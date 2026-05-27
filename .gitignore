@@ -1,0 +1,73 @@
+# Файлы базы данных SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Кэш Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Файлы IDE
+.idea/
+.vscode/
+
+# Резервные копии и временные файлы
+*.swp
+*~
+*.tmp
+
+# Файлы виртуального окружения
+venv/
+.env
+.env.*
+!.env.example
+sessions/
+*.session
+*.session-journal
+
+# Local data, dumps, logs and archives containing live identifiers/secrets
+*.sqlite
+*.sqlite3
+*.sql
+*.dump
+*.backup
+*.bak
+*.cleanup_backup_*
+*.FORCE_backup_*
+*.log
+*.log.*
+logs/
+logs.txt
+import_errors.txt
+thumbnails_to_delete.txt
+New Text Document*.txt
+вывод ии.txt
+запуск.txt
+логи.txt
+меме.txt
+мимо.txt
+*.rar
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.sql.gz
+cookies*.json
+data/db_backup_*
+recovery.sql
+TGACH_Backup_*
+common.rar
+dvachbot.rar
+site_tgach.rar
+bot.lock
+AUTONOMOUS_PROGRESS.md
+security_reports/

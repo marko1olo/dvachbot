@@ -1,0 +1,438 @@
+<!--
+............/´¯/)................(\¯`\..................
+.........../...//....ЗДОХНИ.......\\...\................
+........../...//......ФАШИСТ.......\\...\...............
+...../´¯/..../´¯\.ЕБАНЫй......../¯` \....\¯`\............
+.././.../..../..../.|_......._|.\....\....\...\.\.........
+(.(....(....(..../..)..)…...(..(.\....)....)....).).......
+.\................\/.../......\...\/................/......
+..\.................. /.........\................../......
+-->
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ТГАЧ - Веб-интерфейс</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=8.88">
+    <link rel="icon" href="/static/favicon.ico">
+    <meta property="og:site_name" content="ТГАЧ">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="ТГАЧ — Новая имиджборда">
+    <meta property="og:description" content="{{ request.state.t('meta_description') }}">
+    <meta property="og:url" content="{{ request.url }}">
+    <link rel="canonical" href="{{ request.state.canonical_url }}">
+    <meta property="og:image" content="{{ meta_image }}">
+    
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="ТГАЧ — Новая имиджборда">
+    <meta name="twitter:description" content="{{ request.state.t('meta_description') }}">
+    <meta name="twitter:image" content="{{ meta_image }}">
+
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#212121">
+    <meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+</head>
+<body class="page-index" {% if session.user %}data-user-id="{{ request.state.user_hash }}"{% endif %} data-site-mode="{{ site_mode }}"data-lockdown="{{ 'true' if request.state.is_lockdown else 'false' }}">
+    <script>
+        (function() {
+            try {
+                var settings = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var theme = settings.theme || localStorage.getItem('theme');
+                if (!theme) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+                    else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) theme = 'light';
+                    else theme = Math.random() < 0.5 ? 'dark' : 'light';
+                    localStorage.setItem('theme', theme);
+                }
+                if (theme && theme !== 'light') {
+                    if (document.body) document.body.classList.add('theme-' + theme);
+                    else document.addEventListener('DOMContentLoaded', function() {
+                        document.body.classList.add('theme-' + theme);
+                    });
+                }
+                var fontStyle = settings.fontStyle || 'b';
+                if (fontStyle === 'b') document.body.classList.add('font-style-b');
+                var fontSize = settings.fontSize;
+                if (!fontSize) {
+                    if (window.innerWidth <= 768) fontSize = 'small';
+                    else fontSize = 'medium';
+                }
+                document.body.classList.add('font-size-' + fontSize);
+            } catch (e) { console.error(e); }
+        })();
+    </script>
+    <header>
+        <div class="board-nav-top">
+            <a href="/overboard/" title="Все треды">/all/</a>
+
+            {% for category in ['popular', 'bio', 'thematic', 'system'] %}
+                {% set category_boards = [] %}
+                {% for b_key, b_val in boards.items() %}
+                    {% if b_val.category == category %}{% set _ = category_boards.append(b_key) %}{% endif %}
+                {% endfor %}
+                
+                {% if category_boards %}
+                    <span style="opacity:0.3; margin-left:8px;">[</span>
+                    {% for b_key in category_boards %}
+                        <a href="/{{ b_key }}/threads/" class="{% if b_key == board_id %}active{% endif %}" title="{{ boards[b_key].name }}">
+                            {{ boards[b_key].name }}
+                        </a>
+                    {% endfor %}
+                    <span style="opacity:0.3; margin-right:8px;">]</span>
+                {% endif %}
+            {% endfor %}
+        </div>
+        <div class="header-main-row">
+            <div class="header-logo">
+                <h1>
+                    <a href="/">ТГАЧ</a> 
+                </h1>
+            </div>
+            <div class="header-group-right">
+                <div class="user-actions">
+                    {% if session.user and session.user.is_admin %}
+                        <a href="/admin" class="header-btn admin-btn" title="Админ-панель">👮‍♂️</a>
+                    {% endif %}
+                    <a href="#" id="bottle-notification-btn" class="header-btn" style="display: none; position: relative;">✉️<span id="bottle-count"></span></a>
+                    <a href="#" id="favourites-btn" class="header-btn" title="{{ request.state.t('fav_title') }}">⭐</a>
+                    <button id="settings-btn" class="header-btn" title="{{ request.state.t('settings_btn_title') }}">⚙️</button>
+                    <button id="theme-toggle" class="theme-toggle-btn" title="{{ request.state.t('theme_btn_title') }}">🌙</button>
+                    {% if session.user %}
+                        <a href="/auth/logout" class="logout-link">{{ request.state.t('logout_btn') }}</a>
+                    {% else %}
+                        <a href="/login" class="header-btn" title="{{ request.state.t('login_btn') }}">🔑</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </header>
+    <main>
+        <div class="view-controls" style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="font-weight:bold; color:var(--text-secondary);">Каталог досок</div>
+            <button id="style-switch-btn" class="btn btn-secondary" style="min-width:120px;">
+                <span id="style-name-display">Плитка</span>
+            </button>
+        </div>
+        <div class="board-card-grid">
+            <div class="board-group-header" style="margin-top:0;">Навигация</div>
+            <a href="/overboard/" class="board-card" data-color1="#34495e" data-color2="#2c3e50">
+                <div class="board-card-content">
+                    <span class="board-card-name">/all/</span>
+                    <p class="board-card-description">Оверборд (Все треды)</p>
+                </div>
+            </a>
+            <a href="/tv/random" class="board-card" data-color1="#2d3436" data-color2="#00cec9">
+                <div class="board-card-content">
+                    <span class="board-card-name">/webm/</span>
+                    <p class="board-card-description">WebM Рандом-TV</p>
+                </div>
+            </a>
+            <a href="/img/random" class="board-card" data-color1="#8e44ad" data-color2="#9b59b6">
+                <div class="board-card-content">
+                    <span class="board-card-name">/img/</span>
+                    <p class="board-card-description">Рандом Пикчи</p>
+                </div>
+            </a>
+            {% for category_key, category_name in [
+                ('popular', 'Основа'),
+                ('bio', 'Биопроблемы'),
+                ('thematic', 'Тематика'),
+                ('system', 'Система')
+            ] %}
+                <div class="board-group-header">{{ category_name }}</div>
+                {% for board_id, board_info in boards.items() %}
+                    {% if board_info.category == category_key %}
+                        <a href="/{{ board_id }}/" 
+                           class="board-card" 
+                           data-board-id="{{ board_info.name }}"
+                           data-color1="{{ board_info.color1 or '#4a4a4a' }}"
+                           data-color2="{{ board_info.color2 or '#9b9b9b' }}">
+                            <div class="board-card-content">
+                                <span class="board-card-name">{{ board_info.name }}</span>
+                                <!-- Безопасное получение описания: если словарь - берем ru, иначе выводим как есть -->
+                                <p class="board-card-description">
+                                    {{ board_info.description['ru'] if board_info.description is mapping else board_info.description }}
+                                </p>
+                            </div>
+                        </a>
+                    {% endif %}
+                {% endfor %}
+                
+                {% if category_key == 'system' %}
+                    <a href="/archive/chat/" class="board-card" data-color1="#2c3e50" data-color2="#bdc3c7">
+                        <div class="board-card-content">
+                            <span class="board-card-name">/arch_chat/</span>
+                            <p class="board-card-description">Архив Чата</p>
+                        </div>
+                    </a>
+                    <a href="/archive/threads/" class="board-card" data-color1="#2c3e50" data-color2="#7f8c8d">
+                        <div class="board-card-content">
+                            <span class="board-card-name">/arch_th/</span>
+                            <p class="board-card-description">Архив Тредов</p>
+                        </div>
+                    </a>
+                {% endif %}
+            {% endfor %}
+        </div>
+    </main>
+    <footer>
+        <nav style="margin-bottom: 8px; display: flex; justify-content: center; gap: 20px;">
+            <a href="/about/">{{ request.state.t('nav_about') }}</a>
+            <a href="/faq/">{{ request.state.t('nav_faq') }}</a>
+            <a href="/useful/">{{ request.state.t('nav_useful') }}</a>
+            <a href="/tags/">{{ request.state.t('nav_tags') }}</a> 
+            <a href="#" onclick="event.preventDefault(); openModal('feedback-modal');" style="color: var(--accent-primary);">{{ request.state.t('nav_contact') }}</a>
+            <a href="/archive/" style="color: var(--accent-primary); font-weight: bold;">{{ request.state.t('nav_archive_link') }}</a>
+        </nav>
+        <p>{{ request.state.t('footer_text') }}</p>
+    </footer>
+    <div class="modal-overlay" id="modal-overlay" style="display: none;"></div>
+    <div class="modal" id="quick-reply-modal" style="display: none;"></div>
+    <div class="modal" id="report-modal" style="display: none;">
+        <h3>{{ request.state.t('report_modal_title') }} <span id="report-post-num"></span></h3>
+        <form id="report-form">
+            <div class="form-group">
+                <label for="report-category">{{ request.state.t('report_category') }}</label>
+                <select id="report-category" name="category" required>
+                    <option value="Спам">{{ request.state.t('report_cat_spam') }}</option>
+                    <option value="Оскорбление">{{ request.state.t('report_cat_insult') }}</option>
+                    <option value="Нелегальный контент">{{ request.state.t('report_cat_illegal') }}</option>
+                    <option value="Оффтоп">{{ request.state.t('report_cat_offtopic') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="report-reason">{{ request.state.t('report_reason') }}</label>
+                <textarea id="report-reason" name="reason" rows="3" required></textarea>
+            </div>
+            <input type="hidden" id="report-post-num-input" name="post_num">
+            <button type="submit">{{ request.state.t('report_send') }}</button>
+        </form>
+    </div>
+    <div class="modal" id="settings-modal" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-separator); margin-bottom: 15px; padding-bottom: 10px;">
+            <h3 style="margin: 0; border: none; padding: 0;">{{ request.state.t('settings_modal_title') }}</h3>
+            <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+        </div>
+        <form id="settings-form">
+            <div class="form-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <label for="setting-sound" style="margin:0; cursor: pointer;">🔊 {{ request.state.t('setting_sound') }}</label>
+                    <input type="checkbox" id="setting-sound" data-setting="soundEnabled">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="setting-theme">{{ request.state.t('setting_theme') }}</label>
+                <select id="setting-theme" data-setting="theme" class="form-control">
+                    <option value="light">{{ request.state.t('theme_light') }}</option>
+                    <option value="dark">{{ request.state.t('theme_dark') }}</option>
+                    <option value="cyberpunk">{{ request.state.t('theme_cyberpunk') }}</option>
+                    <option value="crypto">{{ request.state.t('theme_crypto') }}</option>
+                    <option value="conan">{{ request.state.t('theme_conan') }}</option>
+                    <option value="win95">{{ request.state.t('theme_win95') }}</option>
+                    <option value="gameboy">{{ request.state.t('theme_gameboy') }}</option>
+                    <option value="adventure">{{ request.state.t('theme_adventure') }}</option>
+                    <option value="luxury">{{ request.state.t('theme_luxury') }}</option>
+                    <option value="toxic">{{ request.state.t('theme_toxic') }}</option>
+                    <option value="shaft">{{ request.state.t('theme_shaft') }}</option>
+                    <option value="nord">{{ request.state.t('theme_nord') }}</option>
+                    <option value="gruvbox">{{ request.state.t('theme_gruvbox') }}</option>
+                    <option value="discord">{{ request.state.t('theme_discord') }}</option>
+                    <option value="lain">{{ request.state.t('theme_lain') }}</option>
+                    <option value="dracula">{{ request.state.t('theme_dracula') }}</option>
+                    <option value="sakura">{{ request.state.t('theme_sakura') }}</option>
+                    <option value="ukraine">{{ request.state.t('theme_ukraine') }}</option>
+                    <option value="soviet">{{ request.state.t('theme_soviet') }}</option>
+                    <option value="paper">{{ request.state.t('theme_paper') }}</option>
+                    <option value="terminal">{{ request.state.t('theme_terminal') }}</option>
+                    <option value="ocean">{{ request.state.t('theme_ocean') }}</option>
+                    <option value="forest">{{ request.state.t('theme_forest') }}</option>
+                    <option value="gothic">{{ request.state.t('theme_gothic') }}</option>
+                    <option value="noir">{{ request.state.t('theme_noir') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-font-size">{{ request.state.t('setting_font_size') }}</label>
+                <select id="setting-font-size" data-setting="fontSize">
+                    <option value="small">{{ request.state.t('setting_font_small') }}</option>
+                    <option value="medium" selected>{{ request.state.t('setting_font_medium') }}</option>
+                    <option value="large">{{ request.state.t('setting_font_large') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-preview-size">{{ request.state.t('setting_preview_size') }}</label>
+                <select id="setting-preview-size" data-setting="previewSize">
+                    <option value="small">{{ request.state.t('setting_font_small') }}</option>
+                    <option value="medium" selected>{{ request.state.t('setting_font_medium') }}</option>
+                    <option value="large">{{ request.state.t('setting_font_large') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-layout">{{ request.state.t('setting_layout') }}</label>
+                <select id="setting-layout" data-setting="layoutMode">
+                    <option value="center" selected>{{ request.state.t('setting_layout_center') }}</option>
+                    <option value="wide">{{ request.state.t('setting_layout_wide') }}</option>
+                    <option value="left">{{ request.state.t('setting_layout_left') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-density">{{ request.state.t('setting_density') }}</label>
+                <select id="setting-density" data-setting="interfaceDensity">
+                    <option value="normal" selected>{{ request.state.t('setting_density_norm') }}</option>
+                    <option value="compact">{{ request.state.t('setting_density_compact') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-font-style">{{ request.state.t('setting_font_style') }}</label>
+                <select id="setting-font-style" data-setting="fontStyle">
+                    <option value="a">Verdana + Slab</option>
+                    <option value="b" selected>Roboto + Verdana</option>
+                </select>
+            </div>
+            <div class="form-group settings-row-checkbox" style="margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-dim" style="margin:0;">{{ request.state.t('setting_nsfw') }}</label>
+                    <input type="checkbox" id="setting-dim" data-setting="dimMode">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-expand-images" style="margin:0;">Разворачивать картинки</label>
+                    <input type="checkbox" id="setting-expand-images" data-setting="expandImages">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-identicons" style="margin:0;">{{ request.state.t('setting_identicons') }}</label>
+                    <input type="checkbox" id="setting-identicons" data-setting="showIdenticons">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-mascot" style="margin:0;">Показывать Маскота</label>
+                    <input type="checkbox" id="setting-mascot" data-setting="showMascot">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-self-captcha" style="margin:0;">Включить капчу</label>
+                    <input type="checkbox" id="setting-self-captcha" data-setting="selfCaptcha">
+                </div>
+            </div>
+            <div style="margin-top: 15px; padding-top:15px; border-top:1px solid var(--border-separator);">
+                <button type="button" onclick="openFiltersModal()" class="btn btn-secondary" style="width:100%; text-align:center; display:block;">🛡️ Настройка автоскрытия</button>
+            </div>
+            <div style="margin-top: 10px; padding-top:10px; border-top:1px solid var(--border-separator);">
+                <a href="/my/" class="btn btn-secondary" style="width:100%; text-align:center; display:block;">👤 Мои посты</a>
+            </div>
+            <div style="margin-top: 15px; padding-top:15px; border-top:1px solid var(--border-separator);">
+                <a href="/history/" class="btn btn-secondary" style="width:100%; text-align:center; display:block;">История просмотров</a>
+            </div>
+            <div style="margin-top: 20px; text-align: right;">
+                <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-primary modal-close-btn" style="width: 100%;">{{ request.state.t('btn_close') }}</button>
+            </div>
+        </form>
+    </div>
+    <div class="modal" id="feedback-modal" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid var(--border-separator); padding-bottom: 10px;">
+            <h3 style="margin: 0; border: none;">📬 Связь с Админом</h3>
+            <button onclick="document.getElementById('feedback-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+        </div>
+        <form id="feedback-form">
+            <div class="form-group">
+                <label>Тема обращения:</label>
+                <select name="category" class="form-control" required>
+                    <option value="suggestion">💡 Предложение</option>
+                    <option value="endless_thread">♾️ Заявка на бесконечный тред</option>
+                    <option value="borda">♾️ Заявка на новую доску</option>
+                    <option value="pin_request">📌 Заявка на закреп (Pin)</option>
+                    <option value="bug">🐛 Баг / Ошибка</option>
+                    <option value="coop">🤝 Сотрудничество</option>
+                    <option value="other">✉️ Другое</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Ваш контакт (Telegram/Email) - необязательно:</label>
+                <input type="text" name="contact" placeholder="@username" style="width: 100%;">
+            </div>
+            <div class="form-group">
+                <label>Суть вопроса:</label>
+                <textarea name="message" rows="5" required placeholder="Опишите подробно. Если это заявка на тред — укажите тематику." style="width: 100%;"></textarea>
+            </div>
+            <div style="text-align: right; margin-top: 15px;">
+                <button type="submit" class="btn btn-primary">Отправить письмо</button>
+            </div>
+        </form>
+    </div>
+    <div id="new-posts-indicator" style="display: none;"></div>
+    <div id="image-viewer" class="image-viewer-overlay" style="display: none;">
+        <span id="iv-close" class="iv-button iv-close-button">&times;</span>
+        <span id="iv-prev" class="iv-button iv-nav-button iv-prev-button">&lsaquo;</span>
+        <span id="iv-next" class="iv-button iv-nav-button iv-next-button">&rsaquo;</span>
+        <div id="iv-container" class="iv-content-container"></div>
+        <div id="iv-info" class="iv-info-bar">
+            <a id="iv-download-link" href="#" target="_blank" download style="font-weight: bold; color: #64b5f6; margin-right: 10px;">[Скачать]</a>
+            <a id="iv-filename" href="#" target="_blank" download>filename.jpg</a>
+            <span id="iv-dimensions">1920x1080</span>
+            <span id="iv-counter">1 / 10</span>
+        </div>
+        <div id="iv-loader" class="iv-loader" style="display: none;"></div>
+    </div>
+    <div id="loading-indicator" class="loading-indicator">Отправка...</div>
+    <script src="/static/js/main.js?v=8.88228" defer></script>
+<div class="modal" id="welcome-modal" style="display: none; z-index: 99999;">
+    <div class="welcome-content" style="text-align: left; max-width: 450px; margin: 0 auto; padding: 10px;">
+        <h2 style="margin-top: 0; color: var(--accent-primary); font-size: 2em; line-height: 1; margin-bottom: 20px;">
+            Сап!
+        </h2>
+        
+        <div style="font-size: 1.1em; line-height: 1.5; color: var(--text-primary);">
+            <p style="margin-bottom: 15px;">
+                Это наша новая анонимная борда. Свободная, без мочи и лахтадырок. Пости что хочешь! У нас есть всё для быстрого и удобного постинга.
+            </p>
+
+            <div style="background: var(--bg-hover); padding: 15px; border-radius: 6px; margin-bottom: 20px; border: 1px solid var(--border-primary);">
+                <p style="margin: 0; font-size: 0.95em;">
+                    <b>⚙️ Подстрой сайт под себя:</b> Сверху справа есть настройки. Меняй темы и интерфейс. Отключи лишнее, если мешает.
+                </p>
+            </div>
+
+            <ul style="margin: 0 0 20px 0; padding-left: 20px; list-style-type: disc; opacity: 0.9;">
+                <li><b>Кнопка 🧩:</b> Плеер, история, ответы на посты.</li>
+                <li><b>Фичи:</b> Саммари тредов, вебм-рулетка, большие лимиты.</li>
+            </ul>
+
+            <div style="background: var(--bg-hover); padding: 15px; border-radius: 6px; border-left: 4px solid var(--action-danger); margin: 20px 0;">
+                <p style="margin: 0; font-weight: 500; font-size: 0.95em;">
+                    ⚡ <b>Картинки не грузятся?</b> Врубай VPN.<br>
+                    ⛔ <b>Правила?</b> Как везде, сам понимаешь.
+                </p>
+            </div>
+        </div>
+
+        <button id="welcome-accept-btn" class="btn btn-primary" style="width: 100%; margin-top: 10px; padding: 14px; font-size: 1.2em; font-weight: bold; text-transform: uppercase;">
+            ОК
+        </button>
+    </div>
+</div>
+<div class="modal" id="filters-modal" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-separator); margin-bottom: 15px; padding-bottom: 10px;">
+            <h3 style="margin: 0; border: none; padding: 0;">🛡️ Фильтрация контента</h3>
+            <button type="button" onclick="saveFiltersAndBack()" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+        </div>
+        <div class="form-group">
+            <label for="filter-words-input">Скрывать посты со словами:</label>
+            <textarea id="filter-words-input" rows="8" placeholder="Одно слово или /регекс/ на строку..." style="width: 100%; font-family: monospace; font-size: 13px; padding: 10px;"></textarea>
+            <small style="display: block; margin-top: 10px; color: var(--text-secondary); line-height: 1.4;">
+                <b>Anti-Wipe:</b> Включен по умолчанию. Автоматически скрывает CAPS LOCK, длинные бессмысленные строки и спам повторами.
+            </small>
+        </div>
+        <div style="margin-top: 20px;">
+            <button type="button" onclick="saveFiltersAndBack()" class="btn btn-primary" style="width: 100%; font-weight: bold;">Сохранить и вернуться</button>
+        </div>
+    </div>
+</body>
+</html>

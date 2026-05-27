@@ -1,0 +1,27 @@
+{
+    "name": "Aiogram Bot Codespace",
+
+    // Используем стандартный образ Python 3.11 от Microsoft
+    "image": "mcr.microsoft.com/devcontainers/python:3.11",
+
+    // Действия после создания Codespace
+    "postCreateCommand": "pip install --upgrade pip && pip install -r requirements.txt",
+
+    // Проброс порта для healthcheck
+    "forwardPorts": [8080],
+    "portsAttributes": {
+        "8080": {
+            "label": "Healthcheck",
+            "onAutoForward": "openBrowser"
+        }
+    },
+
+    // Настройки для VS Code
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python"
+            ]
+        }
+    }
+}

@@ -1,0 +1,393 @@
+{% macro pluralize(count, one, few, many) -%}
+    {%- set count = count|int -%}
+    {%- if count % 10 == 1 and count % 100 != 11 -%}
+        {{ one }}
+    {%- elif 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20) -%}
+        {{ few }}
+    {%- else -%}
+        {{ many }}
+    {%- endif -%}
+{%- endmacro %}
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ board_info.name }} (Каталог) - {{ request.state.t('site_name') }}</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2.9">
+    <link rel="icon" href="/static/favicon.ico">
+    <link rel="preconnect" href="https://api.telegram.org" crossorigin>
+    <style>
+        /* Атомарный фикс шрифтов каталога */
+        .catalog-text-content, 
+        .catalog-text-preview p, 
+        .catalog-info {
+            font-size: 16px !important; /* Делаем жирный, читаемый шрифт */
+            line-height: 1.5;
+            color: var(--text-primary);
+        }
+        /* На мобилках (если экран узкий) чуть компактнее, но не мелко */
+        @media (max-width: 480px) {
+            .catalog-text-content, 
+            .catalog-text-preview p {
+                font-size: 15px !important; 
+            }
+        }
+    </style>
+</head>
+<body data-user-id="{{ request.state.user_hash }}" data-current-board="{{ board_id }}" data-site-mode="{{ site_mode }}" data-skeleton="{{ 'true' if is_skeleton else 'false' }}">
+    <script>
+        (function() {
+            try {
+                var settings = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var theme = settings.theme || localStorage.getItem('theme');
+                if (!theme) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+                    else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) theme = 'light';
+                    else theme = Math.random() < 0.5 ? 'dark' : 'light';
+                    localStorage.setItem('theme', theme);
+                }
+                if (theme && theme !== 'light') {
+                    if (document.body) document.body.classList.add('theme-' + theme);
+                    else document.addEventListener('DOMContentLoaded', function() {
+                        document.body.classList.add('theme-' + theme);
+                    });
+                }
+                var fontStyle = settings.fontStyle || 'b';
+                if (fontStyle === 'b') document.body.classList.add('font-style-b');
+                var fontSize = settings.fontSize;
+                if (!fontSize) {
+                    // Если настройки нет, смотрим на ширину экрана прямо сейчас
+                    if (window.innerWidth <= 768) fontSize = 'small';
+                    else fontSize = 'medium';
+                }
+                document.body.classList.add('font-size-' + fontSize);
+            } catch (e) { console.error(e); }
+        })();
+    </script>
+    <header>
+        <div class="board-nav-top">
+            <a href="/overboard/" class="nav-item-all active">ALL</a>
+            {% for b_key, b_val in boards.items() %}
+                {% if b_key != 'test' %}
+                    <a href="/{{ b_key }}/threads/" class="{% if b_key == board_id %}active{% endif %}" title="{{ b_val.name }}">
+                        /{{ b_key }}/
+                    </a>
+                {% endif %}
+            {% endfor %}
+        </div>
+        <div class="header-main-row">
+            <div class="header-logo" style="display: flex; align-items: center; gap: 15px;">
+                <h1>
+                    <a href="/">ТГАЧ</a> 
+                </h1>
+                <span style="font-family: var(--font-headings); font-weight:bold; font-size: 1.2em; color: var(--text-secondary);">
+                    {{ board_info.name }} <span style="font-size:0.8em; opacity:0.7;">(Каталог)</span>
+                </span>
+            </div>
+            <div class="header-group-right">
+                <div class="user-actions">
+                    <a href="#" id="favourites-btn" class="header-btn" title="{{ request.state.t('fav_title') }}">⭐</a>
+                    <button id="settings-btn" class="header-btn" title="{{ request.state.t('settings_btn_title') }}">⚙️</button>
+                    <button id="theme-toggle" class="theme-toggle-btn" title="{{ request.state.t('theme_btn_title') }}">🌙</button>
+                    
+                    {% if session.user %}
+                        <div class="user-info" style="margin-left: 10px; font-size: 0.9em;">
+                            <a href="/auth/logout" class="logout-link">{{ request.state.t('logout_btn') }}</a>
+                        </div>
+                    {% else %}
+                        <a href="/login" class="header-btn">🔑</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <nav class="board-header-nav">
+            <a href="/">[{{ request.state.t('nav_home') }}]</a>
+            <span class="nav-sep">|</span>
+            <a href="/{{ board_id }}/mode/">[{{ request.state.t('nav_mode_select') }}]</a>
+            <div class="mobile-break"></div>
+            <span class="nav-sep">|</span>
+            <a href="/{{ board_id }}/threads/">[{{ request.state.t('nav_threads') }}]</a>
+            <a href="/{{ board_id }}/chat/">[{{ request.state.t('nav_chat') }}]</a>
+            <a href="/{{ board_id }}/catalog/" class="active">[{{ request.state.t('nav_catalog') }}]</a>
+            {% if board_info.username %}
+            <a href="https://t.me/{{ board_info.username.lstrip('@') }}" target="_blank" class="tg-link">[{{ request.state.t('nav_tg') }}]</a>
+            {% endif %}
+            <span class="nav-sep">|</span>
+            <a href="#" class="gallery-trigger">[{{ request.state.t('nav_gallery') }}]</a>
+        </nav>
+    </header>
+    <div style="max-width: 960px; margin: 10px auto; padding: 0 15px;">
+        <input type="text" id="catalog-filter" placeholder="{{ request.state.t('filter_placeholder') }}" 
+               style="width: 100%; padding: 10px; border: 1px solid var(--accent-primary); border-radius: 4px; box-sizing: border-box; background-color: var(--bg-input); color: var(--text-primary);">
+    </div>
+<main>
+        <!-- Панель управления каталогом -->
+        <div class="catalog-controls">
+            <div class="catalog-filter-group" style="flex-grow: 0;">
+                <label for="catalog-sort">Сортировка:</label>
+                <select id="catalog-sort" class="catalog-select" onchange="window.location.href='?sort='+this.value">
+                    <option value="bump" {% if current_sort == 'bump' %}selected{% endif %}>Бамп (Активность)</option>
+                    <option value="new" {% if current_sort == 'new' %}selected{% endif %}>Новые (Дата)</option>
+                </select>
+            </div>
+
+            <div class="catalog-filter-group" style="flex-grow: 0;">
+                <label for="catalog-size">Размер:</label>
+                <select id="catalog-size" class="catalog-select">
+                    <option value="small">Маленький</option>
+                    <option value="medium" selected>Средний</option>
+                    <option value="large">Большой</option>
+                </select>
+            </div>
+
+            <div class="catalog-filter-group" style="width: 100%;">
+                <input type="text" id="catalog-filter" class="catalog-search-input" placeholder="🔎 Поиск треда (название или текст)...">
+            </div>
+        </div>
+
+        <!-- Сетка каталога -->
+        <div class="catalog-grid" id="catalog-grid" style="{% if is_skeleton %}display: none;{% endif %}">
+            {% for thread in threads %}
+<a href="/{{ board_id }}/res/{{ thread.id }}.html" class="catalog-item">
+                {% set hue = (thread.id|int * 137) % 360 %}
+                {% set bg_color = 'hsl(' ~ hue ~ ', 60%, 40%)' %}
+                <div class="catalog-thumb" style="background-color: {{ bg_color }};">
+                    {% if thread.content.files and thread.content.files[0].thumbnail_url %}
+                        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                             data-src="{{ thread.content.files[0].thumbnail_url }}" 
+                             class="lazy-load{% if thread.content.is_censored %} blurred-media{% endif %}" 
+                             alt="thumb"
+                             loading="lazy"
+                             referrerpolicy="no-referrer">
+                    {% elif thread.content.files and thread.content.files[0].type in ['video', 'video_note', 'animation'] %}
+                        <div class="catalog-thumb lazy-media-wrapper" 
+                             data-src="{{ thread.content.files[0].original_url }}" 
+                             data-type="{{ 'gif' if thread.content.files[0].type in ['gif', 'animation'] else 'video' }}"
+                             style="background-color: #000;">
+                            
+                            {% if thread.content.files[0].blurhash %}
+                                <canvas class="blurhash-canvas" data-hash="{{ thread.content.files[0].blurhash }}" width="32" height="32" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover;"></canvas>
+                            {% endif %}
+                            
+                            <video class="lazy-load{% if thread.content.is_censored %} blurred-media{% endif %}" 
+                                   preload="metadata" 
+                                   muted 
+                                   playsinline 
+                                   loop
+                                   data-src="{{ thread.content.files[0].original_url }}"
+                                   {% if thread.content.files[0].thumbnail_url %}poster="{{ thread.content.files[0].thumbnail_url }}"{% endif %}
+                                   style="width: 100%; height: 100%; object-fit: cover;">
+                            </video>
+                            
+                            <span class="lazy-badge" style="position:absolute; bottom:5px; right:5px; background:rgba(0,0,0,0.6); color:white; padding:2px 4px; font-size:10px; border-radius:3px;">
+                                {{ 'GIF' if thread.content.files[0].type in ['gif', 'animation'] else 'VIDEO' }}
+                            </span>
+                        </div>
+                    {% else %}
+                        <div class="catalog-ambient">
+                            <span>📝</span>
+                            <small>{{ thread.content.text | safe | striptags | truncate(40) }}</small>
+                        </div>
+                    {% endif %}
+                    {% if thread.is_pinned %}
+                        <div class="cat-badge badge-pin">PIN</div>
+                    {% endif %}
+                    {% if thread.is_endless %}
+                        <div class="cat-badge badge-cyclic" title="Бесконечный">🔄</div>
+                    {% endif %}
+                    {% if thread.is_archived %}
+                        <div class="cat-badge badge-lock">LOCK</div>
+                    {% endif %}
+                </div>
+                <div class="catalog-info">
+                    <div class="catalog-stats-line">
+                        <span class="stat-replies">R: {{ thread.reply_count }}</span> <span style="opacity:0.3">|</span> 
+                        <span class="stat-images">I: {{ thread.content.files|length }}</span>
+                    </div>
+                    <div class="catalog-text-content">
+                        {% set raw_text = thread.content.text | replace('<br>', ' ') | replace('<br/>', ' ') | replace('</p>', ' ') | replace('\n', ' ') %}
+                        {% set clean_text = raw_text | safe | striptags %}
+                        <span class="catalog-subject">
+                            {% if thread.thread_type == 'image' %} <span style="color:#e91e63; font-weight:bold; font-size:0.9em;">[IMG]</span>{% endif %}
+                            {% if thread.thread_type == 'video' %} <span style="color:#9c27b0; font-weight:bold; font-size:0.9em;">[VID]</span>{% endif %}
+                            {% if thread.thread_type == 'audio' %} <span style="color:#ff9800; font-weight:bold; font-size:0.9em;">[AUD]</span>{% endif %}
+                            {% if thread.thread_type == 'media' %} <span style="color:#009688; font-weight:bold; font-size:0.9em;">[MEDIA]</span>{% endif %}
+                            {% if thread.title and thread.title != 'Thread' and thread.title|length > 0 and thread.title != clean_text[:50] %}
+                                {{ thread.title }}
+                            {% else %}
+                                №{{ thread.id }}
+                            {% endif %}
+                        </span>
+                        {% if clean_text|length > 0 %}
+                            {{ clean_text }}
+                        {% else %}
+                            <span style="opacity:0.5;">(Нет текста)</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        <div id="threads-loading-indicator" style="display: {% if is_skeleton %}block{% else %}none{% endif %}; text-align: center; padding: 20px; color: var(--text-secondary);">
+            {{ request.state.t('loading') }}
+        </div>
+    </main>
+    <footer>
+        <nav style="margin-bottom: 8px; display: flex; justify-content: center; gap: 20px;">
+            <a href="/about/">[О проекте]</a>
+            <a href="/faq/">[FAQ]</a>
+        </nav>
+        <p>{{ request.state.t('footer_text') }}</p>
+    </footer>
+    <div class="modal-overlay" id="modal-overlay" style="display: none;"></div>
+    <div class="modal" id="quick-reply-modal" style="display: none;">
+        <h3 id="qr-title">Ответ на пост #<span id="qr-post-num"></span></h3>
+        <form id="quick-reply-form">
+        </form>
+    </div>
+    <div class="modal" id="report-modal" style="display: none;">
+        <h3>{{ request.state.t('report_modal_title') }} <span id="report-post-num"></span></h3>
+        <form id="report-form">
+            <div class="form-group">
+                <label for="report-category">{{ request.state.t('report_category') }}</label>
+                <select id="report-category" name="category" required>
+                    <option value="Спам">{{ request.state.t('report_cat_spam') }}</option>
+                    <option value="Оскорбление">{{ request.state.t('report_cat_insult') }}</option>
+                    <option value="Нелегальный контент">{{ request.state.t('report_cat_illegal') }}</option>
+                    <option value="Оффтоп">{{ request.state.t('report_cat_offtopic') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="report-reason">{{ request.state.t('report_reason') }}</label>
+                <textarea id="report-reason" name="reason" rows="3" required></textarea>
+            </div>
+            <input type="hidden" id="report-post-num-input" name="post_num">
+            <button type="submit">{{ request.state.t('report_send') }}</button>
+        </form>
+    </div>
+    <div class="modal" id="settings-modal" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-separator); margin-bottom: 15px; padding-bottom: 10px;">
+            <h3 style="margin: 0; border: none; padding: 0;">{{ request.state.t('settings_modal_title') }}</h3>
+            <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+        </div>
+        <form id="settings-form">
+            <div class="form-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <label for="setting-sound" style="margin:0; cursor: pointer;">🔊 {{ request.state.t('setting_sound') }}</label>
+                    <input type="checkbox" id="setting-sound" data-setting="soundEnabled">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="setting-theme">{{ request.state.t('setting_theme') }}</label>
+                <select id="setting-theme" data-setting="theme" class="form-control">
+                    <option value="light">{{ request.state.t('theme_light') }}</option>
+                    <option value="dark">{{ request.state.t('theme_dark') }}</option>
+                    <option value="cyberpunk">{{ request.state.t('theme_cyberpunk') }}</option>
+                    <option value="crypto">{{ request.state.t('theme_crypto') }}</option>
+                    <option value="conan">{{ request.state.t('theme_conan') }}</option>
+                    <option value="win95">{{ request.state.t('theme_win95') }}</option>
+                    <option value="gameboy">{{ request.state.t('theme_gameboy') }}</option>
+                    <option value="adventure">{{ request.state.t('theme_adventure') }}</option>
+                    <option value="luxury">{{ request.state.t('theme_luxury') }}</option>
+                    <option value="toxic">{{ request.state.t('theme_toxic') }}</option>
+                    <option value="shaft">{{ request.state.t('theme_shaft') }}</option>
+                    <option value="nord">{{ request.state.t('theme_nord') }}</option>
+                    <option value="gruvbox">{{ request.state.t('theme_gruvbox') }}</option>
+                    <option value="discord">{{ request.state.t('theme_discord') }}</option>
+                    <option value="lain">{{ request.state.t('theme_lain') }}</option>
+                    <option value="dracula">{{ request.state.t('theme_dracula') }}</option>
+                    <option value="sakura">{{ request.state.t('theme_sakura') }}</option>
+                    <option value="ukraine">{{ request.state.t('theme_ukraine') }}</option>
+                    <option value="soviet">{{ request.state.t('theme_soviet') }}</option>
+                    <option value="paper">{{ request.state.t('theme_paper') }}</option>
+                    <option value="terminal">{{ request.state.t('theme_terminal') }}</option>
+                    <option value="ocean">{{ request.state.t('theme_ocean') }}</option>
+                    <option value="forest">{{ request.state.t('theme_forest') }}</option>
+                    <option value="gothic">{{ request.state.t('theme_gothic') }}</option>
+                    <option value="noir">{{ request.state.t('theme_noir') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-font-size">{{ request.state.t('setting_font_size') }}</label>
+                <select id="setting-font-size" data-setting="fontSize">
+                    <option value="small">{{ request.state.t('setting_font_small') }}</option>
+                    <option value="medium" selected>{{ request.state.t('setting_font_medium') }}</option>
+                    <option value="large">{{ request.state.t('setting_font_large') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-preview-size">{{ request.state.t('setting_preview_size') }}</label>
+                <select id="setting-preview-size" data-setting="previewSize">
+                    <option value="small">{{ request.state.t('setting_font_small') }}</option>
+                    <option value="medium" selected>{{ request.state.t('setting_font_medium') }}</option>
+                    <option value="large">{{ request.state.t('setting_font_large') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-layout">{{ request.state.t('setting_layout') }}</label>
+                <select id="setting-layout" data-setting="layoutMode">
+                    <option value="center" selected>{{ request.state.t('setting_layout_center') }}</option>
+                    <option value="wide">{{ request.state.t('setting_layout_wide') }}</option>
+                    <option value="left">{{ request.state.t('setting_layout_left') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-density">{{ request.state.t('setting_density') }}</label>
+                <select id="setting-density" data-setting="interfaceDensity">
+                    <option value="normal" selected>{{ request.state.t('setting_density_norm') }}</option>
+                    <option value="compact">{{ request.state.t('setting_density_compact') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-font-style">{{ request.state.t('setting_font_style') }}</label>
+                <select id="setting-font-style" data-setting="fontStyle">
+                    <option value="a">Verdana + Slab</option>
+                    <option value="b" selected>Roboto + Verdana</option>
+                </select>
+            </div>
+            <div class="form-group settings-row-checkbox" style="margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-dim" style="margin:0;">{{ request.state.t('setting_nsfw') }}</label>
+                    <input type="checkbox" id="setting-dim" data-setting="dimMode">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-expand-images" style="margin:0;">Разворачивать картинки</label>
+                    <input type="checkbox" id="setting-expand-images" data-setting="expandImages">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-identicons" style="margin:0;">{{ request.state.t('setting_identicons') }}</label>
+                    <input type="checkbox" id="setting-identicons" data-setting="showIdenticons">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-mascot" style="margin:0;">Показывать Маскота</label>
+                    <input type="checkbox" id="setting-mascot" data-setting="showMascot">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-self-captcha" style="margin:0;">Включить капчу</label>
+                    <input type="checkbox" id="setting-self-captcha" data-setting="selfCaptcha">
+                </div>
+            </div>
+            <div style="margin-top: 15px; padding-top:15px; border-top:1px solid var(--border-separator);">
+                <a href="/my/" class="btn btn-secondary" style="width:100%; text-align:center; display:block;">👤 Мои посты</a>
+            </div>
+            <div style="margin-top: 15px; padding-top:15px; border-top:1px solid var(--border-separator);">
+                <a href="/history/" class="btn btn-secondary" style="width:100%; text-align:center; display:block;">История просмотров</a>
+            </div>
+            <div style="margin-top: 20px; text-align: right;">
+                <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-primary modal-close-btn" style="width: 100%;">{{ request.state.t('btn_close') }}</button>
+            </div>
+        </form>
+    </div>
+    <div id="new-posts-indicator" style="display: none;"></div>
+    <script src="/static/js/main.js?v=2.4" defer></script>
+</body>
+</html>

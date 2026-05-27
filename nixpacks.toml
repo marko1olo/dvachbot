@@ -1,0 +1,6 @@
+[build]
+builder = "python"
+pythonVersion = "3.10"
+
+[deploy]
+startCommand = "python -m main"

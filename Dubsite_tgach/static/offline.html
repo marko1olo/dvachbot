@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Нет связи - ТГАЧ</title>
+    <style>
+        body {
+            background-color: #212121;
+            color: #e0e0e0;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+        h1 { color: #d9534f; }
+        button {
+            background: #0088cc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        button:active { opacity: 0.8; }
+    </style>
+</head>
+<body>
+    <h1>📡 Связь потеряна</h1>
+    <p>Не удалось загрузить страницу.</p>
+    <p>Проверьте интернет или вернитесь назад.</p>
+    <button onclick="window.location.reload()">Попробовать снова</button>
+    <br><br>
+    <button onclick="window.history.back()" style="background: #444;">Назад</button>
+</body>
+</html>

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ошибка {{ status_code }} - ТГАЧ</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2.3">
+</head>
+<img src="/static/img/mascot/mascot_confused.png" class="corner-mascot" alt="">
+<body>
+    <div id="app-loader">
+        <div class="loader-content">
+            <img src="/static/logo.png" alt="TGACH" width="80" height="80">
+            <div class="loader-spinner"></div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            try {
+                var theme = localStorage.getItem('theme');
+                if (!theme) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+                    else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) theme = 'light';
+                    else theme = Math.random() < 0.5 ? 'dark' : 'light';
+                    localStorage.setItem('theme', theme);
+                }
+                if (theme && theme !== 'light') document.body.classList.add('theme-' + theme);
+            } catch (e) {}
+        })();
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                document.body.classList.add('loaded');
+                var loader = document.getElementById('app-loader');
+                if (loader) {
+                    loader.style.opacity = '0';
+                    loader.style.pointerEvents = 'none';
+                    setTimeout(function() { loader.remove(); }, 500);
+                }
+            }, 100);
+        });
+    </script>
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 80vh; text-align: center;">
+        <h1 style="font-size: 6em; margin: 0; color: var(--action-danger);">{{ status_code }}</h1>
+        <h2 style="margin-top: 0;">{{ detail }}</h2>
+        <p style="color: var(--text-secondary); max-width: 500px;">
+            {% if status_code == 404 %}
+                {{ request.state.t('error_404_desc') }}
+                <br>{{ request.state.t('error_404_fun') }}
+            {% else %}
+                {{ request.state.t('error_500_desc') }}<br>
+                {{ request.state.t('error_500_fun') }}
+            {% endif %}
+        </p>
+        <a href="/" class="btn btn-primary" style="margin-top: 20px;">{{ request.state.t('error_return') }}</a>
+    </div>
+</body>
+</html>

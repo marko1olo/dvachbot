@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Летопись Чата - ТГАЧ АРХИВ</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2.9">
+    <link rel="icon" href="/static/favicon.ico">
+    <meta name="theme-color" content="#212121">
+</head>
+<body class="page-archive" data-site-mode="READ_ONLY">
+    <!-- Скрипт инициализации темы (ОБЯЗАТЕЛЬНО ДОЛЖЕН БЫТЬ В НАЧАЛЕ BODY) -->
+    <script>
+        (function() {
+            try {
+                var settings = JSON.parse(localStorage.getItem('user_settings') || '{}');
+
+                // 1. ТЕМА
+                var theme = settings.theme || localStorage.getItem('theme');
+                if (!theme) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+                    else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) theme = 'light';
+                    else theme = Math.random() < 0.5 ? 'dark' : 'light';
+                    localStorage.setItem('theme', theme);
+                }
+                if (theme && theme !== 'light') document.body.classList.add('theme-' + theme);
+
+                // 2. СТИЛЬ ШРИФТА
+                var fontStyle = settings.fontStyle || 'b';
+                if (fontStyle === 'b') document.body.classList.add('font-style-b');
+
+                // 3. РАЗМЕР ШРИФТА
+                var fontSize = settings.fontSize;
+                if (!fontSize) {
+                    if (window.innerWidth <= 768) fontSize = 'small';
+                    else fontSize = 'medium';
+                }
+                document.body.classList.add('font-size-' + fontSize);
+
+            } catch (e) { console.error(e); }
+        })();
+    </script>
+
+    <header>
+        <div class="header-group-left">
+            <h1>📜 Летопись (Архив Чата)</h1>
+        </div>
+        <div class="header-group-right">
+            <button id="theme-toggle" class="theme-toggle-btn">🌙</button>
+        </div>
+        <nav style="width: 100%; text-align: center; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border-primary); display: block;">
+            <a href="/archive/">[Назад в Архив]</a>
+            <span style="opacity:0.3">|</span>
+            <a href="/">[{{ request.state.t('nav_main') }}]</a>
+        </nav>
+    </header>
+
+    <main>
+        <div class="chat-list">
+            {% if posts %}
+                {% for post in posts %}
+                <div class="post" id="post-{{ post.id }}">
+                    <div class="post-header">
+                        <canvas class="identicon" data-userid="{{ post.author_id }}" width="20" height="20"></canvas>
+                        <span style="font-weight:bold; color:var(--accent-link);">/{{ post.board_id }}/</span>
+                        <span>
+                            {% if post.thread_id %}
+                                <a href="/{{ post.board_id }}/res/{{ post.thread_id }}.html#post-{{ post.id }}" class="post-num-link" target="_blank">#{{ post.id }}</a>
+                            {% else %}
+                                <a href="#post-{{ post.id }}" class="post-num-link">#{{ post.id }}</a>
+                            {% endif %}
+                        </span>
+                        <span class="ts-recalc" data-ts="{{ post.timestamp }}">{{ post.timestamp | format_timestamp }}</span>
+                    </div>
+                    <div class="post-content">
+                        {% if post.content.files %}
+                        <div class="post-files-container post-gallery">
+                            {% for file in post.content.files %}
+                                {% if file.type in ['image', 'photo'] %}
+                                    <a href="{{ file.original_url }}" class="file-thumb">
+                                        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                             class="post-image lazy-load" referrerpolicy="no-referrer">
+                                    </a>
+                                {% elif file.type == 'video' or file.type == 'gif' %}
+                                    <div class="file-thumb lazy-media-wrapper" data-src="{{ file.original_url }}" data-type="video">
+                                        {% if file.blurhash %}
+                                            <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32" style="position: absolute; top:0; left:0; width:100%; height:100%; object-fit: cover;"></canvas>
+                                        {% endif %}
+                                        <video class="post-image lazy-load" 
+                                               preload="metadata" 
+                                               muted 
+                                               playsinline 
+                                               loop
+                                               data-src="{{ file.original_url }}"
+                                               {% if file.thumbnail_url %}poster="{{ file.thumbnail_url }}"{% endif %}
+                                               style="object-fit: cover; width: 100%; height: 100%; background: #000;">
+                                        </video>
+                                        <span class="lazy-badge">VIDEO</span>
+                                    </div>
+                                {% elif file.type == 'sticker' %}
+                                    <div class="sticker-wrapper" style="display:inline-block; vertical-align:bottom;">
+                                        {% if file.filename.endswith('.webm') %}
+                                            <video class="post-sticker lazy-load" 
+                                                   data-src="{{ file.original_url }}" 
+                                                   autoplay loop muted playsinline webkit-playsinline 
+                                                   referrerpolicy="no-referrer" 
+                                                   style="max-height: 150px; width: auto; background: transparent;">
+                                            </video>
+                                        {% else %}
+                                            <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                 data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                 class="post-sticker lazy-load" 
+                                                 referrerpolicy="no-referrer">
+                                        {% endif %}
+                                    </div>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                        
+                        <div class="post-text-content">
+                            {% if post.reply_to_post_num %}
+                                <p class="reply-indicator" style="font-size:0.85em; opacity:0.8;"> Ответ на &gt;&gt;{{ post.reply_to_post_num }}</p>
+                            {% endif %}
+                            <div class="post-text">{{ post.content.text | format_post_text | safe }}</div>
+                            <div class="backlinks-container" id="backlinks-for-{{ post.id }}">
+                                {% if post.backlinks %}
+                                    {% for backlink_id in post.backlinks %}
+                                        <a href="#post-{{ backlink_id }}" class="post-link" data-post-num="{{ backlink_id }}">&gt;&gt;{{ backlink_id }}</a>
+                                    {% endfor %}
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p style="text-align:center; padding:20px;">Архив пуст.</p>
+            {% endif %}
+        </div>
+
+        <div class="pagination" style="display: flex; justify-content: center; align-items: center; gap: 15px; margin: 30px 0;">
+            {% if page > 1 %}
+                <a href="?page={{ page - 1 }}" class="btn btn-secondary" style="min-width: 100px;">← Назад</a>
+            {% else %}
+                <span class="btn btn-secondary" style="min-width: 100px; opacity: 0.5; cursor: default;">← Назад</span>
+            {% endif %}
+            
+            <span style="font-weight: bold; color: var(--text-secondary);">Стр. {{ page }}</span>
+            
+            {% if has_next %}
+                <a href="?page={{ page + 1 }}" class="btn btn-secondary" style="min-width: 100px;">Вперед →</a>
+            {% else %}
+                <span class="btn btn-secondary" style="min-width: 100px; opacity: 0.5; cursor: default;">Вперед →</span>
+            {% endif %}
+        </div>
+    </main>
+    
+    <footer><p>2025 - ТГАЧ АРХИВ</p></footer>
+    
+    <!-- Галерея (Viewer) -->
+    <div id="image-viewer" class="image-viewer-overlay" style="display: none;">
+        <span id="iv-close" class="iv-button iv-close-button">&times;</span>
+        <span id="iv-prev" class="iv-button iv-nav-button iv-prev-button">&lsaquo;</span>
+        <span id="iv-next" class="iv-button iv-nav-button iv-next-button">&rsaquo;</span>
+        <div id="iv-container" class="iv-content-container"></div>
+        <div id="iv-info" class="iv-info-bar">
+            <a id="iv-download-link" href="#" target="_blank" download style="font-weight: bold; color: #64b5f6; margin-right: 10px;">[Скачать]</a>
+            <a id="iv-filename" href="#" target="_blank" download>filename.jpg</a>
+            <span id="iv-dimensions"></span>
+            <span id="iv-counter"></span>
+        </div>
+    </div>
+
+    <!-- Подключаем главный скрипт для работы галереи и темы -->
+    <script src="/static/js/main.js?v=2.1" defer></script>
+</body>
+</html>

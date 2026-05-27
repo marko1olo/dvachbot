@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Утонувшие треды - ТГАЧ АРХИВ</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2.9">
+    <link rel="icon" href="/static/favicon.ico">
+    <link rel="preconnect" href="https://api.telegram.org" crossorigin>
+    <link rel="dns-prefetch" href="https://files.catbox.moe">
+    <link rel="dns-prefetch" href="https://huggingface.co">
+    <link rel="preconnect" href="https://huggingface.co" crossorigin>
+</head>
+<body class="page-archive" data-site-mode="READ_ONLY">
+    <script>
+        /* (Скрипт темы тот же, что везде) */
+        (function() {
+            try {
+                var settings = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var theme = settings.theme || localStorage.getItem('theme');
+                if (!theme) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+                    else theme = 'light';
+                }
+                if (theme && theme !== 'light') document.body.classList.add('theme-' + theme);
+            } catch (e) {}
+        })();
+    </script>
+
+    <header>
+        <div class="header-group-left">
+            <h1>
+                <a href="/" style="text-decoration:none; color:inherit;">ТГАЧ</a> 
+                <span style="font-weight:normal; opacity:0.7; font-size: 0.9em;"> / АРХИВ / ТРЕДЫ</span>
+            </h1>
+        </div>
+        
+        <div class="header-group-right">
+            <button id="theme-toggle" class="theme-toggle-btn">🌙</button>
+        </div>
+
+        <nav style="width: 100%; text-align: center; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border-primary); display: block;">
+            <a href="/archive/">[Назад в Архив]</a>
+            <span style="opacity:0.3">|</span>
+            <a href="/">[На главную]</a>
+        </nav>
+    </header>
+
+    <main>
+        <div class="archived-notice">
+            <h3>{{ request.state.t('archived_title') }}</h3>
+            <p>{{ request.state.t('archived_text') }}</p>
+        </div>
+
+        <div class="thread-list">
+            {% if posts %}
+                {% for post in posts %}
+                <div class="thread-container" id="thread-{{ post.id }}">
+                    <div class="post is-archived" id="post-{{ post.id }}">
+                        <div class="post-header">
+                            <span style="color: var(--accent-primary);">/{{ post.board_id }}/</span>
+                            <span>Анон </span>
+                            <span><a href="/{{ post.board_id }}/res/{{ post.id }}.html">#{{ post.id }}</a></span>
+                            <span class="ts-recalc" data-ts="{{ post.timestamp }}">{{ post.timestamp | format_timestamp }}</span>
+                            <span class="thread-stats">[{{ post.reply_count }} отв.]</span>
+                        </div>
+                        <div class="post-content">
+                            <!-- Файлы -->
+                            {% if post.content.files %}
+                            <div class="post-files-container">
+                                {% for file in post.content.files %}
+                                    <a href="{{ file.original_url }}" class="file-thumb">
+                                        {% if file.type in ['image', 'photo'] %}
+                                            <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                class="post-image lazy-load" alt="img" referrerpolicy="no-referrer">
+                                        {% elif file.type in ['video', 'gif', 'animation', 'video_note'] %}
+                                            <div class="lazy-media-wrapper" data-src="{{ file.original_url }}" data-type="video">
+                                                {% if file.blurhash %}
+                                                    <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32" style="position: absolute; top:0; left:0; width:100%; height:100%; object-fit: cover;"></canvas>
+                                                {% endif %}
+                                                <video class="post-image lazy-load" 
+                                                       preload="metadata" 
+                                                       muted 
+                                                       playsinline 
+                                                       loop
+                                                       data-src="{{ file.original_url }}"
+                                                       {% if file.thumbnail_url %}poster="{{ file.thumbnail_url }}"{% endif %}
+                                                       style="object-fit: cover; width: 100%; height: 100%; background: #000;">
+                                                </video>
+                                                <span class="lazy-badge">VIDEO</span>
+                                            </div>
+                                        {% endif %}
+                                    </a>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                            
+                            <div class="post-text-content">
+                                <div class="post-text">{{ post.content.text | format_post_text | safe }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-top: 5px; text-align: right;">
+                        <a href="/{{ post.board_id }}/res/{{ post.id }}.html" class="btn btn-secondary">{{ request.state.t('action_view_thread') }}</a>
+                    </div>
+                </div>
+                <hr class="thread-separator">
+                {% endfor %}
+            {% else %}
+                <p>{{ request.state.t('no_threads') }}</p>
+            {% endif %}
+        </div>
+        
+        <!-- Пагинация (простая) -->
+        <div class="pagination" style="display: flex; justify-content: center; align-items: center; gap: 15px; margin: 30px 0;">
+            {% if page > 1 %}
+                <a href="?page={{ page - 1 }}" class="btn btn-secondary" style="min-width: 100px;">← Назад</a>
+            {% else %}
+                <span class="btn btn-secondary" style="min-width: 100px; opacity: 0.5; cursor: default;">← Назад</span>
+            {% endif %}
+            
+            <span style="font-weight: bold; color: var(--text-secondary);">Стр. {{ page }}</span>
+            
+            {% if has_next %}
+                <a href="?page={{ page + 1 }}" class="btn btn-secondary" style="min-width: 100px;">Вперед →</a>
+            {% else %}
+                <span class="btn btn-secondary" style="min-width: 100px; opacity: 0.5; cursor: default;">Вперед →</span>
+            {% endif %}
+        </div>
+    </main>
+
+    <footer><p>2025 - ТГАЧ АРХИВ</p></footer>
+    <script src="/static/js/main.js?v=2.1" defer></script>
+</body>
+</html>

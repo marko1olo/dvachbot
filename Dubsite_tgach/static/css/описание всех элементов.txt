@@ -1,0 +1,141 @@
+{
+  "title": "Полная шпаргалка по стилям Tgach Board (style.css)",
+  "description": "Это исчерпывающий справочник всех визуальных элементов, тем, анимаций и блоков, найденных в предоставленном CSS файле. Используйте его как карту для понимания того, что есть в коде.",
+  "sections": [
+    {
+      "title": "1. Основные слои и структура (Layout)",
+      "items": [
+        { "element": "#app-loader", "description": "Экран загрузки (Splash Screen) с логотипом и спиннером. Исчезает после загрузки страницы." },
+        { "element": "body", "description": "Основной контейнер. Цвет фона зависит от темы. Имеет защиту от 'резинового' скролла (overscroll-behavior)." },
+        { "element": "main", "description": "Центральная колонка с контентом (тредами и постами). Ширина ограничена (960px на ПК), на мобильных — на весь экран." },
+        { "element": "header", "description": "Верхняя шапка. Содержит Логотип, Поиск, Навигацию по доскам, Кнопки управления." },
+        { "element": "footer", "description": "Подвал сайта. 'Прижат' к низу страницы." },
+        { "element": ".mobile-bottom-nav", "description": "Фиксированная панель навигации внизу экрана (только для мобильных). Содержит кнопки быстрого доступа." }
+      ]
+    },
+    {
+      "title": "2. Посты и Треды (Core)",
+      "items": [
+        { "element": ".post", "description": "Одиночный пост (блок). Содержит заголовок, текст, файлы. Имеет стили для выделения (тень, рамка)." },
+        { "element": ".post.hidden", "description": "Скрытый пост. Свернут в узкую полоску. Раскрывается по клику." },
+        { "element": ".post.reply-to-you", "description": "Подсветка поста, который является ответом ВАМ (обычно пунктирная рамка или цвет фона)." },
+        { "element": ".post.is-by-op", "description": "Пост автора треда (OP). Имеет пометку (обычно полоска слева)." },
+        { "element": ".post.get-rare / .get-epic", "description": "Стили для 'Гетов' (красивых номеров постов). Золотая или пульсирующая рамка." },
+        { "element": ".post-header", "description": "Верхняя часть поста: Имя, Дата, Номер, Меню действий." },
+        { "element": ".post-content", "description": "Контейнер для текста и картинок." },
+        { "element": ".post-text-content", "description": "Сам текст сообщения." },
+        { "element": ".post-files-container", "description": "Блок с прикрепленными файлами (картинки, видео)." },
+        { "element": ".file-thumb", "description": "Миниатюра (превью) файла. Имеет спиннер загрузки." },
+        { "element": ".post-sticker", "description": "Стикер (картинка без фона и рамок, часто анимированная)." },
+        { "element": ".reply-preview", "description": "Всплывающее окно при наведении на ссылку (>>12345), показывающее текст того поста." }
+      ]
+    },
+    {
+      "title": "3. Формы и Ввод (Forms)",
+      "items": [
+        { "element": "#post-form", "description": "Главная форма отправки сообщения (под тредом или сверху)." },
+        { "element": "#floating-reply-box", "description": "Плавающее окно ответа (можно таскать мышкой по экрану, на мобильном фиксируется внизу)." },
+        { "element": "input / textarea", "description": "Поля ввода. Стили меняются от темы (в 'Terminal' — черные консоли, в 'Paper' — подчеркивания)." },
+        { "element": ".file-input-label", "description": "Кнопка 'Выбрать файл'. На мобильных превращается в иконку Скрепки." },
+        { "element": ".picrandom-container", "description": "Кнопка 'Рандом пик' (игральная кость). Вращается при клике." },
+        { "element": ".drag-over", "description": "Стиль формы, когда над ней держат файл (перетаскивание)." }
+      ]
+    },
+    {
+      "title": "4. Элементы интерфейса (UI)",
+      "items": [
+        { "element": ".board-nav", "description": "Список досок (/b/, /vg/ и т.д.). В 'Win95' — кнопки, в 'Shaft' — наклонные блоки." },
+        { "element": ".btn / button", "description": "Универсальные кнопки. Реагируют на нажатие (уменьшаются)." },
+        { "element": ".modal", "description": "Всплывающее окно (Настройки, Капча, Вход). По центру экрана." },
+        { "element": ".modal-overlay", "description": "Затемнение фона под модальным окном (блюр)." },
+        { "element": ".toast", "description": "Всплывающее уведомление внизу экрана ('Пост отправлен', 'Ошибка')." },
+        { "element": ".action-menu", "description": "Выпадающее меню у поста (Ответить, Скрыть, Пожаловаться)." },
+        { "element": "#scroll-top-btn / #scroll-bottom-btn", "description": "Круглые кнопки прокрутки страницы вверх/вниз." },
+        { "element": "canvas.identicon", "description": "Генератор аватарки пользователя на основе IP/ID (пиксельный рисунок)." }
+      ]
+    },
+    {
+      "title": "5. Галерея (Image Viewer)",
+      "items": [
+        { "element": ".iv-content-container", "description": "Контейнер открытой картинки на весь экран. Поддерживает зум и перетаскивание." },
+        { "element": ".iv-tools", "description": "Панель инструментов галереи (Поворот, Зеркало) — находится в углу." },
+        { "element": ".iv-nav-button", "description": "Стрелки 'Влево' / 'Вправо'." },
+        { "element": ".iv-info-bar", "description": "Полоска с информацией (Имя файла, размер, счетчик 1/50)." }
+      ]
+    },
+    {
+      "title": "6. Каталог (Catalog)",
+      "items": [
+        { "element": ".catalog-grid", "description": "Сетка карточек тредов (плитка)." },
+        { "element": ".catalog-item", "description": "Карточка треда. Увеличивается при наведении." },
+        { "element": ".catalog-thumb", "description": "Картинка треда в каталоге." },
+        { "element": ".catalog-info", "description": "Статистика треда (ответов/просмотров)." }
+      ]
+    },
+    {
+      "title": "7. Текстовые эффекты (Markup)",
+      "items": [
+        { "element": ".spoiler", "description": "Черный квадрат. Текст появляется при наведении или клике." },
+        { "element": ".greentext", "description": "Цитаты (строки, начинающиеся с >). Зеленый цвет." },
+        { "element": ".effect-shake", "description": "Трясущийся текст (красный неон)." },
+        { "element": ".effect-rainbow", "description": "Радужный переливающийся текст." },
+        { "element": ".effect-glitch", "description": "Текст с эффектом помех (раздваивается)." },
+        { "element": ".effect-blur", "description": "Размытый текст, становится четким при наведении." }
+      ]
+    },
+    {
+      "title": "8. Темы оформления (Themes)",
+      "description": "Переключаются добавлением класса к `body`.",
+      "list": [
+        "theme-light (Default)",
+        "theme-dark (Классическая темная)",
+        "theme-cyberpunk (Неон, глитчи, сетка, розово-голубой)",
+        "theme-win95 (Windows 95, серый, 3D кнопки)",
+        "theme-gameboy (Зеленые пиксели, ретро)",
+        "theme-shaft (Стиль аниме Monogatari, красный/черный, наклонный текст)",
+        "theme-terminal (Зеленый текст на черном, курсор, моноширинный)",
+        "theme-lain (Wired, шум на фоне, красный текст)",
+        "theme-luxury (Черный с золотом)",
+        "theme-toxic (Кислотный, радиоактивный)",
+        "theme-conan (Варварский, кровавый, старая бумага)",
+        "theme-discord (Стиль чата Discord)",
+        "theme-paper (Бумажный лист, шрифт печатной машинки)",
+        "theme-soviet (СССР, красный, конструктивизм)",
+        "theme-nord (Холодные скандинавские цвета)",
+        "theme-dracula (Вампирская, фиолетовая)",
+        "theme-ocean (Синее стекло, анимация плавания)",
+        "theme-forest (Лес, органические формы)",
+        "theme-sakura (Розовый, мягкий)",
+        "theme-gothic (Готика, строгий)",
+        "theme-noir (Ч/Б фильм)",
+        "theme-ukraine (Флаг, синий/желтый)",
+        "theme-crypto (Матрица/Биткоин)",
+        "theme-adventure (Мультяшный)"
+      ]
+    },
+    {
+      "title": "9. Мобильная адаптация (@media 768px)",
+      "items": [
+        { "change": "Шрифт", "description": "Увеличен базовый размер шрифта и кнопок для пальцев." },
+        { "change": "Header", "description": "Перестраивается в 2 строки. Поиск сжимается." },
+        { "change": "Board Nav", "description": "Превращается в горизонтальную ленту со скроллом." },
+        { "change": "Floating Box", "description": "Прилипает к низу экрана, на всю ширину." },
+        { "change": "Кнопки формата", "description": "Становятся в одну линию со скроллом." },
+        { "change": "Галерея", "description": "Упрощенный интерфейс, большие кнопки навигации." }
+      ]
+    },
+    {
+      "title": "10. Анимации и Keyframes",
+      "items": [
+        { "name": "spin", "description": "Вращение (лоадеры)." },
+        { "name": "shake-hard", "description": "Сильная тряска текста." },
+        { "name": "rainbow-move", "description": "Движение радужного градиента." },
+        { "name": "glitch-anim", "description": "Помехи." },
+        { "name": "popIn", "description": "Всплывание элементов." },
+        { "name": "skeleton-loading", "description": "Мерцание серых блоков (заглушки) пока грузится контент." },
+        { "name": "toxic-glow", "description": "Пульсация радиации." },
+        { "name": "scanline", "description": "Бегущая полоса (как на старом ТВ) для Cyberpunk/Lain." }
+      ]
+    }
+  ]
+}

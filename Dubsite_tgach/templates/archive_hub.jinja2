@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ТГАЧ АРХИВ</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2.9">
+    <link rel="icon" href="/static/favicon.ico">
+    <meta name="theme-color" content="#212121">
+</head>
+<body class="page-hub" {% if session.user %}data-user-id="{{ session.user.id }}"{% endif %} data-site-mode="{{ site_mode }}">
+    <!-- Скрипт инициализации темы -->
+    <script>
+        (function() {
+            try {
+                var theme = localStorage.getItem('theme');
+                if (!theme) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+                    else theme = 'light';
+                }
+                if (theme && theme !== 'light') document.body.classList.add('theme-' + theme);
+                
+                var settings = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var fontStyle = settings.fontStyle || 'b';
+                if (fontStyle === 'b') document.body.classList.add('font-style-b');
+            } catch (e) {}
+        })();
+    </script>
+
+    <header>
+        <div class="header-group-left">
+            <h1>
+                <a href="/" style="text-decoration:none; color:inherit;">ТГАЧ</a> 
+                <span style="font-weight:normal; opacity:0.7; font-size: 0.9em;"> / АРХИВ</span>
+            </h1>
+        </div>
+
+        <div class="header-group-right">
+            <div class="user-actions">
+                {% if session.user and session.user.is_admin %}
+                    <a href="/admin" class="header-btn admin-btn">👮‍♂️</a>
+                {% endif %}
+                <button id="theme-toggle" class="theme-toggle-btn">🌙</button>
+                {% if session.user %}
+                    <a href="/auth/logout" class="logout-link">{{ request.state.t('logout_btn') }}</a>
+                {% else %}
+                    <a href="/login" class="header-btn">🔑</a>
+                {% endif %}
+            </div>
+        </div>
+
+        <nav style="width: 100%; text-align: center; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border-primary); display: block;">
+            <a href="/">[{{ request.state.t('nav_main') }}]</a>
+        </nav>
+    </header>
+
+    <main>
+        <h2>{{ request.state.t('archive_hub_title') }}</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 20px;">{{ request.state.t('archive_hub_desc') }}</p>
+
+        <div class="mode-selection-container">
+            <a href="/archive/threads/" class="mode-card">
+                <div class="mode-card-icon">💀</div>
+                <div class="mode-card-content">
+                    <span class="mode-card-title">{{ request.state.t('archive_card_dead') }}</span>
+                    <p class="mode-card-description">{{ request.state.t('archive_desc_dead') }}</p>
+                </div>
+            </a>
+            <a href="/archive/chat/" class="mode-card">
+                <div class="mode-card-icon">📜</div>
+                <div class="mode-card-content">
+                    <span class="mode-card-title">{{ request.state.t('archive_card_chat') }}</span>
+                    <p class="mode-card-description">{{ request.state.t('archive_desc_chat') }}</p>
+                </div>
+            </a>
+        </div>
+    </main>
+
+    <footer>
+        <p>2025 - ТГАЧ АРХИВ</p>
+    </footer>
+    
+    <!-- Необходимые скрипты для работы темы -->
+    <script src="/static/js/main.js?v=2.1" defer></script>
+</body>
+</html>

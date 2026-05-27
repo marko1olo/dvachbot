@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Полезное - {{ request.state.site_name }}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="icon" href="/static/favicon.ico">
+    <style>
+        .tool-card {
+            background: var(--bg-post);
+            border: 1px solid var(--border-primary);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: var(--shadow-main);
+        }
+        .tool-icon { font-size: 2em; margin-bottom: 10px; display: block; }
+        .import-status { margin-top: 15px; font-weight: bold; }
+        /* Скрытый блок (для донатов) */
+        .hidden { display: none !important; }
+        /* Простой футер, раз нет отдельного файла */
+        footer {
+            margin-top: auto;
+            padding: 20px;
+            text-align: center;
+            border-top: 1px solid var(--border-primary);
+            background: var(--bg-main);
+            color: var(--text-secondary);
+        }
+        footer a { margin: 0 10px; color: var(--text-secondary); text-decoration: none; }
+        footer a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="header-group-left">
+            <a href="/" class="header-btn" title="На главную">🏠</a>
+            <h1>🛠️ {{ request.state.t('useful_title') }}</h1>
+        </div>
+    </header>
+    <main>
+        <div class="tool-card">
+            <span class="tool-icon">🎰</span>
+            <h2>{{ request.state.t('tool_roulette_title') }}</h2>
+            <p>{{ request.state.t('tool_roulette_desc') }}</p>
+            <a href="/tv/random" class="btn btn-secondary">{{ request.state.t('btn_submit_send') }}</a>
+        </div>
+        <div class="tool-card">
+            <span class="tool-icon">📊</span>
+            <h2>{{ request.state.t('tool_stats_title') }}</h2>
+            <p>{{ request.state.t('tool_stats_desc') }}</p>
+            <div id="public-stats" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:15px; margin-top:15px;">
+                <div style="background:var(--bg-hover); padding:10px; border-radius:4px; text-align:center;">
+                    <div style="font-size:1.5em; font-weight:bold; color:var(--accent-primary);" id="stat-p24">...</div>
+                    <div style="font-size:0.8em; color:var(--text-secondary);">{{ request.state.t('stat_posts_24') }}</div>
+                </div>
+                <div style="background:var(--bg-hover); padding:10px; border-radius:4px; text-align:center;">
+                    <div style="font-size:1.5em; font-weight:bold; color:#2ecc71;" id="stat-t24">...</div>
+                    <div style="font-size:0.8em; color:var(--text-secondary);">{{ request.state.t('stat_threads_24') }}</div>
+                </div>
+                <div style="background:var(--bg-hover); padding:10px; border-radius:4px; text-align:center;">
+                    <div style="font-size:1.5em; font-weight:bold; color:#9b59b6;" id="stat-online">...</div>
+                    <div style="font-size:0.8em; color:var(--text-secondary);">{{ request.state.t('stat_users_online') }}</div>
+                </div>
+            </div>
+        </div>
+        <div class="tool-card" style="border: 2px solid #ff0055;">
+            <span class="tool-icon">🍑</span>
+            <h2>{{ request.state.t('tool_spank_title') }}</h2>
+            <p>{{ request.state.t('tool_spank_desc') }}</p>
+            <button onclick="startSpankGame()" class="btn btn-primary" style="background: #ff0055; border-color: #ff0055;">{{ t('btn_play') }}</button>
+        </div>
+        <div class="tool-card">
+            <span class="tool-icon">🚑</span>
+            <h2>{{ request.state.t('tool_import_title') }}</h2>
+            <p>{{ request.state.t('tool_import_desc') }}</p>
+            <form id="user-import-form" style="margin-top: 15px;">
+                <div class="form-group">
+                    <label>{{ request.state.t('import_label_url') }}</label>
+                    <input type="url" name="url" placeholder="https://2ch.hk/b/res/..." required style="width: 100%;">
+                </div>
+                <div class="form-group">
+                    <label>{{ request.state.t('import_label_board') }}</label>
+                    <select name="board_id" required style="width: 100%;">
+                        {% for bid, b in boards.items() %}
+                        <option value="{{ bid }}">/{{ bid }}/ - {{ b.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>{{ request.state.t('import_label_comment') }}</label>
+                    <input type="text" name="comment" placeholder="..." maxlength="200" style="width: 100%;">
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">{{ request.state.t('import_btn') }}</button>
+            </form>
+            <div id="import-form-status" class="import-status"></div>
+        </div>
+        <div class="tool-card">
+            <span class="tool-icon">🤖</span>
+            <h2>{{ request.state.t('tool_bot_title') }}</h2>
+            <p>{{ request.state.t('tool_bot_desc') }}</p>
+            <a href="https://t.me/{{ BOT_USERNAME }}" target="_blank" class="btn btn-secondary">Telegram</a>
+        </div>
+        <div class="tool-card">
+            <span class="tool-icon">📚</span>
+            <h2>{{ request.state.t('tool_api_title') }}</h2>
+            <p>{{ request.state.t('tool_api_desc') }}</p>
+            <a href="/docs" target="_blank" class="btn btn-secondary">Swagger UI</a>
+        </div>
+        <!-- Support section hidden by default, keeping it as is for now or translate if needed later -->
+        <div id="support-section" class="tool-card hidden" style="border: 2px solid #f1c40f;">
+            <span class="tool-icon">💎</span>
+            <h2>{{ t('donate_title') }}</h2>
+            <p>{{ t('donate_text') }}</p>
+            <div style="display:flex; gap:10px; margin-top:20px; flex-wrap:wrap;">
+                <button class="btn btn-secondary" onclick="showCrypto('ETH')">💎 Ethereum</button>
+                <button class="btn btn-secondary" onclick="showCrypto('BTC')">₿ Bitcoin</button>
+                <button class="btn btn-secondary" onclick="showCrypto('XMR')">🔒 Monero</button>
+                <button class="btn btn-secondary" onclick="showCrypto('USDT')">💲 USDT (TRC20)</button>
+                <button class="btn btn-secondary" onclick="showCrypto('SOL')">🔵 Solana</button>
+            </div>
+            <div id="crypto-address" style="margin-top:15px; font-family:monospace; background:var(--bg-input); padding:10px; border-radius:4px; display:none; word-break:break-all;">
+            </div>
+            <hr style="margin:20px 0; border-color:var(--border-input);">
+            <h3>{{ t('passcode_title') }}</h3>
+            <p>{{ t('passcode_features') }}</p>
+            <ul style="padding-left:20px; color:var(--text-secondary);">
+                <li>10 картинок в одном посте</li>
+                <li>Безлимитный постинг (без капчи/кулдауна)</li>
+                <li>Свой цветной ник (по желанию)</li>
+                <li>Увеличенный лимит на размер файлов (50МБ+)</li>
+            </ul>
+            <button class="btn btn-primary" style="margin-top:10px; opacity:0.5; cursor:not-allowed;" title="Скоро...">Купить Пасскод</button>
+        </div>
+    </main>
+    <footer>
+        <div>2025 - ТГАЧ</div>
+        <div style="margin-top: 10px;">
+            <a href="/about/">[О проекте]</a>
+            <a href="/faq/">[FAQ]</a>
+            <a href="/useful/">[Полезное]</a>
+            <a href="#" onclick="event.preventDefault(); openModal('feedback-modal');" style="color: var(--accent-primary);">[Связь]</a>
+            <a href="/archive/" style="color: var(--accent-primary); font-weight: bold;">[АРХИВ]</a>
+        </div>
+    </footer>
+    <script src="/static/js/main.js"></script>
+    <script>
+        // === ЛОГИКА ИМПОРТА ===
+        document.getElementById('user-import-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button');
+            const status = document.getElementById('import-form-status');
+            btn.disabled = true;
+            const originalText = btn.textContent;
+            btn.textContent = "{{ request.state.t('sending') }}";
+            status.textContent = "";
+            const formData = new FormData(e.target);
+            const data = Object.fromEntries(formData.entries());
+            try {
+                const res = await fetch('/api/request_import', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(data)
+                });
+                const json = await res.json();
+                if (res.ok) {
+                    status.style.color = "green";
+                    status.textContent = json.message || "{{ request.state.t('import_sent') }}";
+                    e.target.reset();
+                } else {
+                    status.style.color = "red";
+                    status.textContent = json.detail || "{{ request.state.t('proc_err') }}";
+                }
+            } catch (err) {
+                status.style.color = "red";
+                status.textContent = "{{ request.state.t('network_error') }}";
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+            }
+        });
+        // === ЛОГИКА СТАТИСТИКИ И ДОНАТОВ ===
+        // 1. Загрузка публичной статистики
+        fetch('/api/stats/detailed').then(r => r.json()).then(d => {
+            let p24 = 0, t24 = 0;
+            // Суммируем данные по всем доскам
+            for(let b in d) {
+                if (d[b].posts_24h) p24 += d[b].posts_24h;
+                if (d[b].threads_24h) t24 += d[b].threads_24h;
+            }
+            document.getElementById('stat-p24').textContent = p24;
+            document.getElementById('stat-t24').textContent = t24;
+            // Онлайн (фейк или реальный, если есть эндпоинт. Пока рандом для живости)
+            // Если хочешь реальный - нужно прокинуть его в api/stats/detailed
+            document.getElementById('stat-online').textContent = Math.floor(Math.random() * 30) + 5; 
+        }).catch(e => console.error("Stats error", e));
+        // 2. Проверка "Олдфага" для показа донатов
+        function checkOldfag() {
+            // Критерии:
+            // 1. Есть сохраненные посты (постил ранее)
+            const myPosts = JSON.parse(localStorage.getItem('my_post_ids') || '[]');
+            // 2. Есть история просмотров
+            const history = JSON.parse(localStorage.getItem('viewed_threads_history') || '[]');
+            // 3. Или первый визит был давно
+            const firstVisit = localStorage.getItem('first_visit_ts');
+            const now = Date.now();
+            const daysSinceFirstVisit = firstVisit ? (now - firstVisit) / (1000 * 60 * 60 * 24) : 0;
+            // Логика: Постил хотя бы 1 раз ИЛИ посмотрел > 5 тредов ИЛИ сидит > 3 дней
+            if (myPosts.length > 0 || history.length > 5 || daysSinceFirstVisit > 3) {
+                document.getElementById('support-section').classList.remove('hidden');
+            }
+        }
+        checkOldfag();
+        // 3. Крипта (Показ адресов)
+        function showCrypto(coin) {
+            const addrBox = document.getElementById('crypto-address');
+            addrBox.style.display = 'block';
+            // ЗАМЕНИ НА СВОИ АДРЕСА
+            const wallets = {
+                'ETH': '0x8892dfa4d48ded8b9216a5b6576f2a6f98ec1e40',
+                'BTC': '3D1vv372emfWc5mBfov1va9S34JtXFhDAP',
+                'XMR': '84L25Tp4A31YujUPgCNcwTR4QFEVudSHA4HTByGUEzrudv7j5T6vLc1Kh7pfGvYfoULCiEiirnwmjQn1pvWYPNWYSgeU7iD',
+                'USDT': 'TEser8G4SBExhH4vrnafrXTqzU14SVY9hu',
+                'SOL': 'HA1k3W4WiZNq8SKdUQnXD21b9seDDyTBVYnLPoDQ5sqE'
+            };
+            addrBox.innerHTML = `
+                <span style="color:var(--accent-primary); font-weight:bold;">${coin}:</span> 
+                ${wallets[coin] || 'Адрес не задан'}
+                <br><br>
+                <small style="color:gray;">Нажми, чтобы скопировать (пока ручками).</small>
+            `;
+        }
+    </script>
+    <div id="spank-game-modal" class="modal" style="background:#1a1a1a; max-width: 400px; height: 500px; padding:0; overflow:hidden;">
+        <button class="modal-close-btn" style="position:absolute; top:10px; right:10px; z-index:100; color:white; background:rgba(0,0,0,0.5); border:none; border-radius:50%; width:30px; height:30px; font-size:20px; cursor:pointer;">&times;</button>
+        <div id="spank-game-container" style="width:100%; height:100%;"></div>
+    </div>
+
+    <script>
+    function startSpankGame() {
+        const modal = document.getElementById('spank-game-modal');
+        const container = document.getElementById('spank-game-container');
+        const overlay = document.getElementById('modal-overlay') || document.createElement('div');
+        
+        if (!document.getElementById('modal-overlay')) {
+            overlay.id = 'modal-overlay';
+            document.body.appendChild(overlay);
+        }
+
+        // Открываем модалку
+        overlay.style.display = 'block';
+        modal.style.display = 'block';
+        setTimeout(() => {
+            overlay.classList.add('active');
+            modal.classList.add('active');
+        }, 10);
+
+        // Картинка (путь должен быть верным)
+        const bgImg = "/static/img/captcha/spank_target.webp";
+
+        // Рендер HTML (то же самое, что в капче, но без таймеров победы)
+        container.innerHTML = `
+            <div class="spank-ui" id="game-area" style="position:relative; width:100%; height:100%; overflow:hidden; background:#222; cursor:pointer;">
+                <div style="position:absolute; top:10px; left:10px; color:#ff0055; font-weight:bold; font-size:20px; z-index:60; font-family:monospace;">
+                    SCORE: <span id="spank-score">0</span>
+                </div>
+                <div class="spank-flash-overlay" id="game-flash"></div>
+                
+                <!-- Слой 1: Фон (База) -->
+                <img src="${bgImg}" class="spank-layer layer-base" draggable="false" style="position:absolute; bottom:0; left:50%; transform:translateX(-50%); height:90%;">
+                
+                <!-- Слой 2: Анимируемая ЖОПА -->
+                <img src="${bgImg}" class="spank-layer layer-jiggle" id="game-butt" draggable="false" style="position:absolute; bottom:0; left:50%; transform:translateX(-50%); height:90%;">
+                
+                <div class="captcha-hint" style="color:rgba(255,255,255,0.5); z-index:50; bottom:10px;">${t('spank_game_hint')}</div>
+            </div>
+        `;
+
+        const area = document.getElementById('game-area');
+        const butt = document.getElementById('game-butt');
+        const flash = document.getElementById('game-flash');
+        const scoreEl = document.getElementById('spank-score');
+        
+        let score = 0;
+        let cooldown = false;
+        let lastX=0, lastY=0, lastTime=0;
+
+        const doSpank = (x, y) => {
+            if (cooldown) return;
+            cooldown = true;
+            score++;
+            scoreEl.textContent = score;
+
+            if (navigator.vibrate) navigator.vibrate(40);
+
+            // 1. АНИМАЦИЯ (Рандомная физика: Лево / Право / Центр)
+            butt.classList.remove('hit-left', 'hit-right', 'hit-center');
+            void butt.offsetWidth; // Force Reflow
+            SpankAudioManager.play();
+            const r = Math.random();
+            let animClass = 'hit-center'; // По дефолту центр
+            if (r < 0.2) animClass = 'hit-left';
+            else if (r < 0.4) animClass = 'hit-right';
+
+            butt.classList.add(animClass);
+
+            // Вариативность скорости (центр чуть быстрее для хлесткости)
+            const speedBase = (animClass === 'hit-center') ? 0.3 : 0.35;
+            butt.style.animationDuration = (speedBase + Math.random() * 0.1) + 's';
+
+            // 2. ВСПЫШКА
+            flash.style.transition = 'none';
+            flash.classList.add('active');
+            setTimeout(() => {
+                flash.style.transition = 'opacity 0.5s ease-out';
+                flash.classList.remove('active');
+            }, 50);
+
+            // 3. РУКА
+            const rect = area.getBoundingClientRect();
+            const relX = x - rect.left;
+            const relY = y - rect.top;
+
+            const hand = document.createElement('div');
+            hand.className = 'hand-slap';
+            hand.textContent = '🖐️';
+            hand.style.left = relX + 'px';
+            hand.style.top = relY + 'px';
+            hand.style.transform = `translate(-50%, -50%) rotate(${Math.random() * 40 - 20}deg)`;
+            area.appendChild(hand);
+            setTimeout(() => hand.remove(), 200);
+            const fx = document.createElement('div');
+            fx.className = 'smack-fx';
+            const words = t('spank_sfx') || ["SMACK!", "PLAP!", "SLAP!", "AHH~", "🍑"];
+            const wordList = Array.isArray(words) ? words : words.split(',');
+            fx.textContent = wordList[Math.floor(Math.random() * wordList.length)];
+            fx.style.left = relX + 'px';
+            fx.style.top = relY + 'px';
+            area.appendChild(fx);
+            setTimeout(() => fx.remove(), 500);
+
+            setTimeout(() => { cooldown = false; }, 400); // Быстрый кулдаун для спама
+        };
+
+        // КЛИК
+        const handleTap = (e) => {
+            if(e.cancelable) e.preventDefault();
+            const cx = e.touches ? e.touches[0].clientX : e.clientX;
+            const cy = e.touches ? e.touches[0].clientY : e.clientY;
+            doSpank(cx, cy);
+        };
+
+        // ДВИЖЕНИЕ (Velocity)
+        const handleMove = (e) => {
+            const cx = e.touches ? e.touches[0].clientX : e.clientX;
+            const cy = e.touches ? e.touches[0].clientY : e.clientY;
+            const now = Date.now();
+
+            if (lastTime > 0) {
+                const dt = now - lastTime;
+                const dist = Math.hypot(cx - lastX, cy - lastY);
+                const speed = dist / dt;
+                
+                // Зона удара (нижняя треть)
+                const rect = area.getBoundingClientRect();
+                const relY = cy - rect.top;
+
+                if (speed > 1.5 && !cooldown && relY > rect.height * 0.4) {
+                    doSpank(cx, cy);
+                }
+            }
+            lastX = cx; lastY = cy; lastTime = now;
+        };
+
+        area.addEventListener('mousedown', handleTap);
+        area.addEventListener('touchstart', handleTap, {passive: false});
+        area.addEventListener('mousemove', handleMove);
+        area.addEventListener('touchmove', handleMove, {passive: true});
+        area.addEventListener('mouseleave', () => { lastTime = 0; });
+    }
+    </script>
+</body>
+</html>

@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Жопо-Калибратор 3000</title>
+    <style>
+        body {
+            background: #111;
+            color: #eee;
+            font-family: monospace;
+            display: flex;
+            gap: 20px;
+            padding: 20px;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+        .canvas-area {
+            position: relative;
+            border: 2px solid #444;
+            /* Размеры контейнера как в боевом CSS */
+            width: 500px; 
+            height: 500px;
+            background: #000;
+            overflow: hidden;
+            cursor: crosshair;
+        }
+        
+        /* Нижний слой (Призрак/Фон) - чтобы видеть, где остальное тело */
+        #img-ghost {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            opacity: 0.3; /* Тусклый */
+            filter: grayscale(1);
+            pointer-events: none;
+        }
+
+        /* Верхний слой (То, что будет трястись) */
+        #img-mask {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            z-index: 2;
+            pointer-events: none;
+            /* Маска применяется сюда */
+        }
+
+        /* Маркер центра */
+        #marker {
+            position: absolute;
+            width: 10px; height: 10px;
+            background: red;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .controls {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .control-group {
+            background: #222;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        label { display: block; margin-bottom: 5px; font-weight: bold; color: #aaa; }
+        input[type="range"] { width: 100%; }
+        
+        .output {
+            background: #000;
+            border: 1px solid #0f0;
+            color: #0f0;
+            padding: 15px;
+            font-size: 14px;
+            word-break: break-all;
+            cursor: pointer;
+        }
+        .output:active { background: #003300; }
+
+        h2 { margin-top: 0; color: #ff0055; }
+    </style>
+</head>
+<body>
+
+    <div class="canvas-area" id="canvas">
+        <!-- СТАТИКА (Для ориентира) -->
+        <img src="spank_target.webp" id="img-ghost">
+        
+        <!-- ДИНАМИКА (Результат маски) -->
+        <img src="spank_target.webp" id="img-mask">
+        
+        <div id="marker"></div>
+    </div>
+
+    <div class="controls">
+        <h2>Настройки Маски</h2>
+        <p>1. Кликни на картинку (установить центр).<br>2. Настрой радиусы ползунками.<br>3. Скопируй код снизу.</p>
+
+        <div class="control-group">
+            <label>Позиция X: <span id="val-x">50%</span></label>
+            <input type="range" id="inp-x" min="0" max="100" value="50">
+        </div>
+
+        <div class="control-group">
+            <label>Позиция Y: <span id="val-y">50%</span></label>
+            <input type="range" id="inp-y" min="0" max="100" value="50">
+        </div>
+
+        <div class="control-group">
+            <label>Ширина пятна (Radius X): <span id="val-rx">15%</span></label>
+            <input type="range" id="inp-rx" min="1" max="100" value="15">
+        </div>
+
+        <div class="control-group">
+            <label>Высота пятна (Radius Y): <span id="val-ry">15%</span></label>
+            <input type="range" id="inp-ry" min="1" max="100" value="15">
+        </div>
+
+        <div class="control-group">
+            <label>Размытие краев (Fade): <span id="val-fade">10%</span></label>
+            <input type="range" id="inp-fade" min="0" max="50" value="10">
+        </div>
+
+        <h3>Результат (CSS):</h3>
+        <div class="output" id="css-output" title="Нажми, чтобы скопировать">
+            /* Код появится здесь */
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const imgMask = document.getElementById('img-mask');
+        const marker = document.getElementById('marker');
+        const output = document.getElementById('css-output');
+
+        const inputs = {
+            x: document.getElementById('inp-x'),
+            y: document.getElementById('inp-y'),
+            rx: document.getElementById('inp-rx'),
+            ry: document.getElementById('inp-ry'),
+            fade: document.getElementById('inp-fade'),
+        };
+
+        const labels = {
+            x: document.getElementById('val-x'),
+            y: document.getElementById('val-y'),
+            rx: document.getElementById('val-rx'),
+            ry: document.getElementById('val-ry'),
+            fade: document.getElementById('val-fade'),
+        };
+
+	function update() {
+            const x = inputs.x.value;
+            const y = inputs.y.value;
+            const rx = inputs.rx.value;
+            const ry = inputs.ry.value;
+            const fade = parseInt(inputs.fade.value);
+
+            // Обновляем лейблы
+            labels.x.textContent = x + '%';
+            labels.y.textContent = y + '%';
+            labels.rx.textContent = rx + '%';
+            labels.ry.textContent = ry + '%';
+            labels.fade.textContent = fade + '%';
+
+            // Двигаем маркер
+            const rect = canvas.getBoundingClientRect();
+            marker.style.left = (rect.width * x / 100) + 'px';
+            marker.style.top = (rect.height * y / 100) + 'px';
+
+            // --- ИСПРАВЛЕННАЯ ЛОГИКА ГРАДИЕНТА ---
+            
+            // Вычисляем точку начала размытия.
+            // Если fade = 0, то solidLimit = 100 (сразу прозрачность, жесткий край).
+            // Если fade = 20, то solidLimit = 80 (от 80% до 100% радиуса идет градиент).
+            const solidLimit = Math.max(0, 100 - fade);
+
+            // Формируем правильный CSS градиент
+            // ellipse RX% RY% -> задает внешний размер овала
+            // black 0%, black SOLID% -> сплошная часть
+            // transparent 100% -> конец размытия (край овала)
+            const finalMask = `radial-gradient(ellipse ${rx}% ${ry}% at ${x}% ${y}%, black 0%, black ${solidLimit}%, transparent 100%)`;
+
+            imgMask.style.maskImage = finalMask;
+            imgMask.style.webkitMaskImage = finalMask;
+            
+            // Точка трансформации
+            imgMask.style.transformOrigin = `${x}% ${y}%`;
+
+            // Генерируем готовый код
+            const codeBlock = `
+/* Вставь это в .layer-jiggle в style.css */
+-webkit-mask-image: ${finalMask};
+mask-image: ${finalMask};
+transform-origin: ${x}% ${y}%;
+            `.trim();
+
+            output.textContent = codeBlock;
+        }
+
+        // Клик по канвасу
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const xPct = Math.round(((e.clientX - rect.left) / rect.width) * 100);
+            const yPct = Math.round(((e.clientY - rect.top) / rect.height) * 100);
+            
+            inputs.x.value = xPct;
+            inputs.y.value = yPct;
+            update();
+        });
+
+        // Листенеры на инпуты
+        Object.values(inputs).forEach(inp => inp.addEventListener('input', update));
+
+        // Копирование
+        output.addEventListener('click', () => {
+            navigator.clipboard.writeText(output.textContent);
+            const old = output.style.borderColor;
+            output.style.borderColor = '#fff';
+            setTimeout(() => output.style.borderColor = old, 200);
+        });
+
+        // Инициализация
+        update();
+    </script>
+</body>
+</html>

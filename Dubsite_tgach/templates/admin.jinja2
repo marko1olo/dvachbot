@@ -1,0 +1,2081 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ТГАЧ :: Центр Управления</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2.9">
+    <link rel="icon" href="/static/favicon.ico">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .scope-radio-group {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 15px;
+            align-items: center;
+            background: var(--bg-post);
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border-input);
+        }
+        .scope-btn {
+            cursor: pointer;
+            padding: 8px 16px;
+            border: 1px solid var(--border-input);
+            background: var(--bg-input);
+            color: var(--text-secondary);
+            border-radius: 6px;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: bold;
+            font-size: 0.95em;
+            user-select: none;
+        }
+        .scope-btn input { display: none; } /* Прячем стандартную точку */
+        
+        .scope-btn:hover {
+            border-color: var(--text-secondary);
+            color: var(--text-primary);
+        }
+
+        /* Активное состояние - Локальный (Синий) */
+        .scope-btn:has(input[value="current"]:checked) {
+            background: var(--accent-primary);
+            color: #fff;
+            border-color: var(--accent-primary);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        }
+
+        /* Активное состояние - Глобальный (Красный/Опасный) */
+        .scope-btn:has(input[value="global"]:checked) {
+            background: #d32f2f; /* Красный */
+            color: #fff;
+            border-color: #d32f2f;
+            box-shadow: 0 4px 10px rgba(211, 47, 47, 0.3);
+            animation: pulse-danger 2s infinite;
+        }
+
+        @keyframes pulse-danger {
+            0% { box-shadow: 0 0 0 0 rgba(211, 47, 47, 0.4); }
+            70% { box-shadow: 0 0 0 6px rgba(211, 47, 47, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(211, 47, 47, 0); }
+        }
+
+        /* ИСПРАВЛЕНИЕ: Растягиваем фон на всю высоту, чтобы не было белой полосы снизу */
+        html, body {
+            min-height: 100vh;
+            background-color: var(--bg-body, #212121);
+            margin: 0;
+        }
+        /* Специфичные стили админки */
+        .admin-layout {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 20px;
+            max-width: 1200px;
+            margin: 20px auto;
+        }
+        /* Боковое меню */
+        .admin-sidebar {
+            background: var(--bg-post);
+            border: 1px solid var(--border-primary);
+            border-radius: 8px;
+            padding: 15px;
+            height: fit-content;
+        }
+        .admin-nav-btn {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 12px;
+            margin-bottom: 5px;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: 4px;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        .admin-nav-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+        .admin-nav-btn.active { background: var(--accent-primary); color: var(--text-button); }
+        /* Контент */
+        .admin-content {
+            background: var(--bg-post);
+            border: 1px solid var(--border-primary);
+            border-radius: 8px;
+            padding: 25px;
+            min-height: 500px;
+        }
+        .tab-pane { display: none; }
+        .tab-pane.active { display: block; }
+        /* Карточки статистики */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: var(--bg-input);
+            border: 1px solid var(--border-input);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-number { font-size: 2.5em; font-weight: bold; color: var(--accent-primary); display: block; }
+        .stat-label { color: var(--text-secondary); font-size: 0.9em; text-transform: uppercase; }
+        #inbox-badge {
+            background: #ff4444;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 10px;
+            margin-left: 5px;
+            font-weight: bold;
+            animation: pulse-red 2s infinite;
+        }
+        .feedback-card.unread {
+            border-left: 4px solid #ff4444 !important;
+            background: rgba(255, 68, 68, 0.05);
+        }
+        .log-console {
+            background: #1e1e1e;
+            color: #00ff00;
+            font-family: monospace;
+            padding: 15px;
+            border-radius: 4px;
+            height: 300px;
+            overflow-y: auto;
+            font-size: 0.85em;
+            border: 1px solid #333;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #333; padding-bottom: 2px; }
+        /* Круговые диаграммы здоровья */
+        .health-circle {
+            width: 80px; height: 80px;
+            border-radius: 50%;
+            /* border: 4px solid var(--border-input); Убрали рамку для градиента */
+            display: flex; align-items: center; justify-content: center;
+            font-weight: bold; font-size: 1.2em;
+            margin: 0 auto 10px;
+            color: var(--text-primary);
+            transition: background 0.5s ease;
+        }
+        @media (max-width: 768px) {
+            .admin-layout { grid-template-columns: 1fr; }
+        }
+        .switch { position: relative; display: inline-block; width: 50px; height: 26px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #dc3545; }
+        input:focus + .slider { box-shadow: 0 0 1px #dc3545; }
+        input:checked + .slider:before { transform: translateX(24px); }
+    </style>
+</head>
+<body data-user-id="{{ request.state.user_hash }}" data-is-admin="{{ 'true' if session.user.is_admin else 'false' }}" data-site-mode="{{ site_mode }}">
+    <div id="app-loader">
+        <div class="loader-content">
+            <img src="/static/logo.png" alt="TGACH" width="80" height="80">
+            <div class="loader-spinner"></div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            try {
+                var settings = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var theme = settings.theme || localStorage.getItem('theme');
+                if (!theme) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+                    else theme = 'light';
+                    localStorage.setItem('theme', theme);
+                }
+                if (theme && theme !== 'light') document.body.classList.add('theme-' + theme);
+                var fontStyle = settings.fontStyle || 'b';
+                if (fontStyle === 'b') document.body.classList.add('font-style-b');
+                var fontSize = settings.fontSize;
+                if (!fontSize) {
+                    if (window.innerWidth <= 768) fontSize = 'small';
+                    else fontSize = 'medium';
+                }
+                document.body.classList.add('font-size-' + fontSize);
+            } catch (e) { console.error(e); }
+        })();
+    </script>
+    <header>
+        <div class="board-nav">
+            <a href="/">[На главную]</a>
+        </div>
+        <h1>👮‍♂️ Центр Управления ТГАЧ</h1>
+    </header>
+    <div class="admin-layout">
+        <aside class="admin-sidebar">
+            <!-- Видят ВСЕ сотрудники (Janitor+) -->
+            <button class="admin-nav-btn active" onclick="openTab('dashboard')">📊 Дашборд</button>
+            <button class="admin-nav-btn" onclick="openTab('reports')">🚨 Жалобы</button>
+            <button class="admin-nav-btn" onclick="openTab('livefeed')">⚡ Live Feed</button>
+            <button class="admin-nav-btn" onclick="openTab('graphs')">📈 Графики</button>
+            <!-- Видят MOD, ADMIN, ROOT -->
+            {% if user_role in ['mod', 'admin'] or is_root %}
+                <button class="admin-nav-btn" onclick="openTab('moderation')">🔨 Модерация (Списки)</button>
+                <button class="admin-nav-btn" onclick="openTab('mod_queue')">🛡️ Нейро-Щит</button>
+                <button class="admin-nav-btn" onclick="openTab('bans')">⛔ Бан-лист</button>
+                <button class="admin-nav-btn" onclick="openTab('inspector')">🔍 Инспектор Постов</button>
+                <button class="admin-nav-btn" onclick="openTab('user_inspector')">👤 Инспектор Юзеров</button>
+                <button class="admin-nav-btn" onclick="openTab('inbox')">📬 Приемная <span id="inbox-badge" style="display:none;">New</span></button>
+            {% endif %}
+            <!-- Остальные кнопки без изменений... -->
+            {% if user_role == 'admin' or is_root %}
+                <button class="admin-nav-btn" onclick="openTab('boards')">📂 Доски</button>
+                <button class="admin-nav-btn" onclick="openTab('banners')">🖼️ Баннеры</button>
+                <button class="admin-nav-btn" onclick="openTab('spamfilter')">🛡️ Спам-фильтр</button>
+                <button class="admin-nav-btn" onclick="openTab('import')">📥 Импорт Тредов</button>
+                <button class="admin-nav-btn" onclick="openTab('requests')">📥 Заявки</button>
+            {% endif %}
+            {% if is_root %}
+                <button class="admin-nav-btn" onclick="openTab('neuro')">🧠 Нейросеть</button>
+                <button class="admin-nav-btn" onclick="openTab('settings')">⚙️ Система</button>
+                <button class="admin-nav-btn" onclick="openTab('users')">👥 Пользователи (Роли)</button>
+                <button class="admin-nav-btn" onclick="openTab('logs')">📜 Логи Системы</button>
+                <button class="admin-nav-btn" onclick="openTab('fullstats')">📈 Полная Статистика</button>
+            {% endif %}
+        </aside>
+        <section class="admin-content">
+            <div id="dashboard" class="tab-pane active">
+                <div class="server-health-panel" style="background: var(--bg-input); padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 1px solid var(--border-primary);">
+                    <h3>🖥️ Состояние Сервера</h3>
+                    <div style="display: flex; gap: 20px; justify-content: space-around; text-align: center;">
+                        <div>
+                            <div class="health-circle" id="health-cpu" style="border-color: #3498db;">0%</div>
+                            <small>CPU</small>
+                        </div>
+                        <div>
+                            <div class="health-circle" id="health-ram" style="border-color: #9b59b6;">0%</div>
+                            <small>RAM</small>
+                        </div>
+                        <div>
+                            <div class="health-circle" id="health-disk" style="border-color: #e67e22;">0%</div>
+                            <small>HDD</small>
+                        </div>
+                    </div>
+                </div>
+                <h2>Статистика сайта</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-number" id="stat-posts">-</span>
+                        <span class="stat-label">Всего постов</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-number" id="stat-threads">-</span>
+                        <span class="stat-label">Живых тредов</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-number" id="stat-online">-</span>
+                        <span class="stat-label">WS Онлайн</span>
+                    </div>
+                </div>
+                <h3>⚙️ Системные Очереди (Бэклог)</h3>
+                <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));">
+                    <div class="stat-card" style="border-color: #f1c40f;">
+                        <span class="stat-number" id="q-mirror" style="color: #f1c40f;">0</span>
+                        <span class="stat-label">Зеркала</span>
+                    </div>
+                    <div class="stat-card" style="border-color: #e74c3c;">
+                        <span class="stat-number" id="q-mod" style="color: #e74c3c;">0</span>
+                        <span class="stat-label">Модерация</span>
+                    </div>
+                    <div class="stat-card" style="border-color: #3498db;">
+                        <span class="stat-number" id="q-notif" style="color: #3498db;">0</span>
+                        <span class="stat-label">Уведомления</span>
+                    </div>
+                    <div class="stat-card" style="border-color: #9b59b6;">
+                        <span class="stat-number" id="q-import" style="color: #9b59b6;">0</span>
+                        <span class="stat-label">Заявки (User)</span>
+                    </div>
+                    <div class="stat-card" style="border-color: #2ecc71;">
+                        <span class="stat-number" id="q-import-sim" style="color: #2ecc71;">0</span>
+                        <span class="stat-label">Симулятор (Очередь)</span>
+                    </div>
+                </div>
+                <h3>Популярные доски</h3>
+                <ul id="top-boards-list" style="list-style: none; padding: 0; margin-bottom: 20px;">
+                </ul>
+                <button class="btn btn-secondary" onclick="loadStats()" style="margin-bottom: 30px;">🔄 Обновить данные</button>
+            </div>
+            <div id="boards" class="tab-pane">
+                <h2>📂 Управление Досками</h2>
+                <div style="background:var(--bg-input); padding:15px; border-radius:4px; margin-bottom:20px; border: 1px solid var(--border-input);">
+                    <h4>Создать новую доску</h4>
+                    <form id="admin-create-board-form" style="display:flex; gap:10px; flex-wrap:wrap; align-items: center;">
+                        <input type="text" name="board_id" placeholder="ID (напр: news)" required style="width:120px;" pattern="[a-z0-9]{2,10}">
+                        <input type="text" name="name" placeholder="Название" required style="flex-grow:1;">
+                        <input type="text" name="description" placeholder="Описание (опц.)" style="flex-grow:1;">
+                        <button type="submit" class="btn btn-primary">Создать</button>
+                    </form>
+                </div>
+                <div id="admin-boards-list">Загрузка списка...</div>
+            </div>
+
+            <div id="livefeed" class="tab-pane">
+                <h2>⚡ Прямой эфир (Все доски)</h2>
+                <div id="admin-live-feed" style="
+                    height: 500px; overflow-y: auto; background: var(--bg-input); 
+                    border: 1px solid var(--border-input); padding: 10px; font-family: monospace;">
+                    <p style="color:gray">Ожидание постов...</p>
+                </div>
+            </div>
+
+            <div id="graphs" class="tab-pane">
+                <h2>📈 Активность (7 дней)</h2>
+                <div style="background: white; padding: 20px; border-radius: 8px; position: relative; height: 400px;">
+                    <canvas id="activityChart"></canvas>
+                </div>
+            </div>
+            <div id="bans" class="tab-pane">
+                <div class="card">
+                    <h3>Черный список файлов</h3>
+                    
+                    <div style="background:#333; padding:10px; border-radius:4px; margin-bottom:15px; display:flex; gap:10px;">
+                        <input type="text" id="manual-ban-id" placeholder="File ID (AgAC...)" style="flex-grow:1; padding:5px;">
+                        <button class="btn btn-primary" style="background:#c0392b;" onclick="manualBanFile()">Забанить ID</button>
+                    </div>
+
+                    <button class="btn btn-secondary" onclick="loadBans()" style="margin-bottom:10px;">🔄 Обновить список</button>
+                    
+                    <table style="width:100%; border-collapse:collapse; font-size:0.9em;">
+                        <thead>
+                            <tr style="background:var(--bg-hover); text-align:left;">
+                                <th style="padding:8px;">Превью</th>
+                                <th style="padding:8px;">Тип / Хеш</th>
+                                <th style="padding:8px;">Причина</th>
+                                <th style="padding:8px;">Действие</th>
+                            </tr>
+                        </thead>
+                        <tbody id="bans-table-body">
+                            <!-- JS заполнит -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div id="mod_queue" class="tab-pane">
+                <div class="card">
+                    <h3>🚨 Подозрительный контент (Очередь)</h3>
+                    <p style="color:#aaa; font-size:0.9em;">Сюда попадает Гей-порно, Лоли и другой контент с пограничным скором.</p>
+                    <button class="btn btn-secondary" onclick="loadModQueue()" style="margin-bottom:15px;">🔄 Обновить список</button>
+                    
+                    <div id="mod-queue-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px;">
+                    </div>
+                </div>
+            </div>
+            <div id="inspector" class="tab-pane">
+                <h2>🔍 Инспектор Постов</h2>
+                <p>Введите номер поста или ссылку на него, чтобы получить полную информацию об авторе и принять меры.</p>
+                <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                    <input type="text" id="inspect-input" placeholder="12345 или ссылка..." style="flex-grow: 1; padding: 10px; border-radius: 4px; border: 1px solid var(--border-input); background: var(--bg-input); color: var(--text-primary);">
+                    <button class="btn btn-primary" onclick="inspectPost()">Найти</button>
+                </div>
+                    <div id="inspector-result" style="display: none;">
+                        <!-- 1. Карточка Информации -->
+                        <div style="background: var(--bg-input); border: 1px solid var(--border-primary); border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+                            <h3 style="margin-top: 0; color: var(--accent-primary);">📄 Данные поста #<span id="ins-num"></span></h3>
+                            
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; font-size: 0.9em;">
+                                <div>
+                                    <p><strong>Доска:</strong> /<span id="ins-board"></span>/</p>
+                                    <p><strong>User ID:</strong> <code id="ins-uid"></code></p>
+                                    <p><strong>User Hash:</strong> <code id="ins-hash" style="color: orange;"></code></p>
+                                </div>
+                                <div>
+                                    <p><strong>Дата:</strong> <span id="ins-date"></span></p>
+                                    <p><strong>Всего постов:</strong> <span id="ins-total-posts"></span></p>
+                                </div>
+                            </div>
+
+                            <div style="margin-top: 15px; padding: 10px; background: var(--bg-hover); border-radius: 4px; font-family: monospace; border: 1px solid var(--border-input);">
+                                <strong style="color: var(--text-secondary);">Контент:</strong><br>
+                                <span id="ins-text"></span>
+                            </div>
+                            
+                            <div id="ins-files" style="margin-top: 10px; display: flex; gap: 10px;"></div>
+                            <div id="ins-status-badges" style="margin-top: 10px;"></div>
+                        </div>
+
+                        <!-- 2. Панель Действий (Меры пресечения) -->
+                        <div style="background: rgba(255, 0, 0, 0.05); border: 1px solid var(--action-danger); border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+                            <h3 style="margin-top: 0; color: var(--action-danger);">⚡ Меры пресечения</h3>
+                            
+                            <!-- Выбор области действия (Scope) -->
+                            <div class="scope-radio-group">
+                                <span style="font-weight: bold; margin-right: 5px;">Область:</span>
+                                
+                                <label class="scope-btn">
+                                    <input type="radio" name="ins-scope" value="current" checked> 
+                                    📍 Только /<span id="ins-scope-board">b</span>/
+                                </label>
+                                
+                                <label class="scope-btn">
+                                    <input type="radio" name="ins-scope" value="global"> 
+                                    🌍 ВЕЗДЕ (Global)
+                                </label>
+                            </div>
+
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+                                <!-- Теневой бан -->
+                                <div style="background: rgba(128,0,128,0.1); padding: 10px; border-radius: 4px; border: 1px solid purple;">
+                                    <div style="margin-bottom: 5px; font-size: 0.9em; color: purple; font-weight: bold;">👻 Теневой Бан</div>
+                                    <select id="ins-shadow-duration" style="padding: 5px;">
+                                        <option value="3600">1 час</option>
+                                        <option value="86400" selected>24 часа</option>
+                                        <option value="604800">7 дней</option>
+                                        <option value="2592000">30 дней</option>
+                                        <option value="315360000">Навсегда</option>
+                                    </select>
+                                    <button class="btn btn-secondary" onclick="shadowBanUser()" style="border-color: purple; color: purple;">Применить</button>
+                                </div>
+
+                                <!-- Shadow Wipe -->
+                                <div style="background: rgba(233, 30, 99, 0.1); padding: 10px; border-radius: 4px; border: 1px solid #e91e63;">
+                                    <div style="margin-bottom: 5px; font-size: 0.9em; color: #e91e63; font-weight: bold;">🧛 Shadow Wipe</div>
+                                    <button class="btn btn-secondary" onclick="shadowWipeUser()" style="border-color: #e91e63; color: #e91e63; width: 100%;">
+                                        Скрыть все посты
+                                    </button>
+                                </div>
+
+                                <div style="width: 1px; background: var(--border-primary); margin: 0 5px;"></div>
+
+                                <!-- Хард бан -->
+                                <button class="btn btn-secondary" onclick="hardBanUser()" style="border-color: red; color: red; height: fit-content; align-self: center;">
+                                    🔨 Хард Бан + Удалить
+                                </button>
+                                
+                                <button class="btn btn-primary" onclick="hardWipeUser()" style="background-color: red; border-color: red; height: fit-content; align-self: center;">
+                                    ☢️ ПОЛНЫЙ ВАЙП
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 3. История постов (Последние 30) -->
+                        <div style="background: var(--bg-input); border: 1px solid var(--border-primary); border-radius: 8px; padding: 20px;">
+                            <h3 style="margin-top: 0;">📜 История постов (Последние 30)</h3>
+                            <div id="ins-history-list" style="max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.85em;">
+                                Загрузка...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            <div id="user_inspector" class="tab-pane">
+                <h2>👤 Досье на пользователя</h2>
+                <p>Полная информация по ID: активность, баны, последние посты.</p>
+                
+                <div style="display: flex; gap: 10px; margin-bottom: 20px; background: var(--bg-input); padding: 15px; border-radius: 8px; border: 1px solid var(--border-input);">
+                    <input type="number" id="inspect-user-id" placeholder="User ID (например: 12345)" style="flex-grow: 1; padding: 10px; border-radius: 4px; border: 1px solid var(--border-input); background: var(--bg-post); color: var(--text-primary);">
+                    <button class="btn btn-primary" onclick="inspectUser()">🔍 Найти Досье</button>
+                </div>
+
+                <div id="user-inspector-result" style="display: none;">
+                    <!-- Основная инфа -->
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px;">
+                        <div style="background: var(--bg-input); border: 1px solid var(--border-primary); padding: 20px; border-radius: 8px;">
+                            <h3 style="margin-top:0; color:var(--accent-primary);">📋 Основные данные</h3>
+                            <p><strong>User ID:</strong> <span id="ui-id" style="font-family:monospace; font-weight:bold;"></span></p>
+                            <p><strong>Hash:</strong> <code id="ui-hash" style="color:orange;"></code></p>
+                            <p><strong>Глобальная роль:</strong> <span id="ui-role"></span></p>
+                            <p><strong>Первый визит:</strong> <span id="ui-seen"></span></p>
+                            <p><strong>Всего постов:</strong> <span id="ui-total"></span></p>
+                        </div>
+
+                        <div style="background: var(--bg-input); border: 1px solid var(--border-primary); padding: 20px; border-radius: 8px;">
+                            <h3 style="margin-top:0; color:#e74c3c;">🚫 Активные наказания</h3>
+                            <ul id="ui-bans-list" style="padding-left: 20px; margin-bottom: 0;">
+                                <li>Нет активных банов.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- Активность по доскам -->
+                    <div style="background: var(--bg-input); border: 1px solid var(--border-primary); padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+                        <h3 style="margin-top:0;">📊 Статус на досках</h3>
+                        <div id="ui-boards-list" style="display:flex; flex-wrap:wrap; gap:10px;"></div>
+                    </div>
+
+                    <!-- Последние посты -->
+                    <div style="background: var(--bg-input); border: 1px solid var(--border-primary); padding: 20px; border-radius: 8px;">
+                        <h3 style="margin-top:0;">📝 Последние 20 постов</h3>
+                        <div id="ui-posts-list" style="max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 0.9em;"></div>
+                    </div>
+                </div>
+            </div>
+            <div id="neuro" class="tab-pane">
+                <h2>🧠 Управление Нейро-Шизом</h2>
+                <p>Здесь можно вручную заставить бота высрать пост, чтобы проверить его адекватность.</p>
+                
+                <div class="admin-section" style="background: var(--bg-input); padding: 20px; border-radius: 8px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div class="form-group">
+                            <label>Доска (ID):</label>
+                            <input type="text" id="neuro-board-input" placeholder="b" value="b" style="width: 100%;">
+                            <small style="color: gray;">Можно писать любую (даже скрытую).</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Поток (Язык):</label>
+                            <select id="neuro-stream-select" style="width: 100%;">
+                                <option value="ru" selected>RU (Русский)</option>
+                                <option value="en">EN (English)</option>
+                                <option value="jp">JP (Japanese)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 10px; margin-top: 15px;">
+                        <button class="btn btn-primary" onclick="forceNeuro('reply')">💬 Сгенерировать ОТВЕТ</button>
+                        <button class="btn btn-secondary" onclick="forceNeuro('thread')" style="border-color: var(--accent-primary);">📝 Сгенерировать ТРЕД</button>
+                    </div>
+                </div>
+                <h3>Лог операций:</h3>
+                <div id="neuro-log" class="log-console" style="height: 200px;">
+                    Ожидание команд...
+                </div>
+            </div>
+            <div id="fullstats" class="tab-pane">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                    <h2>📈 Активность по доскам</h2>
+                    <button class="btn btn-secondary" onclick="loadFullStats()">🔄 Обновить</button>
+                </div>
+                <div style="overflow-x:auto;">
+                    <style>
+                        .stats-table td, .stats-table th {
+                            padding: 6px 10px;
+                            vertical-align: top;
+                            border-bottom: 1px solid var(--border-input);
+                        }
+                        .stat-thread-item {
+                            margin-bottom: 2px;
+                            white-space: nowrap;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
+                            max-width: 300px;
+                            font-size: 0.85em;
+                            line-height: 1.2;
+                        }
+                        .stat-thread-item a { text-decoration: none; color: var(--text-primary); }
+                        .stat-thread-item a:hover { color: var(--accent-primary); text-decoration: underline; }
+                    </style>
+
+                    <table class="stats-table" style="width:100%; border-collapse:collapse; font-size:0.9em;">
+                        <thead>
+                            <tr style="background:var(--bg-hover); color:var(--accent-primary); border-bottom:2px solid var(--border-input);">
+                                <th style="padding:8px 10px; text-align:left;">Доска</th>
+                                <th style="padding:10px;">Посты (1ч)</th>
+                                <th style="padding:10px;">Посты (24ч)</th>
+                                <th style="padding:10px;">Треды (24ч)</th>
+                                <th style="padding:10px;">Всего постов</th>
+                                <th style="padding:10px; text-align:left;">Топ активность (Темы)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="full-stats-body">
+                            <tr><td colspan="6" style="text-align:center; padding:20px;">Загрузка...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div id="moderation" class="tab-pane">
+                <h2>Управление банами</h2>
+                <div class="admin-section" style="margin-top:20px; border-top:1px solid var(--border-primary); padding-top:20px;">
+                    <h3 style="color: purple;">👻 Теневой Бан (Shadow Ban)</h3>
+                    <p>Юзер будет писать в пустоту. Формат: <code>12345</code> (ID) или <code>#123</code> (Пост).</p>
+                    <form id="shadow-ban-form-admin" style="background: var(--bg-input); padding: 15px; border-radius: 8px; display: flex; flex-direction: column; gap: 10px;">
+                        <div style="display: flex; gap: 10px;">
+                            <input type="text" name="target" placeholder="ID юзера или #Пост" required style="flex-grow: 1;">
+                            <select name="duration" style="width: 120px;">
+                                <option value="3600">1 час</option>
+                                <option value="86400">24 часа</option>
+                                <option value="604800" selected>7 дней</option>
+                                <option value="2592000">30 дней</option>
+                                <option value="31536000">1 год</option>
+                            </select>
+                        </div>
+                        <div style="display: flex; gap: 15px; align-items: center;">
+                            <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none;">
+                                <input type="checkbox" name="is_global"> 🌍 Глобально (на все доски)
+                            </label>
+                            <button type="submit" class="btn btn-primary" style="background-color: purple; border-color: purple; margin-left: auto;">Отправить в тень</button>
+                        </div>
+                    </form>
+                </div>
+                <div class="form-group">
+                    <label>Выберите доску:</label>
+                    <select id="admin-board-select" style="width: 100%; margin-bottom: 15px;">
+                        {% for b_id, b_info in boards.items() %}
+                            <option value="{{ b_id }}">/{{ b_id }}/ - {{ b_info.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div id="admin-ban-list">
+                    <p>Загрузка списков...</p>
+                </div>
+            </div>
+            <div id="requests" class="tab-pane">
+                <h2>📥 Заявки от пользователей</h2>
+                <p>Здесь юзеры просят спасти треды. Одобрите или отклоните.</p>
+                <button class="btn btn-secondary" onclick="loadImportRequests()" style="margin-bottom: 15px;">🔄 Обновить список</button>
+                <div id="import-requests-list" style="display: flex; flex-direction: column; gap: 10px;">
+                    <p>Загрузка...</p>
+                </div>
+            </div>
+            <div id="banners" class="tab-pane">
+                <h2 style="color: var(--accent-primary);">🖼️ Управление баннерами досок</h2>
+                <p>Здесь можно установить или изменить верхний баннер для каждой доски.</p>
+                <div class="admin-section" style="background: var(--bg-input); padding: 20px; border-radius: 8px; border: 1px solid var(--border-input); max-width: 600px;">
+                    <form id="admin-banner-form">
+                        <div class="form-group">
+                            <label>Доска:</label>
+                            <select name="board_id" style="width: 100%;">
+                                {% for b_key, b_val in boards.items() %}
+                                <option value="{{ b_key }}">/{{ b_key }}/ - {{ b_val.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>URL Картинки (оставьте пустым для удаления):</label>
+                            <input type="text" name="image_url" placeholder="https://..." style="width: 100%;">
+                        </div>
+                        <div class="form-group">
+                            <label>Ссылка при клике:</label>
+                            <input type="text" name="link_url" placeholder="https://..." style="width: 100%;">
+                        </div>
+                        <button type="submit" class="btn btn-primary">Сохранить Баннер</button>
+                    </form>
+                </div>
+            </div>
+            <div id="import" class="tab-pane">
+                <h2 style="color: #e67e22;">📥 Импортер Тредов</h2>
+                <p>Этот инструмент копирует тред с 2ch/Arch в нашу базу, сохраняя картинки и разметку.</p>
+                <form id="import-form" style="background: var(--bg-input); padding: 20px; border-radius: 8px; border: 1px solid var(--border-input);">
+                    <div class="form-group">
+                        <label>Ссылка на тред-донор:</label>
+                        <input type="text" name="url" placeholder="https://2ch.hk/b/res/123456.html" required style="width: 100%;">
+                    </div>
+                    <div class="form-group">
+                        <label>Поток (Язык):</label>
+                        <select name="stream" style="width: 100%;">
+                            <option value="ru" selected>RU (Русский)</option>
+                            <option value="en">EN (English)</option>
+                            <option value="jp">JP (Japanese)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>В какую доску:</label>
+                        <select name="board_id" style="width: 100%;">
+                            {% for b_key, b_val in boards.items() %}
+                            <option value="{{ b_key }}">/{{ b_key }}/</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div style="margin-top: 15px; border-top: 1px dashed var(--border-primary); padding-top: 10px;">
+                        <label style="display:flex; align-items:center; cursor:pointer; gap:10px; margin-bottom:10px;">
+                            <input type="checkbox" id="import-sim-mode" name="use_simulation" onchange="toggleImportSim(this)"> 
+                            <span style="font-weight:bold; color:var(--accent-primary);">🎭 Режим "Симулятор жизни"</span>
+                        </label>
+                        
+                        <div id="import-sim-settings" style="display:none; padding-left: 20px; border-left: 2px solid var(--accent-primary);">
+                            <p style="font-size:0.85em; color:var(--text-secondary); margin-bottom:10px;">
+                                Тред будет появляться постепенно. Картинки скачиваются сразу.
+                            </p>
+                            
+                            <div class="form-group">
+                                <label>🕒 Отложить старт на (минут):</label>
+                                <input type="number" name="start_delay" value="0" min="0" style="width: 100px;">
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>⏱ Интервал между постами (секунд):</label>
+                                <div style="display:flex; gap:10px; align-items:center;">
+                                    <span>От:</span>
+                                    <input type="number" name="interval_min" value="600" min="60" style="width: 80px;">
+                                    <span>До:</span>
+                                    <input type="number" name="interval_max" value="3600" min="120" style="width: 80px;">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <script>
+                        function toggleImportSim(el) {
+                            document.getElementById('import-sim-settings').style.display = el.checked ? 'block' : 'none';
+                        }
+                    </script>
+                    <button type="submit" class="btn btn-primary" style="background-color: #e67e22; width: 100; margin-top: 10px;">🚀 Запустить процесс</button>
+                </form>
+                <div id="import-status" style="margin-top: 15px; font-weight: bold;"></div>
+                
+                <hr style="border: 0; border-top: 1px solid var(--border-primary); margin: 20px 0;">
+                
+                <h3>🎭 Активные симуляции</h3>
+                <p style="font-size:0.9em; color:gray;">Здесь показаны треды, которые сейчас "живут" (постятся) в режиме отложенного постинга.</p>
+                <button class="btn btn-secondary btn-small" onclick="loadActiveSimulations()">🔄 Обновить список</button>
+                
+                <div id="active-sims-list" style="margin-top: 15px; display: grid; gap: 10px;">
+                    <p>Загрузка...</p>
+                </div>
+            </div>
+            <div id="settings" class="tab-pane">
+                <h2>⚙️ Настройки Системы</h2>
+                
+                <!-- БУНКЕР -->
+                <div style="background: rgba(220, 53, 69, 0.1); border: 2px solid #dc3545; border-radius: 8px; padding: 20px; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <h3 style="color: #dc3545; margin: 0 0 5px 0;">🛡️ Режим БУНКЕР (Lockdown)</h3>
+                        <p style="margin: 0; color: var(--text-secondary); font-size: 0.9em;">Включает PoW-капчу и запрет для новичков.</p>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="lockdown-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+
+                <!-- НЕЙРОНКА -->
+                <div style="background: rgba(46, 204, 113, 0.1); border: 2px solid #2ecc71; border-radius: 8px; padding: 20px; margin-bottom: 25px; display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <h3 style="color: #2ecc71; margin: 0 0 5px 0;">🤖 Нейропостер (AI Bot)</h3>
+                        <p style="margin: 0; color: var(--text-secondary); font-size: 0.9em;">Автоматический постинг (Llama/GPT) в треды.</p>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="neuro-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <div style="background: rgba(52, 152, 219, 0.1); border: 2px solid #3498db; border-radius: 8px; padding: 20px; margin-bottom: 25px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px;">
+                        <div>
+                            <h3 style="color: #3498db; margin: 0 0 5px 0;">🕵️ Нейро-Вор (Scanner)</h3>
+                            <p style="margin: 0; color: var(--text-secondary); font-size: 0.9em;">Ищет годные треды на 2ch и ворует их (раз в N мин).</p>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="scanner-toggle">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <label>Интервал поиска (мин):</label>
+                        <input type="number" id="scanner-interval" value="66" min="10" max="1440" style="width:80px; padding:5px;">
+                        <button class="btn btn-primary btn-small" onclick="saveScannerConfig()">Сохранить</button>
+                    </div>
+                </div>
+
+                <div style="background: rgba(255, 165, 0, 0.1); border: 2px solid orange; border-radius: 8px; padding: 20px; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between;">
+                    <div>
+                        <h3 style="color: orange; margin: 0 0 5px 0;">🐵 Капча "Макака" (Anti-Wipe)</h3>
+                        <p style="margin: 0; color: var(--text-secondary); font-size: 0.9em;">
+                            Включает обязательную мини-игру для постинга (для гостей без токена).
+                        </p>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="captcha-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <div class="admin-section" style="background: rgba(var(--accent-rgb), 0.05); border: 1px solid var(--accent-primary); padding: 20px; border-radius: 8px; margin-bottom: 25px;">
+                    <h3 style="color: var(--accent-primary); margin-top: 0;">🛡️ Белый список IP (Whitelist)</h3>
+                    <p style="font-size: 0.9em; color: var(--text-secondary); margin-bottom: 10px;">Эти IP будут игнорировать защиту от DDoS, капчу и проверки на ботов. Вводите через запятую.</p>
+                    <input type="text" id="admin-whitelist-ips" placeholder="1.2.3.4, 5.6.7.8" style="width: 100%; margin-bottom: 10px;">
+                    <button class="btn btn-primary" id="save-whitelist-btn" style="width: 100%;">Сохранить список</button>
+                </div>
+
+                <div class="admin-section">
+                    <h3>📢 Глобальное объявление</h3>
+                    <input type="text" id="announcement-input" placeholder="Текст объявления (HTML поддерживается)..." style="width: 100%; margin-bottom: 10px;">
+                    <div style="display:flex; gap:10px;">
+                        <button class="btn btn-primary" onclick="saveAnnouncement()">Сохранить</button>
+                        <button class="btn btn-secondary" onclick="saveAnnouncement(true)">Очистить</button>
+                    </div>
+                </div>
+            </div>
+            <div id="spamfilter" class="tab-pane">
+                <h2>🛡️ Управление стоп-словами</h2>
+                <p>Сообщения, содержащие эти слова, будут автоматически отклоняться.</p>
+                <div class="admin-section" style="background: var(--bg-input); padding: 20px; margin-bottom: 20px; border-radius: 8px;">
+                    <form id="add-spam-word-form" style="display: flex; gap: 10px;">
+                        <select name="board_id" style="width: 150px;">
+                            <option value="all">Глобально (All)</option>
+                            {% for b_key in boards %}
+                                <option value="{{ b_key }}">/{{ b_key }}/</option>
+                            {% endfor %}
+                        </select>
+                        <input type="text" name="word" placeholder="Стоп-слово (например: казино)" required style="flex-grow: 1;">
+                        <button type="submit" class="btn btn-primary">Добавить</button>
+                    </form>
+                </div>
+                <div id="spam-words-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px;">
+                    <p>Загрузка...</p>
+                </div>
+            </div>
+            <div id="logs" class="tab-pane">
+                <h2>Системные логи</h2>
+                <p style="font-size: 0.9em; color: var(--text-secondary);">Показывает последние действия (импорт, ошибки, баны).</p>
+                <div id="log-console" class="log-console">
+                </div>
+                <button class="btn btn-secondary" onclick="loadLogs()" style="margin-top: 10px;">Обновить логи</button>
+            </div>
+            <div id="users" class="tab-pane">
+                <div class="admin-section" style="margin-bottom: 30px; border-bottom: 1px solid var(--border-primary); padding-bottom: 20px;">
+                    <h2 style="color: var(--accent-primary);">🔔 Отправить уведомление</h2>
+                    <p style="font-size: 0.9em; color: var(--text-secondary);">Выведет всплывающее окно конкретному пользователю (по ID).</p>
+                    <form id="admin-alert-form" style="max-width: 600px;">
+                        <div class="form-group">
+                            <label>ID Пользователя:</label>
+                            <input type="number" name="user_id" required placeholder="Например: 12345" style="width: 100%;">
+                        </div>
+                        <div class="form-group">
+                            <label>Текст сообщения (HTML можно):</label>
+                            <textarea name="content" rows="4" required placeholder="Ты ведешь себя плохо..." style="width: 100%;"></textarea>
+                        </div>
+                        <div class="form-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <div><label>Текст кнопки (опц.):</label><input type="text" name="btn_text" placeholder="Понял"></div>
+                            <div><label>Ссылка кнопки (опц.):</label><input type="text" name="btn_link" placeholder="https://..."></div>
+                        </div>
+                        <div class="form-group">
+                            <label>Картинка (URL):</label>
+                            <input type="text" name="image_url" placeholder="https://example.com/warn.jpg" style="width: 100%;">
+                        </div>
+                        <div class="form-group">
+                            <label>Где показывать:</label>
+                            <select name="target_board" style="width: 100%;">
+                                <option value="all">Везде (Глобально)</option>
+                                {% for b_key, b_val in boards.items() %}
+                                <option value="{{ b_key }}">Только в /{{ b_key }}/</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Отправить Алерт</button>
+                    </form>
+                </div>
+                <div class="admin-section">
+                    <h2 style="color: purple;">👑 Управление ролями</h2>
+                    <form id="admin-role-form" style="max-width: 600px; background: rgba(128, 0, 128, 0.05); padding: 15px; border-radius: 8px; border: 1px solid purple;">
+                        <div class="form-group" style="display: flex; gap: 10px; align-items: flex-end;">
+                            <div style="flex-grow: 1;">
+                                <label>ID Пользователя:</label>
+                                <input type="number" name="user_id" required placeholder="12345" style="width: 100%;">
+                            </div>
+                            <div style="flex-grow: 1;">
+                                <label>Роль:</label>
+                                <select name="role" style="width: 100%;">
+                                    <option value="user">Юзер (Снять права)</option>
+                                    <option value="mod">Модератор</option>
+                                    <option value="admin">Администратор</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary" style="background-color: purple; border-color: purple;">Назначить</button>
+                        </div>
+                    </form>
+                </div>
+                <div class="admin-section" style="margin-top: 30px;">
+                    <h3 style="color: var(--text-primary);">📜 История уведомлений (последние 50)</h3>
+                    <button class="btn btn-secondary btn-small" onclick="AdminManager.loadAlertsHistory()" style="margin-bottom: 10px;">🔄 Обновить</button>
+                    <div id="admin-alerts-list" style="max-height: 400px; overflow-y: auto; border: 1px solid var(--border-input); border-radius: 4px;">
+                        <p style="padding: 10px; color: var(--text-secondary);">Загрузка...</p>
+                    </div>
+                </div>
+            </div>
+            <div id="reports" class="tab-pane">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2>🚨 Активные жалобы</h2>
+                    <button class="btn btn-secondary" onclick="loadReports()">🔄 Обновить</button>
+                </div>
+                <div id="reports-list" style="display: flex; flex-direction: column; gap: 15px;">
+                    <p style="padding: 20px; text-align: center; color: var(--text-secondary);">Загрузка...</p>
+                </div>
+            </div>
+            <div id="inbox" class="tab-pane">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2>📬 Сообщения от пользователей</h2>
+                    <button class="btn btn-secondary" onclick="AdminManager.loadFeedback()">🔄 Обновить</button>
+                </div>
+                <div id="feedback-list" class="feedback-grid">
+                    <p style="padding: 20px; text-align: center; color: var(--text-secondary);">Загрузка писем...</p>
+                </div>
+            </div>
+        </section>
+    </div>
+    <script src="/static/js/main.js?v=2.0"></script>
+    <script src="/static/js/admin.js?v=1.0"></script>
+    <script>
+        let activityChartInstance = null;
+        const AdminFeed = {
+            socket: null,
+            init() {
+                if (this.socket && this.socket.readyState <= 1) return;
+                
+                const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+                this.socket = new WebSocket(`${proto}://${location.host}/ws/admin/feed`);
+                
+                this.socket.onopen = () => console.log('⚡ Admin Feed Connected');
+                
+                this.socket.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        this.render(data);
+                    } catch(e) { console.error(e); }
+                };
+                
+                this.socket.onclose = () => {
+                    console.log('⚡ Feed Disconnected. Reconnecting...');
+                    setTimeout(() => this.init(), 3000);
+                };
+            },
+            render(post) {
+                const container = document.getElementById('admin-live-feed');
+                if (!container) return;
+                const timeStr = new Date(post.timestamp * 1000).toLocaleTimeString();
+                let content = post.content.text || '[Файл]';
+                if (content.length > 150) content = content.substring(0, 150) + '...';
+                const div = document.createElement('div');
+                div.style.cssText = "border-bottom:1px solid #333; padding:4px 0; font-family:monospace; font-size:12px; animation: flash-highlight 1s;";
+                div.innerHTML = `
+                    <span style="color:#2ecc71">[LIVE ${timeStr}]</span> 
+                    <span style="color:orange">/${post.board_id}/</span> 
+                    <a href="/${post.board_id}/res/0.html#post-${post.id}" target="_blank" style="color:#3498db">#${post.id}</a> 
+                    <b>(ID: ${post.author_id})</b>: ${content}
+                `;
+                
+                container.appendChild(div);
+                container.scrollTop = container.scrollHeight;
+                if (container.children.length > 200) {
+                    container.firstChild.remove();
+                }
+            }
+        };
+        function openTab(tabId) {
+            document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.admin-nav-btn').forEach(el => el.classList.remove('active'));
+            const tab = document.getElementById(tabId);
+            if (tab) tab.classList.add('active');
+            const buttons = document.querySelectorAll('.admin-nav-btn');
+            buttons.forEach(btn => { 
+                const clickAttr = btn.getAttribute('onclick');
+                if(clickAttr && clickAttr.includes(`'${tabId}'`)) btn.classList.add('active'); 
+            });
+            if (tabId === 'dashboard') { loadStats(); updateServerHealth(); }
+            if (tabId === 'boards') loadBoardsList(); 
+            if (tabId === 'logs') loadLogs();
+            if (tabId === 'requests') loadImportRequests(); 
+            if (tabId === 'import') loadActiveSimulations();
+            if (tabId === 'users' && typeof AdminManager !== 'undefined') AdminManager.loadAlertsHistory();
+            if (tabId === 'reports') loadReports();
+            if (tabId === 'fullstats') loadFullStats();
+            if (tabId === 'spamfilter') loadSpamWords();
+            if (tabId === 'inbox' && typeof AdminManager !== 'undefined') AdminManager.loadFeedback();
+            if (tabId === 'bans') loadBans();
+            if (tabId === 'mod_queue') loadModQueue();
+            if (tabId === 'livefeed') {
+                loadLiveFeedHistory(); 
+                if (typeof AdminFeed !== 'undefined') AdminFeed.init();
+            }
+            if (tabId === 'graphs') {
+                setTimeout(loadGraphs, 100); 
+            }
+            if (tabId === 'settings') {
+                if (typeof AdminManager !== 'undefined' && AdminManager.loadSystemSettings) {
+                    AdminManager.loadSystemSettings();
+                }
+                fetch('/api/admin/get_announcement')
+                    .then(r => r.json())
+                    .then(d => {
+                        const input = document.getElementById('announcement-input');
+                        if(input) input.value = d.text || "";
+                    });
+
+                fetch('/api/admin/lockdown_status')
+                    .then(r => r.json())
+                    .then(d => {
+                        document.getElementById('lockdown-toggle').checked = d.enabled;
+                    });
+                
+                fetch('/api/admin/neuro_status')
+                    .then(r => r.json())
+                    .then(d => {
+                        document.getElementById('neuro-toggle').checked = d.enabled;
+                    });
+
+                fetch('/api/admin/scanner_status')
+                    .then(r => r.json())
+                    .then(d => {
+                        const toggle = document.getElementById('scanner-toggle');
+                        if(toggle) toggle.checked = d.enabled;
+                        const input = document.getElementById('scanner-interval');
+                        if(input) input.value = d.interval || 66; 
+                    });
+
+                fetch('/api/captcha/status')
+                    .then(r => r.json())
+                    .then(d => {
+                        const el = document.getElementById('captcha-toggle');
+                        if(el) el.checked = d.enabled;
+                    });
+
+            }
+        }
+        async function saveAnnouncement(clear=false) {
+            const text = clear ? "" : document.getElementById('announcement-input').value;
+            try {
+                await fetch('/api/admin/set_announcement', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ text: text })
+                });
+                alert('Сохранено');
+                if(clear) document.getElementById('announcement-input').value = "";
+            } catch(e) { alert('Ошибка'); }
+        }
+        async function loadSpamWords() {
+            const container = document.getElementById('spam-words-list');
+            if (!container) return;
+            container.innerHTML = '<p>Загрузка...</p>';
+            try {
+                const res = await fetch('/api/admin/spam_words');
+                const data = await res.json();
+                if (Object.keys(data).length === 0) {
+                    container.innerHTML = '<p style="color:gray;">Список пуст.</p>';
+                    return;
+                }
+                let html = '';
+                for (const [board, words] of Object.entries(data)) {
+                    if (words.length === 0) continue;
+                    const title = board === 'all' ? '🌍 Глобально' : `/${board}/`;
+                    html += `
+                    <div style="background:var(--bg-input); border:1px solid var(--border-input); border-radius:4px; padding:10px;">
+                        <h4 style="margin-top:0; color:var(--text-secondary); border-bottom:1px solid var(--border-separator); padding-bottom:5px;">${title}</h4>
+                        <div style="display:flex; flex-wrap:wrap; gap:5px;">
+                    `;
+                    words.forEach(word => {
+                        html += `
+                            <span style="background:var(--bg-hover); padding:2px 8px; border-radius:15px; border:1px solid var(--border-input); display:flex; align-items:center; gap:5px;">
+                                ${word}
+                                <button onclick="removeSpamWord('${board}', '${word}')" style="background:none; border:none; color:red; cursor:pointer; font-weight:bold; padding:0; line-height:1;">&times;</button>
+                            </span>
+                        `;
+                    });
+                    html += `</div></div>`;
+                }
+                container.innerHTML = html || '<p>Слов нет.</p>';
+            } catch(e) {
+                console.error(e);
+                container.innerHTML = '<p style="color:red;">Ошибка загрузки.</p>';
+            }
+        }
+        async function removeSpamWord(board, word) {
+            if(!confirm(`Удалить слово "${word}" из ${board}?`)) return;
+            try {
+                await fetch('/api/admin/remove_spam_word', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ board_id: board, word: word })
+                });
+                loadSpamWords();
+            } catch(e) { alert('Ошибка'); }
+        }
+        async function loadGraphs() {
+            const ctx = document.getElementById('activityChart');
+            if (!ctx) return;
+            
+            // Уничтожаем старый экземпляр
+            if (activityChartInstance) {
+                activityChartInstance.destroy();
+                activityChartInstance = null;
+            }
+
+            try {
+                const res = await fetch('/api/admin/activity_stats');
+                const data = await res.json();
+                const history = data.history; 
+                
+                activityChartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: Object.keys(history),
+                        datasets: [{
+                            label: 'Постов в день',
+                            data: Object.values(history),
+                            borderColor: '#3182ce',
+                            backgroundColor: 'rgba(49, 130, 206, 0.2)',
+                            fill: true,
+                            tension: 0.3
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: { beginAtZero: true, grid: { color: '#333' } },
+                            x: { grid: { display: false } }
+                        }
+                    }
+                });
+            } catch (e) { console.error("Graph error", e); }
+        }
+        async function loadStats() {
+            if (!document.getElementById('dashboard').classList.contains('active')) return;
+            try {
+                const res = await fetch('/api/admin/stats');
+                const data = await res.json();
+                
+                // Основное
+                document.getElementById('stat-posts').textContent = data.total_posts;
+                document.getElementById('stat-threads').textContent = data.total_threads;
+                document.getElementById('stat-online').textContent = data.active_connections;
+                
+                // Очереди
+                if (data.queues) {
+                    document.getElementById('q-mirror').textContent = data.queues.mirror;
+                    document.getElementById('q-mod').textContent = data.queues.mod;
+                    document.getElementById('q-notif').textContent = data.queues.notif;
+                    document.getElementById('q-import').textContent = data.queues.import;
+                    
+                    // Обновление счетчика симуляции
+                    const simEl = document.getElementById('q-import-sim');
+                    if(simEl) simEl.textContent = data.queues.import_sim || 0;
+                }
+
+                const list = document.getElementById('top-boards-list');
+                list.innerHTML = data.top_boards.map(b => `<li><b>/${b.board}/</b> — ${b.count} постов</li>`).join('');
+            } catch (e) { console.error(e); }
+        }
+        async function updateServerHealth() {
+            if (!document.getElementById('dashboard').classList.contains('active')) return;
+            try {
+                const res = await fetch('/api/admin/system_health');
+                const data = await res.json();
+                const updateCircle = (id, value, color) => {
+                    const el = document.getElementById(id);
+                    if(!el) return;
+                    el.textContent = Math.round(value) + '%';
+                    el.style.background = `radial-gradient(closest-side, var(--bg-input) 79%, transparent 80% 100%), conic-gradient(${color} ${value}%, var(--border-input) 0)`;
+                    el.style.color = value > 90 ? 'var(--action-danger)' : 'var(--text-primary)';
+                };
+                updateCircle('health-cpu', data.cpu, '#3498db');
+                updateCircle('health-ram', data.ram, '#9b59b6');
+                updateCircle('health-disk', data.disk, '#e67e22');
+            } catch(e) {}
+        }
+        async function loadLogs() {
+            if (!document.getElementById('logs').classList.contains('active')) return;
+            try {
+                const res = await fetch('/api/admin/logs');
+                const logs = await res.json();
+                const consoleDiv = document.getElementById('log-console');
+                const isAtBottom = consoleDiv.scrollHeight - consoleDiv.scrollTop === consoleDiv.clientHeight;
+
+                consoleDiv.innerHTML = logs.map(l => `<div class="log-entry">${l}</div>`).join('');
+                
+                // Если это первая загрузка или скролл был внизу — мотаем вниз
+                if (!consoleDiv.dataset.loaded || isAtBottom) {
+                    consoleDiv.scrollTop = consoleDiv.scrollHeight;
+                    consoleDiv.dataset.loaded = "true";
+                }
+            } catch (e) {}
+        }
+        // === ФУНКЦИИ ЖАЛОБ (REPORTS) ===
+        async function loadReports() {
+            const container = document.getElementById('reports-list');
+            if (!container) return;
+            container.innerHTML = '<p style="padding: 20px; text-align: center;">Загрузка...</p>';
+            try {
+                const res = await fetch('/api/admin/reports');
+                const reports = await res.json();
+                if (reports.length === 0) {
+                    container.innerHTML = '<div style="padding:20px; text-align:center; color:green; font-size: 1.2em;">🎉 Жалоб нет! Все чисто.</div>';
+                    return;
+                }
+                container.innerHTML = reports.map(r => {
+                    const text = r.content && r.content.text ? r.content.text.substring(0, 300) : '[Медиа/Пусто]';
+                    const postLink = r.board_id ? `/${r.board_id}/res/${r.post_num}.html#post-${r.post_num}` : '#';
+                    const dateStr = new Date(r.created_at * 1000).toLocaleString();
+                    return `
+                    <div class="report-card" style="background: var(--bg-input); border: 1px solid var(--action-danger); border-left-width: 5px; padding: 15px; border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:10px; border-bottom: 1px solid var(--border-separator); padding-bottom: 5px;">
+                            <strong style="color: var(--action-danger); font-size: 1.1em;">${r.category}</strong>
+                            <span style="color: var(--text-secondary); font-size: 0.9em;">${dateStr}</span>
+                        </div>
+                        <div style="margin-bottom: 10px; padding: 10px; background: var(--bg-hover); border-radius: 4px; font-family: monospace; font-size: 0.95em;">
+                            <div style="margin-bottom: 5px;">
+                                <b>Пост #${r.post_num}</b> в /${r.board_id}/ 
+                                (<a href="${postLink}" target="_blank">Перейти к посту</a>)
+                            </div>
+                            <div style="opacity: 0.8; max-height: 100px; overflow-y: auto;">${text}</div>
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <b>Причина:</b> <span style="color: var(--text-primary);">${r.reason}</span>
+                        </div>
+                        <div class="report-actions" style="display:flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;">
+                            <button class="btn btn-secondary" onclick="AdminAction.dismissReport(${r.id})">✅ Отклонить</button>
+                            <button class="btn btn-secondary" onclick="AdminAction.deleteAndResolve(${r.post_num}, ${r.id})" style="color: orange; border-color: orange;">🗑 Удалить пост</button>
+                            <button class="btn btn-primary" onclick="AdminAction.banAndResolve(${r.post_num}, ${r.id})" style="background-color: #d32f2f; border-color: #d32f2f;">🔨 Бан + Удалить</button>
+                        </div>
+                    </div>`;
+                }).join('');
+            } catch (e) {
+                console.error(e);
+                container.innerHTML = '<p style="color:red; text-align:center;">Ошибка загрузки жалоб.</p>';
+            }
+        }
+        async function forceNeuro(mode) {
+            const boardInput = document.getElementById('neuro-board-input');
+            const streamSelect = document.getElementById('neuro-stream-select');
+            const board = boardInput ? boardInput.value.trim() : 'b';
+            const stream = streamSelect ? streamSelect.value : 'ru';
+            const log = document.getElementById('neuro-log');
+            if (!board) { alert("Укажите доску!"); return; }
+            log.innerHTML = `⏳ Думаю над постом в /${board}/ [${stream.toUpperCase()}] (${mode})...\n` + log.innerHTML;
+            try {
+                const res = await fetch('/api/admin/force_neuro', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ 
+                        board_id: board, 
+                        mode: mode,
+                        stream: stream 
+                    })
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    log.innerHTML = `<span style="color: #00ff00;">✅ ${data.log}</span>\n----------------\n` + log.innerHTML;
+                } else {
+                    log.innerHTML = `<span style="color: red;">❌ Ошибка: ${data.log || data.detail}</span>\n` + log.innerHTML;
+                }
+            } catch(e) {
+                log.innerHTML = `<span style="color: red;">❌ Ошибка сети: ${e}</span>\n` + log.innerHTML;
+            }
+        } 
+        const AdminAction = {
+            async dismissReport(id) {
+                await fetch('/api/admin/resolve_report', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ report_id: id, action: 'dismiss' })
+                });
+                loadReports(); 
+            },
+            async deleteAndResolve(postNum, reportId) {
+                if(!confirm('Удалить пост?')) return;
+                const res = await fetch('/api/admin/delete_post', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ post_num: postNum })
+                });
+                if (res.ok) {
+                    await fetch('/api/admin/resolve_report', {
+                        method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ report_id: reportId, action: 'resolved' })
+                    });
+                    loadReports();
+                } else {
+                    alert('Ошибка удаления поста');
+                }
+            },
+            async banAndResolve(postNum, reportId) {
+                if(!confirm('ВНИМАНИЕ: Забанить автора и удалить пост?')) return;
+                const res = await fetch('/api/admin/ban_user', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ post_num: postNum })
+                });
+                if (res.ok) {
+                    await fetch('/api/admin/resolve_report', {
+                        method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ report_id: reportId, action: 'resolved' })
+                    });
+                    loadReports();
+                } else {
+                    alert('Ошибка бана');
+                }
+            }
+        };
+
+        async function loadModQueue() { 
+            const grid = document.getElementById('mod-queue-grid');
+            grid.innerHTML = '<p>Загрузка...</p>';
+            try {
+                const res = await fetch('/api/admin/mod_queue');
+                const items = await res.json();
+                grid.innerHTML = '';
+                
+                if (items.length === 0) {
+                    grid.innerHTML = '<p style="color:green;">✅ Чисто! Нейронка спокойна.</p>';
+                    return;
+                }
+
+                items.forEach(item => {
+                    const card = document.createElement('div');
+                    card.style.cssText = 'background: #252525; border: 1px solid #ff4444; border-radius: 6px; padding: 10px; position:relative;';
+                    
+                    // Красная подсветка причины
+                    const badgeColor = item.score > 0.9 ? '#ff0000' : '#ff8800';
+                    
+                    let mediaHtml = '';
+                    if (item.thumb_url) {
+                        // Добавляем no-referrer, чтобы админ видел картинку с зеркала
+                        mediaHtml = `<a href="/${item.board_id}/res/${item.post_num}.html" target="_blank"><img src="${item.thumb_url}" referrerpolicy="no-referrer" style="max-width:100%; max-height:200px; border-radius:4px; display:block; margin: 0 auto;"></a>`;
+                    }
+
+                    card.innerHTML = `
+                        <div style="position:absolute; top:5px; right:5px; background:${badgeColor}; color:white; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:12px;">
+                            ${item.reason} (${Math.round(item.score*100)}%)
+                        </div>
+                        <div style="margin-bottom:10px;">
+                            <b>/${item.board_id}/ #${item.post_num}</b><br>
+                            <small style="color:#aaa;">ID: ${item.author_id}</small>
+                        </div>
+                        <div style="margin-bottom:10px; min-height:100px; background:#000; display:flex; align-items:center; justify-content:center;">
+                            ${mediaHtml || '<span style="color:#555">Без медиа</span>'}
+                        </div>
+                        <div style="font-size:0.9em; margin-bottom:10px; max-height:60px; overflow-y:auto; background:#333; padding:5px;">
+                            ${window.formatTextGlobal(item.content.text) || '<i>(Нет текста)</i>'}
+                        </div>
+                        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:5px;">
+                            <button class="btn btn-secondary" onclick="decideMod(${item.id}, ${item.post_num}, 'ignore')">Простить</button>
+                            <button class="btn btn-primary" onclick="decideMod(${item.id}, ${item.post_num}, 'delete')" style="background:#e67e22;">Удалить</button>
+                            <button class="btn btn-primary" onclick="decideMod(${item.id}, ${item.post_num}, 'ban')" style="background:#c0392b;">БАН + DEL</button>
+                        </div>
+                    `;
+                    grid.appendChild(card);
+                });
+            } catch (e) {
+                grid.innerHTML = '<p style="color:red">Ошибка загрузки</p>';
+            }
+        }
+
+        async function decideMod(queueId, postNum, action) {
+            if (!confirm('Подтвердить действие?')) return;
+            try {
+                await fetch('/api/admin/mod_decision', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ queue_id: queueId, post_num: postNum, action: action })
+                });
+                // Удаляем карточку визуально
+                loadModQueue();
+            } catch (e) {
+                alert('Ошибка');
+            }
+        }
+        async function loadBoardsList() {
+            const div = document.getElementById('admin-boards-list');
+            div.innerHTML = '<p style="padding:20px; text-align:center;">Загрузка...</p>';
+            
+            try {
+                const res = await fetch('/api/admin/boards');
+                const boards = await res.json();
+                
+                // Стили для таблицы
+                const tableStyle = `
+                    width: 100%; 
+                    border-collapse: collapse; 
+                    font-size: 0.9em; 
+                    background: var(--bg-input); 
+                    border-radius: 8px; 
+                    overflow: hidden;
+                `;
+                const thStyle = `
+                    text-align: left; 
+                    padding: 12px 15px; 
+                    background: var(--bg-hover); 
+                    color: var(--text-secondary);
+                    border-bottom: 2px solid var(--border-input);
+                `;
+                const tdStyle = `
+                    padding: 12px 15px; 
+                    border-bottom: 1px solid var(--border-input);
+                    vertical-align: middle;
+                `;
+
+                let html = `<table style="${tableStyle}">`;
+                html += `
+                    <thead>
+                        <tr>
+                            <th style="${thStyle}">ID</th>
+                            <th style="${thStyle}">Название</th>
+                            <th style="${thStyle}">Владелец</th>
+                            <th style="${thStyle}">Статус</th>
+                            <th style="${thStyle}; text-align: right;">Действия</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                `;
+
+                boards.forEach(b => {
+                    const isSystem = b.owner_id === 0;
+                    const status = b.is_approved 
+                        ? '<span style="color:#2ecc71; font-weight:bold;">Active</span>' 
+                        : '<span style="color:#f39c12; font-weight:bold;">На проверке</span>';
+                    
+                    const owner = isSystem 
+                        ? '<span style="opacity:0.5; font-weight:bold;">SYSTEM</span>' 
+                        : `<a href="#" onclick="alert('User ID: ${b.owner_id}')" style="color:var(--accent-link);">User #${b.owner_id}</a>`;
+
+                    // КНОПКИ ДЕЙСТВИЙ
+                    let actions = '';
+
+                    // 1. Кнопка одобрения (только если не одобрено)
+                    if (!b.is_approved) {
+                        actions += `<button onclick="approveBoard('${b.board_id}')" class="btn btn-primary btn-small" style="margin-right:5px; padding: 4px 8px;" title="Одобрить">✅</button>`;
+                    }
+
+                    // 2. Кнопка удаления (ТОЛЬКО ДЛЯ ПОЛЬЗОВАТЕЛЬСКИХ ДОСОК)
+                    if (!isSystem) {
+                        actions += `<button onclick="deleteBoard('${b.board_id}')" class="btn btn-secondary btn-small" style="color:red; border-color:red; padding: 4px 8px;" title="Удалить">🗑</button>`;
+                    } else {
+                        // Пустышка или иконка замка для системных
+                        actions += `<span style="opacity:0.3; cursor:not-allowed;" title="Системная доска">🔒</span>`;
+                    }
+
+                    html += `
+                        <tr>
+                            <td style="${tdStyle}; font-family:monospace; font-weight:bold; color:var(--accent-primary);">/${b.board_id}/</td>
+                            <td style="${tdStyle}">${b.name}</td>
+                            <td style="${tdStyle}">${owner}</td>
+                            <td style="${tdStyle}">${status}</td>
+                            <td style="${tdStyle}; text-align: right;">${actions}</td>
+                        </tr>
+                    `;
+                });
+
+                html += '</tbody></table>';
+                div.innerHTML = html;
+
+            } catch(e) { 
+                console.error(e);
+                div.innerHTML = '<p style="color:red; padding:20px;">Ошибка загрузки списка досок.</p>'; 
+            }
+        }
+        async function approveBoard(id) {
+            if(!confirm('Одобрить доску?')) return;
+            await fetch('/api/admin/board/approve', { method: 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({board_id:id})});
+            loadBoardsList();
+        }
+        async function deleteBoard(id) {
+            if(!confirm('УДАЛИТЬ ДОСКУ И ВСЕ ЕЁ ТРЕДЫ?')) return;
+            await fetch('/api/admin/board/delete', { method: 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({board_id:id})});
+            loadBoardsList();
+        }
+        async function loadFullStats() {
+            const tbody = document.getElementById('full-stats-body');
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:20px;">Считаем цифры...</td></tr>';
+            try {
+                const res = await fetch('/api/stats/detailed');
+                const data = await res.json();
+                let html = '';
+                // Сортируем: сначала самые активные за 24ч
+                const sortedBoards = Object.keys(data).sort((a,b) => data[b].posts_24h - data[a].posts_24h);
+                for (const bid of sortedBoards) {
+                    const s = data[bid];
+                    // Пропускаем пустые доски, чтобы не засорять (или оставь, если хочешь видеть нули)
+                    if (s.total_posts === 0 && s.total_threads === 0) continue;
+                    const topThreads = s.top_threads.map(t => 
+                        `<div class="stat-thread-item">
+                            <a href="/${bid}/res/${t.id}.html" target="_blank" title="${t.title}">
+                                <b>#${t.id}:</b> ${t.title}
+                            </a>
+                        </div>`
+                    ).join('');
+                    html += `
+                    <tr>
+                        <td style="font-weight:bold;">/${bid}/</td>
+                        <td style="text-align:center; ${s.posts_1h > 0 ? 'color:#2ecc71; font-weight:bold;' : ''}">${s.posts_1h}</td>
+                        <td style="text-align:center;">${s.posts_24h}</td>
+                        <td style="text-align:center;">${s.threads_24h}</td>
+                        <td style="text-align:center;">${s.total_posts}</td>
+                        <td>${topThreads}</td>
+                    </tr>`;
+                }
+                tbody.innerHTML = html;
+            } catch(e) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:red;">Ошибка</td></tr>';
+            }
+        }
+        let currentInspectorData = null;
+
+        async function inspectPost() {
+            const input = document.getElementById('inspect-input').value.trim();
+            if (!input) return;
+
+            let postNum = input;
+            const match = input.match(/res\/(\d+)\.html/) || input.match(/#post-(\d+)/);
+            if (match) postNum = match[1];
+            postNum = parseInt(postNum.replace(/\D/g, ''));
+
+            if (!postNum) { alert("Некорректный номер"); return; }
+
+            const res = await fetch('/api/admin/inspect_post', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ post_num: postNum })
+            });
+            
+            const json = await res.json();
+            if (!json.found) { alert('Пост не найден.'); return; }
+
+            currentInspectorData = json.data;
+            const d = json.data;
+
+            document.getElementById('inspector-result').style.display = 'block';
+            document.getElementById('ins-num').textContent = d.post_num;
+            document.getElementById('ins-board').textContent = d.board_id;
+            document.getElementById('ins-scope-board').textContent = d.board_id; // Обновляем лейбл в радио
+            document.getElementById('ins-uid').textContent = d.author_id;
+            document.getElementById('ins-hash').textContent = json.user_hash;
+            
+            document.getElementById('ins-date').textContent = new Date(d.timestamp * 1000).toLocaleString();
+            document.getElementById('ins-total-posts').textContent = d.total_posts;
+
+            const content = d.content.text || '';
+            document.getElementById('ins-text').textContent = content.substring(0, 500);
+
+            // Файлы
+            const filesDiv = document.getElementById('ins-files');
+            filesDiv.innerHTML = '';
+            if (d.content.files) {
+                d.content.files.forEach(f => {
+                    const img = document.createElement('img');
+                    img.src = f.thumbnail_url || f.original_url;
+                    img.style.height = '60px';
+                    img.style.border = '1px solid #555';
+                    filesDiv.appendChild(img);
+                });
+            }
+
+            // История
+            const histDiv = document.getElementById('ins-history-list');
+            histDiv.innerHTML = '';
+            if (d.history && d.history.length > 0) {
+                d.history.forEach(h => {
+                    const date = new Date(h.timestamp * 1000).toLocaleDateString();
+                    const row = document.createElement('div');
+                    row.style.borderBottom = '1px solid var(--border-input)';
+                    row.style.padding = '4px 0';
+                    // Ссылка на пост
+                    const link = `/${h.board_id}/res/${h.thread_id || h.post_num}.html#post-${h.post_num}`;
+                    row.innerHTML = `
+                        <span style="color:var(--text-secondary)">[${date}]</span> 
+                        <b>/${h.board_id}/</b> 
+                        <a href="${link}" target="_blank">#${h.post_num}</a>: 
+                        ${h.preview}
+                    `;
+                    histDiv.appendChild(row);
+                });
+            } else {
+                histDiv.innerHTML = 'История пуста.';
+            }
+        }
+        async function loadBans() {
+            const tbody = document.getElementById('bans-table-body');
+            if (!tbody) return;
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;">Загрузка...</td></tr>';
+            try {
+                const res = await fetch('/api/admin/banned_files');
+                const list = await res.json();
+                tbody.innerHTML = '';
+                
+                if (list.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding:30px; color:gray; font-size:1.2em;">🍃 Бан-лист пуст</td></tr>';
+                    return;
+                }
+                
+                list.forEach(item => {
+                    let preview = '<span style="color:#555">Нет превью</span>';
+                    if (item.example_file_id) {
+                        preview = `<a href="/files/${item.example_file_id}" target="_blank"><img src="/files/${item.example_file_id}" style="height:50px; width:50px; object-fit:cover; border-radius:4px;" referrerpolicy="no-referrer"></a>`;
+                    }
+                    const tr = document.createElement('tr');
+                    tr.style.borderBottom = '1px solid #444';
+                    tr.innerHTML = `
+                        <td style="padding:5px;">${preview}</td>
+                        <td style="padding:5px;"><span style="font-weight:bold; color:${item.hash_type==='phash'?'#e67e22':'#3498db'}">${item.hash_type}</span><br><span style="font-family:monospace; font-size:0.8em; opacity:0.7">${item.hash_value.substring(0, 15)}...</span></td>
+                        <td style="padding:5px;">${item.reason || '-'}</td>
+                        <td style="padding:5px;"><button class="btn btn-secondary" onclick="unbanHash('${item.hash_value}')" style="font-size:0.8em; padding:2px 8px;">Разбанить</button></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="4" style="color:red; text-align:center;">Ошибка загрузки</td></tr>';
+            }
+        }
+
+        async function unbanHash(hash) {
+            if(!confirm('Разбанить этот файл?')) return;
+            await fetch('/api/admin/unban_file', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ hash_value: hash })
+            });
+            loadBans();
+        }
+
+        async function manualBanFile() {
+            const fid = document.getElementById('manual-ban-id').value.trim();
+            if(!fid) return;
+            if(!confirm('Забанить этот файл навсегда?')) return;
+            
+            const res = await fetch('/api/admin/ban_single_file', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ file_id: fid })
+            });
+            const data = await res.json();
+            if(data.status === 'ok') {
+                alert('Забанено!');
+                document.getElementById('manual-ban-id').value = '';
+                loadBans();
+            } else {
+                alert('Ошибка: ' + (data.message || 'Неизвестно'));
+            }
+        }
+        function getScope() {
+            return document.querySelector('input[name="ins-scope"]:checked').value;
+        }
+
+        async function shadowBanUser() {
+            if (!currentInspectorData) return;
+            const scope = getScope();
+            const duration = parseInt(document.getElementById('ins-shadow-duration').value);
+            
+            if (!confirm(`Выдать ТЕНЕВОЙ БАН (${scope}) на выбранный срок?`)) return;
+            
+            const res = await fetch('/api/admin/shadow_ban', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    post_num: currentInspectorData.post_num,
+                    duration: duration,
+                    scope: scope
+                })
+            });
+            if (res.ok) alert(`Теневой бан выдан (${scope})`);
+            else alert('Ошибка');
+        }
+
+        async function shadowWipeUser() {
+            if (!currentInspectorData) return;
+            const scope = getScope();
+            if (!confirm(`SHADOW WIPE (${scope}): Скрыть все посты юзера?`)) return;
+
+            const res = await fetch('/api/admin/shadow_wipe_user', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    user_id: currentInspectorData.author_id,
+                    scope: scope,
+                    board_id: currentInspectorData.board_id
+                })
+            });
+            const json = await res.json();
+            alert(`Скрыто ${json.count} постов (${scope}).`);
+        }
+
+        async function hardBanUser() {
+            if (!currentInspectorData) return;
+            const scope = getScope();
+            if (!confirm(`ХАРД БАН (${scope}) + Удалить этот пост?`)) return;
+            
+            const res = await fetch('/api/admin/ban_user', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    post_num: currentInspectorData.post_num,
+                    scope: scope
+                })
+            });
+            if (res.ok) alert('Готово.');
+            else alert('Ошибка');
+        }
+
+        // Hard Wipe всегда глобальный по логике БД (удаление из Users/Posts по ID)
+        async function hardWipeUser() {
+            if (!currentInspectorData) return;
+            if (!confirm('☢️ УДАЛИТЬ ПОЛНОСТЬЮ ВСЕ ДАННЫЕ ЮЗЕРА? (Глобально)')) return;
+            
+            const res = await fetch('/api/admin/wipe_user', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ post_num: currentInspectorData.post_num })
+            });
+            if (res.ok) alert('Юзер аннигилирован.');
+        }
+        // Сама функция
+        async function saveScannerConfig() {
+            const enabled = document.getElementById('scanner-toggle').checked;
+            const interval = parseInt(document.getElementById('scanner-interval').value);
+            try {
+                const res = await fetch('/api/admin/configure_scanner', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ enabled: enabled, interval: interval })
+                });
+                if(res.ok) showToast('Настройки сканера сохранены'); // Было alert
+                else alert('Ошибка');
+            } catch(e) { alert('Ошибка сети'); }
+        }
+
+        async function loadImportRequests() {
+            const container = document.getElementById('import-requests-list');
+            container.innerHTML = 'Загрузка...';
+            try {
+                const res = await fetch('/api/admin/import_requests');
+                const list = await res.json();
+                if (list.length === 0) {
+                    container.innerHTML = '<p style="color:gray;">Нет новых заявок.</p>';
+                    return;
+                }
+                container.innerHTML = list.map(item => `
+                    <div class="request-card" style="background:var(--bg-input); padding:15px; border:1px solid var(--border-input); border-radius:4px;">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                            <strong>Юзер #${item.user_id}</strong>
+                            <span style="font-size:0.8em; color:gray;">${new Date(item.created_at*1000).toLocaleString()}</span>
+                        </div>
+                        <div style="margin-bottom:10px;">
+                            <a href="${item.url}" target="_blank" style="color:var(--accent-link); word-break:break-all;">${item.url}</a>
+                            <br>
+                            Target: <b>/${item.target_board}/</b>
+                        </div>
+                        <div style="background:var(--bg-hover); padding:5px; border-radius:4px; font-style:italic; margin-bottom:10px;">
+                            "${item.comment || 'Без комментария'}"
+                        </div>
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <select id="stream-select-${item.id}" style="width:auto; padding:5px;">
+                                <option value="ru">RU</option>
+                                <option value="en">EN</option>
+                                <option value="jp">JP</option>
+                            </select>
+                            <button class="btn btn-primary btn-small" onclick="approveRequest(${item.id}, '${item.url}', '${item.target_board}')">✅ Одобрить</button>
+                            <button class="btn btn-secondary btn-small" onclick="rejectRequest(${item.id})" style="color:red;">❌ Отказать</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch(e) {
+                container.innerHTML = 'Ошибка загрузки';
+            }
+        }
+        async function approveRequest(id, url, board) {
+            if(!confirm('Запустить импорт?')) return;
+            const stream = document.getElementById(`stream-select-${id}`).value;
+            try {
+                await fetch('/api/admin/approve_import', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ request_id: id, url: url, board_id: board, stream: stream })
+                });
+                showToast('Импорт запущен!');
+                loadImportRequests(); // Обновить список
+            } catch(e) { alert('Ошибка'); }
+        }
+        async function rejectRequest(id) {
+            if(!confirm('Отклонить заявку?')) return;
+            try {
+                await fetch('/api/admin/reject_import', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ request_id: id })
+                });
+                loadImportRequests();
+            } catch(e) { alert('Ошибка'); }
+        }
+
+        async function loadActiveSimulations() {
+            const container = document.getElementById('active-sims-list');
+            if(!container) return;
+            container.innerHTML = 'Загрузка...';
+            
+            try {
+                const res = await fetch('/api/admin/active_simulations');
+                const list = await res.json();
+                
+                if (list.length === 0) {
+                    container.innerHTML = '<p style="color:gray">Нет активных импортов.</p>';
+                    return;
+                }
+                
+                let html = '';
+                list.forEach(item => {
+                    const nextTime = new Date(item.next_post_at * 1000).toLocaleTimeString();
+                    const finishTime = new Date(item.finish_at * 1000).toLocaleString();
+                    
+                    html += `
+                    <div style="background: var(--bg-input); border: 1px solid var(--border-primary); padding: 10px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                        <div style="flex-grow: 1;">
+                            <strong style="color: var(--accent-primary); font-size: 1.1em;">/${item.board_id}/ ${item.title}</strong><br>
+                            <span style="font-size: 0.9em; color: var(--text-secondary);">
+                                ⏳ Осталось постов: <b>${item.remaining_posts}</b> | 
+                                След. пост: <b>${nextTime}</b> | 
+                                Финиш: ~${finishTime}
+                            </span>
+                        </div>
+                        <button class="btn btn-secondary" style="color: red; border-color: red;" onclick="cancelSimulation('${item.task_id}')">⛔ Отменить</button>
+                    </div>`;
+                });
+                container.innerHTML = html;
+            } catch(e) {
+                container.innerHTML = 'Ошибка загрузки';
+            }
+        }
+
+        async function cancelSimulation(taskId) {
+            if(!confirm('Остановить импорт этого треда? Оставшиеся посты НЕ будут опубликованы.')) return;
+            try {
+                await fetch('/api/admin/cancel_simulation', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ task_id: taskId })
+                });
+                loadActiveSimulations(); // Обновить
+            } catch(e) { alert('Ошибка'); }
+        }
+        document.addEventListener('DOMContentLoaded', () => {
+            // 1. Обработчик формы импорта
+            openTab('dashboard');
+            const importForm = document.getElementById('import-form');
+            if (importForm) {
+                importForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const btn = e.target.querySelector('button');
+                    const status = document.getElementById('import-status');
+                    btn.disabled = true; btn.textContent = "Запуск...";
+                    const formData = new FormData(e.target);
+                    try {
+                        const res = await fetch('/api/admin/import_thread', {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(Object.fromEntries(formData))
+                        });
+                        const data = await res.json();
+                        if (res.ok) {
+                            status.innerHTML = `<span style="color: green;">✅ ${data.message || 'OK'}</span>`;
+                            setTimeout(() => { openTab('logs'); loadLogs(); }, 1000);
+                        } else status.innerHTML = `<span style="color: var(--action-danger);">❌ ${data.detail}</span>`;
+                    } catch(err) { status.textContent = "Ошибка сети"; }
+                    btn.disabled = false; btn.textContent = "🚀 Запустить процесс";
+                });
+            }
+            // Обработчик создания доски
+            const boardForm = document.getElementById('admin-create-board-form');
+            if (boardForm) {
+                boardForm.onsubmit = async (e) => {
+                    e.preventDefault();
+                    const data = Object.fromEntries(new FormData(e.target));
+                    const res = await fetch('/api/board/request', { method: 'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+                    if(res.ok) { alert('Создано'); e.target.reset(); loadBoardsList(); }
+                    else alert((await res.json()).detail);
+                };
+            }
+            // Обработчик формы теневого бана в админке
+            const sbFormAdmin = document.getElementById('shadow-ban-form-admin');
+            if (sbFormAdmin) {
+                sbFormAdmin.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const formData = new FormData(sbFormAdmin);
+                    const boardSelect = document.getElementById('admin-board-select');
+                    const data = {
+                        target: formData.get('target'),
+                        duration: parseInt(formData.get('duration')),
+                        scope: formData.get('is_global') ? 'global' : 'local',
+                        board_id: boardSelect ? boardSelect.value : 'b'
+                    };
+                    try {
+                        const res = await fetch('/api/admin/shadow_ban', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(data)
+                        });
+                        if (res.ok) {
+                            const ans = await res.json();
+                            alert(ans.message || 'Теневой бан выдан 👻');
+                            sbFormAdmin.reset();
+                            // Обновляем список, если выбрана текущая доска или ALL
+                            if (data.scope === 'local' && typeof loadUsers === 'function') loadUsers(data.board_id);
+                        } else {
+                            const err = await res.json();
+                            alert(`Ошибка: ${err.detail}`);
+                        }
+                    } catch (err) { 
+                        alert('Ошибка сети'); 
+                    }
+                });
+            }
+            // Обработчик Нейронки
+            const neuroToggle = document.getElementById('neuro-toggle');
+            if (neuroToggle) {
+                neuroToggle.addEventListener('change', async (e) => {
+                    const enabled = e.target.checked;
+                    try {
+                        const res = await fetch('/api/admin/toggle_neuro', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ enabled: enabled })
+                        });
+                        if(res.ok) showToast(`🤖 Neuro-Poster: ${enabled ? 'ON' : 'OFF'}`);
+                        else { e.target.checked = !enabled; alert('Ошибка'); }
+                    } catch(err) { e.target.checked = !enabled; alert('Ошибка сети'); }
+                });
+            }
+            // Обработчик Локдауна
+            const lockdownToggle = document.getElementById('lockdown-toggle');
+            if (lockdownToggle) {
+                lockdownToggle.addEventListener('change', async (e) => {
+                    const enabled = e.target.checked;
+                    try {
+                        const res = await fetch('/api/admin/lockdown', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ enabled: enabled })
+                        });
+                        if(res.ok) showToast(`🛡️ Lockdown: ${enabled ? 'ON' : 'OFF'}`);
+                        else { e.target.checked = !enabled; alert('Ошибка'); }
+                    } catch(err) { e.target.checked = !enabled; alert('Ошибка сети'); }
+                });
+            }
+            // Обработчик Капчи 
+            const captchaToggle = document.getElementById('captcha-toggle');
+            if (captchaToggle) {
+                captchaToggle.addEventListener('change', async (e) => {
+                    const enabled = e.target.checked;
+                    try {
+                        const res = await fetch('/api/admin/toggle_captcha', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ enabled: enabled })
+                        });
+                        if(res.ok) showToast(`🐵 Captcha: ${enabled ? 'ON' : 'OFF'}`);
+                        else { e.target.checked = !enabled; alert('Ошибка'); }
+                    } catch(err) { e.target.checked = !enabled; alert('Ошибка сети'); }
+                });
+            }
+            const scannerToggle = document.getElementById('scanner-toggle');
+            if (scannerToggle) {
+                scannerToggle.addEventListener('change', async (e) => {
+                    const enabled = e.target.checked;
+                    const intervalInput = document.getElementById('scanner-interval');
+                    // Берем текущий интервал или дефолтный 66
+                    const interval = intervalInput ? (parseInt(intervalInput.value) || 66) : 66;
+
+                    try {
+                        const res = await fetch('/api/admin/configure_scanner', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ enabled: enabled, interval: interval })
+                        });
+                        if(res.ok) showToast(`🕵️ Neuro-Scanner: ${enabled ? 'ON' : 'OFF'}`);
+                        else { e.target.checked = !enabled; alert('Ошибка сервера'); }
+                    } catch(err) { 
+                        e.target.checked = !enabled; 
+                        alert('Ошибка сети'); 
+                    }
+                });
+            }
+            // Обработчик формы спам-фильтра
+            const spamForm = document.getElementById('add-spam-word-form');
+            if (spamForm) {
+                spamForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const btn = spamForm.querySelector('button');
+                    btn.disabled = true;
+                    const formData = new FormData(spamForm);
+                    try {
+                        const res = await fetch('/api/admin/add_spam_word', {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(Object.fromEntries(formData))
+                        });
+                        if(res.ok) {
+                            spamForm.querySelector('input[name="word"]').value = '';
+                            loadSpamWords();
+                        } else {
+                            alert((await res.json()).detail || 'Ошибка');
+                        }
+                    } catch(e) { alert('Ошибка сети'); }
+                    btn.disabled = false;
+                });
+            }
+            // 2. Первая загрузка данных
+            loadStats(); 
+            updateServerHealth();
+            // 3. Запуск таймеров (как ты просил: 20с и 60с)
+            setInterval(loadLogs, 60000); 
+            setInterval(updateServerHealth, 30000);
+            setInterval(loadStats, 60000);
+            if (typeof AdminManager !== 'undefined') {
+                AdminManager.checkFeedbackCount();
+                setInterval(() => AdminManager.checkFeedbackCount(), 60000);
+            }
+        });
+        // === ИНСПЕКТОР ЮЗЕРОВ ===
+        async function inspectUser() {
+            const input = document.getElementById('inspect-user-id');
+            const uid = input.value.trim();
+            if (!uid) return alert('Введите ID пользователя');
+
+            const container = document.getElementById('user-inspector-result');
+            container.style.display = 'none';
+            
+            try {
+                const res = await fetch('/api/admin/inspect_user', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ user_id: parseInt(uid) })
+                });
+                const resp = await res.json();
+                
+                if (!resp.found) {
+                    alert('Пользователь не найден (нет записей в базе).');
+                    return;
+                }
+
+                const data = resp.data;
+                container.style.display = 'block';
+
+                document.getElementById('ui-id').textContent = data.user_id;
+                document.getElementById('ui-hash').textContent = data.user_hash || '-';
+                document.getElementById('ui-role').textContent = (data.global_role || 'user').toUpperCase();
+                document.getElementById('ui-seen').textContent = data.first_seen ? new Date(data.first_seen * 1000).toLocaleString() : '-';
+                document.getElementById('ui-total').textContent = data.total_posts;
+
+                const bansList = document.getElementById('ui-bans-list');
+                if (data.active_bans.length === 0) {
+                    bansList.innerHTML = '<li style="color:green">✅ Чист</li>';
+                } else {
+                    bansList.innerHTML = data.active_bans.map(b => 
+                        `<li><b>${b.type}</b> на /${b.board_id}/ (до ${new Date(b.expires_at * 1000).toLocaleString()})</li>`
+                    ).join('');
+                }
+
+                const boardsDiv = document.getElementById('ui-boards-list');
+                boardsDiv.innerHTML = data.boards.map(b => 
+                    `<span style="background:#333; color:white; padding:2px 6px; border-radius:4px; border:1px solid #555;">/${b.board_id}/: ${b.status}</span>`
+                ).join('');
+
+                const postsDiv = document.getElementById('ui-posts-list');
+                postsDiv.innerHTML = data.last_posts.map(p => {
+                    const txt = p.content.text ? p.content.text.substring(0, 100) : '[Медиа]';
+                    return `<div style="border-bottom:1px solid #444; padding:2px 0;">[${new Date(p.timestamp*1000).toLocaleTimeString()}] /${p.board_id}/ #${p.id}: ${txt}</div>`;
+                }).join('');
+
+            } catch (e) {
+                console.error(e);
+                alert('Ошибка загрузки досье');
+            }
+        }
+
+        // === LIVE FEED ИСТОРИЯ ===
+        async function loadLiveFeedHistory() {
+            const container = document.getElementById('admin-live-feed');
+            if (!container || container.dataset.historyLoaded === "true") return;
+
+            try {
+                const res = await fetch('/api/admin/recent_posts');
+                const posts = await res.json();
+                
+                // Рендерим историю (снизу вверх)
+                const historyHtml = posts.reverse().map(p => 
+                    `<div style="border-bottom:1px solid #333; padding:4px 0; font-family:monospace; font-size:12px; color:#aaa;">
+                        [HISTORY ${p.time}] <span style="color:orange">/${p.board}/</span> 
+                        #${p.id} (ID: ${p.author}): ${p.text}
+                    </div>`
+                ).join('');
+                
+                container.innerHTML = historyHtml + '<div style="text-align:center; color:#2ecc71; margin:10px 0; border-top:1px dashed #555;">⚡ LIVE STREAM CONNECTED ⚡</div>';
+                container.scrollTop = container.scrollHeight;
+                container.dataset.historyLoaded = "true";
+            } catch(e) { console.error("History error", e); }
+        }
+    </script>
+</body>
+</html>

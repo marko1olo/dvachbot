@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Месть Макаке - ТГАЧ</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #1a1a1a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            display: block;
+        }
+        
+        /* UI поверх канваса (FIXED позиция для мобил) */
+        .ui-layer {
+            position: fixed; /* Важно: fixed, чтобы не уезжало при скролле */
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 10px; /* Отступы */
+            padding-bottom: 20px; /* Отступ снизу побольше */
+            box-sizing: border-box;
+            z-index: 5;
+        }
+
+        .boss-stats {
+            margin-top: 10px; /* Отступ от челки телефона */
+            width: 100%;
+            display: flex;
+            justify-content: center;
+        }
+
+        .player-stats {
+            margin-bottom: 20px; /* Отступ от низа (для iOS safe area) */
+            width: 100%;
+            display: flex;
+            justify-content: center;
+        }
+
+        .hp-bar-container {
+            width: 95%;
+            max-width: 400px;
+            height: 24px; /* Чуть толще */
+            background: rgba(0,0,0,0.7);
+            border: 2px solid #fff;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+        
+        .hp-fill {
+            height: 100%;
+            transition: width 0.1s linear;
+        }
+        
+        #boss-hp-bar .hp-fill { background: linear-gradient(90deg, #e74c3c, #c0392b); }
+        #player-hp-bar .hp-fill { background: linear-gradient(90deg, #2ecc71, #27ae60); }
+
+        .hp-label {
+            position: absolute;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-weight: 900;
+            font-size: 14px;
+            line-height: 24px;
+            text-shadow: 1px 1px 2px black;
+            text-transform: uppercase;
+        }
+
+        #menu-screen, #game-over-screen {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            pointer-events: auto;
+            color: white;
+            z-index: 10;
+        }
+        
+        h1 { font-size: 2.5em; margin: 0 0 15px 0; text-transform: uppercase; color: #f1c40f; text-shadow: 0 0 15px #e67e22; text-align: center;}
+        p { font-size: 1.1em; max-width: 90%; text-align: center; line-height: 1.4; color: #ccc; }
+        
+        .btn-start {
+            margin-top: 25px;
+            padding: 15px 50px;
+            font-size: 1.2em;
+            background: #d35400;
+            color: white;
+            border: 2px solid #fff;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: bold;
+            text-transform: uppercase;
+            box-shadow: 0 0 20px rgba(211, 84, 0, 0.5);
+            transition: transform 0.1s;
+        }
+        .btn-start:active { transform: scale(0.95); background: #e67e22; }
+        
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        
+        <div class="ui-layer" id="game-ui" class="hidden">
+            <div class="boss-stats">
+                <div class="hp-bar-container" id="boss-hp-bar">
+                    <div class="hp-label">Абу</div>
+                    <div class="hp-fill" style="width: 100%;"></div>
+                </div>
+            </div>
+
+            <div class="player-stats">
+                <div class="hp-bar-container" id="player-hp-bar">
+                    <div class="hp-label">Анон (Ты)</div>
+                    <div class="hp-fill" style="width: 100%;"></div>
+                </div>
+            </div>
+        </div>
+
+        <div id="menu-screen">
+            <h1>Месть Макаке</h1>
+            <p>Абу, ебаная макака, охуела окончательно.</p>
+            <p>Тапай по экрану, чтобы кидать бутылки с мочой.<br>Сбивай летящие в тебя банхаммеры!</p>
+            <button class="btn-start" onclick="startGame()">В БОЙ</button>
+            <a href="/" style="margin-top: 25px; color: #777; text-decoration: none;">[Выйти]</a>
+        </div>
+
+        <div id="game-over-screen" class="hidden">
+            <h1 id="go-title">ПОБЕДА!</h1>
+            <p id="go-message">...</p>
+            <button class="btn-start" onclick="startGame()">ЕЩЕ РАЗ</button>
+            <a href="/" style="margin-top: 25px; color: #777; text-decoration: none;">[На главную]</a>
+        </div>
+    </div>
+
+    <script src="/static/js/game_abu.js?v=3"></script>
+</body>
+</html>

@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'en' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - {{ request.state.site_name }}</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2.9">
+    <link rel="icon" href="/static/favicon.ico">
+    <style>
+        .policy-content {
+            line-height: 1.6;
+            font-size: 15px;
+        }
+        .policy-content h3 {
+            margin-top: 25px;
+            margin-bottom: 10px;
+            color: var(--accent-primary);
+            border-bottom: 1px solid var(--border-separator);
+        }
+        .policy-content h4 {
+            margin-top: 15px;
+            margin-bottom: 5px;
+            color: var(--text-primary);
+        }
+        .policy-content ul {
+            margin-bottom: 15px;
+            padding-left: 20px;
+            color: var(--text-secondary);
+        }
+        .policy-content li {
+            margin-bottom: 5px;
+        }
+        .policy-content p {
+            margin-bottom: 15px;
+            color: var(--text-primary);
+            text-align: justify;
+        }
+        .warning-box {
+            background: rgba(255, 0, 0, 0.05);
+            border-left: 4px solid var(--action-danger);
+            padding: 15px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body class="page-rules">
+    <header>
+        <div class="header-group-left">
+            <h1>
+                <a href="/" style="text-decoration:none; color:inherit;">{{ request.state.site_name }}</a> 
+                <span style="font-weight:normal; opacity:0.7; font-size: 0.9em;">/ Policy</span>
+            </h1>
+        </div>
+        <div class="header-group-right">
+            <button id="theme-toggle" class="theme-toggle-btn">🌙</button>
+        </div>
+        <nav style="width: 100%; text-align: center; margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border-primary); display: block;">
+            <a href="/">[{{ request.state.t('nav_main') }}]</a>
+        </nav>
+    </header>
+
+    <main style="max-width: 900px; margin: 20px auto;">
+        <div class="admin-section policy-content" style="background: var(--bg-post); padding: 30px; border-radius: 8px; border: 1px solid var(--border-primary);">
+            
+            <h2 style="text-align: center; margin-bottom: 5px;">Privacy Policy for TGACH Anonymous Chatbots</h2>
+            <p style="text-align: center; color: var(--text-secondary); font-size: 0.9em;">Effective Date: October 13, 2025</p>
+            <hr>
+
+            <h3>1. Introduction</h3>
+            <p>This Privacy Policy describes how the TGACH Anonymous Chatbots ("we," "us," or "the Service") handle information in connection with your use of our bots on the Telegram platform and our Website. The fundamental principle of the Service is to provide a platform for <b>anonymous communication</b>, and this policy is designed to be consistent with that goal.</p>
+            <p>By interacting with the Service, you agree to the collection and use of information in accordance with this policy.</p>
+
+            <h3>2. Information We Collect</h3>
+            <p>Our primary goal is to collect the minimum amount of information necessary to operate the Service. We do not require registration, and we do not collect personal data such as your name, phone number, or Telegram username. The information we handle includes:</p>
+            <ul>
+                <li><b>Telegram User ID:</b> A unique numerical identifier assigned to you by Telegram. We use this to distinguish users for the purpose of message delivery, applying moderation actions (mutes, bans), and managing user-specific settings (e.g., API tokens).</li>
+                <li><b>Message Content:</b> The content you send through the bot, including text, replies, reactions, and file identifiers for media (photos, videos, GIFs, stickers). We process this content to broadcast it to other users of the Service.</li>
+                <li><b>Technical Information:</b> We collect metadata associated with your messages, such as timestamps and the specific bot instance (board) you are interacting with.</li>
+                <li><b>User State:</b> We store temporary, non-personal state information, such as your status (active/banned) and your location within the Service's features (e.g., in a specific thread).</li>
+            </ul>
+
+            <h3>3. How We Use Information</h3>
+            <p>We use the information we collect solely for the following purposes:</p>
+            <ul>
+                <li><b>To Operate and Maintain the Service:</b> To receive your messages and anonymously broadcast them to other users on the same board.</li>
+                <li><b>To Enable Core Chat Functionalities:</b> To process replies, reactions, and other interactive features of the chat.</li>
+                <li><b>For Moderation and Security:</b> To enforce our rules, prevent spam, filter prohibited content, and apply moderation actions (mutes, shadow mutes, bans) to users who violate our policies.</li>
+                <li><b>To Provide User-Specific Features:</b> To generate and manage your unique API token for website access, if requested.</li>
+            </ul>
+
+            <h3>4. Data Storage, Security, and Retention</h3>
+            <p><b>Storage:</b> The information we collect is stored in a database on a secure server. We take reasonable administrative, technical, and physical security measures to protect it from loss, theft, misuse, and unauthorized access.</p>
+            <p><b>Retention:</b> The Service is designed to be ephemeral. We do not aim to store content indefinitely. Our system automatically and periodically purges older posts from our database to manage storage and minimize the amount of retained data. Banned user IDs are retained indefinitely for the purpose of enforcing the ban.</p>
+
+            <h3>5. User-Generated Content and Responsibility</h3>
+            <div class="warning-box" style="border-left-color: var(--accent-primary); background: var(--bg-hover);">
+                <p><b>The Service is a Conduit, Not a Publisher:</b> The Service acts as a passive, real-time conduit for the transmission of anonymous user-generated content. We are a platform, not a creator or publisher. We do not create, endorse, edit, or have prior knowledge of the content posted by users.</p>
+            </div>
+            <p><b>User Sole Responsibility:</b> You, the user, are solely and exclusively responsible for the content you submit, post, or display using the Service. You affirm, represent, and warrant that you own or have the necessary licenses, rights, consents, and permissions to publish the content you submit.</p>
+            <p><b>No Endorsement of Content:</b> The views expressed by users on the Service do not represent the views, opinions, or policies of the Service administrators. We do not endorse or assume any liability for any content posted by you or any other user.</p>
+
+            <h3>6. Prohibited Content and Moderation</h3>
+            <div class="warning-box">
+                <p>While we are a platform for free expression, we <b>strictly prohibit</b> the use of our Service to distribute content that:</p>
+                <ul>
+                    <li>Is illegal under applicable international laws, including but not limited to <b>child sexual abuse material (CSAM)</b>.</li>
+                    <li>Constitutes hate speech, incites violence, or promotes discrimination against individuals or groups based on race, ethnic origin, religion, disability, age, nationality, veteran status, sexual orientation, gender, or gender identity.</li>
+                    <li>Contains private and confidential information of others (doxxing) without their express permission.</li>
+                    <li>Is used for spamming, phishing, or spreading malware.</li>
+                    <li>Infringes on the intellectual property rights of others (e.g., copyright, trademark).</li>
+                </ul>
+                <p><b>We reserve the right to remove any content and ban or mute any user found to be in violation of these rules, with or without notice. All reports of illegal content will be taken seriously.</b></p>
+            </div>
+
+            <h3>7. Disclaimer of Warranties and Limitation of Liability</h3>
+            <p style="text-transform: uppercase; font-size: 0.85em; opacity: 0.8;">
+                THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED. IN NO EVENT SHALL THE ADMINISTRATORS OF THE SERVICE BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES, INCLUDING BUT NOT LIMITED TO, DAMAGES FOR LOSS OF PROFITS, GOODWILL, USE, DATA, OR OTHER INTANGIBLE LOSSES, RESULTING FROM: (I) THE CONTENT POSTED BY ANY USER; (II) THE CONDUCT, WHETHER ONLINE OR OFFLINE, OF ANY USER OF THE SERVICE; (III) ANY UNAUTHORIZED ACCESS TO OR USE OF OUR SERVERS.
+            </p>
+
+            <h3>8. User Rights and Data Erasure</h3>
+            <p>You have the right to have your data erased from our Service. In the context of Telegram bots, you can exercise this right effectively and immediately by following this procedure:</p>
+            <ol>
+                <li>Open your chat with the bot.</li>
+                <li>Select <b>"Stop Bot"</b> or <b>"Block User"</b> from the menu.</li>
+            </ol>
+            <p>This action sends a notification (<code>TelegramForbiddenError</code>) to our system. Our software is designed to automatically interpret this action as a data erasure request. Upon receiving it, we will permanently delete your user-specific data associated with that board from our database, including your User ID, status, and API token. Please note that the content you posted will remain but will become fully unattributable.</p>
+
+            <h3>9. Content Takedown and Copyright Policy</h3>
+            <p>We respect the intellectual property rights of others. If you believe that your copyrighted work has been copied in a way that constitutes copyright infringement and is accessible via the Service, please notify us.</p>
+            <p>For your complaint to be valid, you must provide the following information in writing:</p>
+            <ul>
+                <li>An electronic or physical signature of a person authorized to act on behalf of the copyright owner.</li>
+                <li>Identification of the copyrighted work that you claim has been infringed.</li>
+                <li>Identification of the material that is claimed to be infringing and where it is located on the Service (e.g., Post Number, Board ID, and a screenshot).</li>
+                <li>Information reasonably sufficient to permit us to contact you, such as your address, telephone number, and email address.</li>
+            </ul>
+            <p>All takedown notices should be sent to our designated contact email below.</p>
+
+            <h3>10. Changes to This Privacy Policy</h3>
+            <p>We may update our Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy in a publicly accessible manner. You are advised to review this Privacy Policy periodically for any changes.</p>
+
+            <h3>11. Contact Us</h3>
+            <p>If you have any questions about this Privacy Policy or wish to file a content takedown notice, please contact us at:</p>
+            <p style="text-align: center; font-size: 1.2em; font-weight: bold;">
+                <a href="mailto:tgach@tuta.ioe" 
+                   onclick="event.preventDefault(); navigator.clipboard.writeText('tgach@tuta.io').then(() => showToast('✅ Email copied!'));" 
+                   title="Click to copy"
+                   style="cursor: pointer; text-decoration: none; border-bottom: 1px dashed var(--accent-link);">
+                    tgach@tuta.io
+                </a>
+            </p>
+        </div>
+    </main>
+
+    <footer>
+        <p>2025 - {{ request.state.site_name }}</p>
+    </footer>
+    <script src="/static/js/main.js?v=2.1" defer></script>
+</body>
+</html>

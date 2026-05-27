@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ТГАЧ.IMG (Рандом)</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=3.9">
+    <link rel="icon" href="/static/favicon.ico">
+    <style>
+        body.page-random-img {
+            background-color: #000 !important;
+            color: #fff;
+            overflow: hidden !important;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            height: 100dvh;
+            margin: 0 !important; 
+            padding: 0 !important;
+            padding-bottom: 0 !important;
+            touch-action: none;
+            user-select: none;
+        }
+        #ri-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            background: #000;
+        }
+        #ri-img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            transition: opacity 0.2s ease-out;
+            cursor: pointer;
+            z-index: 1;
+        }
+        #ri-ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 10;
+            transition: opacity 0.3s ease;
+        }
+        #ri-ui-layer.ui-hidden {
+            opacity: 0;
+            pointer-events: none !important;
+        }
+        #ri-ui-layer.ui-hidden * {
+            pointer-events: none !important;
+        }
+        .ri-top-bar {
+            position: absolute;
+            top: 0; left: 0; width: 100%;
+            padding: 15px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.9) 30%, transparent);
+            display: flex;
+            justify-content: flex-start;
+            align-items: center;
+            gap: 20px;
+            pointer-events: auto;
+            z-index: 1000;
+        }
+        .ri-top-btn {
+            color: rgba(255,255,255,0.9);
+            font-size: 24px;
+            text-decoration: none;
+            text-shadow: 0 2px 5px rgba(0,0,0,0.8);
+            cursor: pointer;
+            transition: transform 0.2s;
+            line-height: 1;
+            display: block !important;
+        }
+        .page-random-img [data-title]:hover::after {
+            bottom: auto !important;
+            top: 100% !important;
+            transform: translateX(-50%) translateY(10px) !important;
+        }
+        .page-random-img [data-title]:hover::before {
+            bottom: auto !important;
+            top: 100% !important;
+            transform: translateX(-50%) translateY(0) !important;
+            border-top-color: transparent !important;
+            border-bottom-color: var(--accent-primary) !important;
+        }
+        .ri-top-btn:hover { transform: scale(1.2); color: #fff; }
+        #ri-meta {
+            margin-left: auto;
+            font-family: monospace;
+            font-size: 14px;
+            text-shadow: 0 1px 2px black;
+            color: #fff;
+            background: rgba(0,0,0,0.6);
+            padding: 4px 10px;
+            border-radius: 4px;
+            pointer-events: auto;
+        }
+        .ri-home {
+            color: rgba(255,255,255,0.8);
+            font-size: 24px;
+            text-decoration: none;
+            text-shadow: 0 2px 5px rgba(0,0,0,0.5);
+            transition: transform 0.2s;
+        }
+        .ri-home:hover { transform: scale(1.1); color: #fff; }
+        .ri-nav-btn {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 50px; height: 80px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 40px;
+            color: rgba(255,255,255,0.5);
+            background: rgba(0,0,0,0.1);
+            border-radius: 8px;
+            cursor: pointer;
+            pointer-events: auto;
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .ri-nav-btn:hover {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+        .ri-nav-btn:active {
+            transform: translateY(-50%) scale(0.9);
+        }
+        #ri-prev-btn { left: 10px; }
+        #ri-next-btn { right: 10px; }
+        #ri-link-btn {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.6);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 8px 15px;
+            border-radius: 20px;
+            text-decoration: none;
+            font-weight: bold;
+            font-size: 14px;
+            pointer-events: auto;
+            backdrop-filter: blur(4px);
+            transition: background 0.2s;
+            display: flex; align-items: center; gap: 5px;
+        }
+        #ri-link-btn:hover { background: var(--accent-primary, #3182ce); border-color: transparent; }
+        #ri-loader {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 40px; height: 40px;
+            border: 4px solid rgba(255,255,255,0.2);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            display: none;
+            z-index: 5;
+        }
+        @keyframes spin { 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+        .ri-mobile-nav {
+            display: none;
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            padding: 20px;
+            padding-bottom: calc(30px + env(safe-area-inset-bottom));
+            background: linear-gradient(to top, rgba(0,0,0,0.8) 20%, transparent);
+            justify-content: center;
+            align-items: center;
+            gap: 40px;
+            pointer-events: auto;
+            z-index: 100;
+        }
+        .filter-modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(5px);
+        }
+        .filter-content {
+            background: #222;
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #444;
+            max-width: 90%;
+            width: 400px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .filter-boards {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+            gap: 8px;
+            overflow-y: auto;
+            margin: 15px 0;
+            padding-right: 5px;
+        }
+        .board-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #333;
+            padding: 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: monospace;
+            font-weight: bold;
+            color: #888;
+            border: 1px solid #444;
+            user-select: none;
+        }
+        .board-toggle.active {
+            background: var(--accent-primary, #3182ce);
+            color: #fff;
+            border-color: var(--accent-primary, #3182ce);
+        }
+        .filter-actions {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: auto;
+        }
+        .filter-btn {
+            padding: 10px;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            flex: 1;
+        }
+        .btn-save { background: var(--accent-primary, #3182ce); color: white; }
+        .btn-reset { background: #444; color: white; }
+        @media (max-width: 768px) {
+            #ri-prev-btn, #ri-next-btn, #ri-link-btn { display: none !important; }
+            .ri-mobile-nav { 
+                display: flex !important; 
+                position: absolute;
+                bottom: 20px;
+                left: 0; width: 100%;
+                justify-content: center;
+                gap: 30px;
+                padding-bottom: env(safe-area-inset-bottom);
+            }
+            
+            .ri-btn {
+                width: 60px;
+                height: 60px;
+                border-radius: 50%;
+                background: rgba(40, 40, 40, 0.8);
+                border: 1px solid rgba(255,255,255,0.2);
+                color: white;
+                font-size: 24px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                backdrop-filter: blur(5px);
+            }
+            #ri-link-btn-mobile {
+                background: var(--accent-primary, #3182ce);
+                width: 50px; height: 50px;
+            }
+            .ri-top-bar { padding: 10px; gap: 15px; }
+            .ri-top-btn { font-size: 22px; }
+            #ri-meta { font-size: 12px; padding: 3px 6px; }
+        }
+    </style>
+</head>
+<body class="page-random-img">
+    <div id="ri-container">
+        <div id="ri-loader"></div>
+        
+        <img id="ri-img" src="" alt="Loading...">
+        
+        <div id="ri-ui-layer">
+            <div class="ri-top-bar">
+                <a href="/" class="ri-top-btn" title="На главную">🏠</a>
+                <div id="ri-filter-btn" class="ri-top-btn" title="Фильтр досок" style="cursor:pointer;">⚙️</div>
+                <div id="ri-tags-btn" class="ri-top-btn" title="Теги">🏷️</div>
+                <a href="#" id="ri-download-btn" class="ri-top-btn" title="Скачать" download>⬇️</a>
+                <div id="ri-meta"></div>
+            </div>
+            <div id="ri-prev-btn" class="ri-nav-btn" title="Назад">‹</div>
+            <div id="ri-next-btn" class="ri-nav-btn" title="Вперед">›</div>
+            <div class="ri-mobile-nav">
+                <button id="ri-prev-btn-mobile" class="ri-btn">⬅️</button>
+                <a href="#" id="ri-link-btn-mobile" class="ri-btn" target="_blank">🔗</a>
+                <button id="ri-next-btn-mobile" class="ri-btn">➡️</button>
+            </div>
+
+            <a href="#" id="ri-link-btn" target="_blank">🔗 В тред</a>
+        </div>
+    </div>
+    <script src="/static/js/main.js?v=3.0-img-preload"></script>
+    <div class="modal-overlay" id="modal-overlay" style="display: none;"></div>
+    <div id="filter-modal" class="filter-modal">
+        <div class="filter-content">
+            <h3 style="margin:0 0 10px 0;">Фильтр досок</h3>
+            <div style="font-size:0.8em; color:#aaa; margin-bottom:5px;">Выберите доски для показа:</div>
+            <div class="filter-boards" id="board-list">
+                {% for b_key in boards %}
+                    <div class="board-toggle active" data-board="{{ b_key }}">/{{ b_key }}/</div>
+                {% endfor %}
+            </div>
+            <div class="filter-actions">
+                <button class="filter-btn btn-reset" onclick="FilterManager.toggleAll(false)">Сброс</button>
+                <button class="filter-btn btn-reset" onclick="FilterManager.toggleAll(true)">Все</button>
+                <button class="filter-btn btn-save" onclick="FilterManager.save()">OK</button>
+            </div>
+        </div>
+    </div>
+    <script>
+    const FilterManager = {
+        key: 'tgach_img_filter',
+        selected: [],
+        
+        init() {
+            const saved = localStorage.getItem(this.key);
+            const allBoards = Array.from(document.querySelectorAll('.board-toggle')).map(el => el.dataset.board);
+            this.selected = saved ? JSON.parse(saved) : allBoards;
+            this.render();
+            
+            document.getElementById('ri-filter-btn').onclick = () => {
+                document.getElementById('filter-modal').style.display = 'flex';
+            };
+            
+            document.querySelectorAll('.board-toggle').forEach(el => {
+                el.onclick = () => el.classList.toggle('active');
+            });            
+        },
+        
+        render() {
+            document.querySelectorAll('.board-toggle').forEach(el => {
+                const bid = el.dataset.board;
+                if (this.selected.includes(bid)) el.classList.add('active');
+                else el.classList.remove('active');
+            });
+        },
+        
+        toggleAll(state) {
+            document.querySelectorAll('.board-toggle').forEach(el => el.classList.toggle('active', state));
+        },
+        
+        save() {
+            const active = [];
+            document.querySelectorAll('.board-toggle.active').forEach(el => active.push(el.dataset.board));
+            if (active.length === 0) return alert("Выберите хотя бы одну доску!");
+            
+            this.selected = active;
+            localStorage.setItem(this.key, JSON.stringify(this.selected));
+            document.getElementById('filter-modal').style.display = 'none';
+            
+            if (window.ImageRouletteManager) {
+                window.ImageRouletteManager.isLoading = false;
+                window.ImageRouletteManager.isPreloading = false;
+                window.ImageRouletteManager.preloadBuffer = [];
+                window.ImageRouletteManager.goNext();
+            }
+        }
+    };
+    window.addEventListener('load', () => setTimeout(() => FilterManager.init(), 500));
+    </script>
+</body>
+</html>

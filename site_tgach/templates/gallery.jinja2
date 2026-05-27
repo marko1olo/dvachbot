@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ request.state.t('gallery_title', num=op_post_num) }} - {{ request.state.t('site_name') }}</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2.9">
+    <link rel="icon" href="/static/favicon.ico">
+    <style>
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 10px;
+        }
+        .gallery-item {
+            position: relative;
+            text-decoration: none;
+            border-radius: 4px;
+            overflow: hidden;
+            display: block;
+            border: 1px solid var(--border-primary);
+        }
+        .gallery-item:hover .gallery-post-num {
+            opacity: 1;
+        }
+        .gallery-thumb {
+            width: 100%;
+            height: 150px;
+            background-color: var(--bg-placeholder);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .gallery-thumb img, .gallery-thumb video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .gallery-thumb audio {
+            width: 90%;
+            height: 40px;
+        }
+        .gallery-post-num {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            background-color: rgba(0,0,0,0.7);
+            color: white;
+            padding: 2px 6px;
+            font-size: 0.8em;
+            border-top-left-radius: 4px;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+    </style>
+</head>
+<body {% if session.user %}data-user-id="{{ request.state.user_hash }}"{% endif %} data-site-mode="{{ site_mode }}">
+    
+    <script>
+        (function() {
+            try {
+                var settings = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var theme = settings.theme || localStorage.getItem('theme');
+                if (!theme) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+                    else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) theme = 'light';
+                    else theme = Math.random() < 0.5 ? 'dark' : 'light';
+                }
+                if (theme && theme !== 'light') document.body.classList.add('theme-' + theme);
+                var fontStyle = settings.fontStyle || 'b';
+                if (fontStyle === 'b') document.body.classList.add('font-style-b');
+                var fontSize = settings.fontSize;
+                if (!fontSize) {
+                    if (window.innerWidth <= 768) fontSize = 'small';
+                    else fontSize = 'medium';
+                }
+                document.body.classList.add('font-size-' + fontSize);
+            } catch (e) { console.error(e); }
+        })();
+    </script>
+
+    <header>
+        <div class="header-main-row">
+            <div class="header-logo" style="display: flex; align-items: center; gap: 15px;">
+                <h1>
+                    <a href="/">{{ request.state.t('site_name') }}</a> 
+                </h1>
+            </div>
+            <div class="header-group-right">
+                <div class="user-actions">
+                    <button id="settings-btn" class="header-btn" title="{{ request.state.t('settings_btn_title') }}">⚙️</button>
+                    <button id="theme-toggle" class="theme-toggle-btn" title="{{ request.state.t('theme_btn_title') }}">🌙</button>
+                    {% if session.user %}
+                        <a href="/auth/logout" class="logout-link">{{ request.state.t('logout_btn') }}</a>
+                    {% else %}
+                        <a href="/login" class="header-btn">🔑</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <main>
+        <div style="text-align: center; margin-bottom: 20px;">
+            <h1 style="font-size: 1.5em; margin: 0; border: none;">{{ request.state.t('gallery_title', num=op_post_num) }}</h1>
+            <nav class="board-header-nav" style="border: none; padding-top: 5px;">
+                <a href="/{{ board_id }}/res/{{ op_post_num }}.html">{{ request.state.t('nav_thread_back') }}</a>
+                <a href="/{{ board_id }}/threads/">{{ request.state.t('nav_back_threads') }}</a>
+                <a href="/">[{{ request.state.t('nav_home') }}]</a>
+            </nav>
+        </div>
+
+        {% if media_posts %}
+            <div class="gallery-grid">
+                {% for post in media_posts %}
+                    {% for file in post.content.files %}
+                        <a href="{{ file.original_url }}" 
+                           class="gallery-item gallery-trigger"
+                           data-type="{{ file.type }}"
+                           data-filename="{{ file.filename }}"
+                           data-file-id="{{ file.original_file_id }}"
+                           title="Пост #{{ post.id }}">
+                            
+                            <div class="gallery-thumb">
+                                {% if file.type in ['image', 'photo', 'sticker', 'gif'] and file.thumbnail_url %}
+                                    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                         data-src="{{ file.thumbnail_url }}" 
+                                         class="lazy-load" alt="{{ file.filename }}" referrerpolicy="no-referrer">
+                                
+                                {% elif file.type in ['video', 'animation', 'video_note', 'gif'] %}
+                                    <div style="position: relative; width: 100%; height: 100%; background: #000;">
+                                        {% if file.blurhash %}
+                                            <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32" style="position: absolute; top:0; left:0; width:100%; height:100%; object-fit: cover;"></canvas>
+                                        {% endif %}
+                                        <video class="lazy-load" 
+                                               preload="metadata" 
+                                               muted 
+                                               playsinline 
+                                               loop
+                                               data-src="{{ file.original_url }}"
+                                               {% if file.thumbnail_url %}poster="{{ file.thumbnail_url }}"{% endif %}
+                                               style="width: 100%; height: 100%; object-fit: cover; position: relative; z-index: 1;">
+                                        </video>
+                                    </div>
+                                
+                                {% elif file.type in ['audio', 'voice'] %}
+                                    <audio controls preload="metadata" src="{{ file.original_url }}"></audio>
+                                
+                                {% else %}
+                                    <div style="font-size: 3em; color: var(--text-secondary);">📄</div>
+                                {% endif %}
+                            </div>
+                            <span class="gallery-post-num">#{{ post.id }}</span>
+                        </a>
+                    {% endfor %}
+                {% endfor %}
+            </div>
+        {% else %}
+            <p>{{ request.state.t('gallery_no_media') }}</p>
+        {% endif %}
+    </main>
+    
+    <footer>
+        <p>{{ request.state.t('footer_text') }}</p>
+    </footer>
+    
+    <div id="image-viewer" class="image-viewer-overlay" style="display: none;">
+        <span id="iv-close" class="iv-button iv-close-button">&times;</span>
+        <span id="iv-prev" class="iv-button iv-nav-button iv-prev-button">&lsaquo;</span>
+        <span id="iv-next" class="iv-button iv-nav-button iv-next-button">&rsaquo;</span>
+        <div id="iv-container" class="iv-content-container"></div>
+        <div id="iv-info" class="iv-info-bar">
+            <a id="iv-filename" href="#" target="_blank" download>filename.jpg</a>
+            <span id="iv-dimensions"></span>
+            <span id="iv-counter"></span>
+        </div>
+        <div id="iv-loader" class="iv-loader" style="display: none;"></div>
+    </div>
+    
+    <script src="/static/js/main.js?v=2.9" defer></script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+# Core Bot Framework
+aiogram==3.10.0
+aiohttp==3.9.1
+aiohttp-socks==0.8.0
+aiosqlite==0.19.0
+aio-dns==3.1.1
+
+# Environment & System
+python-dotenv==1.0.1
+psutil==5.9.8
+# General HTTP requests
+requests==2.31.0
+
+# Data & Graphics
+numpy==1.26.3
+pandas==2.1.4
+matplotlib==3.8.2
+
+# Image Processing
+Pillow==10.2.0
+
+# Memory Analysis (Optional, but useful for diagnostics)
+Pympler==1.0.1
+
+
+# fastapi
+# uvicorn
+# aiogram==3.5.0 
+# aiohttp
+# python-dotenv
+# psutil
+# pandas
+# matplotlib
+# numpy
+# slowapi
+# fastapi-cache
+# aiosqlite
+# Pillow

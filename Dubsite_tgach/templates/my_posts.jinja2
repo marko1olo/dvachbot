@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ request.state.t('dock_my', 'Мои посты') }} - {{ request.state.t('site_name') }}</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=4.11">
+    <link rel="icon" href="/static/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
+    <meta name="theme-color" content="#212121">    
+    <style>
+        .my-posts-header {
+            background-color: var(--bg-post);
+            border: 1px solid var(--border-primary);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            text-align: center;
+            box-shadow: var(--shadow-main);
+        }
+        .mp-stat-val {
+            font-weight: bold;
+            color: var(--accent-primary);
+            font-size: 1.2em;
+        }
+        .loader-spinner { margin: 0 auto 10px auto; }
+    </style>
+</head>
+<body class="page-my-posts" 
+    {% if session.user %}data-user-id="{{ request.state.user_hash }}"{% endif %} 
+    data-site-mode="{{ site_mode }}" 
+    data-is-admin="{{ 'true' if session.user and session.user.is_admin else 'false' }}">
+    <script>
+        (function() {
+            try {
+                var settings = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var theme = settings.theme || localStorage.getItem('theme');
+                if (!theme) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+                    else theme = 'light';
+                    localStorage.setItem('theme', theme);
+                }
+                if (theme && theme !== 'light') document.documentElement.classList.add('theme-' + theme);
+                var fontStyle = settings.fontStyle || 'b';
+                if (fontStyle === 'b') document.body.classList.add('font-style-b');
+                var fontSize = settings.fontSize;
+                if (!fontSize) {
+                    if (window.innerWidth <= 768) fontSize = 'small';
+                    else fontSize = 'medium';
+                }
+                document.body.classList.add('font-size-' + fontSize);
+            } catch (e) { console.error(e); }
+        })();
+    </script>
+    <div id="app-loader">
+        <div class="loader-content">
+            <img src="/static/logo.png" alt="TGACH" width="80" height="80">
+            <div class="loader-spinner"></div>
+        </div>
+    </div>
+
+    <header>
+       <div class="board-nav-top">
+            {% for category in ['popular', 'bio', 'thematic', 'system'] %}
+                {% set category_boards = [] %}
+                {% for b_key, b_val in boards.items() %}
+                    {% if b_val.category == category %}{% set _ = category_boards.append(b_key) %}{% endif %}
+                {% endfor %}
+                
+                {% if category_boards %}
+                    <span style="opacity:0.3; margin-left:8px;">[</span>
+                    {% for b_key in category_boards %}
+                        <a href="/{{ b_key }}/threads/" class="{% if b_key == board_id %}active{% endif %}" title="{{ boards[b_key].name }}">
+                            {{ boards[b_key].name }}
+                        </a>
+                    {% endfor %}
+                    <span style="opacity:0.3; margin-right:8px;">]</span>
+                {% endif %}
+            {% endfor %}
+        </div>
+        <div class="header-main-row">
+            <div class="header-logo" style="display: flex; align-items: center; gap: 15px;">
+                <h1><a href="/">ТГАЧ</a></h1>
+                <span style="font-family: var(--font-headings); font-weight:bold; font-size: 1.2em; color: var(--text-secondary);">
+                    /MY/
+                </span>
+            </div>
+            <div class="header-group-right">
+                <div class="user-actions">
+                    <a href="/favourites/" id="favourites-btn" class="header-btn" title="{{ request.state.t('fav_title') }}">⭐</a>
+                    <button id="settings-btn" class="header-btn" title="{{ request.state.t('settings_btn_title') }}">⚙️</button>
+                    <button id="theme-toggle" class="theme-toggle-btn" title="{{ request.state.t('theme_btn_title') }}">🌙</button>
+                    {% if session.user %}
+                        <a href="/auth/logout" class="logout-link">{{ request.state.t('logout_btn') }}</a>
+                    {% else %}
+                        <a href="/login" class="header-btn" title="{{ request.state.t('login_btn') }}">🔑</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <nav style="width: 100%; text-align: center; margin-top: 5px; padding-top: 5px; margin-bottom: 8px; border-top: 1px dashed var(--border-primary); display: block; font-size: 0.9em;">
+            <a href="/" style="font-weight: bold;">{{ request.state.t('nav_main') }}</a>
+            <span style="opacity: 0.5; margin: 0 5px;">|</span>
+            <a href="/history/">{{ request.state.t('history_title', 'История') }}</a>
+        </nav>
+    </header>
+
+    <main>
+        <div class="my-posts-header">
+            <h2>🗂️ История вашей активности</h2>
+            <div style="margin-top: 10px;">
+                Всего постов: <span id="mp-total-count" class="mp-stat-val">...</span>
+            </div>
+        </div>
+
+        <div id="my-posts-feed" class="thread-list">
+            <div id="mp-loader" style="text-align: center; padding: 50px; color: var(--text-secondary);">
+                <div class="loader-spinner"></div>
+                <div>Загрузка...</div>
+            </div>
+        </div>
+    </main>
+    <div id="image-viewer" class="image-viewer-overlay" style="display: none;">
+        <span id="iv-close" class="iv-button iv-close-button">&times;</span>
+        <span id="iv-prev" class="iv-button iv-nav-button iv-prev-button" style="left: 15px;">‹</span>
+        <span id="iv-next" class="iv-button iv-nav-button iv-next-button" style="right: 15px;">›</span>
+        <div id="iv-container" class="iv-content-container"></div>
+        <div id="iv-info" class="iv-info-bar">
+            <a id="iv-download-link" href="#" target="_blank" download style="font-weight: bold; color: #64b5f6; margin-right: 10px;">DL</a>
+            <span id="iv-filename"></span>
+            <span id="iv-dimensions"></span>
+            <span id="iv-counter"></span>
+        </div>
+        <div id="iv-loader" class="iv-loader" style="display: none;"></div>
+    </div>
+    
+    <div id="global-action-menu">
+        <a href="#" class="menu-btn" data-action="view-thread">{{ request.state.t('action_view_thread') }}</a>
+        <a href="#" class="menu-btn" data-action="copy-link">{{ request.state.t('action_copy_link') }}</a>
+        <a href="#" class="menu-btn" data-action="delete" style="color:red;">Удалить (локально)</a>
+    </div>
+
+    <div class="modal-overlay" id="modal-overlay" style="display: none;"></div>
+
+    <div class="modal" id="settings-modal" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-separator); margin-bottom: 15px; padding-bottom: 10px;">
+            <h3 style="margin: 0;">{{ request.state.t('settings_modal_title') }}</h3>
+            <button type="button" class="btn btn-secondary modal-close-btn">&times;</button>
+        </div>
+        <form id="settings-form">
+            <div class="form-group">
+                <label for="setting-theme">{{ request.state.t('setting_theme') }}</label>
+                <select id="setting-theme" data-setting="theme" class="form-control">
+                    <option value="light">{{ request.state.t('theme_light') }}</option>
+                    <option value="dark">{{ request.state.t('theme_dark') }}</option>
+                    <option value="cyberpunk">{{ request.state.t('theme_cyberpunk') }}</option>
+                    <option value="nord">{{ request.state.t('theme_nord') }}</option>
+                    <option value="gruvbox">{{ request.state.t('theme_gruvbox') }}</option>
+                    <option value="conan">{{ request.state.t('theme_conan') }}</option>
+                    <option value="win95">{{ request.state.t('theme_win95') }}</option>
+                    <option value="toxic">{{ request.state.t('theme_toxic') }}</option>
+                    <option value="paper">{{ request.state.t('theme_paper') }}</option>
+                    <option value="terminal">{{ request.state.t('theme_terminal') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-font-size">{{ request.state.t('setting_font_size') }}</label>
+                <select id="setting-font-size" data-setting="fontSize">
+                    <option value="small">{{ request.state.t('setting_font_small') }}</option>
+                    <option value="medium">{{ request.state.t('setting_font_medium') }}</option>
+                    <option value="large">{{ request.state.t('setting_font_large') }}</option>
+                </select>
+            </div>
+             <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-nsfw">{{ request.state.t('setting_nsfw') }}</label>
+                    <input type="checkbox" id="setting-nsfw" data-setting="dimMode">
+                </div>
+            </div>
+            <div style="margin-top: 20px; text-align: right;">
+                <button type="button" class="btn btn-primary modal-close-btn" style="width: 100%;">{{ request.state.t('btn_close') }}</button>
+            </div>
+        </form>
+    </div>
+
+    <nav class="mobile-bottom-nav">
+        <a href="/" class="mobile-nav-item">
+            <span class="mobile-nav-icon">🏠</span>
+            <span>{{ request.state.t('mobile_home') }}</span>
+        </a>
+        <button onclick="window.location.reload()" class="mobile-nav-item">
+            <span class="mobile-nav-icon">🔄</span>
+            <span>{{ request.state.t('mobile_refresh') }}</span>
+        </button>
+        <button onclick="window.scrollTo({ top: 0, behavior: 'smooth' })" class="mobile-nav-item">
+            <span class="mobile-nav-icon">⬆️</span>
+            <span>{{ request.state.t('mobile_up') }}</span>
+        </button>
+    </nav>
+
+    <script src="/static/js/main.js?v=3.1"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            if(window.MyPostsPage) {
+                window.MyPostsPage.init();
+            } else {
+                document.getElementById('my-posts-feed').innerHTML = '<div style="text-align:center;color:red;padding:20px;">Ошибка JS: Модуль не загружен.</div>';
+            }
+        });
+    </script>
+</body>
+</html>

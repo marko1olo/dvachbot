@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Оверборд - {{ request.state.t('site_name') }}</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=4.15">
+    <link rel="preconnect" href="https://api.telegram.org" crossorigin>
+    <link rel="dns-prefetch" href="https://files.catbox.moe">
+    <link rel="dns-prefetch" href="https://huggingface.co">
+    <link rel="preconnect" href="https://huggingface.co" crossorigin>
+    <link rel="icon" href="/static/favicon.ico">
+        <style>
+        /* ИСПРАВЛЕНИЕ: Фон на всю высоту (убирает белый низ) */
+        html, body {
+            min-height: 100vh;
+            background-color: var(--bg-body, #212121);
+            margin: 0;
+        }
+    </style>
+</head>
+<body {% if session.user %}data-user-id="{{ session.user.id }}"{% endif %} data-site-mode="{{ site_mode }}">
+    <div id="app-loader">
+        <div class="loader-content">
+            <img src="/static/logo.png" alt="TGACH" width="80" height="80">
+            <div class="loader-spinner"></div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            try {
+                var settings = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var theme = settings.theme || localStorage.getItem('theme');
+                if (!theme) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+                    else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) theme = 'light';
+                    else theme = Math.random() < 0.5 ? 'dark' : 'light';
+                    localStorage.setItem('theme', theme);
+                }
+                if (theme && theme !== 'light') document.body.classList.add('theme-' + theme);
+                var fontStyle = settings.fontStyle || 'b';
+                if (fontStyle === 'b') document.body.classList.add('font-style-b');
+                var fontSize = settings.fontSize;
+                if (!fontSize) {
+                    // Если настройки нет, смотрим на ширину экрана прямо сейчас
+                    if (window.innerWidth <= 768) fontSize = 'small';
+                    else fontSize = 'medium';
+                }
+                document.body.classList.add('font-size-' + fontSize);
+            } catch (e) { console.error(e); }
+        })();
+    </script>
+    <header>
+        <div class="board-nav-top">
+            <a href="/overboard/" title="Все треды">/all/</a>
+
+            {% for category in ['popular', 'bio', 'thematic', 'system'] %}
+                {% set category_boards = [] %}
+                {% for b_key, b_val in boards.items() %}
+                    {% if b_val.category == category %}{% set _ = category_boards.append(b_key) %}{% endif %}
+                {% endfor %}
+                
+                {% if category_boards %}
+                    <span style="opacity:0.3; margin-left:8px;">[</span>
+                    {% for b_key in category_boards %}
+                        <a href="/{{ b_key }}/threads/" class="{% if b_key == board_id %}active{% endif %}" title="{{ boards[b_key].name }}">
+                            {{ boards[b_key].name }}
+                        </a>
+                    {% endfor %}
+                    <span style="opacity:0.3; margin-right:8px;">]</span>
+                {% endif %}
+            {% endfor %}
+        </div>
+        <div class="header-main-row">
+            <div class="header-logo">
+                <h1>
+                    <a href="/">🌊 Оверборд</a> 
+                </h1>
+            </div>
+            <div class="header-group-right">
+                <div class="user-actions">
+                    <a href="#" id="favourites-btn" class="header-btn" title="{{ request.state.t('fav_title') }}">⭐</a>
+                    <button id="settings-btn" class="header-btn" title="{{ request.state.t('settings_btn_title') }}">⚙️</button>
+                    <button id="theme-toggle" class="theme-toggle-btn" title="{{ request.state.t('theme_btn_title') }}">🌙</button>
+                    
+                    {% if session.user %}
+                        <a href="/auth/logout" class="logout-link">{{ request.state.t('logout_btn') }}</a>
+                    {% else %}
+                        <a href="/login" class="header-btn">🔑</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <nav style="width: 100%; text-align: center; margin-top: 5px; margin-bottom: 8px; padding-top: 5px; border-top: 1px dashed var(--border-primary); font-size: 0.9em;">
+            <a href="/">[{{ request.state.t('nav_main') }}]</a>
+        </nav>
+    </header>
+    <form action="/overboard/" method="get" class="overboard-filters">
+        <div class="filter-group main-filters">
+            <label for="view-select">Вид:</label>
+            <select name="view" id="view-select" onchange="this.form.submit()" style="margin-right: 15px; font-weight: bold;">
+                <option value="threads" {% if current_view == 'threads' %}selected{% endif %}>🧵 Треды</option>
+                <option value="posts" {% if current_view == 'posts' %}selected{% endif %}>💬 Посты (треды)</option>
+                <option value="all" {% if current_view == 'all' %}selected{% endif %}>🌎 Все сообщения (+чат)</option>
+            </select>
+
+            <label for="sort-select">{{ request.state.t('sort_label') }}</label>
+            <select name="sort" id="sort-select" onchange="this.form.submit()">
+                <option value="bump" {% if current_sort == 'bump' %}selected{% endif %}>{{ request.state.t('sort_bump') }}</option>
+                <option value="new" {% if current_sort == 'new' %}selected{% endif %}>{{ request.state.t('sort_new') }}</option>
+                <option value="random" {% if current_sort == 'random' %}selected{% endif %}>{{ request.state.t('sort_random') }}</option>
+            </select>
+        </div>
+        <div class="filter-group board-filters">
+            <label>{{ request.state.t('filter_boards') }}</label>
+            <div class="board-checkboxes">
+                {% for board_id, board_info in all_boards.items() %}
+                <div class="custom-checkbox">
+                    <input type="checkbox" name="boards" value="{{ board_id }}" id="board-{{ board_id }}" {% if board_id in selected_boards %}checked{% endif %}>
+                    <label for="board-{{ board_id }}">{{ board_info.name }}</label>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="filter-group action-filters">
+            <button type="submit" class="btn btn-primary">{{ request.state.t('filter_apply') }}</button>
+        </div>
+    </form>
+    <main>
+        <div class="thread-list">
+            {% if posts %}
+                {% for post in posts %}
+                <div class="thread-container" id="thread-{{ post.id }}">
+                    <div class="post" id="post-{{ post.id }}" data-reports="{{ post.report_count }}">
+                        <div class="post-header">
+                            <div class="post-header-info">
+                                <canvas class="identicon" data-userid="{{ post.author_id }}" width="20" height="20"></canvas>
+                                <span>
+                                    {% if post.board_id == 'wh40k' %}
+                                        {{ ['Гвардеец', 'Служитель', 'Сервитор', 'Еретик', 'Хаосит', 'Техножрец', 'Инквизитор'] | random }}
+                                    {% else %}
+                                        {{ request.state.t('anon_name') }}
+                                    {% endif %}
+                                </span>
+                                 <span>
+                                    <a href="/{{ post.board_id }}/res/{{ post.thread_id or post.id }}.html#post-{{ post.id }}" class="post-num-link" target="_blank">#{{ post.id }}</a>
+                                    {% if post.is_pinned %} <span title="Pinned">📌</span> {% endif %}
+                                    {% if post.is_endless %} <span title="Endless">🔄</span> {% endif %}
+                                    {% if session.user and post.author_id == session.user.id %}<span class="you-marker">{{ request.state.t('you_marker') }}</span>{% endif %}
+                                    {% if post.thread_type == 'image' %}<span class="thread-type-badge tt-image" title="Images Only">🖼️</span>{% endif %}
+                                    {% if post.thread_type == 'video' %}<span class="thread-type-badge tt-video" title="Video Only">🎬</span>{% endif %}
+                                    {% if post.thread_type == 'audio' %}<span class="thread-type-badge tt-audio" title="Audio Only">🎵</span>{% endif %}
+                                    {% if post.thread_type == 'media' %}<span class="thread-type-badge tt-media" title="Media Only">📁</span>{% endif %}
+                                </span>
+                                
+                                {% if current_view == 'posts' and post.thread_id %}
+                                    <span class="post-context" style="font-size: 0.85em; color: var(--text-secondary); margin-left: 8px; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-block; vertical-align: bottom;">
+                                        &larr; <a href="/{{ post.board_id }}/res/{{ post.thread_id }}.html" class="auto-link" style="font-weight: bold;">{{ post.thread_title|default('Тред', true)|clean_title|truncate(30) }}</a>
+                                    </span>
+                                {% endif %}
+
+                                <time class="ts-recalc" data-ts="{{ post.timestamp }}">{{ post.timestamp | format_timestamp }}</time>
+                            </div>
+                            <div class="op-header-tools">
+                                <a href="#" class="favourite-btn" data-thread-id="{{ post.thread_id or post.id }}" title="{{ request.state.t('fav_title') }}">⭐</a>
+                                <a href="/{{ post.board_id }}/res/{{ post.thread_id or post.id }}.html" class="post-header-link">{{ request.state.t('btn_goto_thread', '[ В тред ]') }}</a>
+                                <button class="header-btn summary-btn" onclick="showThreadSummary({{ post.thread_id or post.id }})" title="Суть (AI)">🧠</button>
+                            </div>
+                            <div class="post-actions">
+                                <button class="action-menu-trigger" 
+                                    data-post-num="{{ post.id }}" 
+                                    data-board-id="{{ post.board_id }}" 
+                                    data-thread-id="{{ post.id }}"
+                                    data-author-id="{{ post.author_id }}">
+                                    ▶
+                                </button>
+                            </div>
+                        </div>
+                        <div class="post-content">
+                            {% if post.content.files %}
+                                <div class="post-files-container post-gallery">
+                                    {% for file in post.content.files %}
+                                        {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
+                                            {% if file.type == 'image' or file.type == 'photo' or file.type == 'sticker' %}
+                                                <a href="{{ file.original_url }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
+                                                    {% if file.blurhash %}
+                                                        <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
+                                                    {% endif %}
+                                                    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                        data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                        class="post-image lazy-load" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
+                                                    {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
+                                                </a>
+                                            {% elif file.type == 'video_note' %}
+                                                <video class="post-video video-note lazy-load" 
+                                                       data-src="{{ file.original_url }}" 
+                                                       poster="{{ file.thumbnail_url }}"
+                                                       autoplay loop muted playsinline 
+                                                       style="border-radius: 50%; object-fit: cover;" 
+                                                       referrerpolicy="no-referrer">
+                                                </video>
+                                            {% elif file.type == 'video' or file.type == 'gif' or file.type == 'animation' %}
+                                                <div class="file-thumb lazy-media-wrapper" 
+                                                    data-src="{{ file.original_url }}" 
+                                                    data-filename="{{ file.filename }}"
+                                                    data-type="{{ 'gif' if file.type in ['gif', 'animation'] else 'video' }}">
+                                                    {% if file.blurhash %}
+                                                        <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
+                                                    {% endif %}
+                                                    <video class="post-image lazy-load" 
+                                                           preload="metadata" muted playsinline loop
+                                                           data-src="{{ file.original_url }}"
+                                                           {% if file.thumbnail_url %}poster="{{ file.thumbnail_url }}"{% endif %}
+                                                           style="object-fit: cover; width: 100%; height: 100%; background: #000;">
+                                                    </video>
+                                                    <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
+                                                    {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
+                                                </div>
+                                            {% endif %}
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                                <div class="post-audios-container">
+                                    {% for file in post.content.files %}
+                                        {% if file.type in ['audio', 'voice'] %}
+                                            {% set unique_id = 'audio-' ~ post.id ~ '-' ~ loop.index %}
+                                            <div class="custom-audio-player" id="player-{{ unique_id }}" data-src="{{ file.original_url }}">
+                                                <audio id="{{ unique_id }}" preload="none"><source src="{{ file.original_url }}" type="{{ file.mime_type or 'audio/mpeg' }}"></audio>
+                                                <button class="cap-play-btn" data-target="{{ unique_id }}" type="button">▶</button>
+                                                <div class="cap-body">
+                                                    <div class="cap-title" title="{{ file.filename }}">
+                                                        {% set lower_name = file.filename.lower() %}
+                                                        {% set clean_name = file.filename.rsplit('.', 1)[0] | replace('_', ' ') %}
+                                                        {% if lower_name.startswith('voice_') or 'audiorecord' in lower_name %}
+                                                            <span class="cap-artist">{{ request.state.t('audio_voice_label') or 'Voice Message' }}</span>
+                                                            <span class="cap-track">{{ clean_name }}</span>
+                                                        {% else %}
+                                                            {% set name_parts = clean_name.split(' - ') %}
+                                                            {% if name_parts|length >= 2 %}
+                                                                <span class="cap-artist">{{ name_parts[0] }}</span>
+                                                                <span class="cap-track">{{ name_parts[1:]|join(' - ') }}</span>
+                                                            {% else %}
+                                                                <span class="cap-artist">{{ request.state.t('audio_random_artists') | random }}</span>
+                                                                <span class="cap-track">{{ clean_name }}</span>
+                                                            {% endif %}
+                                                        {% endif %}
+                                                    </div>
+                                                    <div class="cap-controls-row">
+                                                        <div class="cap-info"><span class="cap-time">00:00</span></div>
+                                                        <div class="cap-progress-container" data-target="{{ unique_id }}"><div class="cap-wave-base"></div><div class="cap-wave-progress"></div></div>
+                                                        <div class="cap-info"><button class="cap-speed-btn" data-target="{{ unique_id }}" type="button">1x</button></div>
+                                                        <a href="{{ file.original_url }}" download="{{ file.filename }}" class="cap-download-btn">⬇</a>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                            <div class="post-text-content">
+                                {% if post.reply_to_post_num %}
+                                    <p class="reply-indicator"> Ответ на <a href="/{{ post.board_id }}/res/{{ post.thread_id or post.id }}.html#post-{{ post.reply_to_post_num }}" class="post-link">&gt;&gt;{{ post.reply_to_post_num }}</a></p>
+                                {% endif %}
+                                <div class="post-text">{{ post.content.text | format_post_text | safe }}</div>
+                                <div class="backlinks-container" id="backlinks-for-{{ post.id }}">
+                                    {% if post.backlinks %}
+                                        {% for bl_id in post.backlinks %}
+                                            <a href="/{{ post.board_id }}/res/{{ post.thread_id or post.id }}.html#post-{{ bl_id }}" class="post-link" data-post-num="{{ bl_id }}">&gt;&gt;{{ bl_id }}</a>
+                                        {% endfor %}
+                                    {% endif %}
+                                </div>
+                        </div>
+                    </div>
+                    {% if current_view == 'threads' and post.latest_replies %}
+                        <div class="latest-replies-container" style="margin-top: 10px; padding-top: 5px; border-top: 1px dashed var(--border-separator);">
+                            {% for reply in post.latest_replies %}
+                                <div class="post overboard-reply" id="post-{{ reply.id }}">
+                                    <div class="post-header">
+                                        <span><a href="/{{ reply.board_id }}/res/{{ reply.thread_id or post.id }}.html#post-{{ reply.id }}" class="post-num-link" data-post-num="{{ reply.id }}">#{{ reply.id }}</a></span>
+                                        <time class="ts-recalc" data-ts="{{ reply.timestamp }}">{{ reply.timestamp | format_timestamp }}</time>
+                                    </div>
+                                    <div class="post-content" style="flex-direction: row; align-items: flex-start; flex-wrap: wrap;">
+                                        {% if reply.content.files %}
+                                            <div class="post-files-container post-gallery" style="margin: 0 10px 10px 0; flex-shrink: 0; display: flex; gap: 5px;">
+                                                {% for f in reply.content.files %}
+                                                    {% if f.type in ['video', 'gif', 'animation', 'video_note'] %}
+                                                        <div class="file-thumb lazy-media-wrapper" 
+                                                             style="width: 80px; height: 80px;"
+                                                             data-src="{{ f.original_url }}" 
+                                                             data-filename="{{ f.filename }}"
+                                                             data-type="{{ 'gif' if f.type in ['gif', 'animation'] else 'video' }}">
+                                                            <video class="post-image lazy-load" preload="metadata" muted playsinline loop
+                                                                   data-src="{{ f.original_url }}"
+                                                                   {% if f.thumbnail_url %}poster="{{ f.thumbnail_url }}"{% endif %}
+                                                                   style="width: 100%; height: 100%; object-fit: cover;"></video>
+                                                        </div>
+                                                    {% else %}
+                                                        <a href="{{ f.original_url }}" 
+                                                           class="file-thumb" 
+                                                           data-type="image" 
+                                                           data-filename="{{ f.filename }}"
+                                                           data-file-id="{{ f.original_file_id }}"
+                                                           style="width: 80px; height: 80px;">
+                                                            <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                                 data-src="{{ f.thumbnail_url or f.original_url }}" 
+                                                                 class="post-image lazy-load" 
+                                                                 style="width: 100%; height: 100%; object-fit: cover;"
+                                                                 referrerpolicy="no-referrer">
+                                                        </a>
+                                                    {% endif %}
+                                                {% endfor %}
+                                            </div>
+                                        {% endif %}
+                                        <div class="post-text">{{ reply.content.text | format_post_text | safe | truncate(250) }}</div>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+                <hr class="thread-separator">
+                {% endfor %}
+            {% else %}
+                <p>Тредов, соответствующих вашим фильтрам, не найдено.</p>
+            {% endif %}
+        </div>
+    </main>
+    <footer>
+        <nav style="margin-bottom: 10px; display: flex; justify-content: center; gap: 20px;">
+            <a href="/about/">[О проекте]</a>
+            <a href="/faq/">[FAQ]</a>
+            <a href="/rules/">[Правила]</a>
+        </nav>
+        <p>{{ request.state.t('footer_text') }}</p>
+    </footer>
+    <div class="modal-overlay" id="modal-overlay" style="display: none;"></div>
+    <div class="modal" id="quick-reply-modal" style="display: none;">
+        <h3 id="qr-title">Ответ на пост #<span id="qr-post-num"></span></h3>
+        <form id="quick-reply-form">
+        </form>
+    </div>
+    <div class="modal" id="report-modal" style="display: none;">
+        <h3>{{ request.state.t('report_modal_title') }} <span id="report-post-num"></span></h3>
+        <form id="report-form">
+            <div class="form-group">
+                <label for="report-category">{{ request.state.t('report_category') }}</label>
+                <select id="report-category" name="category" required>
+                    <option value="Спам">{{ request.state.t('report_cat_spam') }}</option>
+                    <option value="Оскорбление">{{ request.state.t('report_cat_insult') }}</option>
+                    <option value="Нелегальный контент">{{ request.state.t('report_cat_illegal') }}</option>
+                    <option value="Оффтоп">{{ request.state.t('report_cat_offtopic') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="report-reason">{{ request.state.t('report_reason') }}</label>
+                <textarea id="report-reason" name="reason" rows="3" required></textarea>
+            </div>
+            <input type="hidden" id="report-post-num-input" name="post_num">
+            <button type="submit">{{ request.state.t('report_send') }}</button>
+        </form>
+    </div>
+    <div class="modal" id="settings-modal" style="display: none;">
+        <!-- Шапка с кнопкой закрытия -->
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-separator); margin-bottom: 15px; padding-bottom: 10px;">
+            <h3 style="margin: 0; border: none; padding: 0;">{{ request.state.t('settings_modal_title') }}</h3>
+            <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+        </div>
+        <form id="settings-form">
+            <!-- Звук -->
+            <div class="form-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <label for="setting-sound" style="margin:0; cursor: pointer;">🔊 {{ request.state.t('setting_sound') }}</label>
+                    <input type="checkbox" id="setting-sound" data-setting="soundEnabled">
+                </div>
+            </div>
+            <!-- Темы -->
+            <div class="form-group">
+                <label for="setting-theme">{{ request.state.t('setting_theme') }}</label>
+                <select id="setting-theme" data-setting="theme" class="form-control">
+                    <option value="light">{{ request.state.t('theme_light') }}</option>
+                    <option value="dark">{{ request.state.t('theme_dark') }}</option>
+                    <option value="cyberpunk">{{ request.state.t('theme_cyberpunk') }}</option>
+                    <option value="crypto">{{ request.state.t('theme_crypto') }}</option>
+                    <option value="conan">{{ request.state.t('theme_conan') }}</option>
+                    <option value="win95">{{ request.state.t('theme_win95') }}</option>
+                    <option value="gameboy">{{ request.state.t('theme_gameboy') }}</option>
+                    <option value="adventure">{{ request.state.t('theme_adventure') }}</option>
+                    <option value="luxury">{{ request.state.t('theme_luxury') }}</option>
+                    <option value="toxic">{{ request.state.t('theme_toxic') }}</option>
+                    <option value="shaft">{{ request.state.t('theme_shaft') }}</option>
+                    <option value="nord">{{ request.state.t('theme_nord') }}</option>
+                    <option value="gruvbox">{{ request.state.t('theme_gruvbox') }}</option>
+                    <option value="discord">{{ request.state.t('theme_discord') }}</option>
+                    <option value="lain">{{ request.state.t('theme_lain') }}</option>
+                    <option value="dracula">{{ request.state.t('theme_dracula') }}</option>
+                    <option value="sakura">{{ request.state.t('theme_sakura') }}</option>
+                    <option value="ukraine">{{ request.state.t('theme_ukraine') }}</option>
+                    <option value="soviet">{{ request.state.t('theme_soviet') }}</option>
+                    <option value="paper">{{ request.state.t('theme_paper') }}</option>
+                    <option value="terminal">{{ request.state.t('theme_terminal') }}</option>
+                    <option value="ocean">{{ request.state.t('theme_ocean') }}</option>
+                    <option value="forest">{{ request.state.t('theme_forest') }}</option>
+                    <option value="gothic">{{ request.state.t('theme_gothic') }}</option>
+                    <option value="noir">{{ request.state.t('theme_noir') }}</option>
+                </select>
+            </div>
+            <!-- Шрифты -->
+            <div class="form-group">
+                <label for="setting-font-size">{{ request.state.t('setting_font_size') }}</label>
+                <select id="setting-font-size" data-setting="fontSize">
+                    <option value="small">{{ request.state.t('setting_font_small') }}</option>
+                    <option value="medium" selected>{{ request.state.t('setting_font_medium') }}</option>
+                    <option value="large">{{ request.state.t('setting_font_large') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-preview-size">{{ request.state.t('setting_preview_size') }}</label>
+                <select id="setting-preview-size" data-setting="previewSize">
+                    <option value="small">{{ request.state.t('setting_font_small') }}</option>
+                    <option value="medium" selected>{{ request.state.t('setting_font_medium') }}</option>
+                    <option value="large">{{ request.state.t('setting_font_large') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-layout">{{ request.state.t('setting_layout') }}</label>
+                <select id="setting-layout" data-setting="layoutMode">
+                    <option value="center" selected>{{ request.state.t('setting_layout_center') }}</option>
+                    <option value="wide">{{ request.state.t('setting_layout_wide') }}</option>
+                    <option value="left">{{ request.state.t('setting_layout_left') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-density">{{ request.state.t('setting_density') }}</label>
+                <select id="setting-density" data-setting="interfaceDensity">
+                    <option value="normal" selected>{{ request.state.t('setting_density_norm') }}</option>
+                    <option value="compact">{{ request.state.t('setting_density_compact') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-font-style">{{ request.state.t('setting_font_style') }}</label>
+                <select id="setting-font-style" data-setting="fontStyle">
+                    <option value="a">Verdana + Slab</option>
+                    <option value="b" selected>Roboto + Verdana</option>
+                </select>
+            </div>
+            <!-- Чекбоксы -->
+            <div class="form-group settings-row-checkbox" style="margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-dim" style="margin:0;">{{ request.state.t('setting_nsfw') }}</label>
+                    <input type="checkbox" id="setting-dim" data-setting="dimMode">
+                </div>
+            </div>
+            <!-- НАСТРОЙКА РАЗВОРОТА КАРТИНОК -->
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-expand-images" style="margin:0;">Разворачивать картинки</label>
+                    <input type="checkbox" id="setting-expand-images" data-setting="expandImages">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-identicons" style="margin:0;">{{ request.state.t('setting_identicons') }}</label>
+                    <input type="checkbox" id="setting-identicons" data-setting="showIdenticons">
+                </div>
+            </div>
+            <!-- НОВАЯ КНОПКА МАСКОТА -->
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-mascot" style="margin:0;">Показывать Маскота</label>
+                    <input type="checkbox" id="setting-mascot" data-setting="showMascot">
+                </div>
+            </div>
+            <!-- Кнопка сохранения -->
+            <div style="margin-top: 20px; text-align: right;">
+                <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-primary modal-close-btn" style="width: 100%;">{{ request.state.t('btn_close') }}</button>
+            </div>
+        </form>
+    </div>
+    <div id="new-posts-indicator" style="display: none;"></div>
+    <div id="loading-indicator" class="loading-indicator">Отправка...</div>
+    <script src="/static/js/main.js?v=3.31" defer></script>
+</body>
+</html>

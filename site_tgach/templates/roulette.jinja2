@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ТГАЧ.ТВ (Рулетка)</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2.9">
+    <link rel="icon" href="/static/favicon.ico">
+    <link rel="preconnect" href="https://api.telegram.org" crossorigin>
+    <link rel="dns-prefetch" href="https://files.catbox.moe">
+    <link rel="dns-prefetch" href="https://huggingface.co">
+    <link rel="preconnect" href="https://huggingface.co" crossorigin>
+    <style>
+        body.page-roulette {
+            background-color: #000;
+            color: #fff;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            margin: 0; padding: 0;
+        }
+
+        #roulette-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        #r-video {
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;
+        }
+        
+        @media (max-width: 768px) {
+            #r-video { width: 100%; height: auto; }
+        }
+        .filter-modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(5px);
+        }
+        .filter-content {
+            background: #222;
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #444;
+            max-width: 90%;
+            width: 400px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .filter-boards {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+            gap: 8px;
+            overflow-y: auto;
+            margin: 15px 0;
+            padding-right: 5px;
+        }
+        .board-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #333;
+            padding: 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: monospace;
+            font-weight: bold;
+            color: #888;
+            border: 1px solid #444;
+            user-select: none;
+        }
+        .board-toggle.active {
+            background: var(--accent-primary, #3182ce);
+            color: #fff;
+            border-color: var(--accent-primary, #3182ce);
+        }
+        .filter-actions {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: auto;
+        }
+        .filter-btn {
+            padding: 10px;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+            flex: 1;
+        }
+        .btn-save { background: var(--accent-primary, #3182ce); color: white; }
+        .btn-reset { background: #444; color: white; }
+        /* Оверлей с инфой */
+        #r-info-layer {
+            position: absolute;
+            bottom: 0; left: 0; right: 0;
+            background: linear-gradient(to top, rgba(0,0,0,0.9), transparent);
+            padding: 20px;
+            padding-bottom: 80px; /* Место под кнопку */
+            pointer-events: none;
+        }
+
+        #r-text {
+            font-size: 14px;
+            line-height: 1.4;
+            text-shadow: 0 1px 2px black;
+            max-height: 100px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        #r-meta {
+            font-size: 12px;
+            color: #aaa;
+            font-family: monospace;
+        }
+
+        /* Кнопки управления */
+        .r-controls {
+            position: absolute;
+            right: 20px;
+            bottom: 100px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 10;
+        }
+
+        .r-btn {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white;
+            width: 50px; height: 50px;
+            border-radius: 50%;
+            font-size: 24px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+            transition: transform 0.1s;
+            text-decoration: none;
+        }
+        .r-btn:active { transform: scale(0.9); background: rgba(255,255,255,0.3); }
+
+        #r-loader {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-weight: bold;
+            display: none;
+        }
+        
+        /* Кнопка "Назад" */
+        .r-back {
+            position: absolute; top: 15px; left: 15px;
+            color: rgba(255,255,255,0.7);
+            font-size: 24px; text-decoration: none;
+            z-index: 20;
+        }
+    </style>
+</head>
+<body class="page-roulette">
+    <a href="/" class="r-back">🏠</a>
+    <button id="r-download-btn" class="r-back" style="left: 60px; border: none; background: none; cursor: pointer; padding: 0;" title="Скачать">💾</button>
+    <div id="roulette-container">
+        <div id="r-loader">Загрузка...</div>
+        <video id="r-video" playsinline autoplay loop></video>
+        
+        <div id="r-info-layer">
+            <div id="r-text"></div>
+            <div id="r-meta"></div>
+        </div>
+
+        <div class="r-controls">
+            <a href="#" id="r-link-btn" class="r-btn" target="_blank" title="В тред">🔗</a>
+            <button id="r-filter-btn" class="r-btn" title="Фильтр досок">⚙️</button>
+            <button id="r-prev-btn" class="r-btn" style="opacity: 0.3;" disabled>⬆</button>
+            <button id="r-next-btn" class="r-btn">⬇</button>
+        </div>
+    </div>
+    <div id="filter-modal" class="filter-modal">
+        <div class="filter-content">
+            <h3 style="margin:0 0 10px 0;">Фильтр досок</h3>
+            <div style="font-size:0.8em; color:#aaa; margin-bottom:5px;">Выберите доски для показа:</div>
+            <div class="filter-boards" id="board-list">
+                {% for b_key in boards %}
+                    <div class="board-toggle active" data-board="{{ b_key }}">/{{ b_key }}/</div>
+                {% endfor %}
+            </div>
+            <div class="filter-actions">
+                <button class="filter-btn btn-reset" onclick="FilterManager.toggleAll(false)">Сброс</button>
+                <button class="filter-btn btn-reset" onclick="FilterManager.toggleAll(true)">Все</button>
+                <button class="filter-btn btn-save" onclick="FilterManager.save()">OK</button>
+            </div>
+        </div>
+    </div>
+    <!-- Подключаем основной JS (там будет менеджер) -->
+    <script src="/static/js/main.js?v=2.7-roulette"></script>
+    <script>
+    const FilterManager = {
+        key: 'tgach_tv_filter',
+        selected: [],
+        
+        init() {
+            const saved = localStorage.getItem(this.key);
+            const allBoards = Array.from(document.querySelectorAll('.board-toggle')).map(el => el.dataset.board);
+            
+            if (saved) {
+                this.selected = JSON.parse(saved);
+            } else {
+                this.selected = allBoards; // По умолчанию все
+            }
+            
+            this.render();
+            
+            document.getElementById('r-filter-btn').onclick = () => {
+                document.getElementById('filter-modal').style.display = 'flex';
+            };
+            
+            document.querySelectorAll('.board-toggle').forEach(el => {
+                el.onclick = () => {
+                    el.classList.toggle('active');
+                };
+            });
+        },
+        
+        render() {
+            document.querySelectorAll('.board-toggle').forEach(el => {
+                const bid = el.dataset.board;
+                if (this.selected.includes(bid)) el.classList.add('active');
+                else el.classList.remove('active');
+            });
+        },
+        
+        toggleAll(state) {
+            document.querySelectorAll('.board-toggle').forEach(el => {
+                if (state) el.classList.add('active');
+                else el.classList.remove('active');
+            });
+        },
+        
+        save() {
+            const active = [];
+            document.querySelectorAll('.board-toggle.active').forEach(el => {
+                active.push(el.dataset.board);
+            });
+            
+            if (active.length === 0) {
+                alert("Выберите хотя бы одну доску!");
+                return;
+            }
+            
+            this.selected = active;
+            localStorage.setItem(this.key, JSON.stringify(this.selected));
+            document.getElementById('filter-modal').style.display = 'none';
+            
+            // Сбрасываем кэш прелоада и грузим новое видео
+            if (window.RouletteManager) {
+                window.RouletteManager.isLoading = false;
+                window.RouletteManager.nextVideoData = null;
+                window.RouletteManager.preloadBuffer = []; // Очищаем новый буфер
+                window.RouletteManager.goNext();
+            }
+        }
+    };
+
+    window.addEventListener('load', () => setTimeout(() => FilterManager.init(), 500));
+    </script>
+</body>
+</html>

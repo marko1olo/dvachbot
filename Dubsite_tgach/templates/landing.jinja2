@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TGACH - Select Region</title>
+    <style>
+        :root {
+            --bg-color: #0f0f11;
+            --card-bg: #1a1a1d;
+            --text-main: #ffffff;
+            --text-sub: #888888;
+            --accent-ru: #e74c3c;
+            --accent-en: #3498db;
+            --accent-jp: #e91e63;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1000px;
+            text-align: center;
+            animation: fadeIn 0.8s ease-out;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin-bottom: 10px;
+            letter-spacing: -1px;
+        }
+
+        .subtitle {
+            color: var(--text-sub);
+            margin-bottom: 50px;
+            font-size: 1.1rem;
+        }
+
+        .lang-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+
+        /* --- CARD DESIGN --- */
+        .lang-card {
+            background-color: var(--card-bg);
+            border-radius: 20px;
+            padding: 30px;
+            text-decoration: none;
+            color: inherit;
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            cursor: pointer;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .lang-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(45deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+            transform: translateX(-100%);
+            transition: 0.5s;
+        }
+
+        .lang-card:hover::before {
+            transform: translateX(100%);
+        }
+
+        .lang-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        /* --- FLAGS (FIXED) --- */
+        .flag-wrapper {
+            width: 90px;  /* Ширина прямоугольника */
+            height: 60px; /* Высота прямоугольника (3:2) */
+            border-radius: 6px; /* Аккуратные уголки */
+            margin-bottom: 25px;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            background: transparent; /* Убран черный фон */
+            /* Чтобы флаг заполнял всё пространство */
+            display: flex; 
+            align-items: center; 
+            justify-content: center;
+        }
+
+        .flag-svg {
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* Заполняет весь прямоугольник */
+            display: block;
+        }
+
+        /* Анимация флагов для EN */
+        .flag-slideshow {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .flag-slide {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            opacity: 0;
+            animation: flagFade 9s infinite;
+        }
+        
+        .flag-slide:nth-child(1) { animation-delay: 0s; } /* US */
+        .flag-slide:nth-child(2) { animation-delay: 3s; } /* UK */
+        .flag-slide:nth-child(3) { animation-delay: 6s; } /* EU */
+
+        @keyframes flagFade {
+            0% { opacity: 0; transform: scale(1.1); }
+            10% { opacity: 1; transform: scale(1); }
+            33% { opacity: 1; transform: scale(1); }
+            43% { opacity: 0; transform: scale(0.9); }
+            100% { opacity: 0; }
+        }
+
+        /* --- TEXT --- */
+        .lang-name {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .lang-phrase {
+            font-size: 1rem;
+            color: var(--text-sub);
+            font-weight: 500;
+        }
+
+        /* --- HOVER ACCENTS --- */
+        .card-ru:hover .lang-name { color: var(--accent-ru); }
+        .card-en:hover .lang-name { color: var(--accent-en); }
+        .card-jp:hover .lang-name { color: var(--accent-jp); }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Mobile Adjustments */
+        @media (max-width: 768px) {
+            h1 { font-size: 2rem; }
+            .lang-grid { grid-template-columns: 1fr; gap: 15px; }
+            .lang-card { padding: 20px; display: grid; grid-template-columns: 70px 1fr; align-items: center; text-align: left; gap: 20px; }
+            .flag-wrapper { margin-bottom: 0; width: 70px; height: 46px; }
+            .lang-name { margin-bottom: 0; font-size: 1.3rem; }
+            .lang-phrase { font-size: 0.9rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>TGACH</h1>
+        <p class="subtitle">Choose your region / Выберите язык</p>
+        
+        <div class="lang-grid">
+            <!-- RUSSIAN -->
+            <div class="lang-card card-ru" onclick="selectStream('ru')">
+                <div class="flag-wrapper">
+                    <svg class="flag-svg" viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
+                        <rect fill="#fff" width="900" height="600"/>
+                        <rect fill="#0039a6" y="200" width="900" height="200"/>
+                        <rect fill="#d52b1e" y="400" width="900" height="200"/>
+                        <!-- Тонкая рамка для белого цвета -->
+                        <rect width="900" height="600" fill="none" stroke="rgba(0,0,0,0.1)" stroke-width="2"/>
+                    </svg>
+                </div>
+                <div>
+                    <div class="lang-name">Russian</div>
+                    <div class="lang-phrase">Я говорю по-русски</div>
+                </div>
+            </div>
+
+            <!-- ENGLISH (ANIMATED) -->
+            <div class="lang-card card-en" onclick="selectStream('en')">
+                <div class="flag-wrapper">
+                    <div class="flag-slideshow">
+                        <!-- US Flag -->
+                        <div class="flag-slide">
+                            <svg class="flag-svg" viewBox="0 0 1235 650" xmlns="http://www.w3.org/2000/svg">
+                                <rect width="1235" height="650" fill="#B22234"/>
+                                <path d="M0,0H1235V50H0M0,100H1235V150H0M0,200H1235V250H0M0,300H1235V350H0M0,400H1235V450H0M0,500H1235V550H0M0,600H1235V650H0" fill="#FFF"/>
+                                <rect width="494" height="350" fill="#3C3B6E"/>
+                            </svg>
+                        </div>
+                        <!-- UK Flag -->
+                        <div class="flag-slide">
+                            <svg class="flag-svg" viewBox="0 0 60 30" xmlns="http://www.w3.org/2000/svg">
+                                <clipPath id="t"><path d="M30,15h30v15zv15h-30zh-30v-15zv-15h30z"/></clipPath>
+                                <path d="M0,0v30h60v-30z" fill="#012169"/>
+                                <path d="M0,0l60,30m0-30l-60,30" stroke="#fff" stroke-width="6"/>
+                                <path d="M0,0l60,30m0-30l-60,30" clip-path="url(#t)" stroke="#c8102e" stroke-width="4"/>
+                                <path d="M30,0v30M0,15h60" stroke="#fff" stroke-width="10"/>
+                                <path d="M30,0v30M0,15h60" stroke="#c8102e" stroke-width="6"/>
+                            </svg>
+                        </div>
+                        <!-- EU Flag -->
+                        <div class="flag-slide">
+                            <svg class="flag-svg" viewBox="0 0 810 540" xmlns="http://www.w3.org/2000/svg">
+                                <rect width="810" height="540" fill="#003399"/>
+                                <g fill="#ffcc00" transform="matrix(30 0 0 30 405 270)">
+                                    <path d="M0-1l-.3.9.95-.3-.95-.3.3.9-.95-.3-.95.3.3-.9L-1.9-.4l.95.3z" id="s"/>
+                                    <use xlink:href="#s" y="-6"/>
+                                    <use xlink:href="#s" y="6"/>
+                                    <use xlink:href="#s" x="-6"/>
+                                    <use xlink:href="#s" x="6"/>
+                                    <use xlink:href="#s" x="-5.2" y="-3"/>
+                                    <use xlink:href="#s" x="5.2" y="-3"/>
+                                    <use xlink:href="#s" x="-5.2" y="3"/>
+                                    <use xlink:href="#s" x="5.2" y="3"/>
+                                    <use xlink:href="#s" x="-3" y="-5.2"/>
+                                    <use xlink:href="#s" x="3" y="-5.2"/>
+                                    <use xlink:href="#s" x="-3" y="5.2"/>
+                                    <use xlink:href="#s" x="3" y="5.2"/>
+                                </g>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    <div class="lang-name">English</div>
+                    <div class="lang-phrase">I speak English</div>
+                </div>
+            </div>
+
+            <!-- JAPANESE -->
+            <div class="lang-card card-jp" onclick="selectStream('jp')">
+                <div class="flag-wrapper">
+                    <svg class="flag-svg" viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
+                        <rect fill="#fff" width="900" height="600"/>
+                        <circle fill="#bc002d" cx="450" cy="300" r="180"/>
+                        <!-- Тонкая рамка -->
+                        <rect width="900" height="600" fill="none" stroke="rgba(0,0,0,0.1)" stroke-width="2"/>
+                    </svg>
+                </div>
+                <div>
+                    <div class="lang-name">Japanese</div>
+                    <div class="lang-phrase">日本語を話します</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function selectStream(stream) {
+            // Эффект нажатия (Scale down)
+            const cards = document.querySelectorAll('.lang-card');
+            cards.forEach(c => c.style.opacity = '0.3');
+            
+            try {
+                // Шлем запрос на API для установки куки и настройки в БД
+                const res = await fetch('/api/settings/stream', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ stream: stream })
+                });
+                
+                setTimeout(() => {
+                    window.location.href = "/";
+                }, 200);
+            } catch (e) {
+                console.error(e);
+                document.cookie = `stream=${stream}; path=/; max-age=31536000`;
+                window.location.href = "/";
+            }
+        }
+    </script>
+</body>
+</html>

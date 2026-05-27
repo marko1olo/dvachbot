@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Примеры кастомных скроллбаров</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background-color: #1a1a1a;
+            color: #fff;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 20px;
+            padding: 40px;
+        }
+
+        h2 { text-align: center; font-size: 18px; margin-bottom: 10px; color: #aaa; }
+
+        .container {
+            width: 300px;
+            height: 400px;
+            background: #2b2b2b;
+            padding: 15px;
+            border-radius: 12px;
+            overflow-y: auto; /* Включает скролл */
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+
+        .text {
+            padding-right: 10px;
+            line-height: 1.6;
+        }
+
+        /* =========================================
+           ВАРИАНТ 1: Минимализм (Mac OS Style)
+           Тонкий, аккуратный, скруглённый
+           ========================================= */
+        .style-1 {
+            /* Для Firefox */
+            scrollbar-width: thin;
+            scrollbar-color: #888 transparent;
+        }
+        
+        /* Ширина скроллбара */
+        .style-1::-webkit-scrollbar {
+            width: 8px; 
+        }
+
+        /* Фон скроллбара (трек) - прозрачный */
+        .style-1::-webkit-scrollbar-track {
+            background: transparent; 
+        }
+
+        /* Сам ползунок */
+        .style-1::-webkit-scrollbar-thumb {
+            background-color: #555; 
+            border-radius: 20px; /* Полное скругление */
+            border: 2px solid #2b2b2b; /* Отступ от края за счет границы в цвет фона */
+        }
+
+        /* Ползунок при наведении */
+        .style-1::-webkit-scrollbar-thumb:hover {
+            background-color: #888; 
+        }
+
+        /* =========================================
+           ВАРИАНТ 2: Киберпанк / Неон
+           Яркий, квадратный, контрастный
+           ========================================= */
+        .style-2 {
+            scrollbar-width: thin;
+            scrollbar-color: #0ff #000;
+        }
+
+        .style-2::-webkit-scrollbar {
+            width: 12px;
+        }
+
+        .style-2::-webkit-scrollbar-track {
+            background: #000; 
+            border-left: 1px solid #333;
+        }
+
+        .style-2::-webkit-scrollbar-thumb {
+            background: #00ffff; /* Неоновый голубой */
+            border: 2px solid #000; /* Черная рамка вокруг */
+            box-shadow: inset 0 0 5px rgba(0,0,0,0.5);
+        }
+
+        .style-2::-webkit-scrollbar-thumb:hover {
+            background: #ff00ff; /* Меняет цвет на розовый при наведении */
+        }
+
+        /* =========================================
+           ВАРИАНТ 3: Градиентный (Modern UI)
+           Красивый перелив
+           ========================================= */
+        .style-3 {
+            scrollbar-width: thin;
+            scrollbar-color: #6a11cb #f0f0f0;
+        }
+
+        .style-3::-webkit-scrollbar {
+            width: 14px;
+        }
+
+        .style-3::-webkit-scrollbar-track {
+            background: #f0f0f0;
+            border-radius: 0 12px 12px 0; /* Скругление трека справа */
+        }
+
+        .style-3::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #6a11cb 0%, #2575fc 100%);
+            border-radius: 10px;
+            border: 3px solid #f0f0f0; /* Создает эффект "парения" внутри трека */
+        }
+
+        .style-3::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #2575fc 0%, #6a11cb 100%);
+        }
+
+        /* =========================================
+           ВАРИАНТ 4: Невидимый (но рабочий)
+           Для чистого дизайна
+           ========================================= */
+        .style-4 {
+            scrollbar-width: none; /* Firefox: скрывает */
+        }
+        
+        .style-4::-webkit-scrollbar {
+            width: 0;
+            height: 0;
+            display: none; /* Chrome/Safari: скрывает */
+        }
+    </style>
+</head>
+<body>
+
+    <div>
+        <h2>1. Minimalist (Mac-like)</h2>
+        <div class="container style-1">
+            <div class="text">
+                Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. <br><br>
+                Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.<br><br>
+                (Пролистай ниже, чтобы увидеть эффект)<br><br>
+                Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.
+                Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. <br><br>
+                Конец блока.
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <h2>2. Cyberpunk Neon</h2>
+        <div class="container style-2">
+            <div class="text">
+                Wake up, Samurai! We have a city to burn. <br><br>
+                Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. <br><br>
+                Обрати внимание на контрастный трек и изменение цвета при наведении мыши. Это достигается через псевдо-класс :hover на scrollbar-thumb.<br><br>
+                Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident.
+                Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. <br><br>
+                System failure. Reboot.
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <h2>3. Gradient & Soft</h2>
+        <div class="container style-3">
+            <style>.style-3 .text { color: #333; } /* Меняем цвет текста для светлого фона */</style>
+            <!-- Переопределим фон контейнера локально для этого примера -->
+            <div class="text" style="background: #fff; height: 100%; color: #333; padding: 5px;">
+                Этот вариант хорошо подходит для светлых тем или дашбордов.<br><br>
+                Главная фишка здесь — использование <code>border</code> того же цвета, что и фон трека, чтобы сделать ползунок визуально тоньше и добавить ему "воздуха".<br><br>
+                Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.<br><br>
+                Градиент задается через background: linear-gradient.<br><br>
+                Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <h2>4. Invisible (Scroll works)</h2>
+        <div class="container style-4">
+            <div class="text">
+                Здесь скроллбара нет визуально, но скроллить колесиком мыши или свайпом на тачпаде можно.<br><br>
+                Это полезно для модальных окон, чатов или лент, где интерфейс не должен отвлекать.<br><br>
+                Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.<br><br>
+                Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident.<br><br>
+                Всё чисто и аккуратно.
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>

@@ -1,0 +1,1081 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ board_info.name }} - {{ op_post.content.text | clean_title | truncate(50) }} - {{ request.state.t('site_name') }}</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=8.88">
+    <link rel="icon" href="/static/favicon.ico">
+    <meta property="og:site_name" content="ТГАЧ">
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="/{{ board_id }}/ — {{ op_post.content.text | clean_title | truncate(60) }}">
+    <meta property="og:description" content="{{ meta_description }}">
+    <meta property="og:url" content="{{ request.url }}">
+    <link rel="canonical" href="{{ request.state.canonical_url }}">
+    <meta property="og:image" content="{{ meta_image }}">
+    <meta name="keywords" content="тгач, tgach, {{ board_info.name }}, двач, анонимный форум, имиджборда, треды">
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#212121">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="/{{ board_id }}/ — {{ op_post.content.text | clean_title | truncate(50) }}">
+    <meta name="twitter:description" content="{{ meta_description }}">
+    <meta name="twitter:image" content="{{ meta_image }}">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+    <link rel="preconnect" href="https://api.telegram.org" crossorigin>
+    <link rel="dns-prefetch" href="https://files.catbox.moe">
+    <link rel="dns-prefetch" href="https://huggingface.co">
+    <link rel="preconnect" href="https://huggingface.co" crossorigin>
+    <style>
+        .file-btn-icon { display: none; }
+        .file-btn-text { display: inline; }
+        @media (max-width: 768px) {
+            .file-btn-text { display: none; }
+            .file-btn-icon { display: inline; font-size: 1.2em; }
+            /* Уменьшаем паддинги кнопки на мобиле */
+            .file-input-label-mobile { padding: 8px 12px !important; }
+        }
+        #post-form.drag-over::after, #post-form-bottom.drag-over::after {
+            content: "{{ request.state.t('drag_hint') }}" !important;
+        }
+        .post.hidden::after {
+            content: "{{ request.state.t('post_hidden_hint') }}" !important;
+        }
+    </style>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [{
+        "@type": "ListItem",
+        "position": 1,
+        "name": "Главная",
+        "item": "{{ request.base_url }}"
+      },{
+        "@type": "ListItem",
+        "position": 2,
+        "name": "/{{ board_id }}/",
+        "item": "{{ request.base_url }}{{ board_id }}/"
+      },{
+        "@type": "ListItem",
+        "position": 3,
+        "name": "Тред #{{ op_post.id }}",
+        "item": "{{ request.url }}"
+      }]
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "DiscussionForumPosting",
+      "url": "{{ request.url }}",
+      "headline": "{{ op_post.content.text | clean_title | truncate(100) | replace('"', '\\"') }}",
+      "datePublished": "{{ op_post.timestamp | format_iso_time }}",
+      "image": [
+        {% if op_post.content.files and op_post.content.files[0].thumbnail_url %}
+            "{{ request.base_url | replace(request.url.path, '') }}{{ op_post.content.files[0].thumbnail_url }}"
+        {% else %}
+            "{{ request.base_url }}static/logo.png"
+        {% endif %}
+       ],
+      "author": {
+        "@type": "Person",
+        "name": "Аноним",
+        "url": "{{ request.base_url }}"
+      },
+      "interactionStatistic": {
+        "@type": "InteractionCounter",
+        "interactionType": "https://schema.org/CommentAction",
+        "userInteractionCount": {{ replies | length }}
+      },
+      "comment": [
+        {% for reply in replies[:50] %}
+        {
+          "@type": "Comment",
+          "text": "{{ reply.content.text | striptags | replace('"', '\\"') | truncate(300) }}",
+          "datePublished": "{{ reply.timestamp | format_iso_time }}",
+          "author": {
+            "@type": "Person",
+            "name": "Аноним",
+            "url": "{{ request.base_url }}"
+          }
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+      ]
+    }
+    </script>
+    <link rel="canonical" href="{{ request.url }}">
+</head>
+<body class="page-thread {% if board_id == 'wh40k' %}theme-conan override-theme{% endif %}"
+    data-user-id="{{ request.state.user_hash }}" 
+    data-site-mode="{{ site_mode }}" 
+    data-thread-unlocked="{{ 'true' if is_unlocked else 'false' }}"
+    data-current-board="{{ board_id }}" 
+    data-is-admin="{{ 'true' if session.user and session.user.is_admin else 'false' }}" 
+    data-user-role="{{ session.user.role if session.user else 'user' }}" 
+    data-lockdown="{{ 'true' if request.state.is_lockdown else 'false' }}" 
+    data-is-archived="{{ 'true' if is_archived else 'false' }}"
+    data-skeleton="{{ 'true' if is_skeleton else 'false' }}">
+    <div id="app-loader">
+        <div class="loader-content">
+            <img src="/static/logo.png" alt="TGACH" width="80" height="80">
+            <div class="loader-spinner"></div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            try {
+                var settings = JSON.parse(localStorage.getItem('user_settings') || '{}');
+                var theme = settings.theme || localStorage.getItem('theme');
+                if (!theme) {
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) theme = 'dark';
+                    else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) theme = 'light';
+                    else theme = Math.random() < 0.5 ? 'dark' : 'light';
+                    localStorage.setItem('theme', theme);
+                }
+                if (theme && theme !== 'light') {
+                    if (document.body) document.body.classList.add('theme-' + theme);
+                    else document.addEventListener('DOMContentLoaded', function() {
+                        document.body.classList.add('theme-' + theme);
+                    });
+                }
+                var fontStyle = settings.fontStyle || 'b';
+                if (fontStyle === 'b') document.body.classList.add('font-style-b');
+                var fontSize = settings.fontSize;
+                if (!fontSize) {
+                    if (window.innerWidth <= 768) fontSize = 'small';
+                    else fontSize = 'medium';
+                }
+                document.body.classList.add('font-size-' + fontSize);
+            } catch (e) { console.error(e); }
+        })();
+    </script>
+    <header>
+        <div class="board-nav-top">
+            <a href="/overboard/" title="Все треды">/all/</a>
+
+            {% for category in ['popular', 'bio', 'thematic', 'system'] %}
+                {% set category_boards = [] %}
+                {% for b_key, b_val in boards.items() %}
+                    {% if b_val.category == category %}{% set _ = category_boards.append(b_key) %}{% endif %}
+                {% endfor %}
+                
+                {% if category_boards %}
+                    <span style="opacity:0.3; margin-left:8px;">[</span>
+                    {% for b_key in category_boards %}
+                        <a href="/{{ b_key }}/threads/" class="{% if b_key == board_id %}active{% endif %}" title="{{ boards[b_key].name }}">
+                            {{ boards[b_key].name }}
+                        </a>
+                    {% endfor %}
+                    <span style="opacity:0.3; margin-right:8px;">]</span>
+                {% endif %}
+            {% endfor %}
+        </div>
+        <div class="header-main-row">
+            <div class="header-logo" style="display: flex; align-items: center; gap: 15px;">
+                <h1>
+                    <a href="/">ТГАЧ</a> 
+                </h1>
+                <span style="font-family: var(--font-headings); font-weight:bold; font-size: 1.2em; color: var(--text-secondary);">
+                    {{ board_info.name }}
+                </span>
+                <form action="/search" method="get" class="search-form compact-search" style="margin-left: 10px;">
+                    <input type="text" name="query" placeholder="Поиск..." value="">
+                    <button type="submit" style="padding: 4px 8px;">🔍</button>
+                </form>
+            </div>
+            <div class="header-group-right">
+                <div class="user-actions">
+                    <a href="#" id="bottle-notification-btn" class="header-btn" style="display:none;">✉️<span id="bottle-count"></span></a>
+                    <a href="#" id="favourites-btn" class="header-btn" title="{{ request.state.t('fav_title') }}">⭐</a>
+                    <button id="settings-btn" class="header-btn" title="{{ request.state.t('settings_btn_title') }}">⚙️</button>
+                    <button id="theme-toggle" class="theme-toggle-btn" title="{{ request.state.t('theme_btn_title') }}">🌙</button>
+                </div>
+            </div>
+        </div>
+        {% if board_info.banner_data and board_info.banner_data.img %}
+            <div class="board-banner-container" style="text-align: center; margin-bottom: 5px; padding: 0 15px;">
+                <a href="{{ board_info.banner_data.link or '#' }}" target="_blank">
+                    <img src="{{ board_info.banner_data.img }}" style="max-width: 100%; max-height: 150px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.2);">
+                </a>
+            </div>
+        {% endif %}
+        <nav class="board-header-nav">
+            <a href="/">[{{ request.state.t('nav_home') }}]</a>
+            <span class="nav-sep">|</span>
+            <a href="/{{ board_id }}/mode/">[{{ request.state.t('nav_mode_select') }}]</a>
+            <div class="mobile-break"></div>
+            <span class="nav-sep">|</span>
+            <a href="/{{ board_id }}/threads/">[{{ request.state.t('nav_threads') }} /{{ board_id }}/]</a>
+            <a href="/{{ board_id }}/chat/">[{{ request.state.t('nav_chat') }}]</a>
+            <a href="/{{ board_id }}/catalog/">[{{ request.state.t('nav_catalog') }}]</a>
+            {% if board_info.username %}
+            <a href="https://t.me/{{ board_info.username.lstrip('@') }}" target="_blank" class="tg-link">[{{ request.state.t('nav_tg') }}]</a>
+            {% endif %}
+            <span class="nav-sep">|</span>
+            <a href="/{{ board_id }}/res/{{ op_post.id }}/gallery" target="_blank">[{{ request.state.t('nav_gallery') }}]</a>
+        </nav>
+    </header>
+    <main data-op-author-id="{{ op_post.author_id }}">
+        <div class="op-post">
+            <div class="post {% if op_post.content.sage %}is-sage{% endif %}" id="post-{{ op_post.id }}" data-reports="{{ op_post.report_count }}">
+                <div class="post-header">
+                    <canvas class="identicon" data-userid="{{ op_post.author_id }}" width="20" height="20"></canvas>
+                    <span>
+                        {% if board_id == 'wh40k' %}
+                            {{ ['Гвардеец', 'Служитель', 'Сервитор', 'Еретик', 'Хаосит', 'Техножрец', 'Инквизитор'] | random }}
+                        {% else %}
+                            {{ request.state.t('anon_name') }}
+                        {% endif %}
+                    </span>
+                    <span>
+                        <a href="#post-{{ op_post.id }}" class="post-num-link" data-post-num="{{ op_post.id }}">#{{ op_post.id }}</a>
+                        {% if op_post.is_pinned %} <span title="Закреплен" style="color:var(--accent-primary); margin-left:5px;">📌</span> {% endif %}
+                        {% if op_post.is_endless %} <span title="Бесконечный тред" style="color:var(--accent-link); margin-left:5px;">🔄</span> {% endif %}
+                        {% if op_post.is_op_yours %}<span class="you-marker">(You)</span>{% endif %}
+                        {% if thread_type == 'image' %}<span class="thread-type-badge tt-image" title="Постинг только с картинками">🖼️ PICTURES ONLY</span>{% endif %}
+                        {% if thread_type == 'video' %}<span class="thread-type-badge tt-video" title="Постинг только с видео">🎬 VIDEO ONLY</span>{% endif %}
+                        {% if thread_type == 'audio' %}<span class="thread-type-badge tt-audio" title="Постинг только с аудио">🎵 AUDIO ONLY</span>{% endif %}
+                        {% if thread_type == 'media' %}<span class="thread-type-badge tt-media" title="Постинг только с файлами">📁 MEDIA ONLY</span>{% endif %}
+                    </span>
+                    <time class="ts-recalc" datetime="{{ op_post.timestamp | format_iso_time }}" data-ts="{{ op_post.timestamp }}">{{ op_post.timestamp | format_timestamp }}</time>
+                    {% if op_post.content.sage %}<span class="sage-indicator">SAGE</span>{% endif %}
+                    <span class="op-header-tools">
+                        <a href="#" class="favourite-btn" data-thread-id="{{ op_post.id }}" title="{{ request.state.t('fav_title') }}" style="margin-right:5px;">⭐</a>
+                        <button class="header-btn summary-btn" onclick="showThreadSummary({{ op_post.id }})" title="О чём тред" style="background:none; border:none; cursor:pointer;">🧠</button>
+                        <!-- <button class="header-btn vibe-btn" data-thread-id="{{ op_post.id }}" onclick="checkThreadVibe(this)" title="Вайбометр" style="background:none; border:none; cursor:pointer;">🌡️</button> -->
+                        <button class="header-btn" onclick="ThreadPlayer.start()" title="Авто-проигрывание" style="background:none; border:none; cursor:pointer;">🎬</button>
+                    </span>
+                    <div class="post-actions">
+                        <button class="action-menu-trigger" 
+                            data-post-num="{{ op_post.id }}" 
+                            data-board-id="{{ board_id }}" 
+                            data-thread-id="{{ op_post.id }}"
+                            data-author-id="{{ op_post.author_id }}"
+                            {% if op_post.is_op_yours %}data-is-op="true"{% endif %}
+                            {% if op_post.is_op_hidden %}data-is-hidden="true"{% endif %}>
+                            ▶
+                        </button>
+                    </div>
+                </div>
+                <div class="post-content">
+                    {% if op_post.content.files %}
+                        <div class="post-files-container post-gallery">
+                            {% for file in op_post.content.files %}
+                                {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
+                                                {% if file.type == 'image' or file.type == 'photo' or file.type == 'sticker' %}
+                                                    <a href="{{ file.original_url }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
+                                                        {% if file.blurhash %}
+                                                            <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
+                                                        {% endif %}
+                                                        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                            data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                            class="post-image lazy-load{% if op_post.content.is_censored %} blurred-media{% endif %}" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded'); var p=this.previousElementSibling; if(p && p.tagName==='CANVAS') p.style.opacity='0';">
+                                                            {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
+                                                    </a>
+                                                {% elif file.type == 'sticker' %}
+                                                    <div class="sticker-wrapper" style="display:inline-block; vertical-align:bottom;">
+                                                        {% if file.filename.endswith('.webm') %}
+                                                            <a href="{{ file.original_url }}" class="gallery-trigger" data-type="video" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
+                                                                <video class="post-sticker{% if op_post.content.is_censored %} blurred-media{% endif %}" src="{{ file.original_url }}" autoplay loop muted playsinline webkit-playsinline referrerpolicy="no-referrer"></video>
+                                                            </a>
+                                                        {% else %}
+                                                            <a href="{{ file.original_url }}" class="gallery-trigger" data-type="image" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
+                                                                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                                    data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                                    class="post-sticker lazy-load{% if op_post.content.is_censored %} blurred-media{% endif %}" 
+                                                                    referrerpolicy="no-referrer">
+                                                            </a>
+                                                        {% endif %}
+                                                    </div>
+                                                {% elif file.type == 'video_note' %}
+                                                    <video class="post-video video-note lazy-load{% if op_post.content.is_censored %} blurred-media{% endif %}" 
+                                                           data-src="{{ file.original_url }}"
+                                                           poster="{{ file.thumbnail_url }}"
+                                                           autoplay 
+                                                           loop 
+                                                           muted 
+                                                           playsinline 
+                                                           onclick="event.preventDefault(); event.stopPropagation(); this.paused ? this.play() : this.pause();"
+                                                           style="border-radius: 50%; object-fit: cover;" 
+                                                           referrerpolicy="no-referrer">
+                                                    </video>
+                                                {% elif file.type == 'video' or file.type == 'gif' or file.type == 'animation' %}
+                                                    <div class="file-thumb lazy-media-wrapper" 
+                                                        data-src="{{ file.original_url }}" 
+                                                        data-filename="{{ file.filename }}"
+                                                        data-type="{{ 'gif' if file.type in ['gif', 'animation'] else 'video' }}">
+                                                        {% if file.blurhash %}
+                                                            <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
+                                                        {% endif %}
+                                                        <video clas<video class="post-image lazy-load{% if op_post.content.is_censored %} blurred-media{% endif %}" 
+                                                               preload="metadata"s="post-image lazy-load" 
+                                                               preload="metadata" 
+                                                               muted 
+                                                               playsinline
+                                                               loop
+                                                               data-src="{{ file.original_url }}"
+                                                               {% if file.thumbnail_url %}poster="{{ file.thumbnail_url }}"{% endif %}
+                                                               style="object-fit: cover; width: 100%; height: 100%; background: #000;">
+                                                        </video>
+                                                        <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
+                                                    </div>
+                                    {% endif %}
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                        <div class="post-audios-container">
+                            {% for file in op_post.content.files %}
+                                {% if file.type in ['audio', 'voice', 'document'] %}
+                                    {% if file.type == 'audio' or file.type == 'voice' %}
+                                        {% set unique_id = 'audio-' ~ op_post.id ~ '-' ~ loop.index %}
+                                        <div class="custom-audio-player" id="player-{{ unique_id }}" data-src="{{ file.original_url }}">
+                                            <audio id="{{ unique_id }}" preload="none"><source src="{{ file.original_url }}" type="{{ file.mime_type or 'audio/mpeg' }}"></audio>
+                                            <button class="cap-play-btn" data-target="{{ unique_id }}" type="button">▶</button>
+                                            <div class="cap-body">
+                                                <div class="cap-title" title="{{ file.filename }}">
+                                                    {% set lower_name = file.filename.lower() %}
+                                                    {% set clean_name = file.filename.rsplit('.', 1)[0] | replace('_', ' ') %}
+                                                    {% if lower_name.startswith('voice_') or 'audiorecord' in lower_name %}
+                                                        <span class="cap-artist">{{ request.state.t('audio_voice_label') or 'Голосовое сообщение' }}</span>
+                                                        <span class="cap-track">{{ clean_name }}</span>
+                                                    {% else %}
+                                                        {% set name_parts = clean_name.split(' - ') %}
+                                                        {% if name_parts|length >= 2 %}
+                                                            <span class="cap-artist">{{ name_parts[0] }}</span>
+                                                            <span class="cap-track">{{ name_parts[1:]|join(' - ') }}</span>
+                                                        {% else %}
+                                                            {% set r_artists = request.state.t('audio_random_artists') %}
+                                                            {% set r_tracks = request.state.t('audio_random_tracks') %}
+                                                            {% set name_idx = file.filename|length %}
+                                                            <span class="cap-artist">{{ r_artists[name_idx % r_artists|length] }}</span>
+                                                            <span class="cap-track">{{ clean_name if clean_name.lower() != 'audio' else r_tracks[name_idx % r_tracks|length] }}</span>
+                                                        {% endif %}
+                                                    {% endif %}
+                                                </div> 
+                                                <div class="cap-controls-row">
+                                                    <div class="cap-info"><span class="cap-time">00:00</span></div>
+                                                    <div class="cap-progress-container" data-target="{{ unique_id }}"><div class="cap-wave-base"></div><div class="cap-wave-progress"></div></div>
+                                                    <div class="cap-info"><button class="cap-speed-btn" data-target="{{ unique_id }}" type="button">1x</button></div>
+                                                    <a href="{{ file.original_url }}" download="{{ file.filename }}" class="cap-download-btn">⬇</a>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    {% elif file.type == 'document' %}
+                                        <div style="margin-top:5px;">
+                                            <a href="{{ file.original_url }}" target="_blank" class="file-document-link">📄 {{ file.filename }}</a>
+                                        </div>
+                                    {% endif %}
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                    
+                    <div class="post-text-content">
+                        <div class="post-text">{{ op_post.content.text | format_post_text | safe }}</div>
+                        <div class="backlinks-container" id="backlinks-for-{{ op_post.id }}">
+                            {% if op_post.backlinks %}
+                                {% for backlink_id in op_post.backlinks %}
+                                    <a href="#post-{{ backlink_id }}" class="post-link" data-post-num="{{ backlink_id }}">&gt;&gt;{{ backlink_id }}</a>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <hr>
+        {% if is_archived %}
+            <div class="archived-notice">
+                <h3>{{ request.state.t('archived_title') }}</h3>
+                <p>{{ request.state.t('archived_text') }}</p>
+                {% if session.user.is_admin %}
+                    <button id="admin-restore-btn" class="btn btn-primary" style="background-color: var(--accent-primary); margin-top: 10px;">
+                        {{ request.state.t('btn_restore') }}
+                    </button>
+                    <script>
+                        document.getElementById('admin-restore-btn').onclick = async () => {
+                            if(!confirm('Вернуть тред к жизни?')) return;
+                            try {
+                                await fetch('/api/admin/restore_thread', {
+                                    method: 'POST',
+                                    headers: {'Content-Type': 'application/json'},
+                                    body: JSON.stringify({ thread_id: "{{ op_post.id }}" })
+                                });
+                                location.reload();
+                            } catch(e) { alert('Ошибка'); }
+                        };
+                    </script>
+                {% endif %}
+            </div>
+        {% else %}
+            <div class="form-container">
+                <h3 id="form-toggle-button" class="form-toggle-button" style="margin:0; font-size: 1.1em;">
+                    {{ request.state.t('form_reply_thread') }} <span class="form-toggle-arrow">[+]</span>
+                </h3>
+            </div>
+            <form id="post-form" class="reply-form-static is-hidden-by-toggle">
+                <input type="text" name="email" class="hp-field" autocomplete="off" tabindex="-1">
+                <input type="text" name="username" class="name-field" autocomplete="off" tabindex="-1">
+                <div class="form-fields">
+                    <div class="format-buttons">
+                        <button type="button" class="format-btn" data-tag="b" title="{{ request.state.t('form_btn_bold') }}"><b>B</b></button>
+                        <button type="button" class="format-btn" data-tag="i" title="{{ request.state.t('form_btn_italic') }}"><i>I</i></button>
+                        <button type="button" class="format-btn" data-tag="s" title="{{ request.state.t('form_btn_strike') }}"><s>S</s></button>
+                        <button type="button" class="format-btn" data-tag="spoiler" title="{{ request.state.t('form_btn_spoiler') }}">Spoiler</button>
+                        <span style="border-left: 1px solid var(--border-input); margin: 0 5px;"></span>
+                        <button type="button" class="format-btn" data-tag="shake" title="{{ request.state.t('form_btn_shake') }}">😵</button>
+                        <button type="button" class="format-btn" data-tag="rainbow" title="{{ request.state.t('form_btn_rainbow') }}">🌈</button>
+                        <button type="button" class="format-btn" data-tag="blur" title="{{ request.state.t('form_btn_blur') }}">🌫️</button>
+                        <button type="button" class="format-btn" data-tag="glitch" title="{{ request.state.t('form_btn_glitch') }}">👾</button>
+                        <button type="button" class="format-btn" id="help-tags-btn" title="{{ request.state.t('form_btn_help') }}">❓</button>
+                    </div>
+                    <textarea id="post-text" name="text" placeholder="{{ request.state.t('form_text_placeholder') }}" rows="4" cols="50"></textarea>
+                    <div id="file-preview-container" class="file-preview-container"></div>
+                </div>
+                <div class="form-controls">
+                    <label for="file-input" class="btn btn-secondary file-input-label-mobile">
+                        <span class="file-btn-text">{{ request.state.t('btn_attach') }}</span>
+                        <span class="file-btn-icon">📎</span>
+                    </label>
+                    <label class="picrandom-container" title="{{ request.state.t('rand_pic_hint') }}">
+                        <input type="checkbox" name="picrandom" value="true">
+                        <span class="picrandom-icon">🎲</span>
+                        <span class="picrandom-label">{{ request.state.t('btn_rand') }}</span>
+                    </label>
+                    <button id="record-audio-btn" class="btn btn-secondary" title="{{ request.state.t('btn_voice') }}">🎤</button>
+                    <input type="file" id="file-input" name="images" accept="image/*,video/*" multiple style="display: none;">
+                    <div style="display: flex; align-items: center; gap: 5px; margin-right: auto;">
+                        <input type="checkbox" id="sage-checkbox" name="sage">
+                        <label for="sage-checkbox">{{ request.state.t('sage_label') }}</label>
+                    </div>
+                    <input type="hidden" name="board_id" value="{{ board_id }}">
+                    <input type="hidden" name="reply_to" value="{{ op_post.id }}">
+                    <input type="hidden" name="post_mode" value="reply">
+                    <button type="submit" class="btn btn-primary">{{ request.state.t('btn_submit_reply') }}</button>
+                </div>
+                <div id="upload-progress-container" class="upload-progress-container">
+                    <div id="upload-progress-bar" class="upload-progress-bar"></div>
+                    <span id="upload-progress-text" class="upload-progress-text"></span>
+                </div>
+            </form>
+        {% endif %}
+        <hr>
+        <div class="thread-controls">
+            <button class="btn btn-secondary" id="expand-all-btn">🖼️ Раскрыть все</button>
+            <div style="width: 1px; background: var(--border-primary); margin: 0 5px;"></div>
+            <button class="btn btn-secondary" id="my-posts-filter-btn">{{ request.state.t('thread_controls_my') }}</button>
+            <button class="btn btn-secondary" id="replies-to-me-filter-btn">{{ request.state.t('thread_controls_replies') }}</button>
+        </div>
+        <div class="replies-list">
+            {% if replies %}
+                {% for reply in replies %}
+                    <div class="post {% if reply.content.sage %}is-sage{% endif %} {% if reply.author_id == session.user.id %}is-yours{% endif %} {% if reply.is_reply_to_you %}reply-to-you{% endif %} {% if reply.author_id == op_post.author_id %}is-by-op{% endif %}" id="post-{{ reply.id }}" data-reports="{{ reply.report_count }}">
+                        <div class="post-header">
+                            <canvas class="identicon" data-userid="{{ reply.author_id }}" width="20" height="20"></canvas>
+                            <span>
+                                {% if board_id == 'wh40k' %}
+                                    {{ ['Гвардеец', 'Служитель', 'Сервитор', 'Еретик', 'Хаосит', 'Техножрец', 'Инквизитор'] | random }}
+                                {% else %}
+                                    {{ request.state.t('anon_name') }}
+                                {% endif %}
+                            </span>
+                            <span>
+                                <a href="#post-{{ reply.id }}" class="post-num-link" data-post-num="{{ reply.id }}">#{{ reply.id }}</a>
+                                {% if reply.is_yours %}<span class="you-marker">(You)</span>{% endif %}
+                                {% if reply.author_id == op_post.author_id %}<span class="op-marker">(OP)</span>{% endif %}
+                            </span>
+                            <span class="ts-recalc" data-ts="{{ reply.timestamp }}">{{ reply.timestamp | format_timestamp }}</span>
+                            {% if reply.content.sage %}<span class="sage-indicator">SAGE</span>{% endif %}
+                            <div class="post-actions">
+                                <button class="action-menu-trigger" 
+                                    data-post-num="{{ reply.id }}" 
+                                    data-board-id="{{ board_id }}" 
+                                    data-thread-id="{{ op_post.id }}"
+                                    data-author-id="{{ reply.author_id }}"
+                                    {% if op_post.is_op_yours %}data-is-op="true"{% endif %}
+                                    {% if reply.is_op_hidden %}data-is-hidden="true"{% endif %}>
+                                    ▶
+                                </button>
+                            </div>
+                        </div>
+                        <div class="post-content">
+                            {% if reply.content.files %}
+                                <div class="post-files-container post-gallery">
+                                    {% for file in reply.content.files %}
+                                        {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
+                                                {% if file.type == 'image' or file.type == 'photo' or file.type == 'sticker' %}
+                                                    <a href="{{ file.original_url }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
+                                                        {% if file.blurhash %}
+                                                            <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
+                                                        {% endif %}
+                                                        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                            data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                            class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded'); var p=this.previousElementSibling; if(p && p.tagName==='CANVAS') p.style.opacity='0';">
+                                                            {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
+                                                    </a>
+                                                {% elif file.type == 'sticker' %}
+                                                    <div class="sticker-wrapper" style="display:inline-block; vertical-align:bottom;">
+                                                        {% if file.filename.endswith('.webm') %}
+                                                            <a href="{{ file.original_url }}" class="gallery-trigger" data-type="video" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
+                                                                <video class="post-sticker{% if reply.content.is_censored %} blurred-media{% endif %}" src="{{ file.original_url }}" autoplay loop muted playsinline webkit-playsinline referrerpolicy="no-referrer"></video>
+                                                            </a>
+                                                        {% else %}
+                                                            <a href="{{ file.original_url }}" class="gallery-trigger" data-type="image" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
+                                                                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                                    data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                                    class="post-sticker lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" 
+                                                                    referrerpolicy="no-referrer">
+                                                            </a>
+                                                        {% endif %}
+                                                    </div>
+                                                {% elif file.type == 'video_note' %}
+                                                    <video class="post-video video-note{% if reply.content.is_censored %} blurred-media{% endif %}" 
+                                                           src="{{ file.original_url }}" 
+                                                           autoplay 
+                                                           loop 
+                                                           muted 
+                                                           playsinline 
+                                                           onclick="event.preventDefault(); event.stopPropagation(); this.paused ? this.play() : this.pause();"
+                                                           style="border-radius: 50%; object-fit: cover;" 
+                                                           referrerpolicy="no-referrer">
+                                                    </video>
+                                                {% elif file.type == 'video' or file.type == 'gif' or file.type == 'animation' %}
+                                                    <div class="file-thumb lazy-media-wrapper" 
+                                                        data-src="{{ file.original_url }}" 
+                                                        data-filename="{{ file.filename }}"
+                                                        data-type="{{ 'gif' if file.type in ['gif', 'animation'] else 'video' }}">
+                                                        {% if file.blurhash %}
+                                                            <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
+                                                        {% endif %}
+                                                        <video class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" 
+                                                               preload="metadata" 
+                                                               muted 
+                                                               playsinline
+                                                               loop
+                                                               data-src="{{ file.original_url }}"
+                                                               {% if file.thumbnail_url %}poster="{{ file.thumbnail_url }}"{% endif %}
+                                                               style="object-fit: cover; width: 100%; height: 100%; background: #000;">
+                                                        </video>
+                                                        <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
+                                                    </div>
+                                            {% endif %}
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                                <div class="post-audios-container">
+                                    {% for file in reply.content.files %}
+                                        {% if file.type in ['audio', 'voice', 'document'] %}
+                                            {% if file.type == 'audio' or file.type == 'voice' %}
+                                                {% set unique_id = 'audio-' ~ reply.id ~ '-' ~ loop.index %}
+                                                <div class="custom-audio-player" id="player-{{ unique_id }}" data-src="{{ file.original_url }}">
+                                                    <audio id="{{ unique_id }}" preload="none"><source src="{{ file.original_url }}" type="{{ file.mime_type or 'audio/mpeg' }}"></audio>
+                                                    <button class="cap-play-btn" data-target="{{ unique_id }}" type="button">▶</button>
+                                                    <div class="cap-body">
+                                                        <div class="cap-title" title="{{ file.filename }}">
+                                                            {% set lower_name = file.filename.lower() %}
+                                                            {% set clean_name = file.filename.rsplit('.', 1)[0] | replace('_', ' ') %}
+                                                            {% if lower_name.startswith('voice_') or 'audiorecord' in lower_name %}
+                                                                <span class="cap-artist">{{ request.state.t('audio_voice_label') or 'Голосовое сообщение' }}</span>
+                                                                <span class="cap-track">{{ clean_name }}</span>
+                                                            {% else %}
+                                                                {% set name_parts = clean_name.split(' - ') %}
+                                                                {% if name_parts|length >= 2 %}
+                                                                    <span class="cap-artist">{{ name_parts[0] }}</span>
+                                                                    <span class="cap-track">{{ name_parts[1:]|join(' - ') }}</span>
+                                                                {% else %}
+                                                                    {% set r_artists = request.state.t('audio_random_artists') %}
+                                                                    {% set r_tracks = request.state.t('audio_random_tracks') %}
+                                                                    {% set name_idx = file.filename|length %}
+                                                                    <span class="cap-artist">{{ r_artists[name_idx % r_artists|length] }}</span>
+                                                                    <span class="cap-track">{{ clean_name if clean_name.lower() != 'audio' else r_tracks[name_idx % r_tracks|length] }}</span>
+                                                                {% endif %}
+                                                            {% endif %}
+                                                        </div>
+                                                        <div class="cap-controls-row">
+                                                            <div class="cap-info"><span class="cap-time">00:00</span></div>
+                                                            <div class="cap-progress-container" data-target="{{ unique_id }}"><div class="cap-wave-base"></div><div class="cap-wave-progress"></div></div>
+                                                            <div class="cap-info"><button class="cap-speed-btn" data-target="{{ unique_id }}" type="button">1x</button></div>
+                                                            <a href="{{ file.original_url }}" download="{{ file.filename }}" class="cap-download-btn">⬇</a>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            {% elif file.type == 'document' %}
+                                                <div style="margin-top:5px;">
+                                                    <a href="{{ file.original_url }}" target="_blank" class="file-document-link">📄 {{ file.filename }}</a>
+                                                </div>
+                                            {% endif %}
+                                        {% endif %}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                            
+                            <div class="post-text-content">
+                                <p>{{ reply.content.text | format_post_text | safe }}</p>
+                                <div class="backlinks-container" id="backlinks-for-{{ reply.id }}">
+                                    {% if reply.backlinks %}
+                                        {% for backlink_id in reply.backlinks %}
+                                            <a href="#post-{{ backlink_id }}" class="post-link" data-post-num="{{ backlink_id }}">&gt;&gt;{{ backlink_id }}</a>
+                                        {% endfor %}
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p id="no-replies-placeholder" style="{% if is_skeleton %}display: none;{% endif %}">В этом треде пока нет ответов.</p>
+            {% endif %}
+        </div>
+        <div id="threads-loading-indicator" style="display: {% if is_skeleton %}block{% else %}none{% endif %}; text-align: center; padding: 20px; color: var(--text-secondary);">
+            {{ request.state.t('loading') }}
+        </div>
+        <hr>
+        <div class="form-container">
+            <h3 class="form-toggle-button">
+                {{ request.state.t('form_reply_thread') }} <span class="form-toggle-arrow">[+]</span>
+            </h3>
+        </div>
+        <form id="post-form-bottom" class="reply-form-static is-hidden-by-toggle">
+            <input type="text" name="email" class="hp-field" autocomplete="off" tabindex="-1">
+            <input type="text" name="username" class="name-field" autocomplete="off" tabindex="-1">
+            <div class="form-fields">
+                <div class="format-buttons">
+                    <button type="button" class="format-btn" data-tag="b" title="{{ request.state.t('form_btn_bold') }}"><b>B</b></button>
+                    <button type="button" class="format-btn" data-tag="i" title="{{ request.state.t('form_btn_italic') }}"><i>I</i></button>
+                    <button type="button" class="format-btn" data-tag="s" title="{{ request.state.t('form_btn_strike') }}"><s>S</s></button>
+                    <button type="button" class="format-btn" data-tag="spoiler" title="{{ request.state.t('form_btn_spoiler') }}">Spoiler</button>
+                    <span style="border-left: 1px solid var(--border-input); margin: 0 5px;"></span>
+                    <button type="button" class="format-btn" data-tag="shake" title="{{ request.state.t('form_btn_shake') }}">😵</button>
+                    <button type="button" class="format-btn" data-tag="rainbow" title="{{ request.state.t('form_btn_rainbow') }}">🌈</button>
+                    <button type="button" class="format-btn" data-tag="blur" title="{{ request.state.t('form_btn_blur') }}">🌫️</button>
+                    <button type="button" class="format-btn" data-tag="glitch" title="{{ request.state.t('form_btn_glitch') }}">👾</button>
+                    <button type="button" class="format-btn" id="help-tags-btn-bottom" title="{{ request.state.t('form_btn_help') }}">❓</button>
+                </div>
+                {% if thread_type != 'default' and not is_unlocked %}
+                    <textarea name="text" class="locked-placeholder" placeholder="🔒 Тред требует файл! Прикрепите {{ thread_type }}, чтобы написать текст." rows="4"></textarea>
+                {% else %}
+                    <textarea name="text" placeholder="{{ request.state.t('form_text_placeholder') }}" rows="4"></textarea>
+                {% endif %}
+                <div class="file-preview-container"></div>
+            </div>
+            <div class="form-controls">
+                <label for="file-input-bottom" class="btn btn-secondary file-input-label-mobile">
+                    <span class="file-btn-text">{{ request.state.t('btn_attach') }}</span>
+                    <span class="file-btn-icon">📎</span>
+                </label>
+                <label class="picrandom-container" title="{{ request.state.t('rand_pic_hint') }}">
+                    <input type="checkbox" name="picrandom" value="true">
+                    <span class="picrandom-icon">🎲</span>
+                    <span class="picrandom-label">{{ request.state.t('btn_rand') }}</span>
+                </label>
+                <button id="record-audio-btn-bottom" class="btn btn-secondary" type="button" title="{{ request.state.t('btn_voice') }}">🎤</button>
+                <input type="file" id="file-input-bottom" name="images" accept="image/*,video/*" multiple style="display: none;">
+                <div style="display: flex; align-items: center; gap: 5px; margin-right: auto;">
+                    <input type="checkbox" id="sage-checkbox-bottom" name="sage">
+                    <label for="sage-checkbox-bottom">{{ request.state.t('sage_label') }}</label>
+                </div>
+                <input type="hidden" name="board_id" value="{{ board_id }}">
+                <input type="hidden" name="reply_to" value="{{ op_post.id }}">
+                <input type="hidden" name="post_mode" value="reply">
+                <button type="submit" class="btn btn-primary">{{ request.state.t('btn_submit_reply') }}</button>
+            </div>
+            <div class="upload-progress-container">
+                <div class="upload-progress-bar"></div>
+                <span class="upload-progress-text"></span>
+            </div>
+        </form>
+        <div style="margin-top: 30px; border-top: 1px solid var(--border-primary); padding-top: 10px; margin-bottom: 20px;">
+            <div class="board-nav" style="justify-content: center; margin-bottom: 10px;">
+                {% for b_key, b_val in boards.items() %}
+                    {% if b_key != 'test' %}
+                        <a href="/{{ b_key }}/" class="{% if b_key == board_id %}active{% endif %}">/{{ b_key }}/</a>
+                    {% endif %}
+                {% endfor %}
+            </div>
+            <nav style="text-align: center;">
+                <a href="/{{ board_id }}/threads/">{{ request.state.t('nav_back_threads') }} /{{ board_id }}/</a>
+                <span style="opacity: 0.5; margin: 0 5px;">|</span>
+                <a href="/">{{ request.state.t('nav_main') }}</a>
+                <span style="opacity: 0.5; margin: 0 5px;">|</span>
+                <a href="/{{ board_id }}/res/{{ op_post.id }}/gallery">{{ request.state.t('nav_gallery') }}</a>
+                <span style="opacity: 0.5; margin: 0 5px;">|</span>
+                <a href="#" id="book-mode-btn" title="Скачать тред как PDF">Скачать тред</a>
+                <span style="opacity: 0.5; margin: 0 5px;">|</span>
+                <a href="#" onclick="event.preventDefault(); window.manualRefresh();">Обновить</a>
+                <span style="opacity: 0.5; margin: 0 5px;">|</span>
+                <a href="/random/thread" title="Прыжок в случайный тред">🎲</a>
+            </nav>
+        </div>
+    </main>
+    <div id="image-viewer" class="image-viewer-overlay" style="display: none;">
+        <span id="iv-close" class="iv-button iv-close-button">&times;</span>
+        <span id="iv-prev" class="iv-button iv-nav-button iv-prev-button">&lsaquo;</span>
+        <span id="iv-next" class="iv-button iv-nav-button iv-next-button">&rsaquo;</span>
+        <div id="iv-container" class="iv-content-container"></div>
+        <div id="iv-info" class="iv-info-bar">
+            <a id="iv-download-link" href="#" target="_blank" download style="font-weight: bold; color: #64b5f6; margin-right: 10px;">{{ request.state.t('gallery_download') }}</a>
+            <a id="iv-filename" href="#" target="_blank" download>filename.jpg</a>
+            <span id="iv-dimensions">1920x1080</span>
+            <span id="iv-counter">1 / 10</span>
+        </div>
+        <div id="iv-loader" class="iv-loader" style="display: none;"></div>
+    </div>
+    <footer>
+        <nav style="margin-bottom: 8px; display: flex; justify-content: center; gap: 20px;">
+            <a href="/about/">{{ request.state.t('nav_about') }}</a>
+            <a href="/faq/">{{ request.state.t('nav_faq') }}</a>
+            <a href="/tags/">{{ request.state.t('nav_tags') }}</a> 
+            <a href="/rules/">{{ request.state.t('nav_rules') }}</a>
+            <a href="/tv/random" style="color: var(--accent-primary); font-weight: bold;">[WebM]</a>
+            <a href="/img/random" style="color: var(--accent-primary); font-weight: bold;">[IMG]</a>
+            <a href="#" onclick="event.preventDefault(); openModal('feedback-modal');">✉️ Связь</a>
+        </nav>
+        <p>{{ request.state.t('footer_text') }}</p>
+    </footer>
+    <div class="modal-overlay" id="modal-overlay" style="display: none;"></div>
+    <div class="modal" id="quick-reply-modal" style="display: none;">
+        <h3 id="qr-title">Ответ на пост #<span id="qr-post-num"></span></h3>
+        <form id="quick-reply-form">
+        </form>
+    </div>
+    <div class="modal" id="report-modal" style="display: none;">
+        <h3>{{ request.state.t('report_modal_title') }} <span id="report-post-num"></span></h3>
+        <form id="report-form">
+            <div class="form-group">
+                <label for="report-category">{{ request.state.t('report_category') }}</label>
+                <select id="report-category" name="category" required>
+                    <option value="Спам">{{ request.state.t('report_cat_spam') }}</option>
+                    <option value="Оскорбление">{{ request.state.t('report_cat_insult') }}</option>
+                    <option value="Нелегальный контент">{{ request.state.t('report_cat_illegal') }}</option>
+                    <option value="Оффтоп">{{ request.state.t('report_cat_offtopic') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="report-reason">{{ request.state.t('report_reason') }}</label>
+                <textarea id="report-reason" name="reason" rows="3" required></textarea>
+            </div>
+            <input type="hidden" id="report-post-num-input" name="post_num">
+            <button type="submit">{{ request.state.t('report_send') }}</button>
+        </form>
+    </div>
+
+    <div class="modal" id="feedback-modal" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin: 0;">✉️ Связь с Админом</h3>
+            <button class="btn btn-secondary modal-close-btn" style="padding: 0 8px;">&times;</button>
+        </div>
+        <form id="feedback-form" onsubmit="event.preventDefault(); sendFeedback(this);">
+            <div class="form-group">
+                <label>Тип обращения:</label>
+                <select name="category" class="form-control">
+                    <option value="Предложение">💡 Идея / Предложение</option>
+                    <option value="Баг">🐛 Ошибка на сайте</option>
+                    <option value="Жалоба">🚨 Жалоба / Абуз</option>
+                    <option value="Сотрудничество">🤝 Сотрудничество</option>
+                    <option value="Другое">📝 Другое</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Как ответить (ТГ/Почта) - необязательно:</label>
+                <input type="text" name="contact" class="form-control" placeholder="@username">
+            </div>
+            <div class="form-group">
+                <label>Сообщение:</label>
+                <textarea name="message" rows="5" class="form-control" required placeholder="Суть вопроса..."></textarea>
+            </div>
+            <input type="text" name="email" class="hp-field" autocomplete="off" tabindex="-1">
+            <button type="submit" class="btn btn-primary" style="width: 100%;">Отправить</button>
+        </form>
+    </div>
+    <div class="modal" id="settings-modal" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-separator); margin-bottom: 15px; padding-bottom: 10px;">
+            <h3 style="margin: 0; border: none; padding: 0;">{{ request.state.t('settings_modal_title') }}</h3>
+            <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+        </div>
+        <form id="settings-form">
+            <div class="form-group">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <label for="setting-sound" style="margin:0; cursor: pointer;">🔊 {{ request.state.t('setting_sound') }}</label>
+                    <input type="checkbox" id="setting-sound" data-setting="soundEnabled">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="setting-theme">{{ request.state.t('setting_theme') }}</label>
+                <select id="setting-theme" data-setting="theme" class="form-control">
+                    <option value="light">{{ request.state.t('theme_light') }}</option>
+                    <option value="dark">{{ request.state.t('theme_dark') }}</option>
+                    <option value="cyberpunk">{{ request.state.t('theme_cyberpunk') }}</option>
+                    <option value="crypto">{{ request.state.t('theme_crypto') }}</option>
+                    <option value="conan">{{ request.state.t('theme_conan') }}</option>
+                    <option value="win95">{{ request.state.t('theme_win95') }}</option>
+                    <option value="gameboy">{{ request.state.t('theme_gameboy') }}</option>
+                    <option value="adventure">{{ request.state.t('theme_adventure') }}</option>
+                    <option value="luxury">{{ request.state.t('theme_luxury') }}</option>
+                    <option value="toxic">{{ request.state.t('theme_toxic') }}</option>
+                    <option value="shaft">{{ request.state.t('theme_shaft') }}</option>
+                    <option value="nord">{{ request.state.t('theme_nord') }}</option>
+                    <option value="gruvbox">{{ request.state.t('theme_gruvbox') }}</option>
+                    <option value="discord">{{ request.state.t('theme_discord') }}</option>
+                    <option value="lain">{{ request.state.t('theme_lain') }}</option>
+                    <option value="dracula">{{ request.state.t('theme_dracula') }}</option>
+                    <option value="sakura">{{ request.state.t('theme_sakura') }}</option>
+                    <option value="ukraine">{{ request.state.t('theme_ukraine') }}</option>
+                    <option value="soviet">{{ request.state.t('theme_soviet') }}</option>
+                    <option value="paper">{{ request.state.t('theme_paper') }}</option>
+                    <option value="terminal">{{ request.state.t('theme_terminal') }}</option>
+                    <option value="ocean">{{ request.state.t('theme_ocean') }}</option>
+                    <option value="forest">{{ request.state.t('theme_forest') }}</option>
+                    <option value="gothic">{{ request.state.t('theme_gothic') }}</option>
+                    <option value="noir">{{ request.state.t('theme_noir') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-font-size">{{ request.state.t('setting_font_size') }}</label>
+                <select id="setting-font-size" data-setting="fontSize">
+                    <option value="small">{{ request.state.t('setting_font_small') }}</option>
+                    <option value="medium" selected>{{ request.state.t('setting_font_medium') }}</option>
+                    <option value="large">{{ request.state.t('setting_font_large') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-preview-size">{{ request.state.t('setting_preview_size') }}</label>
+                <select id="setting-preview-size" data-setting="previewSize">
+                    <option value="small">{{ request.state.t('setting_font_small') }}</option>
+                    <option value="medium" selected>{{ request.state.t('setting_font_medium') }}</option>
+                    <option value="large">{{ request.state.t('setting_font_large') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-layout">{{ request.state.t('setting_layout') }}</label>
+                <select id="setting-layout" data-setting="layoutMode">
+                    <option value="center" selected>{{ request.state.t('setting_layout_center') }}</option>
+                    <option value="wide">{{ request.state.t('setting_layout_wide') }}</option>
+                    <option value="left">{{ request.state.t('setting_layout_left') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-density">{{ request.state.t('setting_density') }}</label>
+                <select id="setting-density" data-setting="interfaceDensity">
+                    <option value="normal" selected>{{ request.state.t('setting_density_norm') }}</option>
+                    <option value="compact">{{ request.state.t('setting_density_compact') }}</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="setting-font-style">{{ request.state.t('setting_font_style') }}</label>
+                <select id="setting-font-style" data-setting="fontStyle">
+                    <option value="a">Verdana + Slab</option>
+                    <option value="b" selected>Roboto + Verdana</option>
+                </select>
+            </div>
+            <div class="form-group settings-row-checkbox" style="margin-top: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-dim" style="margin:0;">{{ request.state.t('setting_nsfw') }}</label>
+                    <input type="checkbox" id="setting-dim" data-setting="dimMode">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-expand-images" style="margin:0;">Разворачивать картинки</label>
+                    <input type="checkbox" id="setting-expand-images" data-setting="expandImages">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-identicons" style="margin:0;">{{ request.state.t('setting_identicons') }}</label>
+                    <input type="checkbox" id="setting-identicons" data-setting="showIdenticons">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-mascot" style="margin:0;">Показывать Маскота</label>
+                    <input type="checkbox" id="setting-mascot" data-setting="showMascot">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label for="setting-self-captcha" style="margin:0;">Включить капчу</label>
+                    <input type="checkbox" id="setting-self-captcha" data-setting="selfCaptcha">
+                </div>
+            </div>
+            <div class="form-group settings-row-checkbox" style="border-top: 1px solid var(--border-separator); margin-top: 10px; padding-top: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <label for="setting-fullscreen" style="margin:0; font-weight:bold; color:var(--accent-primary);">🖥️ Полный экран</label>
+                <input type="checkbox" id="setting-fullscreen">
+                </div>
+            </div>
+            <div style="margin-top: 15px; padding-top:15px; border-top:1px solid var(--border-separator);">
+                <a href="/my/" class="btn btn-secondary" style="width:100%; text-align:center; display:block;">👤 Мои посты</a>
+            </div>
+            <div style="margin-top: 15px; padding-top:15px; border-top:1px solid var(--border-separator);">
+                <button type="button" onclick="openFiltersModal()" class="btn btn-secondary" style="width:100%; text-align:center; display:block;">🛡️ Настройка автоскрытия</button>
+            </div>
+            <div style="margin-top: 10px; padding-top:10px; border-top:1px solid var(--border-separator);">
+                <a href="/history/" class="btn btn-secondary" style="width:100%; text-align:center; display:block;">История просмотров</a>
+            </div>
+            <div style="margin-top: 20px; text-align: right;">
+                <button type="button" onclick="document.getElementById('settings-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-primary modal-close-btn" style="width: 100%;">{{ request.state.t('btn_close') }}</button>
+            </div>
+        </form>
+    </div>
+    <div class="modal" id="help-modal" style="display: none; max-width: 600px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid var(--border-primary); padding-bottom: 10px;">
+            <h3 style="margin: 0; border: none;">{{ request.state.t('help_title') }}</h3>
+            <button class="btn btn-secondary modal-close-btn" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+        </div>
+        <div class="help-content" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div>
+                <h4 style="margin-top: 0; color: var(--text-secondary);">{{ request.state.t('help_basics') }}</h4>
+                <ul style="list-style: none; padding: 0; line-height: 1.8;">
+                    <li><code>[b]Текст[/b]</code> → <b>Жирный</b></li>
+                    <li><code>[i]Текст[/i]</code> → <i>Курсив</i></li>
+                    <li><code>[s]Текст[/s]</code> → <s>Зачеркнутый</s></li>
+                    <li><code>||Текст||</code> → <span class="spoiler">Спойлер</span></li>
+                </ul>
+            </div>
+            <div>
+                <h4 style="margin-top: 0; color: var(--text-secondary);">{{ request.state.t('help_effects') }}</h4>
+                <ul style="list-style: none; padding: 0; line-height: 1.8;">
+                    <li><code>[shake]...[/shake]</code> → <span class="effect-shake">Тряска</span></li>
+                    <li><code>[rainbow]...[/rainbow]</code> → <span class="effect-rainbow">Наримашка</span></li>
+                    <li><code>[blur]...[/blur]</code> → <span class="effect-blur">Сосал?</span> (Наведи)</li>
+                    <li><code>[glitch]...[/glitch]</code> → <span class="effect-glitch" data-text="Глитч">Глитч</span></li>
+                </ul>
+            </div>
+        </div>
+        <div style="margin-top: 15px; text-align: right;">
+            <button class="btn btn-secondary modal-close-btn" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+        </div>
+    </div>
+    <div id="new-posts-indicator" style="display: none;"></div>
+    <div class="modal" id="stealth-edit-modal" style="display: none; max-width: 500px;">
+        <h3>🥷 Скрытое редактирование</h3>
+        <form id="stealth-edit-form">
+            <input type="hidden" name="post_num" id="se-post-num">
+            <div class="form-group">
+                <label>Текст (HTML разрешен):</label>
+                <textarea name="text" id="se-text" rows="6" style="width: 100%; font-family: monospace;"></textarea>
+            </div>
+            <div class="form-group">
+                <label>Удалить файлы (отметьте):</label>
+                <div id="se-current-files" style="display: flex; gap: 5px; flex-wrap: wrap; padding: 5px; background: var(--bg-input); border-radius: 4px;">
+                    <span style="color: var(--text-secondary); font-size: 0.9em;">Нет файлов</span>
+                </div>
+            </div>
+            <div class="form-group" style="margin-top: 10px;">
+                <label>Добавить новые файлы:</label>
+                <input type="file" name="new_images" multiple>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px;">
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('stealth-edit-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';">Отмена</button>
+                <button type="submit" class="btn btn-primary" style="background-color: #e67e22; border-color: #d35400;">Сохранить тихо</button>
+            </div>
+        </form>
+    </div>
+    <div id="loading-indicator" class="loading-indicator">Отправка...</div>
+        <div id="global-action-menu">
+            <a href="#" class="menu-btn" data-action="reply">{{ request.state.t('action_reply') }}</a>
+            <a href="#" class="menu-btn" data-action="view-thread" id="menu-view-thread-btn">{{ request.state.t('action_view_thread') }}</a>
+            <a href="#" class="menu-btn" data-action="copy-link">{{ request.state.t('action_copy_link') }}</a>
+            <a href="#" class="menu-btn" data-action="bottle">{{ request.state.t('action_bottle') }}</a>
+            <a href="#" class="menu-btn" data-action="speak">{{ request.state.t('action_speak') }}</a>
+            <a href="#" class="menu-btn" data-action="report">{{ request.state.t('action_report') }}</a>
+            <a href="#" class="menu-btn" data-action="hide">{{ request.state.t('action_hide') }}</a>
+            <a href="#" class="menu-btn" data-action="op-mod" id="menu-op-mod-btn" style="display:none; color:#e67e22;">Скрыть (OP)</a>
+            <!-- Уровень 1: Дворник (Janitor) -->
+            <div class="role-janitor" style="display:none; border-top:1px solid #ccc; margin-top:5px;">
+                <a href="#" class="menu-btn admin-action" data-action="delete">🗑 {{ request.state.t('action_delete') }}</a>
+                <a href="#" class="menu-btn admin-action" data-action="delete-after" style="color: orange;">✂️ {{ request.state.t('action_delete_after') }}</a>
+            </div>        
+            <!-- Уровень 2: Модератор (Mod) -->
+            <div class="role-mod" style="display:none;">
+                <a href="#" class="menu-btn admin-action" data-action="ban">🔨 {{ request.state.t('action_ban') }}</a>
+                <a href="#" class="menu-btn admin-action" data-action="img-ban" style="color: #c0392b; font-weight: bold;">⛔ Бан Картинки</a>
+                <a href="#" class="menu-btn admin-action" data-action="shadow" style="color: purple;">👻 {{ request.state.t('action_shadow') }}</a>
+                <a href="#" class="menu-btn admin-action" data-action="pin" style="color: green;">📌 Pin/Unpin</a>
+                <a href="#" class="menu-btn admin-action" data-action="move" style="color: #0984e3;">🚚 Перенести тред</a>
+                <a href="#" class="menu-btn admin-action" data-action="endless" style="color: blue;">🔄 Бесконечный тред</a>
+            </div>
+            <!-- Уровень 3: Админ (Admin) -->
+            <div class="role-admin" style="display:none;">
+                <a href="#" class="menu-btn admin-action" data-action="wipe" style="color: red; font-weight: bold;">☢️ {{ request.state.t('action_wipe') }}</a>
+                <a href="#" class="menu-btn admin-action" data-action="stealth" style="color: #e67e22;">🥷 Stealth Edit</a>
+            </div>
+        </div>
+        <script src="/static/js/main.js?v=8.88228" defer></script>
+    </body>
+    <div class="modal" id="bottle-modal" style="display: none;">
+        <h3>Отправить записку анону</h3>
+        <form id="bottle-form">
+            <div class="form-group">
+                <textarea id="bottle-text" name="text" rows="4" maxlength="280" placeholder="Ваше анонимное послание (до 280 символов)..." required></textarea>
+                <small style="color: var(--text-secondary);">Это увидят только вы и получатель. Сообщение самоуничтожится после прочтения.</small>
+            </div>
+            <input type="hidden" id="bottle-post-num-input" name="post_num">
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" id="bottle-cancel-btn" class="btn btn-secondary">Отмена</button>
+                <button type="submit" class="btn btn-primary">Отправить</button>
+            </div>
+        </form>
+    </div>
+    <div class="modal" id="shadow-ban-modal" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid var(--border-primary); padding-bottom: 10px;">
+            <h3 style="margin: 0; border: none;">{{ request.state.t('shadow_modal_title') }}</h3>
+            <button onclick="document.getElementById('shadow-ban-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+        </div>
+        <form id="shadow-ban-form">
+            <input type="hidden" id="shadow-ban-post-num" name="post_num">
+            <div class="form-group">
+                <label>{{ request.state.t('shadow_duration') }}</label>
+                <select name="duration" class="form-control">
+                    <option value="3600">1 час</option>
+                    <option value="86400" selected>24 часа</option>
+                    <option value="604800">7 дней</option>
+                    <option value="2592000">30 дней</option>
+                </select>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+                <button type="button" onclick="document.getElementById('shadow-ban-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary">{{ request.state.t('btn_cancel') }}</button>
+                <button type="submit" class="btn btn-primary" style="background-color: purple; border-color: purple;">{{ request.state.t('btn_shadow_confirm') }}</button>
+            </div>
+        </form>
+    </div>
+    <div class="modal" id="filters-modal" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-separator); margin-bottom: 15px; padding-bottom: 10px;">
+            <h3 style="margin: 0; border: none; padding: 0;">🛡️ Фильтрация контента</h3>
+            <button type="button" onclick="saveFiltersAndBack()" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
+        </div>
+        <div class="form-group">
+            <label for="filter-words-input">Скрывать посты со словами:</label>
+            <textarea id="filter-words-input" rows="8" placeholder="Одно слово или /регекс/ на строку..." style="width: 100%; font-family: monospace; font-size: 13px; padding: 10px;"></textarea>
+            <small style="display: block; margin-top: 10px; color: var(--text-secondary); line-height: 1.4;">
+                <b>Anti-Wipe:</b> Включен по умолчанию. Автоматически скрывает CAPS LOCK, длинные бессмысленные строки и спам повторами.
+            </small>
+        </div>
+        <div style="margin-top: 20px;">
+            <button type="button" onclick="saveFiltersAndBack()" class="btn btn-primary" style="width: 100%; font-weight: bold;">Сохранить и вернуться</button>
+        </div>
+    </div>
+    <nav class="mobile-bottom-nav">
+        <a href="/" class="mobile-nav-item">
+            <span class="mobile-nav-icon">🏠</span>
+            <span>{{ request.state.t('mobile_home') }}</span>
+        </a>
+        <button onclick="window.manualRefresh();" class="mobile-nav-item" id="mobile-refresh-btn">
+            <span class="mobile-nav-icon">🔄</span>
+            <span>{{ request.state.t('mobile_refresh') }}</span>
+        </button>
+        <button onclick="window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })" class="mobile-nav-item">
+            <span class="mobile-nav-icon">⬇️</span>
+            <span>{{ request.state.t('mobile_down') }}</span>
+        </button>
+        <button onclick="window.scrollTo({ top: 0, behavior: 'smooth' })" class="mobile-nav-item">
+            <span class="mobile-nav-icon">⬆️</span>
+            <span>{{ request.state.t('mobile_up') }}</span>
+        </button>
+    </nav>
+</body>
+</html>

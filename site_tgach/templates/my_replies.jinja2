@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="{{ request.state.lang or 'ru' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мои ответы - {{ request.state.t('site_name') }}</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=4.11">
+    <link rel="icon" href="/static/favicon.ico">
+    <style>
+        .replies-container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .reply-card {
+            background: var(--bg-post);
+            border: 1px solid var(--border-primary);
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            text-decoration: none;
+            color: var(--text-primary);
+            transition: transform 0.1s, box-shadow 0.1s, border-color 0.1s;
+            position: relative;
+        }
+        .reply-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-main);
+            border-color: var(--accent-primary);
+        }
+        .reply-card.unread {
+            border-left: 4px solid var(--action-danger);
+            background: rgba(var(--accent-rgb), 0.05);
+        }
+        .reply-card.unread::after {
+            content: "NEW";
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: var(--action-danger);
+            color: white;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .reply-header {
+            font-size: 0.85em;
+            color: var(--text-secondary);
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .reply-board-badge {
+            background: var(--bg-button-secondary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: bold;
+            border: 1px solid var(--border-input);
+        }
+        .reply-content {
+            font-size: 1.1em;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+        .reply-context {
+            font-size: 0.9em;
+            color: var(--text-secondary);
+            border-left: 2px solid var(--border-input);
+            padding-left: 8px;
+            margin-top: 5px;
+            font-style: italic;
+        }
+        .tools-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 10px;
+            background: var(--bg-input);
+            border: 1px solid var(--border-input);
+            border-radius: 6px;
+        }
+    </style>
+</head>
+<body class="page-my-replies" 
+      data-user-id="{{ request.state.user_hash }}" 
+      data-site-mode="{{ site_mode }}">
+
+    <header>
+        <div class="header-main-row">
+            <div class="header-logo">
+                <h1><a href="/">ТГАЧ</a></h1>
+                <span style="margin-left:10px; font-weight:bold; color:var(--text-secondary);">Ответы</span>
+            </div>
+            <div class="header-group-right">
+                <div class="user-actions">
+                    <a href="/" class="header-btn">🏠</a>
+                    <button id="theme-toggle" class="theme-toggle-btn">🌙</button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <div class="replies-container">
+            <div class="tools-bar">
+                <h2 style="margin:0; border:none; font-size:1.2em;">📬 Ваши уведомления</h2>
+                <button class="btn btn-primary" onclick="markAllRead()" id="mark-all-btn">✅ Прочитать все</button>
+            </div>
+
+            <div id="replies-list">
+                <div style="text-align:center; padding:40px; color:var(--text-secondary);">
+                    Загрузка...
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <nav style="margin-bottom: 8px; display: flex; justify-content: center; gap: 20px;">
+            <a href="/">Главная</a>
+            <a href="/my/">Мои посты</a>
+        </nav>
+    </footer>
+
+    <script src="/static/js/main.js?v=4.11"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            loadReplies();
+        });
+
+        async function loadReplies() {
+            const container = document.getElementById('replies-list');
+            try {
+                const res = await fetch('/api/my/replies/list?page=0');
+                if (!res.ok) throw new Error('Auth required');
+                const list = await res.json();
+
+                if (list.length === 0) {
+                    container.innerHTML = `
+                        <div style="text-align:center; padding:50px; opacity:0.6;">
+                            <div style="font-size:3em; margin-bottom:10px;">📭</div>
+                            <h3>Новых ответов нет</h3>
+                            <p>Напишите что-нибудь умное (или нет) в треде.</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                container.innerHTML = list.map(item => {
+                    const date = new Date(item.created_at * 1000).toLocaleString();
+                    const link = `/${item.board_id}/res/${item.thread_id}.html#post-${item.post_num}`;
+                    const unreadClass = item.is_read ? '' : 'unread';
+                    const fileIcon = item.has_file ? '📎 ' : '';
+                    let preview = item.preview || '';
+                    preview = preview.replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                        .replace(/"/g, "&quot;")
+                        .replace(/'/g, "&#039;");
+                        
+                    if (!preview) preview = '<i>(Без текста)</i>';
+
+                    return `
+                    <a href="${link}" class="reply-card ${unreadClass}" onclick="handleReplyClick(event, ${item.id}, '${link}')">
+                        <div class="reply-header">
+                            <span class="reply-board-badge">/${item.board_id}/</span>
+                            <span>#${item.post_num}</span>
+                            <span style="margin-left:auto;">${date}</span>
+                        </div>
+                        <div class="reply-content">
+                            ${fileIcon}${preview}
+                        </div>
+                        <div class="reply-context">
+                            В ответ на ваш пост >>${item.parent_num}
+                        </div>
+                    </a>
+                    `;
+                }).join('');
+
+            } catch (e) {
+                container.innerHTML = `<div style="color:red; text-align:center; padding:20px;">
+                    Ошибка: ${e.message}. <br><a href="/login">Войти</a>
+                </div>`;
+            }
+        }
+
+        async function handleReplyClick(e, id, url) {
+            e.preventDefault();
+            // Помечаем прочитанным и переходим
+            try {
+                fetch('/api/my/replies/read', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ ids: [id] })
+                });
+            } catch(err) {}
+            
+            // Визуально убираем выделение перед переходом
+            e.currentTarget.classList.remove('unread');
+            setTimeout(() => {
+                window.location.href = url;
+            }, 50);
+        }
+
+        async function markAllRead() {
+            const btn = document.getElementById('mark-all-btn');
+            btn.disabled = true;
+            btn.textContent = '⏳ ...';
+            try {
+                await fetch('/api/my/replies/read', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ ids: [] })
+                });
+                // Обновляем UI без перезагрузки
+                document.querySelectorAll('.reply-card.unread').forEach(el => el.classList.remove('unread'));
+                if (typeof SystemDock !== 'undefined') SystemDock.checkUnread();
+                btn.textContent = '✅ Готово';
+            } catch (e) {
+                alert('Ошибка сети');
+                btn.textContent = '❌ Ошибка';
+            } finally {
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.textContent = '✅ Прочитать все';
+                }, 2000);
+            }
+        }
+    </script>
+</body>
+</html>
