@@ -5782,19 +5782,19 @@ async def api_admin_ban_image(data: BanImageRequest, user: dict = Depends(get_re
     banned_count = 0
     db = await get_pool()
     try:
-        for f in files:
-            fid = f.get('original_file_id')
-            if fid:
-                async with db.execute("SELECT sha256, phash FROM FileRegistry WHERE file_id = ?", (fid,)) as cursor:
-                    row = await cursor.fetchone()
-                    if row:
-                        sha, phash = row
-                        if sha:
-                            from common.database import ban_hash
-                            await ban_hash(sha, 'sha256', data.reason)
-                            banned_count += 1
-                        if phash:
-                            await ban_hash(phash, 'phash', data.reason)
+        fids = [f.get('original_file_id') for f in files if f.get('original_file_id')]
+        if fids:
+            placeholders = ",".join("?" * len(fids))
+            async with db.execute(f"SELECT sha256, phash FROM FileRegistry WHERE file_id IN ({placeholders})", tuple(fids)) as cursor:
+                rows = await cursor.fetchall()
+                for row in rows:
+                    sha, phash = row
+                    from common.database import ban_hash
+                    if sha:
+                        await ban_hash(sha, 'sha256', data.reason)
+                        banned_count += 1
+                    if phash:
+                        await ban_hash(phash, 'phash', data.reason)
         await delete_post_by_num(data.post_num)
     except Exception as e:
         logger.error(f"Image Ban Error: {e}")
