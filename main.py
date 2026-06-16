@@ -54,6 +54,7 @@ from PIL import Image, ImageDraw, ImageFont
 from asyncio import Semaphore
 from collections import deque, defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, UTC
 from enum import Enum
 from logging.handlers import RotatingFileHandler
@@ -1172,24 +1173,28 @@ def _queue_item_can_be_durable(item: dict) -> bool:
     return bool(item.get("post_num")) and bool(_durable_recipients_from_item(item))
 
 
-def _build_passive_queue_item(
-    source_item: dict,
-    recipients: set[int],
-    post_num: int,
-    original_recipients: int,
-    enqueued_at: float | None,
-    started_at: float,
-) -> dict:
 
-    passive_item = source_item.copy()
-    passive_item["recipients"] = set(recipients)
+@dataclass
+class PassiveQueueItemParams:
+    source_item: dict
+    recipients: set[int]
+    post_num: int
+    original_recipients: int
+    enqueued_at: float | None
+    started_at: float
+
+
+def _build_passive_queue_item(params: PassiveQueueItemParams) -> dict:
+
+    passive_item = params.source_item.copy()
+    passive_item["recipients"] = set(params.recipients)
     passive_item["delivery_phase"] = "passive"
-    passive_item["original_recipients"] = original_recipients
-    passive_item["priority_split_from"] = post_num
+    passive_item["original_recipients"] = params.original_recipients
+    passive_item["priority_split_from"] = params.post_num
     passive_item["phase_enqueued_at"] = time.time()
-    passive_item["board_id"] = source_item.get("board_id")
+    passive_item["board_id"] = params.source_item.get("board_id")
     if "enqueued_at" not in passive_item:
-        passive_item["enqueued_at"] = enqueued_at or started_at
+        passive_item["enqueued_at"] = params.enqueued_at or params.started_at
     return passive_item
 
 
@@ -5828,12 +5833,14 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
             }
             if passive_recipients_for_later and not msg_data.get("durable_delivery_id"):
                 planned_passive_item = _build_passive_queue_item(
-                    msg_data,
-                    passive_recipients_for_later,
-                    post_num,
-                    original_recipients_for_post,
-                    enqueued_at,
-                    started_at,
+                    PassiveQueueItemParams(
+                        source_item=msg_data,
+                        recipients=passive_recipients_for_later,
+                        post_num=post_num,
+                        original_recipients=original_recipients_for_post,
+                        enqueued_at=enqueued_at,
+                        started_at=started_at,
+                    )
                 )
                 planned_passive_durable_id = await _persist_durable_delivery_item(
                     board_id,
@@ -5889,12 +5896,14 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
                     current_deliveries.pop(board_id, None)
             if passive_recipients_for_later:
                 passive_item = _build_passive_queue_item(
-                    msg_data,
-                    passive_recipients_for_later,
-                    post_num,
-                    original_recipients_for_post,
-                    enqueued_at,
-                    started_at,
+                    PassiveQueueItemParams(
+                        source_item=msg_data,
+                        recipients=passive_recipients_for_later,
+                        post_num=post_num,
+                        original_recipients=original_recipients_for_post,
+                        enqueued_at=enqueued_at,
+                        started_at=started_at,
+                    )
                 )
                 if planned_passive_durable_id:
                     passive_item["durable_delivery_id"] = planned_passive_durable_id
