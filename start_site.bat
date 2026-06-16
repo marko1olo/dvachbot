@@ -3,6 +3,8 @@ chcp 65001 >nul
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
 title TGACH SERVER
+
+call venv\scripts\activate.bat
 :loop
 if not exist logs mkdir logs
 echo.
