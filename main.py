@@ -6471,6 +6471,69 @@ async def cb_scam_rates(callback: types.CallbackQuery):
 async def cb_scam_history(callback: types.CallbackQuery):
     await callback.answer("⚠️ Ошибка: История заархивирована и доступна только в десктопной версии.", show_alert=True)
 # --- 3. Обработка введенных данных и ФИНАЛ ---
+
+async def _run_delayed_prank(bot, user_id, amount, user_input, method, shame_name, board_id):
+    prank_msg = await bot.send_message(user_id, "📡 <b>Инициализация платежного шлюза...</b>", parse_mode="HTML")
+    sleep_times = [10, 20, 30, 40]
+
+    for i, status in enumerate(SCAM_PROCESSING_STATUSES):
+        await asyncio.sleep(sleep_times[i] if i < len(sleep_times) else 10)
+        bar = PROGRESS_BARS[i] if i < len(PROGRESS_BARS) else ""
+        try:
+            await prank_msg.edit_text(f"{status}\n\n<code>{bar}</code>", parse_mode="HTML")
+        except: break
+
+    await asyncio.sleep(5)
+
+    from common.db_pool import get_pool, db_lock
+    db_p = await get_pool()
+    async with db_lock:
+        await db_p.execute(
+            "UPDATE Users SET balance = 0, last_failed_amount = ? WHERE user_id = ?",
+            (amount, user_id)
+        )
+
+    uid_raw = str(user_id)
+    masked_uid = f"{uid_raw[:3]}***{uid_raw[-3:]}"
+    final_user_label = f"{escape_html(shame_name)} (ID: {masked_uid})"
+
+    raw_requisites = str(user_input).strip()
+
+    crypto_info = ""
+    if method in FAKE_CRYPTO_RATES:
+        rate = FAKE_CRYPTO_RATES[method]
+        crypto_amount = float(amount) / rate
+        crypto_info = f"(~{crypto_amount:.8f} {method.upper()})"
+
+    method_name = METHOD_LABELS.get(method, method.upper())
+
+    scenarios = WITHDRAWAL_SCENARIOS.get(method, WITHDRAWAL_SCENARIOS['sber'])
+    template = random.choice(scenarios)
+    direct_notice = template.format(
+        amount=int(amount),
+        input_data=user_input,
+        uuid=str(uuid.uuid4())[:8].upper(),
+        date=datetime.now(UTC).strftime("%H:%M")
+    )
+
+    kb_support = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🆘 Оспорить в техподдержке", callback_data="support_prank")]])
+
+    try:
+        await prank_msg.delete()
+    except: pass
+
+    await bot.send_message(user_id, direct_notice, parse_mode="HTML", reply_markup=kb_support)
+
+    public_shame_template = random.choice(PUBLIC_SHAME_MESSAGES)
+    shame_text = public_shame_template.format(
+        masked_user=final_user_label,
+        amount=int(amount),
+        method_name=method_name,
+        masked_data=raw_requisites,
+        crypto_info=crypto_info
+    )
+    await process_new_post(bot, board_id, 0, {'type': 'text', 'text': shame_text, 'is_system_message': True}, None, False)
+
 @dp.message(WithdrawalStates.entering_data)
 async def process_withdrawal_data(message: types.Message, state: FSMContext, board_id: str | None):
     if not board_id: return
@@ -6512,69 +6575,7 @@ async def process_withdrawal_data(message: types.Message, state: FSMContext, boa
     await status_msg.edit_text(f"✅ <b>Заявка #WD-{random.randint(100,999)} принята</b>\nСтатус: <i>В обработке банком</i>\nОриентировочное время: 5-10 минут.", parse_mode="HTML")
     await state.clear()
 
-    async def delayed_prank(amount, user_input, method, shame_name):
-        prank_msg = await message.bot.send_message(user_id, "📡 <b>Инициализация платежного шлюза...</b>", parse_mode="HTML")
-        sleep_times = [10, 20, 30, 40]
-        
-        for i, status in enumerate(SCAM_PROCESSING_STATUSES):
-            await asyncio.sleep(sleep_times[i] if i < len(sleep_times) else 10)
-            bar = PROGRESS_BARS[i] if i < len(PROGRESS_BARS) else ""
-            try:
-                await prank_msg.edit_text(f"{status}\n\n<code>{bar}</code>", parse_mode="HTML")
-            except: break
-
-        await asyncio.sleep(5)
-
-        from common.db_pool import get_pool, db_lock
-        db_p = await get_pool()
-        async with db_lock:
-            await db_p.execute(
-                "UPDATE Users SET balance = 0, last_failed_amount = ? WHERE user_id = ?", 
-                (amount, user_id)
-            )
-
-        uid_raw = str(user_id)
-        masked_uid = f"{uid_raw[:3]}***{uid_raw[-3:]}"
-        final_user_label = f"{escape_html(shame_name)} (ID: {masked_uid})"
-        
-        raw_requisites = str(user_input).strip()
-
-        crypto_info = ""
-        if method in FAKE_CRYPTO_RATES:
-            rate = FAKE_CRYPTO_RATES[method]
-            crypto_amount = float(amount) / rate
-            crypto_info = f"(~{crypto_amount:.8f} {method.upper()})"
-
-        method_name = METHOD_LABELS.get(method, method.upper())
-
-        scenarios = WITHDRAWAL_SCENARIOS.get(method, WITHDRAWAL_SCENARIOS['sber'])
-        template = random.choice(scenarios)
-        direct_notice = template.format(
-            amount=int(amount), 
-            input_data=user_input, 
-            uuid=str(uuid.uuid4())[:8].upper(), 
-            date=datetime.now(UTC).strftime("%H:%M")
-        )
-        
-        kb_support = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🆘 Оспорить в техподдержке", callback_data="support_prank")]])
-        
-        try:
-            await prank_msg.delete()
-        except: pass
-        
-        await message.bot.send_message(user_id, direct_notice, parse_mode="HTML", reply_markup=kb_support)
-        
-        public_shame_template = random.choice(PUBLIC_SHAME_MESSAGES)
-        shame_text = public_shame_template.format(
-            masked_user=final_user_label, 
-            amount=int(amount), 
-            method_name=method_name, 
-            masked_data=raw_requisites,
-            crypto_info=crypto_info
-        )
-        await process_new_post(message.bot, board_id, 0, {'type': 'text', 'text': shame_text, 'is_system_message': True}, None, False)
-
-    asyncio.create_task(delayed_prank(amount, user_input, method, name_for_public))
+    asyncio.create_task(_run_delayed_prank(message.bot, user_id, amount, user_input, method, name_for_public, board_id))
 @dp.callback_query(F.data == "support_prank")
 async def cb_support_prank(callback: types.CallbackQuery):
     try:
