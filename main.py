@@ -4051,6 +4051,111 @@ def generate_wipe_image(text: str) -> bytes | None:
         import traceback
         traceback.print_exc()
         return None
+def _format_quote_block(quote_info: dict | None) -> str | None:
+    if not quote_info:
+        return None
+    quote_text_raw = quote_info.get('text') or ''
+    quote_text_clean = clean_html_tags(quote_text_raw) or ''
+
+    quote_parts =[]
+    if quote_text_clean:
+        if len(quote_text_clean) > 140:
+            quote_text = escape_html(quote_text_clean[:140]) + "..."
+        else:
+            quote_text = escape_html(quote_text_clean)
+        quote_parts.append(quote_text)
+
+    files_in_quote = quote_info.get('files',[])
+    if files_in_quote:
+        photo_count = sum(1 for f in files_in_quote if f.get('type') == 'photo')
+        video_count = sum(1 for f in files_in_quote if f.get('type') == 'video')
+        gif_count = sum(1 for f in files_in_quote if f.get('type') == 'animation')
+        document_count = sum(1 for f in files_in_quote if f.get('type') == 'document')
+        audio_count = sum(1 for f in files_in_quote if f.get('type') == 'audio')
+        voice_count = sum(1 for f in files_in_quote if f.get('type') == 'voice')
+        sticker_count = sum(1 for f in files_in_quote if f.get('type') == 'sticker')
+        video_note_count = sum(1 for f in files_in_quote if f.get('type') == 'video_note')
+        known_quote_types = {'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'}
+        other_count = sum(1 for f in files_in_quote if f.get('type') not in known_quote_types)
+
+        media_counts =[]
+        if photo_count > 0: media_counts.append(f"{photo_count} фото")
+        if video_count > 0: media_counts.append(f"{video_count} видео")
+        if gif_count > 0: media_counts.append(f"{gif_count} GIF")
+        if document_count > 0: media_counts.append(f"{document_count} doc")
+        if audio_count > 0: media_counts.append(f"{audio_count} audio")
+        if voice_count > 0: media_counts.append(f"{voice_count} voice")
+        if sticker_count > 0: media_counts.append(f"{sticker_count} sticker")
+        if video_note_count > 0: media_counts.append(f"{video_note_count} video note")
+        if other_count > 0: media_counts.append(f"{other_count} file")
+
+        if media_counts:
+            quote_parts.append(f"<i>[{', '.join(media_counts)}]</i>")
+
+    final_quote_text = "\n".join(quote_parts).strip()
+    if final_quote_text:
+        return f"<blockquote expandable>{final_quote_text}</blockquote>"
+    return None
+
+def _format_reply_line(content: dict, user_id_for_context: int, reply_to_post_author_id: int | None, quote_info: dict | None) -> str | None:
+    reply_to_post = content.get('reply_to_post')
+    if not reply_to_post:
+        return None
+    you_marker = " (You)" if user_id_for_context == reply_to_post_author_id else ""
+    reply_line = f">>{reply_to_post}{you_marker}"
+    # Если есть быстрая цитата, не оборачиваем >> в code, чтобы было менее громоздко
+    return reply_line if quote_info else f"<code>{escape_html(reply_line)}</code>"
+
+def _format_reactions_block(post_data: dict) -> str | None:
+    reactions_data = post_data.get('reactions')
+    if not reactions_data:
+        return None
+    reaction_lines =[]
+    user_reactions = reactions_data.get('users', {})
+    if isinstance(user_reactions, dict):
+        all_emojis =[emoji for user_emojis in user_reactions.values() for emoji in user_emojis]
+        categories =[
+            POSITIVE_REACTIONS, LAUGHING_REACTIONS, THINKING_REACTIONS,
+            SHOCK_REACTIONS, SAD_REACTIONS, NEGATIVE_REACTIONS, CLOWN_REACTION,
+            POLITICAL_REACTIONS, SYMBOLIC_REACTIONS, INSULT_REACTIONS
+        ]
+        known_emojis = set().union(*categories)
+        display_groups = {
+            'positive': sorted([e for e in all_emojis if e in POSITIVE_REACTIONS]),
+            'laughing': sorted([e for e in all_emojis if e in LAUGHING_REACTIONS]),
+            'thinking': sorted([e for e in all_emojis if e in THINKING_REACTIONS]),
+            'shock': sorted([e for e in all_emojis if e in SHOCK_REACTIONS]),
+            'sad': sorted([e for e in all_emojis if e in SAD_REACTIONS]),
+            'negative': sorted([e for e in all_emojis if e in NEGATIVE_REACTIONS]),
+            'clown': sorted([e for e in all_emojis if e in CLOWN_REACTION]),
+            'political': sorted([e for e in all_emojis if e in POLITICAL_REACTIONS]),
+            'symbolic': sorted([e for e in all_emojis if e in SYMBOLIC_REACTIONS]),
+            'insult': sorted([e for e in all_emojis if e in INSULT_REACTIONS]),
+            'neutral': sorted([e for e in all_emojis if e not in known_emojis]),
+        }
+        for group_name, group_emojis in display_groups.items():
+            if group_emojis:
+                reaction_lines.append("".join(group_emojis))
+    elif 'positive' in reactions_data or 'negative' in reactions_data:
+        if reactions_data.get('positive'): reaction_lines.append("".join(reactions_data['positive']))
+        if reactions_data.get('neutral'): reaction_lines.append("".join(reactions_data['neutral']))
+        if reactions_data.get('negative'): reaction_lines.append("".join(reactions_data['negative']))
+    if reaction_lines:
+        return "\n".join(reaction_lines)
+    return None
+
+def _format_main_text(content: dict) -> str | None:
+    main_text_raw = content.get('text') or content.get('caption') or ''
+    if not main_text_raw:
+        return None
+    poll_data = content.get('poll_data')
+    if not poll_data:
+         safe_text = main_text_raw
+         text_with_tags = convert_site_tags_to_telegram(safe_text)
+         return apply_greentext_formatting(text_with_tags)
+    else:
+         return convert_site_tags_to_telegram(main_text_raw)
+
 async def _format_message_body(
     content: dict, 
     user_id_for_context: int, 
@@ -4062,114 +4167,18 @@ async def _format_message_body(
     Формирует и форматирует тело сообщения (реакции, reply, опрос, greentext, (You)).
     Версия 2.1: Добавлена поддержка "Быстрой цитаты" (Quick Quote) с защитой от None.
     """
-    parts =[]
+    parts = []
 
-    # --- НАЧАЛО ИЗМЕНЕНИЙ (Блок "Быстрой цитаты") ---
-    if quote_info:
-        quote_text_raw = quote_info.get('text') or ''
-        quote_text_clean = clean_html_tags(quote_text_raw) or ''
-        
-        quote_parts =[]
-        if quote_text_clean:
-            if len(quote_text_clean) > 140:
-                quote_text = escape_html(quote_text_clean[:140]) + "..."
-            else:
-                quote_text = escape_html(quote_text_clean)
-            quote_parts.append(quote_text)
-        
-        files_in_quote = quote_info.get('files',[])
-        if files_in_quote:
-            photo_count = sum(1 for f in files_in_quote if f.get('type') == 'photo')
-            video_count = sum(1 for f in files_in_quote if f.get('type') == 'video')
-            gif_count = sum(1 for f in files_in_quote if f.get('type') == 'animation')
-            document_count = sum(1 for f in files_in_quote if f.get('type') == 'document')
-            audio_count = sum(1 for f in files_in_quote if f.get('type') == 'audio')
-            voice_count = sum(1 for f in files_in_quote if f.get('type') == 'voice')
-            sticker_count = sum(1 for f in files_in_quote if f.get('type') == 'sticker')
-            video_note_count = sum(1 for f in files_in_quote if f.get('type') == 'video_note')
-            known_quote_types = {'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'}
-            other_count = sum(1 for f in files_in_quote if f.get('type') not in known_quote_types)
-            
-            media_counts =[]
-            if photo_count > 0: media_counts.append(f"{photo_count} фото")
-            if video_count > 0: media_counts.append(f"{video_count} видео")
-            if gif_count > 0: media_counts.append(f"{gif_count} GIF")
-            if document_count > 0: media_counts.append(f"{document_count} doc")
-            if audio_count > 0: media_counts.append(f"{audio_count} audio")
-            if voice_count > 0: media_counts.append(f"{voice_count} voice")
-            if sticker_count > 0: media_counts.append(f"{sticker_count} sticker")
-            if video_note_count > 0: media_counts.append(f"{video_note_count} video note")
-            if other_count > 0: media_counts.append(f"{other_count} file")
-            
-            if media_counts:
-                quote_parts.append(f"<i>[{', '.join(media_counts)}]</i>")
+    parts.append(_format_quote_block(quote_info))
+    parts.append(_format_reply_line(content, user_id_for_context, reply_to_post_author_id, quote_info))
+    parts.append(_format_reactions_block(post_data))
 
-        final_quote_text = "\n".join(quote_parts).strip()
-        if final_quote_text:
-            quote_block = f"<blockquote expandable>{final_quote_text}</blockquote>"
-            parts.append(quote_block)
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
-    reply_to_post = content.get('reply_to_post')
-    if reply_to_post:
-        you_marker = " (You)" if user_id_for_context == reply_to_post_author_id else ""
-        reply_line = f">>{reply_to_post}{you_marker}"
-        # Если есть быстрая цитата, не оборачиваем >> в code, чтобы было менее громоздко
-        formatted_reply_line = reply_line if quote_info else f"<code>{escape_html(reply_line)}</code>"
-        parts.append(formatted_reply_line)
-
-    reactions_data = post_data.get('reactions')
-    if reactions_data:
-        reaction_lines =[]
-        user_reactions = reactions_data.get('users', {})
-        if isinstance(user_reactions, dict):
-            all_emojis =[emoji for user_emojis in user_reactions.values() for emoji in user_emojis]
-            categories =[
-                POSITIVE_REACTIONS, LAUGHING_REACTIONS, THINKING_REACTIONS, 
-                SHOCK_REACTIONS, SAD_REACTIONS, NEGATIVE_REACTIONS, CLOWN_REACTION,
-                POLITICAL_REACTIONS, SYMBOLIC_REACTIONS, INSULT_REACTIONS
-            ]
-            known_emojis = set().union(*categories)
-            display_groups = {
-                'positive': sorted([e for e in all_emojis if e in POSITIVE_REACTIONS]),
-                'laughing': sorted([e for e in all_emojis if e in LAUGHING_REACTIONS]),
-                'thinking': sorted([e for e in all_emojis if e in THINKING_REACTIONS]),
-                'shock': sorted([e for e in all_emojis if e in SHOCK_REACTIONS]),
-                'sad': sorted([e for e in all_emojis if e in SAD_REACTIONS]),
-                'negative': sorted([e for e in all_emojis if e in NEGATIVE_REACTIONS]),
-                'clown': sorted([e for e in all_emojis if e in CLOWN_REACTION]),
-                'political': sorted([e for e in all_emojis if e in POLITICAL_REACTIONS]),
-                'symbolic': sorted([e for e in all_emojis if e in SYMBOLIC_REACTIONS]),
-                'insult': sorted([e for e in all_emojis if e in INSULT_REACTIONS]),
-                'neutral': sorted([e for e in all_emojis if e not in known_emojis]),
-            }
-            for group_name, group_emojis in display_groups.items():
-                if group_emojis:
-                    reaction_lines.append("".join(group_emojis))
-        elif 'positive' in reactions_data or 'negative' in reactions_data:
-            if reactions_data.get('positive'): reaction_lines.append("".join(reactions_data['positive']))
-            if reactions_data.get('neutral'): reaction_lines.append("".join(reactions_data['neutral']))
-            if reactions_data.get('negative'): reaction_lines.append("".join(reactions_data['negative']))
-        if reaction_lines:
-            reactions_block = "\n".join(reaction_lines)
-            parts.append(reactions_block)
-            
     poll_data = content.get('poll_data')
     if poll_data:
-        poll_display_text = generate_poll_text_display(poll_data)
-        if poll_display_text:
-            parts.append(poll_display_text)
-            
-    main_text_raw = content.get('text') or content.get('caption') or ''
-    if main_text_raw:
-        if not poll_data:
-             safe_text = main_text_raw
-             text_with_tags = convert_site_tags_to_telegram(safe_text)
-             formatted_main_text = apply_greentext_formatting(text_with_tags)
-             parts.append(formatted_main_text)
-        else:
-             parts.append(convert_site_tags_to_telegram(main_text_raw))
-             
+        parts.append(generate_poll_text_display(poll_data))
+
+    parts.append(_format_main_text(content))
+
     return '\n\n'.join(filter(None, parts))
 def generate_poll_text_display(poll_data: dict) -> str:
     """
