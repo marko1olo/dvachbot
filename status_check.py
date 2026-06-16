@@ -81,9 +81,9 @@ async def get_activity(conn):
     for name, ts in periods.items():
         try:
             p_cursor, t_cursor, u_cursor = await asyncio.gather(
-                conn.execute(f"SELECT COUNT(*) FROM Posts WHERE timestamp > {ts}"),
-                conn.execute(f"SELECT COUNT(*) FROM Threads WHERE created_at > {ts}"),
-                conn.execute(f"SELECT COUNT(DISTINCT user_id) FROM Users WHERE created_at > {ts}")
+                conn.execute("SELECT COUNT(*) FROM Posts WHERE timestamp > ?", (ts,)),
+                conn.execute("SELECT COUNT(*) FROM Threads WHERE created_at > ?", (ts,)),
+                conn.execute("SELECT COUNT(DISTINCT user_id) FROM Users WHERE created_at > ?", (ts,))
             )
             activity[f'posts_{name}'] = (await p_cursor.fetchone())[0]
             activity[f'threads_{name}'] = (await t_cursor.fetchone())[0]
@@ -123,7 +123,7 @@ async def get_top_activity(conn):
     day_ago = time.time() - 86400
     top = {}
     try:
-        boards_cursor = await conn.execute(f"SELECT board_id, COUNT(*) as c FROM Posts WHERE timestamp > {day_ago} GROUP BY board_id ORDER BY c DESC LIMIT 5")
+        boards_cursor = await conn.execute("SELECT board_id, COUNT(*) as c FROM Posts WHERE timestamp > ? GROUP BY board_id ORDER BY c DESC LIMIT 5", (day_ago,))
         threads_cursor = await conn.execute("SELECT thread_id, board_id, title, reply_count FROM Threads WHERE is_archived = 0 ORDER BY last_updated_at DESC LIMIT 5")
         top["boards"] = await boards_cursor.fetchall()
         top["threads"] = await threads_cursor.fetchall()
