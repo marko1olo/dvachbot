@@ -48,11 +48,13 @@ async def find_file_message_info(file_id):
             SELECT cc.channel_id, cc.message_id, p.post_num
             FROM Posts p
             JOIN ChannelCopies cc ON p.post_num = cc.post_num
-            WHERE p.content LIKE ?
+            WHERE p.content LIKE ? ESCAPE '@'
             ORDER BY p.post_num DESC
             LIMIT 1
         """
-        async with db.execute(query, (f'%{file_id}%',)) as cursor:
+        escaped_file_id = str(file_id).replace('@', '@@').replace('%', '@%').replace('_', '@_')
+        search_pattern = '%' + escaped_file_id + '%'
+        async with db.execute(query, (search_pattern,)) as cursor:
             return await cursor.fetchone()
     except:
         return None

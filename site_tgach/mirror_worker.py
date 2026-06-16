@@ -76,11 +76,13 @@ async def _find_msg_info(file_id: str):
                 FROM Posts p
                 LEFT JOIN ChannelCopies cc ON p.post_num = cc.post_num
                 WHERE p.post_num > (SELECT MAX(post_num) - 20000 FROM Posts)
-                  AND p.content LIKE ?
+                  AND p.content LIKE ? ESCAPE '@'
                 ORDER BY p.post_num DESC
                 LIMIT 1
             """
-            async with db.execute(query, (f'%{file_id}%',)) as cursor:
+            escaped_file_id = str(file_id).replace('@', '@@').replace('%', '@%').replace('_', '@_')
+            search_pattern = '%' + escaped_file_id + '%'
+            async with db.execute(query, (search_pattern,)) as cursor:
                 return await cursor.fetchone()
     except Exception as e:
         logger.error(f"DB lookup error: {e}")
