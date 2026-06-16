@@ -1149,8 +1149,10 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error(f"Neuro loop crash: {e}")
                 await asyncio.sleep(60)
-    # backup_task = asyncio.create_task(backup_loop(app.state.file_uploader_bot))
-    backup_task = None
+    if app.state.file_uploader_bot:
+        backup_task = asyncio.create_task(backup_loop(app.state.file_uploader_bot))
+    else:
+        backup_task = None
     neuro_task = asyncio.create_task(neuro_loop())
     mirror_task = asyncio.create_task(process_mirror_queue())
     sim_task = asyncio.create_task(process_import_queue(app.state.broadcast_queue))
