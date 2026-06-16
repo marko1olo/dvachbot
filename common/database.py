@@ -3871,8 +3871,8 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                 await db.execute("BEGIN IMMEDIATE")
                 
                 # Ищем посты, содержащие file_id в JSON
-                query = "SELECT post_num, content, is_shadow FROM Posts WHERE content LIKE ?"
-                async with db.execute(query, (f"%{file_id}%",)) as cursor:
+                query = "SELECT post_num, content, is_shadow FROM Posts WHERE content LIKE '%' || ? || '%'"
+                async with db.execute(query, (file_id,)) as cursor:
                     rows = await cursor.fetchall()
                 
                 if not rows:
@@ -6020,13 +6020,12 @@ async def find_post_by_file_id(file_id_substring: str) -> dict | None:
         query = """
             SELECT post_num, board_id, author_id, content, timestamp 
             FROM Posts 
-            WHERE content LIKE ? 
+            WHERE content LIKE '%' || ? || '%'
             ORDER BY timestamp DESC 
             LIMIT 1
         """
-        search_pattern = f'%{file_id_substring}%'
         
-        async with db.execute(query, (search_pattern,)) as cursor:
+        async with db.execute(query, (file_id_substring,)) as cursor:
             row = await cursor.fetchone()
             
         if row:
@@ -7232,8 +7231,8 @@ async def get_posts_by_file_ids(file_ids: list[str]) -> list[dict]:
     clauses = []
     params = []
     for fid in file_ids:
-        clauses.append("content LIKE ?")
-        params.append(f"%{fid}%")
+        clauses.append("content LIKE '%' || ? || '%'")
+        params.append(fid)
         
     where_clause = " OR ".join(clauses)
     query = f"SELECT * FROM Posts WHERE ({where_clause}) AND IFNULL(is_shadow, 0) = 0"
