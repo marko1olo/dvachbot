@@ -45,11 +45,11 @@ async def find_file_message_info(file_id):
             SELECT cc.channel_id, cc.message_id, p.post_num
             FROM Posts p
             JOIN ChannelCopies cc ON p.post_num = cc.post_num
-            WHERE p.content LIKE ?
+            WHERE p.content LIKE '%' || ? || '%'
             ORDER BY p.post_num DESC
             LIMIT 1
         """
-        async with db.execute(query, (f'%{file_id}%',)) as cursor:
+        async with db.execute(query, (file_id,)) as cursor:
             return await cursor.fetchone()
     except:
         return None
