@@ -1848,9 +1848,11 @@ const OfflineManager = {
         }
         const blob = new Blob(["<!DOCTYPE html>" + clone.outerHTML], {type: 'text/html'});
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
+        const objectUrl = URL.createObjectURL(blob);
+        a.href = objectUrl;
         a.download = `TGACH_Thread_${location.pathname.split('/').pop()}_Offline.html`;
         a.click();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
         showToast(t('offline_done'));
     }
 };
@@ -8083,7 +8085,10 @@ const FormManager = {
         const stopRecording = () => {
             if (mr && mr.state !== 'inactive') mr.stop();
             clearInterval(timerInt);
-            stream.getTracks().forEach(t => t.stop());
+            if (stream) {
+                stream.getTracks().forEach(t => t.stop());
+                stream = null;
+            }
         };
         const showReview = (blob) => {
             if (audioEl.src) URL.revokeObjectURL(audioEl.src);
@@ -8224,10 +8229,7 @@ const FormManager = {
                 timerInt = setInterval(() => {
                     sec++;
                     if (sec >= 900) {
-                        if (mr && mr.state === 'recording') {
-                            mr.stop();
-                        }
-                        clearInterval(timerInt);
+                        stopRecording();
                         if (typeof showToast === 'function') showToast(t('mic_limit'));
                         else alert(t('mic_limit'));
                     }

@@ -16,6 +16,7 @@ from common.database import (
     get_file_details_batch
 )
 from common.token_pool import hf_accounts
+from site_tgach.mirror_health import clear_hf_failure, is_hf_repo_available, mark_hf_upload_failure
 from site_tgach.mtproto_client import download_file_mtproto
 
 logger = logging.getLogger("hf_batcher")
@@ -88,6 +89,7 @@ def upload_folder_sync(folder, token, repo):
                 repo_id=repo, 
                 repo_type="dataset"
             )
+            clear_hf_failure(repo)
             logger.info(f"✅ HF Batch Upload Success ({strategy['name']})")
             return True
         except Exception as e:
@@ -102,6 +104,9 @@ def upload_folder_sync(folder, token, repo):
                 logger.error(f"❌ HF Network Timeout/EOF on strategy {strategy['name']}. Batch too heavy?")
                 # Не выходим, пробуем следующую (прокси может быть стабильнее)
                 
+            if mark_hf_upload_failure(e, repo):
+                break
+
             logger.warning(f"HF Batch Upload ({strategy['name']}) failed: {e}") 
             continue
     
@@ -130,6 +135,10 @@ async def process_queue_batch():
     if not token or not repo:
         if time.time() % 300 < 20: # Логируем раз в 5 минут, чтобы не спамить
             logger.warning("⚠️ HF Batcher: No active HuggingFace accounts found in HF_ACCOUNTS.")
+        return
+    if not is_hf_repo_available(repo):
+        if time.time() % 300 < 20:
+            logger.warning("HF Batcher: repo is temporarily disabled by mirror health: %s", repo)
         return
 
     count, oldest_ts = await get_queue_stats()

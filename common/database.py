@@ -97,6 +97,7 @@ async def initialize_database():
                 api_token TEXT,
                 nsfw_spoiler INTEGER DEFAULT 0,
                 hidden_words TEXT DEFAULT '[]',
+                lie_media INTEGER DEFAULT 0,
                 role TEXT DEFAULT 'user',
                 balance REAL DEFAULT 0,
                 is_verified_b INTEGER DEFAULT 0,
@@ -144,6 +145,10 @@ async def initialize_database():
             try:
                 await db.execute("ALTER TABLE Users ADD COLUMN shadow_ban_media INTEGER DEFAULT 0;")
                 print("✅ Migrated: Added shadow_ban_media to Users.")
+            except aiosqlite.OperationalError: pass
+            try:
+                await db.execute("ALTER TABLE Users ADD COLUMN lie_media INTEGER DEFAULT 0;")
+                print("✅ Migrated: Added lie_media to Users.")
             except aiosqlite.OperationalError: pass
             try:
                 await db.execute("ALTER TABLE Users ADD COLUMN role TEXT DEFAULT 'user';")
@@ -851,9 +856,9 @@ async def load_state_from_db(thread_boards: set) -> dict:
             
             print("  > Загрузка пользователей...")
             try:
-                async with db.execute("SELECT user_id, board_id, status, location, nsfw_spoiler, hidden_words, shadow_ban_gif, shadow_ban_sticker, shadow_ban_media FROM Users") as cursor:
+                async with db.execute("SELECT user_id, board_id, status, location, nsfw_spoiler, hidden_words, shadow_ban_gif, shadow_ban_sticker, shadow_ban_media, lie_media FROM Users") as cursor:
                     async for row in cursor:
-                        user_id, board_id, status, location, nsfw, words_json, s_gif, s_sticker, s_media = row
+                        user_id, board_id, status, location, nsfw, words_json, s_gif, s_sticker, s_media, s_lie = row
                         if status == 'active':
                             state_data['board_data'][board_id]['users']['active'].add(user_id)
                         elif status == 'banned':
@@ -869,7 +874,8 @@ async def load_state_from_db(thread_boards: set) -> dict:
                             'hide': h_words,
                             'shadow_gif': bool(s_gif),       
                             'shadow_sticker': bool(s_sticker),
-                            'shadow_media': bool(s_media)
+                            'shadow_media': bool(s_media),
+                            'lie_media': bool(s_lie)
                         }
             except Exception:
                 # Fallback для старой схемы (на всякий случай)
@@ -937,7 +943,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
             print(f"  > Загрузка последних {post_cache_limit} постов в RAM-кэш (DB_POST_LIMIT={DB_POST_LIMIT})...")
             max_post_num_loaded = 0
             query_posts = f"""
-                SELECT post_num, board_id, thread_id, author_id, content, timestamp 
+                SELECT post_num, board_id, thread_id, author_id, content, timestamp, reply_to_post_num 
                 FROM Posts 
                 ORDER BY post_num DESC 
                 LIMIT {post_cache_limit}
@@ -945,18 +951,22 @@ async def load_state_from_db(thread_boards: set) -> dict:
             loaded_post_nums = set()
             async with db.execute(query_posts) as cursor:
                 async for row in cursor:
-                    post_num, board_id, thread_id, author_id, content_str, timestamp_ts = row
+                    post_num, board_id, thread_id, author_id, content_str, timestamp_ts, reply_to_post_num = row
                     loaded_post_nums.add(post_num)
                     try:
                         content_data = json.loads(content_str)
                     except: content_data = {}
                     
+                    if reply_to_post_num:
+                        content_data['reply_to_post'] = reply_to_post_num
+
                     state_data['messages_storage'][post_num] = {
                         "author_id": author_id,
                         "timestamp": datetime.fromtimestamp(timestamp_ts, tz=UTC),
                         "content": content_data,
                         "board_id": board_id,
                         "thread_id": thread_id,
+                        "reply_to_post_num": reply_to_post_num,
                     }
                     
                     if thread_id and board_id in thread_boards:
@@ -1033,7 +1043,8 @@ async def load_state_from_db(thread_boards: set) -> dict:
     print("✅ Состояние успешно загружено.")
     return state_data
 async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None, hidden_words: list = None, 
-                                  shadow_gif: int = None, shadow_sticker: int = None, shadow_media: int = None): 
+                                  shadow_gif: int = None, shadow_sticker: int = None, shadow_media: int = None,
+                                  lie_media: int = None):
     """
     Обновляет настройки пользователя.
     Использует явные транзакции и глобальный лок.
@@ -1057,6 +1068,8 @@ async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None,
                     await db.execute("UPDATE Users SET shadow_ban_sticker = ? WHERE user_id = ? AND board_id = ?", (shadow_sticker, user_id, board_id))
                 if shadow_media is not None:
                     await db.execute("UPDATE Users SET shadow_ban_media = ? WHERE user_id = ? AND board_id = ?", (shadow_media, user_id, board_id))
+                if lie_media is not None:
+                    await db.execute("UPDATE Users SET lie_media = ? WHERE user_id = ? AND board_id = ?", (lie_media, user_id, board_id))
                 
                 await db.execute("COMMIT")
                 return
@@ -2746,7 +2759,8 @@ async def cleanup_broadcast_queue(retention_hours: int = 1):
 async def get_and_clear_broadcast_queue() -> list[dict]:
     """
     Атомарно извлекает новые посты для бота.
-    Использует BEGIN IMMEDIATE, чтобы заблокировать таблицу от записи сайтом на время чтения и обновления.
+    Статус отправки выставляется отдельно через mark_broadcast_posts_sent()
+    только после того, как бот смог обработать запись.
     """
     from common.db_pool import get_pool, db_lock
     
@@ -2774,10 +2788,6 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
                     columns = [description[0] for description in post_cursor.description]
                     posts_data = await post_cursor.fetchall()
                 
-                # 3. Обновляем статус
-                update_query = f"UPDATE BroadcastQueue SET is_sent_to_tg = 1 WHERE post_num IN ({placeholders})"
-                await db.execute(update_query, post_nums)
-                
                 await db.execute("COMMIT")
                 
                 # Обработка данных (уже вне транзакции, в памяти)
@@ -2787,9 +2797,10 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
                     try:
                         if isinstance(post_dict.get('content'), str):
                             post_dict['content'] = json.loads(post_dict['content'])
-                        processed_posts.append(post_dict)
                     except (json.JSONDecodeError, TypeError):
-                        continue
+                        post_dict['content'] = {}
+                        post_dict['_broadcast_decode_failed'] = True
+                    processed_posts.append(post_dict)
                         
                 return processed_posts
 
@@ -2809,6 +2820,36 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
                 break
             
     return []
+
+async def mark_broadcast_posts_sent(post_nums: list[int] | tuple[int, ...] | set[int]) -> int:
+    """Marks broadcast rows as handed off to the bot delivery queue."""
+    from common.db_pool import get_pool, db_lock
+
+    clean_post_nums = sorted({int(post_num) for post_num in post_nums if post_num})
+    if not clean_post_nums:
+        return 0
+
+    async with db_lock:
+        for attempt in range(10):
+            try:
+                db = await get_pool()
+                placeholders = ','.join('?' for _ in clean_post_nums)
+                cursor = await db.execute(
+                    f"UPDATE BroadcastQueue SET is_sent_to_tg = 1 WHERE post_num IN ({placeholders})",
+                    clean_post_nums,
+                )
+                await db.commit()
+                return int(cursor.rowcount or 0)
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() or "busy" in str(e).lower():
+                    await asyncio.sleep(0.1 * (attempt + 1))
+                    continue
+                print(f"⛔ ОШИБКА в mark_broadcast_posts_sent: {e}")
+                break
+            except Exception as e:
+                print(f"⛔ ОШИБКА в mark_broadcast_posts_sent: {e}")
+                break
+    return 0
 async def get_user_by_token(token: str) -> Optional[dict]:
     """
     Находит пользователя по его API токену.
@@ -3328,6 +3369,97 @@ _THREAD_CACHE: Dict[str, List[str]] = defaultdict(list)
 _LAST_MAX_POST_NUM = 0
 _LAST_CACHE_UPDATE = 0
 
+_RANDOM_VIDEO_TYPES = {'video', 'animation', 'video_note', 'gif'}
+_RANDOM_IMAGE_TYPES = {'image', 'photo', 'sticker'}
+_RANDOM_VIDEO_EXTS = ('.mp4', '.webm', '.mov', '.mkv')
+_RANDOM_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.gif')
+
+def _random_media_class(raw_type: str | None, item: dict) -> str | None:
+    ftype = str(raw_type or '').lower()
+    if ftype in _RANDOM_VIDEO_TYPES:
+        return 'video'
+    if ftype in _RANDOM_IMAGE_TYPES:
+        return 'image'
+    if ftype != 'document':
+        return None
+    filename = str(item.get('filename') or item.get('file_name') or item.get('name') or '').lower()
+    mime = str(item.get('mime_type') or item.get('mime') or '').lower()
+    if mime.startswith('video/') or filename.endswith(_RANDOM_VIDEO_EXTS):
+        return 'video'
+    if mime.startswith('image/') or filename.endswith(_RANDOM_IMAGE_EXTS):
+        return 'image'
+    return None
+
+def _make_random_file_entry(item: dict, fallback_type: str | None = None) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    file_id = (
+        item.get('original_file_id')
+        or item.get('file_id')
+        or item.get('media')
+    )
+    if not file_id or not isinstance(file_id, str) or file_id.startswith('<'):
+        return None
+    media_class = _random_media_class(item.get('type') or fallback_type, item)
+    if not media_class:
+        return None
+    filename = item.get('filename') or item.get('file_name') or item.get('name')
+    if not filename:
+        ext = 'mp4' if media_class == 'video' else ('webp' if (item.get('type') == 'sticker') else 'jpg')
+        prefix = 'vid' if media_class == 'video' else 'img'
+        filename = f"{prefix}_{file_id[:8]}.{ext}"
+    return {
+        **item,
+        'type': media_class,
+        'source_type': item.get('source_type') or item.get('type') or fallback_type,
+        'original_file_id': file_id,
+        'thumbnail_file_id': item.get('thumbnail_file_id') or item.get('thumb_file_id') or item.get('file_id'),
+        'filename': filename,
+    }
+
+def _extract_random_media_files(content: dict | str | None) -> list[dict]:
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except Exception:
+            return []
+    if not isinstance(content, dict):
+        return []
+
+    files = content.get('files')
+    if isinstance(files, list):
+        return [entry for entry in (_make_random_file_entry(f) for f in files) if entry]
+
+    if content.get('type') == 'media_group' and isinstance(content.get('media'), list):
+        return [entry for entry in (_make_random_file_entry(item) for item in content['media']) if entry]
+
+    if content.get('file_id'):
+        entry = _make_random_file_entry(content, fallback_type=content.get('type'))
+        return [entry] if entry else []
+
+    return []
+
+def _append_random_media_to_caches(
+    video_cache: Dict[str, List[Tuple[int, int]]],
+    image_cache: Dict[str, List[Tuple[int, int]]],
+    board_id: str,
+    post_num: int,
+    content: dict | str,
+) -> int:
+    files = _extract_random_media_files(content)
+    if not files:
+        return 0
+    added = 0
+    for idx, f in enumerate(files):
+        ftype = f.get('type')
+        if ftype == 'video':
+            video_cache[board_id].append((post_num, idx))
+            added += 1
+        elif ftype == 'image':
+            image_cache[board_id].append((post_num, idx))
+            added += 1
+    return added
+
 async def refresh_random_indexes():
     global _VIDEO_CACHE, _IMAGE_CACHE, _THREAD_CACHE, _LAST_MAX_POST_NUM, _LAST_CACHE_UPDATE
     
@@ -3339,7 +3471,7 @@ async def refresh_random_indexes():
             row = await cursor.fetchone()
             current_max = row[0] if row and row[0] else 0
             
-        if current_max == _LAST_MAX_POST_NUM and _VIDEO_CACHE:
+        if current_max == _LAST_MAX_POST_NUM and (_VIDEO_CACHE or _IMAGE_CACHE or _THREAD_CACHE):
             return
             
     except Exception:
@@ -3353,28 +3485,68 @@ async def refresh_random_indexes():
             new_video_cache = defaultdict(list)
             new_image_cache = defaultdict(list)
             new_thread_cache = defaultdict(list)
+            can_increment = (
+                _LAST_MAX_POST_NUM > 0
+                and current_max >= _LAST_MAX_POST_NUM
+                and (_VIDEO_CACHE or _IMAGE_CACHE or _THREAD_CACHE)
+            )
+
+            if can_increment:
+                added_media = 0
+                query = """
+                    SELECT board_id, post_num, content
+                    FROM Posts
+                    WHERE post_num > ?
+                      AND post_num <= ?
+                      AND IFNULL(is_shadow, 0) = 0
+                      AND (
+                        json_extract(content, '$.files') IS NOT NULL
+                        OR json_extract(content, '$.media') IS NOT NULL
+                        OR json_extract(content, '$.file_id') IS NOT NULL
+                      )
+                """
+                async with db.execute(query, (_LAST_MAX_POST_NUM, current_max)) as cursor:
+                    async for row in cursor:
+                        bid, pid, content_str = row
+                        try:
+                            added_media += _append_random_media_to_caches(_VIDEO_CACHE, _IMAGE_CACHE, bid, pid, content_str)
+                        except Exception:
+                            continue
+
+                query_threads = """
+                    SELECT p.board_id, p.thread_id
+                    FROM Posts p
+                    JOIN Threads t ON p.post_num = t.thread_num
+                    WHERE p.post_num > ?
+                      AND p.post_num <= ?
+                      AND t.is_archived = 0
+                      AND IFNULL(p.is_shadow, 0) = 0
+                """
+                async with db.execute(query_threads, (_LAST_MAX_POST_NUM, current_max)) as cursor:
+                    async for row in cursor:
+                        _THREAD_CACHE[row[0]].append(str(row[1]))
+
+                _LAST_MAX_POST_NUM = current_max
+                _LAST_CACHE_UPDATE = time.time()
+                print(f"Random Cache Incremental Updated: +{added_media} media, max={current_max}")
+                return
             
             query = """
                 SELECT board_id, post_num, content 
                 FROM Posts 
-                WHERE json_extract(content, '$.files') IS NOT NULL
-                AND IFNULL(is_shadow, 0) = 0
+                WHERE IFNULL(is_shadow, 0) = 0
+                  AND (
+                    json_extract(content, '$.files') IS NOT NULL
+                    OR json_extract(content, '$.media') IS NOT NULL
+                    OR json_extract(content, '$.file_id') IS NOT NULL
+                  )
             """
             
             async with db.execute(query) as cursor:
                 async for row in cursor:
                     bid, pid, content_str = row
                     try:
-                        content = json.loads(content_str)
-                        files = content.get('files', [])
-                        if not files: continue
-                        
-                        for idx, f in enumerate(files):
-                            ftype = f.get('type')
-                            if ftype in ['video', 'animation', 'video_note', 'gif']:
-                                new_video_cache[bid].append((pid, idx))
-                            elif ftype in ['image', 'photo', 'sticker']:
-                                new_image_cache[bid].append((pid, idx))
+                        _append_random_media_to_caches(new_video_cache, new_image_cache, bid, pid, content_str)
                                 
                     except: continue
 
@@ -3401,9 +3573,13 @@ async def refresh_random_indexes():
         except Exception as e:
             print(f"Error updating random indexes: {e}")
 
-async def _get_random_media_item(cache_dict: Dict[str, List[Tuple[int, int]]], allowed_boards: List[str] = None):
+async def _get_random_media_item(cache_dict: Dict[str, List[Tuple[int, int]]], allowed_boards: List[str] = None, media_kind: str | None = None):
     if not cache_dict:
         await refresh_random_indexes()
+        if media_kind == 'video':
+            cache_dict = _VIDEO_CACHE
+        elif media_kind == 'image':
+            cache_dict = _IMAGE_CACHE
         if not cache_dict: return None
 
     if allowed_boards:
@@ -3436,9 +3612,10 @@ async def _get_random_media_item(cache_dict: Dict[str, List[Tuple[int, int]]], a
     for _ in range(5):
         post = await get_post_by_num(pid)
         
-        if post and 'content' in post and 'files' in post['content']:
-            files = post['content']['files']
+        if post and 'content' in post:
+            files = _extract_random_media_files(post['content'])
             if file_idx < len(files):
+                post['content']['files'] = files
                 post['_selected_file_index'] = file_idx
                 return post
         for c in [_VIDEO_CACHE, _IMAGE_CACHE]:
@@ -3461,10 +3638,10 @@ async def _get_random_media_item(cache_dict: Dict[str, List[Tuple[int, int]]], a
     return None
     
 async def get_random_video_post(allowed_boards: List[str] = None):
-    return await _get_random_media_item(_VIDEO_CACHE, allowed_boards)
+    return await _get_random_media_item(_VIDEO_CACHE, allowed_boards, media_kind='video')
 
 async def get_random_image_post(allowed_boards: List[str] = None):
-    return await _get_random_media_item(_IMAGE_CACHE, allowed_boards)
+    return await _get_random_media_item(_IMAGE_CACHE, allowed_boards, media_kind='image')
 
 async def update_thread_last_updated(thread_op_num: int, timestamp: float):
     """
@@ -6267,7 +6444,21 @@ async def check_file_deduplication(sha256: str):
                 if await cursor.fetchone():
                     return {"banned": True, "reason": "SHA256 Ban"}
             
-            query = "SELECT file_id, thumbnail_id, file_type, phash, blurhash FROM FileRegistry WHERE sha256 = ?"
+            query = """
+                SELECT
+                    fr.file_id,
+                    fr.thumbnail_id,
+                    fr.file_type,
+                    fr.phash,
+                    fr.blurhash,
+                    fo.bot_id AS owner_bot_id,
+                    tfo.bot_id AS thumbnail_owner_bot_id
+                FROM FileRegistry fr
+                LEFT JOIN FileOwners fo ON fo.file_id = fr.file_id
+                LEFT JOIN FileOwners tfo ON tfo.file_id = fr.thumbnail_id
+                WHERE fr.sha256 = ?
+                LIMIT 1
+            """
             async with db.execute(query, (sha256,)) as cursor:
                 row = await cursor.fetchone()
                 if row:
@@ -6278,7 +6469,9 @@ async def check_file_deduplication(sha256: str):
                         "thumbnail_file_id": row[1],
                         "type": row[2],
                         "phash": row[3],
-                        "blurhash": row[4]
+                        "blurhash": row[4],
+                        "owner_bot_id": row[5],
+                        "thumbnail_owner_bot_id": row[6],
                     }
         except Exception as e:
             print(f"⚠️ Deduplication error: {e}")
@@ -6456,12 +6649,11 @@ async def add_to_mirror_queue(file_id: str, mirror_type: str):
                 await db.execute("BEGIN IMMEDIATE")
                 
                 # ПРАВКА: При повторном добавлении сбрасываем попытки и ставим текущее время
+                # Duplicate requests must not reset retry backoff.
                 await db.execute("""
-                    INSERT INTO MirrorQueue (file_id, mirror_type, next_run_at, attempts) 
+                    INSERT INTO MirrorQueue (file_id, mirror_type, next_run_at, attempts)
                     VALUES (?, ?, ?, 0)
-                    ON CONFLICT(file_id, mirror_type) DO UPDATE SET
-                    next_run_at = excluded.next_run_at,
-                    attempts = 0
+                    ON CONFLICT(file_id, mirror_type) DO NOTHING
                 """, (file_id, mirror_type, time.time()))
                 
                 await db.execute("COMMIT")
@@ -6490,7 +6682,7 @@ async def add_post_to_random_cache(post_data: dict):
         for b in c:
             c[b] = [item for item in c[b] if item[0] != pid_int]
     content = post_data.get('content', {})
-    files = content.get('files', [])
+    files = _extract_random_media_files(content)
     is_op = post_data.get('thread_id') == pid or not post_data.get('thread_id')
 
     if not pid or not bid: return
@@ -6498,9 +6690,9 @@ async def add_post_to_random_cache(post_data: dict):
         _LAST_MAX_POST_NUM = pid
     for idx, f in enumerate(files):
         ftype = f.get('type')
-        if ftype in ['video', 'animation', 'video_note', 'gif']:
+        if ftype == 'video':
             _VIDEO_CACHE[bid].append((pid, idx))
-        elif ftype in ['image', 'photo', 'sticker']:
+        elif ftype == 'image':
             _IMAGE_CACHE[bid].append((pid, idx))
 
     # Если это ОП-пост, добавляем в кэш тредов

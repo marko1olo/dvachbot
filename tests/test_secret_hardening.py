@@ -13,6 +13,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+verification_path = str(PROJECT_ROOT / "verification_scripts")
+if verification_path not in sys.path:
+    sys.path.insert(0, verification_path)
 
 from common.async_file_io import (
     copy_fileobj_to_temp_async,
@@ -106,6 +109,27 @@ class SecretRedactionTests(unittest.TestCase):
         self.assertNotIn(SYNTHETIC_TELEGRAM_TOKEN, output)
         self.assertIn("<telegram-token-redacted>", output)
         self.assertIn("count=7", output)
+
+    def test_logging_filter_redacts_non_string_url_args(self) -> None:
+        class UrlLike:
+            def __str__(self) -> str:
+                return f"https://api.telegram.org/file/bot{SYNTHETIC_TELEGRAM_TOKEN}/file.dat"
+
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        logging.basicConfig(
+            level=logging.INFO,
+            handlers=[handler],
+            force=True,
+            format="%(message)s",
+        )
+        install_logging_redaction()
+
+        logging.info("url=%s", UrlLike())
+        output = stream.getvalue()
+
+        self.assertNotIn(SYNTHETIC_TELEGRAM_TOKEN, output)
+        self.assertIn("<telegram-token-redacted>", output)
 
     def test_secret_fingerprint_is_stable_and_non_reversible_text(self) -> None:
         first = secret_fingerprint(SYNTHETIC_TELEGRAM_TOKEN)

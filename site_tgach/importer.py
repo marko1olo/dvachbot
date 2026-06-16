@@ -593,6 +593,7 @@ class ThreadImporter:
             finally:
                 self.client = None
                 self.created_post_ids.clear()
+                self._cpu_executor.shutdown(wait=False, cancel_futures=True)
 
     async def _queue_posts_for_simulation(self, posts: List[Dict], board_id: str, stream: str, task_id: str, settings: dict):
         start_delay = settings.get('start_delay_mins', 0) * 60

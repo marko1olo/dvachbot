@@ -43,7 +43,10 @@ async def process_and_upload_voice(
                 "original_file_id": dedup['original_file_id'],
                 "thumbnail_file_id": None,
                 "filename": filename,
-                "sha256": sha256_hash
+                "sha256": sha256_hash,
+                "dedup_found": True,
+                "owner_bot_id": dedup.get("owner_bot_id"),
+                "thumbnail_owner_bot_id": dedup.get("thumbnail_owner_bot_id"),
             }
 
     # 2. Загрузка в Telegram

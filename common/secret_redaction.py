@@ -30,7 +30,14 @@ def redact_secrets(value: Any) -> str:
 def redact_log_arg(value: Any) -> Any:
     if isinstance(value, str):
         return redact_secrets(value)
-    return value
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return redact_secrets(value.decode("utf-8", errors="replace"))
+        except Exception:
+            return "<binary-redacted>"
+    return redact_secrets(value)
 
 
 def secret_fingerprint(value: Any) -> str:

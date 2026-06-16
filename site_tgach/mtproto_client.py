@@ -59,6 +59,23 @@ async def _cleanup_idle_clients():
                 _ACTIVE_CLIENTS.pop(token, None)
                 _LAST_USED.pop(token, None)
 
+async def close_all_mtproto_clients():
+    """Close every cached Pyrogram client during application shutdown."""
+    async with _CLIENT_LOCK:
+        clients = list(_ACTIVE_CLIENTS.items())
+        _ACTIVE_CLIENTS.clear()
+        _LAST_USED.clear()
+        _CONNECTION_COOLDOWN.clear()
+
+    for token, client in clients:
+        try:
+            if client and client.is_connected:
+                await client.stop()
+            safe_token = secret_fingerprint(token)
+            logger.info(f"🔌 [MTProto] Client stopped on shutdown: {safe_token}")
+        except Exception as e:
+            logger.warning(f"⚠️ Error stopping MTProto client on shutdown: {e}")
+
 async def get_active_client(bot_token: str):
     """
     Возвращает живой клиент Pyrogram с защитой от флуда и авто-очисткой.

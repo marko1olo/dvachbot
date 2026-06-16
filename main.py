@@ -65,18 +65,19 @@ from common.html_utils import escape_html
 from common.token_generator import generate_unique_token
 from common.database import (
     initialize_database, is_database_migrated, load_state_from_db, get_and_clear_reaction_queue, get_post_by_num, get_stream_active_users, 
-    update_board_settings, add_or_activate_user, update_user_status, get_and_clear_broadcast_queue, get_channel_message_id,
+    update_board_settings, add_or_activate_user, update_user_status, get_and_clear_broadcast_queue, mark_broadcast_posts_sent, get_channel_message_id,
     create_post, update_shadow_mute, create_thread, update_user_location, get_op_posts_for_board, get_thread_by_op_post, add_channel_copy, get_all_channel_copies,
     add_post_copies, get_post_author_by_copy, get_post_copies, get_post_info_by_copy, update_user_settings_db, get_all_active_subscribers, log_global_event,
     upsert_delivery_queue_item, delete_delivery_queue_item, get_pending_delivery_queue_items,
     get_posts_from_broadcast_queue, cleanup_broadcast_queue, get_or_create_api_token, get_user_by_token, remove_regular_mute, apply_regular_mute,
     get_and_clear_notification_queue, search_posts, update_post_content, remove_user_from_board, cleanup_old_posts_from_db, find_post_by_file_id,
-    load_all_spam_words, add_spam_word, remove_spam_word, delete_post_by_num, add_reaction_ban, remove_reaction_ban, load_all_reaction_bans, set_channel_message_id, get_max_post_num, get_weekly_active_users, get_reply_coverage_stats
+    load_all_spam_words, add_spam_word, remove_spam_word, delete_post_by_num, add_reaction_ban, remove_reaction_ban, load_all_reaction_bans, set_channel_message_id, get_max_post_num, get_weekly_active_users, get_reply_coverage_stats,
+    get_random_video_post, get_random_image_post
 )
 from site_tgach.admin_config import ADMIN_IDS
 from backup_manager import create_gzipped_dump
 from common.db_pool import create_pool, close_pool, get_pool
-from common.secret_redaction import install_logging_redaction
+from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from text_assets import (
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP,
     DVACH_STATS_CAPTIONS, DVACH_STATS_CAPTIONS_EN, DVACH_STATS_CAPTIONS_JP,
@@ -103,6 +104,7 @@ from text_assets import (
 from contextual_flavor import install_contextual_reply_extensions
 from common.config import DB_POST_LIMIT as CONFIG_DB_POST_LIMIT
 from common.config import BOT_POST_CACHE_LIMIT as CONFIG_BOT_POST_CACHE_LIMIT
+from common.config import BOT_COPY_CACHE_POST_LIMIT as CONFIG_BOT_COPY_CACHE_POST_LIMIT
 from common.config import ENABLE_MULTILANG
 from common.config import (
     BOT_PRIORITY_DELIVERY,
@@ -205,12 +207,12 @@ from warhammer_mode import WH40K_PHRASES_START, WH40K_PHRASES_END, warhammer_tra
 from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial_transform
 from gopnik_mode import GOPNIK_PHRASES_START, GOPNIK_PHRASES_END, gopnik_transform
 from shizo_mode import SCHIZO_PHRASES_START, SCHIZO_PHRASES_END, shizo_transform
-from new_modes import (
-    AMERICA_PHRASES_END, AMERICA_PHRASES_START, HOLIDAY_PHRASES_END, HOLIDAY_PHRASES_START,
-    JEWISH_PHRASES_END, JEWISH_PHRASES_START, MATRIX_PHRASES_END, MATRIX_PHRASES_START,
-    OLDWEB_PHRASES_END, OLDWEB_PHRASES_START,
-    america_transform, holiday_transform, jewish_transform, matrix_transform, oldweb_transform,
-)
+# from new_modes import (
+#     AMERICA_PHRASES_END, AMERICA_PHRASES_START, HOLIDAY_PHRASES_END, HOLIDAY_PHRASES_START,
+#     JEWISH_PHRASES_END, JEWISH_PHRASES_START, MATRIX_PHRASES_END, MATRIX_PHRASES_START,
+#     OLDWEB_PHRASES_END, OLDWEB_PHRASES_START,
+#     america_transform, holiday_transform, jewish_transform, matrix_transform, oldweb_transform,
+# )
 from mode_punchup import punch_up_mode_text
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
@@ -494,7 +496,7 @@ board_data = defaultdict(lambda: {
     },
     'single_photo_counter': defaultdict(int), # Трекер для одиночных фото
     'last_photo_group_id': defaultdict(str),  # Чтобы отличать разные группы
-    'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set()}), 
+    'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set(), 'lie_media': False}),
     'active_pin': None, 
     'message_counter': defaultdict(int),
     'last_user_msgs': {},
@@ -540,6 +542,45 @@ current_media_groups = {}
 media_group_timers = {}
 user_spam_locks = defaultdict(asyncio.Lock)
 media_group_creation_lock = asyncio.Lock()
+
+def _iter_message_ids_for_copy(mid_or_list):
+    if isinstance(mid_or_list, list):
+        return mid_or_list
+    return (mid_or_list,)
+
+def _drop_post_copy_maps_unlocked(post_num: int) -> int:
+    copies_map = post_to_messages.pop(post_num, None)
+    if not copies_map:
+        return 0
+    removed = 0
+    for uid, mid_or_list in copies_map.items():
+        for mid in _iter_message_ids_for_copy(mid_or_list):
+            if message_to_post.pop((uid, mid), None) is not None:
+                removed += 1
+    return removed
+
+def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
+    if max_posts < 0 or len(post_to_messages) <= max_posts:
+        return 0, 0
+    if max_posts == 0:
+        stale_posts = list(post_to_messages.keys())
+    else:
+        keep_posts = set(sorted(post_to_messages.keys(), reverse=True)[:max_posts])
+        stale_posts = [post_num for post_num in list(post_to_messages.keys()) if post_num not in keep_posts]
+    removed_reverse = 0
+    for post_num in stale_posts:
+        removed_reverse += _drop_post_copy_maps_unlocked(post_num)
+    return len(stale_posts), removed_reverse
+
+def _purge_orphan_message_to_post_unlocked() -> int:
+    valid_reverse_posts = set(messages_storage.keys()) | set(post_to_messages.keys())
+    orphan_reverse_keys = [
+        key for key, mapped_post_num in message_to_post.items()
+        if mapped_post_num not in valid_reverse_posts
+    ]
+    for key in orphan_reverse_keys:
+        message_to_post.pop(key, None)
+    return len(orphan_reverse_keys)
 
 def _media_group_state_key(chat_id: int | str, media_group_id: str) -> str:
     return f"{chat_id}:{media_group_id}"
@@ -831,6 +872,7 @@ def _setup_runtime_logger() -> logging.Logger:
             "%(asctime)s %(levelname)s %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S"
         ))
+        add_secret_redaction_filter(handler)
         logger.addHandler(handler)
     return logger
 runtime_logger = _setup_runtime_logger()
@@ -895,6 +937,7 @@ STICKER_WINDOW = 10  # секунд
 STICKER_LIMIT = 7
 REST_SECONDS = 30  # время блокировки
 MAX_MESSAGES_IN_MEMORY = CONFIG_BOT_POST_CACHE_LIMIT  # храним только последние посты в общей памяти
+MAX_COPY_MAP_POSTS_IN_MEMORY = max(0, int(CONFIG_BOT_COPY_CACHE_POST_LIMIT or 0))
 TELEMETRY_INTERVAL_SEC = int(os.getenv("BOT_TELEMETRY_INTERVAL_SEC", "300"))
 TELEMETRY_WARN_QUEUE_TOTAL = int(os.getenv("BOT_TELEMETRY_WARN_QUEUE_TOTAL", "80"))
 TELEMETRY_WARN_DONE_EDIT_TASKS = int(os.getenv("BOT_TELEMETRY_WARN_DONE_EDIT_TASKS", "100"))
@@ -2202,34 +2245,17 @@ async def auto_memory_cleaner():
                 deleted_map_entries = 0
                 for post_num in keys_to_delete:
                     messages_storage.pop(post_num, None)
-                    
-                    # --- НАЧАЛО ИЗМЕНЕНИЙ (Устранение утечки message_to_post) ---
-                    # Сначала берем копии, чтобы очистить message_to_post
-                    copies_map = post_to_messages.pop(post_num, {})
-                    for uid, mid_or_list in copies_map.items():
-                        if isinstance(mid_or_list, list):
-                            for mid in mid_or_list:
-                                if (uid, mid) in message_to_post:
-                                    del message_to_post[(uid, mid)]
-                                    deleted_map_entries += 1
-                        else:
-                            mid = mid_or_list
-                            if (uid, mid) in message_to_post:
-                                del message_to_post[(uid, mid)]
-                                deleted_map_entries += 1
-                    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+                    deleted_map_entries += _drop_post_copy_maps_unlocked(post_num)
                 
                 print(f"🧹 [GC] RAM Purge: выгружено {len(keys_to_delete)} постов и {deleted_map_entries} ссылок.")
 
-            valid_reverse_posts = set(messages_storage.keys()) | set(post_to_messages.keys())
-            orphan_reverse_keys = [
-                key for key, mapped_post_num in message_to_post.items()
-                if mapped_post_num not in valid_reverse_posts
-            ]
-            if orphan_reverse_keys:
-                for key in orphan_reverse_keys:
-                    message_to_post.pop(key, None)
-                print(f"🧹 [GC] Reverse map purge: удалено {len(orphan_reverse_keys)} старых message_to_post кэш-ссылок.")
+            removed_copy_posts, removed_copy_refs = _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
+            if removed_copy_posts:
+                print(f"🧹 [GC] Copy map cap: удалено {removed_copy_posts} постов и {removed_copy_refs} ссылок из RAM-кэша копий.")
+
+            orphan_reverse_count = _purge_orphan_message_to_post_unlocked()
+            if orphan_reverse_count:
+                print(f"🧹 [GC] Reverse map purge: удалено {orphan_reverse_count} старых message_to_post кэш-ссылок.")
 
             # Очистка кэшей юзеров...
             now_utc = datetime.now(UTC)
@@ -2524,7 +2550,7 @@ async def setup_pinned_messages(bots: dict[str, Bot]):
         default_lang = 'en' if board_id == 'int' else 'ru'
         b_data['start_message_text'] = start_messages[default_lang]
         print(f"📌 [{board_id}] Тексты помощи (RU/EN/JP) подготовлены.")
-async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None = None) -> str:
+async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None = None, lang: str | None = None) -> str:
 
     now = datetime.now(UTC)
     time_threshold = now - timedelta(hours=hours)
@@ -2557,7 +2583,38 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
                 text = re.sub(r'^(###.*?###|<i>.*?</i>)\s*\n?', '', text, flags=re.MULTILINE)
                 text = text.strip()
                 if text:
-                    lines.append(text)
+                    author_id = post.get('author_id')
+                    name = content.get('username') or content.get('name') or content.get('author_name')
+                    if not name:
+                        if not lang:
+                            lang = 'en' if board_id == 'int' else 'ru'
+                        if author_id and author_id != 0:
+                            suffix = str(author_id)[-4:]
+                            if lang == 'en':
+                                name = f"Anon #{suffix}"
+                            elif lang == 'jp':
+                                name = f"名無し #{suffix}"
+                            else:
+                                name = f"Анон #{suffix}"
+                        else:
+                            if lang == 'en':
+                                name = "Anon"
+                            elif lang == 'jp':
+                                name = "名無し"
+                            else:
+                                name = "Анон"
+                    reply_to = content.get('reply_to_post') or post.get('reply_to_post_num')
+                    reply_suffix = ""
+                    if reply_to:
+                        if not lang:
+                            lang = 'en' if board_id == 'int' else 'ru'
+                        if lang == 'en':
+                            reply_suffix = f" (reply to №{reply_to})"
+                        elif lang == 'jp':
+                            reply_suffix = f" (>>{reply_to})"
+                        else:
+                            reply_suffix = f" (ответ на №{reply_to})"
+                    lines.append(f"{name}{reply_suffix}: {text}")
         except Exception as e:
             print(f"[summarize] Error while chunking post: {e}, post: {post}")
     full_text = "\n".join(lines)
@@ -3630,9 +3687,9 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
         b_data['anime_mode'] or b_data['slavaukraine_mode'] or
         b_data['zaputin_mode'] or b_data['suka_blyat_mode'] or
         b_data['polish_mode'] or b_data['warhammer_mode'] or b_data['imperial_mode'] or
-        b_data['gopnik_mode'] or b_data.get('schizo_mode') or
-        b_data.get('matrix_mode') or b_data.get('america_mode') or
-        b_data.get('holiday_mode') or b_data.get('oldweb_mode') or b_data.get('jewish_mode')
+        b_data['gopnik_mode'] or b_data.get('schizo_mode')
+        # or b_data.get('matrix_mode') or b_data.get('america_mode') or
+        # b_data.get('holiday_mode') or b_data.get('oldweb_mode') or b_data.get('jewish_mode')
     )
     if not is_transform_mode_active:
         return modified_content
@@ -3658,16 +3715,16 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
     # 4. Выбор и запуск функции трансформации
     if b_data.get('schizo_mode'):
         transform_result = await loop.run_in_executor(None, shizo_transform, plain_text, header)
-    elif b_data.get('matrix_mode'):
-        transform_result = await loop.run_in_executor(None, matrix_transform, plain_text, header)
-    elif b_data.get('america_mode'):
-        transform_result = await loop.run_in_executor(None, america_transform, plain_text, header)
-    elif b_data.get('holiday_mode'):
-        transform_result = await loop.run_in_executor(None, holiday_transform, plain_text, header)
-    elif b_data.get('oldweb_mode'):
-        transform_result = await loop.run_in_executor(None, oldweb_transform, plain_text, header)
-    elif b_data.get('jewish_mode'):
-        transform_result = await loop.run_in_executor(None, jewish_transform, plain_text, header)
+    # elif b_data.get('matrix_mode'):
+    #     transform_result = await loop.run_in_executor(None, matrix_transform, plain_text, header)
+    # elif b_data.get('america_mode'):
+    #     transform_result = await loop.run_in_executor(None, america_transform, plain_text, header)
+    # elif b_data.get('holiday_mode'):
+    #     transform_result = await loop.run_in_executor(None, holiday_transform, plain_text, header)
+    # elif b_data.get('oldweb_mode'):
+    #     transform_result = await loop.run_in_executor(None, oldweb_transform, plain_text, header)
+    # elif b_data.get('jewish_mode'):
+    #     transform_result = await loop.run_in_executor(None, jewish_transform, plain_text, header)
     elif b_data['gopnik_mode']:
         transform_result = await loop.run_in_executor(None, gopnik_transform, plain_text)
     elif b_data['imperial_mode']:
@@ -4272,6 +4329,190 @@ def _phase_time_budget_sec(delivery_phase: str) -> float:
     return 0.0
 
 
+_LIE_VIDEO_EXTS = ('.mp4', '.webm', '.mov', '.mkv')
+_LIE_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.gif')
+
+
+def _lie_media_kind(raw_type: str | None, item: dict | None = None) -> str | None:
+    item = item or {}
+    ftype = str(raw_type or item.get('type') or '').split('.')[-1].lower()
+    mime = str(item.get('mime_type') or item.get('mime') or '').lower()
+    filename = str(item.get('filename') or item.get('file_name') or item.get('name') or '').lower()
+    if ftype in {'photo', 'image'}:
+        return 'image'
+    if ftype in {'video', 'animation', 'gif'}:
+        return 'video'
+    if ftype == 'document':
+        if mime.startswith('video/') or filename.endswith(_LIE_VIDEO_EXTS):
+            return 'video'
+        if mime.startswith('image/') or filename.endswith(_LIE_IMAGE_EXTS):
+            return 'image'
+    return None
+
+
+def _lie_archive_send_type(entry: dict, desired_kind: str) -> str | None:
+    source_type = str(entry.get('source_type') or entry.get('type') or '').split('.')[-1].lower()
+    mime = str(entry.get('mime_type') or entry.get('mime') or '').lower()
+    filename = str(entry.get('filename') or entry.get('file_name') or entry.get('name') or '').lower()
+    if desired_kind == 'image':
+        if source_type in {'photo', 'image'}:
+            return 'photo'
+        if source_type == 'document' and (mime.startswith('image/') or filename.endswith(_LIE_IMAGE_EXTS)):
+            return 'document'
+    elif desired_kind == 'video':
+        if source_type == 'video':
+            return 'video'
+        if source_type in {'animation', 'gif'}:
+            return 'animation'
+        if source_type == 'document' and (mime.startswith('video/') or filename.endswith(_LIE_VIDEO_EXTS)):
+            return 'document'
+    return None
+
+
+def _lie_file_from_random_post(
+    post: dict | None,
+    desired_kind: str,
+    allowed_send_types: set[str],
+    avoid_post_num: int | None = None,
+    exclude_file_ids: set[str] | None = None,
+) -> dict | None:
+    if not post or not isinstance(post.get('content'), dict):
+        return None
+    if avoid_post_num is not None:
+        try:
+            candidate_post_num = int(post.get('post_num') or post.get('id') or 0)
+            if candidate_post_num == int(avoid_post_num):
+                return None
+        except (TypeError, ValueError):
+            pass
+    files = post['content'].get('files') or []
+    if not files:
+        return None
+    selected_idx = post.get('_selected_file_index', 0)
+    if not isinstance(selected_idx, int) or selected_idx < 0 or selected_idx >= len(files):
+        selected_idx = 0
+    entry = files[selected_idx]
+    if not isinstance(entry, dict):
+        return None
+    file_id = entry.get('original_file_id') or entry.get('file_id') or entry.get('media')
+    if not file_id or not isinstance(file_id, str) or file_id.startswith('<'):
+        return None
+    if exclude_file_ids and file_id in exclude_file_ids:
+        return None
+    send_type = _lie_archive_send_type(entry, desired_kind)
+    if not send_type or send_type not in allowed_send_types:
+        return None
+    return {
+        'type': send_type,
+        'file_id': file_id,
+        'filename': entry.get('filename') or entry.get('file_name') or entry.get('name'),
+        'mime_type': entry.get('mime_type') or entry.get('mime'),
+    }
+
+
+async def _get_lie_archive_media(
+    board_id: str,
+    desired_kind: str,
+    allowed_send_types: set[str],
+    avoid_post_num: int | None = None,
+    exclude_file_ids: set[str] | None = None,
+) -> dict | None:
+    getter = get_random_video_post if desired_kind == 'video' else get_random_image_post
+    for _ in range(12):
+        post = await getter([board_id])
+        media = _lie_file_from_random_post(post, desired_kind, allowed_send_types, avoid_post_num, exclude_file_ids)
+        if media:
+            return media
+    return None
+
+
+def _lie_allowed_send_types(raw_type: str, media_group: bool = False) -> set[str]:
+    ctype = str(raw_type or '').split('.')[-1].lower()
+    if media_group:
+        if ctype == 'photo':
+            return {'photo'}
+        if ctype == 'video':
+            return {'video'}
+        if ctype == 'document':
+            return {'document'}
+        return set()
+    if ctype == 'photo':
+        return {'photo'}
+    if ctype == 'video':
+        return {'video'}
+    if ctype == 'animation':
+        return {'animation'}
+    if ctype == 'document':
+        return {'document'}
+    return set()
+
+
+async def _build_lie_media_content(content: dict, board_id: str) -> dict:
+    ctype = str(content.get('type') or '').split('.')[-1].lower()
+    avoid_post_num = content.get('post_num')
+    if ctype == 'media_group':
+        source_media = content.get('media') or []
+        if not source_media:
+            return content
+        replaced_any = False
+        lie_media = []
+        used_file_ids = set()
+        for item in source_media:
+            if not isinstance(item, dict):
+                lie_media.append(item)
+                continue
+            item_type = str(item.get('type') or '').split('.')[-1].lower()
+            desired_kind = _lie_media_kind(item_type, item)
+            allowed_types = _lie_allowed_send_types(item_type, media_group=True)
+            if desired_kind and allowed_types:
+                replacement = await _get_lie_archive_media(
+                    board_id,
+                    desired_kind,
+                    allowed_types,
+                    avoid_post_num,
+                    used_file_ids,
+                )
+                if replacement:
+                    new_item = {
+                        'type': replacement['type'],
+                        'file_id': replacement['file_id'],
+                        'media': replacement['file_id'],
+                    }
+                    if replacement.get('filename'):
+                        new_item['filename'] = replacement['filename']
+                    if replacement.get('mime_type'):
+                        new_item['mime_type'] = replacement['mime_type']
+                    lie_media.append(new_item)
+                    used_file_ids.add(replacement['file_id'])
+                    replaced_any = True
+                    continue
+            lie_media.append(item.copy())
+        if not replaced_any:
+            return content
+        lie_content = content.copy()
+        lie_content['media'] = lie_media
+        return lie_content
+
+    desired_kind = _lie_media_kind(ctype, content)
+    allowed_types = _lie_allowed_send_types(ctype)
+    if not desired_kind or not allowed_types:
+        return content
+    replacement = await _get_lie_archive_media(board_id, desired_kind, allowed_types, avoid_post_num)
+    if not replacement:
+        return content
+    lie_content = content.copy()
+    lie_content['type'] = replacement['type']
+    lie_content['file_id'] = replacement['file_id']
+    lie_content.pop('image_url', None)
+    lie_content.pop('image_bytes', None)
+    lie_content.pop('media', None)
+    if replacement.get('filename'):
+        lie_content['filename'] = replacement['filename']
+    if replacement.get('mime_type'):
+        lie_content['mime_type'] = replacement['mime_type']
+    return lie_content
+
+
 async def send_message_to_users(
     bot_instance: Bot,
     board_id: str,
@@ -4321,6 +4562,7 @@ async def send_message_to_users(
     final_keyboard = keyboard 
     media_url_text_fallback = False
     media_url_fallback_logged = False
+    html_plain_fallback_logged = False
     if content.get('poll_data') and not final_keyboard:
         poll_options = content.get('poll_data', {}).get('options',[])
         post_num = content.get('post_num')
@@ -4421,7 +4663,7 @@ async def send_message_to_users(
             # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
     async def _send_one(uid: int, telegram_request_timeout_sec: int):
-        nonlocal stats, media_url_text_fallback, media_url_fallback_logged
+        nonlocal stats, media_url_text_fallback, media_url_fallback_logged, html_plain_fallback_logged
         request_timeout = max(3, int(telegram_request_timeout_sec))
         u_set = users_settings.get(uid, {'nsfw': False, 'hide': set()})
         if u_set['hide']:
@@ -4445,12 +4687,39 @@ async def send_message_to_users(
         head = highlight_head_html if uid == reply_to_post_author_id else base_head_html
         body = common_formatted_body
         is_direct_reply = (uid == reply_to_post_author_id)
-        current_content = content_for_common
+        send_content = content_for_common
+        if u_set.get('lie_media'):
+            try:
+                send_content = await _build_lie_media_content(content_for_common, board_id)
+                if send_content is not content_for_common:
+                    body = await _format_message_body(
+                        content=send_content,
+                        user_id_for_context=uid,
+                        post_data=post_data_copy,
+                        reply_to_post_author_id=reply_to_post_author_id,
+                        quote_info=send_content.get('quote_info')
+                    )
+            except Exception as exc:
+                runtime_logger.warning(
+                    "lie_media_replacement_failed %s",
+                    json.dumps(
+                        {
+                            "board_id": board_id,
+                            "post_num": post_num,
+                            "uid": uid,
+                            "error": type(exc).__name__,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                send_content = content_for_common
+        current_content = send_content
         
         if mentioned_authors:
             text_with_you = add_you_to_my_posts_fast(raw_text, uid, mentioned_authors)
             if text_with_you != raw_text:
-                current_content = content.copy()
+                current_content = send_content.copy()
                 target_field = 'text' if 'text' in current_content else 'caption'
                 current_content[target_field] = text_with_you
                 body = await _format_message_body(
@@ -4487,7 +4756,7 @@ async def send_message_to_users(
             reply_to_mid = db_replies_map.get(uid)
         # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
-        is_sage = content.get('is_sage', False)
+        is_sage = send_content.get('is_sage', False)
         has_spoiler = u_set['nsfw']
         max_attempts = 5
         attempt_delay = 1.5
@@ -4495,7 +4764,7 @@ async def send_message_to_users(
         async def _send_text_fallback(reason: str):
             nonlocal media_url_fallback_logged
             fallback_text = full_text
-            media_url = content.get("image_url")
+            media_url = current_content.get("image_url")
             if media_url and str(media_url) not in fallback_text:
                 fallback_text = f"{fallback_text}\n\n{escape_html(str(media_url))}"
             if not media_url_fallback_logged:
@@ -4506,7 +4775,7 @@ async def send_message_to_users(
                             "board_id": board_id,
                             "post_num": post_num,
                             "phase": delivery_phase,
-                            "type": str(content.get("type")),
+                            "type": str(current_content.get("type")),
                             "reason": reason,
                         },
                         ensure_ascii=False,
@@ -4530,10 +4799,178 @@ async def send_message_to_users(
                 sent_msgs.append(m)
             stats['success'] += 1
             return sent_msgs
+
+        def _telegram_parse_error(err_low: str) -> bool:
+            return (
+                "can't parse entities" in err_low
+                or "can't find end tag" in err_low
+                or "unsupported start tag" in err_low
+                or "unmatched end tag" in err_low
+                or "can't parse message text" in err_low
+            )
+
+        def _plain_delivery_text() -> str:
+            plain_head = html.unescape(clean_html_tags(head or ""))
+            plain_body = html.unescape(clean_html_tags(body or ""))
+            if plain_body:
+                text = f"{plain_head}\n\n{plain_body}"
+            else:
+                text = plain_head
+            return text.strip() or "."
+
+        def _log_plain_fallback(reason: str) -> None:
+            nonlocal html_plain_fallback_logged
+            if html_plain_fallback_logged:
+                return
+            runtime_logger.warning(
+                "delivery_html_plain_fallback %s",
+                json.dumps(
+                    {
+                        "board_id": board_id,
+                        "post_num": post_num,
+                        "phase": delivery_phase,
+                        "type": str(current_content.get("type")),
+                        "reason": reason,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            html_plain_fallback_logged = True
+
+        async def _send_plain_text_parts(
+            reason: str,
+            text: str | None = None,
+            reply_to_id: int | None = None,
+            include_keyboard: bool = True,
+        ):
+            _log_plain_fallback(reason)
+            sent_msgs = []
+            fallback_text = text if text is not None else _plain_delivery_text()
+            parts = split_text(fallback_text, 4096)
+            target_reply_id = reply_to_id if reply_to_id is not None else reply_to_mid
+            for i, part in enumerate(parts):
+                m = await bot_instance.send_message(
+                    chat_id=uid,
+                    text=part,
+                    reply_to_message_id=target_reply_id if i == 0 else None,
+                    reply_markup=final_keyboard if include_keyboard and i == len(parts) - 1 else None,
+                    disable_notification=is_sage,
+                    disable_web_page_preview=True,
+                    request_timeout=request_timeout,
+                )
+                sent_msgs.append(m)
+            stats['success'] += 1
+            return sent_msgs
+
+        def _plain_media_source(media_type: str):
+            if current_content.get("image_bytes"):
+                if media_type == 'photo':
+                    filename = "file.jpg"
+                elif media_type == 'animation':
+                    filename = "file.gif"
+                elif media_type == 'audio':
+                    filename = "file.mp3"
+                elif media_type == 'voice':
+                    filename = "file.ogg"
+                else:
+                    filename = "file.mp4"
+                return BufferedInputFile(current_content["image_bytes"], filename=filename)
+            return current_content.get("file_id") or current_content.get("image_url")
+
+        async def _send_plain_media_fallback(reason: str):
+            plain_text = _plain_delivery_text()
+            ct = str(current_content.get("type") or "").split('.')[-1].lower()
+            if ct == "text":
+                return await _send_plain_text_parts(reason, plain_text)
+            if ct in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
+                file_source = _plain_media_source(ct)
+                if not file_source:
+                    return await _send_plain_text_parts(reason, plain_text)
+                common_plain_kwargs = {
+                    'chat_id': uid,
+                    'reply_to_message_id': reply_to_mid,
+                    'reply_markup': final_keyboard,
+                    'disable_notification': is_sage,
+                    'request_timeout': request_timeout,
+                }
+                if has_spoiler and ct in ['photo', 'video', 'animation']:
+                    common_plain_kwargs['has_spoiler'] = True
+                send_method = getattr(bot_instance, f"send_{ct}")
+                if len(plain_text) > 1024:
+                    common_plain_kwargs[ct] = file_source
+                    media_msg = await send_method(**common_plain_kwargs)
+                    await _send_plain_text_parts(
+                        reason,
+                        plain_text,
+                        reply_to_id=media_msg.message_id,
+                        include_keyboard=False,
+                    )
+                    return media_msg
+                common_plain_kwargs['caption'] = plain_text
+                common_plain_kwargs[ct] = file_source
+                res = await send_method(**common_plain_kwargs)
+                _log_plain_fallback(reason)
+                stats['success'] += 1
+                return res
+            if ct == "media_group":
+                media_group_build = []
+                can_fit_caption = len(plain_text) <= 1024
+                caption_for_group = plain_text if can_fit_caption else None
+                for idx, item in enumerate(current_content.get('media') or []):
+                    media_src = item.get('media') or item.get('file_id')
+                    if not media_src:
+                        continue
+                    m_type = str(item.get('type') or '').split('.')[-1].lower()
+                    cap = caption_for_group if idx == 0 else None
+                    if m_type == 'photo':
+                        media_group_build.append(InputMediaPhoto(media=media_src, caption=cap, has_spoiler=has_spoiler))
+                    elif m_type == 'video':
+                        media_group_build.append(InputMediaVideo(media=media_src, caption=cap, has_spoiler=has_spoiler))
+                    elif m_type == 'document':
+                        media_group_build.append(InputMediaDocument(media=media_src, caption=cap))
+                    elif m_type == 'audio':
+                        media_group_build.append(InputMediaAudio(media=media_src, caption=cap))
+                if not media_group_build:
+                    return await _send_plain_text_parts(reason, plain_text)
+                res = await bot_instance.send_media_group(
+                    chat_id=uid,
+                    media=media_group_build,
+                    reply_to_message_id=reply_to_mid,
+                    disable_notification=is_sage,
+                    request_timeout=request_timeout,
+                )
+                _log_plain_fallback(reason)
+                if not can_fit_caption:
+                    anchor_msg = res[0] if isinstance(res, list) else res
+                    anchor_id = getattr(anchor_msg, "message_id", None)
+                    await _send_plain_text_parts(reason, plain_text, reply_to_id=anchor_id, include_keyboard=True)
+                    return res
+                stats['success'] += 1
+                return res
+            if ct in ['sticker', 'video_note', 'dice']:
+                text_result = await _send_plain_text_parts(reason, plain_text)
+                if ct == 'dice':
+                    await bot_instance.send_dice(
+                        chat_id=uid,
+                        emoji=current_content.get('dice_emoji', '\U0001F3B2'),
+                        disable_notification=is_sage,
+                        request_timeout=request_timeout,
+                    )
+                elif current_content.get("file_id"):
+                    send_method = getattr(bot_instance, f"send_{ct}")
+                    await send_method(
+                        chat_id=uid,
+                        **{ct: current_content.get("file_id")},
+                        disable_notification=is_sage,
+                        request_timeout=request_timeout,
+                    )
+                return text_result
+            return await _send_plain_text_parts(reason, plain_text)
         
         for attempt in range(max_attempts):
             try:
-                ct_raw = content["type"]
+                ct_raw = current_content["type"]
                 ct = str(ct_raw).split('.')[-1].lower()
                 common_kwargs = {
                     'chat_id': uid, 
@@ -4560,22 +4997,22 @@ async def send_message_to_users(
                     return sent_msgs
                 elif ct in['photo', 'video', 'animation', 'document', 'audio', 'voice']:
                     file_source = None
-                    if content.get("image_bytes"): 
+                    if current_content.get("image_bytes"):
                         if ct == 'photo': 
                             filename = "file.jpg"
                         elif ct == 'animation':
                             filename = "file.gif" 
                         else:
                             filename = "video.mp4"
-                        file_source = BufferedInputFile(content["image_bytes"], filename=filename)
-                    elif content.get("file_id"): 
-                        file_source = content["file_id"]
-                    elif content.get("image_url"): 
-                        file_source = content["image_url"]
+                        file_source = BufferedInputFile(current_content["image_bytes"], filename=filename)
+                    elif current_content.get("file_id"):
+                        file_source = current_content["file_id"]
+                    elif current_content.get("image_url"):
+                        file_source = current_content["image_url"]
                     if not file_source:
                         stats['errors'] += 1
                         return None
-                    if media_url_text_fallback and content.get("image_url"):
+                    if media_url_text_fallback and current_content.get("image_url"):
                         return await _send_text_fallback("cached_bad_media_url")
                     if has_spoiler and ct in['photo', 'video', 'animation']:
                         common_kwargs['has_spoiler'] = True
@@ -4584,14 +5021,25 @@ async def send_message_to_users(
                         send_method = getattr(bot_instance, f"send_{ct}")
                         media_msg = await send_method(**common_kwargs)
                         text_parts = split_text(full_text, 4096)
-                        for part in text_parts:
-                            await bot_instance.send_message(
-                                chat_id=uid, text=part, parse_mode="HTML",
-                                reply_to_message_id=media_msg.message_id,
-                                disable_notification=is_sage,
-                                disable_web_page_preview=True,
-                                request_timeout=request_timeout,
-                            )
+                        try:
+                            for part in text_parts:
+                                await bot_instance.send_message(
+                                    chat_id=uid, text=part, parse_mode="HTML",
+                                    reply_to_message_id=media_msg.message_id,
+                                    disable_notification=is_sage,
+                                    disable_web_page_preview=True,
+                                    request_timeout=request_timeout,
+                                )
+                        except TelegramBadRequest as e:
+                            if _telegram_parse_error(e.message.lower()):
+                                await _send_plain_text_parts(
+                                    "telegram_rejected_html_after_media",
+                                    _plain_delivery_text(),
+                                    reply_to_id=media_msg.message_id,
+                                    include_keyboard=False,
+                                )
+                                return media_msg
+                            raise
                         stats['success'] += 1
                         return media_msg
                     else:
@@ -4603,7 +5051,7 @@ async def send_message_to_users(
                         stats['success'] += 1
                         return res
                 elif ct == "media_group":
-                    if not content.get('media'): 
+                    if not current_content.get('media'):
                         stats['errors'] += 1
                         return None
                     
@@ -4612,7 +5060,7 @@ async def send_message_to_users(
                     caption_for_group = full_text if can_fit_caption else None
                     
                     media_group_build = []
-                    for idx, item in enumerate(content['media']):
+                    for idx, item in enumerate(current_content['media']):
                         media_src = item.get('media') or item.get('file_id')
                         if not media_src: continue
                         m_type = item['type']
@@ -4642,14 +5090,25 @@ async def send_message_to_users(
                     if not can_fit_caption:
                         anchor_msg = res[0] if isinstance(res, list) else res
                         text_parts = split_text(full_text, 4096)
-                        for part in text_parts:
-                            await bot_instance.send_message(
-                                chat_id=uid, text=part, parse_mode="HTML",
-                                reply_to_message_id=anchor_msg.message_id,
-                                disable_notification=is_sage,
-                                disable_web_page_preview=True,
-                                request_timeout=request_timeout,
-                            )
+                        try:
+                            for part in text_parts:
+                                await bot_instance.send_message(
+                                    chat_id=uid, text=part, parse_mode="HTML",
+                                    reply_to_message_id=anchor_msg.message_id,
+                                    disable_notification=is_sage,
+                                    disable_web_page_preview=True,
+                                    request_timeout=request_timeout,
+                                )
+                        except TelegramBadRequest as e:
+                            if _telegram_parse_error(e.message.lower()):
+                                await _send_plain_text_parts(
+                                    "telegram_rejected_html_after_media_group",
+                                    _plain_delivery_text(),
+                                    reply_to_id=anchor_msg.message_id,
+                                    include_keyboard=True,
+                                )
+                                return res
+                            raise
                     
                     stats['success'] += 1
                     return res
@@ -4665,20 +5124,22 @@ async def send_message_to_users(
                         )
                         res = await bot_instance.send_dice(
                             chat_id=uid,
-                            emoji=content.get('dice_emoji', '🎲'),
+                            emoji=current_content.get('dice_emoji', '🎲'),
                             disable_notification=is_sage,
                             request_timeout=request_timeout,
                         )
                     else:
-                        common_kwargs[ct] = content.get("file_id")
+                        common_kwargs[ct] = current_content.get("file_id")
                         send_method = getattr(bot_instance, f"send_{ct}")
                         res = await send_method(**common_kwargs)
                     stats['success'] += 1
                     return res
             except TelegramBadRequest as e:
                 err_low = e.message.lower()
+                if _telegram_parse_error(err_low):
+                    return await _send_plain_media_fallback("telegram_rejected_html")
                 if (
-                    content.get("image_url")
+                    current_content.get("image_url")
                     and (
                         "wrong type of the web page content" in err_low
                         or "failed to get http url content" in err_low
@@ -4688,11 +5149,11 @@ async def send_message_to_users(
                     media_url_text_fallback = True
                     return await _send_text_fallback("telegram_rejected_media_url")
                 if "too big" in err_low or "file of size" in err_low:
-                    if content.get('type') == 'media_group' and content.get('media'):
+                    if current_content.get('type') == 'media_group' and current_content.get('media'):
                         print(f"⚠️[Anti-Fat] Пост #{post_num}: Обнаружен жирный файл. Запуск фильтрации...")
                         clean_media_list =[]
                         async with aiohttp.ClientSession() as head_session:
-                            for item in content['media']:
+                            for item in current_content['media']:
                                 media_obj = item.get('media') or item.get('file_id')
                                 should_skip = False
                                 if hasattr(media_obj, 'data'):
@@ -4718,7 +5179,7 @@ async def send_message_to_users(
                         if not clean_media_list:
                             stats['errors'] += 1
                             return None 
-                        content['media'] = clean_media_list
+                        current_content['media'] = clean_media_list
                         await asyncio.sleep(0.5)
                         continue 
                 if "message to be replied not found" in err_low:
@@ -4962,15 +5423,35 @@ async def send_message_to_users(
         
     if post_num and post_num not in posts_pending_deletion and not content.get('is_shadow_reject'):
         copies_for_db =[]
+        trimmed_copy_posts = 0
+        trimmed_copy_refs = 0
         async with storage_lock:
+            keep_copy_maps_in_ram = post_num in messages_storage and MAX_COPY_MAP_POSTS_IN_MEMORY > 0
             for uid, msg_obj_or_list in all_results:
                 msgs = msg_obj_or_list if isinstance(msg_obj_or_list, list) else [msg_obj_or_list]
                 if msgs:
                     msg_ids = [m.message_id for m in msgs]
-                    post_to_messages.setdefault(post_num, {})[uid] = msg_ids[0] if len(msg_ids) == 1 else msg_ids
                     for m in msgs:
-                        message_to_post[(uid, m.message_id)] = post_num
                         copies_for_db.append((uid, m.message_id))
+                    if keep_copy_maps_in_ram:
+                        post_to_messages.setdefault(post_num, {})[uid] = msg_ids[0] if len(msg_ids) == 1 else msg_ids
+                        for m in msgs:
+                            message_to_post[(uid, m.message_id)] = post_num
+            if keep_copy_maps_in_ram:
+                trimmed_copy_posts, trimmed_copy_refs = _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
+        if trimmed_copy_posts:
+            runtime_logger.info(
+                "copy_map_ram_trim %s",
+                json.dumps(
+                    {
+                        "removed_posts": trimmed_copy_posts,
+                        "removed_reverse": trimmed_copy_refs,
+                        "limit": MAX_COPY_MAP_POSTS_IN_MEMORY,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
         if copies_for_db:
             try:
                 await add_post_copies(post_num, copies_for_db)
@@ -6425,6 +6906,7 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
         u_set = b_data.get('user_settings', {}).get(target_id, {})
         if u_set.get('shadow_gif'): status.append("NoGIF")
         if u_set.get('shadow_sticker'): status.append("NoSticker")
+        if u_set.get('lie_media'): status.append("LieMedia")
         if status:
             total_activity = True
             board_name = BOARD_CONFIG[b_id]['name']
@@ -7631,7 +8113,7 @@ async def cmd_delete_thread(message: types.Message, board_id: str | None, stream
         confirm = "Тред успешно удалён, пользователи переведены на главную."
     await message.answer(confirm, parse_mode="HTML")
     await message.delete()
-@dp.message(Command("summarize"))
+@dp.message(Command("summarize", "sum", "summary", "samamri", "sammary"))
 async def cmd_summarize(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id:
         print("[summarize] Board ID not found")
@@ -7639,7 +8121,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         return
     b_data = board_data[board_id]
     user_id = message.from_user.id
-    lang = 'en' if board_id == 'int' else 'ru'
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     now_ts = time.time()
     async with storage_lock:
         last_usage = b_data.get('last_summarize_time', 0)
@@ -7647,6 +8129,8 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             remaining = SUMMARIZE_COOLDOWN - (now_ts - last_usage)
             if lang == 'en':
                 cooldown_text = f"⏳ Command is on cooldown. Please wait {int(remaining)} seconds."
+            elif lang == 'jp':
+                cooldown_text = f"⏳ コマンドはクールダウン中です。あと {int(remaining)} 秒お待ちください。"
             else:
                 cooldown_text = f"⏳ Команда на кулдауне. Подождите еще {int(remaining)} сек."
             try:
@@ -7657,51 +8141,122 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             return
         b_data['last_summarize_time'] = time.time()
     thread_id = None
-    context_name = f"доски {escape_html(BOARD_CONFIG[board_id]['name'])}"
+    
+    board_name = escape_html(BOARD_CONFIG[board_id]['name'])
+    if lang == 'en':
+        context_name = f"board {board_name}"
+    elif lang == 'jp':
+        context_name = f"板 {board_name}"
+    else:
+        context_name = f"доски {board_name}"
+
     if board_id in THREAD_BOARDS:
         user_location = b_data.get('user_state', {}).get(user_id, {}).get('location', 'main')
         if user_location != 'main':
             thread_id = user_location
             thread_info = b_data.get('threads_data', {}).get(thread_id, {})
             thread_title = thread_info.get('title', '...')
-            context_name = f"треда «{thread_title}»"
+            if lang == 'en':
+                context_name = f"thread \"{thread_title}\""
+            elif lang == 'jp':
+                context_name = f"スレッド「{thread_title}」"
+            else:
+                context_name = f"треда «{thread_title}»"
+
     if thread_id:
-        prompt = (
-            f"Ты должен коротко и забавно подвести итоги обсуждений в треде под названием «{escape_html(thread_info.get('title', ''))}» в анонимном чате двача. "
-            "Пиши как настоящий анон, используй иронию и сарказм, выноси суть. Не будь унылым!"
-        )
-        chunk = await get_board_chunk(board_id, thread_id=thread_id)
-        info_text = f"За последние 6 часов в треде" # для сообщения пользователю
+        if lang == 'en':
+            prompt = (
+                f"You are a toxic 4chan anon. Summarize this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). "
+                "Use internet slang, profanity, be cynical and rude. "
+                "Roast the participants if they are stupid. Keep it short (2-3 sentences). No filters."
+            )
+            info_text = "For the last 6 hours in the thread"
+        elif lang == 'jp':
+            prompt = (
+                f"お前は2chねらーだ。スレ「{escape_html(thread_info.get('title', ''))}」（「|」で区切られた投稿）の流れを3行で解説しろ。"
+                "毒舌で、ネットスラング（草、ｗ、～だろ）を多用しろ。丁寧語禁止。煽り全開で。"
+            )
+            info_text = "スレッドでの過去6時間の間に"
+        else:
+            prompt = (
+                f"Ты — Анон с имиджборды (Двач). Твоя задача: прочитать этот срач треда «{escape_html(thread_info.get('title', ''))}» (посты разделены '|') "
+                "и кратко пояснить, чё там происходит. "
+                "Пиши грязно, используй сленг, мат, будь веселым, ебанутым, токсичным и циничным ублюдком. "
+                "Высмей участников, если они тупят. Не используй возвышенных слов. "
+                "Формат: 2-3 предложения по сути. Без цензуры."
+            )
+            info_text = "За последние 6 часов в треде"
+        chunk = await get_board_chunk(board_id, thread_id=thread_id, lang=lang)
     else:
-        prompt = random.choice(SUMMARIZE_PROMPTS_BOARD)
-        chunk = await get_board_chunk(board_id, hours=6)
-        info_text = f"За последние 6 часов на доске"
+        if lang == 'en':
+            prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_EN)
+            info_text = "For the last 6 hours on the board"
+        elif lang == 'jp':
+            prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_JP)
+            info_text = "板での過去6時間の間に"
+        else:
+            prompt = random.choice(SUMMARIZE_PROMPTS_BOARD)
+            info_text = "За последние 6 часов на доске"
+        chunk = await get_board_chunk(board_id, hours=6, lang=lang)
+
     hf_token = os.getenv("HF_TOKEN")
-    if not hf_token:
-        print("[summarize] HF_TOKEN not set")
-        await message.answer("Ошибка: не настроен токен Hugging Face.")
-        return
     if not chunk or len(chunk) < 100:
         print(f"[summarize] Мало сообщений для summarize (len={len(chunk)})")
-        await message.answer(f"{info_text} было мало сообщений для саммари.")
+        if lang == 'en':
+            err_msg = f"{info_text} there were too few messages to summarize."
+        elif lang == 'jp':
+            err_msg = f"{info_text} サмаリーを作成するのに十分なメッセージがありませんでした。"
+        else:
+            err_msg = f"{info_text} было мало сообщений для саммари."
+        await message.answer(err_msg)
         return
-    await message.answer("⏳ Генерирую саммари, ждите ~30 секунд...")
+
+    if lang == 'en':
+        status_text = "⏳ Generating summary, please wait ~30 seconds..."
+    elif lang == 'jp':
+        status_text = "⏳ サマリーを生成中、30秒ほどお待ちください..."
+    else:
+        status_text = "⏳ Генерирую саммари, ждите ~30 секунд..."
+    await message.answer(status_text)
+
     try:
         summary = await summarize_text_with_hf(prompt, chunk, hf_token)
     except Exception as e:
         print(f"[summarize] Error during HF summarize: {e}")
-        await message.answer("Ошибка при генерации саммари.")
+        if lang == 'en':
+            err_msg = "Error generating summary."
+        elif lang == 'jp':
+            err_msg = "サмаリーの生成中にエラーが発生しました。"
+        else:
+            err_msg = "Ошибка при генерации саммари."
+        await message.answer(err_msg)
         return
+
     if not summary:
         print("[summarize] Summary empty or failed")
-        await message.answer("Не удалось сделать саммари. Попробуй позже.")
+        if lang == 'en':
+            err_msg = "Could not generate summary. Try again later."
+        elif lang == 'jp':
+            err_msg = "サマリーを作成できませんでした。後ほどもう一度お試しください。"
+        else:
+            err_msg = "Не удалось сделать саммари. Попробуй позже."
+        await message.answer(err_msg)
         return
+
     summary = summary[:4000]
     print(f"[summarize] Final summary length: {len(summary)}")
     now_dt = datetime.now(UTC)
+
+    if lang == 'en':
+        post_text = f"Summary of {context_name}:\n\n{summary}"
+    elif lang == 'jp':
+        post_text = f"{context_name} の要約:\n\n{summary}"
+    else:
+        post_text = f"Саммари {context_name}:\n\n{summary}"
+
     content = {
         'type': 'text',
-        'text': f"Саммари {context_name}:\n\n{summary}",
+        'text': post_text,
         'is_system_message': True
     }
     pnum = await create_post(
@@ -7715,11 +8270,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     if not pnum:
         print(f"⛔ [{board_id}] КРИТИЧЕСКАЯ ОШИБКА: не удалось создать пост в БД для /summarize.")
         return
-    if thread_id:
-        thread_info = b_data.get('threads_data', {}).get(thread_id, {})
-        header_text = await format_header(board_id, pnum) 
-    else:
-        header_text = await format_header(board_id, pnum)
+    header_text = await format_header(board_id, pnum)
     content['header'] = header_text
     await update_post_content(pnum, content)
     recipients = set()
@@ -7741,7 +8292,13 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         })
     else:
         await delete_post_by_num(pnum)
-        await message.answer("Не удалось отправить саммари, тред больше не активен.")
+        if lang == 'en':
+            err_msg = "Failed to send summary, thread is no longer active."
+        elif lang == 'jp':
+            err_msg = "サマリーを送信できませんでした。スレッドがアクティブではありません。"
+        else:
+            err_msg = "Не удалось отправить саммари, тред больше не активен."
+        await message.answer(err_msg)
         return
     print(f"[summarize] Саммари успешно отправлено ({context_name}, post_num={pnum})")
 @dp.message(Command("gban"))
@@ -8238,45 +8795,45 @@ async def activate_lightweight_mode(
     except TelegramBadRequest:
         pass
 
-@dp.message(Command("matrix", "matrica", "matriza", "redpill", "neo"))
-async def cmd_matrix(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    await activate_lightweight_mode(
-        message, board_id, stream, 'matrix_mode', MATRIX_PHRASES_START,
-        {'ru': "### ОПЕРАТОР ###", 'en': "### OPERATOR ###", 'jp': "### オペレーター ###"},
-        duration_seconds=310,
-    )
+# @dp.message(Command("matrix", "matrica", "matriza", "redpill", "neo"))
+# async def cmd_matrix(message: types.Message, board_id: str | None, stream: str = 'ru'):
+#     await activate_lightweight_mode(
+#         message, board_id, stream, 'matrix_mode', MATRIX_PHRASES_START,
+#         {'ru': "### ОПЕРАТОР ###", 'en': "### OPERATOR ###", 'jp': "### オペレーター ###"},
+#         duration_seconds=310,
+#     )
 
-@dp.message(Command("america", "usa", "liberty", "freedom"))
-async def cmd_america(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    await activate_lightweight_mode(
-        message, board_id, stream, 'america_mode', AMERICA_PHRASES_START,
-        {'ru': "### СЕНАТ ###", 'en': "### SENATE ###", 'jp': "### 上院 ###"},
-        duration_seconds=310,
-    )
+# @dp.message(Command("america", "usa", "liberty", "freedom"))
+# async def cmd_america(message: types.Message, board_id: str | None, stream: str = 'ru'):
+#     await activate_lightweight_mode(
+#         message, board_id, stream, 'america_mode', AMERICA_PHRASES_START,
+#         {'ru': "### СЕНАТ ###", 'en': "### SENATE ###", 'jp': "### 上院 ###"},
+#         duration_seconds=310,
+#     )
 
-@dp.message(Command("holiday", "newyear", "xmas", "christmas", "ny"))
-async def cmd_holiday(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    await activate_lightweight_mode(
-        message, board_id, stream, 'holiday_mode', HOLIDAY_PHRASES_START,
-        {'ru': "### ДЕД МОРОЗ ###", 'en': "### HOLIDAY ADMIN ###", 'jp': "### クリスマス管理人 ###"},
-        duration_seconds=320,
-    )
+# @dp.message(Command("holiday", "newyear", "xmas", "christmas", "ny"))
+# async def cmd_holiday(message: types.Message, board_id: str | None, stream: str = 'ru'):
+#     await activate_lightweight_mode(
+#         message, board_id, stream, 'holiday_mode', HOLIDAY_PHRASES_START,
+#         {'ru': "### ПОХМЕЛЬНЫЙ ШТАБ ###", 'en': "### HANGOVER DESK ###", 'jp': "### 後始末係 ###"},
+#         duration_seconds=320,
+#     )
 
-@dp.message(Command("oldweb", "oldnet", "icq", "winamp", "forum"))
-async def cmd_oldweb(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    await activate_lightweight_mode(
-        message, board_id, stream, 'oldweb_mode', OLDWEB_PHRASES_START,
-        {'ru': "### ВЕБМАСТЕР ###", 'en': "### WEBMASTER ###", 'jp': "### ウェブマスター ###"},
-        duration_seconds=315,
-    )
+# @dp.message(Command("oldweb", "oldnet", "icq", "winamp", "forum"))
+# async def cmd_oldweb(message: types.Message, board_id: str | None, stream: str = 'ru'):
+#     await activate_lightweight_mode(
+#         message, board_id, stream, 'oldweb_mode', OLDWEB_PHRASES_START,
+#         {'ru': "### ВЕБМАСТЕР ###", 'en': "### WEBMASTER ###", 'jp': "### ウェブマスター ###"},
+#         duration_seconds=315,
+#     )
 
-@dp.message(Command("jewish", "talmud", "odessa", "shabbat", "rabbi", "evrei", "evrey"))
-async def cmd_jewish(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    await activate_lightweight_mode(
-        message, board_id, stream, 'jewish_mode', JEWISH_PHRASES_START,
-        {'ru': "### РАВВИН ПРОТОКОЛА ###", 'en': "### PROTOCOL RABBI ###", 'jp': "### 議論のラビ ###"},
-        duration_seconds=320,
-    )
+# @dp.message(Command("jewish", "talmud", "odessa", "shabbat", "rabbi", "evrei", "evrey"))
+# async def cmd_jewish(message: types.Message, board_id: str | None, stream: str = 'ru'):
+#     await activate_lightweight_mode(
+#         message, board_id, stream, 'jewish_mode', JEWISH_PHRASES_START,
+#         {'ru': "### КАНЦЕЛЯРИЯ СПОРА ###", 'en': "### ARGUMENT DESK ###", 'jp': "### 反論窓口 ###"},
+#         duration_seconds=320,
+#     )
 async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: str):
     """
     Универсальная функция для отключения любого режима по таймеру.
@@ -8349,11 +8906,11 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
         'imperial_mode': IMPERIAL_PHRASES_END,
         'gopnik_mode': GOPNIK_PHRASES_END,
         'schizo_mode': SCHIZO_PHRASES_END,
-        'matrix_mode': MATRIX_PHRASES_END,
-        'america_mode': AMERICA_PHRASES_END,
-        'holiday_mode': HOLIDAY_PHRASES_END,
-        'oldweb_mode': OLDWEB_PHRASES_END,
-        'jewish_mode': JEWISH_PHRASES_END,
+        # 'matrix_mode': MATRIX_PHRASES_END,
+        # 'america_mode': AMERICA_PHRASES_END,
+        # 'holiday_mode': HOLIDAY_PHRASES_END,
+        # 'oldweb_mode': OLDWEB_PHRASES_END,
+        # 'jewish_mode': JEWISH_PHRASES_END,
     }
     phrases = end_phrases_map.get(mode_to_disable, ["Режим отключен."])
     end_text = random.choice(phrases) if isinstance(phrases, list) else "Режим отключен."
@@ -9411,6 +9968,39 @@ async def cmd_toggle_media(message: types.Message, board_id: str | None, stream:
     await message.answer(msg)
     try: await message.delete()
     except: pass
+@dp.message(Command("lie"))
+async def cmd_lie_media(message: types.Message, board_id: str | None, stream: str = 'ru'):
+
+    if not board_id or not is_admin(message.from_user.id, board_id): return
+    target_id = None
+    if message.reply_to_message:
+        async with storage_lock:
+            target_id = await get_author_id_by_reply(message)
+    elif len(message.text.split()) > 1:
+        try: target_id = int(message.text.split()[1])
+        except: pass
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if not target_id:
+        await message.answer("Need ID or reply: /lie <id>" if lang == 'en' else "Need ID or reply: /lie <id>")
+        return
+    b_data = board_data[board_id]
+    if target_id not in b_data.get('user_settings', {}):
+        b_data.setdefault('user_settings', {})[target_id] = {
+            'nsfw': False, 'hide': set(),
+            'shadow_gif': False, 'shadow_sticker': False, 'shadow_media': False,
+            'lie_media': False,
+        }
+    settings = b_data['user_settings'][target_id]
+    settings.setdefault('nsfw', False)
+    settings.setdefault('hide', set())
+    new_val = not settings.get('lie_media', False)
+    settings['lie_media'] = new_val
+    asyncio.create_task(update_user_settings_db(target_id, board_id, lie_media=1 if new_val else 0))
+    status = "ENABLED" if new_val else "DISABLED"
+    await log_global_event('bot', f"LIE_MEDIA_TOGGLE: admin {message.from_user.id} {status} archive media substitution for {target_id} on /{board_id}/")
+    await message.answer(f"Lie media for <code>{target_id}</code>: {status}", parse_mode="HTML")
+    try: await message.delete()
+    except: pass
 @dp.callback_query(F.data == "create_thread_edit", ThreadCreateStates.waiting_for_confirmation)
 async def cb_create_thread_edit(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -10246,6 +10836,11 @@ async def archive_thread(bots: dict[str, Bot], board_id: str, thread_id: str, th
     )
     if filepath:
         await post_archive_to_channel(bots, filepath, board_id, thread_info)
+    try:
+        from common.database import archive_thread_in_db
+        await archive_thread_in_db(int(thread_id))
+    except Exception as e:
+        print(f"❌ Ошибка при архивации треда #{thread_id} в БД: {e}")
 @dp.message(Command("cancel"), FSMContext)
 async def cmd_cancel_fsm(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -12436,6 +13031,7 @@ async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 
     sticker_ban_count = sum(1 for s in user_settings.values() if s.get('shadow_sticker'))
     reaction_ban_count = len(b_data.get('reaction_banned_users', set()))
     media_ban_count = sum(1 for s in user_settings.values() if s.get('shadow_media')) # Подсчет
+    lie_media_count = sum(1 for s in user_settings.values() if s.get('lie_media'))
     if lang == 'en':
         header_text = f"Admin panel for board {BOARD_CONFIG[board_id]['name']}:"
         memo_text = (
@@ -12445,6 +13041,7 @@ async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 
             f"<code>/togglegif &lt;id&gt;</code> - Shadow Ban GIFs ({gif_ban_count})\n"
             f"<code>/togglestickers &lt;id&gt;</code> - Shadow Ban Stickers ({sticker_ban_count})\n"
             f"<code>/togglemedia</code> — Бан ВСЕХ медиа ({media_ban_count})\n\n"
+            f"<code>/lie &lt;id&gt;</code> - Archive media substitution ({lie_media_count})\n"
             "<code>/reactions</code> (reply) - Show who reacted"
         )
     elif lang == 'jp':
@@ -12455,6 +13052,7 @@ async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 
             f"<code>/togglereactions &lt;id&gt;</code> - リアクション禁止 ({reaction_ban_count})\n"
             f"<code>/togglegif &lt;id&gt;</code> - GIFシャドウバン ({gif_ban_count})\n"
             f"<code>/togglestickers &lt;id&gt;</code> - ステッカーシャドウバン ({sticker_ban_count})\n"
+            f"<code>/lie &lt;id&gt;</code> - Archive media substitution ({lie_media_count})\n"
             "<code>/reactions</code> (返信) - リアクションした人を見る"
         )
     else:
@@ -12472,6 +13070,7 @@ async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 
             "<code>/id</code> — Узнать ID\n"
             f"<code>/togglegif</code> — Запрет GIF (Всего: {gif_ban_count})\n"
             f"<code>/togglestickers</code> — Запрет стикеров (Всего: {sticker_ban_count})\n\n"
+            f"<code>/lie</code> — Подмена медиа архивом (Всего: {lie_media_count})\n\n"
             "<code>/say [текст]</code> — Пост от имени Админа\n"
             "<code>/ans [текст]</code> — Ответ от имени Системы (реплай)\n"
             "<code>/stop</code> — Выключить режимы (Шиза и т.д.)"
@@ -12856,6 +13455,13 @@ async def admin_restrictions_board(callback: types.CallbackQuery, board_id: str 
     if media_banned_users:
         media_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(media_banned_users)])
         text_parts.append(f"\n<u>🔇 Теневой бан Медиа (только текст):</u>\n{media_list}")
+    lie_media_users = []
+    for uid, settings in user_settings.items():
+        if settings.get('lie_media'):
+            lie_media_users.append(uid)
+    if lie_media_users:
+        lie_list = "\n".join([f"  • ID <code>{uid}</code>" for uid in sorted(lie_media_users)])
+        text_parts.append(f"\n<u>🎭 Archive media substitution:</u>\n{lie_list}")
     if len(text_parts) == 1:
         final_text = f"На доске {BOARD_CONFIG[board_id]['name']} нет активных ограничений."
     else:
@@ -12974,6 +13580,8 @@ async def admin_back_to_main(callback: types.CallbackQuery):
     gif_ban_count = sum(1 for s in user_settings.values() if s.get('shadow_gif'))
     sticker_ban_count = sum(1 for s in user_settings.values() if s.get('shadow_sticker'))
     reaction_ban_count = len(b_data.get('reaction_banned_users', set()))
+    media_ban_count = sum(1 for s in user_settings.values() if s.get('shadow_media'))
+    lie_media_count = sum(1 for s in user_settings.values() if s.get('lie_media'))
     board_name = BOARD_CONFIG[board_id]['name']
     if lang == 'en':
         header_text = f"Admin panel for board {board_name}:"
@@ -12984,6 +13592,7 @@ async def admin_back_to_main(callback: types.CallbackQuery):
             f"<code>/togglegif &lt;id&gt;</code> - Shadow Ban GIFs ({gif_ban_count})\n"
             f"<code>/togglestickers &lt;id&gt;</code> - Shadow Ban Stickers ({sticker_ban_count})\n"
             f"<code>/togglemedia &lt;id&gt;</code> - Shadow Ban Media ({media_ban_count})\n"
+            f"<code>/lie &lt;id&gt;</code> - Archive media substitution ({lie_media_count})\n"
             "<code>/reactions</code> (reply) - Show who reacted"
         )
         btn_stats = "📊 Stats"
@@ -12997,8 +13606,9 @@ async def admin_back_to_main(callback: types.CallbackQuery):
             "<code>/filter ...</code> - フィルタ管理\n"
             f"<code>/togglereactions &lt;id&gt;</code> - リアクション禁止 ({reaction_ban_count})\n"
             f"<code>/togglegif &lt;id&gt;</code> - GIF禁止 ({gif_ban_count})\n"
-            f"<code>/togglestickers &lt;id&gt;</code> - スタンプ禁止 ({sticker_ban_count})"
+            f"<code>/togglestickers &lt;id&gt;</code> - スタンプ禁止 ({sticker_ban_count})\n"
             f"<code>/togglemedia &lt;id&gt;</code> - メディア禁止 ({media_ban_count})\n"
+            f"<code>/lie &lt;id&gt;</code> - Archive media substitution ({lie_media_count})\n"
             "<code>/reactions</code> (返信) - リアクションした人を見る"
         )
         btn_stats = "📊 統計"
@@ -13018,6 +13628,7 @@ async def admin_back_to_main(callback: types.CallbackQuery):
             "<code>/whois [id]</code> — Досье\n"
             f"<code>/togglegif</code> — Бан GIF ({gif_ban_count})\n"
             f"<code>/togglestickers</code> — Бан стикеров ({sticker_ban_count})\n\n"
+            f"<code>/lie</code> — Подмена медиа архивом ({lie_media_count})\n\n"
             "<code>/say</code>, <code>/ans</code> — Ответы\n"
             "<code>/stop</code> — Стоп режимы"
         )
@@ -14254,10 +14865,26 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
         final_media_list = []
         for msg in raw_messages:
             media_data = {'type': msg.content_type, 'file_id': None}
-            if msg.photo: media_data['file_id'] = msg.photo[-1].file_id
-            elif msg.video: media_data['file_id'] = msg.video.file_id
-            elif msg.document: media_data['file_id'] = msg.document.file_id
-            elif msg.audio: media_data['file_id'] = msg.audio.file_id
+            media_obj = None
+            if msg.photo:
+                media_obj = msg.photo[-1]
+                media_data['file_id'] = media_obj.file_id
+            elif msg.video:
+                media_obj = msg.video
+                media_data['file_id'] = media_obj.file_id
+            elif msg.document:
+                media_obj = msg.document
+                media_data['file_id'] = media_obj.file_id
+            elif msg.audio:
+                media_obj = msg.audio
+                media_data['file_id'] = media_obj.file_id
+            if media_obj:
+                file_name = getattr(media_obj, 'file_name', None)
+                mime_type = getattr(media_obj, 'mime_type', None)
+                if file_name:
+                    media_data['filename'] = file_name
+                if mime_type:
+                    media_data['mime_type'] = mime_type
             if media_data['file_id']:
                 final_media_list.append(media_data)
         group['media'] = final_media_list
@@ -14752,9 +15379,18 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         # Предварительно извлекаем данные о медиа, если они есть
         media_type = message.content_type if message.content_type != 'text' else None
         media_file_id = None
+        media_meta = {}
         if media_type:
             file_obj = getattr(message, media_type)
-            media_file_id = file_obj[-1].file_id if isinstance(file_obj, list) else file_obj.file_id
+            if isinstance(file_obj, list):
+                file_obj = file_obj[-1]
+            media_file_id = file_obj.file_id
+            file_name = getattr(file_obj, 'file_name', None)
+            mime_type = getattr(file_obj, 'mime_type', None)
+            if file_name:
+                media_meta['filename'] = file_name
+            if mime_type:
+                media_meta['mime_type'] = mime_type
 
         for i, (post_num_to_reply, text_chunk) in enumerate(multi_reply_blocks):
             # Проверяем существование поста (сначала в RAM, потом в БД)
@@ -14771,6 +15407,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             # Прикрепляем медиа к первому посту в цепочке ответов, остальные — текст
             if i == 0 and media_type:
                 content = {'type': media_type, 'file_id': media_file_id, 'caption': formatted_chunk}
+                content.update(media_meta)
             else:
                 content = {'type': 'text', 'text': formatted_chunk}
             quote_info = await build_quick_quote_info(post_num_to_reply)
@@ -14844,6 +15481,12 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         if isinstance(file_id_obj, list): file_id_obj = file_id_obj[-1]
         safe_caption_html = sanitize_html(processed_html_text)
         content.update({'file_id': file_id_obj.file_id, 'caption': safe_caption_html})
+        file_name = getattr(file_id_obj, 'file_name', None)
+        mime_type = getattr(file_id_obj, 'mime_type', None)
+        if file_name:
+            content['filename'] = file_name
+        if mime_type:
+            content['mime_type'] = mime_type
     elif message.content_type in ['sticker', 'video_note']:
         file_id_obj = getattr(message, message.content_type)
         content.update({'file_id': file_id_obj.file_id})
@@ -15055,13 +15698,20 @@ async def _run_background_task(task_factory: Callable[[], Awaitable[Any]], task_
         try:
             task_coro = task_factory()
             await task_coro
-            print(f"⚠️ Фоновая задача '{task_name}' завершилась штатно. Перезапуск не выполняется.")
-            break
+            if is_shutting_down or drain_shutdown_requested:
+                print(f"ℹ️ Фоновая задача '{task_name}' завершилась при остановке.")
+                break
+            print(f"⚠️ Фоновая задача '{task_name}' неожиданно завершилась. Перезапуск через {current_delay} секунд...")
+            await asyncio.sleep(current_delay)
+            current_delay = min(current_delay * 2, MAX_RESTART_DELAY)
         except asyncio.CancelledError:
             print(f"ℹ️ Фоновая задача '{task_name}' была отменена.")
             break
         except Exception as e:
             import traceback
+            if is_shutting_down or drain_shutdown_requested:
+                print(f"Background task '{task_name}' ended during shutdown: {e}")
+                break
             print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА в фоновой задаче '{task_name}': {e}")
             runtime_logger.exception("background_task_failed task=%s", task_name)
             traceback.print_exc()
@@ -15118,6 +15768,108 @@ async def periodic_thread_digest():
                     })
         except Exception as e:
             print(f"❌ Ошибка дайджеста: {e}")
+SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
+
+
+def _site_public_url(raw_url: str | None) -> str | None:
+    if not raw_url:
+        return None
+    url = str(raw_url).strip()
+    if not url:
+        return None
+    if url.startswith(("http://", "https://")):
+        return url
+    if url.startswith("/"):
+        return f"{SITE_PUBLIC_BASE_URL}{url}"
+    return f"{SITE_PUBLIC_BASE_URL}/{url.lstrip('/')}"
+
+
+def _site_file_send_type(file_info: dict) -> str | None:
+    raw_type = str(file_info.get("type") or "").split(".")[-1].lower()
+    filename = str(file_info.get("filename") or "").lower()
+    if raw_type in {"image", "photo", "picture"}:
+        return "photo"
+    if raw_type in {"video", "video_note"}:
+        return "video"
+    if raw_type in {"gif", "animation"}:
+        return "animation"
+    if raw_type in {"audio", "voice"}:
+        return "audio" if raw_type == "audio" else "voice"
+    if raw_type in {"document", "file"}:
+        return "document"
+    if raw_type == "sticker":
+        return "document"
+    if filename.endswith((".jpg", ".jpeg", ".png")):
+        return "photo"
+    if filename.endswith((".mp4", ".mov", ".mkv", ".webm")):
+        return "video" if not filename.endswith(".webm") else "document"
+    if filename.endswith(".gif"):
+        return "animation"
+    if filename.endswith((".mp3", ".wav", ".ogg", ".opus")):
+        return "audio"
+    return "document"
+
+
+def _site_file_source(file_info: dict, prefer_url: bool = False) -> str | None:
+    file_id = file_info.get("original_file_id") or file_info.get("file_id") or file_info.get("media")
+    if isinstance(file_id, str) and file_id.startswith("shadowbanned"):
+        file_id = None
+    public_url = _site_public_url(file_info.get("original_url") or file_info.get("thumbnail_url"))
+    source = public_url if prefer_url else file_id
+    if not source:
+        source = file_id or public_url
+    return str(source) if source else None
+
+
+def _site_media_item(file_info: dict) -> dict | None:
+    send_type = _site_file_send_type(file_info)
+    source = _site_file_source(file_info)
+    if not send_type or not source:
+        return None
+    return {
+        "type": send_type,
+        "media": source,
+        "file_id": source,
+        "mime_type": file_info.get("mime_type"),
+        "filename": file_info.get("filename"),
+    }
+
+
+def _attach_site_media_for_delivery(content: dict, source_content: dict | None = None) -> dict:
+    files = (source_content or content).get("files")
+    if not isinstance(files, list) or not files:
+        return content
+
+    media_items = [
+        item for item in (_site_media_item(file_info) for file_info in files if isinstance(file_info, dict))
+        if item
+    ]
+    if not media_items:
+        return content
+
+    delivery_content = content.copy()
+    delivery_content["caption"] = delivery_content.get("caption") or delivery_content.get("text") or ""
+    delivery_content["files"] = files
+
+    album_supported = {"photo", "video", "document", "audio"}
+    album_items = [item for item in media_items if item["type"] in album_supported]
+    if len(album_items) > 1:
+        delivery_content["type"] = "media_group"
+        delivery_content["media"] = album_items[:10]
+        delivery_content.pop("file_id", None)
+        delivery_content.pop("image_url", None)
+        return delivery_content
+
+    first_item = media_items[0]
+    delivery_content["type"] = first_item["type"]
+    delivery_content["file_id"] = first_item["file_id"]
+    first_file = files[0] if isinstance(files[0], dict) else {}
+    public_url = _site_public_url(first_file.get("original_url") or first_file.get("thumbnail_url"))
+    if public_url:
+        delivery_content["image_url"] = public_url
+    return delivery_content
+
+
 async def site_posts_broadcaster():
     """
     Фоновая задача, которая извлекает посты, созданные на сайте, из очереди в БД
@@ -15136,16 +15888,28 @@ async def site_posts_broadcaster():
                     post_num = post.get('post_num')
                     if not post_num:
                         continue
+                    if post.get('_broadcast_decode_failed'):
+                        await mark_broadcast_posts_sent([post_num])
+                        continue
                     if post_num in messages_storage or post_num in locally_created_posts:
+                        await mark_broadcast_posts_sent([post_num])
                         continue
                     board_id = post.get('board_id')
                     author_id = post.get('author_id')
                     post_stream = post.get('stream', 'ru')
                     post_mode = post.get('post_mode') 
+                    thread_id = post.get('thread_id')
+                    is_new_thread = (
+                        post_mode == 'new_thread'
+                        or bool(post.get('is_op_post'))
+                        or (thread_id is not None and str(thread_id) == str(post_num))
+                    )
                     if not board_id or board_id not in BOARD_CONFIG:
+                        await mark_broadcast_posts_sent([post_num])
                         continue
                     b_data = board_data[board_id]
                     content = post.get('content', {})
+                    skip_broadcast = False
                     async with storage_lock:
                         is_banned = author_id in b_data.get('users', {}).get('banned', set())
                         m_until = b_data.get('mutes', {}).get(author_id)
@@ -15153,57 +15917,67 @@ async def site_posts_broadcaster():
                         sm_until = b_data.get('shadow_mutes', {}).get(author_id)
                         is_shadow_muted = sm_until and sm_until > datetime.now(UTC)
                         if is_banned or is_muted or is_shadow_muted:
-                            continue
-                        state['post_counter'] = max(state.get('post_counter', 0), post_num)
-                        header = await format_header(board_id, post_num, stream=post_stream)
-                        if post_mode == 'new_thread':
-                            raw_text = content.get('text', '')
-                            clean_text_no_tags = re.sub(r'<[^>]+>', '', raw_text)
-                            decoded_text = html.unescape(clean_text_no_tags)
-                            title_preview = (decoded_text[:120] + '...') if len(decoded_text) > 120 else decoded_text
-                            if not title_preview.strip():
-                                title_preview = "Новый тред (медиа-контент)"
-                            site_url = f"https://tgach.top/{board_id}/res/{post_num}.html"
-                            if post_stream == 'en':
-                                notify_text = (
-                                    f"🌱 <b>New thread on website!</b>\n\n"
-                                    f"📝 {html.escape(title_preview)}\n\n"
-                                    f"🔗 <a href='{site_url}'>Open on Website</a>"
-                                )
-                            elif post_stream == 'jp':
-                                notify_text = (
-                                    f"🌱 <b>サイトで新しいスレが作成されました！</b>\n\n"
-                                    f"📝 {html.escape(title_preview)}\n\n"
-                                    f"🔗 <a href='{site_url}'>サイトで開く</a>"
-                                )
-                            else:
-                                notify_text = (
-                                    f"🌱 <b>На сайте создан новый тред!</b>\n\n"
-                                    f"📝 {html.escape(title_preview)}\n\n"
-                                    f"🔗 <a href='{site_url}'>Читать на сайте</a>"
-                                )
-                            content = {
-                                'type': 'text',
-                                'text': notify_text,
-                                'is_system_message': True,
-                                'header': f"### WEBSITE ###\n{header}"
-                            }
+                            skip_broadcast = True
                         else:
-                            content['header'] = header
-                        messages_storage[post_num] = {
-                            'author_id': author_id,
-                            'timestamp': datetime.fromtimestamp(post['timestamp'], UTC),
-                            'content': content,
-                            'board_id': board_id,
-                            'thread_id': post.get('thread_id'),
-                        }
+                            state['post_counter'] = max(state.get('post_counter', 0), post_num)
+                            header = await format_header(board_id, post_num, stream=post_stream)
+                            source_content = content
+                            if is_new_thread:
+                                raw_text = source_content.get('text', '')
+                                clean_text_no_tags = re.sub(r'<[^>]+>', '', raw_text)
+                                decoded_text = html.unescape(clean_text_no_tags)
+                                title_preview = (decoded_text[:120] + '...') if len(decoded_text) > 120 else decoded_text
+                                if not title_preview.strip():
+                                    title_preview = "Новый тред (медиа-контент)"
+                                site_url = f"https://tgach.top/{board_id}/res/{post_num}.html"
+                                if post_stream == 'en':
+                                    notify_text = (
+                                        f"🌱 <b>New thread on website!</b>\n\n"
+                                        f"📝 {html.escape(title_preview)}\n\n"
+                                        f"🔗 <a href='{site_url}'>Open on Website</a>"
+                                    )
+                                elif post_stream == 'jp':
+                                    notify_text = (
+                                        f"🌱 <b>サイトで新しいスレが作成されました！</b>\n\n"
+                                        f"📝 {html.escape(title_preview)}\n\n"
+                                        f"🔗 <a href='{site_url}'>サイトで開く</a>"
+                                    )
+                                else:
+                                    notify_text = (
+                                        f"🌱 <b>На сайте создан новый тред!</b>\n\n"
+                                        f"📝 {html.escape(title_preview)}\n\n"
+                                        f"🔗 <a href='{site_url}'>Читать на сайте</a>"
+                                    )
+                                content = {
+                                    'type': 'text',
+                                    'text': notify_text,
+                                    'is_system_message': True,
+                                    'header': f"### WEBSITE ###\n{header}",
+                                    'post_num': post_num,
+                                }
+                                content = _attach_site_media_for_delivery(content, source_content)
+                            else:
+                                content = _attach_site_media_for_delivery(content)
+                                content['header'] = header
+                                content['post_num'] = post_num
+                            if post.get('reply_to_post_num'):
+                                content['reply_to_post'] = post['reply_to_post_num']
+                            messages_storage[post_num] = {
+                                'author_id': author_id,
+                                'timestamp': datetime.fromtimestamp(post['timestamp'], UTC),
+                                'content': content,
+                                'board_id': board_id,
+                                'thread_id': post.get('thread_id'),
+                            }
+                    if skip_broadcast:
+                        await mark_broadcast_posts_sent([post_num])
+                        continue
                     base_recipients = b_data['users']['active'] - b_data['users']['banned']
                     if ENABLE_MULTILANG and board_id != 'int':
                         stream_users = await get_stream_active_users(board_id, post_stream)
                         base_recipients = base_recipients.intersection(stream_users)
                     recipients = set()
-                    thread_id = post.get('thread_id')
-                    if post_mode == 'new_thread' or not thread_id:
+                    if is_new_thread or not thread_id:
                         recipients = base_recipients
                     else:
                         thread_info = b_data.get('threads_data', {}).get(str(thread_id))
@@ -15216,8 +15990,9 @@ async def site_posts_broadcaster():
                             'content': content,
                             'post_num': post_num,
                             'board_id': board_id,
-                            'thread_id': thread_id if post_mode != 'new_thread' else None
+                            'thread_id': thread_id if not is_new_thread else None
                         })
+                        await mark_broadcast_posts_sent([post_num])
                         
                         if not content.get('is_system_message'):
                             bot_to_use = GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
@@ -15229,6 +16004,8 @@ async def site_posts_broadcaster():
                                     content=content,
                                     is_shadow_muted=is_shadow_muted
                                 ))
+                    else:
+                        await mark_broadcast_posts_sent([post_num])
             await asyncio.sleep(5) 
         except asyncio.CancelledError:
             break
@@ -15349,7 +16126,8 @@ async def event_loop_health_tick_task():
                     "is_shutting_down": is_shutting_down,
                     "drain_shutdown_requested": drain_shutdown_requested,
                 }
-                await asyncio.to_thread(_write_heartbeat_payload, payload)
+                _write_heartbeat_payload(payload)
+                event_loop_last_tick = time.time()
             except Exception:
                 pass
         await asyncio.sleep(1)

@@ -40,6 +40,7 @@ import hmac
 import hashlib
 import tracemalloc
 import io
+import mimetypes
 import random
 import secrets
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -52,7 +53,7 @@ from common.async_file_io import (
 from common.async_process import AsyncProcessError, run_process_checked
 from common.audio_effects import get_audio_filter
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
-from site_tgach.mirror_worker import process_mirror_queue
+from site_tgach.mirror_worker import close_internal_file_bots, process_mirror_queue
 from site_tgach.tagging_worker import tagging_loop
 import logging
 from collections import defaultdict
@@ -71,7 +72,7 @@ from site_tgach.security import get_pow_challenge_data, verify_pow, check_ddos, 
 from common.database import add_file_mirror, ban_hash
 from warhammer_mode import warhammer_transform
 from site_tgach.image_processing import apply_grimdark_filter_async, shutdown_image_executors
-from site_tgach.mtproto_client import _cleanup_idle_clients
+from site_tgach.mtproto_client import _cleanup_idle_clients, close_all_mtproto_clients
 try:
     from japanese_translator import (
         get_random_anime_image, 
@@ -108,11 +109,14 @@ from fastapi import (
     FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect, 
     File, UploadFile, Form, Depends, BackgroundTasks, Body
 )
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import (
     RedirectResponse, StreamingResponse, Response, HTMLResponse, JSONResponse
 )
+from starlette.background import BackgroundTask
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.inmemory import InMemoryBackend
 from fastapi_cache.decorator import cache
@@ -206,6 +210,7 @@ from common.database import (
     get_file_mirrors, get_banned_files_list, unban_hash, get_blurhashes_batch, get_duplicate_counts, cleanup_old_posts_from_db,
     get_random_video_post, get_random_image_post, get_random_active_thread, refresh_random_indexes, add_post_to_random_cache,
     get_recent_posts_global, get_full_user_info, get_global_feed_posts, process_backlinks,
+    add_to_mirror_queue,
     get_mod_queue, resolve_mod_queue,
     get_unread_replies_count, get_user_replies, mark_replies_read, toggle_post_censorship,
     get_recent_tags_summary,
@@ -221,6 +226,7 @@ from common.db_pool import create_pool, close_pool, get_pool
 from common.bot_pool import global_bot_pool
 from site_tgach.admin_config import ADMIN_IDS
 from site_tgach.image_processing import process_and_upload_image
+from site_tgach.mirror_health import is_hf_link_allowed
 from site_tgach.voice_processing import process_and_upload_voice
 from PIL import Image as PilImage
 PilImage.MAX_IMAGE_PIXELS = 49_000_000
@@ -279,21 +285,22 @@ async def is_request_from_ru(request: Request) -> bool:
     return country == "RU"
 from logging.handlers import RotatingFileHandler
 
-_old_log_record_factory = logging.getLogRecordFactory()
+class _RequestIdDefaultFilter(logging.Filter):
+    def filter(self, record):
+        if not hasattr(record, "request_id"):
+            record.request_id = "SYSTEM"
+        return True
 
-def _site_log_record_factory(*args, **kwargs):
-    record = _old_log_record_factory(*args, **kwargs)
-    if not hasattr(record, "request_id"):
-        record.request_id = "SYSTEM"
-    return record
+def _add_request_id_filter(handler: logging.Handler) -> logging.Handler:
+    handler.addFilter(_RequestIdDefaultFilter())
+    return handler
 
-logging.setLogRecordFactory(_site_log_record_factory)
-
-file_handler = RotatingFileHandler("site.log", maxBytes=10*1024*1024, backupCount=3, encoding="utf-8")
+file_handler = _add_request_id_filter(RotatingFileHandler("site.log", maxBytes=10*1024*1024, backupCount=3, encoding="utf-8"))
+stream_handler = _add_request_id_filter(logging.StreamHandler(sys.stdout))
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - [%(request_id)s] - %(message)s',
-    handlers=[file_handler, logging.StreamHandler(sys.stdout)],
+    handlers=[file_handler, stream_handler],
     force=True,
 )
 install_logging_redaction()
@@ -334,6 +341,117 @@ SITE_THREAD_VERSION_MAX_KEYS = int(os.getenv("SITE_THREAD_VERSION_MAX_KEYS", "50
 SITE_FLOOD_TRACKER_TTL_SEC = int(os.getenv("SITE_FLOOD_TRACKER_TTL_SEC", "60"))
 SITE_SECURITY_MAP_MAX_KEYS = int(os.getenv("SITE_SECURITY_MAP_MAX_KEYS", "10000"))
 SITE_DB_MAINTENANCE_ENABLED = os.getenv("SITE_DB_MAINTENANCE_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+RANDOM_DEAD_FILE_TTL_SEC = int(os.getenv("SITE_RANDOM_DEAD_FILE_TTL_SEC", "3600"))
+RANDOM_DEAD_FILE_MAX_KEYS = int(os.getenv("SITE_RANDOM_DEAD_FILE_MAX_KEYS", "5000"))
+RANDOM_API_DEADLINE_SEC = float(os.getenv("SITE_RANDOM_API_DEADLINE_SEC", "6.0"))
+RANDOM_AVAILABILITY_TIMEOUT_SEC = float(os.getenv("SITE_RANDOM_AVAILABILITY_TIMEOUT_SEC", "2.5"))
+RANDOM_DEAD_FILE_IDS: dict[str, float] = {}
+
+def _mark_random_dead_file(file_id: str | None):
+    if not file_id:
+        return
+    now = time.time()
+    if len(RANDOM_DEAD_FILE_IDS) >= RANDOM_DEAD_FILE_MAX_KEYS:
+        cutoff = now - RANDOM_DEAD_FILE_TTL_SEC
+        for key, ts in list(RANDOM_DEAD_FILE_IDS.items()):
+            if ts < cutoff:
+                RANDOM_DEAD_FILE_IDS.pop(key, None)
+        while len(RANDOM_DEAD_FILE_IDS) >= RANDOM_DEAD_FILE_MAX_KEYS:
+            RANDOM_DEAD_FILE_IDS.pop(next(iter(RANDOM_DEAD_FILE_IDS)), None)
+    RANDOM_DEAD_FILE_IDS[str(file_id)] = now
+
+def _is_random_dead_file(file_id: str | None) -> bool:
+    if not file_id:
+        return False
+    ts = RANDOM_DEAD_FILE_IDS.get(str(file_id))
+    if not ts:
+        return False
+    if time.time() - ts > RANDOM_DEAD_FILE_TTL_SEC:
+        RANDOM_DEAD_FILE_IDS.pop(str(file_id), None)
+        return False
+    return True
+
+def _upload_bot_attempt_count(stream: str) -> int:
+    if not global_bot_pool:
+        return 0
+    try:
+        global_bot_pool.init_stream(stream)
+        target_stream = stream if stream in global_bot_pool.iterators else 'ru'
+        if target_stream not in global_bot_pool.iterators:
+            global_bot_pool.init_stream('ru')
+            target_stream = 'ru'
+        bots = global_bot_pool.bots_map.get(target_stream) or {}
+        return min(max(len(bots), 1), 4)
+    except Exception:
+        return 1
+
+
+async def upload_with_bot_pool(file_obj, stream: str, channel_id: int, max_size_bytes: int, log) -> tuple:
+    if not global_bot_pool:
+        log.error("Upload error: bot pool is unavailable")
+        return (None, None)
+
+    content_type = file_obj.content_type or "application/octet-stream"
+    func = process_and_upload_voice if content_type.startswith("audio/") else process_and_upload_image
+    attempts = _upload_bot_attempt_count(stream)
+    tried_bot_ids = set()
+    last_error = None
+
+    for _ in range(attempts):
+        try:
+            bot_id, bot_inst = global_bot_pool.get_next_bot(stream)
+        except Exception as e:
+            last_error = e
+            break
+
+        if bot_id in tried_bot_ids:
+            continue
+        tried_bot_ids.add(bot_id)
+
+        try:
+            await file_obj.seek(0)
+        except Exception:
+            pass
+
+        try:
+            res = await func(file_obj, max_size_bytes, bot_inst, channel_id)
+            return (res, bot_id)
+        except HTTPException as e:
+            last_error = e
+            if e.status_code < 500:
+                break
+            log.warning(f"Upload retryable error on bot {bot_id}: {e.detail}")
+        except Exception as e:
+            last_error = e
+            log.warning(f"Upload retryable error on bot {bot_id}: {e}")
+
+    log.error(f"Upload failed after bot pool retries: {last_error}")
+    return (None, None)
+
+
+def _file_owner_pairs_for_upload_result(res_data: dict, uploader_bot_id: int | None) -> list[tuple[str, int]]:
+    pairs = []
+    if not isinstance(res_data, dict):
+        return pairs
+
+    is_dedup = bool(res_data.get("dedup_found"))
+    owner_bot_id = res_data.get("owner_bot_id")
+    if owner_bot_id is None and not is_dedup:
+        owner_bot_id = uploader_bot_id
+
+    original_file_id = res_data.get("original_file_id")
+    if original_file_id and owner_bot_id:
+        pairs.append((original_file_id, owner_bot_id))
+
+    thumbnail_owner_bot_id = res_data.get("thumbnail_owner_bot_id")
+    if thumbnail_owner_bot_id is None and not is_dedup:
+        thumbnail_owner_bot_id = owner_bot_id or uploader_bot_id
+
+    thumbnail_file_id = res_data.get("thumbnail_file_id")
+    if thumbnail_file_id and thumbnail_owner_bot_id:
+        pairs.append((thumbnail_file_id, thumbnail_owner_bot_id))
+
+    return pairs
 
 # Лимиты для удержания ботов в ловушках (защита слотов соединений сервера)
 ACTIVE_TROLL_CONNS = 0
@@ -924,8 +1042,9 @@ class ConnectionManager:
                     await asyncio.sleep(0.01)
         if 'admin_feed' in self.active_connections:
             admin_conns = list(self.active_connections['admin_feed'])
-            for ac in admin_conns:
-                asyncio.create_task(self._safe_send(ac, message_str, 'admin_feed'))
+            admin_tasks = [self._safe_send(ac, message_str, 'admin_feed') for ac in admin_conns]
+            if admin_tasks:
+                await asyncio.gather(*admin_tasks, return_exceptions=True)
 manager = ConnectionManager()
 
 @asynccontextmanager
@@ -995,7 +1114,6 @@ async def lifespan(app: FastAPI):
     spam_task = asyncio.create_task(site_spam_cleanup_task())
     cache_cleanup_task = asyncio.create_task(site_cache_cleanup_task())
     mtproto_task = asyncio.create_task(mtproto_cleanup_task())
-    tasks.append(mtproto_task)
     shadow_task = asyncio.create_task(shadow_cleanup_task())
     captcha_task = asyncio.create_task(captcha_cleanup_task())
     tagging_task = asyncio.create_task(tagging_loop())
@@ -1008,7 +1126,7 @@ async def lifespan(app: FastAPI):
     batcher_task = asyncio.create_task(hf_batch_loop())
     from site_tgach.neuro_poster import NeuroManager
     neuro_manager = NeuroManager(app.state.file_uploader_bot)
-    asyncio.create_task(refresh_random_indexes())
+    random_index_task = asyncio.create_task(refresh_random_indexes())
     app.state.neuro_manager = neuro_manager 
     NEURO_ENABLED = False 
     async def neuro_loop():
@@ -1031,19 +1149,21 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error(f"Neuro loop crash: {e}")
                 await asyncio.sleep(60)
-    backup_task = asyncio.create_task(backup_loop(app.state.file_uploader_bot))
+    # backup_task = asyncio.create_task(backup_loop(app.state.file_uploader_bot))
+    backup_task = None
     neuro_task = asyncio.create_task(neuro_loop())
     mirror_task = asyncio.create_task(process_mirror_queue())
     sim_task = asyncio.create_task(process_import_queue(app.state.broadcast_queue))
     scanner_task = asyncio.create_task(scanner_loop(app.state)) 
-    asyncio.create_task(update_tor_nodes_task())
+    tor_task = asyncio.create_task(update_tor_nodes_task())
     startup_mark("background tasks done", step_started)
     try:
         tasks = [
             task for task in (
                 db_task, ws_task, spam_task, cache_cleanup_task, shadow_task,
                 maintenance_task, neuro_task, batcher_task, backup_task,
-                mirror_task, captcha_task, tagging_task, sim_task, scanner_task
+                mirror_task, captcha_task, tagging_task, sim_task, scanner_task,
+                mtproto_task, random_index_task, tor_task
             )
             if task is not None
         ]
@@ -1054,8 +1174,6 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        if GLOBAL_HTTP_SESSION:
-            await GLOBAL_HTTP_SESSION.close()
         logger.info("INFO:     Shutting down...")
         for task in tasks:
             if not task.done():
@@ -1068,6 +1186,17 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
         shutdown_image_executors()
+        await close_internal_file_bots()
+        await close_all_mtproto_clients()
+        if GLOBAL_HTTP_SESSION:
+            await GLOBAL_HTTP_SESSION.close()
+        if not GEO_IP_CLIENT.is_closed:
+            await GEO_IP_CLIENT.aclose()
+        if GEOIP_READER:
+            try:
+                await asyncio.to_thread(GEOIP_READER.close)
+            except Exception:
+                pass
         await close_pool()
 app = FastAPI(
     lifespan=lifespan,
@@ -1175,16 +1304,38 @@ async def custom_access_log_middleware(request: Request, call_next):
     elif path.startswith("/overboard/"):
         action = "Overboard"
     elif path.startswith("/api/post/"):
-        board = path.split("/")[-1]
-        action = f"POSTING to /{board}/"
+        target = path.rsplit("/", 1)[-1]
+        if request.method == "POST":
+            action = f"POST /api/post/{target}"
+        else:
+            action = f"{request.method} post API /{target}/"
 
     v_logger.info(f"[DO] {client_ip} | {action}")
 
     start_time = time.time()
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        if request.method == "POST" and path.startswith("/api/post/"):
+            logger.exception(
+                "site_post_unhandled_exception method=%s path=%s content_length=%s",
+                request.method,
+                path,
+                request.headers.get("content-length", "-"),
+            )
+        raise
     if response.status_code == 403:
         logger.warning(f"🚫 403 FORBIDDEN: IP={client_ip} Path={request.url.path} UA={request.headers.get('user-agent')}")
     process_time = (time.time() - start_time) * 1000
+    if request.method == "POST" and path.startswith("/api/post/"):
+        logger.info(
+            "site_post_http method=%s path=%s status=%s duration_ms=%.0f content_length=%s",
+            request.method,
+            path,
+            response.status_code,
+            process_time,
+            request.headers.get("content-length", "-"),
+        )
     client_ip = get_real_ip(request)
     
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -1202,6 +1353,7 @@ async def custom_access_log_middleware(request: Request, call_next):
         loc = response.headers["location"]
         if "huggingface.co" in loc: redirect_tag = " \033[33m-> [HF]\033[0m" 
         elif "catbox.moe" in loc: redirect_tag = " \033[35m-> [CB]\033[0m"
+        elif "0x0.st" in loc: redirect_tag = " \033[36m-> [0x0]\033[0m"
         elif "api.telegram.org" in loc: redirect_tag = " \033[34m-> [TG]\033[0m" 
         else: redirect_tag = " -> [OTHER]"
 
@@ -1806,10 +1958,36 @@ async def custom_404_handler(request: Request, exc):
     }, status_code=404)
 @app.exception_handler(500)
 async def custom_500_handler(request: Request, exc):
+    if request.method == "POST" and request.url.path.startswith("/api/post/"):
+        logger.exception(
+            "site_post_500 method=%s path=%s content_length=%s",
+            request.method,
+            request.url.path,
+            request.headers.get("content-length", "-"),
+            exc_info=exc,
+        )
     return templates.TemplateResponse("error.jinja2", {"request": request, "status_code": 500, "detail": "Внутренняя ошибка сервера"}, status_code=500)
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    if request.url.path.startswith("/api/post/"):
+        return JSONResponse(
+            {"Status": "Error", "Error": exc.detail, "detail": exc.detail},
+            status_code=exc.status_code,
+            headers=exc.headers,
+        )
     return templates.TemplateResponse("error.jinja2", {"request": request, "status_code": exc.status_code, "detail": exc.detail}, status_code=exc.status_code)
+
+@app.exception_handler(RequestValidationError)
+async def custom_validation_exception_handler(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith("/api/post/"):
+        logger.warning(
+            "site_post_validation_failed method=%s path=%s errors=%s",
+            request.method,
+            request.url.path,
+            exc.errors(),
+        )
+    return await request_validation_exception_handler(request, exc)
+
 async def get_current_user_or_guest(request: Request) -> dict:
     user = request.session.get("user")
     if user:
@@ -2064,12 +2242,8 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
     
     # Проверка валидности HF (из глобального списка VALID_HF_REPOS)
     hf_candidate = mirrors.get('huggingface')
-    hf_valid = False
-    if hf_candidate:
-        for repo in VALID_HF_REPOS:
-            if repo in hf_candidate:
-                hf_valid = True
-                break
+    hf_valid = is_hf_link_allowed(hf_candidate, VALID_HF_REPOS)
+    zeroxzero_candidate = mirrors.get('0x0')
 
     # --- ВЫБОР ОРИГИНАЛА ---
     selected_original = base_original_url # По умолчанию Telegram Proxy
@@ -2080,6 +2254,8 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
             selected_original = mirrors['catbox']
         elif hf_valid:
             selected_original = hf_candidate
+        elif zeroxzero_candidate:
+            selected_original = zeroxzero_candidate
     else:
         # Для RU-IP: Приоритет HF или Telegram
         if hf_valid:
@@ -2087,6 +2263,8 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
         elif 'catbox' in mirrors:
             # Catbox для RU только если больше ничего нет
             selected_original = mirrors['catbox']
+        elif zeroxzero_candidate:
+            selected_original = zeroxzero_candidate
 
     # --- ВЫБОР ПРЕВЬЮ (Thumbnail) ---
     selected_thumbnail = base_thumbnail_url
@@ -2096,21 +2274,21 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
         selected_thumbnail = thumb_mirrors['telegraph']
     else:
         hf_thumb = thumb_mirrors.get('huggingface')
-        hf_thumb_valid = False
-        if hf_thumb:
-            for repo in VALID_HF_REPOS:
-                if repo in hf_thumb:
-                    hf_thumb_valid = True
-                    break
+        hf_thumb_valid = is_hf_link_allowed(hf_thumb, VALID_HF_REPOS)
+        zeroxzero_thumb = thumb_mirrors.get('0x0')
 
         if not is_ru:
             if 'catbox' in thumb_mirrors:
                 selected_thumbnail = thumb_mirrors['catbox']
             elif hf_thumb_valid:
                 selected_thumbnail = hf_thumb
+            elif zeroxzero_thumb:
+                selected_thumbnail = zeroxzero_thumb
         else:
             if hf_thumb_valid:
                 selected_thumbnail = hf_thumb
+            elif zeroxzero_thumb:
+                selected_thumbnail = zeroxzero_thumb
             
     return selected_original, selected_thumbnail
 async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
@@ -3766,52 +3944,59 @@ async def api_random_image_next(request: Request, boards: Optional[str] = None):
         if boards:
             allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
 
-        post_data = await get_random_image_post(allowed_boards=allowed_boards)
-        
-        if not post_data:
-            return JSONResponse({"error": "No images found"}, status_code=404)
-            
-        if isinstance(post_data['content'], str):
-            try:
-                post_data['content'] = json.loads(post_data['content'])
-            except:
-                # Если сбой парсинга, пробуем еще раз (рекурсия с теми же параметрами)
-                # Чтобы не зациклилось, можно ограничить, но для простоты вернем ошибку или ретрай
-                return JSONResponse({"error": "Content parse error"}, status_code=500)
-        
-        enriched_list = _convert_and_enrich_posts([post_data])
-        post = enriched_list[0]
-        
-        target_file = None
-        files = post['content'].get('files', [])
-        
-        idx = post.get('_selected_file_index')
-        if idx is not None and 0 <= idx < len(files):
-            target_file = files[idx]
-        else:
-            if files:
+        deadline = time.monotonic() + RANDOM_API_DEADLINE_SEC
+        for _ in range(8):
+            if time.monotonic() >= deadline:
+                break
+            post_data = await get_random_image_post(allowed_boards=allowed_boards)
+
+            if not post_data:
+                return JSONResponse({"error": "No images found"}, status_code=404)
+
+            if isinstance(post_data['content'], str):
+                try:
+                    post_data['content'] = json.loads(post_data['content'])
+                except:
+                    continue
+
+            enriched_list = _convert_and_enrich_posts([post_data])
+            post = enriched_list[0]
+
+            target_file = None
+            files = post['content'].get('files', [])
+
+            idx = post.get('_selected_file_index')
+            if idx is not None and 0 <= idx < len(files):
+                target_file = files[idx]
+            elif files:
                 valid_media = [
-                    f for f in files 
+                    f for f in files
                     if f.get('type') in ['image', 'photo', 'sticker']
                 ]
                 if valid_media:
                     target_file = random.choice(valid_media)
-        
-        if not target_file:
-            return JSONResponse({"error": "No image in post"}, status_code=404)
-            
-        src = target_file.get('original_url')
-        
-        return {
-            "src": src,
-            "file_id": target_file.get('original_file_id'),
-            "post_id": post['id'],
-            "board_id": post['board_id'],
-            "thread_id": post.get('thread_id') or post['id'],
-            "type": target_file.get('type', 'image'),
-            "filename": target_file.get('filename', 'file.jpg'),
-            "is_censored": post['content'].get('is_censored', False)
-        }
+
+            if not target_file:
+                continue
+
+            file_id = target_file.get('original_file_id')
+            if not await _is_random_file_available_with_deadline(file_id, deadline):
+                continue
+
+            src = target_file.get('original_url')
+
+            return {
+                "src": src,
+                "file_id": file_id,
+                "post_id": post['id'],
+                "board_id": post['board_id'],
+                "thread_id": post.get('thread_id') or post['id'],
+                "type": target_file.get('type', 'image'),
+                "filename": target_file.get('filename', 'file.jpg'),
+                "is_censored": post['content'].get('is_censored', False)
+            }
+
+        return JSONResponse({"error": "No live images found"}, status_code=404)
     except Exception as e:
         logger.error(f"Random Image API Error: {e}")
         await asyncio.sleep(0.5)
@@ -3942,16 +4127,8 @@ async def api_makaba_posting(
         
         async def upload_task(f):
             async with UPLOAD_SEMAPHORE:
-                try:
-                    bot_id, bot_inst = global_bot_pool.get_next_bot(stream)
-                    content_type = f.content_type or "application/octet-stream"
-                    func = process_and_upload_voice if content_type.startswith("audio/") else process_and_upload_image          
-                    TELEGRAM_SINGLE_FILE_LIMIT = 50 * 1024 * 1024 
-                    res = await func(f, TELEGRAM_SINGLE_FILE_LIMIT, bot_inst, target_channel_id)
-                    return (res, bot_id)
-                except Exception as e:
-                    local_logger.error(f"Upload error: {e}")
-                    return (None, None)
+                TELEGRAM_SINGLE_FILE_LIMIT = 50 * 1024 * 1024
+                return await upload_with_bot_pool(f, stream, target_channel_id, TELEGRAM_SINGLE_FILE_LIMIT, local_logger)
         
         tasks = [upload_task(f) for f in files_to_process]
         upload_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -3969,13 +4146,12 @@ async def api_makaba_posting(
             
             if res_data.get('original_file_id'):
                 oid = res_data['original_file_id']
-                file_owners_to_save.append((oid, uploader_id))
                 res_data['original_url'] = f"/files/{oid}"
                 
                 if res_data.get('thumbnail_file_id'):
                     tid = res_data['thumbnail_file_id']
-                    file_owners_to_save.append((tid, uploader_id))
                     res_data['thumbnail_url'] = f"/files/{tid}"
+                file_owners_to_save.extend(_file_owner_pairs_for_upload_result(res_data, uploader_id))
                 
                 files_data.append(res_data)
     
@@ -4839,23 +5015,20 @@ async def api_admin_stealth_edit(
         for file_obj in new_images:
             if not file_obj.filename:
                 continue
-            u_bot_id, u_bot = global_bot_pool.get_next_bot(stream)
-            content_type = file_obj.content_type or ""
-            func = process_and_upload_voice if content_type.startswith("audio/") else process_and_upload_image
             try:
-                res_data = await func(file_obj, max_size_bytes=29*1024*1024, bot=u_bot, channel_id=FILE_STORAGE_CHANNEL_ID)
+                res_data, u_bot_id = await upload_with_bot_pool(file_obj, stream, FILE_STORAGE_CHANNEL_ID, 29 * 1024 * 1024, logger)
                 if res_data:
                     if res_data.get("banned"):
                         continue
                         
                     if res_data.get('original_file_id'):
-                        await register_file_owner(res_data['original_file_id'], u_bot_id)
                         res_data['original_url'] = f"/files/{res_data['original_file_id']}"
-                        file_owners_to_save.append((res_data['original_file_id'], u_bot_id))
                     if res_data.get('thumbnail_file_id'):
-                        await register_file_owner(res_data['thumbnail_file_id'], u_bot_id)
                         res_data['thumbnail_url'] = f"/files/{res_data['thumbnail_file_id']}"
-                        file_owners_to_save.append((res_data['thumbnail_file_id'], u_bot_id))
+                    owner_pairs = _file_owner_pairs_for_upload_result(res_data, u_bot_id)
+                    for file_id, owner_bot_id in owner_pairs:
+                        await register_file_owner(file_id, owner_bot_id)
+                    file_owners_to_save.extend(owner_pairs)
                     current_files.append(res_data)
             except Exception as e:
                 logger.error(f"Error processing image in stealth_edit: {e}")
@@ -5323,15 +5496,8 @@ async def api_create_post(
         
         async def upload_task(file_obj):
             async with UPLOAD_SEMAPHORE:
-                try:
-                    bot_id, bot_inst = global_bot_pool.get_next_bot(stream)
-                    content_type = file_obj.content_type or ""
-                    func = process_and_upload_voice if content_type.startswith("audio/") else process_and_upload_image          
-                    TELEGRAM_SINGLE_FILE_LIMIT = 50 * 1024 * 1024 
-                    res = await func(file_obj, TELEGRAM_SINGLE_FILE_LIMIT, bot_inst, target_channel_id)
-                    return (res, bot_id)
-                except asyncio.TimeoutError:
-                    return (None, None)
+                TELEGRAM_SINGLE_FILE_LIMIT = 50 * 1024 * 1024
+                return await upload_with_bot_pool(file_obj, stream, target_channel_id, TELEGRAM_SINGLE_FILE_LIMIT, local_logger)
 
         tasks = [upload_task(f) for f in all_files_to_upload if f.filename]
         if tasks:
@@ -5345,11 +5511,10 @@ async def api_create_post(
                 if res_data.get('original_file_id'):
                     oid = res_data['original_file_id']
                     res_data['original_url'] = f"/files/{oid}"
-                    file_owners_to_save.append((oid, uploader_bot_id))
                 if res_data.get('thumbnail_file_id'):
                     tid = res_data['thumbnail_file_id']
                     res_data['thumbnail_url'] = f"/files/{tid}"
-                    file_owners_to_save.append((tid, uploader_bot_id))
+                file_owners_to_save.extend(_file_owner_pairs_for_upload_result(res_data, uploader_bot_id))
                 files_data.append(res_data)
 
     if picrandom and len(files_data) < 4:
@@ -6013,55 +6178,67 @@ async def api_roulette_next(request: Request, boards: Optional[str] = None):
     if boards:
         allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
 
-    try:
-        raw_post = await get_random_video_post(allowed_boards=allowed_boards)
-    except Exception:
-        raw_post = None
-        
-    if not raw_post:
-        return JSONResponse({"error": "No videos found"}, status_code=404)  
-    
-    enriched_posts = _convert_and_enrich_posts([raw_post])
-    post = enriched_posts[0]
-    
-    video_file = None
-    files = post['content'].get('files', [])
-    
-    idx = raw_post.get('_selected_file_index')
-    if idx is not None and 0 <= idx < len(files):
-        video_file = files[idx]
-    else:
-        if files:
+    deadline = time.monotonic() + RANDOM_API_DEADLINE_SEC
+    for _ in range(8):
+        if time.monotonic() >= deadline:
+            break
+        try:
+            raw_post = await get_random_video_post(allowed_boards=allowed_boards)
+        except Exception:
+            raw_post = None
+
+        if not raw_post:
+            return JSONResponse({"error": "No videos found"}, status_code=404)
+
+        enriched_posts = _convert_and_enrich_posts([raw_post])
+        post = enriched_posts[0]
+
+        video_file = None
+        files = post['content'].get('files', [])
+
+        idx = raw_post.get('_selected_file_index')
+        if idx is not None and 0 <= idx < len(files):
+            video_file = files[idx]
+        elif files:
             for f in files:
                 if f['type'] in ['video', 'gif', 'animation', 'video_note']:
                     video_file = f
                     break
-    
-    if not video_file:
-        return JSONResponse({"error": "Invalid video post"}, status_code=404)
-    
-    src = video_file['original_url']
-    sources = [src]
-    
-    if video_file.get('original_file_id'):
-        mirrors_dict = await get_file_mirrors(video_file['original_file_id'])
-        if 'catbox' in mirrors_dict:
-            sources.append(mirrors_dict['catbox'])
-        if 'huggingface' in mirrors_dict:
-            sources.append(mirrors_dict['huggingface'])
 
-    return {
-        "src": src,
-        "file_id": video_file.get('original_file_id'),
-        "sources": sources,
-        "poster": video_file.get('thumbnail_url', ''),
-        "post_id": post['id'],
-        "board_id": post['board_id'],
-        "thread_id": post.get('thread_id'), 
-        "text": post['content'].get('text', '')[:200],
-        "filename": video_file.get('filename', 'video.mp4'),
-        "is_censored": post['content'].get('is_censored', False)
-    }
+        if not video_file:
+            continue
+
+        file_id = video_file.get('original_file_id')
+        if not await _is_random_file_available_with_deadline(file_id, deadline):
+            continue
+
+        src = video_file['original_url']
+        sources = [src]
+
+        if file_id:
+            mirrors_dict = await get_file_mirrors(file_id)
+            if 'catbox' in mirrors_dict:
+                sources.append(mirrors_dict['catbox'])
+            hf_source = mirrors_dict.get('huggingface')
+            if is_hf_link_allowed(hf_source, VALID_HF_REPOS):
+                sources.append(hf_source)
+            if '0x0' in mirrors_dict:
+                sources.append(mirrors_dict['0x0'])
+
+        return {
+            "src": src,
+            "file_id": file_id,
+            "sources": sources,
+            "poster": video_file.get('thumbnail_url', ''),
+            "post_id": post['id'],
+            "board_id": post['board_id'],
+            "thread_id": post.get('thread_id'),
+            "text": post['content'].get('text', '')[:200],
+            "filename": video_file.get('filename', 'video.mp4'),
+            "is_censored": post['content'].get('is_censored', False)
+        }
+
+    return JSONResponse({"error": "No live videos found"}, status_code=404)
 @app.get("/api/global_announcement")
 async def api_public_announcement():
     text = await get_system_setting('global_announcement')
@@ -6757,8 +6934,53 @@ async def _fetch_telegram_path(file_id: str, bot_token: str):
         except Exception: 
             return None
 
-async def get_cached_file_path(file_id: str) -> tuple[str, str] | None:
+def _bot_id_from_token(token: str | None) -> int | None:
+    if not token or ':' not in str(token):
+        return None
+    try:
+        return int(str(token).split(':', 1)[0])
+    except (TypeError, ValueError):
+        return None
+
+def _iter_known_file_bot_tokens(allow_protected_tokens: bool = False) -> list[tuple[int | None, str]]:
+    candidates: list[tuple[int | None, str]] = []
+    seen_tokens = set()
+
+    def add_token(token: str | None, bot_id: int | None = None):
+        token = str(token or '').strip()
+        if not token or ':' not in token or token in seen_tokens:
+            return
+        seen_tokens.add(token)
+        candidates.append((bot_id or _bot_id_from_token(token), token))
+
+    if global_bot_pool:
+        for bot in getattr(global_bot_pool, 'all_bots', []) or []:
+            add_token(getattr(bot, 'token', None), getattr(bot, 'id', None))
+
+    add_token(FILE_UPLOADER_BOT_TOKEN)
+
+    if allow_protected_tokens:
+        for board in (BOARD_CONFIG or {}).values():
+            if isinstance(board, dict):
+                add_token(board.get('token'))
+
+    return candidates
+
+def _resolve_known_file_bot_token(bot_id: int | None, allow_protected_tokens: bool = False) -> str | None:
+    if not bot_id:
+        return None
+    if global_bot_pool:
+        bot = global_bot_pool.get_bot_by_id(bot_id)
+        if bot:
+            return getattr(bot, 'token', None)
+    for candidate_id, token in _iter_known_file_bot_tokens(allow_protected_tokens=allow_protected_tokens):
+        if candidate_id == bot_id:
+            return token
+    return None
+
+async def get_cached_file_path(file_id: str, allow_protected_tokens: bool = False) -> tuple[str, str] | None:
     backend = FastAPICache.get_backend()
+    dead_key = f"dead_file:{'protected' if allow_protected_tokens else 'public'}:{file_id}"
     cached_path = await backend.get(f"fpath:{file_id}")
     if cached_path:
         p, bot_id_text = cached_path.split('|', 1)
@@ -6766,20 +6988,15 @@ async def get_cached_file_path(file_id: str) -> tuple[str, str] | None:
             cached_bot_id = int(bot_id_text)
         except ValueError:
             cached_bot_id = None
-        if global_bot_pool and cached_bot_id:
-            bot = global_bot_pool.get_bot_by_id(cached_bot_id)
-            if bot:
-                return p, bot.token
+        token = _resolve_known_file_bot_token(cached_bot_id, allow_protected_tokens=allow_protected_tokens)
+        if token:
+            return p, token
 
-    if await backend.get(f"dead_file:{file_id}"):
+    if await backend.get(dead_key):
         return None
 
     # ПРАВКА: Пытаемся получить владельца несколько раз, если база занята
-    owner_id = None
-    for _ in range(8):
-        owner_id = await get_file_owner_id(file_id)
-        if owner_id: break
-        await asyncio.sleep(0.2)
+    owner_id = await get_file_owner_id(file_id)
     tried_tokens = set()
     
     # ПРАВКА: Функция-хелпер для сохранения успеха
@@ -6790,12 +7007,12 @@ async def get_cached_file_path(file_id: str) -> tuple[str, str] | None:
         return path, token
 
     # Пробуем владельца
-    if global_bot_pool and owner_id:
-        bot = global_bot_pool.get_bot_by_id(owner_id)
-        if bot:
-            path = await _fetch_telegram_path(file_id, bot.token)
-            if path: return await save_success(path, bot.token, bot.id)
-            tried_tokens.add(bot.token)
+    if owner_id:
+        owner_token = _resolve_known_file_bot_token(owner_id, allow_protected_tokens=allow_protected_tokens)
+        if owner_token:
+            path = await _fetch_telegram_path(file_id, owner_token)
+            if path: return await save_success(path, owner_token, owner_id)
+            tried_tokens.add(owner_token)
 
     # Пробуем основного бота
     if global_bot_pool:
@@ -6805,18 +7022,181 @@ async def get_cached_file_path(file_id: str) -> tuple[str, str] | None:
             if path: return await save_success(path, main_bot.token, main_bot.id)
             tried_tokens.add(main_bot.token)
 
-    # Пробуем еще 2 случайных (не 3, чтобы быстрее)
+    # Historical bot media often lacks FileOwners rows. Probe the whole pool in
+    # small batches, then cache the discovered owner for future requests.
     if global_bot_pool:
-        all_bots = global_bot_pool.all_bots
-        random_bots = random.sample(all_bots, min(len(all_bots), 2))
-        for bot in random_bots:
-            if not hasattr(bot, 'token') or bot.token in tried_tokens: continue
-            path = await _fetch_telegram_path(file_id, bot.token)
-            if path: return await save_success(path, bot.token, bot.id)
-    
-    # Если произошла ошибка (например, база была занята), НЕ кэшируем её как смерть файла.
-    # Просто возвращаем None, чтобы цикл в get_telegram_file попробовал снова через 0.5 сек.
+        async def try_bot_batch(bot_tokens, batch_size: int = 4):
+            candidates = []
+            for bot_id, token in bot_tokens:
+                if not token or token in tried_tokens:
+                    continue
+                tried_tokens.add(token)
+                candidates.append((bot_id, token))
+
+            async def fetch_with_bot(bot_id, token):
+                path = await _fetch_telegram_path(file_id, token)
+                if not path:
+                    return None
+                return path, token, bot_id
+
+            for start in range(0, len(candidates), batch_size):
+                tasks = [
+                    asyncio.create_task(fetch_with_bot(bot_id, token))
+                    for bot_id, token in candidates[start:start + batch_size]
+                ]
+                try:
+                    for task in asyncio.as_completed(tasks):
+                        result = await task
+                        if result:
+                            for pending in tasks:
+                                if not pending.done():
+                                    pending.cancel()
+                            await asyncio.gather(*tasks, return_exceptions=True)
+                            return await save_success(*result)
+                finally:
+                    pending_tasks = [task for task in tasks if not task.done()]
+                    for pending in pending_tasks:
+                        pending.cancel()
+                    if pending_tasks:
+                        await asyncio.gather(*pending_tasks, return_exceptions=True)
+            return None
+
+        for stream_code in ('ru', 'en', 'jp'):
+            try:
+                global_bot_pool.init_stream(stream_code)
+            except Exception:
+                pass
+        all_bot_tokens = _iter_known_file_bot_tokens(allow_protected_tokens=allow_protected_tokens)
+        random.shuffle(all_bot_tokens)
+        result = await try_bot_batch(all_bot_tokens)
+        if result:
+            return result
+        if all_bot_tokens:
+            await backend.set(dead_key, "1", expire=120)
+
+    # No mirror or bot path is available right now. Positive hits are cached by
+    # owner; full-pool misses are briefly negative-cached above to avoid hammering.
     return None
+
+async def _is_random_file_available(file_id: str | None) -> bool:
+    if not file_id or _is_random_dead_file(file_id):
+        return False
+
+    try:
+        mirrors = await get_file_mirrors(file_id)
+    except Exception:
+        mirrors = {}
+
+    if mirrors.get('catbox') or mirrors.get('0x0') or is_hf_link_allowed(mirrors.get('huggingface'), VALID_HF_REPOS):
+        return True
+
+    if await get_cached_file_path(file_id):
+        return True
+
+    shadow_file_id = mirrors.get('tg_shadow')
+    if shadow_file_id:
+        if await get_cached_file_path(shadow_file_id):
+            return True
+        if await get_cached_file_path(shadow_file_id, allow_protected_tokens=True):
+            return True
+
+    if await get_cached_file_path(file_id, allow_protected_tokens=True):
+        return True
+
+    _mark_random_dead_file(file_id)
+    if shadow_file_id:
+        _mark_random_dead_file(shadow_file_id)
+    return False
+
+async def _is_random_file_available_with_deadline(file_id: str | None, deadline: float) -> bool:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return False
+    timeout = min(RANDOM_AVAILABILITY_TIMEOUT_SEC, max(0.25, remaining))
+    try:
+        return await asyncio.wait_for(_is_random_file_available(file_id), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.debug(f"Random media availability timeout for {str(file_id)[:10]}")
+        return False
+    except Exception as e:
+        logger.warning(f"Random media availability check failed: {type(e).__name__}")
+        return False
+
+async def _proxy_protected_telegram_file(
+    file_id: str,
+    file_path: str,
+    token: str,
+    filename: str | None = None,
+    request: Request | None = None,
+):
+    try:
+        await add_to_mirror_queue(file_id, 'catbox')
+    except Exception:
+        pass
+
+    timeout = aiohttp.ClientTimeout(total=180, sock_connect=10, sock_read=30)
+    connector = aiohttp.TCPConnector(limit=1, ttl_dns_cache=300, family=socket.AF_INET)
+    session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+    url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+    try:
+        request_headers = {}
+        if request:
+            range_header = request.headers.get("range")
+            if range_header:
+                request_headers["Range"] = range_header
+        resp = await session.get(url, headers=request_headers)
+    except Exception:
+        await session.close()
+        raise HTTPException(status_code=404, detail="File unavailable.")
+
+    if resp.status not in (200, 206):
+        resp.release()
+        await session.close()
+        raise HTTPException(status_code=404, detail="File unavailable.")
+
+    closed = False
+
+    async def close_upstream():
+        nonlocal closed
+        if closed:
+            return
+        closed = True
+        resp.release()
+        await session.close()
+
+    try:
+        guessed_type = mimetypes.guess_type(filename or file_path)[0]
+        media_type = resp.headers.get("Content-Type")
+        if not media_type or media_type == "application/octet-stream":
+            media_type = guessed_type or media_type or "application/octet-stream"
+
+        headers = {
+            "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"),
+            "Cache-Control": "public, max-age=300",
+        }
+        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag"):
+            value = resp.headers.get(header_name)
+            if value:
+                headers[header_name] = value
+    except Exception:
+        await close_upstream()
+        raise
+
+    async def body_iter():
+        try:
+            async for chunk in resp.content.iter_chunked(64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            await close_upstream()
+
+    return StreamingResponse(
+        body_iter(),
+        status_code=resp.status,
+        media_type=media_type,
+        headers=headers,
+        background=BackgroundTask(close_upstream),
+    )
 @app.get("/games/abu")
 async def game_abu_page(request: Request, user: dict | None = Depends(get_optional_user)):
     return templates.TemplateResponse("game_abu.jinja2", {
@@ -6847,7 +7227,8 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     # Очистка file_id от лишних слешей и сегментов пути
     file_id = file_id.lstrip('/')
     if '/' in file_id:
-        file_id = file_id.split('/')[0]
+        file_id, path_filename = file_id.split('/', 1)
+        filename = filename or path_filename.rsplit('/', 1)[-1]
 
     # Если file_id уже является полной ссылкой, перенаправляем
     if file_id.startswith(('http://', 'https://')):
@@ -6891,16 +7272,12 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
 
         # Проверка валидности HF (из глобального списка VALID_HF_REPOS)
         hf_candidate = mirrors.get('huggingface')
-        hf_valid = False
-        if hf_candidate:
-            for repo in VALID_HF_REPOS:
-                if repo in hf_candidate:
-                    hf_valid = True
-                    break
+        hf_valid = is_hf_link_allowed(hf_candidate, VALID_HF_REPOS)
         
         # 1. Сначала проверяем зеркала
         catbox_link = mirrors.get('catbox')
-        if (is_ru and hf_valid) or (not is_ru and (catbox_link or hf_valid)):
+        zeroxzero_link = mirrors.get('0x0')
+        if (is_ru and hf_valid) or (not is_ru and (catbox_link or hf_valid or zeroxzero_link)):
              break
              
         # 2. Если файл новый (нет в кэше зеркал), пробуем Telegram СРАЗУ
@@ -6920,23 +7297,19 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     # Извлечение (повторное для надежности)
     hf_link = mirrors.get('huggingface')
     catbox_link = mirrors.get('catbox')
+    zeroxzero_link = mirrors.get('0x0')
     shadow_file_id = mirrors.get('tg_shadow')
 
     # 1. HuggingFace — ПРИОРИТЕТ №1 (Для РФ и ИНО)
-    if hf_link:
-        is_valid_repo = True
-        if VALID_HF_REPOS:
-             is_valid_repo = False
-             for repo in VALID_HF_REPOS:
-                 if repo in hf_link:
-                     is_valid_repo = True
-                     break
-        if is_valid_repo:
-            return RedirectResponse(url=hf_link, status_code=307, headers=no_cache_headers)
+    if is_hf_link_allowed(hf_link, VALID_HF_REPOS):
+        return RedirectResponse(url=hf_link, status_code=307, headers=no_cache_headers)
     
     # 2. Catbox — ПРИОРИТЕТ №2 для ИНО (В РФ пропускаем)
     if catbox_link and not is_ru:
         return RedirectResponse(url=catbox_link, status_code=307, headers=no_cache_headers)
+
+    if zeroxzero_link and not is_ru:
+        return RedirectResponse(url=zeroxzero_link, status_code=307, headers=no_cache_headers)
 
     # 3. Telegram Direct — ПРИОРИТЕТ №2 для РФ / №3 для ИНО
     info = await get_cached_file_path(file_id)
@@ -6961,11 +7334,37 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
                 headers={"Cache-Control": "public, max-age=3600"}
             )
 
+    # Protected archive/chat bots must never be exposed in browser redirects.
+    # Use them only as a server-side fallback and enqueue a public mirror.
+    protected_candidates = []
+    if shadow_file_id:
+        protected_candidates.append(shadow_file_id)
+    protected_candidates.append(file_id)
+    seen_protected = set()
+    for protected_file_id in protected_candidates:
+        if not protected_file_id or protected_file_id in seen_protected:
+            continue
+        seen_protected.add(protected_file_id)
+        protected_info = await get_cached_file_path(protected_file_id, allow_protected_tokens=True)
+        if protected_info:
+            path, token = protected_info
+            try:
+                return await _proxy_protected_telegram_file(protected_file_id, path, token, filename, request)
+            except HTTPException:
+                _mark_random_dead_file(protected_file_id)
+                continue
+
     # 5. Catbox для РФ — ПОСЛЕДНИЙ ШАНС (Если HF и TG лежат)
     if catbox_link:
         return RedirectResponse(url=catbox_link, status_code=307, headers=no_cache_headers)
 
+    if zeroxzero_link:
+        return RedirectResponse(url=zeroxzero_link, status_code=307, headers=no_cache_headers)
+
     # Если совсем всё плохо
+    _mark_random_dead_file(file_id)
+    if shadow_file_id:
+        _mark_random_dead_file(shadow_file_id)
     raise HTTPException(status_code=404, detail="File unavailable.")
 @app.post("/api/react")
 @limiter.limit("20/minute", key_func=get_user_id_from_session)

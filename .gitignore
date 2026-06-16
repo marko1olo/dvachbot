@@ -23,11 +23,13 @@ htmlcov/
 *.swp
 *~
 *.tmp
+/*.txt
 
 # Файлы виртуального окружения
 venv/
 .env
 .env.*
+.envgoogle
 !.env.example
 sessions/
 *.session
@@ -40,6 +42,8 @@ sessions/
 *.dump
 *.backup
 *.bak
+*.bak*
+*.json.bak*
 *.cleanup_backup_*
 *.FORCE_backup_*
 *.log
@@ -63,6 +67,7 @@ New Text Document*.txt
 *.sql.gz
 cookies*.json
 data/db_backup_*
+data/mirror_health.json
 recovery.sql
 TGACH_Backup_*
 common.rar

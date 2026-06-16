@@ -33,6 +33,9 @@ class NeuroScanner:
         )
         self.seen_threads = set()
 
+    async def close(self):
+        await self.client.aclose()
+
     async def scan_and_schedule(self, board_source='b', target_board='b', target_stream='ru'):
         logger.info(f"🕵️ [Scanner] Scanning /{board_source}/ for content...")
         
@@ -259,43 +262,46 @@ async def scanner_loop(app_state):
     
     logger.info("👀 Neuro-Scanner Loop Started")
     
-    while True:
-        try:
-            # 1. Проверяем, включен ли сканер
-            enabled_str = await get_system_setting("neuro_scanner_enabled")
-            
-            # Если выключен — ждем либо 60 сек, либо пока не пнут (SCANNER_TRIGGER)
-            if enabled_str != "true":
-                try:
-                    await asyncio.wait_for(SCANNER_TRIGGER.wait(), timeout=60.0)
-                    SCANNER_TRIGGER.clear() # Сбрасываем триггер после пробуждения
-                    logger.info("👀 Scanner woke up by TRIGGER!")
-                    continue # Сразу идем на новый виток цикла проверять настройки
-                except asyncio.TimeoutError:
-                    continue # Просто прошло 60 сек, проверяем заново
-
-            # 2. Читаем интервал
-            interval_str = await get_system_setting("neuro_scanner_interval")
+    try:
+        while True:
             try:
-                interval_minutes = int(interval_str)
-            except (ValueError, TypeError):
-                interval_minutes = 66
-            
-            if interval_minutes < 10: interval_minutes = 10
+                # 1. Проверяем, включен ли сканер
+                enabled_str = await get_system_setting("neuro_scanner_enabled")
 
-            # 3. Сканируем
-            success = await scanner.scan_and_schedule(board_source='b', target_board='b', target_stream='ru')
-            
-            # 4. Если ошибка сети — пробуем через 5 минут, если успех — через заданный интервал
-            if success:
-                wait_seconds = (interval_minutes * 60) + random.randint(0, 300)
-                logger.info(f"👀 Scanner finished. Sleeping for {wait_seconds}s")
-            else:
-                wait_seconds = 300 
-                logger.warning(f"⚠️ Scanner failed. Retrying in {wait_seconds}s")
-                
-            await asyncio.sleep(wait_seconds)
-            
-        except Exception as e:
-            logger.error(f"Scanner loop crash: {e}")
-            await asyncio.sleep(300)
+                # Если выключен — ждем либо 60 сек, либо пока не пнут (SCANNER_TRIGGER)
+                if enabled_str != "true":
+                    try:
+                        await asyncio.wait_for(SCANNER_TRIGGER.wait(), timeout=60.0)
+                        SCANNER_TRIGGER.clear() # Сбрасываем триггер после пробуждения
+                        logger.info("👀 Scanner woke up by TRIGGER!")
+                        continue # Сразу идем на новый виток цикла проверять настройки
+                    except asyncio.TimeoutError:
+                        continue # Просто прошло 60 сек, проверяем заново
+
+                # 2. Читаем интервал
+                interval_str = await get_system_setting("neuro_scanner_interval")
+                try:
+                    interval_minutes = int(interval_str)
+                except (ValueError, TypeError):
+                    interval_minutes = 66
+
+                if interval_minutes < 10: interval_minutes = 10
+
+                # 3. Сканируем
+                success = await scanner.scan_and_schedule(board_source='b', target_board='b', target_stream='ru')
+
+                # 4. Если ошибка сети — пробуем через 5 минут, если успех — через заданный интервал
+                if success:
+                    wait_seconds = (interval_minutes * 60) + random.randint(0, 300)
+                    logger.info(f"👀 Scanner finished. Sleeping for {wait_seconds}s")
+                else:
+                    wait_seconds = 300
+                    logger.warning(f"⚠️ Scanner failed. Retrying in {wait_seconds}s")
+
+                await asyncio.sleep(wait_seconds)
+
+            except Exception as e:
+                logger.error(f"Scanner loop crash: {e}")
+                await asyncio.sleep(300)
+    finally:
+        await scanner.close()

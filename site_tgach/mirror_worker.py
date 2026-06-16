@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import httpx 
+import tempfile
 from common.async_file_io import write_async_iter_bytes_to_file
 from common.database import (
     get_pending_mirror_tasks, reschedule_mirror_task, remove_mirror_task, 
@@ -10,10 +11,60 @@ from common.database import (
 from common.db_pool import get_pool
 from site_tgach.catbox import upload_url_to_catbox, upload_file_to_catbox
 from common.bot_pool import global_bot_pool
+from common.board_config import BOARD_CONFIG
+from aiogram import Bot
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramBadRequest
 from site_tgach.mtproto_client import download_file_mtproto
+from site_tgach.zeroxzero import is_0x0_available, upload_url_to_0x0, upload_file_to_0x0
 
 logger = logging.getLogger("mirror_worker")
+_INTERNAL_FILE_BOTS: dict[int, Bot] = {}
+
+def _bot_id_from_token(token: str | None) -> int | None:
+    if not token or ':' not in str(token):
+        return None
+    try:
+        return int(str(token).split(':', 1)[0])
+    except (TypeError, ValueError):
+        return None
+
+def _get_internal_file_bot(token: str) -> Bot | None:
+    bot_id = _bot_id_from_token(token)
+    if not bot_id:
+        return None
+    bot = _INTERNAL_FILE_BOTS.get(bot_id)
+    if bot:
+        return bot
+    bot = Bot(token=token, session=AiohttpSession())
+    _INTERNAL_FILE_BOTS[bot_id] = bot
+    return bot
+
+def _resolve_file_bot(owner_id: int | None) -> tuple[Bot | None, bool]:
+    if owner_id and global_bot_pool:
+        bot = global_bot_pool.get_bot_by_id(owner_id)
+        if bot:
+            return bot, True
+
+    if owner_id:
+        for board in (BOARD_CONFIG or {}).values():
+            if not isinstance(board, dict):
+                continue
+            token = board.get('token')
+            if _bot_id_from_token(token) == owner_id:
+                return _get_internal_file_bot(token), False
+
+    if global_bot_pool:
+        return global_bot_pool.get_main_bot(), True
+    return None, True
+
+async def close_internal_file_bots():
+    for bot in list(_INTERNAL_FILE_BOTS.values()):
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
+    _INTERNAL_FILE_BOTS.clear()
 
 async def _find_msg_info(file_id: str):
     from common.db_pool import get_pool, db_lock # Локальный импорт
@@ -39,6 +90,10 @@ async def _process_single_task(task):
     file_id, mirror_type, task_id, attempt = task['file_id'], task['mirror_type'], task['id'], task['attempts']
     
     try:
+        if mirror_type == '0x0' and not is_0x0_available():
+            await reschedule_mirror_task(task_id, attempt)
+            return
+
         # 0. Защита от бесконечных циклов
         if attempt > 10: 
             logger.warning(f"🗑️ Removing stale task {task_id}: max attempts reached.")
@@ -56,7 +111,7 @@ async def _process_single_task(task):
         c_id, m_id, p_num = msg_info if msg_info else (None, None, "???")
         
         owner_id = await get_file_owner_id(file_id)
-        bot = global_bot_pool.get_bot_by_id(owner_id) if owner_id else global_bot_pool.get_main_bot()
+        bot, public_safe_bot = _resolve_file_bot(owner_id)
         if not bot:
             await reschedule_mirror_task(task_id, attempt)
             return
@@ -76,9 +131,12 @@ async def _process_single_task(task):
                 _, ext = os.path.splitext(file_info.file_path)
                 if ext: file_ext = ext
 
-            tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
-            if mirror_type == 'catbox':
-                success_link = await upload_url_to_catbox(tg_url)
+            if public_safe_bot:
+                tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+                if mirror_type == 'catbox':
+                    success_link = await upload_url_to_catbox(tg_url)
+                elif mirror_type == '0x0':
+                    success_link = await upload_url_to_0x0(tg_url)
         except TelegramBadRequest as e:
             is_photo = file_id.startswith("AgAC")
             err_str = str(e).lower()
@@ -98,7 +156,8 @@ async def _process_single_task(task):
         except Exception:
             pass 
         
-        lpath = os.path.abspath(f"temp_mw_{task_id}{file_ext}")
+        fd, lpath = tempfile.mkstemp(prefix=f"dvach_mirror_{task_id}_", suffix=file_ext)
+        os.close(fd)
         
         try:
             if not success_link:
@@ -121,7 +180,8 @@ async def _process_single_task(task):
                         if file_info and file_info.file_path:
                             dl_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
                             
-                            async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+                            transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
+                            async with httpx.AsyncClient(timeout=60.0, verify=False, transport=transport) as client:
                                 async with client.stream("GET", dl_url) as r:
                                     if r.status_code == 200:
                                         await write_async_iter_bytes_to_file(r.aiter_bytes(), lpath)
@@ -139,6 +199,8 @@ async def _process_single_task(task):
                 if download_success:
                     if mirror_type == 'catbox':
                         success_link = await upload_file_to_catbox(lpath)
+                    elif mirror_type == '0x0':
+                        success_link = await upload_file_to_0x0(lpath)
                 else:
                     logger.warning(f"⛔ All download methods failed for {file_id[:10]}. Rescheduling.")
                     await reschedule_mirror_task(task_id, attempt)
@@ -171,15 +233,18 @@ async def process_mirror_queue():
         async with SEM:
             await _process_single_task(task)
 
-    while True:
-        try:
-            tasks = await get_pending_mirror_tasks(limit=5)
-            if not tasks:
+    try:
+        while True:
+            try:
+                tasks = await get_pending_mirror_tasks(limit=5)
+                if not tasks:
+                    await asyncio.sleep(10)
+                    continue
+                await asyncio.gather(*[runner(t) for t in tasks])
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Mirror worker loop crash: {e}")
                 await asyncio.sleep(10)
-                continue
-            
-            await asyncio.gather(*[runner(t) for t in tasks])
-            
-        except Exception as e:
-            logger.error(f"Mirror worker loop crash: {e}")
-            await asyncio.sleep(10)
+    finally:
+        await close_internal_file_bots()

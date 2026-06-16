@@ -52,6 +52,8 @@ from common.database import add_file_mirror, check_file_deduplication, register_
 from common.secret_redaction import install_logging_redaction
 from site_tgach.catbox import upload_url_to_catbox, upload_bytes_to_catbox
 from site_tgach.huggingface import upload_to_hf
+from site_tgach.mirror_health import has_available_hf_repo
+from site_tgach.zeroxzero import is_0x0_available, upload_url_to_0x0, upload_bytes_to_0x0
 from site_tgach.mtproto_client import upload_file_mtproto
 from fastapi import UploadFile, HTTPException
 from PIL import Image, ImageOps  
@@ -239,7 +241,10 @@ async def process_and_upload_image(
                 "filename": original_filename,
                 "phash": dedup_result.get('phash'),
                 "blurhash": dedup_result.get('blurhash'),
-                "sha256": sha256_hash
+                "sha256": sha256_hash,
+                "dedup_found": True,
+                "owner_bot_id": dedup_result.get("owner_bot_id"),
+                "thumbnail_owner_bot_id": dedup_result.get("thumbnail_owner_bot_id"),
             }
 
     clean_name = re.sub(r'[^a-zA-Z0-9._-]', '_', original_filename)
@@ -591,7 +596,8 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
 
     # 2. Логика зеркал (Catbox + HF)
     # Всегда добавляем превью в очередь HF, так как они маленькие
-    if related_id:
+    hf_available = has_available_hf_repo()
+    if related_id and hf_available:
         await add_to_hf_queue(related_id)
 
     # Если файл > 19MB, Telegram не отдаст ссылку. Грузим байты напрямую.
@@ -605,14 +611,23 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
             if link: await add_file_mirror(file_id, 'catbox', link)
             
         async def _hf_direct():
+            if not hf_available:
+                return
             link = await upload_to_hf(file_bytes, filename)
             if link: await add_file_mirror(file_id, 'huggingface', link)
 
-        await asyncio.gather(_catbox_direct(), _hf_direct())
+        async def _zeroxzero_direct():
+            if not is_0x0_available():
+                return
+            link = await upload_bytes_to_0x0(file_bytes, filename)
+            if link: await add_file_mirror(file_id, '0x0', link)
+
+        await asyncio.gather(_catbox_direct(), _hf_direct(), _zeroxzero_direct())
     
     else:
         # Файл маленький, идем по стандартному пути (очереди и ссылки)
-        await add_to_hf_queue(file_id)
+        if hf_available:
+            await add_to_hf_queue(file_id)
         
         try:
             file_info = await bot.get_file(file_id)
@@ -624,7 +639,17 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
             else:
                 from common.database import add_to_mirror_queue
                 await add_to_mirror_queue(file_id, 'catbox')
+
+            if is_0x0_available():
+                zeroxzero_link = await upload_url_to_0x0(tg_url)
+                if zeroxzero_link:
+                    await add_file_mirror(file_id, '0x0', zeroxzero_link)
+                elif is_0x0_available():
+                    from common.database import add_to_mirror_queue
+                    await add_to_mirror_queue(file_id, '0x0')
                 
         except Exception:
             from common.database import add_to_mirror_queue
             await add_to_mirror_queue(file_id, 'catbox')
+            if is_0x0_available():
+                await add_to_mirror_queue(file_id, '0x0')
