@@ -7392,6 +7392,8 @@ async def graph_data_collector():
                 if count > 0:
                     graph_stats.setdefault(board_id, {})[timestamp_key] = count
             print(f"📊 Статистика для графика собрана за {timestamp_key}. Активные доски: {list(posts_per_hour.keys())}")
+            # Сохраняем на диск в фоновом потоке
+            loop.run_in_executor(save_executor, _sync_save_graph_stats, graph_stats.copy())
         except asyncio.CancelledError:
             print("ℹ️ Сборщик статистики для графика остановлен.")
             break
