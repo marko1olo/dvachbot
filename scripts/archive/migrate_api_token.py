@@ -8,7 +8,7 @@ from common.config import DB_NAME, DB_TIMEOUT
 
 
 async def column_exists(db: aiosqlite.Connection, table: str, column: str) -> bool:
-    async with db.execute(f"PRAGMA table_info({table});") as cursor:
+    async with db.execute("SELECT * FROM pragma_table_info(?)", (table,)) as cursor:
         rows = await cursor.fetchall()
     return any(row[1] == column for row in rows)
 
