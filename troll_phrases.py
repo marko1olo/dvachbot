@@ -160,7 +160,7 @@ MEDIA_PHRASES = [
 ]
 
 def get_random_troll_phrase(context_type="normal", quote_text=None) -> str:
-    \"\"\"Генерирует фразу с учетом контекста и возможной цитаты\"\"\"
+    """Генерирует фразу с учетом контекста и возможной цитаты"""
     res = ""
     
     if context_type == "chain":
