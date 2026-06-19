@@ -128,8 +128,8 @@ async def apply_neuro_ban(file_id: str, reason: str):
     logger.info(f"🔨 NEURO-BAN: {reason} | File: {file_id}")
     db = await get_pool()
     try:
-        query = f"SELECT post_num FROM Posts WHERE content LIKE '%{file_id}%' LIMIT 1"
-        async with db.execute(query) as cursor:
+        query = "SELECT post_num FROM Posts WHERE content LIKE ? LIMIT 1"
+        async with db.execute(query, (f"%{file_id}%",)) as cursor:
             row = await cursor.fetchone()
             if row:
                 post_num = row[0]
