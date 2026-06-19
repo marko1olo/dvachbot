@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import dataclass
 """
 This module contains the main functionality for a Telegram bot that interacts with a specific board system.
 It includes various middleware classes for handling user streams, deduplication of messages, and board identification.
@@ -3048,81 +3049,42 @@ async def _rollback_post_creation(post_num_to_delete: int):
             message_to_post.pop(k, None)
     if deleted_from_db:
         print(f"Rollback: Пост #{post_num_to_delete} успешно удален из БД и памяти.")
+@dataclass
+class ShadowRejectContext:
+    bot: Bot
+    board_id: str
+    user_id: int
+    content: dict
+    reply_to_post: int | None = None
+    stream: str = 'ru'
 
-# --- SHADOW TROLL MECHANICS ---
-import time
-import witching_hour
-import periodic_publisher
+async def process_shadow_reject(ctx: ShadowRejectContext):
 
-last_shadow_troll_time = {}
-
-async def execute_shadow_troll(bot, board_id: str, user_id: int, target_fake_post_num: int, stream: str = 'ru'):
-    # Cooldown check: 1 minute per user
-    now = time.time()
-    if now - last_shadow_troll_time.get(user_id, 0) < 60:
-        return
-    last_shadow_troll_time[user_id] = now
-    
-    # Wait realistically before replying (30 to 60 seconds)
-    await asyncio.sleep(random.uniform(30.0, 60.0))
-    
-    # Generate fake post properties
-    troll_id = random.randint(100000, 999999)
-    shadow_key = (board_id, user_id)
-    current_floor = state['post_counter'] + random.randint(1, 3)
-    last_fake = shadow_fake_post_counters.get(shadow_key, target_fake_post_num)
-    troll_post_num = max(current_floor, last_fake + random.randint(1, 3))
-    shadow_fake_post_counters[shadow_key] = troll_post_num
-    
-    header_text = await format_header(board_id, troll_post_num, troll_id, stream=stream)
-    
-    from troll_phrases import get_random_troll_phrase
-    troll_content = {
-        'type': 'text',
-        'text': get_random_troll_phrase(),
-        'reply_to_post': target_fake_post_num,
-        'post_num': troll_post_num,
-        'header': header_text,
-        'is_shadow_reject': True
-    }
-    
-    
-    await send_message_to_users(
-        bot_instance=bot,
-        board_id=board_id,
-        recipients={user_id},
-        content=troll_content,
-        notify=True
-    )
-
-async def process_shadow_reject(bot: Bot, board_id: str, user_id: int, content: dict, reply_to_post: int | None, stream: str = 'ru'):
     """
     Эмулирует успешную публикацию поста, но отправляет его ТОЛЬКО автору.
     Не пишет в БД, не увеличивает счетчики.
     """
-    shadow_key = (board_id, user_id)
+    shadow_key = (ctx.board_id, ctx.user_id)
     current_floor = state['post_counter'] + random.randint(1, 3)
     last_fake_post_num = shadow_fake_post_counters.get(shadow_key, 0)
     fake_post_num = max(current_floor, last_fake_post_num + random.randint(1, 3))
     shadow_fake_post_counters[shadow_key] = fake_post_num
-    header_text = await format_header(board_id, fake_post_num, user_id, stream=stream)
-    user_content = content.copy()
+    header_text = await format_header(ctx.board_id, fake_post_num, ctx.user_id, stream=ctx.stream)
+    user_content = ctx.content.copy()
     user_content['header'] = header_text
     user_content['post_num'] = fake_post_num
     user_content['is_shadow_reject'] = True
-    user_content['reply_to_post'] = reply_to_post
+    user_content['reply_to_post'] = ctx.reply_to_post
     await asyncio.sleep(random.uniform(0.5, 1.5))
     await send_message_to_users(
-        bot_instance=bot,
-        board_id=board_id,
-        recipients={user_id}, # Только автор!
+        bot_instance=ctx.bot,
+        board_id=ctx.board_id,
+        recipients={ctx.user_id}, # Только автор!
         content=user_content,
         reply_info=None
     )
-    print(f"👻 [SHADOW] Теневой отброс медиа от {user_id} на доске {board_id}")
-    
-    # Initiate shadow troll
-    asyncio.create_task(execute_shadow_troll(bot, board_id, user_id, fake_post_num, stream))
+    print(f"👻 [SHADOW] Теневой отброс медиа от {ctx.user_id} на доске {ctx.board_id}")
+
 async def process_new_post(
     bot_instance: Bot,
     board_id: str,
@@ -12577,14 +12539,14 @@ async def _process_stacked_anime_command(
                            b_data['shadow_mutes'][user_id] > datetime.now(UTC))
                            
         if is_shadow_muted:
-            await process_shadow_reject(
+            await process_shadow_reject(ShadowRejectContext(
                 bot=message.bot,
                 board_id=board_id,
                 user_id=user_id,
                 content=content,
                 reply_to_post=None,
                 stream=stream
-            )
+            ))
             post_num = 0 
         else:
             post_num = await process_new_post(
@@ -14629,14 +14591,14 @@ async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru
 
     # Если теневой бан (включая запрет медиа), отправляем фейк
     if is_shadow_muted:
-        await process_shadow_reject(
+        await process_shadow_reject(ShadowRejectContext(
             bot=message.bot,
             board_id=board_id,
             user_id=user_id,
             content=content,
             reply_to_post=reply_to_post,
             stream=stream
-        )
+        ))
     else:
         await process_new_post(
             bot_instance=message.bot,
@@ -14692,10 +14654,10 @@ async def handle_voice(message: Message, board_id: str | None, stream: str = 'ru
     content['quote_info'] = await build_quick_quote_info(reply_to_post)
 
     if is_shadow_muted:
-        await process_shadow_reject(
+        await process_shadow_reject(ShadowRejectContext(
             bot=message.bot, board_id=board_id, user_id=user_id, 
             content=content, reply_to_post=reply_to_post, stream=stream
-        )
+        ))
     else:
         await process_new_post(
             bot_instance=message.bot,
@@ -14753,10 +14715,10 @@ async def handle_video_note(message: Message, board_id: str | None, stream: str 
     content['quote_info'] = await build_quick_quote_info(reply_to_post)
 
     if is_shadow_muted:
-        await process_shadow_reject(
+        await process_shadow_reject(ShadowRejectContext(
             bot=message.bot, board_id=board_id, user_id=user_id, 
             content=content, reply_to_post=reply_to_post, stream=stream
-        )
+        ))
     else:
         await process_new_post(
             bot_instance=message.bot,
@@ -14961,14 +14923,14 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
         # --- КОНЕЦ ИЗМЕНЕНИЙ ---
         
         if is_shadow_muted:
-            await process_shadow_reject(
+            await process_shadow_reject(ShadowRejectContext(
                 bot=bot_instance,
                 board_id=board_id,
                 user_id=user_id,
                 content=content,
                 reply_to_post=reply_to_post,
                 stream=stream
-            )
+            ))
             if is_large_group: await asyncio.sleep(1)
             continue
         post_num = await process_new_post(
@@ -14988,14 +14950,14 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
     if send_caption_separately and original_caption:
         text_content = {'type': 'text', 'text': original_caption}
         if is_shadow_muted:
-            await process_shadow_reject(
+            await process_shadow_reject(ShadowRejectContext(
                 bot=bot_instance,
                 board_id=board_id,
                 user_id=user_id,
                 content=text_content,
                 reply_to_post=None,
                 stream=stream
-            )
+            ))
         elif first_post_num:
             await process_new_post(
                 bot_instance=bot_instance,
@@ -15444,14 +15406,14 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     asyncio.create_task(check_and_send_contextual_reply(message.bot, user_id, text_chunk, board_id, stream=stream))
             
             if is_shadow_muted:
-                await process_shadow_reject(
+                await process_shadow_reject(ShadowRejectContext(
                     bot=message.bot,
                     board_id=board_id,
                     user_id=user_id,
                     content=content,
                     reply_to_post=post_num_to_reply,
                     stream=stream
-                )
+                ))
             else:
                 await process_new_post(
                     bot_instance=message.bot,
@@ -15534,14 +15496,14 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     # --- КОНЕЦ ИЗМЕНЕНИЙ ---
     
     if is_shadow_muted:
-        await process_shadow_reject(
+        await process_shadow_reject(ShadowRejectContext(
             bot=message.bot,
             board_id=board_id,
             user_id=user_id,
             content=content,
             reply_to_post=reply_to_post,
             stream=stream
-        )
+        ))
     else:
         await process_new_post(
             bot_instance=message.bot,
