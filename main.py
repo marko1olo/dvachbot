@@ -7984,15 +7984,17 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
     
     msgs = []
     cutoff = time.time() - 3600
-    for msg_id, p_info in reversed(messages_storage.values()):
-        if len(msgs) >= 40: break
-        if p_info.get('board_id') == board_id:
-            ts = p_info.get('timestamp', 0)
-            if hasattr(ts, 'timestamp'):
-                ts = ts.timestamp()
-            if ts > cutoff:
-                if not p_info.get('thread_id'):
-                    msgs.append(p_info)
+    
+    async with storage_lock:
+        for p_info in reversed(messages_storage.values()):
+            if len(msgs) >= 40: break
+            if p_info.get('board_id') == board_id:
+                ts = p_info.get('timestamp', 0)
+                if hasattr(ts, 'timestamp'):
+                    ts = ts.timestamp()
+                if ts > cutoff:
+                    if not p_info.get('thread_id'):
+                        msgs.append(p_info)
                 
     msgs.sort(key=lambda x: x.get('timestamp').timestamp() if hasattr(x.get('timestamp'), 'timestamp') else x.get('timestamp', 0))
     
@@ -8085,15 +8087,16 @@ async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 
     
     msgs = []
     cutoff = time.time() - (3600 * 2)
-    for msg_id, p_info in reversed(messages_storage.values()):
-        if len(msgs) >= 40: break
-        if p_info.get('board_id') == board_id:
-            ts = p_info.get('timestamp', 0)
-            if hasattr(ts, 'timestamp'):
-                ts = ts.timestamp()
-            if ts > cutoff:
-                if not p_info.get('thread_id'):
-                    msgs.append(p_info)
+    async with storage_lock:
+        for p_info in reversed(messages_storage.values()):
+            if len(msgs) >= 40: break
+            if p_info.get('board_id') == board_id:
+                ts = p_info.get('timestamp', 0)
+                if hasattr(ts, 'timestamp'):
+                    ts = ts.timestamp()
+                if ts > cutoff:
+                    if not p_info.get('thread_id'):
+                        msgs.append(p_info)
                     
     msgs.sort(key=lambda x: x.get('timestamp').timestamp() if hasattr(x.get('timestamp'), 'timestamp') else x.get('timestamp', 0))
     
