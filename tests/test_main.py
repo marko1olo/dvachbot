@@ -1,0 +1,97 @@
+import sys
+import os
+import unittest
+import types
+from unittest.mock import MagicMock
+
+# Setup required env var
+os.environ["SECRET_KEY"] = "test-secret-key-12345"
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+def mock_module(name):
+    mod = types.ModuleType(name)
+    mod.__path__ = [] # makes it a package
+    sys.modules[name] = mod
+    return mod
+
+# Mock heavy/missing dependencies to allow import
+mocked_deps = [
+    'site_tgach', 'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
+    'site_tgach.security', 'site_tgach.image_processing', 'site_tgach.catbox',
+    'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
+    'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
+    'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
+    'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
+    'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
+    'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
+    'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
+    'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
+    'aiogram.webhook', 'aiogram.webhook.aiohttp_server'
+]
+
+for dep in mocked_deps:
+    mock_module(dep)
+
+# Return MagicMock for any attribute access on our mocked modules
+for mod_name in sys.modules:
+    if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
+        sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
+
+# Now we can safely import the function under test
+from Dubsite_tgach.main import get_real_ip
+
+class StubClient:
+    def __init__(self, host):
+        self.host = host
+
+class StubRequest:
+    def __init__(self, headers=None, client_host=None):
+        self.headers = headers or {}
+        self.client = StubClient(client_host)
+
+class TestGetRealIp(unittest.TestCase):
+    def test_x_real_ip_preferred(self):
+        """Test that x-real-ip is used if available."""
+        request = StubRequest(
+            headers={"x-real-ip": "1.2.3.4", "x-forwarded-for": "5.6.7.8"},
+            client_host="9.10.11.12"
+        )
+        self.assertEqual(get_real_ip(request), "1.2.3.4")
+
+    def test_x_forwarded_for_fallback(self):
+        """Test that x-forwarded-for is used if x-real-ip is not available."""
+        request = StubRequest(
+            headers={"x-forwarded-for": "5.6.7.8"},
+            client_host="9.10.11.12"
+        )
+        self.assertEqual(get_real_ip(request), "5.6.7.8")
+
+    def test_x_forwarded_for_multiple_ips(self):
+        """Test that only the first IP from x-forwarded-for is returned."""
+        request = StubRequest(
+            headers={"x-forwarded-for": "5.6.7.8, 10.0.0.1"},
+            client_host="9.10.11.12"
+        )
+        self.assertEqual(get_real_ip(request), "5.6.7.8")
+
+    def test_client_host_fallback(self):
+        """Test that client.host is used if no relevant headers are present."""
+        request = StubRequest(
+            headers={},
+            client_host="9.10.11.12"
+        )
+        self.assertEqual(get_real_ip(request), "9.10.11.12")
+
+    def test_empty_headers_values(self):
+        """Test that empty string header values correctly fall back to client.host."""
+        request = StubRequest(
+            headers={"x-real-ip": "", "x-forwarded-for": ""},
+            client_host="9.10.11.12"
+        )
+        self.assertEqual(get_real_ip(request), "9.10.11.12")
+
+if __name__ == "__main__":
+    unittest.main()
