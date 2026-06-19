@@ -32,7 +32,7 @@ def _pack_and_split_sync(backup_db_path: str, zip_name_base: str):
     created_files.append(zip_name_base)
     
     # 2. Разделение
-    CHUNK_SIZE = 45 * 1024 * 1024
+    CHUNK_SIZE = 25 * 1024 * 1024
     file_size = os.path.getsize(zip_name_base)
     
     if file_size > CHUNK_SIZE:
@@ -91,13 +91,13 @@ async def create_db_backup(bot) -> bool:
                 )
                 try:
                     input_file = FSInputFile(part_path, filename=os.path.basename(part_path))
-                    await bot.send_document(chat_id=admin_id, document=input_file, caption=caption, parse_mode="HTML")
+                    await bot.send_document(chat_id=admin_id, document=input_file, caption=caption, parse_mode="HTML", request_timeout=300)
                     await asyncio.sleep(2) 
                 except TelegramRetryAfter as e:
                     logger.warning(f"FloodWait sending backup to {admin_id}, waiting {e.retry_after}s...")
                     await asyncio.sleep(e.retry_after + 2)
                     input_file = FSInputFile(part_path, filename=os.path.basename(part_path))
-                    await bot.send_document(chat_id=admin_id, document=input_file, caption=caption, parse_mode="HTML")
+                    await bot.send_document(chat_id=admin_id, document=input_file, caption=caption, parse_mode="HTML", request_timeout=300)
                 except Exception as e:
                     logger.error(f"Failed to send {part_path} to {admin_id}: {e}")
 
