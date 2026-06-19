@@ -2111,267 +2111,60 @@ async def log_memory_summary():
         current_stats[f"board[{board_id}].threads"] = len(b_data.get('threads_data', {}))
         current_stats[f"board[{board_id}].user_state"] = len(b_data.get('user_state', {}))
         current_stats[f"board[{board_id}].last_user_msgs"] = len(b_data.get('last_user_msgs', {}))
+    full_stats_text, header_title = format_board_statistics(stream, posts_per_hour, board_data, BOARD_CONFIG)
+        
+    return full_stats_text, header_title
+
+
+def format_board_statistics(stream: str, posts_per_hour: dict, board_data: dict, board_config: dict) -> tuple[str, str]:
     stats_lines = []
-    print("--- MEMORY STRUCTURE STATS (current / delta) ---")
-    sorted_keys = sorted(current_stats.keys())
-    for key in sorted_keys:
-        current_val = current_stats[key]
-        prev_val = previous_stats.get(key, current_val)
-        delta = current_val - prev_val
-        delta_str = f" ({delta:+})"
-        stats_lines.append(f"{key:<30}: {current_val}{delta_str}")
-    print("\n".join(stats_lines))
-    log_memory_summary.previous_stats = current_stats
-    for board_id in BOARDS:
-        threads_data = board_data[board_id].get('threads_data', {})
-        if threads_data:
-            top_threads = sorted(threads_data.items(), key=lambda item: len(item[1].get('posts', [])), reverse=True)[:5]
-            print(f"board[{board_id}]: TOP-5 THREADS BY POSTS:")
-            for tid, tinfo in top_threads:
-                print(f"    thread_id {tid}: posts={len(tinfo.get('posts', []))}, subs={len(tinfo.get('subscribers', set()))}")
-    for board_id in BOARDS:
-        last_user_msgs = board_data[board_id].get('last_user_msgs', {})
-        if last_user_msgs:
-            top_users = sorted(last_user_msgs.items(), key=lambda item: len(item[1]), reverse=True)[:5]
-            print(f"board[{board_id}]: TOP-5 USERS BY last_user_msgs:")
-            for uid, dq in top_users:
-                print(f"    user_id {uid}: msgs={len(dq)}")
-    for board_id in BOARDS:
-        user_state = board_data[board_id].get('user_state', {})
-        if user_state:
-            top_users = sorted(user_state.items(), key=lambda item: item[1].get('last_seen_main', 0), reverse=True)[:5]
-            print(f"board[{board_id}]: TOP-5 ACTIVE USERS (last_seen_main):")
-            for uid, st in top_users:
-                print(f"    user_id {uid}: last_seen_main={st.get('last_seen_main', 0)} location={st.get('location', 'main')}")
-    if post_to_messages:
-        top_posts = sorted(post_to_messages.items(), key=lambda item: len(item[1]), reverse=True)[:5]
-        print(f"TOP-5 POSTS BY recipients in post_to_messages:")
-        for pnum, recips in top_posts:
-            print(f"    post_num {pnum}: recipients={len(recips)}")
-    all_gc_objs = gc.get_objects()
-    type_counts = Counter(type(obj).__name__ for obj in all_gc_objs)
-    print("--- DISTRIBUTION OF OBJECT TYPES IN GC ---")
-    for tname, count in type_counts.most_common(10):
-        print(f"    {tname}: {count}")
-    print(f"Total objects tracked by GC: {len(all_gc_objs)}")
-    tasks = asyncio.all_tasks()
-    print(f"Active asyncio.Tasks: {len(tasks)}")
-    print(f"Top-5 running coroutines:")
-    task_info_lines = []
-    for task in tasks:
-        if not task.done():
-            coro = task.get_coro()
-            coro_name = getattr(coro, '__qualname__', str(coro))
-            task_info_lines.append(f"    - {coro_name}")
-    for line in task_info_lines[:5]:
-        print(line)
-    if len(messages_storage) > MAX_MESSAGES_IN_MEMORY * 2:
-        print(f"⚠️ ALERT: messages_storage size={len(messages_storage)} > DOUBLE LIMIT ({MAX_MESSAGES_IN_MEMORY * 2})")
-    for board_id in BOARDS:
-        if len(board_data[board_id].get('user_state', {})) > 8000:
-            print(f"⚠️ ALERT: board[{board_id}].user_state size={len(board_data[board_id]['user_state'])} > 8000")
-        if len(board_data[board_id].get('threads_data', {})) > MAX_ACTIVE_THREADS * 2:
-            print(f"⚠️ ALERT: board[{board_id}].threads_data size={len(board_data[board_id]['threads_data'])} > DOUBLE THREAD LIMIT")
-    print("--- ✅ Максимально подробный анализ памяти завершён ---\n")
-async def auto_memory_cleaner():
-    """
-    Очистка мусора и обслуживание БД.
-    Адаптировано под db_lock.
-    """
-    from common.db_pool import get_pool, db_lock
-    last_db_cleanup_time = datetime.now(UTC)
-    REAL_RAM_LIMIT = MAX_MESSAGES_IN_MEMORY
-    
-    while True:
-        await asyncio.sleep(1800) 
+    for b_id_inner, config_inner in board_config.items():
+        if b_id_inner == 'test': continue
+        # Фильтр: только доски с юзернеймом (реальные)
+        bot_username = config_inner.get('username')
+        if not bot_username: continue
+
+        clean_username = bot_username.replace('@', '')
+        board_name_display = config_inner['name']
+
+        # Формируем кликабельную ссылку
+        display_html = f'<a href="https://t.me/{clean_username}">{board_name_display}</a>'
+
+        hour_stat = posts_per_hour.get(b_id_inner, 0)
+        total_stat = board_data[b_id_inner].get('board_post_count', 0)
         
-        # 1. Отложенное удаление постов (delete_post_by_num уже безопасен)
-        if posts_pending_deletion:
-            posts_to_delete_now = list(posts_pending_deletion)
-            posts_pending_deletion.clear()
-            deleted_count_from_db = 0
-            for post_num in posts_to_delete_now:
-                if await delete_post_by_num(post_num):
-                    deleted_count_from_db += 1
-            if deleted_count_from_db > 0:
-                print(f"🧹 [GC] Отложенное удаление: {deleted_count_from_db} постов.")
+        # Убрали <b> из шаблонов, так как теги теперь в display_html
+        if stream == 'en':
+            tpl = "{name} - {hour} pst/hr, total: {total}"
+        elif stream == 'jp':
+            tpl = "{name} - {hour} レス/時, 合計: {total}"
+        else:
+            tpl = "{name} - {hour} пст/час, всего: {total}"
 
-        # 2. Тяжелая очистка БД и VACUUM
-        if datetime.now(UTC) - last_db_cleanup_time > DB_CLEANUP_INTERVAL:
-            try:
-                loop = asyncio.get_running_loop()
-                # cleanup_old_posts_from_db - синхронная, внутри создает свое соединение.
-                # Это безопасно в WAL, но может вызвать busy, если бот активен.
-                await loop.run_in_executor(
-                    save_executor,
-                    cleanup_old_posts_from_db,
-                    DB_POST_LIMIT
-                )
-                last_db_cleanup_time = datetime.now(UTC)
-                print("🧹 [GC] БД очищена от старого мусора.")
-                
-                # Чекпоинт WAL под защитой лока
-                async with db_lock:
-                    for attempt in range(5):
-                        try:
-                            db = await get_pool()
-                            await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
-                            print("💾 [DB] WAL Checkpoint (Passive) выполнен.")
-                            break
-                        except Exception as e:
-                            if "locked" in str(e).lower():
-                                await asyncio.sleep(1)
-                                continue
-                            print(f"⚠️ Ошибка чекпоинта БД: {e}")
-                            break
-                        
-            except Exception as e:
-                print(f"⛔ [GC] Ошибка обслуживания БД: {e}")
+        stats_lines.append(tpl.format(
+            name=display_html,
+            hour=hour_stat,
+            total=total_stat
+        ))
+    if stream == 'en':
+        header_text = "📊 Boards Statistics:\n"
+        header_title = "### Statistics ###"
+        captions = DVACH_STATS_CAPTIONS_EN
+    elif stream == 'jp':
+        header_text = "📊 板統計:\n"
+        header_title = "### 統計 ###"
+        captions = DVACH_STATS_CAPTIONS_JP
+    else:
+        header_text = "📊 Статистика досок:\n"
+        header_title = "### Статистика ###"
+        captions = DVACH_STATS_CAPTIONS
+    full_stats_text = header_text + "\n".join(stats_lines)
+    if random.random() < 0.76:
+        dvach_caption = random.choice(captions)
+        full_stats_text = f"{full_stats_text}\n\n<i>{dvach_caption}</i>"
 
-        # 3. Очистка RAM (ИСПРАВЛЕНО: удаление обратных ссылок)
-        async with storage_lock:
-            current_size = len(messages_storage)
-            if current_size > REAL_RAM_LIMIT:
-                sorted_keys = sorted(messages_storage.keys())
-                to_delete_count = current_size - REAL_RAM_LIMIT
-                keys_to_delete = sorted_keys[:to_delete_count]
-                
-                deleted_map_entries = 0
-                for post_num in keys_to_delete:
-                    messages_storage.pop(post_num, None)
-                    deleted_map_entries += _drop_post_copy_maps_unlocked(post_num)
-                
-                print(f"🧹 [GC] RAM Purge: выгружено {len(keys_to_delete)} постов и {deleted_map_entries} ссылок.")
+    return full_stats_text, header_title
 
-            removed_copy_posts, removed_copy_refs = _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
-            if removed_copy_posts:
-                print(f"🧹 [GC] Copy map cap: удалено {removed_copy_posts} постов и {removed_copy_refs} ссылок из RAM-кэша копий.")
-
-            orphan_reverse_count = _purge_orphan_message_to_post_unlocked()
-            if orphan_reverse_count:
-                print(f"🧹 [GC] Reverse map purge: удалено {orphan_reverse_count} старых message_to_post кэш-ссылок.")
-
-            # Очистка кэшей юзеров...
-            now_utc = datetime.now(UTC)
-            INACTIVE_THRESHOLD = timedelta(hours=1)
-            
-            for board_id in BOARDS:
-                b_data = board_data[board_id]
-                last_activity_map = b_data['last_activity']
-                board_inactive_users = {
-                    uid for uid, last_ts in last_activity_map.items()
-                    if now_utc - last_ts > INACTIVE_THRESHOLD
-                }
-                
-                if board_inactive_users:
-                    caches_to_prune = [
-                        b_data['last_texts'], b_data['last_stickers'],
-                        b_data['last_animations'], b_data['last_audios'],
-                        b_data['spam_violations'], b_data['spam_tracker'],
-                        b_data['message_counter'], b_data['last_user_msgs'],
-                        b_data['last_roll_time'], b_data['reaction_rate_tracker'],
-                        b_data['reaction_queue'], b_data['last_reaction_process_time'],
-                        b_data.get('last_info_command_time', {}),
-                        b_data.get('last_generate_time', {}),
-                        b_data.get('single_photo_counter', {}),
-                        b_data.get('anime_daily_tracker', {}),
-                        # --- ИЗМЕНЕНО: Добавлена очистка user_state и last_photo_group_id ---
-                        b_data.get('user_state', {}),         # <--- Очистка навигации
-                        b_data.get('last_photo_group_id', {}) # <--- Очистка ID альбомов
-                        # --------------------------------------------------------------------
-                    ]
-                    
-                    for user_id in board_inactive_users:
-                        for cache in caches_to_prune:
-                            if isinstance(cache, dict): cache.pop(user_id, None)
-                        last_activity_map.pop(user_id, None)
-                    
-                    async with author_reaction_notify_lock:
-                        for user_id in board_inactive_users:
-                            author_reaction_notify_tracker.pop(user_id, None)
-                thread_locks = b_data.get('thread_locks', {})
-                threads_data = b_data.get('threads_data', {})
-                if isinstance(thread_locks, dict):
-                    for thread_id in list(thread_locks.keys()):
-                        if thread_id not in threads_data:
-                            thread_locks.pop(thread_id, None)
-
-            # Очистка глобальных кэшей
-            global_caches_to_clean = [
-                user_spam_locks, generate_locks, unknown_command_tracker,
-                user_hourly_image_count, user_hourly_image_reset,
-                user_last_thread_action, reaction_ratelimit,
-                last_poll_creation_time, last_poll_vote_time,
-                shadow_fake_post_counters
-            ]
-            now_ts = time.time()
-            for board_id, timestamps in list(image_spam_tracker.items()):
-                fresh_timestamps = [
-                    ts for ts in timestamps
-                    if isinstance(ts, (int, float)) and now_ts - float(ts) < IMAGE_SPAM_WINDOW
-                ]
-                if fresh_timestamps:
-                    image_spam_tracker[board_id] = fresh_timestamps
-                else:
-                    image_spam_tracker.pop(board_id, None)
-            for uid, reset_ts in list(user_hourly_image_reset.items()):
-                if now_ts - float(reset_ts or 0) > 7200:
-                    user_hourly_image_reset.pop(uid, None)
-                    user_hourly_image_count.pop(uid, None)
-            for board_id in BOARDS:
-                daily_tracker = board_data[board_id].get('anime_daily_tracker', {})
-                for uid, tracker in list(daily_tracker.items()):
-                    reset_at = float((tracker or {}).get('reset_at') or 0)
-                    if reset_at and now_ts - reset_at > 3600:
-                        daily_tracker.pop(uid, None)
-            for cache, ttl in (
-                (user_last_thread_action, 3600),
-                (reaction_ratelimit, 300),
-                (last_poll_creation_time, 3600),
-                (last_poll_vote_time, 600),
-            ):
-                for uid, ts in list(cache.items()):
-                    if now_ts - float(ts or 0) > ttl:
-                        cache.pop(uid, None)
-            async with author_reaction_notify_lock:
-                for uid, timestamps in list(author_reaction_notify_tracker.items()):
-                    if not timestamps or now_ts - float(timestamps[-1] or 0) > 300:
-                        author_reaction_notify_tracker.pop(uid, None)
-            for uid, timestamps in list(unknown_command_tracker.items()):
-                fresh_timestamps = [
-                    ts for ts in timestamps
-                    if isinstance(ts, (int, float)) and (ts > now_ts or now_ts - float(ts) < 300)
-                ]
-                if fresh_timestamps:
-                    unknown_command_tracker[uid] = fresh_timestamps
-                else:
-                    unknown_command_tracker.pop(uid, None)
-            for cache in global_caches_to_clean:
-                if len(cache) > 10000: cache.clear()
-            
-            async with pending_edit_lock:
-                finished_edit_tasks = [pnum for pnum, task in pending_edit_tasks.items() if task.done()]
-                for pnum in finished_edit_tasks:
-                    pending_edit_tasks.pop(pnum, None)
-
-        # Очистка медиа-групп
-        stale_groups = [gid for gid in current_media_groups if gid not in media_group_timers]
-        if stale_groups:
-             for group_id in stale_groups:
-                 current_media_groups.pop(group_id, None)
-        
-        gc.collect()
-        print(f"🧹 Очистка памяти завершена.")
-def _sync_collect_board_statistics(hour_ago: datetime, posts_meta_list: list[tuple]) -> defaultdict[str, int]:
-    """
-    Синхронная, блокирующая функция для сбора статистики.
-    Работает с легковесным списком метаданных (timestamp, board_id).
-    """
-    posts_per_hour = defaultdict(int)
-    for post_time, b_id in posts_meta_list:
-        if post_time >= hour_ago and b_id:
-            posts_per_hour[b_id] += 1
-    return posts_per_hour
 async def board_statistics_broadcaster():
     """
     Раз в 3 часа собирает общую статистику и рассылает на каждую доску
@@ -2421,51 +2214,7 @@ async def board_statistics_broadcaster():
                             if stream != 'ru': continue
                             recipients = b_data['users']['active'] - b_data['users']['banned']
                     if not recipients: continue
-                    stats_lines = []
-                    for b_id_inner, config_inner in BOARD_CONFIG.items():
-                        if b_id_inner == 'test': continue
-                        # Фильтр: только доски с юзернеймом (реальные)
-                        bot_username = config_inner.get('username')
-                        if not bot_username: continue
-                        
-                        clean_username = bot_username.replace('@', '')
-                        board_name_display = config_inner['name']
-                        
-                        # Формируем кликабельную ссылку
-                        display_html = f'<a href="https://t.me/{clean_username}">{board_name_display}</a>'
-
-                        hour_stat = posts_per_hour.get(b_id_inner, 0)
-                        total_stat = board_data[b_id_inner].get('board_post_count', 0)
-                        
-                        # Убрали <b> из шаблонов, так как теги теперь в display_html
-                        if stream == 'en':
-                            tpl = "{name} - {hour} pst/hr, total: {total}"
-                        elif stream == 'jp':
-                            tpl = "{name} - {hour} レス/時, 合計: {total}"
-                        else:
-                            tpl = "{name} - {hour} пст/час, всего: {total}"
-                        
-                        stats_lines.append(tpl.format(
-                            name=display_html,
-                            hour=hour_stat,
-                            total=total_stat
-                        ))
-                    if stream == 'en':
-                        header_text = "📊 Boards Statistics:\n"
-                        header_title = "### Statistics ###"
-                        captions = DVACH_STATS_CAPTIONS_EN
-                    elif stream == 'jp':
-                        header_text = "📊 板統計:\n"
-                        header_title = "### 統計 ###"
-                        captions = DVACH_STATS_CAPTIONS_JP
-                    else:
-                        header_text = "📊 Статистика досок:\n"
-                        header_title = "### Статистика ###"
-                        captions = DVACH_STATS_CAPTIONS
-                    full_stats_text = header_text + "\n".join(stats_lines)
-                    if random.random() < 0.76:
-                        dvach_caption = random.choice(captions)
-                        full_stats_text = f"{full_stats_text}\n\n<i>{dvach_caption}</i>"
+                    full_stats_text, header_title = format_board_statistics(stream, posts_per_hour, board_data, BOARD_CONFIG)
                     content = {"type": "text", "text": full_stats_text, "is_system_message": True}
                     post_num = await create_post(
                         board_id=board_id, author_id=0, content=content,
