@@ -1953,7 +1953,7 @@ async def custom_404_handler(request: Request, exc):
         log_system_event(f"🪤 AUTO-TRAP: {client_ip} triggered bot-filter on {path}. Penalty: {troll_mode.upper()} for 24h")
         return await honey_pot_troll(request)
 
-    return templates.TemplateResponse("error.jinja2", {
+    return templates.TemplateResponse(request=request, name="error.jinja2", context={
         "request": request, 
         "status_code": 404, 
         "detail": "Страница не найдена"
@@ -1968,7 +1968,7 @@ async def custom_500_handler(request: Request, exc):
             request.headers.get("content-length", "-"),
             exc_info=exc,
         )
-    return templates.TemplateResponse("error.jinja2", {"request": request, "status_code": 500, "detail": "Внутренняя ошибка сервера"}, status_code=500)
+    return templates.TemplateResponse(request=request, name="error.jinja2", context={"request": request, "status_code": 500, "detail": "Внутренняя ошибка сервера"}, status_code=500)
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
     if request.url.path.startswith("/api/post/"):
@@ -1977,7 +1977,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
             status_code=exc.status_code,
             headers=exc.headers,
         )
-    return templates.TemplateResponse("error.jinja2", {"request": request, "status_code": exc.status_code, "detail": exc.detail}, status_code=exc.status_code)
+    return templates.TemplateResponse(request=request, name="error.jinja2", context={"request": request, "status_code": exc.status_code, "detail": exc.detail}, status_code=exc.status_code)
 
 @app.exception_handler(RequestValidationError)
 async def custom_validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -2864,7 +2864,7 @@ def finalize_posts_for_user(posts: List[dict], user_id: int, is_ru: bool, op_aut
 @app.get("/welcome")
 async def welcome_page(request: Request):
 
-    return templates.TemplateResponse("landing.jinja2", {"request": request})
+    return templates.TemplateResponse(request=request, name="landing.jinja2", context={"request": request})
 @app.get("/")
 async def read_root(request: Request, user: dict | None = Depends(get_optional_user)):
     if ENABLE_MULTILANG:
@@ -2877,7 +2877,7 @@ async def read_root(request: Request, user: dict | None = Depends(get_optional_u
     base_url = str(request.base_url).rstrip('/')
     meta_image = f"{base_url}/static/{random.choice(['logo.png', 'logo1.png'])}"
 
-    return templates.TemplateResponse("index.jinja2", {
+    return templates.TemplateResponse(request=request, name="index.jinja2", context={
         "request": request, 
         "boards": local_boards,
         "BOT_USERNAME": BOT_USERNAME,
@@ -2889,12 +2889,12 @@ async def read_root(request: Request, user: dict | None = Depends(get_optional_u
 def login_page(request: Request):
     if 'user' in request.session:
         return RedirectResponse(url="/")
-    return templates.TemplateResponse("login.jinja2", {
+    return templates.TemplateResponse(request=request, name="login.jinja2", context={
         "request": request, "BOT_USERNAME": BOT_USERNAME, "session": request.session
     })
 @app.get("/rules/")
 async def rules_page(request: Request):
-    return templates.TemplateResponse("rules.jinja2", {
+    return templates.TemplateResponse(request=request, name="rules.jinja2", context={
         "request": request, 
         "BOT_USERNAME": BOT_USERNAME
     })
@@ -2913,7 +2913,7 @@ async def search_page(request: Request, query: str = "", user: dict | None = Dep
     results = await search_posts(clean_query, observer_id=observer_id) if clean_query else []
     results = _convert_and_enrich_posts(results)
     await enrich_extra_data(results)
-    return templates.TemplateResponse("search_results.jinja2", {
+    return templates.TemplateResponse(request=request, name="search_results.jinja2", context={
         "request": request, "query": query, "posts": results, "boards": BOARD_CONFIG,
         "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
     })
@@ -2926,7 +2926,7 @@ async def security_txt():
     return RedirectResponse(url="/static/security.txt")
 @app.get("/favourites/")
 async def favourites_page(request: Request, user: dict | None = Depends(get_optional_user)):
-    return templates.TemplateResponse("favourites.jinja2", {
+    return templates.TemplateResponse(request=request, name="favourites.jinja2", context={
         "request": request, "boards": BOARD_CONFIG, "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
     })
 @app.get("/overboard/")
@@ -2961,7 +2961,7 @@ async def overboard_page(request: Request, user: dict | None = Depends(get_optio
     lang = getattr(request.state, 'lang', 'ru')
     local_boards = localize_boards(lang)
     
-    return templates.TemplateResponse("overboard.jinja2", {
+    return templates.TemplateResponse(request=request, name="overboard.jinja2", context={
         "request": request, 
         "posts": posts,
         "site_mode": SITE_ACCESS_MODE, 
@@ -2975,22 +2975,22 @@ async def overboard_page(request: Request, user: dict | None = Depends(get_optio
     })
 @app.get("/history/")
 async def history_page(request: Request, user: dict | None = Depends(get_optional_user)):
-    return templates.TemplateResponse("history.jinja2", {
+    return templates.TemplateResponse(request=request, name="history.jinja2", context={
         "request": request, "boards": BOARD_CONFIG, "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
     })
 @app.get("/faq/")
 async def faq_page(request: Request, user: dict | None = Depends(get_optional_user)):
-    return templates.TemplateResponse("faq.jinja2", {
+    return templates.TemplateResponse(request=request, name="faq.jinja2", context={
         "request": request, "boards": BOARD_CONFIG, "site_mode": SITE_ACCESS_MODE, "session": {"user": user}, "bot_username": BOT_USERNAME
     })
 @app.get("/about/")
 async def about_page(request: Request, user: dict | None = Depends(get_optional_user)):
-    return templates.TemplateResponse("about.jinja2", {
+    return templates.TemplateResponse(request=request, name="about.jinja2", context={
         "request": request, "boards": BOARD_CONFIG, "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
     })
 @app.get("/my/")
 async def my_posts_page(request: Request, user: dict | None = Depends(get_optional_user)):
-    return templates.TemplateResponse("my_posts.jinja2", {
+    return templates.TemplateResponse(request=request, name="my_posts.jinja2", context={
         "request": request, 
         "boards": BOARD_CONFIG,
         "site_mode": SITE_ACCESS_MODE, 
@@ -3000,7 +3000,7 @@ async def my_posts_page(request: Request, user: dict | None = Depends(get_option
 
 @app.get("/my/replies")
 async def my_replies_page(request: Request, user: dict | None = Depends(get_optional_user)):
-    return templates.TemplateResponse("my_replies.jinja2", {
+    return templates.TemplateResponse(request=request, name="my_replies.jinja2", context={
         "request": request, 
         "boards": BOARD_CONFIG,
         "site_mode": SITE_ACCESS_MODE, 
@@ -3029,7 +3029,7 @@ async def api_my_replies_read(data: MarkReadRequest, user: dict = Depends(get_cu
     return {"status": "ok"}
 @app.get("/useful/")
 async def useful_page(request: Request, user: dict | None = Depends(get_optional_user)):
-    return templates.TemplateResponse("useful.jinja2", {
+    return templates.TemplateResponse(request=request, name="useful.jinja2", context={
         "request": request, 
         "boards": BOARD_CONFIG, 
         "site_mode": SITE_ACCESS_MODE, 
@@ -3042,7 +3042,7 @@ async def archive_hub_page(request: Request, user: dict | None = Depends(get_opt
 
     if SITE_ACCESS_MODE == "PRIVATE" and not user:
          return RedirectResponse(url="/login")
-    return templates.TemplateResponse("archive_hub.jinja2", {
+    return templates.TemplateResponse(request=request, name="archive_hub.jinja2", context={
         "request": request, 
         "boards": BOARD_CONFIG,
         "BOT_USERNAME": BOT_USERNAME,
@@ -3920,7 +3920,7 @@ async def read_board_mode_select(board_id: str, request: Request, user: dict | N
     local_boards = localize_boards(lang)
     board_info = BOARD_CONFIG[board_id]
     
-    return templates.TemplateResponse("board_hub.jinja2", {
+    return templates.TemplateResponse(request=request, name="board_hub.jinja2", context={
         "request": request, 
         "board_id": board_id, 
         "boards": local_boards,
@@ -3931,7 +3931,7 @@ async def read_board_mode_select(board_id: str, request: Request, user: dict | N
     })
 @app.get("/img/random")
 async def random_image_page(request: Request, user: dict | None = Depends(get_optional_user)):
-    return templates.TemplateResponse("random_img.jinja2", {
+    return templates.TemplateResponse(request=request, name="random_img.jinja2", context={
         "request": request,
         "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
@@ -4014,7 +4014,7 @@ async def archive_threads_view(request: Request, page: int = 1, user: dict | Non
     
     is_ru = await is_request_from_ru(request)
     await enrich_extra_data(posts, is_ru=is_ru)
-    return templates.TemplateResponse("archive_threads.jinja2", {
+    return templates.TemplateResponse(request=request, name="archive_threads.jinja2", context={
         "request": request,
         "posts": posts,
         "page": page,
@@ -4221,7 +4221,7 @@ async def archive_chat_view(request: Request, page: int = 1, user: dict | None =
     
     is_ru = await is_request_from_ru(request)
     await enrich_extra_data(posts, is_ru=is_ru)
-    return templates.TemplateResponse("archive_chat.jinja2", {
+    return templates.TemplateResponse(request=request, name="archive_chat.jinja2", context={
         "request": request,
         "posts": posts,
         "page": page,
@@ -4298,7 +4298,7 @@ async def read_board_threads(board_id: str, request: Request, sort: str = "bump"
     base_url = str(request.base_url).rstrip('/')
     meta_image = f"{base_url}/static/{random.choice(['logo.png', 'logo1.png'])}"
 
-    return templates.TemplateResponse("board.jinja2", {
+    return templates.TemplateResponse(request=request, name="board.jinja2", context={
         "request": request, "board_id": board_id, "boards": BOARD_CONFIG,
         "board_info": BOARD_CONFIG[board_id], "posts": op_posts,
         "BOT_USERNAME": BOT_USERNAME, "current_sort": sort_mode,
@@ -4320,7 +4320,7 @@ async def read_board_chat(board_id: str, request: Request, user: dict | None = D
         observer_id=observer_id
     )
     
-    return templates.TemplateResponse("chat.jinja2", {
+    return templates.TemplateResponse(request=request, name="chat.jinja2", context={
         "request": request, "board_id": board_id, "boards": BOARD_CONFIG,
         "board_info": BOARD_CONFIG[board_id], "posts": _convert_and_enrich_posts(chat_posts),
         "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
@@ -4447,7 +4447,7 @@ async def thread_gallery_page(board_id: str, post_num: int, request: Request, us
     media_posts = _convert_and_enrich_posts(media_posts_raw)
     is_ru = await is_request_from_ru(request)
     await enrich_extra_data(media_posts, is_ru=is_ru)
-    return templates.TemplateResponse("gallery.jinja2", {
+    return templates.TemplateResponse(request=request, name="gallery.jinja2", context={
         "request": request, "board_id": board_id, "boards": BOARD_CONFIG,
         "op_post_num": post_num, "media_posts": media_posts,
         "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
@@ -4472,7 +4472,7 @@ async def read_board_catalog(board_id: str, request: Request, user: dict | None 
     else:
         is_skeleton = True
 
-    return templates.TemplateResponse("catalog.jinja2", {
+    return templates.TemplateResponse(request=request, name="catalog.jinja2", context={
         "request": request, "board_id": board_id, "boards": BOARD_CONFIG,
         "board_info": BOARD_CONFIG[board_id], 
         "threads": threads,
@@ -6167,7 +6167,7 @@ async def api_admin_stats(user: dict | None = Depends(get_optional_user)):
     }
 @app.get("/tv/random")
 async def roulette_page(request: Request, user: dict | None = Depends(get_optional_user)):
-    return templates.TemplateResponse("roulette.jinja2", {
+    return templates.TemplateResponse(request=request, name="roulette.jinja2", context={
         "request": request,
         "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
@@ -6328,7 +6328,7 @@ async def admin_dashboard(request: Request, user: dict | None = Depends(get_opti
     is_root = user.get('id') in ADMIN_IDS
     if role == 'user' and not is_root:
         raise HTTPException(status_code=403, detail="Forbidden")
-    return templates.TemplateResponse("admin.jinja2", {
+    return templates.TemplateResponse(request=request, name="admin.jinja2", context={
         "request": request, 
         "boards": BOARD_CONFIG, 
         "site_mode": SITE_ACCESS_MODE, 
@@ -7204,7 +7204,7 @@ async def _proxy_protected_telegram_file(
     )
 @app.get("/games/abu")
 async def game_abu_page(request: Request, user: dict | None = Depends(get_optional_user)):
-    return templates.TemplateResponse("game_abu.jinja2", {
+    return templates.TemplateResponse(request=request, name="game_abu.jinja2", context={
         "request": request, 
         "user": user,
         "site_mode": SITE_ACCESS_MODE
