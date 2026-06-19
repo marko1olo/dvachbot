@@ -138,10 +138,15 @@ async def init_db_schema():
                 tags TEXT
             );
         """)
-        for col in ['tags', 'phash', 'blurhash']:
-            try:
-                await db.execute(f"ALTER TABLE FileRegistry ADD COLUMN {col} TEXT;")
-            except aiosqlite.OperationalError: pass
+        try:
+            await db.execute("ALTER TABLE FileRegistry ADD COLUMN tags TEXT;")
+        except aiosqlite.OperationalError: pass
+        try:
+            await db.execute("ALTER TABLE FileRegistry ADD COLUMN phash TEXT;")
+        except aiosqlite.OperationalError: pass
+        try:
+            await db.execute("ALTER TABLE FileRegistry ADD COLUMN blurhash TEXT;")
+        except aiosqlite.OperationalError: pass
         
         await db.execute("CREATE TABLE IF NOT EXISTS FileOwners (file_id TEXT PRIMARY KEY, bot_id INTEGER NOT NULL);")
         await db.commit()
