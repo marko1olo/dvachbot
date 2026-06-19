@@ -45,6 +45,8 @@ import sys
 import io
 import glob
 import time
+import witching_hour
+import periodic_publisher
 import textwrap
 import threading
 import socket
@@ -586,6 +588,7 @@ def _media_group_state_key(chat_id: int | str, media_group_id: str) -> str:
     return f"{chat_id}:{media_group_id}"
 
 unknown_command_tracker = defaultdict(list)
+cross_board_spam_tracker = defaultdict(lambda: deque(maxlen=3))
 posts_pending_deletion = set()
 os.environ["AIORGRAM_DISABLE_SIGNAL_HANDLERS"] = "1"
 DEANON_COOLDOWN = 180  # 3 минуты
@@ -601,26 +604,17 @@ SPAM_RULES = {
         'max_repeats': 3,
         'min_length': 2,
         'window_sec': 15,
-        'max_per_window': 7,
-        'penalty': [60, 120, 300]
+        'max_per_window': 7
     },
     'sticker': {
         'max_repeats': 2,
         'max_per_window': 5,
-        'window_sec': 18,
-        'penalty': [60, 300, 600]
+        'window_sec': 18
     },
     'animation': {
         'max_repeats': 2,
         'max_per_window': 4,
-        'window_sec': 24,
-        'penalty': [60, 300, 600]
-    },
-    'audio': {
-        'max_repeats': 3,  
-        'window_sec': 60,  
-        'max_per_window': 5,  
-        'penalty': [180, 300, 600] 
+        'window_sec': 24
     }
 }
 TOKEN_TO_BOARD_MAP = {
@@ -2575,46 +2569,45 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
             if post.get('author_id') == 0: # Игнорируем системные сообщения
                 continue
             content = post.get('content', {})
-            ttype = content.get('type')
-            if ttype == 'text':
-                text = content.get('text', '')
-                text = clean_html_tags(text)
-                text = re.sub(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', '', text, flags=re.MULTILINE)
-                text = re.sub(r'^(###.*?###|<i>.*?</i>)\s*\n?', '', text, flags=re.MULTILINE)
-                text = text.strip()
-                if text:
-                    author_id = post.get('author_id')
-                    name = content.get('username') or content.get('name') or content.get('author_name')
-                    if not name:
-                        if not lang:
-                            lang = 'en' if board_id == 'int' else 'ru'
-                        if author_id and author_id != 0:
-                            suffix = str(author_id)[-4:]
-                            if lang == 'en':
-                                name = f"Anon #{suffix}"
-                            elif lang == 'jp':
-                                name = f"名無し #{suffix}"
-                            else:
-                                name = f"Анон #{suffix}"
-                        else:
-                            if lang == 'en':
-                                name = "Anon"
-                            elif lang == 'jp':
-                                name = "名無し"
-                            else:
-                                name = "Анон"
-                    reply_to = content.get('reply_to_post') or post.get('reply_to_post_num')
-                    reply_suffix = ""
-                    if reply_to:
-                        if not lang:
-                            lang = 'en' if board_id == 'int' else 'ru'
+            text = content.get('text', '')
+            
+            text = clean_html_tags(text)
+            text = re.sub(r'^(Ответ на \d+.*?\n|Post No\.\d+.*?\n)', '', text, flags=re.MULTILINE)
+            text = re.sub(r'^(###.*?###|<i>.*?</i>)\s*\n?', '', text, flags=re.MULTILINE)
+            text = text.strip()
+            if text:
+                author_id = post.get('author_id')
+                name = content.get('username') or content.get('name') or content.get('author_name')
+                if not name:
+                    if not lang:
+                        lang = 'en' if board_id == 'int' else 'ru'
+                    if author_id and author_id != 0:
+                        suffix = str(author_id)[-4:]
                         if lang == 'en':
-                            reply_suffix = f" (reply to №{reply_to})"
+                            name = f"Anon #{suffix}"
                         elif lang == 'jp':
-                            reply_suffix = f" (>>{reply_to})"
+                            name = f"名無し #{suffix}"
                         else:
-                            reply_suffix = f" (ответ на №{reply_to})"
-                    lines.append(f"{name}{reply_suffix}: {text}")
+                            name = f"Анон #{suffix}"
+                    else:
+                        if lang == 'en':
+                            name = "Anon"
+                        elif lang == 'jp':
+                            name = "名無し"
+                        else:
+                            name = "Анон"
+                reply_to = content.get('reply_to_post') or post.get('reply_to_post_num')
+                reply_suffix = ""
+                if reply_to:
+                    if not lang:
+                        lang = 'en' if board_id == 'int' else 'ru'
+                    if lang == 'en':
+                        reply_suffix = f" (reply to #{reply_to})"
+                    elif lang == 'jp':
+                        reply_suffix = f" (>>{reply_to})"
+                    else:
+                        reply_suffix = f" (Ответ на #{reply_to})"
+                lines.append(f"{name}{reply_suffix}: {text}")
         except Exception as e:
             print(f"[summarize] Error while chunking post: {e}, post: {post}")
     full_text = "\n".join(lines)
@@ -2627,6 +2620,56 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
     b_data = board_data[board_id]
     if is_admin(user_id, board_id):
         return True # Админу можно всё, спам-фильтр пропускает
+
+    # Extract content early for echodown tracking
+    if msg.content_type == 'text':
+        check_content = msg.text
+    elif msg.content_type == 'sticker':
+        check_content = msg.sticker.file_id
+    elif msg.content_type == 'animation':
+        check_content = msg.animation.file_id
+    elif msg.content_type == 'audio':
+        return True
+    elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
+        check_content = msg.caption
+    else:
+        check_content = None
+
+    if check_content:
+        now_ts = time.time()
+        user_cb = cross_board_spam_tracker[user_id]
+        if not user_cb or user_cb[-1][1] != board_id:
+            user_cb.append((now_ts, board_id, check_content))
+            
+            if len(user_cb) == 3:
+                boards = {b for t, b, c in user_cb}
+                # Check if it's 3 distinct boards within 30 seconds
+                if len(boards) == 3 and (user_cb[-1][0] - user_cb[0][0]) <= 30:
+                    # Check if contents are duplicates
+                    contents = [c for t, b, c in user_cb]
+                    is_duplicate = False
+                    if msg.content_type == 'text' or (msg.content_type in ['photo', 'video', 'document'] and msg.caption):
+                        import difflib
+                        r1 = difflib.SequenceMatcher(None, contents[0], contents[1]).ratio()
+                        r2 = difflib.SequenceMatcher(None, contents[1], contents[2]).ratio()
+                        if r1 > 0.85 and r2 > 0.85:
+                            is_duplicate = True
+                    else:
+                        if contents[0] == contents[1] == contents[2]:
+                            is_duplicate = True
+                            
+                    if is_duplicate:
+                        msg_str = f"🚨 [GLOBAL] ЭХОДАУН ОБНАРУЖЕН: user {user_id} спамит дубликатами в {boards}. Выдан перманентный SHADOWMUTE везде кроме /b/."
+                        print(msg_str)
+                        from common.database import update_shadow_mute, log_global_event
+                        asyncio.create_task(log_global_event('bot', msg_str))
+                        expires_dt = datetime.now(UTC) + timedelta(days=365)
+                        for b in BOARD_CONFIG.keys():
+                            if b != 'b':
+                                board_data[b].setdefault('shadow_mutes', {})[user_id] = expires_dt
+                                asyncio.create_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
+                        user_cb.clear() # clear tracker after muting
+                        return False
     if msg.content_type == 'text':
         msg_type = 'text'
         content = msg.text
@@ -2637,8 +2680,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         msg_type = 'animation'
         content = msg.animation.file_id
     elif msg.content_type == 'audio':
-        msg_type = 'audio'
-        content = msg.audio.file_unique_id
+        return True # Handled above
     elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
         msg_type = 'text'
         content = msg.caption
@@ -2668,16 +2710,24 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
             last_items_deque.append(content)
             if len(last_items_deque) >= max_repeats:
                 if len(set(last_items_deque)) == 1:
-                    violations['level'] = min(violations['level'] + 1, len(rules['penalty']) - 1)
+                    violations['level'] += 1
                     last_items_deque.clear() # Очищаем очередь после нарушения
                     return False
+                elif msg_type == 'text':
+                    from difflib import SequenceMatcher
+                    contents = list(last_items_deque)
+                    similarities = [SequenceMatcher(None, contents[0], c).ratio() for c in contents[1:]]
+                    if all(sim > 0.85 for sim in similarities):
+                        violations['level'] += 1
+                        last_items_deque.clear()
+                        return False
             if msg_type == 'text' and len(last_items_deque) == 4:
                 if len(set(last_items_deque)) == 2:
                     contents = list(last_items_deque)
                     p1 = [contents[0], contents[1]] * 2
                     p2 = [contents[1], contents[0]] * 2
                     if contents == p1 or contents == p2:
-                        violations['level'] = min(violations['level'] + 1, len(rules['penalty']) - 1)
+                        violations['level'] += 1
                         last_items_deque.clear() # Очищаем очередь
                         return False
     window_start = now - timedelta(seconds=rules['window_sec'])
@@ -2685,7 +2735,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
     b_data['spam_tracker'][user_id] = [t for t in b_data['spam_tracker'][user_id] if t > (now_ts - rules['window_sec'])]
     b_data['spam_tracker'][user_id].append(now_ts)
     if len(b_data['spam_tracker'][user_id]) >= rules['max_per_window']:
-        violations['level'] = min(violations['level'] + 1, len(rules['penalty']) - 1)
+        violations['level'] += 1
         b_data['spam_tracker'][user_id] = [] 
         return False
     return True
@@ -2698,52 +2748,29 @@ async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id
             return
         violations_data = b_data['spam_violations'].get(user_id, {'level': 0, 'last_reset': datetime.now(UTC)})
         level = violations_data['level']
-        current_mute = b_data['mutes'].get(user_id)
-        if current_mute and current_mute > datetime.now(UTC):
-            return  # Мут уже активен, пропускаем
-        level = min(level, len(rules.get('penalty', [])) - 1)
-        mute_seconds = rules['penalty'][level] if rules.get('penalty') else 30
-        b_data['mutes'][user_id] = datetime.now(UTC) + timedelta(seconds=mute_seconds)
+        
+        current_smute = b_data.get('shadow_mutes', {}).get(user_id)
+        if current_smute and current_smute > datetime.now(UTC):
+            return  # Уже в теневом муте, пропускаем
+
+        # Progressive silent shadow mute: 5, 10, 20, 40, 80... minutes.
+        base_mute_minutes = 5
+        multiplier = 2 ** max(0, level - 1)
+        mute_seconds = base_mute_minutes * 60 * multiplier
+        
+        expires_dt = datetime.now(UTC) + timedelta(seconds=mute_seconds)
+        b_data.setdefault('shadow_mutes', {})[user_id] = expires_dt
+        
+        from common.database import update_shadow_mute
+        await update_shadow_mute(user_id, board_id, expires_dt.timestamp())
+        
         violation_type = {'text': "текстовый спам", 'sticker': "спам стикерами", 'animation': "спам гифками", 'audio': "спам аудио"}.get(msg_type, "спам")
-        mute_duration = f"{mute_seconds} сек" if mute_seconds < 60 else f"{mute_seconds//60} мин"
-        print(f"🚫 [{board_id}] Мут за спам: user {user_id}, тип: {violation_type}, уровень: {level+1}, длительность: {mute_duration}")
-        try:
-            if mute_seconds < 60:
-                time_str = f"{mute_seconds} sec" if stream == 'en' else (f"{mute_seconds}秒" if stream == 'jp' else f"{mute_seconds} сек")
-            elif mute_seconds < 3600:
-                time_str = f"{mute_seconds // 60} min" if stream == 'en' else (f"{mute_seconds // 60}分" if stream == 'jp' else f"{mute_seconds // 60} мин")
-            else:
-                time_str = f"{mute_seconds // 3600} h" if stream == 'en' else (f"{mute_seconds // 3600}時間" if stream == 'jp' else f"{mute_seconds // 3600} час")
-            lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-            if lang == 'en':
-                violation_type_en = {'text': "text spam", 'sticker': "sticker spam", 'animation': "gif spam", 'audio': "audio spam"}.get(msg_type, "spam")
-                phrases = [
-                    "🚫 Hey faggot, you are muted for {time} for {violation} on the {board} board.\nKeep spamming - get banned.",
-                    "🔇 Too much spam, buddy. Take a break for {time} on {board}.",
-                    "🚨 Spam detected! You've been silenced for {time} for {violation} on {board}. Don't do it again.",
-                    "🛑 Stop right there, criminal scum! You're muted for {time} on {board} for spamming."
-                ]
-                notification_text = random.choice(phrases).format(time=time_str, violation=violation_type_en, board=BOARD_CONFIG[board_id]['name'])
-            elif lang == 'jp':
-                violation_type_jp = {'text': "テキスト連投", 'sticker': "スタンプ連打", 'animation': "GIF連打", 'audio': "音声連打"}.get(msg_type, "スパム")
-                phrases = [
-                    "🚫 おいホモ野郎、{board} 板での {violation} により {time} ミュートされたぞ。\nこれ以上やるとBANだ。",
-                    "🔇 スパムしすぎだ。 {board} 板で {time} 頭を冷やせ。",
-                    "🚨 スパム検知！ {board} で {violation} のため {time} 黙らせたぞ。二度とやるな。",
-                    "🛑 止まれ犯罪者！スパム行為により {board} で {time} のミュートだ。"
-                ]
-                notification_text = random.choice(phrases).format(time=time_str, violation=violation_type_jp, board=BOARD_CONFIG[board_id]['name'])
-            else:
-                phrases = [
-                    "🚫 Эй пидор, ты в муте на {time} за {violation} на доске {board}\nСпамишь дальше - получишь бан.",
-                    "🔇 Ты заебал спамить. Отдохни {time} на доске {board}.",
-                    "🚨 Обнаружен спам! Твоя пасть завалена на {time} за {violation} на доске {board}. Повторишь - получишь по жопе.",
-                    "🛑 Стой, пидорас! Ты оштрафован на {time} молчания на доске {board} за свой высер."
-                ]
-                notification_text = random.choice(phrases).format(time=time_str, violation=violation_type, board=BOARD_CONFIG[board_id]['name'])
-            await bot_instance.send_message(user_id, notification_text, parse_mode="HTML")
-        except Exception as e:
-            print(f"Ошибка отправки уведомления о муте: {e}")
+        mute_duration = f"{mute_seconds//60} мин"
+        log_msg = f"👻 [{board_id}] ТИХИЙ SHADOW Мут за спам: user {user_id}, тип: {violation_type}, уровень: {level}, длительность: {mute_duration}"
+        print(log_msg)
+        from common.database import log_global_event
+        asyncio.create_task(log_global_event('bot', log_msg))
+        # Уведомление пользователю отключено по просьбе админа
 def _get_random_header_prefix(lang: str = 'ru') -> str:
 
     rand_prefix = random.random()
@@ -3267,6 +3294,53 @@ async def _rollback_post_creation(post_num_to_delete: int):
             message_to_post.pop(k, None)
     if deleted_from_db:
         print(f"Rollback: Пост #{post_num_to_delete} успешно удален из БД и памяти.")
+
+# --- SHADOW TROLL MECHANICS ---
+import time
+import witching_hour
+import periodic_publisher
+
+last_shadow_troll_time = {}
+
+async def execute_shadow_troll(bot, board_id: str, user_id: int, target_fake_post_num: int, stream: str = 'ru'):
+    # Cooldown check: 1 minute per user
+    now = time.time()
+    if now - last_shadow_troll_time.get(user_id, 0) < 60:
+        return
+    last_shadow_troll_time[user_id] = now
+    
+    # Wait realistically before replying (30 to 60 seconds)
+    await asyncio.sleep(random.uniform(30.0, 60.0))
+    
+    # Generate fake post properties
+    troll_id = random.randint(100000, 999999)
+    shadow_key = (board_id, user_id)
+    current_floor = state['post_counter'] + random.randint(1, 3)
+    last_fake = shadow_fake_post_counters.get(shadow_key, target_fake_post_num)
+    troll_post_num = max(current_floor, last_fake + random.randint(1, 3))
+    shadow_fake_post_counters[shadow_key] = troll_post_num
+    
+    header_text = await format_header(board_id, troll_post_num, troll_id, stream=stream)
+    
+    from troll_phrases import get_random_troll_phrase
+    troll_content = {
+        'type': 'text',
+        'text': get_random_troll_phrase(),
+        'reply_to_post': target_fake_post_num,
+        'post_num': troll_post_num,
+        'header': header_text,
+        'is_shadow_reject': True
+    }
+    
+    
+    await send_message_to_users(
+        bot_instance=bot,
+        board_id=board_id,
+        recipients={user_id},
+        content=troll_content,
+        notify=True
+    )
+
 async def process_shadow_reject(bot: Bot, board_id: str, user_id: int, content: dict, reply_to_post: int | None, stream: str = 'ru'):
     """
     Эмулирует успешную публикацию поста, но отправляет его ТОЛЬКО автору.
@@ -3292,6 +3366,9 @@ async def process_shadow_reject(bot: Bot, board_id: str, user_id: int, content: 
         reply_info=None
     )
     print(f"👻 [SHADOW] Теневой отброс медиа от {user_id} на доске {board_id}")
+    
+    # Initiate shadow troll
+    asyncio.create_task(execute_shadow_troll(bot, board_id, user_id, fake_post_num, stream))
 async def process_new_post(
     bot_instance: Bot,
     board_id: str,
@@ -3509,6 +3586,8 @@ async def process_new_post(
                         thread_info=thread_info, event_type='milestone',
                         details={'posts': posts_count}
                     ))
+        if user_id in b_data.get('troll_targets', set()):
+            asyncio.create_task(execute_shadow_troll(bot_instance, board_id, user_id, current_post_num, stream, user_text=final_content.get('text') or final_content.get('caption')))
         return current_post_num
     except Exception as e:
         import traceback
@@ -5341,6 +5420,9 @@ async def send_message_to_users(
                 remaining_recipients_for_later.update(queue)
                 queue.clear()
                 interrupted_reason = "phase_budget_before_floodwait"
+                if verbose:
+                    print(f"⏳ FloodWait: пауза {wait_real} сек. (перенос бюджета) ...")
+                await asyncio.sleep(wait_real)
                 break
             if verbose:
                 print(f"⏳ FloodWait: пауза {wait_real} сек. В очереди: {len(queue)}...")
@@ -7393,7 +7475,7 @@ async def graph_data_collector():
                     graph_stats.setdefault(board_id, {})[timestamp_key] = count
             print(f"📊 Статистика для графика собрана за {timestamp_key}. Активные доски: {list(posts_per_hour.keys())}")
             # Сохраняем на диск в фоновом потоке
-            loop.run_in_executor(save_executor, _sync_save_graph_stats, graph_stats.copy())
+            asyncio.get_running_loop().run_in_executor(save_executor, _sync_save_graph_stats, graph_stats.copy())
         except asyncio.CancelledError:
             print("ℹ️ Сборщик статистики для графика остановлен.")
             break
@@ -8303,6 +8385,15 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         await message.answer(err_msg)
         return
     print(f"[summarize] Саммари успешно отправлено ({context_name}, post_num={pnum})")
+
+@dp.message(Command("bot_stats"))
+async def cmd_bot_stats(message: types.Message):
+    if not is_admin(message.from_user.id, 'b'): # check if admin on at least board b
+        await message.answer("❌ Access denied.")
+        return
+    await periodic_publisher.send_stats_to_user(message.bot, message.chat.id)
+
+
 @dp.message(Command("gban"))
 async def cmd_gban(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -12106,6 +12197,137 @@ async def cmd_check_queues(message: types.Message, board_id: str | None, stream:
         f"🧠 <b>RSS/private:</b> {memory.get('rss_mb', '?')} / {memory.get('private_mb', '?')} MB"
     )
     await message.answer(text, parse_mode="HTML")
+@dp.message(Command("whisper"))
+async def cmd_whisper(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    try: await message.delete()
+    except: pass
+    if not message.reply_to_message:
+        await message.answer("❌ Используй /whisper в ответ на сообщение, автору которого хочешь прошептать.")
+        return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("❌ Использование: /whisper <текст>")
+        return
+    text = parts[1]
+    
+    target_id = await get_author_id_by_reply(message)
+    if not target_id:
+        await message.answer("❌ Не удалось найти автора оригинального сообщения.")
+        return
+        
+    if target_id == message.from_user.id:
+        await message.answer("❌ Зачем шептать самому себе?")
+        return
+
+    # Send to target
+    try:
+        await bot.send_message(
+            target_id, 
+            f"🤫 <b>Тебе анонимно шепчут в /{board_id}/:</b>\n<i>{escape_html(text)}</i>", 
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        runtime_logger.error(f"Whisper send failed: {e}")
+        
+    # Send to admin
+    admins = BOARD_CONFIG.get(board_id, {}).get('admins', set())
+    for admin_id in admins:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\nОт: <code>{message.from_user.id}</code>\nКому: <code>{target_id}</code>\nТекст: <i>{escape_html(text)}</i>",
+                parse_mode="HTML"
+            )
+        except:
+            pass
+
+@dp.message(Command("redact"))
+async def cmd_redact(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    try: await message.delete()
+    except: pass
+    if not message.reply_to_message:
+        await message.answer("❌ Используй /redact в ответ на свое сообщение.")
+        return
+
+    key = (message.chat.id, message.reply_to_message.message_id)
+    post_num = message_to_post.get(key)
+    if not post_num:
+        info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
+        if info: post_num = info[0]
+        
+    if not post_num:
+        await message.answer("❌ Не найдено в базе.")
+        return
+        
+    target_id = await get_author_id_by_reply(message)
+    if target_id != message.from_user.id:
+        await message.answer("❌ Ты не можешь удалять чужие сообщения!")
+        return
+
+    msg_status = await message.answer("⏳ Удаляем из всех чатов...")
+    
+    # Get all copies
+    db_copies = await get_post_copies(post_num)
+    success_count = 0
+    for rec_id, msg_id in db_copies:
+        try:
+            try:
+                await bot.edit_message_text(
+                    chat_id=rec_id,
+                    message_id=msg_id,
+                    text="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
+                    parse_mode="HTML"
+                )
+            except TelegramBadRequest as e:
+                err_str = str(e).lower()
+                if "message is not modified" in err_str:
+                    pass
+                elif "there is no text in the message" in err_str or "message to edit not found" not in err_str:
+                    try:
+                        await bot.edit_message_caption(
+                            chat_id=rec_id,
+                            message_id=msg_id,
+                            caption="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
+                            parse_mode="HTML"
+                        )
+                    except:
+                        pass
+            success_count += 1
+            await asyncio.sleep(0.04)
+        except Exception:
+            pass
+
+    async with storage_lock:
+        if post_num in messages_storage:
+            content_dict = messages_storage[post_num].get('content', {})
+            if 'text' in content_dict:
+                content_dict['text'] = "[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]"
+            if 'caption' in content_dict:
+                content_dict['caption'] = "[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]"
+                
+    # Update SQLite explicitly using the database connection
+    try:
+        from common.database import update_post_content
+        # Get the updated content dict or a default fallback
+        content_dict = {}
+        if post_num in messages_storage:
+            content_dict = messages_storage[post_num].get('content', {})
+        else:
+            content_dict = {"type": "text", "text": "[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]"}
+        await update_post_content(post_num, content_dict)
+    except Exception as e:
+        runtime_logger.warning(f"Could not update db text for redact: {e}")
+    
+    try: await msg_status.delete()
+    except: pass
+    
+    st_msg = await message.answer(f"✅ Успешно удалено у {success_count} пользователей.")
+    await asyncio.sleep(4)
+    try: await st_msg.delete()
+    except: pass
+
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -13005,6 +13227,35 @@ async def cmd_admin_say(message: types.Message, board_id: str | None, stream: st
         asyncio.create_task(delete_message_after_delay(sent_conf, 5))
     try: await message.delete()
     except TelegramBadRequest: pass
+
+@dp.message(Command("troll"))
+async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id or not is_admin(message.from_user.id, board_id):
+        return
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("Usage: /troll <user_id>")
+        return
+    try:
+        target_id = int(parts[1])
+    except ValueError:
+        await message.answer("Invalid ID.")
+        return
+    b_data = board_data[board_id]
+    if 'troll_targets' not in b_data:
+        b_data['troll_targets'] = set()
+    
+    if target_id in b_data['troll_targets']:
+        b_data['troll_targets'].remove(target_id)
+        await message.answer(f"Shadow-Troll OFF for {target_id}")
+    else:
+        b_data['troll_targets'].add(target_id)
+        await message.answer(f"Shadow-Troll ON for {target_id}")
+        
+    # Also log global event
+    from common.database import log_global_event
+    await log_global_event('bot', f"🤡 TROLL: Admin {message.from_user.id} toggled troll for {target_id} on {board_id}")
+
 @dp.message(Command("admin"))
 async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id:

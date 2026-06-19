@@ -7,6 +7,7 @@ from httpx import AsyncHTTPTransport # <--- Импорт транспорта
 
 from common.token_pool import hf_accounts, groq_pool 
 from common.database import get_pool, add_to_mod_queue
+from common.db_pool import db_lock
 
 logger = logging.getLogger("neuro_mod")
 
@@ -104,11 +105,12 @@ async def check_image_content(image_bytes: bytes, file_id: str):
         # Сохранение в БД
         db = await get_pool()
         try:
-            await db.execute(
-                "UPDATE FileRegistry SET tags = ? WHERE file_id = ?",
-                (clean_tags, file_id)
-            )
-            await db.commit()
+            async with db_lock:
+                await db.execute(
+                    "UPDATE FileRegistry SET tags = ? WHERE file_id = ?",
+                    (clean_tags, file_id)
+                )
+                await db.commit()
             logger.info(f"🏷️ TAGS SAVED for {file_id}")
         except Exception as e:
             logger.error(f"DB Save Tags Error: {e}")
@@ -131,7 +133,8 @@ async def apply_neuro_ban(file_id: str, reason: str):
             row = await cursor.fetchone()
             if row:
                 post_num = row[0]
-                await db.execute("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", (post_num,))
-                await db.commit()
+                async with db_lock:
+                    await db.execute("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", (post_num,))
+                    await db.commit()
     except Exception as e:
         logger.error(f"DB Ban error: {e}")

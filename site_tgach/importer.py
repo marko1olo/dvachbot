@@ -100,7 +100,7 @@ class ThreadImporter:
         if not self.created_post_ids: return
         logger.warning(f"⚠️ ROLLBACK: Удаление {len(self.created_post_ids)} созданных постов...")
         try:
-            async with get_db_connection() as conn:
+            async with db_lock, get_db_connection() as conn:
                 chunk_size = 900
                 for i in range(0, len(self.created_post_ids), chunk_size):
                     chunk = self.created_post_ids[i:i + chunk_size]
@@ -629,7 +629,7 @@ class ThreadImporter:
                 op_title if p['is_op'] else None, time.time()
             ))
             
-        async with get_db_connection() as conn:
+        async with db_lock, get_db_connection() as conn:
             await conn.executemany("""
                 INSERT INTO ImportQueue 
                 (task_id, board_id, original_post_num, reply_to_original, publish_at, content, author_id, stream, is_op, thread_title, created_at)
@@ -646,7 +646,7 @@ class ThreadImporter:
                 if f.get("original_file_id"):
                     all_files_for_queue.append(f["original_file_id"])
 
-        async with get_db_connection() as conn:
+        async with db_lock, get_db_connection() as conn:
             try:
                 await conn.execute("BEGIN")
                 op_data = prepared_posts[0]
@@ -702,8 +702,8 @@ class ThreadImporter:
                 
                 await conn.execute("BEGIN")
                 unique_authors = set(p["author_id"] for p in prepared_posts)
-                for uid in unique_authors:
-                    await conn.execute("INSERT OR IGNORE INTO Users (user_id, board_id, stream) VALUES (?, ?, ?)", (uid, target_board, stream))
+                # for uid in unique_authors:
+                #     await conn.execute("INSERT OR IGNORE INTO Users (user_id, board_id, stream) VALUES (?, ?, ?)", (uid, target_board, stream))
                 
                 from common.config import STORAGE_CHANNELS
                 current_channel = STORAGE_CHANNELS.get(stream, STORAGE_CHANNELS['ru'])
@@ -834,8 +834,10 @@ async def process_import_queue(app_state_broadcast_queue):
                                 await update_thread_last_updated(int(final_thread_id_db), time.time())
                             await process_backlinks(new_post_num, content['text'], real_reply_to)
 
-                            await conn.execute("INSERT INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)", (task_id, orig_num, new_post_num))
-                            await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
+                            async with db_lock:
+                                await conn.execute("INSERT INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)", (task_id, orig_num, new_post_num))
+                                await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
+                                await conn.commit()
                             
                             if app_state_broadcast_queue:
                                 bp = await get_post_for_broadcast(new_post_num)
@@ -847,14 +849,15 @@ async def process_import_queue(app_state_broadcast_queue):
                             
                         else:
                             logger.error(f"❌ [Sim] Failed to create post for queue item {q_id}")
-                            await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
-
-                        await conn.commit()
+                            async with db_lock:
+                                await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
+                                await conn.commit()
                         
                     except Exception as e:
                         try:
-                            await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
-                            await conn.commit()
+                            async with db_lock:
+                                await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
+                                await conn.commit()
                         except: pass
 
         except Exception:

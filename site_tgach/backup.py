@@ -9,6 +9,7 @@ from aiogram.types import FSInputFile
 from aiogram.exceptions import TelegramRetryAfter
 
 from common.db_pool import get_pool
+from common.database import get_system_setting, set_system_setting
 from site_tgach.admin_config import ADMIN_IDS
 import aiosqlite
 
@@ -56,10 +57,10 @@ def _pack_and_split_sync(backup_db_path: str, zip_name_base: str):
         
     return parts_to_send, created_files
 
-async def create_db_backup(bot):
+async def create_db_backup(bot) -> bool:
     if not ADMIN_IDS:
         logger.warning("⚠️ Admin IDs not set, skipping backup.")
-        return
+        return False
     
     backup_db_path = f"backup_{int(time.time())}.db"
     zip_name_base = f"TGACH_Backup_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.zip"
@@ -101,9 +102,11 @@ async def create_db_backup(bot):
                     logger.error(f"Failed to send {part_path} to {admin_id}: {e}")
 
         logger.info("✅ Backup broadcast completed.")
+        return True
 
     except Exception as e:
         logger.error(f"❌ Backup generation failed: {e}", exc_info=True)
+        return False
 
     finally:
         # 4. Очистка временных файлов
@@ -115,9 +118,33 @@ async def create_db_backup(bot):
 async def backup_loop(bot):
     """Фоновая задача"""
     logger.info("🛡️ Backup Daemon started (12h interval).")
-    # Первый бэкап через 10 часов, чтобы не грузить при рестарте
-    await asyncio.sleep(36000) 
+    
+    last_backup_str = await get_system_setting("last_backup_time")
+    try:
+        last_backup_ts = float(last_backup_str) if last_backup_str else 0.0
+    except ValueError:
+        last_backup_ts = 0.0
+
+    now = time.time()
+    if last_backup_ts > 0:
+        elapsed = now - last_backup_ts
+        if elapsed < BACKUP_INTERVAL:
+            initial_delay = BACKUP_INTERVAL - elapsed
+            logger.info(f"⏳ Last backup was {elapsed/3600:.1f}h ago. Next backup in {initial_delay/3600:.1f}h.")
+        else:
+            initial_delay = 300
+            logger.info(f"⏳ Last backup was {elapsed/3600:.1f}h ago (overdue). Running initial backup in 5 minutes.")
+    else:
+        initial_delay = 300
+        logger.info("⏳ No previous backup timestamp found. Running initial backup in 5 minutes.")
+
+    await asyncio.sleep(initial_delay)
     
     while True:
-        await create_db_backup(bot)
-        await asyncio.sleep(BACKUP_INTERVAL)
+        success = await create_db_backup(bot)
+        if success:
+            await set_system_setting("last_backup_time", str(time.time()))
+            await asyncio.sleep(BACKUP_INTERVAL)
+        else:
+            logger.warning("⚠️ Backup failed, retrying in 1 hour...")
+            await asyncio.sleep(3600)

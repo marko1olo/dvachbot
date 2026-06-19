@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import time
+import random
 from pyrogram import Client
 from pyrogram.errors import FileReferenceExpired
 from dotenv import load_dotenv
@@ -27,37 +28,46 @@ _LAST_USED = {}  # {bot_token: timestamp}
 _CLIENT_LOCK = asyncio.Lock()   
 _CONNECTION_COOLDOWN = {}
 
+_cleanup_in_progress = False
+
 async def _cleanup_idle_clients():
     """Отключает клиенты, которые не использовались более 10 минут."""
-    now = time.time()
-    idle_timeout = 600 # 10 минут
-    
-    tokens_to_remove = []
-    
-    # Ищем кандидатов на удаление (без лока, чтобы не блокировать всё)
-    for token, last_time in _LAST_USED.items():
-        if now - last_time > idle_timeout:
-            tokens_to_remove.append(token)
-            
-    if not tokens_to_remove:
+    global _cleanup_in_progress
+    if _cleanup_in_progress:
         return
-
-    async with _CLIENT_LOCK:
-        for token in tokens_to_remove:
-            client = _ACTIVE_CLIENTS.get(token)
-            if client:
-                raw_cleanup_token = token
-                try:
-                    if client.is_connected:
-                        await client.stop()
-                    token = secret_fingerprint(token)
-                    logger.info(f"💤 [MTProto] Client stopped due to inactivity: {token[:10]}...")
-                except Exception as e:
-                    logger.warning(f"⚠️ Error stopping idle client: {e}")
+    _cleanup_in_progress = True
+    try:
+        now = time.time()
+        idle_timeout = 600 # 10 минут
+        
+        tokens_to_remove = []
+        
+        # Ищем кандидатов на удаление (без лока, чтобы не блокировать всё)
+        for token, last_time in _LAST_USED.items():
+            if now - last_time > idle_timeout:
+                tokens_to_remove.append(token)
                 
-                token = raw_cleanup_token
-                _ACTIVE_CLIENTS.pop(token, None)
-                _LAST_USED.pop(token, None)
+        if not tokens_to_remove:
+            return
+
+        async with _CLIENT_LOCK:
+            for token in tokens_to_remove:
+                client = _ACTIVE_CLIENTS.get(token)
+                if client:
+                    raw_cleanup_token = token
+                    try:
+                        if client.is_connected:
+                            await client.stop()
+                        token = secret_fingerprint(token)
+                        logger.info(f"💤 [MTProto] Client stopped due to inactivity: {token[:10]}...")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error stopping idle client: {e}")
+                    
+                    token = raw_cleanup_token
+                    _ACTIVE_CLIENTS.pop(token, None)
+                    _LAST_USED.pop(token, None)
+    finally:
+        _cleanup_in_progress = False
 
 async def close_all_mtproto_clients():
     """Close every cached Pyrogram client during application shutdown."""
@@ -81,7 +91,7 @@ async def get_active_client(bot_token: str):
     Возвращает живой клиент Pyrogram с защитой от флуда и авто-очисткой.
     """
     # 0. Периодическая очистка (с вероятностью 5% при каждом вызове)
-    if len(_ACTIVE_CLIENTS) > 5 and int(time.time()) % 20 == 0:
+    if len(_ACTIVE_CLIENTS) > 5 and random.random() < 0.05:
         asyncio.create_task(_cleanup_idle_clients())
 
     # 1. Проверка кулдауна

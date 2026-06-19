@@ -46,7 +46,7 @@ async def summarize_text_with_gemini(prompt: str, text_dump: str, keys: list[str
             "systemInstruction": {"parts": [{"text": prompt}]},
             "generationConfig": {
                 "temperature": 0.8,
-                "maxOutputTokens": 300
+                "maxOutputTokens": 2000
             }
         }
         
@@ -124,7 +124,7 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
                         completion = await client.chat.completions.create(
                             model=target_model,
                             messages=messages,
-                            max_tokens=300,
+                            max_tokens=2000,
                             temperature=GROQ_CONFIG["temperature"]
                         )
                         result = completion.choices[0].message.content.strip()

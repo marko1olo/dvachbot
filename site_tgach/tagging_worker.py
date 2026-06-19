@@ -41,7 +41,7 @@ from PIL import Image
 from openai import AsyncOpenAI
 
 # Импорты проекта
-from common.db_pool import get_pool
+from common.db_pool import get_pool, db_lock
 from common.bot_pool import global_bot_pool
 from common.token_pool import groq_pool
 from aiogram.exceptions import TelegramBadRequest
@@ -348,8 +348,9 @@ async def tagging_loop():
             if file_type in ['video', 'animation', 'gif', 'video_note']:
                 if not thumb_id:
                     logger.warning(f"⚠️ Video {file_id} has no thumb. Skipping tag.")
-                    await db.execute("UPDATE FileRegistry SET tags='no_thumb' WHERE file_id=?", (file_id,))
-                    await db.commit()
+                    async with db_lock:
+                        await db.execute("UPDATE FileRegistry SET tags='no_thumb' WHERE file_id=?", (file_id,))
+                        await db.commit()
                     continue
                 download_target_id = thumb_id
 
@@ -361,8 +362,9 @@ async def tagging_loop():
                     img_bytes = f_obj.read() if hasattr(f_obj, 'read') else f_obj
                 except TelegramBadRequest:
                     logger.error(f"🗑️ File {download_target_id} deleted. Marking error.")
-                    await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
-                    await db.commit()
+                    async with db_lock:
+                        await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
+                        await db.commit()
                     continue
                 except Exception as e:
                     logger.warning(f"❌ DL fail {download_target_id}: {e}")
@@ -376,9 +378,10 @@ async def tagging_loop():
                     logger.error(f"⚠️ Bad File {file_id}: {error_msg}")
                     # Сохраняем как ошибку, чтобы не долбить
                     sha_fail = hashlib.sha256(img_bytes).hexdigest()
-                    await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
-                    await db.execute("INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)", (sha_fail, file_id, time.time()))
-                    await db.commit()
+                    async with db_lock:
+                        await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
+                        await db.execute("INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)", (sha_fail, file_id, time.time()))
+                        await db.commit()
                     continue
 
                 sha, phash, b_hash, resized_bytes = res
@@ -405,23 +408,24 @@ async def tagging_loop():
 
                 for attempt in range(10):
                     try:
-                        cursor = await db.execute("""
-                            UPDATE FileRegistry 
-                            SET tags = ?, phash = ?, blurhash = ?
-                            WHERE file_id = ?
-                        """, (tags, phash, b_hash, file_id))
-                        
-                        if cursor.rowcount == 0:
-                            await db.execute("""
-                                INSERT INTO FileRegistry 
-                                (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                ON CONFLICT(sha256) DO UPDATE SET
-                                    tags = excluded.tags,
-                                    phash = excluded.phash
-                            """, (sha, phash, file_id, None, file_type, time.time(), b_hash, tags))
+                        async with db_lock:
+                            cursor = await db.execute("""
+                                UPDATE FileRegistry 
+                                SET tags = ?, phash = ?, blurhash = ?
+                                WHERE file_id = ?
+                            """, (tags, phash, b_hash, file_id))
+                            
+                            if cursor.rowcount == 0:
+                                await db.execute("""
+                                    INSERT INTO FileRegistry 
+                                    (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                    ON CONFLICT(sha256) DO UPDATE SET
+                                        tags = excluded.tags,
+                                        phash = excluded.phash
+                                """, (sha, phash, file_id, None, file_type, time.time(), b_hash, tags))
 
-                        await db.commit()
+                            await db.commit()
                         save_success = True
                         logger.info(f"✅ {file_type.upper()} {file_id[:8]} | {tag_mark} | Saved")
                         break

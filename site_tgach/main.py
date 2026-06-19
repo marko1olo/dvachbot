@@ -5778,7 +5778,8 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
     import json
     
     # Используем отдельное соединение для тяжелой задачи
-    async with get_db_connection() as conn:
+    from common.db_pool import db_lock
+    async with db_lock, get_db_connection() as conn:
         # 1. Находим посты, где в тексте есть тег <img
         # LIKE '%<img%' работает быстро
         query = "SELECT post_num, content FROM Posts WHERE content LIKE '%<img%'"
@@ -5855,7 +5856,8 @@ async def api_import_thread(
     from common.database import get_db_connection
     import time
     try:
-        async with get_db_connection() as conn:
+        from common.db_pool import db_lock
+        async with db_lock, get_db_connection() as conn:
             await conn.execute(
                 "INSERT INTO ImportRequests (user_id, url, target_board, comment, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (user['id'], url, board_id, f"Manual {mode}", "approved", time.time())
@@ -5901,8 +5903,9 @@ async def api_cancel_simulation(data: CancelImportRequest, user: dict = Depends(
     if not user.get('is_admin'): raise HTTPException(status_code=403, detail="Forbidden")
     
     from common.database import get_db_connection
+    from common.db_pool import db_lock
     
-    async with get_db_connection() as conn:
+    async with db_lock, get_db_connection() as conn:
         await conn.execute("BEGIN IMMEDIATE")
         await conn.execute("DELETE FROM ImportQueue WHERE task_id = ?", (data.task_id,))
         await conn.execute("DELETE FROM ImportRefMap WHERE task_id = ?", (data.task_id,))
@@ -7569,7 +7572,8 @@ async def api_shadow_ban(data: ShadowBanRequest, user: dict = Depends(get_requir
     try:
         from common.database import update_shadow_mute
         await update_shadow_mute(user_id_to_ban, target_board, expires_at)
-        async with get_db_connection() as conn:
+        from common.db_pool import db_lock
+        async with db_lock, get_db_connection() as conn:
             await conn.execute(
                 """INSERT INTO AdminActionQueue (action_type, user_id, board_id, expires_at) 
                    VALUES (?, ?, ?, ?)""",

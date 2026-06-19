@@ -7,6 +7,7 @@ import random
 from common.config import STORAGE_CHANNELS, ADMIN_IDS
 from common.bot_pool import global_bot_pool
 from common.database import get_db_connection, get_system_setting, log_global_event
+from common.db_pool import db_lock
 from site_tgach.importer import ThreadImporter
 from site_tgach.neuro_poster import NeuroManager, AI_CONFIG
 
@@ -151,12 +152,13 @@ class NeuroScanner:
         # 5. Запуск Импорта
         logger.info(f"✅ [Scanner] WINNER: {best_candidate['subject']} (Score {best_score}). Starting import...")
 
-        async with get_db_connection() as conn:
-            await conn.execute(
-                "INSERT INTO ImportRequests (user_id, url, target_board, comment, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (0, best_candidate['url'], target_board, "Neuro-Auto-Import", "approved", time.time())
-            )
-            await conn.commit()
+        async with db_lock:
+            async with get_db_connection() as conn:
+                await conn.execute(
+                    "INSERT INTO ImportRequests (user_id, url, target_board, comment, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (0, best_candidate['url'], target_board, "Neuro-Auto-Import", "approved", time.time())
+                )
+                await conn.commit()
         
         await self._notify_admin(best_candidate, interval_min, interval_max, target_board)
         

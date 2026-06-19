@@ -27,6 +27,7 @@ from httpx import AsyncHTTPTransport
 
 from common.token_pool import groq_pool
 from common.database import get_pool, add_to_mod_queue, apply_auto_censure
+from common.db_pool import db_lock
 
 logger = logging.getLogger("neuro_mod")
 
@@ -246,11 +247,12 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
             try:
                 db = await get_pool()
                 curr_ts = time.time()
-                await db.executemany(
-                    "INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)", 
-                    [(p, curr_ts) for p in affected_posts]
-                )
-                await db.commit()
+                async with db_lock:
+                    await db.executemany(
+                        "INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)", 
+                        [(p, curr_ts) for p in affected_posts]
+                    )
+                    await db.commit()
             except Exception as db_ex:
                 logger.error(f"BroadcastQueue update failed: {db_ex}")
         
@@ -272,8 +274,9 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
             # Уведомляем фронтенд об изменении (чтобы картинка заблюрилась в реальном времени)
             try:
                 db = await get_pool()
-                await db.execute("INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)", (pid, time.time()))
-                await db.commit()
+                async with db_lock:
+                    await db.execute("INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)", (pid, time.time()))
+                    await db.commit()
             except: pass
 
     # === ЛОГИКА NSFW ДЛЯ МОЛОДЫХ ВЗРОСЛЫХ ===
@@ -288,8 +291,9 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
             # Триггерим обновление через WS
             try:
                 db = await get_pool()
-                await db.execute("INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)", (pid, time.time()))
-                await db.commit()
+                async with db_lock:
+                    await db.execute("INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)", (pid, time.time()))
+                    await db.commit()
             except: pass
 
     logger.info(f"✅ [DeepCheck] Finished for {file_id}. Verdict: {age} | {visual_style} | NSFW: {is_nsfw}")

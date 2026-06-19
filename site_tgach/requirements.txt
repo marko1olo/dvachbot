@@ -17,3 +17,10 @@ Pillow==10.4.0
 python-multipart==0.0.9
 
 pyrogram==2.0.106
+tgcrypto==1.2.5
+imagehash==4.3.2
+blurhash==1.1.5
+geoip2==5.2.0
+orjson==3.11.9
+huggingface-hub==1.19.0
+jinja2==3.1.6
