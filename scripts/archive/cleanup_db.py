@@ -69,7 +69,7 @@ def cleanup_database_aggressive():
                 if confirm_posts.lower() == 'yes':
                     print("Определение порога для удаления...")
                     threshold_post_num = con.execute(
-                        f"SELECT post_num FROM Posts ORDER BY post_num DESC LIMIT 1 OFFSET {POST_LIMIT - 1}"
+                        "SELECT post_num FROM Posts ORDER BY post_num DESC LIMIT 1 OFFSET ?", (POST_LIMIT - 1,)
                     ).fetchone()
                     
                     if threshold_post_num:
