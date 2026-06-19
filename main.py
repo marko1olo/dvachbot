@@ -98,6 +98,7 @@ from text_assets import (
     POLL_CREATION_SUCCESS_PHRASES, POLL_CREATION_SUCCESS_PHRASES_EN, POLL_CREATION_SUCCESS_PHRASES_JP,
     POLL_VOTE_SUCCESS_PHRASES, POLL_VOTE_SUCCESS_PHRASES_EN, POLL_VOTE_SUCCESS_PHRASES_JP,
     SUMMARIZE_PROMPTS_BOARD, SUMMARIZE_PROMPTS_BOARD_EN, SUMMARIZE_PROMPTS_BOARD_JP,
+    ROAST_PROMPTS, ROAST_PROMPTS_EN, ROAST_PROMPTS_JP,
     CONTEXTUAL_REPLIES, CONTEXTUAL_REPLIES_EN, CONTEXTUAL_REPLIES_JP,
     REACTION_NOTIFY_PHRASES, REACTION_NOTIFY_PHRASES_JP, ALBUM_EDUCATION_PHRASES, ANIME_HOURLY_LIMIT_PHRASES,
     SITE_PROMO_PHRASES, SITE_PROMO_PHRASES_EN, SITE_PROMO_PHRASES_JP, EARNING_NOTIFICATIONS,
@@ -409,7 +410,19 @@ THREAD_CREATE_COOLDOWN_USER = 1800  # 30 минут в секундах
 THREAD_HISTORY_COOLDOWN = 60 # 1 минут в секундах
 OP_COMMAND_COOLDOWN = 60 # 1 минута кулдауна для команд модерации ОПа в треде
 LOCATION_SWITCH_COOLDOWN = 5 # 5 секунд на смену локации (вход/выход)
-SUMMARIZE_COOLDOWN = 600 # 10 минут в секундах для команды /summarize
+SUMMARIZE_COOLDOWN = 600
+ROAST_COOLDOWN = 300
+
+def clean_html_for_tg(text: str) -> str:
+    import re
+    if not text: return ''
+    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
+    text = re.sub(r'(.*?)', r'<code>\1</code>', text)
+    text = text.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
+    text = re.sub(r'<(?!/?(b|i|u|s|code|pre|a\b)[>\s])', '&lt;', text)
+    return text
+
 DB_POST_LIMIT = CONFIG_DB_POST_LIMIT  # Максимальное количество постов, которое будет храниться в БД
 DB_CLEANUP_INTERVAL = timedelta(hours=2) # Как часто проводить очистку БД
 MEMORY_LIMIT_GB = 3.2
@@ -8043,6 +8056,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
 
     try:
         summary = await summarize_text_with_hf(prompt, chunk, hf_token)
+        summary = clean_html_for_tg(summary)
     except Exception as e:
         print(f"[summarize] Error during HF summarize: {e}")
         if lang == 'en':
