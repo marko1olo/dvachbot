@@ -2205,7 +2205,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                                 source_post_num, 
                                 ref_post_num, 
                                 board_id, 
-                                thread_id, 
+                                thread_id if thread_id else ref_post_num,
                                 current_time
                             ))
                 if notifications_to_insert:
@@ -7006,7 +7006,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                         """INSERT INTO NotificationQueue 
                            (recipient_id, source_post_num, reply_post_num, board_id, thread_id, created_at) 
                            VALUES (?, ?, ?, ?, ?, ?)""",
-                        (original_author_id, source_post_num, reply_post_num, board_id, thread_id, curr_time)
+                        (original_author_id, source_post_num, reply_post_num, board_id, thread_id if thread_id else reply_post_num, curr_time)
                     )
                     
                     # FIX: Если thread_id is None, используем ID родительского поста
