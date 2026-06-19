@@ -2205,7 +2205,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                                 source_post_num, 
                                 ref_post_num, 
                                 board_id, 
-                                thread_id if thread_id else ref_post_num,
+                                thread_id, 
                                 current_time
                             ))
                 if notifications_to_insert:
@@ -3871,7 +3871,7 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                 await db.execute("BEGIN IMMEDIATE")
                 
                 # Ищем посты, содержащие file_id в JSON
-                query = "SELECT post_num, content, is_shadow FROM Posts WHERE content LIKE '%' || ? || '%'"
+                query = "SELECT post_num, content, is_shadow FROM Posts WHERE instr(content, ?) > 0"
                 async with db.execute(query, (file_id,)) as cursor:
                     rows = await cursor.fetchall()
                 
@@ -6020,12 +6020,13 @@ async def find_post_by_file_id(file_id_substring: str) -> dict | None:
         query = """
             SELECT post_num, board_id, author_id, content, timestamp 
             FROM Posts 
-            WHERE content LIKE '%' || ? || '%'
+            WHERE instr(content, ?) > 0
             ORDER BY timestamp DESC 
             LIMIT 1
         """
+        search_pattern = file_id_substring
         
-        async with db.execute(query, (file_id_substring,)) as cursor:
+        async with db.execute(query, (search_pattern,)) as cursor:
             row = await cursor.fetchone()
             
         if row:
@@ -7005,7 +7006,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                         """INSERT INTO NotificationQueue 
                            (recipient_id, source_post_num, reply_post_num, board_id, thread_id, created_at) 
                            VALUES (?, ?, ?, ?, ?, ?)""",
-                        (original_author_id, source_post_num, reply_post_num, board_id, thread_id if thread_id else reply_post_num, curr_time)
+                        (original_author_id, source_post_num, reply_post_num, board_id, thread_id, curr_time)
                     )
                     
                     # FIX: Если thread_id is None, используем ID родительского поста
@@ -7231,15 +7232,11 @@ async def get_posts_by_file_ids(file_ids: list[str]) -> list[dict]:
     clauses = []
     params = []
     for fid in file_ids:
-        clauses.append("content LIKE '%' || ? || '%'")
+        clauses.append("instr(content, ?) > 0")
         params.append(fid)
         
-    query_parts = [
-        "SELECT * FROM Posts WHERE (",
-        " OR ".join(clauses),
-        ") AND IFNULL(is_shadow, 0) = 0"
-    ]
-    query = "".join(query_parts)
+    where_clause = " OR ".join(clauses)
+    query = f"SELECT * FROM Posts WHERE ({where_clause}) AND IFNULL(is_shadow, 0) = 0"
 
     async with db_lock:
         try:

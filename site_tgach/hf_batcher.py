@@ -48,7 +48,7 @@ async def find_file_message_info(file_id):
             SELECT cc.channel_id, cc.message_id, p.post_num
             FROM Posts p
             JOIN ChannelCopies cc ON p.post_num = cc.post_num
-            WHERE p.content LIKE '%' || ? || '%'
+            WHERE instr(p.content, ?) > 0
             ORDER BY p.post_num DESC
             LIMIT 1
         """

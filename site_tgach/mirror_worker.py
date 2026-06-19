@@ -76,7 +76,7 @@ async def _find_msg_info(file_id: str):
                 FROM Posts p
                 LEFT JOIN ChannelCopies cc ON p.post_num = cc.post_num
                 WHERE p.post_num > (SELECT MAX(post_num) - 20000 FROM Posts)
-                  AND p.content LIKE '%' || ? || '%'
+                  AND instr(p.content, ?) > 0
                 ORDER BY p.post_num DESC
                 LIMIT 1
             """
@@ -125,19 +125,18 @@ async def _process_single_task(task):
 
         try:
             file_info = await bot.get_file(file_id)
-            if file_info:
-                fresh_file_id = file_info.file_id
+            fresh_file_id = file_info.file_id 
+            
+            if file_info.file_path:
+                _, ext = os.path.splitext(file_info.file_path)
+                if ext: file_ext = ext
 
-                if file_info.file_path:
-                    _, ext = os.path.splitext(file_info.file_path)
-                    if ext: file_ext = ext
-
-                if public_safe_bot and file_info.file_path:
-                    tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
-                    if mirror_type == 'catbox':
-                        success_link = await upload_url_to_catbox(tg_url)
-                    elif mirror_type == '0x0':
-                        success_link = await upload_url_to_0x0(tg_url)
+            if public_safe_bot:
+                tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+                if mirror_type == 'catbox':
+                    success_link = await upload_url_to_catbox(tg_url)
+                elif mirror_type == '0x0':
+                    success_link = await upload_url_to_0x0(tg_url)
         except TelegramBadRequest as e:
             is_photo = file_id.startswith("AgAC")
             err_str = str(e).lower()
