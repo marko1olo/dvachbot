@@ -7234,8 +7234,12 @@ async def get_posts_by_file_ids(file_ids: list[str]) -> list[dict]:
         clauses.append("content LIKE '%' || ? || '%'")
         params.append(fid)
         
-    where_clause = " OR ".join(clauses)
-    query = f"SELECT * FROM Posts WHERE ({where_clause}) AND IFNULL(is_shadow, 0) = 0"
+    query_parts = [
+        "SELECT * FROM Posts WHERE (",
+        " OR ".join(clauses),
+        ") AND IFNULL(is_shadow, 0) = 0"
+    ]
+    query = "".join(query_parts)
 
     async with db_lock:
         try:
