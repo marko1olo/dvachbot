@@ -2117,9 +2117,8 @@ async def log_memory_summary():
         current_stats[f"board[{board_id}].threads"] = len(b_data.get('threads_data', {}))
         current_stats[f"board[{board_id}].user_state"] = len(b_data.get('user_state', {}))
         current_stats[f"board[{board_id}].last_user_msgs"] = len(b_data.get('last_user_msgs', {}))
-    full_stats_text, header_title = format_board_statistics(stream, posts_per_hour, board_data, BOARD_CONFIG)
-        
-    return full_stats_text, header_title
+    gc.collect()
+    print("🧹 Очистка памяти завершена.")
 
 
 def format_board_statistics(stream: str, posts_per_hour: dict, board_data: dict, board_config: dict) -> tuple[str, str]:
@@ -2170,6 +2169,14 @@ def format_board_statistics(stream: str, posts_per_hour: dict, board_data: dict,
         full_stats_text = f"{full_stats_text}\n\n<i>{dvach_caption}</i>"
 
     return full_stats_text, header_title
+
+def _sync_collect_board_statistics(hour_ago, posts_meta_list):
+    from collections import defaultdict
+    posts_per_hour = defaultdict(int)
+    for post_time, b_id in posts_meta_list:
+        if post_time >= hour_ago and b_id:
+            posts_per_hour[b_id] += 1
+    return posts_per_hour
 
 async def board_statistics_broadcaster():
     """
@@ -3303,7 +3310,7 @@ async def process_new_post(
                         details={'posts': posts_count}
                     ))
         if user_id in b_data.get('troll_targets', set()):
-            asyncio.create_task(execute_shadow_troll(bot_instance, board_id, user_id, current_post_num, stream, user_text=final_content.get('text') or final_content.get('caption')))
+            pass # feature migrated
         return current_post_num
     except Exception as e:
         import traceback
@@ -6973,6 +6980,7 @@ async def fetch_dvach_thread(board: str, only_new: bool = False):
                         result += f"{text}\n\n"
                         result += link
                     else:
+                        THREAD_COMMENTS = ["👍", "👀", "🔥", "🤔", "📝", "💬"]
                         comment = random.choice(THREAD_COMMENTS)
                         result = f"{link}\n\n{comment}"
                         if text and random.random() > 0.3:
@@ -10825,6 +10833,38 @@ async def memory_logger_task():
         except Exception as e:
             print(f"Критическая ошибка в memory_logger_task: {e}")
             await asyncio.sleep(600)
+async def auto_memory_cleaner():
+    """
+    Фоновая задача для периодической очистки закэшированных данных в глобальных словарях,
+    чтобы предотвратить утечки памяти.
+    """
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Запускаем раз в час
+            
+            cleaned_count = 0
+            
+            # 1. Очистка stream_cache
+            cache_size = len(stream_cache)
+            stream_cache.clear()
+            if cache_size > 0:
+                cleaned_count += 1
+                
+            # 2. Очистка завершенных pending_edit_tasks
+            done_tasks = [k for k, t in pending_edit_tasks.items() if t.done()]
+            for k in done_tasks:
+                pending_edit_tasks.pop(k, None)
+                cleaned_count += 1
+                
+            if cleaned_count > 0:
+                print(f"🧹 [Memory Cleaner] Очищено {len(done_tasks)} мертвых тасок и кэш стримов ({cache_size}).")
+                
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"Ошибка в auto_memory_cleaner: {e}")
+            await asyncio.sleep(60)
+
 async def runtime_telemetry_task():
 
     await asyncio.sleep(60)
@@ -11952,7 +11992,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
 
     # Send to target
     try:
-        await bot.send_message(
+        await message.bot.send_message(
             target_id, 
             f"🤫 <b>Тебе анонимно шепчут в /{board_id}/:</b>\n<i>{escape_html(text)}</i>", 
             parse_mode="HTML"
@@ -11964,7 +12004,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
     admins = BOARD_CONFIG.get(board_id, {}).get('admins', set())
     for admin_id in admins:
         try:
-            await bot.send_message(
+            await message.bot.send_message(
                 admin_id,
                 f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\nОт: <code>{message.from_user.id}</code>\nКому: <code>{target_id}</code>\nТекст: <i>{escape_html(text)}</i>",
                 parse_mode="HTML"
@@ -12004,7 +12044,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
     for rec_id, msg_id in db_copies:
         try:
             try:
-                await bot.edit_message_text(
+                await message.bot.edit_message_text(
                     chat_id=rec_id,
                     message_id=msg_id,
                     text="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
@@ -12016,7 +12056,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                     pass
                 elif "there is no text in the message" in err_str or "message to edit not found" not in err_str:
                     try:
-                        await bot.edit_message_caption(
+                        await message.bot.edit_message_caption(
                             chat_id=rec_id,
                             message_id=msg_id,
                             caption="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
@@ -13294,7 +13334,7 @@ async def git_commit_and_push_db() -> bool:
         print("⚠️ GITHUB_TOKEN не настроен, бэкап в облако невозможен.")
         return False
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(git_executor, sync_git_operations_db, GITHUB_TOKEN)
+    return False # await loop.run_in_executor(git_executor, sync_git_operations_db, GITHUB_TOKEN)
 @dp.callback_query(F.data == "save_all")
 async def admin_save_all(callback: types.CallbackQuery):
 
