@@ -418,7 +418,7 @@ def clean_html_for_tg(text: str) -> str:
     if not text: return ''
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     text = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
-    text = re.sub(r'(.*?)', r'<code>\1</code>', text)
+    text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
     text = text.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
     text = re.sub(r'<(?!/?(b|i|u|s|code|pre|a\b)[>\s])', '&lt;', text)
     return text
@@ -3254,11 +3254,30 @@ async def process_new_post(
                     thread_info_safe['last_activity_at'] = time.time()
             content_for_ram = final_content.copy()
             content_for_ram.pop('image_bytes', None)
+            
+            # --- SHITSTORM DETECTOR (chain_depth) ---
+            chain_depth = 0
+            reply_to = final_content.get('reply_to_post')
+            if reply_to:
+                parent_data = messages_storage.get(reply_to)
+                if parent_data:
+                    chain_depth = parent_data.get('chain_depth', 0) + 1
+                    
             messages_storage[current_post_num] = {
                 'author_id': user_id, 'timestamp': now_dt, 
                 'content': content_for_ram,
-                'author_message_id': None, 'board_id': board_id, 'thread_id': thread_id
+                'author_message_id': None, 'board_id': board_id, 'thread_id': thread_id,
+                'chain_depth': chain_depth
             }
+            
+            if chain_depth > 0 and chain_depth % 15 == 0:
+                # Trigger schizo roast in the background
+                try:
+                    bot_instance = get_bot_for_board(board_id)
+                    stream_to_pass = stream if stream else 'ru'
+                    asyncio.create_task(execute_auto_roast(board_id, stream_to_pass, bot_instance))
+                except Exception as e:
+                    print(f"Error triggering auto_roast: {e}")
             if author_results and author_results[0] and author_results[0][1]:
                 sent_messages = author_results[0][1]
                 messages_to_process = sent_messages if isinstance(sent_messages, list) else [sent_messages]
@@ -7949,6 +7968,175 @@ async def cmd_delete_thread(message: types.Message, board_id: str | None, stream
     await message.answer(confirm, parse_mode="HTML")
     await message.delete()
 @dp.message(Command("summarize", "sum", "summary", "samamri", "sammary"))
+
+async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=None):
+    b_data = board_data.get(board_id)
+    if not b_data: return
+    now_ts = time.time()
+    
+    async with storage_lock:
+        last_usage = b_data.get('last_auto_roast_time', 0)
+        if now_ts - last_usage < ROAST_COOLDOWN:
+            return
+        b_data['last_auto_roast_time'] = now_ts
+
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    
+    msgs = []
+    cutoff = time.time() - 3600
+    for msg_id, p_info in reversed(messages_storage.values()):
+        if len(msgs) >= 40: break
+        if p_info.get('board_id') == board_id:
+            ts = p_info.get('timestamp', 0)
+            if hasattr(ts, 'timestamp'):
+                ts = ts.timestamp()
+            if ts > cutoff:
+                if not p_info.get('thread_id'):
+                    msgs.append(p_info)
+                
+    msgs.sort(key=lambda x: x.get('timestamp').timestamp() if hasattr(x.get('timestamp'), 'timestamp') else x.get('timestamp', 0))
+    
+    if not msgs:
+        return
+        
+    chunk_parts = []
+    for p in msgs:
+        text = p.get('content', {}).get('text', '') if isinstance(p.get('content'), dict) else ''
+        if text:
+            chunk_parts.append(f"[Anon]: {text}")
+            
+    chunk = " | ".join(chunk_parts)
+    if len(chunk) < 50:
+        return
+        
+    if lang == 'en':
+        prompt = random.choice(ROAST_PROMPTS_EN)
+    elif lang == 'jp':
+        prompt = random.choice(ROAST_PROMPTS_JP)
+    else:
+        prompt = random.choice(ROAST_PROMPTS)
+        
+    hf_token = os.getenv("HF_TOKEN")
+    try:
+        summary = await summarize_text_with_hf(prompt, chunk, hf_token)
+        summary = clean_html_for_tg(summary)
+    except Exception as e:
+        print(f"[auto-roast] Error: {e}")
+        return
+        
+    if not summary:
+        return
+        
+    roast_text = f"🔥 <b>АВТО-ПРОЖАРКА СРАЧА</b> 🔥\n\n{summary}" if lang == 'ru' else f"🔥 <b>AUTO-ROAST</b> 🔥\n\n{summary}"
+    if lang == 'jp':
+        roast_text = f"🔥 <b>自動煽り</b> 🔥\n\n{summary}"
+    
+    content_payload = {
+        'type': 'text',
+        'text': roast_text,
+        'is_system_message': True
+    }
+    
+    pnum = await create_post(
+        board_id=board_id,
+        author_id=0,
+        content=content_payload,
+        timestamp=time.time(),
+        is_from_site=False,
+        stream=stream
+    )
+    if pnum:
+        header = await format_header(board_id, pnum)
+        content_payload['header'] = header
+        await update_post_content(pnum, content_payload)
+        async with storage_lock:
+            messages_storage[pnum] = {'author_id': 0, 'timestamp': datetime.now(UTC), 'content': content_payload, 'board_id': board_id}
+            
+        base_recipients = b_data['users']['active'] - b_data['users']['banned']
+        if ENABLE_MULTILANG and board_id != 'int':
+            stream_users = await get_stream_active_users(board_id, stream)
+            base_recipients = base_recipients.intersection(stream_users)
+            
+        await enqueue_board_message(board_id, {
+            'recipients': base_recipients,
+            'content': content_payload,
+            'post_num': pnum,
+            'board_id': board_id
+        })
+
+async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id:
+        return
+        
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    b_data = board_data.get(board_id)
+    if not b_data:
+        return
+        
+    now_ts = time.time()
+    last_usage = b_data.get('last_roast_time', 0)
+    if now_ts - last_usage < ROAST_COOLDOWN:
+        rem_m = int((ROAST_COOLDOWN - (now_ts - last_usage)) // 60)
+        rem_s = int((ROAST_COOLDOWN - (now_ts - last_usage)) % 60)
+        await message.reply(f"⏳ Команда остывает: {rem_m}м {rem_s}с" if lang == 'ru' else f"⏳ Cooldown: {rem_m}m {rem_s}s")
+        return
+
+    b_data['last_roast_time'] = now_ts
+    
+    msgs = []
+    cutoff = time.time() - (3600 * 2)
+    for msg_id, p_info in reversed(messages_storage.values()):
+        if len(msgs) >= 40: break
+        if p_info.get('board_id') == board_id:
+            ts = p_info.get('timestamp', 0)
+            if hasattr(ts, 'timestamp'):
+                ts = ts.timestamp()
+            if ts > cutoff:
+                if not p_info.get('thread_id'):
+                    msgs.append(p_info)
+                    
+    msgs.sort(key=lambda x: x.get('timestamp').timestamp() if hasattr(x.get('timestamp'), 'timestamp') else x.get('timestamp', 0))
+    
+    if len(msgs) < 5:
+        await message.reply("💤 Мало постов для прожарки" if lang == 'ru' else "💤 Not enough posts")
+        return
+        
+    chunk_parts = []
+    for p in msgs:
+        text = p.get('content', {}).get('text', '') if isinstance(p.get('content'), dict) else ''
+        if text:
+            chunk_parts.append(f"[Anon]: {text}")
+            
+    chunk = " | ".join(chunk_parts)
+    
+    if lang == 'en':
+        prompt = random.choice(ROAST_PROMPTS_EN)
+    elif lang == 'jp':
+        prompt = random.choice(ROAST_PROMPTS_JP)
+    else:
+        prompt = random.choice(ROAST_PROMPTS)
+        
+    hf_token = os.getenv("HF_TOKEN")
+    
+    processing_msg = await message.reply("🔥 Готовим прожарку..." if lang == 'ru' else "🔥 Roasting...")
+    try:
+        summary = await summarize_text_with_hf(prompt, chunk, hf_token)
+        summary = clean_html_for_tg(summary)
+    except Exception as e:
+        print(f"[roast] Error: {e}")
+        await processing_msg.edit_text("❌ Ошибка генерации" if lang == 'ru' else "❌ Error")
+        return
+        
+    if not summary:
+        await processing_msg.edit_text("❌ Ошибка генерации" if lang == 'ru' else "❌ Error")
+        return
+        
+    roast_text = f"🔥 <b>ПРОЖАРКА ЧАТА</b> 🔥\n\n{summary}" if lang == 'ru' else f"🔥 <b>CHAT ROAST</b> 🔥\n\n{summary}"
+    if lang == 'jp': roast_text = f"🔥 <b>煽り</b> 🔥\n\n{summary}"
+    
+    await processing_msg.edit_text(roast_text, parse_mode='HTML')
+
+
 async def cmd_summarize(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id:
         print("[summarize] Board ID not found")
