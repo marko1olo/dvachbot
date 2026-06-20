@@ -178,11 +178,6 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 time.sleep(2)
 import deanonymizer
 from deanonymizer import (
-    DEANON_CITIES,
-    DEANON_DETAILS,
-    DEANON_FETISHES,
-    DEANON_PROFESSIONS,
-    DEANON_SURNAMES,
     generate_deanon_info,
 )
 from help_text import (
