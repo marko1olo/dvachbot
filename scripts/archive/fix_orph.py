@@ -36,7 +36,7 @@ def find_and_queue_posts_without_mirrors(conn):
     cursor.execute("SELECT content FROM Posts WHERE json_valid(content) AND content LIKE '%\"files\"%'")
     
     total_posts_with_files = 0
-    for row in cursor.fetchall():
+    for row in cursor:
         total_posts_with_files += 1
         try:
             content = json.loads(row[0])
