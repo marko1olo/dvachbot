@@ -1958,6 +1958,13 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
                 print(f"--- Update Context ---\n{update_json}\n--- End Update Context ---")
             except Exception as json_e:
                 print(f"Не удалось сериализовать update: {json_e}")
+            
+            # Send fallback message to user
+            if hasattr(update, "message") and update.message:
+                try:
+                    await update.message.answer("⚠️ <b>Произошла ошибка при выполнении команды.</b>\nРазработчик уже уведомлен.", parse_mode="HTML")
+                except Exception:
+                    pass
         return True
 def is_admin(uid: int, board_id: str) -> bool:
 
@@ -6601,7 +6608,7 @@ async def cmd_admin_answer(message: types.Message, board_id: str | None, stream:
     if not board_id or not is_admin(message.from_user.id, board_id): return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not message.reply_to_message:
-        err = "Use as reply: /ans <text>" if lang == 'en' else ("返信として使用してください: /ans <text>" if lang == 'jp' else "⚠️ Ответьте на сообщение юзера: <code>/ans &lt;официальный ответ админа&gt;</code>")
+        err = "Use as reply: /ans &lt;text&gt;" if lang == 'en' else ("返信として使用してください: /ans &lt;text&gt;" if lang == 'jp' else "⚠️ Ответьте на сообщение юзера: <code>/ans &lt;официальный ответ админа&gt;</code>")
         await message.answer(err, parse_mode="HTML")
         return
     raw_html = message.html_text
@@ -8637,7 +8644,7 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
     
     args = message.text.split()
     if len(args) < 3:
-        await message.answer("Юзай: /addmoney <ID> <сумма>")
+        await message.answer("Юзай: /addmoney &lt;ID&gt; &lt;сумма&gt;")
         return
         
     try:
@@ -10081,7 +10088,7 @@ async def cmd_lie_media(message: types.Message, board_id: str | None, stream: st
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
-        await message.answer("Need ID or reply: /lie <id>" if lang == 'en' else "Need ID or reply: /lie <id>")
+        await message.answer("Need ID or reply: /lie &lt;id&gt;" if lang == 'en' else "Need ID or reply: /lie &lt;id&gt;")
         return
     b_data = board_data[board_id]
     if target_id not in b_data.get('user_settings', {}):
@@ -11953,8 +11960,8 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
             help_text = (
                 "<b>Hide Words Management:</b>\n"
                 "/hide list - Show hidden words\n"
-                "/hide add <word> - Add word to filter\n"
-                "/hide remove <word> - Remove word"
+                "/hide add &lt;word&gt; - Add word to filter\n"
+                "/hide remove &lt;word&gt; - Remove word"
             )
         elif lang == 'jp':
             help_text = (
@@ -11988,7 +11995,7 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
     elif action == 'add':
         word_part = message.text.split(maxsplit=2)
         if len(word_part) < 3:
-             err = "Usage: /hide add <word>"
+             err = "Usage: /hide add &lt;word&gt;"
              await message.answer(err)
              return
         word = word_part[2].lower().strip()
@@ -12013,7 +12020,7 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
     elif action == 'remove' or action == 'del':
         word_part = message.text.split(maxsplit=2)
         if len(word_part) < 3:
-             await message.answer("Usage: /hide remove <word>")
+             await message.answer("Usage: /hide remove &lt;word&gt;")
              return
         word = word_part[2].lower().strip()
         if word in user_hide_set:
