@@ -93,5 +93,35 @@ class TestGetRealIp(unittest.TestCase):
         )
         self.assertEqual(get_real_ip(request), "9.10.11.12")
 
+
+from Dubsite_tgach.main import clean_title_text
+
+class TestCleanTitleText(unittest.TestCase):
+    def test_empty_string(self):
+        self.assertEqual(clean_title_text(""), "")
+        self.assertEqual(clean_title_text(None), "")
+
+    def test_remove_html_tags(self):
+        self.assertEqual(clean_title_text("<h1>Hello</h1>"), "Hello")
+        self.assertEqual(clean_title_text("<p>Some <b>bold</b> text</p>"), "Some bold text")
+
+    def test_remove_brackets(self):
+        self.assertEqual(clean_title_text("This is [some tag] text"), "This is text")
+        self.assertEqual(clean_title_text("[Prefix] Just the title"), "Just the title")
+
+    def test_excessive_whitespace(self):
+        self.assertEqual(clean_title_text("   Too   much   space   "), "Too much space")
+        self.assertEqual(clean_title_text("New\nlines\tand\ttabs"), "New lines and tabs")
+
+    def test_combined(self):
+        self.assertEqual(
+            clean_title_text("\n\n [Tag]   <h1>  Super Title  </h1>   [123] \t"),
+            "Super Title"
+        )
+        self.assertEqual(
+            clean_title_text("Title with <a href='https://example.com'>link</a> and [brackets]"),
+            "Title with link and"
+        )
+
 if __name__ == "__main__":
     unittest.main()
