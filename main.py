@@ -6580,8 +6580,8 @@ async def cmd_admin_answer(message: types.Message, board_id: str | None, stream:
     if not board_id or not is_admin(message.from_user.id, board_id): return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not message.reply_to_message:
-        err = "Use as reply." if lang == 'en' else ("返信として使用してください。" if lang == 'jp' else "Используйте ответом на сообщение юзера.")
-        await message.answer(err)
+        err = "Use as reply: /ans <text>" if lang == 'en' else ("返信として使用してください: /ans <text>" if lang == 'jp' else "⚠️ Ответьте на сообщение юзера: <code>/ans &lt;официальный ответ админа&gt;</code>")
+        await message.answer(err, parse_mode="HTML")
         return
     raw_html = message.html_text
     answer_text = ""
@@ -12208,7 +12208,8 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
         try:
             await message.bot.send_message(
                 admin_id,
-                f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\nОт: <code>{message.from_user.id}</code>\nКому: <code>{target_id}</code>\nТекст: <i>{escape_html(text)}</i>",
+                f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\nОт: <code>{sender_nick}</code>
+Кому: <code>{target_nick}</code>\nТекст: <i>{escape_html(text)}</i>",
                 parse_mode="HTML"
             )
         except:
