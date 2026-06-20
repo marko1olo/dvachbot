@@ -94,6 +94,19 @@ def get_real_ip(request: Request) -> str:
         return forwarded.split(",")[0].strip()
     return request.client.host
 GEOIP_READER = None
+_GEOIP_LOCK = None
+
+def _init_geoip_reader():
+    global GEOIP_READER
+    if GEOIP_READER is not None:
+        return
+    try:
+        import geoip2.database
+        db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
+        if os.path.exists(db_full_path):
+            GEOIP_READER = geoip2.database.Reader(db_full_path)
+    except:
+        pass
 
 @alru_cache(maxsize=10000, ttl=3600)
 async def get_country_by_ip(ip: str) -> str:
@@ -101,14 +114,14 @@ async def get_country_by_ip(ip: str) -> str:
     if ip in ("127.0.0.1", "localhost", "::1"): 
         return "XX"
     
+    global _GEOIP_LOCK
+    if _GEOIP_LOCK is None:
+        _GEOIP_LOCK = asyncio.Lock()
+
     if GEOIP_READER is None:
-        try:
-            import geoip2.database
-            db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
-            if os.path.exists(db_full_path):
-                GEOIP_READER = geoip2.database.Reader(db_full_path)
-        except:
-            pass
+        async with _GEOIP_LOCK:
+            if GEOIP_READER is None:
+                await asyncio.to_thread(_init_geoip_reader)
 
     if GEOIP_READER:
         try:
