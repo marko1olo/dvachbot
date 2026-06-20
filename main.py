@@ -57,7 +57,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone, UTC
 from enum import Enum
 from logging.handlers import RotatingFileHandler
-from typing import Tuple
+from typing import Tuple, Optional
+from dataclasses import dataclass
 from dotenv import load_dotenv
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -3161,7 +3162,22 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
     results = await asyncio.gather(*tasks)
     deleted_count = sum(1 for res in results if res is True)
     return deleted_count
-async def send_moderation_notice(user_id: int, action: str, board_id: str, duration: str = None, deleted_posts: int = 0, stream: str = 'ru'):
+@dataclass
+class ModerationNotice:
+    user_id: int
+    action: str
+    board_id: str
+    duration: Optional[str] = None
+    deleted_posts: int = 0
+    stream: str = 'ru'
+
+async def send_moderation_notice(notice: ModerationNotice):
+    user_id = notice.user_id
+    action = notice.action
+    board_id = notice.board_id
+    duration = notice.duration
+    deleted_posts = notice.deleted_posts
+    stream = notice.stream
 
     b_data = board_data[board_id]
     if not b_data['users']['active']:
@@ -11656,7 +11672,7 @@ async def cmd_mute(message: Message, board_id: str | None, stream: str = 'ru'):
     else:
         msg = f"🔇 Юзер <code>{target_id}</code> замучен на {duration_text}. Удалено: {deleted}"
     await message.answer(msg, parse_mode="HTML")
-    await send_moderation_notice(target_id, "mute", board_id, duration=duration_text, deleted_posts=deleted, stream=stream)
+    await send_moderation_notice(ModerationNotice(user_id=target_id, action="mute", board_id=board_id, duration=duration_text, deleted_posts=deleted, stream=stream))
     try: await message.delete()
     except: pass
 @dp.message(Command("unmute"))
@@ -13767,7 +13783,7 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
         ]
     response_text = random.choice(phrases).format(user_id=target_id, board=board_name, deleted=deleted_posts)
     await message.answer(response_text, parse_mode="HTML")
-    await send_moderation_notice(target_id, "ban", board_id, deleted_posts=deleted_posts)
+    await send_moderation_notice(ModerationNotice(user_id=target_id, action="ban", board_id=board_id, deleted_posts=deleted_posts))
     try:
         if lang == 'en':
             phrases = [
