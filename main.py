@@ -6105,8 +6105,8 @@ async def cmd_global_pin(message: types.Message, board_id: str | None, stream: s
     if not is_admin(message.from_user.id, board_id): return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not message.reply_to_message:
-        msg = "Reply with /pin." if lang == 'en' else ("返信で /pin を使ってください。" if lang == 'jp' else "Использование: ответьте командой /pin на сообщение.")
-        await message.answer(msg)
+        msg = "Reply to a message: <code>/del</code>" if lang == 'en' else ("返信して使ってください: <code>/del</code>" if lang == 'jp' else "⚠️ Ответьте на сообщение, которое хотите удалить: <code>/del</code>")
+        await message.answer(msg, parse_mode="HTML")
         return
     post_num = None
     async with storage_lock:
@@ -9221,9 +9221,9 @@ async def cmd_generate(message: types.Message, board_id: str | None, stream: str
     if full_command_text.startswith(command_prefix):
         text_to_generate = full_command_text[len(command_prefix):].strip()
     if not text_to_generate:
-        if lang == 'en': usage = "Usage: <code>/generate &lt;your text&gt;</code>"
-        elif lang == 'jp': usage = "使用法: <code>/generate &lt;テキスト&gt;</code>"
-        else: usage = "Использование: <code>/generate &lt;твой текст&gt;</code>"
+        if lang == 'en': usage = "Usage: <code>/generate &lt;prompt text&gt;</code>"
+        elif lang == 'jp': usage = "使用法: <code>/generate &lt;prompt text&gt;</code>"
+        else: usage = "⚠️ Напишите промпт. Пример: <code>/generate Нарисуй кота в космосе</code>"
         await message.answer(usage, parse_mode="HTML")
         return
     working_msg = None
@@ -12842,8 +12842,8 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
             b_data['last_deanon_time'] = current_time
     lang = 'en' if board_id == 'int' else 'ru'
     if not message.reply_to_message:
-        reply_text = "⚠️ Reply to a message to de-anonymize!" if lang == 'en' else "⚠️ Ответь на сообщение для деанона!"
-        await message.answer(reply_text)
+        reply_text = "👀 Reply to a message to de-anonymize!" if lang == 'en' else "⚠️ Ответьте на анонимное сообщение юзера, чтобы попытаться узнать автора: <code>/deanon</code>"
+        await message.answer(reply_text, parse_mode="HTML")
         try:
             if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
                 await message.delete()
@@ -13205,14 +13205,19 @@ async def cmd_admin_say(message: types.Message, board_id: str | None, stream: st
 async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id):
         return
+    target_id = None
+    if message.reply_to_message:
+        target_id = await get_author_id_by_reply(message)
+    
     parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer("Usage: /troll <user_id>")
-        return
-    try:
-        target_id = int(parts[1])
-    except ValueError:
-        await message.answer("Invalid ID.")
+    if not target_id and len(parts) > 1:
+        try:
+            target_id = int(parts[1])
+        except ValueError:
+            pass
+
+    if not target_id:
+        await message.answer("⚠️ Ответьте на сообщение юзера или укажите его ID: <code>/troll &lt;ID&gt;</code>", parse_mode="HTML")
         return
     b_data = board_data[board_id]
     if 'troll_targets' not in b_data:
@@ -13393,10 +13398,10 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
         return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not message.reply_to_message:
-        if lang == 'en': msg = "Usage: reply with /reactions to see reactions."
-        elif lang == 'jp': msg = "使用法: /reactions と返信してリアクションを確認。"
-        else: msg = "Использование: ответьте командой /reactions на пост, чтобы увидеть реакции."
-        await message.answer(msg)
+        if lang == 'en': msg = "Reply to a message to use this: <code>/sdel</code>"
+        elif lang == 'jp': msg = "返信して使ってください: <code>/sdel</code>"
+        else: msg = "⚠️ Ответьте на сообщение, которое хотите тихо удалить: <code>/sdel</code>"
+        await message.answer(msg, parse_mode="HTML")
         try: await message.delete()
         except TelegramBadRequest: pass
         return
@@ -14202,10 +14207,10 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
         return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not message.reply_to_message:
-        if lang == 'en': msg = "Reply to a message to use this."
-        elif lang == 'jp': msg = "メッセージに返信して使用してください。"
-        else: msg = "Эта команда работает только через ответ на сообщение."
-        await message.answer(msg)
+        if lang == 'en': msg = "Reply to a message to use this: <code>/sdel</code>"
+        elif lang == 'jp': msg = "返信して使ってください: <code>/sdel</code>"
+        else: msg = "⚠️ Ответьте на сообщение, которое хотите тихо удалить: <code>/sdel</code>"
+        await message.answer(msg, parse_mode="HTML")
         await message.delete()
         return
     post_info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
@@ -14281,8 +14286,8 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
     if not board_id or not is_admin(message.from_user.id, board_id): return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not message.reply_to_message:
-        msg = "Reply to a message." if lang == 'en' else ("メッセージに返信してください。" if lang == 'jp' else "Ответь на сообщение.")
-        await message.answer(msg)
+        msg = "Reply to a message: <code>/del</code>" if lang == 'en' else ("返信して使ってください: <code>/del</code>" if lang == 'jp' else "⚠️ Ответьте на сообщение, которое хотите удалить: <code>/del</code>")
+        await message.answer(msg, parse_mode="HTML")
         return
     post_num = None
     async with storage_lock:
