@@ -345,7 +345,7 @@ class BoardMiddleware(BaseMiddleware):
                                 await event.delete()
                             elif isinstance(event, types.CallbackQuery):
                                 pass 
-                        except: 
+                        except Exception: 
                             pass
                         return 
         return await handler(event, data)
@@ -2770,13 +2770,13 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
                 msg_text = VERIFICATION_SUCCESS_MESSAGES.get(lang, VERIFICATION_SUCCESS_MESSAGES['ru'])
                 try:
                     await bot.send_message(user_id, msg_text, parse_mode="HTML")
-                except:
+                except Exception:
                     pass
                     
         except Exception as e:
             try:
                 await db.execute("ROLLBACK")
-            except:
+            except Exception:
                 pass
             print(f"⚠️ Ошибка верификации для {user_id}: {e}")
 async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
@@ -2830,7 +2830,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                     
                 except Exception as e:
                     try: await db.execute("ROLLBACK")
-                    except: pass
+                    except Exception: pass
                     
                     if "locked" in str(e).lower() or "busy" in str(e).lower():
                         await asyncio.sleep(0.2 * (attempt + 1))
@@ -3735,7 +3735,7 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                                 try:
                                     # Пытаемся прочитать текст ошибки для диагностики
                                     error_text = data[:300].decode('utf-8', errors='ignore').replace('\n', ' ')
-                                except:
+                                except Exception:
                                     error_text = "Binary/Unknown"
                                     
                                 print(f"⚠️ [DEBUG_DL] Ссылка вернула HTML заглушку. Содержимое: {error_text}")
@@ -6340,7 +6340,7 @@ async def _run_delayed_prank(bot, user_id, amount, user_input, method, shame_nam
         bar = PROGRESS_BARS[i] if i < len(PROGRESS_BARS) else ""
         try:
             await prank_msg.edit_text(f"{status}\n\n<code>{bar}</code>", parse_mode="HTML")
-        except: break
+        except Exception: break
 
     await asyncio.sleep(5)
 
@@ -6379,7 +6379,7 @@ async def _run_delayed_prank(bot, user_id, amount, user_input, method, shame_nam
 
     try:
         await prank_msg.delete()
-    except: pass
+    except Exception: pass
 
     await bot.send_message(user_id, direct_notice, parse_mode="HTML", reply_markup=kb_support)
 
@@ -6444,7 +6444,7 @@ async def cb_support_prank(callback: types.CallbackQuery):
             caption=SUPPORT_RESPONSES['text'],
             parse_mode="HTML"
         )
-    except:
+    except Exception:
         await callback.message.answer(SUPPORT_RESPONSES['text'], parse_mode="HTML")
     await callback.answer()
 @dp.message(Command("passport", "me", "profile", "stats_me"))
@@ -6583,13 +6583,13 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     )
     try:
         await message.reply(passport_text, parse_mode="HTML")
-    except:
+    except Exception:
         try:
             await message.answer(passport_text, parse_mode="HTML")
         except Exception:
             pass
     try: await message.delete()
-    except: pass
+    except Exception: pass
 @dp.message(Command("ans"))
 async def cmd_admin_answer(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -6669,7 +6669,7 @@ async def cmd_admin_answer(message: types.Message, board_id: str | None, stream:
             "reply_info": reply_info_for_send
         })
         try: await message.delete()
-        except: pass
+        except Exception: pass
 @dp.message(Command("gunban"))
 async def cmd_gunban(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -6682,7 +6682,7 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
             target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
-        except: pass
+        except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         await message.answer("ID/Reply needed." if lang != 'ru' else "Нужен ID или реплай.")
@@ -6745,7 +6745,7 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
             target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
-        except: pass
+        except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         await message.answer("ID needed." if lang == 'en' else "Нужен ID.")
@@ -6764,7 +6764,7 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
             async with db.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (target_id,)) as cursor:
                 row = await cursor.fetchone()
                 post_count = row[0] if row and row[0] else 0
-    except: pass
+    except Exception: pass
 
     if lang == 'en': header = f"🗂 <b>Dossier on {anon_name}:</b>\n<code>{'—'*20}</code>"
     elif lang == 'jp': header = f"🗂 <b>{anon_name} の調査書:</b>\n<code>{'—'*20}</code>"
@@ -7544,7 +7544,7 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
                         ref_stream = await get_user_stream(referrer_id, board_id)
                         notif_text = REFERRAL_BONUS_MESSAGES.get(ref_stream, REFERRAL_BONUS_MESSAGES['ru']).format(balance=int(ref_balance))
                         await message.bot.send_message(referrer_id, notif_text, parse_mode="HTML")
-                    except: pass
+                    except Exception: pass
             except Exception as e:
                 print(f"⚠️ Ошибка обработки реферала: {e}")
 
@@ -7561,7 +7561,7 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
         menu_text = "👇 <b>Quick Menu / Быстрое меню:</b>"
         await message.answer(menu_text, reply_markup=get_quick_menu_keyboard(board_id, stream=stream), parse_mode="HTML")
         try: await message.delete()
-        except: pass
+        except Exception: pass
 @dp.callback_query(F.data.startswith("set_stream_"))
 async def cb_set_stream(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -7753,7 +7753,7 @@ async def handle_stacked_anime_commands(message: types.Message, board_id: str | 
                 sent = await message.answer(msg)
                 asyncio.create_task(delete_message_after_delay(sent, 15))
                 await message.delete()
-            except: pass
+            except Exception: pass
             return
         tracker['count'] += requested_count
 
@@ -7767,7 +7767,7 @@ async def handle_stacked_anime_commands(message: types.Message, board_id: str | 
             sent = await message.answer(limit_msg)
             asyncio.create_task(delete_message_after_delay(sent, 15))
             await message.delete()
-        except: pass
+        except Exception: pass
         return
     
     user_hourly_image_count[user_id] += requested_count
@@ -7984,7 +7984,7 @@ async def cmd_delete_thread(message: types.Message, board_id: str | None, stream
     user_id = message.from_user.id
     if not board_id or board_id not in THREAD_BOARDS:
         try: await message.delete()
-        except: pass
+        except Exception: pass
         return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not is_admin(user_id, board_id):
@@ -8395,7 +8395,7 @@ async def cmd_gban(message: types.Message, board_id: str | None, stream: str = '
             target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
-        except: pass
+        except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         await message.answer("ID/Reply needed." if lang != 'ru' else "Нужен ID или реплай.")
@@ -9179,7 +9179,7 @@ async def cmd_stop(message: types.Message, board_id: str | None, stream: str = '
     if not board_id: return
     if not is_admin(message.from_user.id, board_id):
         try: await message.delete()
-        except: pass
+        except Exception: pass
         return
     all_modes = MODE_FLAGS
     async with storage_lock:
@@ -9202,7 +9202,7 @@ async def cmd_stop(message: types.Message, board_id: str | None, stream: str = '
         msg = f"🛑 Все активные режимы на доске {board_name} остановлены."
     await message.answer(msg)
     try: await message.delete()
-    except: pass
+    except Exception: pass
 @dp.message(Command("active"))
 async def cmd_active(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -9217,7 +9217,7 @@ async def cmd_active(message: types.Message, board_id: str | None, stream: str =
             last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
             if current_time - last_usage < INFO_CMD_COOLDOWN:
                 try: await message.delete()
-                except: pass
+                except Exception: pass
                 return
             b_data.setdefault('last_info_command_time', {})[user_id] = current_time
     day_ago = datetime.now(UTC) - timedelta(hours=24)
@@ -9264,7 +9264,7 @@ async def cmd_active(message: types.Message, board_id: str | None, stream: str =
         await message.answer(unlock)
     except Exception: pass
     try: await message.delete()
-    except: pass
+    except Exception: pass
 @dp.message(Command("generate"))
 async def cmd_generate(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -9348,7 +9348,7 @@ async def cmd_nuke_pins_surgical(message: types.Message, board_id: str | None, s
         if i % 100 == 0 and i > 0:
             try:
                 await status_msg.edit_text(f"☢️ <b>Прогресс: {i} / {len(users)}</b>")
-            except: pass
+            except Exception: pass
         try:
             await message.bot.unpin_all_chat_messages(chat_id=chat_id)
             stats['ok'] += 1
@@ -9359,7 +9359,7 @@ async def cmd_nuke_pins_surgical(message: types.Message, board_id: str | None, s
             try:
                 await message.bot.unpin_all_chat_messages(chat_id=chat_id)
                 stats['ok'] += 1
-            except: stats['error'] += 1
+            except Exception: stats['error'] += 1
         except Exception:
             stats['error'] += 1
         if i % BATCH_SIZE == 0:
@@ -9656,7 +9656,7 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, board_id: str |
             limit_msg = random.choice(phrases)
             try:
                 await callback.answer(limit_msg, show_alert=True)
-            except: pass
+            except Exception: pass
             return
         user_hourly_image_count[user_id] += count
 
@@ -9854,7 +9854,7 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
         except TelegramBadRequest:
             try:
                 await callback.message.answer(cooldown_text)
-            except: pass
+            except Exception: pass
         return
     fsm_data = await state.get_data()
     op_post_text = fsm_data.get('op_post_text')
@@ -9886,7 +9886,7 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
         error_text = "Database error: Could not create thread." if lang == 'en' else "Ошибка БД: не удалось создать тред."
         try:
             await callback.message.answer(error_text)
-        except: pass
+        except Exception: pass
         return
     thread_info = {
         'op_id': user_id, 'title': title, 'created_at': now_dt.isoformat(),
@@ -9968,7 +9968,7 @@ async def cmd_toggle_gif(message: types.Message, board_id: str | None, stream: s
             target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
-        except: pass
+        except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         await message.answer("Need ID or reply." if lang == 'en' else ("IDまたは返信が必要です。" if lang == 'jp' else "Нужен ID или реплай."))
@@ -9993,7 +9993,7 @@ async def cmd_toggle_gif(message: types.Message, board_id: str | None, stream: s
         msg = f"Гифки для {target_id} теперь: {status}"
     await message.answer(msg)
     try: await message.delete()
-    except: pass
+    except Exception: pass
 @dp.message(Command("togglestickers"))
 async def cmd_toggle_stickers(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -10004,7 +10004,7 @@ async def cmd_toggle_stickers(message: types.Message, board_id: str | None, stre
             target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
-        except: pass
+        except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         await message.answer("Need ID or reply." if lang == 'en' else ("IDまたは返信が必要です。" if lang == 'jp' else "Нужен ID или реплай."))
@@ -10029,7 +10029,7 @@ async def cmd_toggle_stickers(message: types.Message, board_id: str | None, stre
         msg = f"Стикеры для {target_id} теперь: {status}"
     await message.answer(msg)
     try: await message.delete()
-    except: pass
+    except Exception: pass
 @dp.message(Command("togglemedia"))
 async def cmd_toggle_media(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -10040,7 +10040,7 @@ async def cmd_toggle_media(message: types.Message, board_id: str | None, stream:
             target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
-        except: pass
+        except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         await message.answer("Need ID or reply." if lang == 'en' else ("IDまたは返信が必要です。" if lang == 'jp' else "Нужен ID или реплай."))
@@ -10068,7 +10068,7 @@ async def cmd_toggle_media(message: types.Message, board_id: str | None, stream:
         msg = f"Любые медиа для {target_id} теперь: {status} (Разрешен только текст)"
     await message.answer(msg)
     try: await message.delete()
-    except: pass
+    except Exception: pass
 @dp.message(Command("lie"))
 async def cmd_lie_media(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -10079,7 +10079,7 @@ async def cmd_lie_media(message: types.Message, board_id: str | None, stream: st
             target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
-        except: pass
+        except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         await message.answer("Need ID or reply: /lie <id>" if lang == 'en' else "Need ID or reply: /lie <id>")
@@ -10101,7 +10101,7 @@ async def cmd_lie_media(message: types.Message, board_id: str | None, stream: st
     await log_global_event('bot', f"LIE_MEDIA_TOGGLE: admin {message.from_user.id} {status} archive media substitution for {target_id} on /{board_id}/")
     await message.answer(f"Lie media for <code>{target_id}</code>: {status}", parse_mode="HTML")
     try: await message.delete()
-    except: pass
+    except Exception: pass
 @dp.callback_query(F.data == "create_thread_edit", ThreadCreateStates.waiting_for_confirmation)
 async def cb_create_thread_edit(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -10125,7 +10125,7 @@ async def cb_create_thread_edit(callback: types.CallbackQuery, state: FSMContext
     except TelegramBadRequest:
         try:
             await callback.message.answer(prompt_text)
-        except: pass
+        except Exception: pass
 THREADS_PER_PAGE = 10
 @dp.message(Command("threads"))
 async def cmd_threads(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -10640,7 +10640,7 @@ async def sync_boards_with_config():
                 return
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except: pass
+                except Exception: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await asyncio.sleep(0.5 * (attempt + 1))
@@ -11358,7 +11358,7 @@ async def cb_create_thread_start(callback: types.CallbackQuery, state: FSMContex
     """
     if not board_id or board_id not in THREAD_BOARDS:
         try: await callback.answer("Not available.", show_alert=True)
-        except: pass
+        except Exception: pass
         return
     lang = 'en' if board_id == 'int' else 'ru'
     await state.set_state(ThreadCreateStates.waiting_for_op_post)
@@ -11419,7 +11419,7 @@ async def cq_threads_page(callback: types.CallbackQuery, board_id: str | None, s
     except (ValueError, IndexError):
         try:
             await callback.answer("Ошибка данных.", show_alert=True)
-        except: pass
+        except Exception: pass
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower() and "query is too old" not in str(e).lower():
              print(f"Ошибка в cq_threads_page: {e}")
@@ -11450,7 +11450,7 @@ async def cq_view_thread(callback: types.CallbackQuery, board_id: str | None, st
         return_page = int(parts[3])
     except (ValueError, IndexError):
         try: await callback.answer("Invalid ID", show_alert=True)
-        except: pass
+        except Exception: pass
         return
     load_txt = "Loading..." if lang == 'en' else ("読み込み中..." if lang == 'jp' else "Загрузка...")
     try:
@@ -11461,7 +11461,7 @@ async def cq_view_thread(callback: types.CallbackQuery, board_id: str | None, st
     if not thread_data:
         err_txt = "Thread not found." if lang == 'en' else ("スレッドが見つかりません。" if lang == 'jp' else "Тред не найден.")
         try: await callback.message.answer(err_txt)
-        except: pass
+        except Exception: pass
         return
     thread_chunks = await format_thread_for_telegram(*thread_data)
     if lang == 'en': back_txt = "« Back"
@@ -11486,13 +11486,13 @@ async def cq_thread_history(callback: types.CallbackQuery, board_id: str | None,
 
     if not board_id or board_id not in THREAD_BOARDS:
         try: await callback.answer("N/A", show_alert=True)
-        except: pass
+        except Exception: pass
         return
     try:
         thread_id = callback.data.split("_")[-1]
     except (ValueError, IndexError):
         try: await callback.answer("Invalid thread ID", show_alert=True)
-        except: pass
+        except Exception: pass
         return
     user_id = callback.from_user.id
     b_data = board_data[board_id]
@@ -11584,13 +11584,13 @@ async def cq_enter_thread(callback: types.CallbackQuery, board_id: str | None, s
 
     if not board_id or board_id not in THREAD_BOARDS:
         try: await callback.answer("N/A", show_alert=True)
-        except: pass
+        except Exception: pass
         return
     try:
         thread_id = callback.data.split("_")[-1]
     except (ValueError, IndexError):
         try: await callback.answer("Invalid thread ID", show_alert=True)
-        except: pass
+        except Exception: pass
         return
     user_id = callback.from_user.id
     message_to_delete = callback.message if isinstance(callback.message, types.Message) else None
@@ -11793,7 +11793,7 @@ async def cmd_mute(message: Message, board_id: str | None, stream: str = 'ru'):
     await message.answer(msg, parse_mode="HTML")
     await send_moderation_notice(target_id, "mute", board_id, duration=duration_text, deleted_posts=deleted, stream=stream)
     try: await message.delete()
-    except: pass
+    except Exception: pass
 @dp.message(Command("unmute"))
 async def cmd_unmute(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -11843,7 +11843,7 @@ async def cmd_unmute(message: types.Message, board_id: str | None, stream: str =
         else: txt = f"Пользователь {target_id} не был в муте."
         await message.answer(txt)
     try: await message.delete()
-    except: pass
+    except Exception: pass
 @dp.message(Command("shadowmute"))
 async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id):
@@ -12045,7 +12045,7 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
     if not is_adm:
         if board_id not in THREAD_BOARDS: 
             try: await message.delete()
-            except: pass
+            except Exception: pass
             return
         user_s = b_data.get('user_state', {}).get(user_id, {})
         location = user_s.get('location', 'main')
@@ -12119,7 +12119,7 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
         await message.answer(resp, parse_mode="HTML")
     try:
         await message.delete()
-    except:
+    except Exception:
         pass
 @dp.message(Command("invite"))
 async def cmd_invite(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -12243,7 +12243,7 @@ async def cmd_check_queues(message: types.Message, board_id: str | None, stream:
 async def cmd_whisper(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     try: await message.delete()
-    except: pass
+    except Exception: pass
     if not message.reply_to_message:
         await message.answer("❌ Используй /whisper в ответ на сообщение, автору которого хочешь прошептать.")
         return
@@ -12283,13 +12283,13 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
                 f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\\nОт: <code>{sender_nick}</code>\\nКому: <code>{target_nick}</code>\\nТекст: <i>{escape_html(text)}</i>",
                 parse_mode="HTML"
             )
-        except: pass
+        except Exception: pass
 
 @dp.message(Command("redact"))
 async def cmd_redact(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     try: await message.delete()
-    except: pass
+    except Exception: pass
     if not message.reply_to_message:
         await message.answer("❌ Используй /redact в ответ на свое сообщение.")
         return
@@ -12335,7 +12335,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                             caption="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
                             parse_mode="HTML"
                         )
-                    except:
+                    except Exception:
                         pass
             success_count += 1
             await asyncio.sleep(0.04)
@@ -12364,12 +12364,12 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
         runtime_logger.warning(f"Could not update db text for redact: {e}")
     
     try: await msg_status.delete()
-    except: pass
+    except Exception: pass
     
     st_msg = await message.answer(f"✅ Успешно удалено у {success_count} пользователей.")
     await asyncio.sleep(4)
     try: await st_msg.delete()
-    except: pass
+    except Exception: pass
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -12388,7 +12388,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
             last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
             if current_time - last_usage < INFO_CMD_COOLDOWN:
                 try: await message.delete()
-                except: pass
+                except Exception: pass
                 return
             b_data.setdefault('last_info_command_time', {})[user_id] = current_time
     b_data = board_data[board_id]
@@ -12434,7 +12434,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
         await message.answer(unlock)
     except Exception: pass
     try: await message.delete()
-    except: pass
+    except Exception: pass
 
 @dp.message(Command("top"))
 async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -12494,7 +12494,7 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
     
     try:
         await message.answer(text, parse_mode="HTML")
-    except: pass
+    except Exception: pass
 
 
 @dp.message(Command("anime", "nya", "kawai", "kawaii"))
@@ -13393,7 +13393,7 @@ async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 
         try:
             await message.answer(response_text, reply_markup=keyboard)
             await message.delete()
-        except: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
@@ -13690,7 +13690,7 @@ async def admin_save_all(callback: types.CallbackQuery):
     is_any_admin = any(is_admin(callback.from_user.id, b_id) for b_id in BOARDS)
     if not is_any_admin:
         try: await callback.answer("Access denied", show_alert=True)
-        except: pass
+        except Exception: pass
         return
     user_lang = callback.from_user.language_code or 'en'
     is_ru = 'ru' in user_lang or 'uk' in user_lang or 'be' in user_lang
@@ -13723,11 +13723,11 @@ async def admin_stats_board(callback: types.CallbackQuery):
     except IndexError: return
     if not is_admin(callback.from_user.id, board_id):
         try: await callback.answer("Access denied", show_alert=True)
-        except: pass
+        except Exception: pass
         return
     if not isinstance(callback.message, types.Message):
         try: await callback.answer()
-        except: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
@@ -13855,7 +13855,7 @@ async def admin_filter_list(callback: types.CallbackQuery):
     except IndexError: return
     if not is_admin(callback.from_user.id, board_id):
         try: await callback.answer("Access denied", show_alert=True)
-        except: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     spam_words = b_data.get('spam_filter_words', set())
@@ -13904,7 +13904,7 @@ async def admin_reaction_bans(callback: types.CallbackQuery):
     except IndexError: return
     if not is_admin(callback.from_user.id, board_id):
         try: await callback.answer("Access denied", show_alert=True)
-        except: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
@@ -13944,7 +13944,7 @@ async def admin_back_to_main(callback: types.CallbackQuery):
     except IndexError: return
     if not is_admin(callback.from_user.id, board_id):
         try: await callback.answer("Нет прав", show_alert=True)
-        except: pass
+        except Exception: pass
         return
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
@@ -14158,7 +14158,7 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
         try:
             target_id = int(command_args[0])
             if len(command_args) > 1: duration_str = command_args[1]
-        except:
+        except Exception:
             if message.reply_to_message:
                 duration_str = command_args[0]
                 async with storage_lock: target_id = await get_author_id_by_reply(message)
@@ -14175,7 +14175,7 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
     elif duration_str.endswith("d"): minutes = int(duration_str[:-1]) * 60 * 24
     else:
         try: minutes = int(duration_str)
-        except: minutes = 60
+        except Exception: minutes = 60
 
     anon_name = generate_anon_name(target_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -14205,7 +14205,7 @@ async def on_admin_action(callback: types.CallbackQuery):
     if action == "cancel":
         await callback.message.delete()
         try: await callback.answer("Отменено")
-        except: pass
+        except Exception: pass
         return
         
     target_id = int(parts[2])
@@ -14268,7 +14268,7 @@ async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str
     await message.answer(res, parse_mode="HTML")
     try:
         await message.delete()
-    except:
+    except Exception:
         pass
 @dp.message(Command("shadowmute_threads"))
 async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream: str = 'ru'):
@@ -14435,7 +14435,7 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
         resp = f"🗑 Пост №{post_num} и копии ({deleted_count}) удалены."
     await message.answer(resp)
     try: await message.delete()
-    except: pass
+    except Exception: pass
 @dp.message(Command("token"))
 async def cmd_token(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -15648,7 +15648,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 try:
                     sent = await message.answer(edu_text)
                     asyncio.create_task(delete_message_after_delay(sent, 20))
-                except: pass
+                except Exception: pass
         else:
             b_data['single_photo_counter'][user_id] = 0
     elif message.content_type == 'text':
@@ -15805,7 +15805,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             
         if limit_hit:
             try: await message.bot.send_message(user_id, "Replies limit reached (3 max).", disable_notification=True)
-            except: pass
+            except Exception: pass
         return
     try: await message.delete()
     except TelegramBadRequest: pass
