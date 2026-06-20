@@ -12822,12 +12822,18 @@ async def _process_stacked_anime_command(
 @dp.message(Command("deanon"))
 async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     current_time = time.time()
     async with deanon_lock:
         async with storage_lock:
             b_data = board_data[board_id]
             if current_time - b_data.get('last_deanon_time', 0) < DEANON_COOLDOWN:
-                cooldown_msg = random.choice(DEANON_COOLDOWN_PHRASES)
+                if lang == 'en':
+                    cooldown_msg = random.choice(DEANON_COOLDOWN_PHRASES_EN)
+                elif lang == 'jp':
+                    cooldown_msg = random.choice(DEANON_COOLDOWN_PHRASES_JP)
+                else:
+                    cooldown_msg = random.choice(DEANON_COOLDOWN_PHRASES)
                 try:
                     sent_msg = await message.answer(cooldown_msg)
                     asyncio.create_task(delete_message_after_delay(sent_msg, 5))
@@ -12839,7 +12845,6 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
                     pass
                 return
             b_data['last_deanon_time'] = current_time
-    lang = 'en' if board_id == 'int' else 'ru'
     if not message.reply_to_message:
         reply_text = "⚠️ Reply to a message to de-anonymize!" if lang == 'en' else "⚠️ Ответь на сообщение для деанона!"
         await message.answer(reply_text)
