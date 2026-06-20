@@ -207,11 +207,6 @@ from warhammer_mode import WH40K_PHRASES_START, WH40K_PHRASES_END, warhammer_tra
 from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial_transform
 from gopnik_mode import GOPNIK_PHRASES_START, GOPNIK_PHRASES_END, gopnik_transform
 from shizo_mode import SCHIZO_PHRASES_START, SCHIZO_PHRASES_END, shizo_transform
-# from new_modes import (
-#     AMERICA_PHRASES_END, AMERICA_PHRASES_START, HOLIDAY_PHRASES_END, HOLIDAY_PHRASES_START,
-#     JEWISH_PHRASES_END, JEWISH_PHRASES_START, MATRIX_PHRASES_END, MATRIX_PHRASES_START,
-#     OLDWEB_PHRASES_END, OLDWEB_PHRASES_START,
-#     america_transform, holiday_transform, jewish_transform, matrix_transform, oldweb_transform,
 # )
 from mode_punchup import punch_up_mode_text
 from aiogram import BaseMiddleware
@@ -452,7 +447,6 @@ locally_created_posts = deque(maxlen=500)
 MODE_FLAGS = [
     'anime_mode', 'zaputin_mode', 'slavaukraine_mode', 'suka_blyat_mode',
     'polish_mode', 'warhammer_mode', 'imperial_mode', 'gopnik_mode', 'schizo_mode',
-    'matrix_mode', 'america_mode', 'holiday_mode', 'oldweb_mode', 'jewish_mode',
 ]
 board_data = defaultdict(lambda: {
     'anime_mode': False,
@@ -464,11 +458,6 @@ board_data = defaultdict(lambda: {
     'imperial_mode': False,
     'gopnik_mode': False,
     'schizo_mode': False,
-    'matrix_mode': False,
-    'america_mode': False,
-    'holiday_mode': False,
-    'oldweb_mode': False,
-    'jewish_mode': False,
     'last_suka_blyat': None,
     'suka_blyat_counter': 0,
     'last_mode_activation': None,
@@ -2840,11 +2829,6 @@ async def format_thread_post_header(board_id: str, local_post_num: int, author_i
     if b_data.get('schizo_mode'): return f"++ СИГНАЛ #{post_num_formatted} ++"
     if b_data['warhammer_mode']: return f"⚔️ Донесение №{post_num_formatted}"
     if b_data['imperial_mode']: return f"📜 Депеша №{post_num_formatted}"
-    if b_data.get('matrix_mode'): return f"🟩 Пакет №{post_num_formatted}"
-    if b_data.get('america_mode'): return f"🦅 Freedom Post №{post_num_formatted}"
-    if b_data.get('holiday_mode'): return f"🎄 Подарок №{post_num_formatted}"
-    if b_data.get('oldweb_mode'): return f"🖥️ Сообщение #{post_num_formatted}"
-    if b_data.get('jewish_mode'): return f"📜 Казус №{post_num_formatted}"
     prefix = _get_random_header_prefix(lang=stream)
     if stream == 'en':
         return f"{circle}{prefix}Post No.{post_num_formatted}"
@@ -2902,15 +2886,10 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
         return f"⚔️ Донесение №{post_num_formatted}"
     if b_data['imperial_mode']:
         return f"📜 Депеша №{post_num_formatted}"
-    if b_data.get('matrix_mode'):
         return f"🟩 Пакет №{post_num_formatted}"
-    if b_data.get('america_mode'):
         return f"🦅 Freedom Post №{post_num_formatted}"
-    if b_data.get('holiday_mode'):
         return f"🎄 Подарок №{post_num_formatted}"
-    if b_data.get('oldweb_mode'):
         return f"🖥️ Сообщение #{post_num_formatted}"
-    if b_data.get('jewish_mode'):
         return f"📜 Казус №{post_num_formatted}"
     prefix_lang = 'en' if stream == 'en' else 'ru' 
     prefix = _get_random_header_prefix(lang=prefix_lang)
@@ -3688,8 +3667,6 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
         b_data['zaputin_mode'] or b_data['suka_blyat_mode'] or
         b_data['polish_mode'] or b_data['warhammer_mode'] or b_data['imperial_mode'] or
         b_data['gopnik_mode'] or b_data.get('schizo_mode')
-        # or b_data.get('matrix_mode') or b_data.get('america_mode') or
-        # b_data.get('holiday_mode') or b_data.get('oldweb_mode') or b_data.get('jewish_mode')
     )
     if not is_transform_mode_active:
         return modified_content
@@ -3715,15 +3692,10 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
     # 4. Выбор и запуск функции трансформации
     if b_data.get('schizo_mode'):
         transform_result = await loop.run_in_executor(None, shizo_transform, plain_text, header)
-    # elif b_data.get('matrix_mode'):
     #     transform_result = await loop.run_in_executor(None, matrix_transform, plain_text, header)
-    # elif b_data.get('america_mode'):
     #     transform_result = await loop.run_in_executor(None, america_transform, plain_text, header)
-    # elif b_data.get('holiday_mode'):
     #     transform_result = await loop.run_in_executor(None, holiday_transform, plain_text, header)
-    # elif b_data.get('oldweb_mode'):
     #     transform_result = await loop.run_in_executor(None, oldweb_transform, plain_text, header)
-    # elif b_data.get('jewish_mode'):
     #     transform_result = await loop.run_in_executor(None, jewish_transform, plain_text, header)
     elif b_data['gopnik_mode']:
         transform_result = await loop.run_in_executor(None, gopnik_transform, plain_text)
@@ -8800,7 +8772,6 @@ async def activate_lightweight_mode(
 # @dp.message(Command("matrix", "matrica", "matriza", "redpill", "neo"))
 # async def cmd_matrix(message: types.Message, board_id: str | None, stream: str = 'ru'):
 #     await activate_lightweight_mode(
-#         message, board_id, stream, 'matrix_mode', MATRIX_PHRASES_START,
 #         {'ru': "### ОПЕРАТОР ###", 'en': "### OPERATOR ###", 'jp': "### オペレーター ###"},
 #         duration_seconds=310,
 #     )
@@ -8808,7 +8779,6 @@ async def activate_lightweight_mode(
 # @dp.message(Command("america", "usa", "liberty", "freedom"))
 # async def cmd_america(message: types.Message, board_id: str | None, stream: str = 'ru'):
 #     await activate_lightweight_mode(
-#         message, board_id, stream, 'america_mode', AMERICA_PHRASES_START,
 #         {'ru': "### СЕНАТ ###", 'en': "### SENATE ###", 'jp': "### 上院 ###"},
 #         duration_seconds=310,
 #     )
@@ -8816,7 +8786,6 @@ async def activate_lightweight_mode(
 # @dp.message(Command("holiday", "newyear", "xmas", "christmas", "ny"))
 # async def cmd_holiday(message: types.Message, board_id: str | None, stream: str = 'ru'):
 #     await activate_lightweight_mode(
-#         message, board_id, stream, 'holiday_mode', HOLIDAY_PHRASES_START,
 #         {'ru': "### ПОХМЕЛЬНЫЙ ШТАБ ###", 'en': "### HANGOVER DESK ###", 'jp': "### 後始末係 ###"},
 #         duration_seconds=320,
 #     )
@@ -8824,7 +8793,6 @@ async def activate_lightweight_mode(
 # @dp.message(Command("oldweb", "oldnet", "icq", "winamp", "forum"))
 # async def cmd_oldweb(message: types.Message, board_id: str | None, stream: str = 'ru'):
 #     await activate_lightweight_mode(
-#         message, board_id, stream, 'oldweb_mode', OLDWEB_PHRASES_START,
 #         {'ru': "### ВЕБМАСТЕР ###", 'en': "### WEBMASTER ###", 'jp': "### ウェブマスター ###"},
 #         duration_seconds=315,
 #     )
@@ -8832,7 +8800,6 @@ async def activate_lightweight_mode(
 # @dp.message(Command("jewish", "talmud", "odessa", "shabbat", "rabbi", "evrei", "evrey"))
 # async def cmd_jewish(message: types.Message, board_id: str | None, stream: str = 'ru'):
 #     await activate_lightweight_mode(
-#         message, board_id, stream, 'jewish_mode', JEWISH_PHRASES_START,
 #         {'ru': "### КАНЦЕЛЯРИЯ СПОРА ###", 'en': "### ARGUMENT DESK ###", 'jp': "### 反論窓口 ###"},
 #         duration_seconds=320,
 #     )
@@ -8908,11 +8875,6 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
         'imperial_mode': IMPERIAL_PHRASES_END,
         'gopnik_mode': GOPNIK_PHRASES_END,
         'schizo_mode': SCHIZO_PHRASES_END,
-        # 'matrix_mode': MATRIX_PHRASES_END,
-        # 'america_mode': AMERICA_PHRASES_END,
-        # 'holiday_mode': HOLIDAY_PHRASES_END,
-        # 'oldweb_mode': OLDWEB_PHRASES_END,
-        # 'jewish_mode': JEWISH_PHRASES_END,
     }
     phrases = end_phrases_map.get(mode_to_disable, ["Режим отключен."])
     end_text = random.choice(phrases) if isinstance(phrases, list) else "Режим отключен."
