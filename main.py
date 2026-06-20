@@ -8553,15 +8553,8 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
     b_data = board_data[board_id]
     text_map = b_data.get('start_message_map', {})
     start_text = text_map.get(lang, b_data.get('start_message_text', "Help info missing."))
-    await message.answer(start_text, parse_mode="HTML", disable_web_page_preview=True)
     await _send_thread_info_if_applicable(message, board_id)
-    if lang == 'en':
-        menu_text = "👇 <b>Quick Menu:</b>"
-    elif lang == 'jp':
-        menu_text = "👇 <b>クイックメニュー:</b>"
-    else:
-        menu_text = "👇 <b>Быстрое меню:</b>"
-    await message.answer(menu_text, reply_markup=get_quick_menu_keyboard(board_id, stream=stream), parse_mode="HTML")
+    await message.answer(start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
     try:
         await message.delete()
     except TelegramBadRequest:
@@ -13346,6 +13339,7 @@ async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 
         [InlineKeyboardButton(text="📊 Статистика", callback_data=f"stats_{board_id}"),
          InlineKeyboardButton(text="🤬 Стоп-слова", callback_data=f"filter_list_{board_id}")],
         [InlineKeyboardButton(text="🚫 Ограничения (Баны/Муты)", callback_data=f"restrictions_{board_id}")],
+        [InlineKeyboardButton(text="🔒 Локдаун (ВКЛ/ВЫКЛ)", callback_data="admin_menu:lockdown")],
         [InlineKeyboardButton(text="💾 Сохранить Бэкап", callback_data="save_all")],
     ])
     await message.answer(final_text, reply_markup=keyboard, parse_mode="HTML")
@@ -16983,6 +16977,95 @@ async def process_report_action(callback: types.CallbackQuery, board_id: str | N
             
         await callback.message.edit_text(callback.message.html_text + f"\n\n<i>🔨 Автор забанен на {duration_hours}ч модератором.</i>", parse_mode="HTML")
         await callback.answer(f"Пользователь забанен на {duration_hours}ч")
+
+
+
+@dp.callback_query(F.data.startswith("admin_menu:"))
+async def process_admin_menu(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
+    if not board_id or not is_admin(callback.from_user.id, board_id):
+        await callback.answer("У вас нет прав.", show_alert=True)
+        return
+        
+    action = callback.data.split(":")[1]
+    b_data = board_data[board_id]
+    
+    if action == "lockdown":
+        from common.database import set_system_setting
+        is_lockdown = b_data.get('lockdown', False)
+        # toggle it
+        new_val = not is_lockdown
+        b_data['lockdown'] = new_val
+        await set_system_setting('lockdown_enabled', "true" if new_val else "false")
+        
+        # update keyboard
+        # we can just answer it for now
+        status = "ВКЛЮЧЕН" if new_val else "ВЫКЛЮЧЕН"
+        await callback.answer(f"Локдаун {status}", show_alert=True)
+        # Ideally we should edit the markup but the keyboard is statically built. Let's just answer.
+
+
+
+def get_help_keyboard(category: str, board_id: str, stream: str = 'ru') -> InlineKeyboardMarkup:
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    
+    if category == "main":
+        if lang == 'en':
+            builder.button(text="🛠 Moderation", callback_data="help:mod")
+            builder.button(text="🎲 Fun", callback_data="help:fun")
+            builder.button(text="⚙️ Settings", callback_data="help:settings")
+            builder.button(text="💬 Chat", callback_data="help:chat")
+        elif lang == 'jp':
+            builder.button(text="🛠 モデレーション", callback_data="help:mod")
+            builder.button(text="🎲 遊び", callback_data="help:fun")
+            builder.button(text="⚙️ 設定", callback_data="help:settings")
+            builder.button(text="💬 チャット", callback_data="help:chat")
+        else:
+            builder.button(text="🛠 Модерация", callback_data="help:mod")
+            builder.button(text="🎲 Развлечения", callback_data="help:fun")
+            builder.button(text="⚙️ Настройки", callback_data="help:settings")
+            builder.button(text="💬 Общение", callback_data="help:chat")
+        builder.adjust(2, 2)
+    else:
+        btn_back = "⬅️ Back" if lang == 'en' else ("⬅️ 戻る" if lang == 'jp' else "⬅️ Назад")
+        builder.button(text=btn_back, callback_data="help:main")
+        builder.adjust(1)
+    return builder.as_markup()
+
+@dp.callback_query(F.data.startswith("help:"))
+async def process_help_menu(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    cat = callback.data.split(":")[1]
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    b_data = board_data[board_id]
+    
+    if cat == "main":
+        text_map = b_data.get('start_message_map', {})
+        text = text_map.get(lang, b_data.get('start_message_text', "Help info missing."))
+    elif cat == "mod":
+        if lang == 'en': text = "<b>🛠 Moderation:</b>\n<code>/admin</code> - Admin Panel\n<code>/ban &lt;id&gt;</code> - Ban user\n<code>/mute &lt;id&gt;</code> - Mute user\n<code>/wipe &lt;id&gt;</code> - Delete messages"
+        elif lang == 'jp': text = "<b>🛠 モデレーション:</b>\n<code>/admin</code> - 管理パネル\n<code>/ban &lt;id&gt;</code> - バン\n<code>/mute &lt;id&gt;</code> - ミュート\n<code>/wipe &lt;id&gt;</code> - メッセージ削除"
+        else: text = "<b>🛠 Модерация:</b>\n<code>/admin</code> - Панель управления\n<code>/ban &lt;id&gt;</code> - Бан\n<code>/mute &lt;id&gt;</code> - Мут\n<code>/wipe &lt;id&gt;</code> - Очистка"
+    elif cat == "fun":
+        if lang == 'en': text = "<b>🎲 Fun:</b>\n<code>/roll</code> - Random 1-100\n<code>/anime</code> - Anime pic\n<code>/passport</code> - User profile\n<code>/schizo</code> - Schizo mode"
+        elif lang == 'jp': text = "<b>🎲 遊び:</b>\n<code>/roll</code> - ルーレット\n<code>/anime</code> - アニメ画像\n<code>/passport</code> - プロフィール\n<code>/schizo</code> - 統合失調症モード"
+        else: text = "<b>🎲 Развлечения:</b>\n<code>/roll</code> - Рулетка\n<code>/anime</code> - Аниме-пикча\n<code>/passport</code> - Паспорт\n<code>/schizo</code> - Шизо-мод"
+    elif cat == "settings":
+        if lang == 'en': text = "<b>⚙️ Settings:</b>\n<code>/nsfw</code> - NSFW Spoilers\n<code>/hide</code> - Word filter\n<code>/togglegif</code> - Hide GIFs"
+        elif lang == 'jp': text = "<b>⚙️ 設定:</b>\n<code>/nsfw</code> - NSFW スポイラー\n<code>/hide</code> - 単語フィルター\n<code>/togglegif</code> - GIF非表示"
+        else: text = "<b>⚙️ Настройки:</b>\n<code>/nsfw</code> - Спойлеры на NSFW\n<code>/hide</code> - Фильтр слов\n<code>/togglegif</code> - Скрыть гифки"
+    elif cat == "chat":
+        if lang == 'en': text = "<b>💬 Chat:</b>\n<code>/whisper</code> - Secret reply\n<code>/ans</code> - Anonymous reply\n<code>/report</code> - Report post"
+        elif lang == 'jp': text = "<b>💬 チャット:</b>\n<code>/whisper</code> - 秘密の返信\n<code>/ans</code> - 匿名返信\n<code>/report</code> - 通報する"
+        else: text = "<b>💬 Общение:</b>\n<code>/whisper</code> - Шепот\n<code>/ans</code> - Анонимный ответ\n<code>/report</code> - Пожаловаться"
+        
+    try:
+        await callback.message.edit_text(text, reply_markup=get_help_keyboard(cat, board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+    except Exception:
+        pass
+    await callback.answer()
 
 
 async def main():
