@@ -77,7 +77,8 @@ def probe_database():
     print("-" * 40)
     for table in tables:
         try:
-            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            safe_table = table.replace('"', '""')
+            cur.execute(f'SELECT COUNT(*) FROM "{safe_table}"')
             count = cur.fetchone()[0]
             print(f"{table:<25} | {count:<10}")
             total_rows += count
@@ -143,8 +144,9 @@ def probe_database():
     
     for table, col in tables_to_check.items():
         if table in tables:
+            safe_table = table.replace('"', '""')
             cur.execute(f"""
-                SELECT COUNT(*) FROM {table} t
+                SELECT COUNT(*) FROM "{safe_table}" t
                 LEFT JOIN Posts p ON t.{col} = p.post_num
                 WHERE p.post_num IS NULL
             """)
