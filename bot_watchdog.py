@@ -411,9 +411,10 @@ def main() -> int:
 
                 time.sleep(POLL_SEC)
         except KeyboardInterrupt:
+            log("Supervisor received KeyboardInterrupt. Exiting cleanly.")
             _kill_tree(child, "supervisor_keyboard_interrupt")
             _close_child_log(child)
-            raise
+            return 0
         except Exception as exc:
             log(f"Supervisor loop error: {type(exc).__name__}: {exc}")
             _kill_tree(child, "supervisor_exception")
