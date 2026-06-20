@@ -17049,9 +17049,9 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
         elif lang == 'jp': text = "<b>🛠 モデレーション:</b>\n<code>/admin</code> - 管理パネル\n<code>/ban &lt;id&gt;</code> - バン\n<code>/mute &lt;id&gt;</code> - ミュート\n<code>/wipe &lt;id&gt;</code> - メッセージ削除"
         else: text = "<b>🛠 Модерация:</b>\n<code>/admin</code> - Панель управления\n<code>/ban &lt;id&gt;</code> - Бан\n<code>/mute &lt;id&gt;</code> - Мут\n<code>/wipe &lt;id&gt;</code> - Очистка"
     elif cat == "fun":
-        if lang == 'en': text = "<b>🎲 Fun:</b>\n<code>/roll</code> - Random 1-100\n<code>/anime</code> - Anime pic\n<code>/passport</code> - User profile\n<code>/schizo</code> - Schizo mode"
-        elif lang == 'jp': text = "<b>🎲 遊び:</b>\n<code>/roll</code> - ルーレット\n<code>/anime</code> - アニメ画像\n<code>/passport</code> - プロフィール\n<code>/schizo</code> - 統合失調症モード"
-        else: text = "<b>🎲 Развлечения:</b>\n<code>/roll</code> - Рулетка\n<code>/anime</code> - Аниме-пикча\n<code>/passport</code> - Паспорт\n<code>/schizo</code> - Шизо-мод"
+        if lang == 'en': text = "<b>🎲 Fun:</b>\n<code>/roll</code> - Random 1-100\n<code>/wordcloud</code> - Word cloud\n<code>/passport</code> - Profile\n<code>/schizo</code> - Schizo mode"
+        elif lang == 'jp': text = "<b>🎲 遊び:</b>\n<code>/roll</code> - ルーレット\n<code>/wordcloud</code> - ワードクラウド\n<code>/passport</code> - プロフ\n<code>/schizo</code> - 統合失調症モード"
+        else: text = "<b>🎲 Развлечения:</b>\n<code>/wordcloud</code> - Облако слов\n<code>/roll</code> - Рулетка\n<code>/anime</code> - Аниме-пикча\n<code>/passport</code> - Паспорт\n<code>/schizo</code> - Шизо-мод"
     elif cat == "settings":
         if lang == 'en': text = "<b>⚙️ Settings:</b>\n<code>/nsfw</code> - NSFW Spoilers\n<code>/hide</code> - Word filter\n<code>/togglegif</code> - Hide GIFs"
         elif lang == 'jp': text = "<b>⚙️ 設定:</b>\n<code>/nsfw</code> - NSFW スポイラー\n<code>/hide</code> - 単語フィルター\n<code>/togglegif</code> - GIF非表示"
