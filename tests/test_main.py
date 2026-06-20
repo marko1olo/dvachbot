@@ -95,3 +95,46 @@ class TestGetRealIp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+from Dubsite_tgach.main import format_bayan_label
+from unittest.mock import patch
+
+class TestFormatBayanLabel(unittest.TestCase):
+    @patch('Dubsite_tgach.main.random.choice')
+    def test_bayan_low(self, mock_choice):
+        mock_choice.return_value = "Mocked_Low"
+        # 2 and 3 should be 'low'
+        self.assertEqual(format_bayan_label(2), "♻️ Mocked_Low (2)")
+        self.assertEqual(format_bayan_label(3), "♻️ Mocked_Low (3)")
+        # Make sure the phrases are chosen properly by looking at what was passed
+        self.assertEqual(len(mock_choice.call_args[0][0]), 3) # "bayan_low" array in RU has 3 items
+
+    @patch('Dubsite_tgach.main.random.choice')
+    def test_bayan_mid(self, mock_choice):
+        mock_choice.return_value = "Mocked_Mid"
+        # 4 to 10 should be 'mid'
+        self.assertEqual(format_bayan_label(4), "♻️ Mocked_Mid (4)")
+        self.assertEqual(format_bayan_label(10), "♻️ Mocked_Mid (10)")
+
+    @patch('Dubsite_tgach.main.random.choice')
+    def test_bayan_high(self, mock_choice):
+        mock_choice.return_value = "Mocked_High"
+        # > 10 should be 'high'
+        self.assertEqual(format_bayan_label(11), "♻️ Mocked_High (11)")
+        self.assertEqual(format_bayan_label(100), "♻️ Mocked_High (100)")
+
+    def test_bayan_count_zero_or_one(self):
+        # 0 or 1 should return empty string
+        self.assertEqual(format_bayan_label(0), "")
+        self.assertEqual(format_bayan_label(1), "")
+        self.assertEqual(format_bayan_label(-1), "")
+
+    @patch('Dubsite_tgach.main.random.choice')
+    def test_bayan_language_fallback(self, mock_choice):
+        mock_choice.return_value = "Mocked_Eng"
+        # English translations are present
+        res = format_bayan_label(5, lang='en')
+        self.assertEqual(res, "♻️ Mocked_Eng (5)")
+        # Assuming the fallback logic works for a missing lang
+        res = format_bayan_label(5, lang='missing_lang')
+        self.assertEqual(res, "♻️ Mocked_Eng (5)")
