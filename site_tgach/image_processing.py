@@ -512,27 +512,6 @@ def _create_thumbnail_sync_in_memory(image_bytes: bytes) -> bytes | None:
     except Exception as e:
         logger.error(f"Thumbnail error: {e}")
         return None
-async def upload_to_telegraph(file_bytes: bytes) -> str | None:
-    """Загрузка на Telegra.ph (анонимный CDN)"""
-    try:
-        # Правильный способ проброса local_address через транспорт
-        transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
-        async with httpx.AsyncClient(transport=transport, timeout=30.0, verify=False) as client:
-            files = {"file": ("file.jpg", file_bytes, "image/jpeg")}
-            resp = await client.post("https://telegra.ph/upload", files=files)
-            
-            if resp.status_code == 200:
-                res_json = resp.json()
-                if isinstance(res_json, list) and len(res_json) > 0:
-                    link = f"https://telegra.ph{res_json[0]['src']}"
-                    logger.info(f"☁️ Telegra.ph Success: {link}")
-                    return link
-            
-            logger.warning(f"☁️ Telegra.ph Failed: HTTP {resp.status_code} | {resp.text[:100]}")
-    except Exception as e:
-        logger.error(f"☁️ Telegra.ph Error: {e}")
-    return None
-
 async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filename: str, related_id: str = None, thumb_bytes: bytes = None):
     # 1. Теневой канал (Shadow)
     try:
@@ -576,23 +555,6 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
                 await add_file_mirror(related_id, 'tg_shadow', shadow_thumb_fid)
     except Exception as e:
         logger.error(f"Shadow task error: {e}")
-
-    # ПЕРВООЧЕРЕДНАЯ ЗАДАЧА: Превью в Телеграф
-    # Используем переданные байты или генерируем, если их нет, но файл - картинка
-    # --- ЗАКОММЕНТИРОВАН ЭТОТ БЛОК ---
-    # thumb_data = thumb_bytes
-    # if not thumb_data and filename.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-    #     thumb_data = await create_thumbnail_in_memory(file_bytes)
-    #
-    # if thumb_data:
-    #     tg_link = await upload_to_telegraph(thumb_data)
-    #     if tg_link:
-    #         # Ссылка сохраняется как зеркало для превью (related_id), 
-    #         # а если его нет (одиночная картинка) - для самого файла.
-    #         target_id = related_id if related_id else file_id
-    #         await add_file_mirror(target_id, 'telegraph', tg_link)
-    #         logger.info(f"🚀 Telegra.ph mirror saved for {target_id[:10]}: {tg_link}")
-    # -------------------------------
 
     # 2. Логика зеркал (Catbox + HF)
     # Всегда добавляем превью в очередь HF, так как они маленькие
