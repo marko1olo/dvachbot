@@ -2308,22 +2308,22 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
             tid = f.get('thumbnail_file_id')
             if tid: all_fids.append(tid)
         
+        if 'poll_data' in p.get('content', {}):
+            poll_post_ids.append(p['id'])
+
         if p.get('latest_replies'):
             for r in p['latest_replies']:
                 all_post_ids.append(r['id'])
-                r_files = r.get('content', {}).get('files', [])
+                r_content = r.get('content', {})
+
+                r_files = r_content.get('files', [])
                 for rf in r_files:
                     rfid = rf.get('original_file_id')
                     if rfid: all_fids.append(rfid)
                     rtid = rf.get('thumbnail_file_id')
                     if rtid: all_fids.append(rtid)
-        
-        if 'poll_data' in p.get('content', {}):
-            poll_post_ids.append(p['id'])
-        
-        if p.get('latest_replies'):
-            for r in p['latest_replies']:
-                if 'poll_data' in r.get('content', {}):
+
+                if 'poll_data' in r_content:
                     poll_post_ids.append(r['id'])
     
     dupe_map, blur_map, mirror_map = {}, {}, {}
@@ -2702,21 +2702,22 @@ async def enrich_heavy_data(posts: List[dict]):
             tid = f.get('thumbnail_file_id')
             if tid: all_fids.append(tid)
         
+        if 'poll_data' in p.get('content', {}):
+            poll_post_ids.append(p['id'])
+
         if p.get('latest_replies'):
             for r in p['latest_replies']:
                 all_post_ids.append(r['id'])
-                r_files = r.get('content', {}).get('files', [])
+                r_content = r.get('content', {})
+
+                r_files = r_content.get('files', [])
                 for rf in r_files:
                     rfid = rf.get('original_file_id')
                     if rfid: all_fids.append(rfid)
                     rtid = rf.get('thumbnail_file_id')
                     if rtid: all_fids.append(rtid)
 
-        if 'poll_data' in p.get('content', {}):
-            poll_post_ids.append(p['id'])
-        if p.get('latest_replies'):
-            for r in p['latest_replies']:
-                if 'poll_data' in r.get('content', {}):
+                if 'poll_data' in r_content:
                     poll_post_ids.append(r['id'])
 
     # Параллельные запросы
