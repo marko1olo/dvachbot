@@ -6440,6 +6440,10 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     Адаптировано под безопасную работу с БД (db_lock).
     """
     if not board_id: return
+
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     user_id = message.from_user.id
     
@@ -8564,6 +8568,10 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
         pass
 @dp.message(Command("roll"))
 async def cmd_roll(message: types.Message, board_id: str | None, stream: str = 'ru'):
+
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
     if not board_id: return
     result = random.randint(1, 100)
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -8603,6 +8611,10 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
         await message.answer(f"Ошибка: {e}")
 @dp.message(Command("slavaukraine", "slava_ukraine", "ukraine", "ukraina", "hohol"))
 async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream: str = 'ru'):
+
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
     if not board_id: return
     if board_id == 'int':
         try:
@@ -8679,6 +8691,10 @@ async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream:
             print(f"Не удалось удалить сообщение {message.message_id} в cmd_slavaukraine: {e}")
 @dp.message(Command("gopnik", "blyat", "gopota"))
 async def cmd_gopnik(message: types.Message, board_id: str | None, stream: str = 'ru'):
+
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
     if not board_id: return
     if board_id == 'int': # Отключаем на int
         try: await message.delete()
@@ -8722,6 +8738,10 @@ async def cmd_gopnik(message: types.Message, board_id: str | None, stream: str =
     except TelegramBadRequest: pass
 @dp.message(Command("schizo", "shiza", "shizo", "shiz", "durka"))
 async def cmd_schizo(message: types.Message, board_id: str | None, stream: str = 'ru'):
+
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
     if not board_id: return
     if board_id == 'int':
         try: await message.delete()
@@ -8980,6 +9000,10 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
         await enqueue_board_message(board_id, {"recipients": recipients, "content": content, "post_num": pnum, "board_id": board_id})
 @dp.message(Command("kurwa", "polish", "poland"))
 async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 'ru'):
+
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
     if not board_id: return
     if board_id == 'int':
         try:
@@ -9027,6 +9051,10 @@ async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 
         pass
 @dp.message(Command("wh40k", "waha", "warhammer", "warhamer"))
 async def cmd_wh40k(message: types.Message, board_id: str | None, stream: str = 'ru'):
+
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
     if not board_id: return
     b_data = board_data[board_id]
     if not await check_cooldown(message, board_id):
@@ -12208,8 +12236,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
         try:
             await message.bot.send_message(
                 admin_id,
-                f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\nОт: <code>{sender_nick}</code>
-Кому: <code>{target_nick}</code>\nТекст: <i>{escape_html(text)}</i>",
+                f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\\nОт: <code>{sender_nick}</code>\\nКому: <code>{target_nick}</code>\\nТекст: <i>{escape_html(text)}</i>",
                 parse_mode="HTML"
             )
         except:
@@ -12303,6 +12330,10 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
 
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
+
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
     if not board_id: return
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -12363,6 +12394,10 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
     except: pass
 @dp.message(Command("anime", "nya", "kawai", "kawaii"))
 async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 'ru'):
+
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
     if not board_id: return
     b_data = board_data[board_id]
     if not await check_cooldown(message, board_id):
@@ -14674,6 +14709,10 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
             pending_edit_tasks[post_num] = new_task
 @dp.message(Command("roll", "roulette", "ruletka", "rulet"))
 async def cmd_roll(message: types.Message, board_id: str | None, stream: str = 'ru'):
+
+
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
 
     if not board_id: 
         try: await message.delete()
