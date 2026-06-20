@@ -144,8 +144,18 @@ async def get_country_by_ip(ip: str) -> str:
             import geoip2.database
             db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
             if os.path.exists(db_full_path):
-                GEOIP_READER = geoip2.database.Reader(db_full_path)
-        except:
+                # Using a lock to prevent multiple initializations concurrent loading
+                global _geoip_init_lock
+                if "_geoip_init_lock" not in globals():
+                    _geoip_init_lock = asyncio.Lock()
+
+                async with _geoip_init_lock:
+                    if GEOIP_READER is None:
+                        # Run initialization in a thread pool to avoid blocking the event loop
+                        GEOIP_READER = await asyncio.to_thread(geoip2.database.Reader, db_full_path)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to load GeoIP DB: {e}")
             pass
 
     if GEOIP_READER:
