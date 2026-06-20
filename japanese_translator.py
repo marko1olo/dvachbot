@@ -8,7 +8,7 @@ from urllib.parse import urlparse, urlunparse, quote, unquote
 import aiohttp
 import socket
 from dotenv import load_dotenv
-from typing import Optional, List, Dict, Callable, Awaitable
+from typing import Optional, List, Dict, Awaitable
 from aiohttp import ClientTimeout
 import json
 import time
