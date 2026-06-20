@@ -39,7 +39,6 @@ import random
 import re
 import secrets
 import html
-import shutil
 import signal
 import subprocess
 import sys
