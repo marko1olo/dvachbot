@@ -140,13 +140,22 @@ async def get_country_by_ip(ip: str) -> str:
         return "XX"
     
     if GEOIP_READER is None:
-        try:
-            import geoip2.database
-            db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
-            if os.path.exists(db_full_path):
-                GEOIP_READER = geoip2.database.Reader(db_full_path)
-        except:
-            pass
+        def _init_reader():
+            try:
+                import geoip2.database
+                db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
+                if os.path.exists(db_full_path):
+                    return geoip2.database.Reader(db_full_path)
+            except:
+                pass
+            return None
+
+        if getattr(get_country_by_ip, '_init_lock', None) is None:
+            get_country_by_ip._init_lock = asyncio.Lock()
+
+        async with get_country_by_ip._init_lock:
+            if GEOIP_READER is None:
+                GEOIP_READER = await asyncio.to_thread(_init_reader)
 
     if GEOIP_READER:
         try:
