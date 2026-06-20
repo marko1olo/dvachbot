@@ -12245,7 +12245,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
         return
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        await message.answer("❌ Использование: /whisper <текст>")
+        await message.answer("❌ Использование: <code>/whisper &lt;текст&gt;</code>", parse_mode="HTML")
         return
     text = parts[1]
     
