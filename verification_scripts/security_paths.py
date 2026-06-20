@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 SECURITY_REPORTS_DIR = ROOT / "security_reports"
 REDACTED_ARTIFACTS_DIR = SECURITY_REPORTS_DIR / "redacted_artifacts"
 SECRET_ARTIFACT_INVENTORY = SECURITY_REPORTS_DIR / "secret_artifact_inventory.json"

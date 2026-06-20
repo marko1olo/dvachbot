@@ -24,6 +24,8 @@ import random
 import os
 import json
 import time
+import html as html_lib
+import warnings
 import logging
 import traceback
 from datetime import datetime
@@ -32,6 +34,8 @@ from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
+
+warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 # Импорты проекта
 from warhammer_mode import warhammer_transform
@@ -63,6 +67,24 @@ logger = logging.getLogger("importer")
 
 PROXY_URL = "http://127.0.0.1:10808"
 RE_LINK_REF = re.compile(r'(?:>>|&gt;&gt;)(\d+)')
+
+_NORMALIZATION_REPLACEMENTS = {
+    r'двач': 'тгач',
+    r'харкач': 'тгач',
+    r'сосач': 'тгач',
+    r'двачер': 'тгачер',
+    r'двощ': 'тгач',
+    r'абу': 'админ',
+    r'mailru': 'tganon',
+    r'2ch': 'tgach',
+    r'2ch.su': 'tgach.site',
+    r'2ch.org': 'tgach.site',
+    r'2chan': 'tgach',
+    r'4chan': 'tgach',
+    r'4chan.org': 'tgach.site'
+}
+_COMPILED_NORMALIZATION_REGEXES = [(re.compile(k, flags=re.IGNORECASE), v) for k, v in _NORMALIZATION_REPLACEMENTS.items()]
+
 
 class MemoryUploadFile:
     """
@@ -117,30 +139,12 @@ class ThreadImporter:
     def _normalize_html_sync(self, raw_html: str) -> str:
         if not raw_html: return ""
         
-        import html as html_lib
         # FIX: Unescape first to let BeautifulSoup see tags properly
         raw_html = html_lib.unescape(raw_html)
 
-        replacements = {
-            r'двач': 'тгач',
-            r'харкач': 'тгач',
-            r'сосач': 'тгач',
-            r'двачер': 'тгачер',
-            r'двощ': 'тгач',
-            r'абу': 'админ',
-            r'mailru': 'tganon',
-            r'2ch': 'tgach',
-            r'2ch.su': 'tgach.site',
-            r'2ch.org': 'tgach.site',
-            r'2chan': 'tgach',
-            r'4chan': 'tgach',
-            r'4chan.org': 'tgach.site'
-        }
-        for pattern, replacement in replacements.items():
-            raw_html = re.sub(pattern, replacement, raw_html, flags=re.IGNORECASE)
+        for pattern, replacement in _COMPILED_NORMALIZATION_REGEXES:
+            raw_html = pattern.sub(replacement, raw_html)
         
-        import warnings
-        warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
         
         try:
             soup = BeautifulSoup(raw_html, "lxml")
