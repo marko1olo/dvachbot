@@ -181,10 +181,7 @@ except ImportError:
     sys.exit(1)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 time.sleep(2)
-import deanonymizer
-from deanonymizer import (
-    generate_deanon_info,
-)
+
 from help_text import (
     HELP_TEXT_COMMANDS, HELP_TEXT_EN_COMMANDS, HELP_TEXT_JP_COMMANDS,
     generate_boards_list,
