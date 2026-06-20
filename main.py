@@ -8007,6 +8007,8 @@ async def cmd_delete_thread(message: types.Message, board_id: str | None, stream
         await message.answer(msg)
         await message.delete()
         return
+    wait_txt = "🧹 Удаляю тред, процесс запущен (может занять время)..." if lang != 'en' else "🧹 Deleting thread, please wait..."
+    wait_msg = await message.answer(wait_txt)
     await delete_thread_atomic(message.bot, board_id, thread_id, notify_users=True, initiator_id=user_id)
     if lang == 'en':
         confirm = "Thread deleted, users moved to main."
@@ -8014,6 +8016,8 @@ async def cmd_delete_thread(message: types.Message, board_id: str | None, stream
         confirm = "スレッドを削除し、ユーザーをメインに移動しました。"
     else:
         confirm = "Тред успешно удалён, пользователи переведены на главную."
+    try: await wait_msg.delete()
+    except Exception: pass
     await message.answer(confirm, parse_mode="HTML")
     await message.delete()
 @dp.message(Command("summarize", "sum", "summary", "samamri", "sammary"))
@@ -12384,6 +12388,9 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
                 return
             b_data.setdefault('last_info_command_time', {})[user_id] = current_time
     b_data = board_data[board_id]
+    
+    wait_txt = "📊 Собираю статистику, вычисляю активность..." if lang != 'en' else "📊 Gathering statistics..."
+    wait_msg = await message.answer(wait_txt)
     real_users_active = [uid for uid in b_data['users']['active'] if uid > 0]
     total_users_on_board = len(real_users_active)
     total_posts_on_board = b_data.get('board_post_count', 0)
@@ -12425,6 +12432,8 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
     except TelegramForbiddenError:
         await message.answer(unlock)
     except Exception: pass
+    try: await wait_msg.delete()
+    except Exception: pass
     try: await message.delete()
     except Exception: pass
 
@@ -12435,6 +12444,9 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
 
     from common.db_pool import get_pool, db_lock
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    
+    wait_txt = "🏆 Анализирую базу данных для построения топов..." if lang != 'en' else "🏆 Computing leaderboards..."
+    wait_msg = await message.answer(wait_txt)
     
     top_posters = []
     top_rich = []
@@ -12485,6 +12497,7 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
     text += f"{cat2}\n<pre>{format_table(top_rich, ' ₽')}</pre>"
     
     try:
+        await wait_msg.delete()
         await message.answer(text, parse_mode="HTML")
     except Exception: pass
 
@@ -14175,6 +14188,8 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
     await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) за последние {minutes} минут?", parse_mode="HTML", reply_markup=kb)
 
 async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: int, minutes: int):
+    try: await message.edit_text("⏳ Сжигаю посты (процесс запущен, может занять несколько минут)...", parse_mode="HTML")
+    except Exception: pass
     deleted_count = await delete_user_posts(bot, target_id, minutes, board_id)
     await log_global_event('bot', f"🧹 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на /{board_id}/ (глубина {minutes}м)")
     anon_name = generate_anon_name(target_id)
@@ -14337,6 +14352,8 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
         await message.answer(err)
         await message.delete()
         return
+    wait_txt = "🧹 Сношу посты этого юзера..." if lang != 'en' else "🧹 Wiping posts..."
+    wait_msg = await message.answer(wait_txt)
     tasks = []
     for recipient_id, message_id in all_copies:
         if recipient_id != author_id:
@@ -14351,6 +14368,8 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
         report = f"👻 投稿 #{post_num} をシャドウ削除しました。\n削除数: {deleted_count} / {len(all_copies) - 1}."
     else:
         report = f"👻 Пост #{post_num} был 'теневым' образом удален.\nУдалено копий: {deleted_count} из {len(all_copies) - 1}."
+    try: await wait_msg.delete()
+    except Exception: pass
     await message.answer(report)
     try:
         await message.delete()
