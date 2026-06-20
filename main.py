@@ -27,7 +27,10 @@ import faulthandler
 import gc
 import gzip
 import psutil
-import ujson as json
+try:
+    import ujson as json
+except ImportError:
+    import json
 import logging
 import os
 import tracemalloc
@@ -17151,7 +17154,10 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
 
 
 import io
-import ujson as json
+try:
+    import ujson as json
+except ImportError:
+    import json
 import re
 import time
 from wordcloud import WordCloud
