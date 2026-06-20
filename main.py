@@ -17160,8 +17160,12 @@ except ImportError:
     import json
 import re
 import time
-from wordcloud import WordCloud
-import matplotlib.pyplot as plt
+try:
+    from wordcloud import WordCloud
+    HAS_WORDCLOUD = True
+except ImportError:
+    WordCloud = None
+    HAS_WORDCLOUD = False
 
 STOP_WORDS = set([
     'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то', 
@@ -17189,6 +17193,10 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
     
     try: asyncio.create_task(delete_message_after_delay(message, 5))
     except Exception: pass
+    
+    if not HAS_WORDCLOUD or not GRAPH_LIBS_AVAILABLE:
+        await message.answer("❌ Компоненты WordCloud или Matplotlib не установлены.")
+        return
     
     wait_msg = "⏳ Собираю слова за последние 24 часа..."
     if lang == 'en': wait_msg = "⏳ Gathering words for the last 24 hours..."
