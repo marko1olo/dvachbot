@@ -13,7 +13,7 @@ from site_tgach.huggingface import upload_to_hf
 from site_tgach.mtproto_client import upload_file_mtproto
 from fastapi import UploadFile, HTTPException
 from PIL import Image
-#from site_tgach.neuro_moderator import check_image_content
+
 from common.bot_pool import global_bot_pool 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
@@ -425,8 +425,8 @@ async def process_and_upload_image(
         related_id=result_data['thumbnail_file_id']
     ))
     
-    #if thumbnail_bytes:
-       #asyncio.create_task(check_image_content(thumbnail_bytes, result_data['original_file_id']))
+
+
 
     return result_data
 async def create_thumbnail_in_memory(image_bytes: bytes) -> bytes | None:

@@ -57,7 +57,7 @@ from site_tgach.zeroxzero import is_0x0_available, upload_url_to_0x0, upload_byt
 from site_tgach.mtproto_client import upload_file_mtproto
 from fastapi import UploadFile, HTTPException
 from PIL import Image, ImageOps  
-#from site_tgach.neuro_moderator import check_image_content
+
 from common.bot_pool import global_bot_pool 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
@@ -472,8 +472,8 @@ async def process_and_upload_image(
         thumb_bytes=thumbnail_bytes
     ))
     
-    #if thumbnail_bytes:
-       #asyncio.create_task(check_image_content(thumbnail_bytes, result_data['original_file_id']))
+
+
 
     return result_data
 _thumb_process_pool = None
