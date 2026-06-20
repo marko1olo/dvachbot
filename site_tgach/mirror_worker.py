@@ -127,12 +127,12 @@ async def _process_single_task(task):
             file_info = await bot.get_file(file_id)
             fresh_file_id = file_info.file_id 
             
-            if file_info.file_path:
-                _, ext = os.path.splitext(file_info.file_path)
+            if getattr(file_info, 'file_path', None):
+                _, ext = os.path.splitext(getattr(file_info, 'file_path', ''))
                 if ext: file_ext = ext
 
             if public_safe_bot:
-                tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+                tg_url = f"https://api.telegram.org/file/bot{bot.token}/{getattr(file_info, 'file_path', '')}"
                 if mirror_type == 'catbox':
                     success_link = await upload_url_to_catbox(tg_url)
                 elif mirror_type == '0x0':
@@ -174,11 +174,11 @@ async def _process_single_task(task):
                     logger.warning(f"⚠️ MTProto failed for {file_id[:10]}. Trying HTTP Fallback...")
                     try:
                         # Получаем путь, если его нет (или если первый запрос упал)
-                        if not file_info or not file_info.file_path: # <--- FIX: Безопасная проверка
+                        if not file_info or not getattr(file_info, 'file_path', None):
                             file_info = await bot.get_file(fresh_file_id)
                         
-                        if file_info and file_info.file_path:
-                            dl_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+                        if file_info and getattr(file_info, 'file_path', None):
+                            dl_url = f"https://api.telegram.org/file/bot{bot.token}/{getattr(file_info, 'file_path', '')}"
                             
                             transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
                             async with httpx.AsyncClient(timeout=60.0, verify=False, transport=transport) as client:
