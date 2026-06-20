@@ -1973,6 +1973,13 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
                     await chat_obj.answer("⚠️ Telegram отклонил запрос. Попробуй ещё раз.", parse_mode=None)
             except Exception:
                 pass
+                
+        # Always clear locks if a command aborted due to BadRequest
+        user_id = chat_obj.from_user.id if chat_obj else None
+        if user_id:
+            user_spam_locks.pop(user_id, None)
+            generate_locks.pop(user_id, None)
+            
         return True
     
     # --- Any other unhandled exception ---
@@ -2005,6 +2012,15 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
                     await chat_obj.answer("⚠️ Произошла ошибка при выполнении команды.\nРазработчик уже уведомлен.", parse_mode=None)
                 except Exception:
                     pass
+            
+            # Always clear locks if a command crashed!
+            user_id = chat_obj.from_user.id if chat_obj else None
+            if not user_id and hasattr(update, "callback_query") and update.callback_query:
+                user_id = update.callback_query.from_user.id
+            if user_id:
+                user_spam_locks.pop(user_id, None)
+                generate_locks.pop(user_id, None)
+
         return True
 def is_admin(uid: int, board_id: str) -> bool:
 
