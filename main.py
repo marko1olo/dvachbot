@@ -10189,9 +10189,11 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
     Надежно обрабатывает все типы медиа, отправляя сам файл, а не плейсхолдер.
     """
     try:
-        archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
+        bot_instance = bots.get(board_id)
+        archive_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
+        
         if not archive_bot:
-            print(f"⛔ Ошибка: бот для постинга ('{ARCHIVE_POSTING_BOT_ID}') не найден.")
+            print(f"⛔ Ошибка: бот для постинга архивов не найден.")
             return
 
         config = SPECIAL_NUMERALS_CONFIG[level]
@@ -16739,6 +16741,95 @@ def _write_text_file_atomic(path: str, text: str, tmp_path: str) -> None:
     os.replace(tmp_path, path)
 
 
+async def setup_bot_commands(bots: dict):
+    from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+    
+    user_commands = [
+        BotCommand(command="start", description="Запустить бота"),
+        BotCommand(command="help", description="Помощь по командам"),
+        BotCommand(command="menu", description="Главное меню"),
+        BotCommand(command="app", description="Открыть Mini App"),
+        BotCommand(command="getid", description="Узнать свой ID"),
+        BotCommand(command="whois", description="Информация о пользователе"),
+        BotCommand(command="wallet", description="Баланс кошелька"),
+        BotCommand(command="passport", description="Паспорт и статистика"),
+        BotCommand(command="threads", description="Список тредов"),
+        BotCommand(command="search", description="Поиск постов"),
+        BotCommand(command="create", description="Создать новый тред"),
+        BotCommand(command="roll", description="Рулетка/Roll"),
+        BotCommand(command="anime", description="Аниме режим"),
+        BotCommand(command="gopnik", description="Режим гопника"),
+        BotCommand(command="slavaukraine", description="Слава Украине"),
+        BotCommand(command="zaputin", description="Z-режим"),
+        BotCommand(command="schizo", description="Шиза режим"),
+        BotCommand(command="wh40k", description="Warhammer 40k"),
+        BotCommand(command="imperial", description="Имперский режим"),
+        BotCommand(command="kurwa", description="Польский режим"),
+        BotCommand(command="suka_blyat", description="Быдло-режим"),
+        BotCommand(command="active", description="Текущие режимы на доске"),
+        BotCommand(command="stop", description="Остановить режим"),
+        BotCommand(command="poll", description="Создать опрос"),
+        BotCommand(command="stats", description="Статистика доски"),
+        BotCommand(command="togglegif", description="Отключить/включить GIF"),
+        BotCommand(command="togglestickers", description="Отключить/включить стикеры"),
+        BotCommand(command="togglemedia", description="Отключить/включить медиа"),
+        BotCommand(command="summarize", description="Пересказ треда"),
+        BotCommand(command="ans", description="Задать вопрос автору поста"),
+        BotCommand(command="nsfw", description="Включить/выключить NSFW"),
+        BotCommand(command="hide", description="Скрыть конкретный пост"),
+        BotCommand(command="invite", description="Пригласить на доску"),
+        BotCommand(command="whisper", description="Анонимное сообщение")
+    ]
+    
+    admin_commands = user_commands.copy() + [
+        BotCommand(command="admin", description="Админ-панель"),
+        BotCommand(command="ban", description="Забанить юзера"),
+        BotCommand(command="unban", description="Разбанить юзера"),
+        BotCommand(command="gban", description="Глобальный бан"),
+        BotCommand(command="gunban", description="Глобальный разбан"),
+        BotCommand(command="shadowmute", description="Теневой мут"),
+        BotCommand(command="unshadowmute", description="Снять теневой мут"),
+        BotCommand(command="gshadowmute", description="Глобальный теневой мут"),
+        BotCommand(command="shadowmute_threads", description="Теневой мут на создание тредов"),
+        BotCommand(command="mute", description="Обычный мут"),
+        BotCommand(command="unmute", description="Размутить"),
+        BotCommand(command="wipe", description="Вайп всех постов юзера"),
+        BotCommand(command="del", description="Удалить пост"),
+        BotCommand(command="sdel", description="Удалить несколько постов"),
+        BotCommand(command="deletethread", description="Удалить тред"),
+        BotCommand(command="pin", description="Закрепить пост"),
+        BotCommand(command="unpin", description="Открепить пост"),
+        BotCommand(command="nuke_pins", description="Удалить все закрепления"),
+        BotCommand(command="lockdown", description="Заблокировать доску"),
+        BotCommand(command="bot_stats", description="Статистика бота"),
+        BotCommand(command="addmoney", description="Выдать деньги юзеру"),
+        BotCommand(command="airdrop", description="Раздача денег"),
+        BotCommand(command="restrict_anime", description="Ограничить аниме юзеру"),
+        BotCommand(command="deanon", description="Деанон (fake)"),
+        BotCommand(command="debug_memory", description="Статистика памяти"),
+        BotCommand(command="queues", description="Статистика очередей"),
+        BotCommand(command="graph", description="График активности"),
+        BotCommand(command="redact", description="Редактировать текст поста"),
+        BotCommand(command="troll", description="Затроллить юзера"),
+        BotCommand(command="say", description="Написать от имени бота"),
+        BotCommand(command="togglereactions", description="Включить/выключить реакции"),
+        BotCommand(command="filter", description="Фильтр слов"),
+        BotCommand(command="token", description="Сгенерировать токен"),
+        BotCommand(command="lie", description="Искажение медиа")
+    ]
+
+
+    for bot in bots.values():
+        try:
+            await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"Ошибка при установке команд: {e}")
+
 async def main():
 
     lock_file = "bot.lock"
@@ -16805,6 +16896,7 @@ async def main():
         print("⏳ Даем 1.5 секунд на инициализацию...")
         await asyncio.sleep(1.5)
         print("🚀 Запускаем polling...")
+        await setup_bot_commands(GLOBAL_BOTS)
         await dp.start_polling(
             *active_bots_list, skip_updates=False,
             allowed_updates=dp.resolve_used_update_types(),
