@@ -14,7 +14,6 @@ import json
 import time
 import hashlib
 
-from common.html_utils import escape_html
 
 PROXY_STATE = {'is_working': True}
 PROXY_STATE_LAST_FAILURE = 0
