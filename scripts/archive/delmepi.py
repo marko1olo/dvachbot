@@ -177,16 +177,16 @@ async def get_tasks(rewrite_tags=False):
     # БЕРЕМ: 'image' (старые оригиналы) и 'document' (файлы-оригиналы)
     # ИГНОРИРУЕМ: 'photo' (сжатые), 'sticker', 'video'
     target_types = ('image', 'document')
-    placeholders = f"({', '.join('?' for _ in target_types)})"
+    placeholders = ", ".join(["?"] * len(target_types))
 
     query_registry = f"""
         SELECT file_id
         FROM FileRegistry
-        WHERE file_type IN {placeholders}
+        WHERE file_type IN ({placeholders})
         AND (tags IS NULL OR phash IS NULL OR blurhash IS NULL)
     """
     if rewrite_tags:
-        query_registry = f"SELECT file_id FROM FileRegistry WHERE file_type IN {placeholders}"
+        query_registry = f"SELECT file_id FROM FileRegistry WHERE file_type IN ({placeholders})"
         
     async with conn.execute(query_registry, target_types) as cursor:
         async for row in cursor:
@@ -201,7 +201,7 @@ async def get_tasks(rewrite_tags=False):
     async with conn.execute(f"""
         SELECT DISTINCT json_extract(j.value, '$.original_file_id') AS file_id
         FROM Posts p, json_each(p.content, '$.files') j
-        WHERE json_extract(j.value, '$.type') IN {placeholders}
+        WHERE json_extract(j.value, '$.type') IN ({placeholders})
           AND json_extract(j.value, '$.original_file_id') IS NOT NULL
           AND json_extract(j.value, '$.original_file_id') NOT IN (SELECT file_id FROM FileRegistry)
     """, target_types) as cursor:
@@ -219,7 +219,7 @@ async def get_tasks(rewrite_tags=False):
     
     # Исправляем статистику: считаем не по JSON постов (там каша), а по реальным записям в реестре
     conn_stat = await aiosqlite.connect(DB_NAME)
-    async with conn_stat.execute(f"SELECT COUNT(*) FROM FileRegistry WHERE file_type IN {placeholders}", target_types) as cursor:
+    async with conn_stat.execute(f"SELECT COUNT(*) FROM FileRegistry WHERE file_type IN ({placeholders})", target_types) as cursor:
         total_valid_images = (await cursor.fetchone())[0]
     await conn_stat.close()
 
