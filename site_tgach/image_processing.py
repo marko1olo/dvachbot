@@ -471,9 +471,6 @@ async def process_and_upload_image(
         related_id=result_data['thumbnail_file_id'],
         thumb_bytes=thumbnail_bytes
     ))
-    
-    #if thumbnail_bytes:
-       #asyncio.create_task(check_image_content(thumbnail_bytes, result_data['original_file_id']))
 
     return result_data
 _thumb_process_pool = None
