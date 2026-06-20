@@ -23,52 +23,77 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Now import the module
-from Dubsite_tgach.main import clean_zalgo
+# Import both modules
+from Dubsite_tgach.main import clean_zalgo as clean_zalgo_dubsite
+from site_tgach.main import clean_zalgo as clean_zalgo_site
 
 class TestCleanZalgo(unittest.TestCase):
+    def check_both(self, input_text, expected_output):
+        """Helper to run the test on both implementations."""
+        self.assertEqual(clean_zalgo_dubsite(input_text), expected_output)
+        self.assertEqual(clean_zalgo_site(input_text), expected_output)
+
     def test_empty_string(self):
         """Test that an empty string returns an empty string."""
-        self.assertEqual(clean_zalgo(""), "")
-        self.assertEqual(clean_zalgo(None), "")
+        self.check_both("", "")
+        self.check_both(None, "")
 
     def test_normal_text(self):
         """Test that normal text is returned unchanged."""
         text = "Hello, World!"
-        self.assertEqual(clean_zalgo(text), text)
+        self.check_both(text, text)
 
     def test_valid_combining_characters(self):
         """Test that text with valid combining characters (<= 4) is unchanged."""
         # e + 3 combining characters (acute accent)
         text = "e\u0301\u0301\u0301"
-        self.assertEqual(clean_zalgo(text), text)
+        self.check_both(text, text)
 
         # e + 4 combining characters
         text = "e\u0301\u0301\u0301\u0301"
-        self.assertEqual(clean_zalgo(text), text)
+        self.check_both(text, text)
 
     def test_excess_zalgo_characters(self):
         """Test that text with > 4 consecutive combining characters is truncated."""
         # e + 10 combining characters -> should become e + 4 combining characters
         text = "e" + ("\u0301" * 10)
         expected = "e" + ("\u0301" * 4)
-        self.assertEqual(clean_zalgo(text), expected)
+        self.check_both(text, expected)
 
     def test_mixed_text(self):
         """Test that mixed text behaves correctly with zalgo and normal chars."""
         # a + 10 comb + b + 2 comb + c + 6 comb
         text = "a" + ("\u0301" * 10) + "b" + ("\u0301" * 2) + "c" + ("\u0301" * 6)
         expected = "a" + ("\u0301" * 4) + "b" + ("\u0301" * 2) + "c" + ("\u0301" * 4)
-        self.assertEqual(clean_zalgo(text), expected)
+        self.check_both(text, expected)
 
     def test_russian_string(self):
-        self.assertEqual(clean_zalgo("Привет мир!"), "Привет мир!")
+        self.check_both("Привет мир!", "Привет мир!")
 
     def test_only_combining_characters(self):
         # Just 10 combining characters
         zalgo_input = "\u0300" * 10
         zalgo_expected = "\u0300" * 4
-        self.assertEqual(clean_zalgo(zalgo_input), zalgo_expected)
+        self.check_both(zalgo_input, zalgo_expected)
+
+    def test_emojis_with_modifiers(self):
+        """Test emojis, which are not Mn category."""
+        # Man + Dark Skin Tone
+        text = "👨🏿"
+        self.check_both(text, text)
+
+        # Family emoji (uses ZWJ, not Mn)
+        text = "👨‍👩‍👧‍👦"
+        self.check_both(text, text)
+
+    def test_whitespace_and_newlines(self):
+        text = "  \n\t  "
+        self.check_both(text, text)
+
+    def test_long_string(self):
+        text = "a" * 1000 + "\u0301" * 10 + "b" * 1000
+        expected = "a" * 1000 + "\u0301" * 4 + "b" * 1000
+        self.check_both(text, expected)
 
 if __name__ == '__main__':
     unittest.main()
