@@ -50,5 +50,26 @@ class TestImporter(unittest.TestCase):
         normalized = importer_instance._normalize_html_sync(raw_html)
         self.assertEqual(normalized, "Text ||hidden||")
 
+
+    def test_normalize_html_sync_ast_unescape(self):
+        import inspect
+        import ast
+        import textwrap
+        from Dubsite_tgach.importer import ThreadImporter
+
+        source = inspect.getsource(ThreadImporter._normalize_html_sync)
+        source = textwrap.dedent(source)
+        tree = ast.parse(source)
+
+        unescape_found = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    if node.func.attr == 'unescape':
+                        unescape_found = True
+                        break
+
+        self.assertTrue(unescape_found, "unescape must be called in _normalize_html_sync to allow BeautifulSoup to parse tags properly")
+
 if __name__ == "__main__":
     unittest.main()
