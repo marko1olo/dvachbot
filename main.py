@@ -1947,6 +1947,35 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
         print(f"🌐 Конфликт: {exception}. Возможно, запущен другой экземпляр бота.")
         await asyncio.sleep(10)
         return True
+    # --- TelegramBadRequest: HTML parse errors, message too long, etc. ---
+    if isinstance(exception, TelegramBadRequest):
+        err_msg = str(exception).lower()
+        print(f"⚠️ TelegramBadRequest: {exception}")
+        
+        # Try to notify the user with a safe plain-text fallback
+        chat_obj = None
+        if update and update.message:
+            chat_obj = update.message
+        elif update and update.callback_query and update.callback_query.message:
+            chat_obj = update.callback_query.message
+        
+        if chat_obj:
+            try:
+                if "parse entities" in err_msg or "can't parse" in err_msg:
+                    await chat_obj.answer("⚠️ Ошибка форматирования ответа. Попробуй ещё раз.", parse_mode=None)
+                elif "message is too long" in err_msg:
+                    await chat_obj.answer("⚠️ Ответ слишком длинный. Попробуй более узкий запрос.", parse_mode=None)
+                elif "query is too old" in err_msg or "query_id_invalid" in err_msg:
+                    pass  # Callback expired, nothing to do
+                elif "message is not modified" in err_msg:
+                    pass  # Harmless, user already sees the correct text
+                else:
+                    await chat_obj.answer("⚠️ Telegram отклонил запрос. Попробуй ещё раз.", parse_mode=None)
+            except Exception:
+                pass
+        return True
+    
+    # --- Any other unhandled exception ---
     else:
         import traceback
         print("⛔⛔⛔ НЕПРЕДВИДЕННАЯ КРИТИЧЕСКАЯ ОШИБКА ⛔⛔⛔")
@@ -1959,10 +1988,21 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
             except Exception as json_e:
                 print(f"Не удалось сериализовать update: {json_e}")
             
-            # Send fallback message to user
+            # Send fallback message to user (try HTML first, then plain text)
+            chat_obj = None
             if hasattr(update, "message") and update.message:
+                chat_obj = update.message
+            elif hasattr(update, "callback_query") and update.callback_query:
+                chat_obj = update.callback_query.message
+                # Also answer the callback to remove the loading spinner
                 try:
-                    await update.message.answer("⚠️ <b>Произошла ошибка при выполнении команды.</b>\nРазработчик уже уведомлен.", parse_mode="HTML")
+                    await update.callback_query.answer("Ошибка. Попробуй ещё раз.", show_alert=True)
+                except Exception:
+                    pass
+            
+            if chat_obj:
+                try:
+                    await chat_obj.answer("⚠️ Произошла ошибка при выполнении команды.\nРазработчик уже уведомлен.", parse_mode=None)
                 except Exception:
                     pass
         return True
@@ -8660,7 +8700,7 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
         await message.answer(f"✅ Нарисовано {amount} рублей для юзера {target_id}. Баланс пополнен (корзина /{board_id}/).")
         await message.bot.send_message(target_id, f"🎁 <b>Администрация начислила вам бонус: {amount} RUB! Кошелек - /wallet </b>", parse_mode="HTML")
     except Exception as e:
-        await message.answer(f"Ошибка: {e}")
+        await message.answer(f"Ошибка: {e}", parse_mode=None)
 @dp.message(Command("slavaukraine", "slava_ukraine", "ukraine", "ukraina", "hohol"))
 async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -11744,7 +11784,7 @@ async def cmd_mute(message: Message, board_id: str | None, stream: str = 'ru'):
         if not target_id: await message.delete(); return
         thread_info.setdefault('local_mutes', {})[target_id] = time.time() + 600 # 10 минут
         resp = random.choice(thread_messages[lang]['op_mute_success'])
-        await message.answer(f"🔇 {resp}"); await message.delete()
+        await message.answer(f"🔇 {resp}", parse_mode=None); await message.delete()
         return
     args = message.text.split()[1:]
     target_id = None
@@ -11822,7 +11862,7 @@ async def cmd_unmute(message: types.Message, board_id: str | None, stream: str =
         if target_id in thread_info.get('local_mutes', {}):
             del thread_info['local_mutes'][target_id]
             resp = random.choice(thread_messages[lang]['op_unmute_success'])
-            await message.answer(f"🔊 {resp}")
+            await message.answer(f"🔊 {resp}", parse_mode=None)
         await message.delete()
         return
     target_id = None
@@ -12079,7 +12119,7 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
             del local_shadow_mutes[target_id]
             phrases = thread_messages.get(lang, {}).get('op_unmute_success', ["Unmuted."])
             response_text = random.choice(phrases)
-            await message.answer(f"👻 (shadow) {response_text}")
+            await message.answer(f"👻 (shadow) {response_text}", parse_mode=None)
         await message.delete()
         return
     target_id = None
@@ -17301,7 +17341,7 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
     except Exception as e:
         import traceback
         traceback.print_exc()
-        await status_message.edit_text(f"Произошла ошибка при генерации облака слов: {e}")
+        await status_message.edit_text(f"Произошла ошибка при генерации облака слов: {e}", parse_mode=None)
 
 
 async def main():
