@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import os
 import re
@@ -24,7 +22,9 @@ HEALTH_URL = os.environ.get("BOT_HEALTH_URL", "http://127.0.0.1:8080")
 HEALTH_TIMEOUT_SEC = float(os.environ.get("BOT_WATCHDOG_HEALTH_TIMEOUT_SEC", "5"))
 HEALTH_FAIL_LIMIT = int(os.environ.get("BOT_WATCHDOG_HEALTH_FAIL_LIMIT", "3"))
 FORCE_FAIL_LIMIT = int(os.environ.get("BOT_WATCHDOG_FORCE_FAIL_LIMIT", "12"))
-SAFE_RESTART_QUEUE_LIMIT = int(os.environ.get("BOT_WATCHDOG_SAFE_RESTART_QUEUE_LIMIT", "0"))
+SAFE_RESTART_QUEUE_LIMIT = int(
+    os.environ.get("BOT_WATCHDOG_SAFE_RESTART_QUEUE_LIMIT", "0")
+)
 POLL_SEC = float(os.environ.get("BOT_WATCHDOG_POLL_SEC", "15"))
 WARMUP_SEC = float(os.environ.get("BOT_WATCHDOG_WARMUP_SEC", "75"))
 LOG_STALE_SEC = float(os.environ.get("BOT_WATCHDOG_LOG_STALE_SEC", "120"))
@@ -313,13 +313,19 @@ def main() -> int:
             return 0
         live_pid = _locked_live_bot_pid()
         if live_pid:
-            log(f"bot.lock points to live pid={live_pid}; another bot is already running; supervisor exits")
+            log(
+                f"bot.lock points to live pid={live_pid}; another bot is already running; supervisor exits"
+            )
             log(
                 "Existing live bot stdout is not attached to this window; "
                 f"delivery stdout log={STDOUT_LOG}"
             )
-            log(f"Runtime JSON/health log={LOG_DIR / 'bot_runtime.log'}; heartbeat={HEARTBEAT_LOG}")
-            log("Use stop_bot.bat for controlled stop, or stop_bot.bat /force only if queue loss is accepted")
+            log(
+                f"Runtime JSON/health log={LOG_DIR / 'bot_runtime.log'}; heartbeat={HEARTBEAT_LOG}"
+            )
+            log(
+                "Use stop_bot.bat for controlled stop, or stop_bot.bat /force only if queue loss is accepted"
+            )
             return 0
         child = _start_child()
         start_time = time.time()
@@ -342,7 +348,9 @@ def main() -> int:
                         )
                         return 0
                     if return_code == 0:
-                        log("Bot child exited normally without stop request; supervisor exits")
+                        log(
+                            "Bot child exited normally without stop request; supervisor exits"
+                        )
                         return 0
                     break
 
@@ -372,7 +380,9 @@ def main() -> int:
                     heartbeat_fresh = _heartbeat_is_fresh(heartbeat)
                     if healthy:
                         if health_failures:
-                            log(f"Health restored after {health_failures} failures: {details}")
+                            log(
+                                f"Health restored after {health_failures} failures: {details}"
+                            )
                         health_failures = 0
                     elif heartbeat_fresh:
                         now = time.time()
@@ -392,19 +402,27 @@ def main() -> int:
                             f"stdout_age={stdout_age}; runtime_age={runtime_age}"
                         )
                         logs_stale = (
-                            (stdout_age is None or stdout_age >= LOG_STALE_SEC)
-                            and (runtime_age is None or runtime_age >= LOG_STALE_SEC)
+                            stdout_age is None or stdout_age >= LOG_STALE_SEC
+                        ) and (runtime_age is None or runtime_age >= LOG_STALE_SEC)
+                        stale_status = (
+                            "status=stale" in details or "http_error=503" in details
                         )
-                        stale_status = "status=stale" in details or "http_error=503" in details
                         queue_total = _extract_latest_queue_total()
-                        queue_safe = queue_total is None or queue_total <= SAFE_RESTART_QUEUE_LIMIT
-                        force_restart = health_failures >= FORCE_FAIL_LIMIT and queue_safe
+                        queue_safe = (
+                            queue_total is None
+                            or queue_total <= SAFE_RESTART_QUEUE_LIMIT
+                        )
+                        force_restart = (
+                            health_failures >= FORCE_FAIL_LIMIT and queue_safe
+                        )
                         if health_failures >= FORCE_FAIL_LIMIT and not queue_safe:
                             log(
                                 "Health still failing, but restart deferred because "
                                 f"latest_queue_total={queue_total} > {SAFE_RESTART_QUEUE_LIMIT}"
                             )
-                        if health_failures >= HEALTH_FAIL_LIMIT and (logs_stale or stale_status or force_restart):
+                        if health_failures >= HEALTH_FAIL_LIMIT and (
+                            logs_stale or stale_status or force_restart
+                        ):
                             _kill_tree(child, details)
                             _close_child_log(child)
                             break
