@@ -17068,6 +17068,121 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
     await callback.answer()
 
 
+
+import io
+import json
+import re
+import time
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
+
+STOP_WORDS = set([
+    'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то', 
+    'все', 'она', 'так', 'его', 'но', 'да', 'ты', 'к', 'у', 'же', 'вы', 'за', 
+    'бы', 'по', 'только', 'ее', 'мне', 'было', 'вот', 'от', 'меня', 'еще', 
+    'нет', 'о', 'из', 'ему', 'теперь', 'когда', 'даже', 'ну', 'вдруг', 'ли', 
+    'если', 'уже', 'или', 'ни', 'быть', 'был', 'него', 'до', 'вас', 'нибудь', 
+    'опять', 'уж', 'вам', 'ведь', 'там', 'потом', 'себя', 'ничего', 'ей', 
+    'может', 'они', 'тут', 'где', 'есть', 'надо', 'ней', 'для', 'мы', 'тебя', 
+    'их', 'чем', 'была', 'сам', 'чтоб', 'без', 'будто', 'чего', 'раз', 'тоже', 
+    'себе', 'под', 'будет', 'ж', 'тогда', 'кто', 'этот', 'того', 'потому', 
+    'этого', 'какой', 'совсем', 'ним', 'здесь', 'этом', 'один', 'почти', 'мой', 
+    'тем', 'чтобы', 'нее', 'сейчас', 'были', 'куда', 'зачем', 'всех', 'никогда', 
+    'можно', 'при', 'наконец', 'два', 'об', 'другой', 'хоть', 'после', 'над', 
+    'больше', 'тот', 'через', 'эти', 'нас', 'про', 'всего', 'них', 'какая', 
+    'много', 'разве', 'три', 'эту', 'моя', 'впрочем', 'хорошо', 'свою', 'этой', 
+    'перед', 'иногда', 'лучше', 'чуть', 'том', 'нельзя', 'такой', 'им', 'более', 
+    'всегда', 'конечно', 'всю', 'между', 'это', 'просто', 'блин', 'бля', 'ебать'
+])
+
+@dp.message(Command("wordcloud", "words", "облако"))
+async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+    
+    wait_msg = "⏳ Собираю слова за последние 24 часа..."
+    if lang == 'en': wait_msg = "⏳ Gathering words for the last 24 hours..."
+    elif lang == 'jp': wait_msg = "⏳ 過去24時間の単語を収集中..."
+    
+    status_message = await message.answer(wait_msg)
+    
+    try:
+        from common.db_pool import get_pool
+        db = await get_pool()
+        
+        # 24 hours ago
+        target_timestamp = time.time() - 86400
+        
+        rows = await db.execute(
+            "SELECT content FROM Posts WHERE board_id = ? AND timestamp > ?",
+            (board_id, target_timestamp)
+        )
+        posts = await rows.fetchall()
+        
+        text_corpus = ""
+        for row in posts:
+            try:
+                content_dict = json.loads(row[0])
+                text = ""
+                if content_dict.get('type') == 'text':
+                    text = content_dict.get('text', '')
+                elif content_dict.get('type') in ['photo', 'video', 'animation', 'document']:
+                    text = content_dict.get('caption', '')
+                
+                if text:
+                    # Remove HTML tags
+                    text = re.sub(r'<[^>]+>', ' ', text)
+                    # Remove URLs
+                    text = re.sub(r'http[s]?://\S+', ' ', text)
+                    text_corpus += text + " "
+            except Exception:
+                continue
+                
+        words = re.findall(r'[а-яА-Яa-zA-Z]{3,}', text_corpus.lower())
+        filtered_words = [w for w in words if w not in STOP_WORDS]
+        final_text = " ".join(filtered_words)
+        
+        if not final_text.strip():
+            await status_message.edit_text("Недостаточно текста за последние 24 часа для генерации облака слов.")
+            return
+
+        def generate_image(txt):
+            wc = WordCloud(
+                width=1000, height=600, 
+                background_color='black', 
+                colormap='viridis',
+                max_words=150,
+                collocations=False
+            )
+            wc.generate(txt)
+            
+            img_io = io.BytesIO()
+            wc.to_image().save(img_io, 'PNG')
+            img_io.seek(0)
+            return img_io
+
+        img_io = await asyncio.to_thread(generate_image, final_text)
+        
+        caption = f"☁️ <b>Облако слов /{board_id}/ за 24 часа</b>"
+        if lang == 'en': caption = f"☁️ <b>Word Cloud /{board_id}/ (24h)</b>"
+        elif lang == 'jp': caption = f"☁️ <b>ワードクラウド /{board_id}/ (24h)</b>"
+        
+        await message.answer_photo(
+            photo=types.BufferedInputFile(img_io.read(), filename="wordcloud.png"),
+            caption=caption,
+            parse_mode="HTML"
+        )
+        await status_message.delete()
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        await status_message.edit_text(f"Произошла ошибка при генерации облака слов: {e}")
+
+
 async def main():
 
     lock_file = "bot.lock"
