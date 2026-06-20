@@ -124,10 +124,12 @@ def _db_counts() -> dict:
         conn = sqlite3.connect(DB_PATH, timeout=5)
         cur = conn.cursor()
         result["quick_check"] = cur.execute("PRAGMA quick_check").fetchone()[0]
-        result["Users"] = cur.execute("SELECT COUNT(*) FROM Users").fetchone()[0]
-        result["Posts"] = cur.execute("SELECT COUNT(*) FROM Posts").fetchone()[0]
-        result["PostCopies"] = cur.execute("SELECT COUNT(*) FROM PostCopies").fetchone()[0]
-        result["BroadcastQueue"] = cur.execute("SELECT COUNT(*) FROM BroadcastQueue").fetchone()[0]
+        ALLOWED_TABLES = {"Users", "Posts", "PostCopies", "BroadcastQueue"}
+        for table in ("Users", "Posts", "PostCopies", "BroadcastQueue"):
+            if table in ALLOWED_TABLES:
+                # Use of an explicit allow-list mitigates the SQL Injection vulnerability
+                # associated with string interpolation of table names.
+                result[table] = cur.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         try:
             result["Users_active"] = cur.execute("SELECT COUNT(*) FROM Users WHERE status='active'").fetchone()[0]
             result["Users_banned"] = cur.execute("SELECT COUNT(*) FROM Users WHERE status='banned'").fetchone()[0]
