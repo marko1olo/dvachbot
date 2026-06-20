@@ -6678,8 +6678,7 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
     if not board_id or not is_admin(message.from_user.id, board_id): return
     target_id = None
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
         except Exception: pass
@@ -6741,8 +6740,7 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
     if not board_id or not is_admin(message.from_user.id, board_id): return
     target_id = None
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
         except Exception: pass
@@ -8391,8 +8389,7 @@ async def cmd_gban(message: types.Message, board_id: str | None, stream: str = '
     if not board_id or not is_admin(message.from_user.id, board_id): return
     target_id = None
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
         except Exception: pass
@@ -8435,8 +8432,7 @@ async def cmd_gshadowmute(message: types.Message, board_id: str | None, stream: 
     target_id = None
     duration_str = "24h"
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
         if args:
             duration_str = args[0]
     elif args:
@@ -9964,8 +9960,7 @@ async def cmd_toggle_gif(message: types.Message, board_id: str | None, stream: s
     if not board_id or not is_admin(message.from_user.id, board_id): return
     target_id = None
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
         except Exception: pass
@@ -10000,8 +9995,7 @@ async def cmd_toggle_stickers(message: types.Message, board_id: str | None, stre
     if not board_id or not is_admin(message.from_user.id, board_id): return
     target_id = None
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
         except Exception: pass
@@ -10036,8 +10030,7 @@ async def cmd_toggle_media(message: types.Message, board_id: str | None, stream:
     if not board_id or not is_admin(message.from_user.id, board_id): return
     target_id = None
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
         except Exception: pass
@@ -10075,8 +10068,7 @@ async def cmd_lie_media(message: types.Message, board_id: str | None, stream: st
     if not board_id or not is_admin(message.from_user.id, board_id): return
     target_id = None
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     elif len(message.text.split()) > 1:
         try: target_id = int(message.text.split()[1])
         except Exception: pass
@@ -11734,7 +11726,7 @@ async def cmd_mute(message: Message, board_id: str | None, stream: str = 'ru'):
         user_s['last_op_command_ts'] = now_ts
         if not message.reply_to_message: await message.delete(); return
         target_id = None
-        async with storage_lock: target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
         if not target_id: await message.delete(); return
         thread_info.setdefault('local_mutes', {})[target_id] = time.time() + 600 # 10 минут
         resp = random.choice(thread_messages[lang]['op_mute_success'])
@@ -11744,7 +11736,7 @@ async def cmd_mute(message: Message, board_id: str | None, stream: str = 'ru'):
     target_id = None
     duration_str = "24h"
     if message.reply_to_message:
-        async with storage_lock: target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
         if args: duration_str = args[0]
     elif args:
         try:
@@ -11811,7 +11803,7 @@ async def cmd_unmute(message: types.Message, board_id: str | None, stream: str =
         if not thread_info or thread_info.get('op_id') != user_id: return
         if not message.reply_to_message: await message.delete(); return
         target_id = None
-        async with storage_lock: target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
         if not target_id: await message.delete(); return
         if target_id in thread_info.get('local_mutes', {}):
             del thread_info['local_mutes'][target_id]
@@ -11821,7 +11813,7 @@ async def cmd_unmute(message: types.Message, board_id: str | None, stream: str =
         return
     target_id = None
     if message.reply_to_message:
-        async with storage_lock: target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     else:
         parts = message.text.split()
         if len(parts) == 2 and parts[1].isdigit(): target_id = int(parts[1])
@@ -11852,8 +11844,7 @@ async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = '
     target_id = None
     duration_str = "24h"
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
         if args:
             duration_str = args[0]
     elif args:
@@ -12065,8 +12056,7 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
             await message.delete()
             return
         target_id = None
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
         if not target_id:
             await message.delete()
             return
@@ -12080,8 +12070,7 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
         return
     target_id = None
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     else:
         parts = message.text.split()
         if len(parts) == 2 and parts[1].isdigit():
@@ -13483,8 +13472,7 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
         return
     target_id = None
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     else:
         parts = message.text.split()
         if len(parts) == 2 and parts[1].isdigit():
@@ -14052,8 +14040,7 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
     else: info_header = "🆔 <b>Информация о вас:</b>\n\n"
     if message.reply_to_message:
         replied_author_id = None
-        async with storage_lock:
-            replied_author_id = await get_author_id_by_reply(message)
+        replied_author_id = await get_author_id_by_reply(message)
         if replied_author_id == 0:
             msg = "ℹ️ System message (bot)." if lang == 'en' else ("ℹ️ システムメッセージ（ボット）。" if lang == 'jp' else "ℹ️ Вы ответили на системное сообщение (автор: бот).")
             await message.answer(msg)
@@ -14098,8 +14085,7 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
     if not board_id or not is_admin(message.from_user.id, board_id): return
     target_id = None
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     parts = message.text.split()
     if len(parts) == 2 and parts[1].isdigit():
         target_id = int(parts[1])
@@ -14151,8 +14137,7 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
     target_id = None
     duration_str = "1h" 
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
         if command_args: duration_str = command_args[0]
     elif command_args:
         try:
@@ -14161,7 +14146,7 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
         except Exception:
             if message.reply_to_message:
                 duration_str = command_args[0]
-                async with storage_lock: target_id = await get_author_id_by_reply(message)
+                target_id = await get_author_id_by_reply(message)
             else:
                 await message.answer("❌ Invalid User ID.")
                 return
@@ -14231,8 +14216,7 @@ async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str
     target_id = None
     args = message.text.split()
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
     elif len(args) > 1 and args[1].isdigit():
         target_id = int(args[1])
 
@@ -14280,8 +14264,7 @@ async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream:
     target_id = None
     duration_str = "10m" 
     if message.reply_to_message:
-        async with storage_lock:
-            target_id = await get_author_id_by_reply(message)
+        target_id = await get_author_id_by_reply(message)
         if args: duration_str = args[0]
     elif args:
         try:
@@ -16992,8 +16975,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
 
     # Get author id of reported message
     author_id = None
-    async with storage_lock:
-        author_id = await get_author_id_by_reply(message)
+    author_id = await get_author_id_by_reply(message)
     if not author_id:
         author_id = "0"
     
