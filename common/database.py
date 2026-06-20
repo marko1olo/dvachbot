@@ -1587,12 +1587,12 @@ async def get_op_posts_for_board(
                 pin_clause = "MAX(IFNULL(t.is_pinned, 0)) DESC," if not ignore_pin else ""
                 
                 # Общая часть для WHERE
-                params = []
                 viewer_id = observer_id if observer_id else -1
+                params = [viewer_id]
                 where_clause = f"""
                     WHERE p.reply_to_post_num IS NULL 
                     AND t.thread_id IS NOT NULL 
-                    AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
+                    AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = ?)
                 """
                 if board_id:
                     if isinstance(board_id, list):
@@ -1717,10 +1717,10 @@ async def get_op_posts_for_board(
                             thread_id IN ({in_clause}) 
                             OR reply_to_post_num IN ({id_placeholders})
                         )
-                        AND (IFNULL(is_shadow, 0) = 0 OR author_id = {viewer_id})
+                        AND (IFNULL(is_shadow, 0) = 0 OR author_id = ?)
                         ORDER BY post_num ASC
                     """
-                    async with db.execute(replies_fetch_query, target_ids) as cursor:
+                    async with db.execute(replies_fetch_query, target_ids + [viewer_id]) as cursor:
                         rep_columns = [desc[0] for desc in cursor.description]
                         async for row in cursor:
                             try:
@@ -1958,7 +1958,7 @@ async def get_chat_posts_for_board(board_id: str, offset: int = 0, stream: str =
             viewer_id = observer_id if observer_id is not None else -1
             
             stream_clause = "AND stream = ?" if board_id != 'int' else ""
-            params = [board_id]
+            params = [board_id, viewer_id]
             if board_id != 'int':
                 params.append(stream)
             params.append(offset)
@@ -1968,7 +1968,7 @@ async def get_chat_posts_for_board(board_id: str, offset: int = 0, stream: str =
                 FROM Posts 
                 WHERE board_id = ? 
                 AND thread_id IS NULL 
-                AND (IFNULL(is_shadow, 0) = 0 OR author_id = {viewer_id})
+                AND (IFNULL(is_shadow, 0) = 0 OR author_id = ?)
                 {stream_clause}
                 ORDER BY timestamp DESC 
                 LIMIT 50 OFFSET ?
@@ -2913,9 +2913,9 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
                 JOIN PostsFTS fts ON p.post_num = fts.rowid
                 WHERE fts.content MATCH ? 
                   AND p.thread_id IS NOT NULL 
-                  AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
+                  AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = ?)
             """
-            params = [final_query]
+            params = [final_query, viewer_id]
             if board_id:
                 sql_query += " AND p.board_id = ?"
                 params.append(board_id)
@@ -4120,14 +4120,14 @@ async def get_board_media_posts(board_id: str, page: int = 1, page_size: int = 2
             FROM Posts 
             WHERE board_id = ? 
               AND stream = ?
-              AND (IFNULL(is_shadow, 0) = 0 OR author_id = {viewer_id})
+              AND (IFNULL(is_shadow, 0) = 0 OR author_id = ?)
               AND json_extract(content, '$.files') IS NOT NULL
               AND json_array_length(json_extract(content, '$.files')) > 0
             ORDER BY timestamp DESC
             LIMIT ? OFFSET ?
         """        
         posts = []
-        async with db.execute(query, (board_id, stream, page_size, offset)) as cursor:
+        async with db.execute(query, (board_id, stream, viewer_id, page_size, offset)) as cursor:
             cols = [d[0] for d in cursor.description]
             async for row in cursor:
                 if hasattr(row, 'keys'):
@@ -5439,13 +5439,13 @@ async def get_global_feed_posts(
             db.row_factory = aiosqlite.Row
             
             where_clauses = [
-                f"(IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})",
+                "(IFNULL(p.is_shadow, 0) = 0 OR p.author_id = ?)",
                 "(p.stream = ? OR p.stream IS NULL)"
             ]
             
             if not include_chat:
                 where_clauses.append("p.thread_id IS NOT NULL")
-            params = [stream]
+            params = [viewer_id, stream]
             
             if board_ids:
                 if isinstance(board_ids, list) and len(board_ids) > 0:
