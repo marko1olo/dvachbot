@@ -408,7 +408,21 @@ LOCATION_SWITCH_COOLDOWN = 5 # 5 секунд на смену локации (в
 SUMMARIZE_COOLDOWN = 600
 ROAST_COOLDOWN = 300
 
+
+import random
+
+NICK_PREFIXES = ["Шиз", "Аутист", "Дед", "Попущ", "Биомусор", "Анон", "Гигачад", "Школьник", "Скуф", "Сыч", "Альтушка", "Тролль", "Омежка"]
+NICK_SUFFIXES = ["Интеллектуал", "Качалка", "Пердед", "Шпана", "Ноулайфер", "Шизофреник", "Анимешник", "Говнопостер", "Таксист", "Подпивас", "Куколд", "Скуфидон"]
+
+def generate_anon_name(user_id: int) -> str:
+    if not user_id: return "Анонимус"
+    rng = random.Random(user_id)
+    prefix = rng.choice(NICK_PREFIXES)
+    suffix = rng.choice(NICK_SUFFIXES)
+    return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
+
 def clean_html_for_tg(text: str) -> str:
+
     import re
     if not text: return ''
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
@@ -6724,7 +6738,6 @@ async def cmd_menu(message: types.Message, board_id: str | None, stream: str = '
         pass
 @dp.message(Command("whois", "info"))
 async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 'ru'):
-
     if not board_id or not is_admin(message.from_user.id, board_id): return
     target_id = None
     if message.reply_to_message:
@@ -6737,11 +6750,34 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
     if not target_id:
         await message.answer("ID needed." if lang == 'en' else "Нужен ID.")
         return
-    if lang == 'en': header = f"🗂 <b>Dossier on {target_id}:</b>"
-    elif lang == 'jp': header = f"🗂 <b>{target_id} の調査書:</b>"
-    else: header = f"🗂 <b>Досье на {target_id}:</b>"
+        
+    anon_name = generate_anon_name(target_id)
+    balance = 0
+    post_count = 0
+    from common.db_pool import get_pool, db_lock
+    try:
+        async with db_lock:
+            db = await get_pool()
+            async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (target_id,)) as cursor:
+                row = await cursor.fetchone()
+                balance = row[0] if row and row[0] else 0
+            async with db.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (target_id,)) as cursor:
+                row = await cursor.fetchone()
+                post_count = row[0] if row and row[0] else 0
+    except: pass
+
+    if lang == 'en': header = f"🗂 <b>Dossier on {anon_name}:</b>\n<code>{'—'*20}</code>"
+    elif lang == 'jp': header = f"🗂 <b>{anon_name} の調査書:</b>\n<code>{'—'*20}</code>"
+    else: header = f"🗂 <b>Досье на {anon_name}:</b>\n<code>{'—'*20}</code>"
+    
     report = [header]
+    report.append(f"🆔 <b>ID:</b> <code>{target_id}</code>")
+    report.append(f"💸 <b>Баланс:</b> {int(balance)} RUB")
+    report.append(f"💩 <b>Постов:</b> {post_count}")
+    report.append(f"<code>{'—'*20}</code>")
+
     total_activity = False
+    now_dt = datetime.now(UTC)
     for b_id in BOARDS:
         b_data = board_data[b_id]
         status = []
@@ -6749,22 +6785,35 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
             status.append("🚫 BAN")
         elif target_id in b_data['users']['active']:
             status.append("✅ Active")
-        if b_data['mutes'].get(target_id, datetime.min.replace(tzinfo=UTC)) > datetime.now(UTC):
-            status.append("🔇 Mute")
-        if b_data['shadow_mutes'].get(target_id, datetime.min.replace(tzinfo=UTC)) > datetime.now(UTC):
-            status.append("👻 Shadow")
+            
+        mute_end = b_data['mutes'].get(target_id, datetime.min.replace(tzinfo=UTC))
+        if mute_end > now_dt:
+            td = mute_end - now_dt
+            status.append(f"🔇 Mute ({int(td.total_seconds()//60)}m)")
+            
+        smute_end = b_data['shadow_mutes'].get(target_id, datetime.min.replace(tzinfo=UTC))
+        if smute_end > now_dt:
+            td = smute_end - now_dt
+            status.append(f"👻 Shadow ({int(td.total_seconds()//60)}m)")
+            
         u_set = b_data.get('user_settings', {}).get(target_id, {})
         if u_set.get('shadow_gif'): status.append("NoGIF")
         if u_set.get('shadow_sticker'): status.append("NoSticker")
         if u_set.get('lie_media'): status.append("LieMedia")
+        
+        spam_v = b_data.get('spam_violations', {}).get(target_id, 0)
+        if spam_v > 0: status.append(f"⚠️ Spam: {spam_v}")
+        
         if status:
             total_activity = True
             board_name = BOARD_CONFIG[b_id]['name']
             report.append(f"<b>{board_name}</b>: {', '.join(status)}")
+            
     if not total_activity:
         if lang == 'en': report.append("<i>No info (not active on any board).</i>")
         elif lang == 'jp': report.append("<i>情報なし（どの板でも活動していません）。</i>")
         else: report.append("<i>Информации нет (не активен ни на одной доске).</i>")
+        
     await message.answer("\n".join(report), parse_mode="HTML")
 @dp.message(Command("unpin"))
 async def cmd_global_unpin(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -12225,6 +12274,8 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
         
     # Send to admin
     admins = BOARD_CONFIG.get(board_id, {}).get('admins', set())
+    sender_nick = generate_anon_name(message.from_user.id)
+    target_nick = generate_anon_name(target_id)
     for admin_id in admins:
         try:
             await message.bot.send_message(
@@ -12232,8 +12283,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
                 f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\\nОт: <code>{sender_nick}</code>\\nКому: <code>{target_nick}</code>\\nТекст: <i>{escape_html(text)}</i>",
                 parse_mode="HTML"
             )
-        except:
-            pass
+        except: pass
 
 @dp.message(Command("redact"))
 async def cmd_redact(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -12385,6 +12435,68 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
     except Exception: pass
     try: await message.delete()
     except: pass
+
+@dp.message(Command("top"))
+async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
+    from common.db_pool import get_pool, db_lock
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    
+    top_posters = []
+    top_rich = []
+    
+    try:
+        async with db_lock:
+            db = await get_pool()
+            # Top 10 by posts
+            q_posts = "SELECT author_id, COUNT(*) as cnt FROM Posts GROUP BY author_id ORDER BY cnt DESC LIMIT 10"
+            async with db.execute(q_posts) as cursor:
+                rows = await cursor.fetchall()
+                for r in rows:
+                    if r[0]: top_posters.append((r[0], r[1]))
+            
+            # Top 10 by balance
+            q_rich = "SELECT user_id, SUM(balance) as bal FROM Users GROUP BY user_id ORDER BY bal DESC LIMIT 10"
+            async with db.execute(q_rich) as cursor:
+                rows = await cursor.fetchall()
+                for r in rows:
+                    if r[0]: top_rich.append((r[0], r[1]))
+    except Exception as e:
+        print(f"Error fetching top: {e}")
+        return
+
+    def format_table(data_list, value_suffix=""):
+        lines = []
+        for i, (uid, val) in enumerate(data_list, 1):
+            name = generate_anon_name(uid)
+            val_str = f"{int(val)}{value_suffix}"
+            lines.append(f"{i:2}. {name:<25} | {val_str:>8}")
+        return "\n".join(lines) if lines else "Empty"
+
+    if lang == 'en':
+        header = "🏆 <b>TGACH LEADERBOARD</b> 🏆"
+        cat1 = "📝 <b>Top 10 Shitposters</b>"
+        cat2 = "💰 <b>Top 10 Richest</b>"
+    elif lang == 'jp':
+        header = "🏆 <b>TGちゃん ランキング</b> 🏆"
+        cat1 = "📝 <b>トップ10 レス数</b>"
+        cat2 = "💰 <b>トップ10 富豪</b>"
+    else:
+        header = "🏆 <b>ДОСКА ПОЧЕТА ТГАЧА</b> 🏆"
+        cat1 = "📝 <b>Топ-10 Щитпостеров (посты)</b>"
+        cat2 = "💰 <b>Топ-10 Богачей (баланс)</b>"
+
+    text = f"{header}\n\n"
+    text += f"{cat1}\n<pre>{format_table(top_posters)}</pre>\n\n"
+    text += f"{cat2}\n<pre>{format_table(top_rich, ' ₽')}</pre>"
+    
+    try:
+        await message.answer(text, parse_mode="HTML")
+    except: pass
+
+
 @dp.message(Command("anime", "nya", "kawai", "kawaii"))
 async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -13980,11 +14092,11 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
         pass
+
 @dp.message(Command("ban"))
 async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id or not is_admin(message.from_user.id, board_id):
-        return
-    target_id: int | None = None
+    if not board_id or not is_admin(message.from_user.id, board_id): return
+    target_id = None
     if message.reply_to_message:
         async with storage_lock:
             target_id = await get_author_id_by_reply(message)
@@ -13994,8 +14106,19 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
     if not target_id:
         await message.answer("Нужно ответить на сообщение или указать ID: <code>/ban &lt;id&gt;</code>", parse_mode="HTML")
         return
-    deleted_posts = await delete_user_posts(message.bot, target_id, 5, board_id)
-    await log_global_event('bot', f"🔨 BAN: Мод {message.from_user.id} забанил {target_id} на /{board_id}/ (удалено {deleted_posts} пст)")
+
+    anon_name = generate_anon_name(target_id)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔥 Да, сжечь!", callback_data=f"admin_action:ban:{target_id}:{board_id}:0"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
+        ]
+    ])
+    await message.answer(f"⚠️ Вы уверены, что хотите забанить <b>{anon_name}</b> (ID: <code>{target_id}</code>) и снести его последние посты?", parse_mode="HTML", reply_markup=kb)
+
+async def execute_ban(bot, message, target_id: int, board_id: str, admin_id: int):
+    deleted_posts = await delete_user_posts(bot, target_id, 5, board_id)
+    await log_global_event('bot', f"🔨 BAN: Мод {admin_id} забанил {target_id} на /{board_id}/ (удалено {deleted_posts} пст)")
     async with storage_lock:
         b_data = board_data[board_id]
         b_data['users']['banned'].add(target_id)
@@ -14013,120 +14136,93 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
     await update_user_status(target_id, board_id, 'banned')
     lang = 'en' if board_id == 'int' else 'ru'
     board_name = BOARD_CONFIG[board_id]['name']
+    anon_name = generate_anon_name(target_id)
     if lang == 'en':
-        phrases = [
-            "✅ Faggot <code>{user_id}</code> has been banned from {board}.\nDeleted his posts in the last 5 minutes: {deleted}",
-            "👍 User <code>{user_id}</code> is now banned on {board}. Wiped {deleted} recent posts.",
-            "👌 Done. <code>{user_id}</code> won't be posting on {board} anymore. Deleted posts: {deleted}."
-        ]
+        response_text = f"✅ Faggot <b>{anon_name}</b> has been banned from {board_name}.\nDeleted posts: {deleted_posts}"
     else:
-        phrases = [
-            "✅ Хуесос под номером <code>{user_id}</code> забанен на доске {board}\nУдалено его постов за последние 5 минут: {deleted}",
-            "👍 Пользователь <code>{user_id}</code> успешно забанен на доске {board}. Снесено {deleted} его высеров.",
-            "👌 Готово. <code>{user_id}</code> больше не будет отсвечивать на доске {board}. Удалено постов: {deleted}."
-        ]
-    response_text = random.choice(phrases).format(user_id=target_id, board=board_name, deleted=deleted_posts)
-    await message.answer(response_text, parse_mode="HTML")
+        response_text = f"✅ Хуесос <b>{anon_name}</b> забанен на доске {board_name}\nУдалено его постов: {deleted_posts}"
+    await message.edit_text(response_text, parse_mode="HTML")
     await send_moderation_notice(target_id, "ban", board_id, deleted_posts=deleted_posts)
-    try:
-        if lang == 'en':
-            phrases = [
-                "You have been permanently banned from the {board} board. Reason: you're a faggot.\nDeleted your posts in the last 5 minutes: {deleted}",
-                "Congratulations! You've won an all-inclusive trip to hell. You are banned from {board}.\nWe've deleted {deleted} of your recent shitposts.",
-                "The admin didn't like you. You're banned from {board}. Get out.\nDeleted posts: {deleted}.",
-                "You have been banned from {board}. See you in hell. Пиздуй отсюда."
-            ]
-        else:
-            phrases = [
-                "Пидорас ебаный, ты нас так заебал, что тебя блокнули нахуй на доске {board}.\nУдалено твоих постов за последние 5 минут: {deleted}\nПиздуй отсюда.",
-                "Поздравляю, долбоеб. Ты допизделся и получил вечный бан на доске {board}.\nТвои высеры за последние 5 минут ({deleted} шт.) удалены.",
-                "Ты был слаб, и Абу тебя сожрал. Ты забанен на доске {board}.\nУдалено постов: {deleted}.",
-                "🖕 ТЫ НАС ЗАЕБАЛ. БАН НА ДОСКЕ {board}. ПОПРОЩАЙСЯ СО СВОИМИ {deleted} ПОСТАМИ",
-                "☠️ ТЫ УМЕР ДЛЯ ЭТОГО ЧАТА. БАН НАВСЕГДА. ПОТЕРЯНО ПОСТОВ: {deleted}",
-                "💀 ВАШ АККАУНТ БЫЛ ДОБАВЛЕН В БАЗУ ФСБ. ПРИЯТНОГО ДНЯ!",
-                "🚫 ВЫ ЗАБАНЕНЫ. ПОПРОЩАЙТЕСЬ СО СВОИМИ {deleted} ПОСТАМИ.",
-                "⛔ ВЫ ПОЛУЧИЛИ ВЕЧНЫЙ БАН НА ДОСКЕ {board}. УДАЛЕНО ПОСТОВ: {deleted}.",
-                "❌ ВЫ ЗАЕБАЛИ ВСЕХ. БАН НА ДОСКЕ {board}. УДАЛЕНО ПОСТОВ: {deleted}."
-            ]
-        notification_text = random.choice(phrases).format(board=board_name, deleted=deleted_posts)
-        await message.bot.send_message(target_id, notification_text, parse_mode="HTML")
-    except:
-        pass
-    try:
-        await message.delete()
-    except (TelegramBadRequest, TelegramForbiddenError):
-        pass
+
 @dp.message(Command("wipe"))
 async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id or not is_admin(message.from_user.id, board_id):
-        return
+    if not board_id or not is_admin(message.from_user.id, board_id): return
     command_args = message.text.split()[1:]
     target_id = None
     duration_str = "1h" 
     if message.reply_to_message:
         async with storage_lock:
             target_id = await get_author_id_by_reply(message)
-        if command_args:
-            duration_str = command_args[0]
+        if command_args: duration_str = command_args[0]
     elif command_args:
         try:
             target_id = int(command_args[0])
-            if len(command_args) > 1:
-                duration_str = command_args[1]
-        except (ValueError, IndexError):
+            if len(command_args) > 1: duration_str = command_args[1]
+        except:
             if message.reply_to_message:
                 duration_str = command_args[0]
-                async with storage_lock:
-                    target_id = await get_author_id_by_reply(message)
+                async with storage_lock: target_id = await get_author_id_by_reply(message)
             else:
                 await message.answer("❌ Invalid User ID.")
-                try: await message.delete()
-                except TelegramBadRequest: pass
                 return
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
-        if lang == 'en':
-            usage = "Usage: <code>/wipe &lt;id&gt; [time]</code> or reply."
-        elif lang == 'jp':
-            usage = "使用法: <code>/wipe &lt;ID&gt; [時間]</code> または返信。"
-        else:
-            usage = "Использование: <code>/wipe &lt;id&gt; [время]</code> или ответом на сообщение <code>[время]</code>"
-        await message.answer(usage, parse_mode="HTML")
-        try: await message.delete()
-        except TelegramBadRequest: pass
+        await message.answer("Usage: <code>/wipe &lt;id&gt; [time]</code>", parse_mode="HTML")
         return
-    try:
-        duration_str = duration_str.lower().replace(" ", "")
-        if duration_str.endswith("m"): 
-            time_period_minutes = int(duration_str[:-1])
-            duration_text = f"{time_period_minutes} min"
-        elif duration_str.endswith("h"): 
-            time_period_minutes = int(duration_str[:-1]) * 60
-            duration_text = f"{int(duration_str[:-1])} hours"
-        elif duration_str.endswith("d"): 
-            time_period_minutes = int(duration_str[:-1]) * 1440
-            duration_text = f"{int(duration_str[:-1])} days"
-        else: 
-            time_period_minutes = int(duration_str)
-            duration_text = f"{time_period_minutes} min"
-    except (ValueError, AttributeError):
-        await message.answer("❌ Error format (Ex: <code>30m</code>, <code>2h</code>).", parse_mode="HTML")
-        try: await message.delete()
-        except TelegramBadRequest: pass
-        return
-    deleted_messages = await delete_user_posts(message.bot, target_id, time_period_minutes, board_id)
-    board_name = BOARD_CONFIG[board_id]['name']
-    if lang == 'en':
-        msg = f"🗑 Deleted {deleted_messages} messages from <code>{target_id}</code> on {board_name} for last {duration_text}."
-    elif lang == 'jp':
-        msg = f"🗑 {board_name} で <code>{target_id}</code> の過去 {duration_text} 分のメッセージ {deleted_messages} 件を削除しました。"
+        
+    duration_str = duration_str.lower().replace(" ", "")
+    if duration_str.endswith("m"): minutes = int(duration_str[:-1])
+    elif duration_str.endswith("h"): minutes = int(duration_str[:-1]) * 60
+    elif duration_str.endswith("d"): minutes = int(duration_str[:-1]) * 60 * 24
     else:
-        msg = f"🗑 Удалено {deleted_messages} сообщений пользователя <code>{target_id}</code> с доски {board_name} за последние {duration_text}."
-    await message.answer(msg, parse_mode="HTML")
-    try:
-        await message.delete()
-    except (TelegramBadRequest, TelegramForbiddenError):
-        pass
+        try: minutes = int(duration_str)
+        except: minutes = 60
+
+    anon_name = generate_anon_name(target_id)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔥 Да, сжечь!", callback_data=f"admin_action:wipe:{target_id}:{board_id}:{minutes}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
+        ]
+    ])
+    await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) за последние {minutes} минут?", parse_mode="HTML", reply_markup=kb)
+
+async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: int, minutes: int):
+    deleted_count = await delete_user_posts(bot, target_id, minutes, board_id)
+    await log_global_event('bot', f"🧹 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на /{board_id}/ (глубина {minutes}м)")
+    anon_name = generate_anon_name(target_id)
+    lang = 'en' if board_id == 'int' else 'ru'
+    if lang == 'en':
+        text = f"🧹 Posts by <b>{anon_name}</b> in the last {minutes}m were wiped.\nTotal deleted: {deleted_count}"
+    else:
+        text = f"🧹 Посты от <b>{anon_name}</b> за {minutes}м удалены.\nСнесено: {deleted_count}"
+    await message.edit_text(text, parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("admin_action:"))
+async def on_admin_action(callback: types.CallbackQuery):
+    parts = callback.data.split(":")
+    action = parts[1]
+    
+    if action == "cancel":
+        await callback.message.delete()
+        try: await callback.answer("Отменено")
+        except: pass
+        return
+        
+    target_id = int(parts[2])
+    board_id = parts[3]
+    admin_id = callback.from_user.id
+    
+    if not is_admin(admin_id, board_id):
+        await callback.answer("Нет прав", show_alert=True)
+        return
+        
+    if action == "ban":
+        await callback.answer("Баним...")
+        await execute_ban(callback.bot, callback.message, target_id, board_id, admin_id)
+    elif action == "wipe":
+        minutes = int(parts[4])
+        await callback.answer("Вайпаем...")
+        await execute_wipe(callback.bot, callback.message, target_id, board_id, admin_id, minutes)
 @dp.message(Command("restrict_anime"))
 async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id):
@@ -16804,6 +16900,9 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="stop", description="Остановить режим"),
         BotCommand(command="poll", description="Создать опрос"),
         BotCommand(command="stats", description="Статистика доски"),
+        BotCommand(command="top", description="Топ пользователей"),
+        BotCommand(command="report", description="Жалоба модераторам"),
+        BotCommand(command="wordcloud", description="Облако слов дня"),
         BotCommand(command="togglegif", description="Отключить/включить GIF"),
         BotCommand(command="togglestickers", description="Отключить/включить стикеры"),
         BotCommand(command="togglemedia", description="Отключить/включить медиа"),
