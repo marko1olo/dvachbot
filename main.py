@@ -2132,23 +2132,6 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
         print("⏸ Polling остановлен.")
     except Exception: pass
 
-    # Бэкап (если не OOM)
-   # if not emergency:
-   #    print("💾 Создание полного бэкапа БД...")
-   #     try:
-   #       #  loop = asyncio.get_running_loop()
-    #        await asyncio.wait_for(
-   #             loop.run_in_executor(save_executor, create_gzipped_dump, DB_PATH_CONFIG, DATA_DIR),
-          #      timeout=20.0
-      #      )
-     #       print("✅ Бэкап создан.")
-     #   except asyncio.TimeoutError:
-    #        print("⚠️ Бэкап занял слишком много времени, пропускаем.")
-    #    except Exception as e:
-    #        print(f"⚠️ Ошибка бэкапа: {e}")
-    #else:
-     #   print("⚠️ ПРОПУСК БЭКАПА (мало памяти).")
-
     # Сброс WAL на диск
     print("💾 Сброс данных из WAL на диск...")
     try:
