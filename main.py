@@ -8826,45 +8826,6 @@ async def activate_lightweight_mode(
     except TelegramBadRequest:
         pass
 
-# @dp.message(Command("matrix", "matrica", "matriza", "redpill", "neo"))
-# async def cmd_matrix(message: types.Message, board_id: str | None, stream: str = 'ru'):
-#     await activate_lightweight_mode(
-#         message, board_id, stream, 'matrix_mode', MATRIX_PHRASES_START,
-#         {'ru': "### ОПЕРАТОР ###", 'en': "### OPERATOR ###", 'jp': "### オペレーター ###"},
-#         duration_seconds=310,
-#     )
-
-# @dp.message(Command("america", "usa", "liberty", "freedom"))
-# async def cmd_america(message: types.Message, board_id: str | None, stream: str = 'ru'):
-#     await activate_lightweight_mode(
-#         message, board_id, stream, 'america_mode', AMERICA_PHRASES_START,
-#         {'ru': "### СЕНАТ ###", 'en': "### SENATE ###", 'jp': "### 上院 ###"},
-#         duration_seconds=310,
-#     )
-
-# @dp.message(Command("holiday", "newyear", "xmas", "christmas", "ny"))
-# async def cmd_holiday(message: types.Message, board_id: str | None, stream: str = 'ru'):
-#     await activate_lightweight_mode(
-#         message, board_id, stream, 'holiday_mode', HOLIDAY_PHRASES_START,
-#         {'ru': "### ПОХМЕЛЬНЫЙ ШТАБ ###", 'en': "### HANGOVER DESK ###", 'jp': "### 後始末係 ###"},
-#         duration_seconds=320,
-#     )
-
-# @dp.message(Command("oldweb", "oldnet", "icq", "winamp", "forum"))
-# async def cmd_oldweb(message: types.Message, board_id: str | None, stream: str = 'ru'):
-#     await activate_lightweight_mode(
-#         message, board_id, stream, 'oldweb_mode', OLDWEB_PHRASES_START,
-#         {'ru': "### ВЕБМАСТЕР ###", 'en': "### WEBMASTER ###", 'jp': "### ウェブマスター ###"},
-#         duration_seconds=315,
-#     )
-
-# @dp.message(Command("jewish", "talmud", "odessa", "shabbat", "rabbi", "evrei", "evrey"))
-# async def cmd_jewish(message: types.Message, board_id: str | None, stream: str = 'ru'):
-#     await activate_lightweight_mode(
-#         message, board_id, stream, 'jewish_mode', JEWISH_PHRASES_START,
-#         {'ru': "### КАНЦЕЛЯРИЯ СПОРА ###", 'en': "### ARGUMENT DESK ###", 'jp': "### 反論窓口 ###"},
-#         duration_seconds=320,
-#     )
 async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: str):
     """
     Универсальная функция для отключения любого режима по таймеру.
