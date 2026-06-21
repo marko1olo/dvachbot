@@ -2942,7 +2942,7 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
         finally:
             if 'db' in locals() and db:
                 db.row_factory = None
-def cleanup_old_posts_from_db(limit: int = 50000):
+async def cleanup_old_posts_from_db(limit: int = 50000):
     CHAT_COPIES_LIMIT = 5000
     SHADOW_LIFETIME = 24 * 3600
     ARCHIVED_THREAD_LIFETIME = 30 * 24 * 3600
@@ -2953,35 +2953,35 @@ def cleanup_old_posts_from_db(limit: int = 50000):
     EPHEMERAL_BOARDS = ('thread', 'test') 
     EPHEMERAL_LIMIT = 500
     
-    def delete_in_chunks(con, table, where_clause, params, chunk_size=100):
+    async def delete_in_chunks(con, table, where_clause, params, chunk_size=100):
         total_deleted = 0
-        con.execute("PRAGMA busy_timeout = 5000;")
+        await con.execute("PRAGMA busy_timeout = 5000;")
         
         while True:
-            # Используем IMMEDIATE транзакцию даже в синхронном коде
+            # Используем IMMEDIATE транзакцию
             try:
-                con.execute("BEGIN IMMEDIATE")
+                await con.execute("BEGIN IMMEDIATE")
                 query = f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {where_clause} LIMIT {chunk_size})"
-                cur = con.execute(query, params)
+                cur = await con.execute(query, params)
                 count = cur.rowcount
-                con.execute("COMMIT")
+                await con.execute("COMMIT")
                 
                 total_deleted += count
                 if count < chunk_size:
                     break
                 
                 # Даем передышку другим процессам
-                time.sleep(0.1)
+                await asyncio.sleep(0.1)
                 
             except sqlite3.OperationalError as e:
-                try: con.execute("ROLLBACK")
+                try: await con.execute("ROLLBACK")
                 except: pass
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    time.sleep(1) 
+                    await asyncio.sleep(1)
                     continue
                 raise e
             except Exception:
-                try: con.execute("ROLLBACK")
+                try: await con.execute("ROLLBACK")
                 except: pass
                 break
                 
@@ -2989,50 +2989,51 @@ def cleanup_old_posts_from_db(limit: int = 50000):
 
     try:
         # isolation_level=None для соответствия архитектуре
-        with sqlite3.connect(DB_NAME, timeout=30.0, isolation_level=None) as con:
-            con.execute("PRAGMA journal_mode=WAL;")
-            con.execute("PRAGMA synchronous = NORMAL;")
-            con.execute("PRAGMA foreign_keys = ON;")
+        async with aiosqlite.connect(DB_NAME, timeout=30.0, isolation_level=None) as con:
+            await con.execute("PRAGMA journal_mode=WAL;")
+            await con.execute("PRAGMA synchronous = NORMAL;")
+            await con.execute("PRAGMA foreign_keys = ON;")
             
             # 1. Telegram copy retention. PostCopies are required for real Telegram replies.
             # Keep a bounded rolling window by age and by global post distance; RAM hydration is capped separately.
             copy_cutoff = time.time() - POST_COPY_RETENTION_SECONDS
-            row = con.execute(
+            cur = await con.execute(
                 "SELECT post_num FROM Posts ORDER BY post_num DESC LIMIT 1 OFFSET ?",
                 (POST_COPY_RETENTION_LIMIT,)
-            ).fetchone()
+            )
+            row = await cur.fetchone()
             copy_floor_post_num = row[0] if row else 0
             copy_where = "post_num IN (SELECT post_num FROM Posts WHERE timestamp < ? AND post_num < ?)"
-            delete_in_chunks(con, "PostCopies", copy_where, (copy_cutoff, copy_floor_post_num))
-            delete_in_chunks(con, "ChannelCopies", copy_where, (copy_cutoff, copy_floor_post_num))
+            await delete_in_chunks(con, "PostCopies", copy_where, (copy_cutoff, copy_floor_post_num))
+            await delete_in_chunks(con, "ChannelCopies", copy_where, (copy_cutoff, copy_floor_post_num))
 
             # 2. Логи и алерты
             logs_cutoff = time.time() - LOGS_LIFETIME
-            delete_in_chunks(con, "GlobalLogs", "created_at < ?", (logs_cutoff,))
-            delete_in_chunks(con, "UserAlerts", "created_at < ?", (time.time() - ALERTS_LIFETIME,))
+            await delete_in_chunks(con, "GlobalLogs", "created_at < ?", (logs_cutoff,))
+            await delete_in_chunks(con, "UserAlerts", "created_at < ?", (time.time() - ALERTS_LIFETIME,))
             replies_cutoff = time.time() - (8 * 24 * 3600)
-            delete_in_chunks(con, "UserReplies", "created_at < ?", (replies_cutoff,))
+            await delete_in_chunks(con, "UserReplies", "created_at < ?", (replies_cutoff,))
             try:
-                con.execute("BEGIN IMMEDIATE")
+                await con.execute("BEGIN IMMEDIATE")
                 hf_cutoff = time.time() - (24 * 3600)
-                con.execute("DELETE FROM PendingHF WHERE created_at < ?", (hf_cutoff,))
+                await con.execute("DELETE FROM PendingHF WHERE created_at < ?", (hf_cutoff,))
                 hf_orphan_cutoff = time.time() - 3600
-                con.execute("""
+                await con.execute("""
                     DELETE FROM PendingHF 
                     WHERE created_at < ? 
                     AND file_id NOT IN (SELECT file_id FROM FileRegistry)
                 """, (hf_orphan_cutoff,))
-                con.execute("DELETE FROM Bottles WHERE timestamp < ?", (logs_cutoff,))
-                con.execute("DELETE FROM ImportRequests WHERE created_at < ? AND status != 'pending'", (logs_cutoff,))
-                con.execute("DELETE FROM Reports WHERE created_at < ? AND status != 'open'", (logs_cutoff,))
-                con.execute("COMMIT")
+                await con.execute("DELETE FROM Bottles WHERE timestamp < ?", (logs_cutoff,))
+                await con.execute("DELETE FROM ImportRequests WHERE created_at < ? AND status != 'pending'", (logs_cutoff,))
+                await con.execute("DELETE FROM Reports WHERE created_at < ? AND status != 'open'", (logs_cutoff,))
+                await con.execute("COMMIT")
             except:
-                try: con.execute("ROLLBACK")
+                try: await con.execute("ROLLBACK")
                 except: pass
 
             # 3. Теневые посты
             shadow_cutoff = time.time() - SHADOW_LIFETIME
-            delete_in_chunks(con, "Posts", "is_shadow = 1 AND timestamp < ?", (shadow_cutoff,))
+            await delete_in_chunks(con, "Posts", "is_shadow = 1 AND timestamp < ?", (shadow_cutoff,))
 
             # 4. Очистка сирот (Orphans)
             cleanup_targets = [
@@ -3044,20 +3045,21 @@ def cleanup_old_posts_from_db(limit: int = 50000):
             for table, col in cleanup_targets:
                 try:
                     where_fast = f"NOT EXISTS (SELECT 1 FROM Posts WHERE Posts.post_num = {table}.{col})"
-                    delete_in_chunks(con, table, where_fast, ())
+                    await delete_in_chunks(con, table, where_fast, ())
                 except: pass
 
             # 5. Эфемельные доски
             for board in EPHEMERAL_BOARDS:
                 try:
-                    row = con.execute(
+                    cur = await con.execute(
                         "SELECT post_num FROM Posts WHERE board_id = ? ORDER BY post_num DESC LIMIT 1 OFFSET ?", 
                         (board, EPHEMERAL_LIMIT)
-                    ).fetchone()
+                    )
+                    row = await cur.fetchone()
                     
                     if row:
                         threshold_id = row[0]
-                        deleted = delete_in_chunks(
+                        deleted = await delete_in_chunks(
                             con, "Posts", 
                             "board_id = ? AND post_num < ? AND thread_id IS NULL", 
                             (board, threshold_id)
@@ -3069,32 +3071,34 @@ def cleanup_old_posts_from_db(limit: int = 50000):
 
             # 6. Очистка архива тредов
             archive_cutoff = time.time() - ARCHIVED_THREAD_LIFETIME
-            tids = [r[0] for r in con.execute("SELECT thread_id FROM Threads WHERE is_archived = 1 AND last_updated_at < ?", (archive_cutoff,)).fetchall()]
+            cur = await con.execute("SELECT thread_id FROM Threads WHERE is_archived = 1 AND last_updated_at < ?", (archive_cutoff,))
+            rows = await cur.fetchall()
+            tids = [r[0] for r in rows]
             
             if tids:
                 for tid in tids:
                     try:
-                        con.execute("BEGIN IMMEDIATE")
-                        con.execute("DELETE FROM Posts WHERE thread_id = ?", (tid,))
-                        con.execute("DELETE FROM Threads WHERE thread_id = ?", (tid,))
-                        con.execute("COMMIT")
-                        time.sleep(0.05)
+                        await con.execute("BEGIN IMMEDIATE")
+                        await con.execute("DELETE FROM Posts WHERE thread_id = ?", (tid,))
+                        await con.execute("DELETE FROM Threads WHERE thread_id = ?", (tid,))
+                        await con.execute("COMMIT")
+                        await asyncio.sleep(0.05)
                     except:
-                        try: con.execute("ROLLBACK")
+                        try: await con.execute("ROLLBACK")
                         except: pass
                 print(f"  > Archive: deleted {len(tids)} old threads.")
 
             # 7. Очистка карты импорта (удаляем маппинг для завершенных задач)
             # Если task_id больше нет в ImportQueue, значит все посты опубликованы, и карта больше не нужна.
             try:
-                con.execute("BEGIN IMMEDIATE")
-                con.execute("DELETE FROM ImportRefMap WHERE task_id NOT IN (SELECT DISTINCT task_id FROM ImportQueue)")
-                deleted_maps = con.total_changes
-                con.execute("COMMIT")
+                await con.execute("BEGIN IMMEDIATE")
+                await con.execute("DELETE FROM ImportRefMap WHERE task_id NOT IN (SELECT DISTINCT task_id FROM ImportQueue)")
+                deleted_maps = await con.execute('SELECT total_changes()'); deleted_maps = (await deleted_maps.fetchone())[0]
+                await con.execute("COMMIT")
                 if deleted_maps > 0:
                     print(f"  > Import Cleanup: Cleared {deleted_maps} outdated reference maps.")
             except:
-                try: con.execute("ROLLBACK")
+                try: await con.execute("ROLLBACK")
                 except: pass
 
     except Exception as e:
