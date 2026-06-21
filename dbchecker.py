@@ -77,7 +77,8 @@ def probe_database():
     print("-" * 40)
     for table in tables:
         try:
-            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            safe_table = table.replace('"', '""')
+            cur.execute(f'SELECT COUNT(*) FROM "{safe_table}"')
             count = cur.fetchone()[0]
             print(f"{table:<25} | {count:<10}")
             total_rows += count
