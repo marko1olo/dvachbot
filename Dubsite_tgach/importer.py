@@ -99,6 +99,7 @@ class ThreadImporter:
         if not raw_html: return ""
         
         import html as html_lib
+        # FIX: Unescape first to let BeautifulSoup see tags properly
         raw_html = html_lib.unescape(raw_html)
 
         replacements = {
