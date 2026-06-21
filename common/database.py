@@ -2217,7 +2217,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                     )
                     # FIX: Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
                     site_notifs = [
-                        (r_id, board_id, str(t_id) if t_id else str(rep_num), src_num, rep_num, 0, current_time)
+                        (r_id, board_id, str(t_id) if t_id is not None else str(rep_num), src_num, rep_num, 0, current_time)
                         for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert
                     ]
                     await db.executemany(
@@ -7013,7 +7013,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                     )
                     
                     # FIX: Если thread_id is None, используем ID родительского поста
-                    effective_thread_id = str(thread_id) if thread_id else str(source_post_num)
+                    effective_thread_id = str(thread_id) if thread_id is not None else str(source_post_num)
                     
                     await db.execute(
                         """INSERT INTO UserReplies 
