@@ -157,6 +157,15 @@ PERSONAS = {
     }
 }
 
+@api_retry
+async def _execute_completion(client, model, messages, max_tokens, temperature):
+    return await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=temperature
+    )
+
 logger = logging.getLogger("neuro_poster")
 
 class NeuroManager:
