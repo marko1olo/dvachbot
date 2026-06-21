@@ -22,11 +22,11 @@ def find_and_queue_posts_without_mirrors(conn):
     # Это нужно для эффективности, чтобы не проверять их в большом запросе.
     processed_files = set()
     cursor.execute("SELECT file_id FROM FileMirrors")
-    for row in cursor.fetchall():
+    for row in cursor:
         processed_files.add(row[0])
     
     cursor.execute("SELECT file_id FROM MirrorQueue")
-    for row in cursor.fetchall():
+    for row in cursor:
         processed_files.add(row[0])
 
     print(f"[*] Найдено {len(processed_files)} файлов, которые уже обработаны или в очереди.")
@@ -36,7 +36,7 @@ def find_and_queue_posts_without_mirrors(conn):
     cursor.execute("SELECT content FROM Posts WHERE json_valid(content) AND content LIKE '%\"files\"%'")
     
     total_posts_with_files = 0
-    for row in cursor.fetchall():
+    for row in cursor:
         total_posts_with_files += 1
         try:
             content = json.loads(row[0])
