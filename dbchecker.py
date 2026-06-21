@@ -144,8 +144,9 @@ def probe_database():
     
     for table, col in tables_to_check.items():
         if table in tables:
+            safe_table = table.replace('"', '""')
             cur.execute(f"""
-                SELECT COUNT(*) FROM {table} t
+                SELECT COUNT(*) FROM "{safe_table}" t
                 LEFT JOIN Posts p ON t.{col} = p.post_num
                 WHERE p.post_num IS NULL
             """)
