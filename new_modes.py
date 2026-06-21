@@ -1,21 +1,15 @@
-from __future__ import annotations
-
 import random
 import re
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
-
 ReplacementMap = dict[str, tuple[str, ...]]
-
 
 def _key(value: str) -> str:
     return value.casefold()
 
-
 def _choose(values: Sequence[str]) -> str:
     return random.choice(tuple(values))
-
 
 def _match_case(source: str, replacement: str) -> str:
     if not source:
@@ -26,13 +20,11 @@ def _match_case(source: str, replacement: str) -> str:
         return replacement[:1].upper() + replacement[1:]
     return replacement
 
-
 def _build_pattern(replacements: Mapping[str, Sequence[str]]) -> re.Pattern[str] | None:
     words = sorted((re.escape(word) for word in replacements), key=len, reverse=True)
     if not words:
         return None
     return re.compile(r"(?iu)(?<![\w])(" + "|".join(words) + r")(?![\w])")
-
 
 @dataclass(frozen=True)
 class ModeProfile:
@@ -48,7 +40,6 @@ class ModeProfile:
     suffix_chance: float = 0.90
     slogan_chance: float = 0.56
     max_injections: int = 4
-
 
 _CONCEPT_ALIASES: Mapping[str, tuple[str, ...]] = {
     "greeting": ("привет", "здравствуй", "здравствуйте", "здарова", "дарова", "ку", "хай", "hello", "салам"),
@@ -155,7 +146,6 @@ _CONCEPT_ALIASES: Mapping[str, tuple[str, ...]] = {
     "big": ("большой", "огромный", "жирный", "здоровый", "гигантский"),
 }
 
-
 _STARTS: Mapping[str, tuple[str, ...]] = {
     "matrix": (
         "++ СИСТЕМА УПАЛА В ЧЁРНЫЙ КАНАЛ ++\n\nРКН забанил протокол нормальности. Мы сидим под тройным прокси в зашифрованном анонимном лимбе. Удалите куки, засуньте жесткий диск в микроволновку и смотрите в щель в слое.",
@@ -244,7 +234,6 @@ _STARTS: Mapping[str, tuple[str, ...]] = {
     ),
 }
 
-
 _ENDS: Mapping[str, tuple[str, ...]] = {
     "matrix": (
         "++ MATRIX OFFLINE ++ Сигнал потерян. Провайдер выдернул шнур, агенты стёрли кэш, а аноны снова делают вид, что спят.",
@@ -310,7 +299,6 @@ _ENDS: Mapping[str, tuple[str, ...]] = {
         "Последний контрвопрос оставлен на потом, то есть навсегда.",
     ),
 }
-
 
 _PREFIXES: Mapping[str, tuple[str, ...]] = {
     "matrix": (
@@ -433,7 +421,6 @@ _PREFIXES: Mapping[str, tuple[str, ...]] = {
     ),
 }
 
-
 _SUFFIXES: Mapping[str, tuple[str, ...]] = {
     "matrix": (
         "(запись занесена в протокол СОРМ)",
@@ -554,7 +541,6 @@ _SUFFIXES: Mapping[str, tuple[str, ...]] = {
     ),
 }
 
-
 _INJECTIONS: Mapping[str, tuple[str, ...]] = {
     "matrix": (
         "(packet lost)", "(сбой VPN)", "(РКН бан)", "(СОРМ пишет)", "(глитч ядра)", "(кэш пуст)",
@@ -586,7 +572,6 @@ _INJECTIONS: Mapping[str, tuple[str, ...]] = {
         "(пункт два)", "(судья вопроса)", "(доказать)", "(не закрыто)", "(спор жив)",
     ),
 }
-
 
 _SLOGANS: Mapping[str, tuple[str, ...]] = {
     "matrix": (
@@ -629,7 +614,6 @@ _SLOGANS: Mapping[str, tuple[str, ...]] = {
         "НЮАНС ВСЕГДА ГДЕ-ТО РЯДОМ.", "ДОКАЖИ, ПОТОМ ДОКАЖИ ДОКАЗАТЕЛЬСТВО.", "ВТОРАЯ ВЕРСИЯ СМЕЁТСЯ.",
     ),
 }
-
 
 _CONCEPT_REPLACEMENTS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
     "matrix": {
@@ -1154,7 +1138,6 @@ _CONCEPT_REPLACEMENTS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
     },
 }
 
-
 _EXACT_REPLACEMENTS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
     "matrix": {
         "я думаю": ("мой VPN шепчет", "в кэш пришла мысль", "процессор выдаёт версию"),
@@ -1329,7 +1312,6 @@ _EXACT_REPLACEMENTS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
     },
 }
 
-
 def _expand_replacements(concepts: Mapping[str, Sequence[str]]) -> ReplacementMap:
     replacements: ReplacementMap = {}
     for concept, options in concepts.items():
@@ -1338,7 +1320,6 @@ def _expand_replacements(concepts: Mapping[str, Sequence[str]]) -> ReplacementMa
         for alias in aliases:
             replacements[_key(alias)] = values
     return replacements
-
 
 def _make_profile(name: str) -> ModeProfile:
     replacements = _expand_replacements(_CONCEPT_REPLACEMENTS[name])
@@ -1353,7 +1334,6 @@ def _make_profile(name: str) -> ModeProfile:
         pattern=_build_pattern(replacements),
     )
 
-
 _PROFILES = {
     "matrix": _make_profile("matrix"),
     "america": _make_profile("america"),
@@ -1361,7 +1341,6 @@ _PROFILES = {
     "oldweb": _make_profile("oldweb"),
     "jewish": _make_profile("jewish"),
 }
-
 
 MATRIX_PHRASES_START = list(_STARTS["matrix"])
 MATRIX_PHRASES_END = list(_ENDS["matrix"])
@@ -1373,7 +1352,6 @@ OLDWEB_PHRASES_START = list(_STARTS["oldweb"])
 OLDWEB_PHRASES_END = list(_ENDS["oldweb"])
 JEWISH_PHRASES_START = list(_STARTS["jewish"])
 JEWISH_PHRASES_END = list(_ENDS["jewish"])
-
 
 def _replace_words(text: str, profile: ModeProfile) -> str:
     if profile.pattern is None:
@@ -1395,7 +1373,6 @@ def _replace_words(text: str, profile: ModeProfile) -> str:
 
     return profile.pattern.sub(repl, text)
 
-
 def _inject(text: str, profile: ModeProfile) -> str:
     if not text or len(text) > 1400 or random.random() > profile.inject_chance:
         return text
@@ -1406,7 +1383,6 @@ def _inject(text: str, profile: ModeProfile) -> str:
     if random.random() < 0.35:
         return f"{insert} {text}"
     return f"{text} {insert}"
-
 
 def _apply_matrix_effects(text: str) -> str:
     # 1. Leet-speak replacement
@@ -1454,7 +1430,6 @@ def _apply_matrix_effects(text: str) -> str:
                 text = " ".join(words)
 
     return text
-
 
 def _apply_america_effects(text: str) -> str:
     # 1. Corporate Buzzword replacements
@@ -1513,7 +1488,6 @@ def _apply_america_effects(text: str) -> str:
 
     return text
 
-
 def _apply_holiday_effects(text: str) -> str:
     # 1. Drunk Typos (30% chance)
     if random.random() < 0.30:
@@ -1571,7 +1545,6 @@ def _apply_holiday_effects(text: str) -> str:
 
     return text
 
-
 def _apply_oldweb_effects(text: str) -> str:
     # 1. Padonki conversion rules
     rules = [
@@ -1622,7 +1595,6 @@ def _apply_oldweb_effects(text: str) -> str:
 
     return text
 
-
 def _apply_jewish_effects(text: str) -> str:
     # 1. Odessa prefixes
     if random.random() < 0.40:
@@ -1656,7 +1628,6 @@ def _apply_jewish_effects(text: str) -> str:
 
     return text
 
-
 def _decorate_custom(text: str, profile: ModeProfile, custom_func) -> str:
     result = _replace_words(text, profile)
     result = custom_func(result)
@@ -1669,22 +1640,17 @@ def _decorate_custom(text: str, profile: ModeProfile, custom_func) -> str:
         result = f"{result}\n\n<b>{_choose(profile.slogans)}</b>"
     return result
 
-
 def matrix_transform(text: str, header: str | None = None) -> tuple[str, str]:
     return "text", _decorate_custom(text, _PROFILES["matrix"], _apply_matrix_effects)
-
 
 def america_transform(text: str, header: str | None = None) -> tuple[str, str]:
     return "text", _decorate_custom(text, _PROFILES["america"], _apply_america_effects)
 
-
 def holiday_transform(text: str, header: str | None = None) -> tuple[str, str]:
     return "text", _decorate_custom(text, _PROFILES["holiday"], _apply_holiday_effects)
 
-
 def oldweb_transform(text: str, header: str | None = None) -> tuple[str, str]:
     return "text", _decorate_custom(text, _PROFILES["oldweb"], _apply_oldweb_effects)
-
 
 def jewish_transform(text: str, header: str | None = None) -> tuple[str, str]:
     return "text", _decorate_custom(text, _PROFILES["jewish"], _apply_jewish_effects)
