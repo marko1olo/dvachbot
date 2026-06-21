@@ -8593,13 +8593,12 @@ async def cmd_airdrop(message: Message, board_id: str | None):
             await message.answer("🤷‍♂️ У всех и так есть бабки, эирдроп не нужен.")
             return
 
-        for uid in users_to_fix:
-            amount = random.randint(8, 15)
-            # Начисляем только в ОДНУ (любую) существующую запись юзера, чтобы избежать дублей
-            await db.execute("""
-                UPDATE Users SET balance = ? 
-                WHERE rowid = (SELECT rowid FROM Users WHERE user_id = ? LIMIT 1)
-            """, (amount, uid))
+        updates = [(random.randint(8, 15), uid) for uid in users_to_fix]
+        # Начисляем только в ОДНУ (любую) существующую запись юзера, чтобы избежать дублей
+        await db.executemany("""
+            UPDATE Users SET balance = ?
+            WHERE rowid = (SELECT rowid FROM Users WHERE user_id = ? LIMIT 1)
+        """, updates)
         
     await message.answer(f"🚀 <b>ЭИРДРОП ЗАВЕРШЕН!</b>\nНачислил бабки {len(users_to_fix)} нищим анонам.")
 @dp.callback_query(F.data == "show_active_threads")
