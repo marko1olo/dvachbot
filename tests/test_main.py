@@ -168,3 +168,73 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+class TestGenerateAnonName(unittest.TestCase):
+    def setUp(self):
+        # We need to test generate_anon_name from main.py without importing main.py directly
+        # since it pulls in 1000 dependencies not present in the test environment.
+        # As there are no dependencies for this pure function, we can dynamically compile it.
+        import os
+        import ast
+
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        main_path = os.path.join(project_root, "main.py")
+
+        with open(main_path, "r", encoding="utf-8") as f:
+            source = f.read()
+
+        module_ast = ast.parse(source)
+
+        # Find the function definition
+        func_def = None
+        for node in module_ast.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "generate_anon_name":
+                func_def = node
+                break
+
+        # Find prefix and suffix assignments
+        prefix_def = None
+        suffix_def = None
+        for node in module_ast.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        if target.id == "NICK_PREFIXES":
+                            prefix_def = node
+                        elif target.id == "NICK_SUFFIXES":
+                            suffix_def = node
+
+        # Execute only these parts
+        exec_globals = {"random": __import__("random")}
+
+        # Compile and exec the variables
+        if prefix_def:
+            exec(compile(ast.Module(body=[prefix_def], type_ignores=[]), filename="<ast>", mode="exec"), exec_globals)
+        if suffix_def:
+            exec(compile(ast.Module(body=[suffix_def], type_ignores=[]), filename="<ast>", mode="exec"), exec_globals)
+
+        # Compile and exec the function
+        if func_def:
+            exec(compile(ast.Module(body=[func_def], type_ignores=[]), filename="<ast>", mode="exec"), exec_globals)
+            self.generate_anon_name = exec_globals["generate_anon_name"]
+        else:
+            self.fail("Could not find generate_anon_name in main.py")
+
+    def test_generate_anon_name_empty(self):
+        self.assertEqual(self.generate_anon_name(0), "Анонимус")
+        self.assertEqual(self.generate_anon_name(None), "Анонимус")
+
+    def test_generate_anon_name_deterministic(self):
+        name1 = self.generate_anon_name(12345)
+        name2 = self.generate_anon_name(12345)
+        self.assertEqual(name1, name2)
+
+    def test_generate_anon_name_different_ids(self):
+        name1 = self.generate_anon_name(12345)
+        name2 = self.generate_anon_name(12346)
+        self.assertNotEqual(name1, name2)
+
+    def test_generate_anon_name_format(self):
+        name = self.generate_anon_name(987654321)
+        self.assertTrue(name.endswith("(#4321)"))
+        self.assertIn("-", name)
