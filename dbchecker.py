@@ -31,29 +31,8 @@ def format_size(size_bytes):
         size_bytes /= 1024.0
     return f"{size_bytes:.2f} TB"
 
-def probe_database():
-    db_path = get_db_path()
-    
-    if not db_path:
-        print(f"{Colors.FAIL}❌ База данных не найдена в текущей директории.{Colors.ENDC}")
-        print("Ожидались: dvach_bot.db или tgach.db")
-        sys.exit(1)
 
-    print(f"{Colors.HEADER}{Colors.BOLD}=== ЗАПУСК ГЛУБОКОГО АНАЛИЗА БД: {db_path} ==={Colors.ENDC}")
-    print(f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    file_size = os.path.getsize(db_path)
-    print(f"Физический размер файла: {Colors.OKCYAN}{format_size(file_size)}{Colors.ENDC}")
-
-    try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-    except Exception as e:
-        print(f"{Colors.FAIL}Критическая ошибка подключения: {e}{Colors.ENDC}")
-        sys.exit(1)
-
-    # 1. PRAGMA Integrity Check
+def check_integrity(cur):
     print(f"\n{Colors.BOLD}1. Проверка физической целостности (integrity_check)...{Colors.ENDC}")
     start_time = time.time()
     try:
@@ -67,11 +46,8 @@ def probe_database():
         print(f"{Colors.FAIL}Ошибка проверки целостности: {e}{Colors.ENDC}")
     print(f"   (Заняло {time.time() - start_time:.4f} сек)")
 
-    # 2. Статистика по таблицам
+def get_table_statistics(cur, tables):
     print(f"\n{Colors.BOLD}2. Статистика таблиц{Colors.ENDC}")
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
-    tables = [row[0] for row in cur.fetchall()]
-    
     total_rows = 0
     print(f"{'Таблица':<25} | {'Строк':<10}")
     print("-" * 40)
@@ -85,8 +61,9 @@ def probe_database():
             print(f"{table:<25} | {'ERROR':<10}")
     print("-" * 40)
     print(f"{Colors.BOLD}Всего записей: {total_rows}{Colors.ENDC}")
+    return total_rows
 
-    # 3. Поиск логического мусора (Orphaned Data)
+def find_logical_garbage(cur, tables):
     print(f"\n{Colors.BOLD}3. Поиск логического мусора (Orphans & Garbage){Colors.ENDC}")
     garbage_found = False
 
@@ -103,7 +80,6 @@ def probe_database():
         print(f"{Colors.OKGREEN}✓ Посты корректно привязаны к доскам{Colors.ENDC}")
 
     # 3.2 Мертвые треды (Запись в Threads есть, а ОП-поста в Posts нет)
-    # Важно: thread_id в Threads - это TEXT, а post_num в Posts - INTEGER
     cur.execute("""
         SELECT COUNT(*) FROM Threads t
         LEFT JOIN Posts p ON t.thread_id = CAST(p.post_num AS TEXT)
@@ -118,7 +94,6 @@ def probe_database():
         print(f"{Colors.OKGREEN}✓ Все треды имеют живой ОП-пост{Colors.ENDC}")
 
     # 3.3 Посты-сироты (указан thread_id, но такого треда нет в таблице Threads)
-    # Исключаем NULL (обычные посты чата) и thread_id = post_num (ОП-посты, которые сами себе треды)
     cur.execute("""
         SELECT COUNT(*) FROM Posts 
         WHERE thread_id IS NOT NULL 
@@ -141,6 +116,7 @@ def probe_database():
         "Reports": "post_num"
     }
     
+    orphan_tables = []
     for table, col in tables_to_check.items():
         if table in tables:
             cur.execute(f"""
@@ -152,6 +128,7 @@ def probe_database():
             if orphans > 0:
                 print(f"{Colors.FAIL}⚠️  Мусор в таблице {table}: {orphans} записей (ссылаются на удаленные посты){Colors.ENDC}")
                 garbage_found = True
+                orphan_tables.append((table, col))
             else:
                 print(f"{Colors.OKGREEN}✓ Таблица {table} чиста{Colors.ENDC}")
 
@@ -164,7 +141,9 @@ def probe_database():
     else:
         print(f"{Colors.OKGREEN}✓ Актуальность таблицы Mutes в порядке{Colors.ENDC}")
 
-    # 4. Глубокий анализ контента (JSON)
+    return garbage_found, dead_threads, posts_orphaned_thread, orphan_tables
+
+def analyze_content(cur):
     print(f"\n{Colors.BOLD}4. Анализ контента (JSON и Медиа){Colors.ENDC}")
     print("Сканирование всех постов... (может занять время)")
     
@@ -174,10 +153,6 @@ def probe_database():
     total_files = 0
     empty_content = 0
     shadow_posts = 0
-    
-    # Получаем общее кол-во для прогресса
-    # cur.lastrowid не работает для select, используем total_rows из этапа 2
-    # Если total_rows большой, можно не выводить каждый, но для скрипта анализа это ок.
     
     counter = 0
     try:
@@ -207,7 +182,6 @@ def probe_database():
                         pass
                 except json.JSONDecodeError:
                     json_errors += 1
-                    # print(f"   -> Битая JSON структура в посте #{post_num}")
 
     except KeyboardInterrupt:
         print("\nПроцесс прерван пользователем.")
@@ -219,15 +193,15 @@ def probe_database():
     print(f"   - Просканировано постов: {counter}")
     if json_errors > 0:
         print(f"{Colors.FAIL}   - Постов с битым JSON: {json_errors}{Colors.ENDC}")
-        garbage_found = True
     else:
         print(f"{Colors.OKGREEN}   - Все JSON поля валидны{Colors.ENDC}")
     
     print(f"   - Всего медиа-файлов (ссылок): {total_files}")
     print(f"   - Пустых постов: {empty_content}")
     print(f"   - Теневых (Shadow) постов: {shadow_posts}")
+    return json_errors > 0
 
-    # 5. Пользователи
+def analyze_users(cur):
     print(f"\n{Colors.BOLD}5. Анализ пользователей{Colors.ENDC}")
     cur.execute("SELECT COUNT(*) FROM Users")
     total_users = cur.fetchone()[0]
@@ -242,7 +216,7 @@ def probe_database():
     print(f"   - Уникальных User ID: {unique_users}")
     print(f"   - Активных банов (status='banned'): {banned_users}")
 
-    # 6. Рекомендации
+def print_recommendations(garbage_found, dead_threads, orphan_tables, posts_orphaned_thread, db_path):
     print(f"\n{Colors.HEADER}{Colors.BOLD}=== ИТОГОВЫЙ ОТЧЕТ ==={Colors.ENDC}")
     
     if garbage_found:
@@ -252,10 +226,6 @@ def probe_database():
         if dead_threads > 0:
             print(f"1. Выполнить очистку мертвых тредов:")
             print(f"   {Colors.OKCYAN}DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts);{Colors.ENDC}")
-            
-        orphan_tables = []
-        for t, c in tables_to_check.items():
-            if t in tables: orphan_tables.append((t, c))
             
         if orphan_tables:
             print("2. Очистить очереди от ссылок на несуществующие посты:")
@@ -279,6 +249,44 @@ def probe_database():
 
     print("\nДля полной оптимизации (сжатия) базы рекомендуется выполнить SQL команду:")
     print(f"{Colors.OKCYAN}VACUUM;{Colors.ENDC}")
+
+def probe_database():
+    db_path = get_db_path()
+
+    if not db_path:
+        print(f"{Colors.FAIL}❌ База данных не найдена в текущей директории.{Colors.ENDC}")
+        print("Ожидались: dvach_bot.db или tgach.db")
+        sys.exit(1)
+
+    print(f"{Colors.HEADER}{Colors.BOLD}=== ЗАПУСК ГЛУБОКОГО АНАЛИЗА БД: {db_path} ==={Colors.ENDC}")
+    print(f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    file_size = os.path.getsize(db_path)
+    print(f"Физический размер файла: {Colors.OKCYAN}{format_size(file_size)}{Colors.ENDC}")
+
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+    except Exception as e:
+        print(f"{Colors.FAIL}Критическая ошибка подключения: {e}{Colors.ENDC}")
+        sys.exit(1)
+
+    check_integrity(cur)
+
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = [row[0] for row in cur.fetchall()]
+
+    get_table_statistics(cur, tables)
+
+    garbage_found, dead_threads, posts_orphaned_thread, orphan_tables = find_logical_garbage(cur, tables)
+
+    if analyze_content(cur):
+        garbage_found = True
+
+    analyze_users(cur)
+
+    print_recommendations(garbage_found, dead_threads, orphan_tables, posts_orphaned_thread, db_path)
 
     conn.close()
 
