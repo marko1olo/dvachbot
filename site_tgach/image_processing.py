@@ -57,7 +57,6 @@ from site_tgach.zeroxzero import is_0x0_available, upload_url_to_0x0, upload_byt
 from site_tgach.mtproto_client import upload_file_mtproto
 from fastapi import UploadFile, HTTPException
 from PIL import Image, ImageOps  
-#from site_tgach.neuro_moderator import check_image_content
 from common.bot_pool import global_bot_pool 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
