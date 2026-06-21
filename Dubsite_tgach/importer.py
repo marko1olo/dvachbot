@@ -98,8 +98,8 @@ class ThreadImporter:
     def _normalize_html_sync(self, raw_html: str) -> str:
         if not raw_html: return ""
         
-        import html as html_lib
-        raw_html = html_lib.unescape(raw_html)
+        import html
+        raw_html = html.unescape(raw_html)
 
         replacements = {
             r'двач': 'тгач',
