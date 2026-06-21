@@ -26,10 +26,10 @@ mocked_deps = [
     'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
     'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
-    'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
-    'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
+    'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram', 'fastapi', 'fastapi.responses', 'fastapi.staticfiles', 'fastapi.templating', 'orjson',
+    'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client', 'aiogram.client.default', 'aiogram.filters', 'aiogram.utils', 'aiogram.utils.media_group', 'aiogram.fsm', 'aiogram.fsm.state', 'aiogram.fsm.context', 'aiogram.fsm.storage', 'aiogram.fsm.storage.memory', 'openai',
     'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
-    'aiogram.webhook', 'aiogram.webhook.aiohttp_server'
+    'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'aiosqlite', 'starlette.responses', 'starlette.types', 'PIL', 'itsdangerous', 'starlette', 'starlette.middleware', 'starlette.middleware.sessions', 'aiohttp', 'dotenv', 'python-dotenv', 'pydantic', 'pydantic.main', 'pydantic.types', 'httpx', 'jinja2', 'fastapi.middleware', 'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip', 'fastapi.middleware.cors', 'apscheduler', 'apscheduler.schedulers', 'apscheduler.schedulers.asyncio', 'apscheduler.triggers', 'apscheduler.triggers.interval', 'markdown', 'psutil', 'matplotlib', 'matplotlib.pyplot', 'matplotlib.dates', 'matplotlib.ticker', 'seaborn', 'pandas', 'numpy'
 ]
 
 for dep in mocked_deps:
@@ -168,3 +168,53 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+# Because this file now mocks out psutil, we can import clean_html_for_tg
+# without resorting to an ast hack
+from main import clean_html_for_tg
+
+class TestCleanHtmlForTg(unittest.TestCase):
+    def test_empty_string(self):
+        self.assertEqual(clean_html_for_tg(""), "")
+        self.assertEqual(clean_html_for_tg(None), "")
+
+    def test_basic_formatting(self):
+        self.assertEqual(clean_html_for_tg("**bold**"), "<b>bold</b>")
+        self.assertEqual(clean_html_for_tg("*italic*"), "<i>italic</i>")
+        self.assertEqual(clean_html_for_tg("`code`"), "<code>code</code>")
+
+    def test_unbalanced_tags(self):
+        self.assertEqual(clean_html_for_tg("**bold"), "**bold")
+        self.assertEqual(clean_html_for_tg("bold**"), "bold**")
+        self.assertEqual(clean_html_for_tg("*italic"), "*italic")
+        self.assertEqual(clean_html_for_tg("italic*"), "italic*")
+        self.assertEqual(clean_html_for_tg("`code"), "`code")
+        self.assertEqual(clean_html_for_tg("code`"), "code`")
+
+    def test_overlapping_tags(self):
+        # We just want to make sure it doesn't crash and does *something* reasonable
+        # according to the regexes.
+        res = clean_html_for_tg("**bold *and italic***")
+        self.assertEqual(res, "<b>bold <i>and italic</b></i>")
+
+    def test_newlines(self):
+        self.assertEqual(clean_html_for_tg("line1<br>line2"), "line1\nline2")
+        self.assertEqual(clean_html_for_tg("line1<br/>line2"), "line1\nline2")
+        self.assertEqual(clean_html_for_tg("line1<br />line2"), "line1\nline2")
+
+    def test_safe_tag_retention(self):
+        # Allowed tags should not be escaped.
+        # (b|i|u|s|code|pre|a\b)
+        safe_tags = ["<b>", "</b>", "<i>", "</i>", "<u>", "</u>", "<s>", "</s>", "<code>", "</code>", "<pre>", "</pre>", "<a href='foo'>", "</a>"]
+        for tag in safe_tags:
+            self.assertEqual(clean_html_for_tg(tag), tag)
+
+    def test_malformed_html_escaping(self):
+        # Tags that shouldn't be allowed are escaped
+        self.assertEqual(clean_html_for_tg("<script>"), "&lt;script>")
+        self.assertEqual(clean_html_for_tg("<img>"), "&lt;img>")
+        self.assertEqual(clean_html_for_tg("<b/>"), "&lt;b/>")
+        self.assertEqual(clean_html_for_tg("</ b>"), "&lt;/ b>")
+        # The current code allows <b attr='value'> because of `[>\s]`
+        self.assertEqual(clean_html_for_tg("<b attr='value'>"), "<b attr='value'>")
+        self.assertEqual(clean_html_for_tg("< b>"), "&lt; b>")
