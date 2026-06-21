@@ -76,20 +76,28 @@ async def get_queue_details(conn):
 
 async def get_activity(conn):
     now = time.time()
-    periods = {"1h": now - 3600, "24h": now - 86400}
+    ts_1h = now - 3600
+    ts_24h = now - 86400
     activity = {}
-    for name, ts in periods.items():
-        try:
-            p_cursor, t_cursor, u_cursor = await asyncio.gather(
-                conn.execute("SELECT COUNT(*) FROM Posts WHERE timestamp > ?", (ts,)),
-                conn.execute("SELECT COUNT(*) FROM Threads WHERE created_at > ?", (ts,)),
-                conn.execute("SELECT COUNT(DISTINCT user_id) FROM Users WHERE created_at > ?", (ts,))
-            )
-            activity[f'posts_{name}'] = (await p_cursor.fetchone())[0]
-            activity[f'threads_{name}'] = (await t_cursor.fetchone())[0]
-            activity[f'users_{name}'] = (await u_cursor.fetchone())[0]
-        except aiosqlite.OperationalError:
-            activity[f'posts_{name}'] = activity[f'threads_{name}'] = activity[f'users_{name}'] = "N/A"
+    try:
+        p_cursor, t_cursor, u_cursor_1h, u_cursor_24h = await asyncio.gather(
+            conn.execute("SELECT SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END), COUNT(*) FROM Posts WHERE timestamp > ?", (ts_1h, ts_24h)),
+            conn.execute("SELECT SUM(CASE WHEN created_at > ? THEN 1 ELSE 0 END), COUNT(*) FROM Threads WHERE created_at > ?", (ts_1h, ts_24h)),
+            conn.execute("SELECT COUNT(DISTINCT user_id) FROM Users WHERE created_at > ?", (ts_1h,)),
+            conn.execute("SELECT COUNT(DISTINCT user_id) FROM Users WHERE created_at > ?", (ts_24h,))
+        )
+        p_res = await p_cursor.fetchone()
+        t_res = await t_cursor.fetchone()
+
+        activity['posts_1h'] = p_res[0] or 0
+        activity['posts_24h'] = p_res[1] or 0
+        activity['threads_1h'] = t_res[0] or 0
+        activity['threads_24h'] = t_res[1] or 0
+        activity['users_1h'] = (await u_cursor_1h.fetchone())[0] or 0
+        activity['users_24h'] = (await u_cursor_24h.fetchone())[0] or 0
+    except aiosqlite.OperationalError:
+        activity['posts_1h'] = activity['threads_1h'] = activity['users_1h'] = "N/A"
+        activity['posts_24h'] = activity['threads_24h'] = activity['users_24h'] = "N/A"
     return activity
 
 async def get_media_stats(conn):
