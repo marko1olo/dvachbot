@@ -1,4 +1,5 @@
 import asyncio
+from common.http_utils import api_retry
 import logging
 import random
 import time
@@ -198,12 +199,7 @@ class NeuroManager:
                             base_url=AI_CONFIG["base_url"],
                             http_client=http_client
                         ) as client:
-                            completion = await client.chat.completions.create(
-                                model=target_model,
-                                messages=messages,
-                                max_tokens=max_tokens,
-                                temperature=temperature
-                            )
+                            completion = await _execute_completion(client, target_model, messages, max_tokens, temperature)
                             return completion.choices[0].message.content.strip()
 
                 except Exception as e:

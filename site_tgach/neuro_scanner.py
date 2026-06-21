@@ -1,4 +1,5 @@
 import asyncio
+from common.task_manager import spawn_task
 import logging
 import httpx
 import time
@@ -176,7 +177,7 @@ class NeuroScanner:
         importer = ThreadImporter(self.bot, target_channel_id)
         
         # Запускаем в фоне
-        asyncio.create_task(
+        spawn_task(
             importer.process_thread(best_candidate['url'], target_board, target_stream, sim_settings)
         )
         return True

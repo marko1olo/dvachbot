@@ -1,6 +1,7 @@
 import base64
 import logging
 import asyncio
+from common.http_utils import api_retry
 import httpx
 import json
 from httpx import AsyncHTTPTransport # <--- Импорт транспорта

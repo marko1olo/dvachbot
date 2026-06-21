@@ -1,4 +1,5 @@
 import asyncio
+from common.task_manager import spawn_task
 import hashlib
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
@@ -94,7 +95,7 @@ async def process_and_upload_voice(
         print(f"DB Register error (Voice): {e}")
 
     # 4. Фоновое зеркалирование (С поддержкой больших файлов >19МБ)
-    asyncio.create_task(_upload_mirrors_task(
+    spawn_task(_upload_mirrors_task(
         bot, 
         result_data['original_file_id'], 
         file_bytes=file_content, 

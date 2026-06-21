@@ -1,4 +1,5 @@
 import asyncio
+from common.task_manager import spawn_task
 """
 This module provides functionality for processing and uploading images and other media files 
 to a specified channel using the Telegram Bot API. It includes various image processing 
@@ -462,7 +463,7 @@ async def process_and_upload_image(
     except Exception as e:
         logger.error(f"DB Register error: {e}")
 
-    asyncio.create_task(_upload_mirrors_task(
+    spawn_task(_upload_mirrors_task(
         current_bot, 
         result_data['original_file_id'], 
         file_bytes=contents,

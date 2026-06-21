@@ -44,13 +44,13 @@ async def build_stats_media_group():
 
 async def send_stats_to_user(bot: Bot, chat_id: int):
     """Generates and sends stats directly to a user/admin."""
-    await bot.send_message(chat_id, "⏳ <i>Генерирую 10 графиков статистики (это может занять пару секунд)...</i>", parse_mode="HTML")
+    await bot.send_message(chat_id, "⏳ <i>Рисую 10 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
     try:
         media_group = await build_stats_media_group()
         if media_group:
             await bot.send_media_group(chat_id=chat_id, media=media_group)
         else:
-            await bot.send_message(chat_id, "❌ Не удалось собрать данные для статистики.")
+            await bot.send_message(chat_id, "❌ Хуй там плавал, стату собрать не вышло.")
     except Exception as e:
         print(f"Error sending stats: {e}")
         await bot.send_message(chat_id, f"❌ Ошибка при генерации статистики: {e}")

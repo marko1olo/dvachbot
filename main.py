@@ -23,6 +23,7 @@ Key Components:ware: Determines the user's language stream and caches it.
 This module is designed to be extensible and maintainable, allowing for future enhancements and modifications.
 """
 import asyncio
+from common.task_manager import spawn_task
 import faulthandler
 import gc
 import gzip
@@ -1968,7 +1969,7 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
                 elif "message is not modified" in err_msg:
                     pass  # Harmless, user already sees the correct text
                 else:
-                    await chat_obj.answer("⚠️ Telegram отклонил запрос. Попробуй ещё раз.", parse_mode=None)
+                    await chat_obj.answer("⚠️ Телега послала нахуй твой запрос. Пробуй снова.", parse_mode=None)
             except Exception:
                 pass
                 
@@ -2493,12 +2494,12 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
                         msg_str = f"🚨 [GLOBAL] ЭХОДАУН ОБНАРУЖЕН: user {user_id} спамит дубликатами в {boards}. Выдан перманентный SHADOWMUTE везде кроме /b/."
                         print(msg_str)
                         from common.database import update_shadow_mute, log_global_event
-                        asyncio.create_task(log_global_event('bot', msg_str))
+                        spawn_task(log_global_event('bot', msg_str))
                         expires_dt = datetime.now(UTC) + timedelta(days=365)
                         for b in BOARD_CONFIG.keys():
                             if b != 'b':
                                 board_data[b].setdefault('shadow_mutes', {})[user_id] = expires_dt
-                                asyncio.create_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
+                                spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
                         user_cb.clear() # clear tracker after muting
                         return False
     if msg.content_type == 'text':
@@ -2600,7 +2601,7 @@ async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id
         log_msg = f"👻 [{board_id}] ТИХИЙ SHADOW Мут за спам: user {user_id}, тип: {violation_type}, уровень: {level}, длительность: {mute_duration}"
         print(log_msg)
         from common.database import log_global_event
-        asyncio.create_task(log_global_event('bot', log_msg))
+        spawn_task(log_global_event('bot', log_msg))
         # Уведомление пользователю отключено по просьбе админа
 def _get_random_header_prefix(lang: str = 'ru') -> str:
 
@@ -3049,7 +3050,7 @@ async def send_moderation_notice(user_id: int, action: str, board_id: str, durat
                 f"✈️ Отправили спамера в увлекательное путешествие нахуй!",
             ]
         text = random.choice(ban_phrases)
-        asyncio.create_task(log_global_event('bot', f"🔨 {board_id.upper()}: {text} (User: {user_id})"))
+        spawn_task(log_global_event('bot', f"🔨 {board_id.upper()}: {text} (User: {user_id})"))
     elif action == "mute":
         if lang == 'en':
             mute_phrases = [
@@ -3221,7 +3222,7 @@ async def process_new_post(
         # --- НАЧАЛО ИЗМЕНЕНИЙ (Запуск системы верификации) ---
         if current_post_num is not None and user_id > 0:
             # Запускаем обновление статистики в фоне
-            asyncio.create_task(update_user_verification_stats(user_id, board_id, bot_instance, stream))
+            spawn_task(update_user_verification_stats(user_id, board_id, bot_instance, stream))
         # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
         if current_post_num is None:
@@ -3331,7 +3332,7 @@ async def process_new_post(
                 try:
                     bot_instance = get_bot_for_board(board_id)
                     stream_to_pass = stream if stream else 'ru'
-                    asyncio.create_task(execute_auto_roast(board_id, stream_to_pass, bot_instance))
+                    spawn_task(execute_auto_roast(board_id, stream_to_pass, bot_instance))
                 except Exception as e:
                     print(f"Error triggering auto_roast: {e}")
             if author_results and author_results[0] and author_results[0][1]:
@@ -3376,12 +3377,12 @@ async def process_new_post(
                 'board_id': board_id, 'thread_id': thread_id
             })
         if not final_content.get('is_system_message'):
-            asyncio.create_task(_forward_post_to_realtime_archive(
+            spawn_task(_forward_post_to_realtime_archive(
                 bot_instance=bot_instance, board_id=board_id, post_num=current_post_num, content=final_content, is_shadow_muted=is_shadow_muted
             ))
         numeral_level = check_post_numerals(current_post_num)
         if numeral_level:
-            asyncio.create_task(post_special_num_to_channel(
+            spawn_task(post_special_num_to_channel(
                 bots=GLOBAL_BOTS, board_id=board_id, post_num=current_post_num,
                 level=numeral_level, content=final_content, author_id=user_id
             ))
@@ -3392,7 +3393,7 @@ async def process_new_post(
                 milestones = [50, 150, 220]
                 if posts_count in milestones and posts_count not in thread_info.get('announced_milestones', []):
                     thread_info.setdefault('announced_milestones', []).append(posts_count)
-                    asyncio.create_task(post_thread_notification_to_channel(
+                    spawn_task(post_thread_notification_to_channel(
                         bots=GLOBAL_BOTS, board_id=board_id, thread_id=thread_id,
                         thread_info=thread_info, event_type='milestone',
                         details={'posts': posts_count}
@@ -5546,7 +5547,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
     for uid, msgs in user_messages_map.items():
         if msgs:
             target_mid = sorted(msgs)[0]
-            task = asyncio.create_task(_edit_one(uid, target_mid))
+            task = spawn_task(_edit_one(uid, target_mid))
             tasks_to_run.append(task)
 
     CHUNK_SIZE = 30 
@@ -5591,7 +5592,7 @@ async def execute_delayed_edit(
 async def message_broadcaster(bots: dict[str, Bot]):
 
     tasks = [
-        asyncio.create_task(message_worker(f"Worker-{board_id}", board_id, bot_instance))
+        spawn_task(message_worker(f"Worker-{board_id}", board_id, bot_instance))
         for board_id, bot_instance in bots.items()
     ]
     await asyncio.gather(*tasks)
@@ -6015,7 +6016,7 @@ async def help_broadcaster():
     for board_id in BOARDS:
         if board_id == 'test':
             continue
-        task = asyncio.create_task(board_help_worker(board_id))
+        task = spawn_task(board_help_worker(board_id))
         tasks.append(task)
     print(f"✅ Менеджер [help_broadcaster] запустил {len(tasks)} независимых воркеров.")
     await asyncio.gather(*tasks)
@@ -6481,7 +6482,7 @@ async def process_withdrawal_data(message: types.Message, state: FSMContext, boa
     await status_msg.edit_text(f"✅ <b>Заявка #WD-{random.randint(100,999)} принята</b>\nСтатус: <i>В обработке банком</i>\nОриентировочное время: 5-10 минут.", parse_mode="HTML")
     await state.clear()
 
-    asyncio.create_task(_run_delayed_prank(message.bot, user_id, amount, user_input, method, name_for_public, board_id))
+    spawn_task(_run_delayed_prank(message.bot, user_id, amount, user_input, method, name_for_public, board_id))
 @dp.callback_query(F.data == "support_prank")
 async def cb_support_prank(callback: types.CallbackQuery):
     try:
@@ -6502,7 +6503,7 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     """
     if not board_id: return
 
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -7019,7 +7020,7 @@ async def motivation_broadcaster():
             except Exception as e:
                 print(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}")
                 await asyncio.sleep(120)
-    tasks = [asyncio.create_task(board_motivation_worker(bid)) for bid in BOARDS if bid != 'test']
+    tasks = [spawn_task(board_motivation_worker(bid)) for bid in BOARDS if bid != 'test']
     await asyncio.gather(*tasks)
 async def validate_message_format(msg_data: dict) -> bool:
 
@@ -7244,7 +7245,7 @@ async def check_cooldown(message: Message, board_id: str) -> bool:
         text = random.choice(phrases).format(minutes=minutes, seconds=seconds)
         try:
             sent_msg = await message.answer(text, parse_mode="HTML")
-            asyncio.create_task(delete_message_after_delay(sent_msg, 11))
+            spawn_task(delete_message_after_delay(sent_msg, 11))
         except Exception:
             pass
         try:
@@ -7599,7 +7600,7 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
         b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set()}
         print(f"✅ [{board_id}] Новый пользователь: {user_id}")
         await send_welcome_sequence(message.bot, user_id, board_id, stream=stream)
-        asyncio.create_task(send_active_pin_to_new_user(message.bot, user_id, board_id))
+        spawn_task(send_active_pin_to_new_user(message.bot, user_id, board_id))
     else:
         start_text = b_data.get('start_message_text', "Добро пожаловать в ТГАЧ!")
         await message.answer(start_text, parse_mode="HTML", disable_web_page_preview=True)
@@ -7631,7 +7632,7 @@ async def cb_set_stream(callback: types.CallbackQuery, board_id: str | None, str
     if is_new:
         await asyncio.sleep(1)
         await send_welcome_sequence(callback.bot, user_id, board_id, stream=new_stream)
-        asyncio.create_task(send_active_pin_to_new_user(callback.bot, user_id, board_id))
+        spawn_task(send_active_pin_to_new_user(callback.bot, user_id, board_id))
         menu_text = "👇 <b>Quick Menu / Быстрое меню:</b>"
         await callback.message.answer(menu_text, reply_markup=get_quick_menu_keyboard(board_id, stream=stream), parse_mode="HTML")
     await callback.answer()
@@ -7796,7 +7797,7 @@ async def handle_stacked_anime_commands(message: types.Message, board_id: str | 
                 msg = "🛑 У вас жесткое ограничение: 10 картинок в сутки. Заебал спамить! По всем вопросам к админу."
             try:
                 sent = await message.answer(msg)
-                asyncio.create_task(delete_message_after_delay(sent, 15))
+                spawn_task(delete_message_after_delay(sent, 15))
                 await message.delete()
             except Exception: pass
             return
@@ -7810,7 +7811,7 @@ async def handle_stacked_anime_commands(message: types.Message, board_id: str | 
         limit_msg = random.choice(phrases)
         try:
             sent = await message.answer(limit_msg)
-            asyncio.create_task(delete_message_after_delay(sent, 15))
+            spawn_task(delete_message_after_delay(sent, 15))
             await message.delete()
         except Exception: pass
         return
@@ -7846,7 +7847,7 @@ async def handle_stacked_anime_commands(message: types.Message, board_id: str | 
             cooldown_msg = f"{part1}\n\n{part2}"
             try:
                 sent_msg = await message.answer(cooldown_msg)
-                asyncio.create_task(delete_message_after_delay(sent_msg, 10))
+                spawn_task(delete_message_after_delay(sent_msg, 10))
                 await message.delete()
             except (TelegramBadRequest, TelegramForbiddenError): pass
             return
@@ -8658,7 +8659,7 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
 @dp.message(Command("roll"))
 async def cmd_roll(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     if not board_id: return
@@ -8701,7 +8702,7 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
 @dp.message(Command("slavaukraine", "slava_ukraine", "ukraine", "ukraina", "hohol"))
 async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     if not board_id: return
@@ -8771,7 +8772,7 @@ async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream:
         "post_num": pnum,
     })
     await _activate_mode(board_id, 'slavaukraine_mode')
-    disable_task = asyncio.create_task(disable_mode_after_delay(310, board_id, 'slavaukraine_mode'))
+    disable_task = spawn_task(disable_mode_after_delay(310, board_id, 'slavaukraine_mode'))
     b_data['active_mode_task'] = disable_task
     try:
         await message.delete()
@@ -8781,7 +8782,7 @@ async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream:
 @dp.message(Command("gopnik", "blyat", "gopota"))
 async def cmd_gopnik(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     if not board_id: return
@@ -8821,14 +8822,14 @@ async def cmd_gopnik(message: types.Message, board_id: str | None, stream: str =
         "content": content, "post_num": pnum,
     })
     await _activate_mode(board_id, 'gopnik_mode')
-    disable_task = asyncio.create_task(disable_mode_after_delay(300, board_id, 'gopnik_mode'))
+    disable_task = spawn_task(disable_mode_after_delay(300, board_id, 'gopnik_mode'))
     b_data['active_mode_task'] = disable_task
     try: await message.delete()
     except TelegramBadRequest: pass
 @dp.message(Command("schizo", "shiza", "shizo", "shiz", "durka"))
 async def cmd_schizo(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     if not board_id: return
@@ -8867,7 +8868,7 @@ async def cmd_schizo(message: types.Message, board_id: str | None, stream: str =
         "post_num": pnum,
     })
     await _activate_mode(board_id, 'schizo_mode')
-    disable_task = asyncio.create_task(disable_mode_after_delay(300, board_id, 'schizo_mode'))
+    disable_task = spawn_task(disable_mode_after_delay(300, board_id, 'schizo_mode'))
     b_data['active_mode_task'] = disable_task
     try: await message.delete()
     except TelegramBadRequest: pass
@@ -8928,7 +8929,7 @@ async def activate_lightweight_mode(
         "board_id": board_id,
     })
     await _activate_mode(board_id, mode_key)
-    disable_task = asyncio.create_task(disable_mode_after_delay(duration_seconds, board_id, mode_key))
+    disable_task = spawn_task(disable_mode_after_delay(duration_seconds, board_id, mode_key))
     b_data['active_mode_task'] = disable_task
     try:
         await message.delete()
@@ -9051,7 +9052,7 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
 @dp.message(Command("kurwa", "polish", "poland"))
 async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     if not board_id: return
@@ -9093,7 +9094,7 @@ async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 
         "content": content, "post_num": pnum,
     })
     await _activate_mode(board_id, 'polish_mode')
-    disable_task = asyncio.create_task(disable_mode_after_delay(305, board_id, 'polish_mode'))
+    disable_task = spawn_task(disable_mode_after_delay(305, board_id, 'polish_mode'))
     b_data['active_mode_task'] = disable_task
     try:
         await message.delete()
@@ -9102,7 +9103,7 @@ async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 
 @dp.message(Command("wh40k", "waha", "warhammer", "warhamer"))
 async def cmd_wh40k(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     if not board_id: return
@@ -9136,7 +9137,7 @@ async def cmd_wh40k(message: types.Message, board_id: str | None, stream: str = 
         "content": content, "post_num": pnum,
     })
     await _activate_mode(board_id, 'warhammer_mode')
-    disable_task = asyncio.create_task(disable_mode_after_delay(315, board_id, 'warhammer_mode'))
+    disable_task = spawn_task(disable_mode_after_delay(315, board_id, 'warhammer_mode'))
     b_data['active_mode_task'] = disable_task
     try: await message.delete()
     except TelegramBadRequest: pass
@@ -9177,7 +9178,7 @@ async def cmd_yer(message: types.Message, board_id: str | None, stream: str = 'r
         "content": content, "post_num": pnum,
     })
     await _activate_mode(board_id, 'imperial_mode')
-    disable_task = asyncio.create_task(disable_mode_after_delay(320, board_id, 'imperial_mode'))
+    disable_task = spawn_task(disable_mode_after_delay(320, board_id, 'imperial_mode'))
     b_data['active_mode_task'] = disable_task
     try: await message.delete()
     except TelegramBadRequest: pass
@@ -9267,7 +9268,7 @@ async def cmd_active(message: types.Message, board_id: str | None, stream: str =
     try:
         await message.bot.send_message(user_id, full_activity_text, parse_mode="HTML")
         temp_msg = await message.answer(pm_sent)
-        asyncio.create_task(delete_message_after_delay(temp_msg, 5))
+        spawn_task(delete_message_after_delay(temp_msg, 5))
     except TelegramForbiddenError:
         await message.answer(unlock)
     except Exception: pass
@@ -9413,7 +9414,7 @@ async def cmd_graph(message: types.Message, board_id: str | None, stream: str = 
                     cooldown_text = f"⏳ Команду можно использовать через {remaining} сек."
                 try:
                     sent_msg = await message.answer(cooldown_text)
-                    asyncio.create_task(delete_message_after_delay(sent_msg, 5))
+                    spawn_task(delete_message_after_delay(sent_msg, 5))
                     await message.delete()
                 except Exception: pass
                 return
@@ -9784,7 +9785,7 @@ async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | No
     if action == "nsfw_toggle":
         new_status = not settings['nsfw']
         settings['nsfw'] = new_status
-        asyncio.create_task(update_user_settings_db(user_id, board_id, nsfw=1 if new_status else 0))
+        spawn_task(update_user_settings_db(user_id, board_id, nsfw=1 if new_status else 0))
         text, kb = get_personal_menu_keyboard(board_id, user_id, stream=stream)
         try:
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -9961,7 +9962,7 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
         await callback.bot.send_message(user_id, enter_message, reply_markup=entry_keyboard, parse_mode="HTML")
     except (TelegramForbiddenError, TelegramBadRequest):
         pass
-    asyncio.create_task(post_thread_notification_to_channel(
+    spawn_task(post_thread_notification_to_channel(
         bots=GLOBAL_BOTS, board_id=board_id, thread_id=thread_id,
         thread_info=thread_info, event_type='new_thread'
     ))
@@ -9986,7 +9987,7 @@ async def cmd_toggle_gif(message: types.Message, board_id: str | None, stream: s
     settings = b_data['user_settings'][target_id]
     new_val = not settings.get('shadow_gif', False)
     settings['shadow_gif'] = new_val
-    asyncio.create_task(update_user_settings_db(target_id, board_id, shadow_gif=1 if new_val else 0))
+    spawn_task(update_user_settings_db(target_id, board_id, shadow_gif=1 if new_val else 0))
     act = "ЗАПРЕТИЛ GIF" if new_val else "РАЗРЕШИЛ GIF"
     await log_global_event('bot', f"🖼️ GIF_TOGGLE: Админ {message.from_user.id} {act} пользователю {target_id} на /{board_id}/")
     if lang == 'en':
@@ -10021,7 +10022,7 @@ async def cmd_toggle_stickers(message: types.Message, board_id: str | None, stre
     settings = b_data['user_settings'][target_id]
     new_val = not settings.get('shadow_sticker', False)
     settings['shadow_sticker'] = new_val
-    asyncio.create_task(update_user_settings_db(target_id, board_id, shadow_sticker=1 if new_val else 0))
+    spawn_task(update_user_settings_db(target_id, board_id, shadow_sticker=1 if new_val else 0))
     act = "ЗАПРЕТИЛ стикеры" if new_val else "РАЗРЕШИЛ стикеры"
     await log_global_event('bot', f"🃏 STICK_TOGGLE: Админ {message.from_user.id} {act} пользователю {target_id} на /{board_id}/")
     if lang == 'en':
@@ -10059,7 +10060,7 @@ async def cmd_toggle_media(message: types.Message, board_id: str | None, stream:
     settings = b_data['user_settings'][target_id]
     new_val = not settings.get('shadow_media', False)
     settings['shadow_media'] = new_val
-    asyncio.create_task(update_user_settings_db(target_id, board_id, shadow_media=1 if new_val else 0))
+    spawn_task(update_user_settings_db(target_id, board_id, shadow_media=1 if new_val else 0))
     act = "ЗАПРЕТИЛ все медиа" if new_val else "РАЗРЕШИЛ медиа"
     await log_global_event('bot', f"🔇 MEDIA_TOGGLE: Админ {message.from_user.id} {act} пользователю {target_id} на /{board_id}/ (Text-only mode)")
     if lang == 'en':
@@ -10100,7 +10101,7 @@ async def cmd_lie_media(message: types.Message, board_id: str | None, stream: st
     settings.setdefault('hide', set())
     new_val = not settings.get('lie_media', False)
     settings['lie_media'] = new_val
-    asyncio.create_task(update_user_settings_db(target_id, board_id, lie_media=1 if new_val else 0))
+    spawn_task(update_user_settings_db(target_id, board_id, lie_media=1 if new_val else 0))
     status = "ENABLED" if new_val else "DISABLED"
     await log_global_event('bot', f"LIE_MEDIA_TOGGLE: admin {message.from_user.id} {status} archive media substitution for {target_id} on /{board_id}/")
     await message.answer(f"Lie media for <code>{target_id}</code>: {status}", parse_mode="HTML")
@@ -11029,7 +11030,7 @@ async def thread_lifecycle_manager(bots: dict[str, Bot]):
                         b_data.get('thread_locks', {}).pop(thread_id, None)
                     print(f"🧹 [{board_id}] Очищено {len(threads_to_purge)} старых заархивированных тредов из памяти.")
         for board_id, thread_id, thread_info_copy in archives_to_generate:
-            asyncio.create_task(archive_thread(bots, board_id, thread_id, thread_info_copy))
+            spawn_task(archive_thread(bots, board_id, thread_id, thread_info_copy))
         for board_id, recipients, content, thread_id in notifications_to_queue:
             try:
                 pnum = await create_post(
@@ -11088,7 +11089,7 @@ async def thread_activity_monitor(bots: dict[str, Bot]):
                     ACTIVITY_THRESHOLD = 15
                     if recent_posts_count >= ACTIVITY_THRESHOLD:
                         thread_info['activity_notified'] = True
-                        asyncio.create_task(post_thread_notification_to_channel(
+                        spawn_task(post_thread_notification_to_channel(
                             bots=bots,
                             board_id=board_id,
                             thread_id=thread_id,
@@ -11549,7 +11550,7 @@ async def _enter_thread_logic(bot: Bot, board_id: str, user_id: int, thread_id: 
         cooldown_msg = random.choice(cooldown_phrases)
         try:
             sent_msg = await bot.send_message(user_id, cooldown_msg)
-            asyncio.create_task(delete_message_after_delay(sent_msg, 5))
+            spawn_task(delete_message_after_delay(sent_msg, 5))
         except (TelegramForbiddenError, TelegramBadRequest):
             pass
         return
@@ -11931,7 +11932,7 @@ async def cmd_nsfw(message: types.Message, board_id: str | None, stream: str = '
         new_status = False
     if new_status is not None:
         b_data['user_settings'][user_id]['nsfw'] = new_status
-        asyncio.create_task(update_user_settings_db(user_id, board_id, nsfw=1 if new_status else 0))
+        spawn_task(update_user_settings_db(user_id, board_id, nsfw=1 if new_status else 0))
         if lang == 'en':
             reply = "✅ NSFW Spoilers enabled." if new_status else "☑️ NSFW Spoilers disabled."
         elif lang == 'jp':
@@ -12010,7 +12011,7 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
             await message.answer(msg, parse_mode="HTML")
             return
         user_hide_set.add(word)
-        asyncio.create_task(update_user_settings_db(user_id, board_id, hidden_words=list(user_hide_set)))
+        spawn_task(update_user_settings_db(user_id, board_id, hidden_words=list(user_hide_set)))
         if lang == 'en': msg = f"✅ Word '<b>{escape_html(word)}</b>' added to hidden list."
         elif lang == 'jp': msg = f"✅ '<b>{escape_html(word)}</b>' をリストに追加しました。"
         else: msg = f"✅ Слово '<b>{escape_html(word)}</b>' добавлено в скрытые."
@@ -12023,7 +12024,7 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
         word = word_part[2].lower().strip()
         if word in user_hide_set:
             user_hide_set.remove(word)
-            asyncio.create_task(update_user_settings_db(user_id, board_id, hidden_words=list(user_hide_set)))
+            spawn_task(update_user_settings_db(user_id, board_id, hidden_words=list(user_hide_set)))
             if lang == 'en': msg = f"🗑 Word '<b>{escape_html(word)}</b>' removed from list."
             elif lang == 'jp': msg = f"🗑 '<b>{escape_html(word)}</b>' を削除しました。"
             else: msg = f"🗑 Слово '<b>{escape_html(word)}</b>' удалено из списка."
@@ -12375,7 +12376,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     if not board_id: return
@@ -12433,7 +12434,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
     try:
         await message.bot.send_message(user_id, stats_text, parse_mode="HTML")
         temp_msg = await message.answer(pm_sent)
-        asyncio.create_task(delete_message_after_delay(temp_msg, 5))
+        spawn_task(delete_message_after_delay(temp_msg, 5))
     except TelegramForbiddenError:
         await message.answer(unlock)
     except Exception: pass
@@ -12444,7 +12445,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
 
 @dp.message(Command("top"))
 async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     from common.db_pool import get_pool, db_lock
@@ -12510,7 +12511,7 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
 @dp.message(Command("anime", "nya", "kawai", "kawaii"))
 async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     if not board_id: return
@@ -12573,7 +12574,7 @@ async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 
         "post_num": pnum,
     })
     await _activate_mode(board_id, 'anime_mode')
-    disable_task = asyncio.create_task(disable_mode_after_delay(330, board_id, 'anime_mode'))
+    disable_task = spawn_task(disable_mode_after_delay(330, board_id, 'anime_mode'))
     b_data['active_mode_task'] = disable_task
     try:
         await message.delete()
@@ -12594,7 +12595,7 @@ async def check_anime_cmd_cooldown(message: types.Message, board_id: str) -> boo
             cooldown_msg = random.choice(ANIME_CMD_COOLDOWN_PHRASES)
             try:
                 sent_msg = await message.answer(cooldown_msg)
-                asyncio.create_task(delete_message_after_delay(sent_msg, 15))
+                spawn_task(delete_message_after_delay(sent_msg, 15))
             except Exception:
                 pass
             try:
@@ -12652,7 +12653,7 @@ async def _run_bounded_anime_url_fetches(
             except Exception as exc:
                 return index, exc
 
-    tasks = [asyncio.create_task(run_one(i, fetcher)) for i, fetcher in enumerate(fetcher_tasks)]
+    tasks = [spawn_task(run_one(i, fetcher)) for i, fetcher in enumerate(fetcher_tasks)]
     done, pending = await asyncio.wait(tasks, timeout=ANIME_URL_FETCH_TOTAL_SEC)
     if pending:
         for task in pending:
@@ -12738,7 +12739,7 @@ async def _run_bounded_anime_downloads(
             except Exception as exc:
                 return index, url, exc
 
-    tasks = [asyncio.create_task(run_one(i, url)) for i, url in enumerate(urls)]
+    tasks = [spawn_task(run_one(i, url)) for i, url in enumerate(urls)]
     done, pending = await asyncio.wait(tasks, timeout=ANIME_DOWNLOAD_TOTAL_SEC)
     if pending:
         for task in pending:
@@ -12958,12 +12959,12 @@ async def _process_stacked_anime_command(
                 chat_id=message.chat.id,
                 text=f"{success_phrase} (+{len(successful_downloads)})"
             )
-            asyncio.create_task(delete_message_after_delay(sent_notification, 15))
+            spawn_task(delete_message_after_delay(sent_notification, 15))
     except ValueError as e:
         print(f"[{board_id}] Не удалось обработать команду для user {user_id}: {e}")
         fail_text = "Не удалось получить контент. API недоступны или лимит исчерпан."
         error_msg = await message.bot.send_message(message.chat.id, fail_text)
-        asyncio.create_task(delete_message_after_delay(error_msg, 10))
+        spawn_task(delete_message_after_delay(error_msg, 10))
     finally:
         if gate_acquired:
             anime_media_gate.release()
@@ -12981,7 +12982,7 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
                 cooldown_msg = random.choice(DEANON_COOLDOWN_PHRASES)
                 try:
                     sent_msg = await message.answer(cooldown_msg)
-                    asyncio.create_task(delete_message_after_delay(sent_msg, 5))
+                    spawn_task(delete_message_after_delay(sent_msg, 5))
                 except Exception: pass
                 try:
                     if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
@@ -13168,7 +13169,7 @@ async def cmd_zaputin(message: types.Message, board_id: str | None, stream: str 
         "post_num": pnum,
     })
     await _activate_mode(board_id, 'zaputin_mode')
-    disable_task = asyncio.create_task(disable_mode_after_delay(309, board_id, 'zaputin_mode'))
+    disable_task = spawn_task(disable_mode_after_delay(309, board_id, 'zaputin_mode'))
     b_data['active_mode_task'] = disable_task
     try:
         await message.delete()
@@ -13272,7 +13273,7 @@ async def cmd_suka_blyat(message: types.Message, board_id: str | None, stream: s
         "post_num": pnum,
     })
     await _activate_mode(board_id, 'suka_blyat_mode')
-    disable_task = asyncio.create_task(disable_mode_after_delay(303, board_id, 'suka_blyat_mode'))
+    disable_task = spawn_task(disable_mode_after_delay(303, board_id, 'suka_blyat_mode'))
     b_data['active_mode_task'] = disable_task
     try:
         await message.delete()
@@ -13347,7 +13348,7 @@ async def cmd_admin_say(message: types.Message, board_id: str | None, stream: st
         })
         conf_txt = f"✅ Message sent (#{pnum})" if lang == 'en' else (f"✅ 送信完了 (#{pnum})" if lang == 'jp' else f"✅ Сообщение отправлено (#{pnum})")
         sent_conf = await message.answer(conf_txt)
-        asyncio.create_task(delete_message_after_delay(sent_conf, 5))
+        spawn_task(delete_message_after_delay(sent_conf, 5))
     try: await message.delete()
     except TelegramBadRequest: pass
 
@@ -14507,7 +14508,7 @@ async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | No
             else:
                 cooldown_msg = "⏳ Создавать опросы можно раз в минуту."
             sent = await message.answer(cooldown_msg)
-            asyncio.create_task(delete_message_after_delay(sent, 5))
+            spawn_task(delete_message_after_delay(sent, 5))
         except (TelegramForbiddenError, TelegramBadRequest):
             pass
         return
@@ -14797,7 +14798,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         async with pending_edit_lock:
             if post_num in pending_edit_tasks:
                 pending_edit_tasks[post_num].cancel()
-            new_task = asyncio.create_task(
+            new_task = spawn_task(
                 execute_delayed_edit(
                     post_num=post_num,
                     bot_instance=callback.bot,
@@ -14811,7 +14812,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
 async def cmd_roll(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
 
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     if not board_id: 
@@ -14831,7 +14832,7 @@ async def cmd_roll(message: types.Message, board_id: str | None, stream: str = '
                 else: cooldown_msg = random.choice(ROULETTE_COOLDOWN_PHRASES)
                 try:
                     sent_msg = await message.answer(cooldown_msg)
-                    asyncio.create_task(delete_message_after_delay(sent_msg, 5))
+                    spawn_task(delete_message_after_delay(sent_msg, 5))
                 except (TelegramBadRequest, TelegramForbiddenError): pass
                 try: await message.delete()
                 except TelegramBadRequest: pass
@@ -15207,7 +15208,7 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
         
     if media_group_key in media_group_timers:
         media_group_timers[media_group_key].cancel()
-    media_group_timers[media_group_key] = asyncio.create_task(
+    media_group_timers[media_group_key] = spawn_task(
         complete_media_group_after_delay(media_group_key, message.bot, delay=1.5)
     )
 async def complete_media_group_after_delay(media_group_key: str, bot_instance: Bot, delay: float = 1.5):
@@ -15597,7 +15598,7 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
             if not final_bot_instance: return
             async with pending_edit_lock:
                 if post_num in pending_edit_tasks: pending_edit_tasks[post_num].cancel()
-                new_task = asyncio.create_task(execute_delayed_edit(post_num, final_bot_instance, author_id_for_notify, text_for_notify, reply_to_message_id=author_message_id_for_reply))
+                new_task = spawn_task(execute_delayed_edit(post_num, final_bot_instance, author_id_for_notify, text_for_notify, reply_to_message_id=author_message_id_for_reply))
                 pending_edit_tasks[post_num] = new_task
     except Exception as e:
         print(f"❌ Ошибка в handle_message_reaction: {e}")
@@ -15657,7 +15658,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 edu_text = random.choice(phrases)
                 try:
                     sent = await message.answer(edu_text)
-                    asyncio.create_task(delete_message_after_delay(sent, 20))
+                    spawn_task(delete_message_after_delay(sent, 20))
                 except Exception: pass
         else:
             b_data['single_photo_counter'][user_id] = 0
@@ -15682,7 +15683,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 fuck_off_text = random.choice(phrases)
                 try:
                     sent_msg = await message.answer(fuck_off_text)
-                    asyncio.create_task(delete_message_after_delay(sent_msg, 7))
+                    spawn_task(delete_message_after_delay(sent_msg, 7))
                     b_data.setdefault('last_roll_time', {})[user_id] = now
                 except Exception: 
                     pass
@@ -15790,7 +15791,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 if _is_spam_filtered(text_chunk, board_id, user_id):
                     is_shadow_muted = True 
                 else:
-                    asyncio.create_task(check_and_send_contextual_reply(message.bot, user_id, text_chunk, board_id, stream=stream))
+                    spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_chunk, board_id, stream=stream))
             
             if is_shadow_muted:
                 await process_shadow_reject(ShadowRejectContext(
@@ -15865,7 +15866,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     if text_for_corpus:
         async with storage_lock: last_messages.append(text_for_corpus)
         if board_id != 'trash':
-            asyncio.create_task(check_and_send_contextual_reply(message.bot, user_id, text_for_corpus, board_id, stream=stream))
+            spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_for_corpus, board_id, stream=stream))
     if not is_shadow_muted and text_for_corpus:
         if _is_spam_filtered(text_for_corpus, board_id, user_id):
             is_shadow_muted = True
@@ -16053,7 +16054,7 @@ async def mode_auto_disabler():
                                 b_data[mode] = False
                             b_data['last_mode_activation'] = None
                             b_data['active_mode_task'] = None # Сбрасываем таск
-                            asyncio.create_task(disable_mode_after_delay(0, board_id, active_modes[0]))
+                            spawn_task(disable_mode_after_delay(0, board_id, active_modes[0]))
         except Exception as e:
             print(f"❌ Ошибка в mode_auto_disabler: {e}")
 async def _run_background_task(task_factory: Callable[[], Awaitable[Any]], task_name: str):
@@ -16367,7 +16368,7 @@ async def site_posts_broadcaster():
                         if not content.get('is_system_message'):
                             bot_to_use = GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
                             if bot_to_use:
-                                asyncio.create_task(_forward_post_to_realtime_archive(
+                                spawn_task(_forward_post_to_realtime_archive(
                                     bot_instance=bot_to_use,
                                     board_id=board_id,
                                     post_num=post_num,
@@ -16461,7 +16462,7 @@ async def reaction_queue_processor():
                         async with pending_edit_lock:
                             if post_num_to_process in pending_edit_tasks:
                                 pending_edit_tasks[post_num_to_process].cancel()
-                            new_task = asyncio.create_task(
+                            new_task = spawn_task(
                                 execute_delayed_edit(
                                     post_num=post_num_to_process,
                                     bot_instance=bot_instance,
@@ -16699,7 +16700,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "admin_action_sync_worker": lambda: admin_action_sync_worker(),
     }
     tasks = [
-        asyncio.create_task(_run_background_task(factory, name))
+        spawn_task(_run_background_task(factory, name))
         for name, factory in tasks_to_run.items()
     ]
     print(f"✓ Background tasks started: {len(tasks)}")
@@ -16862,7 +16863,7 @@ def warm_native_media_stack() -> None:
 
 def setup_lifecycle_handlers(loop: asyncio.AbstractEventLoop, bots: list[Bot], healthcheck_site: web.TCPSite | None):
 
-    handler = lambda: asyncio.create_task(graceful_shutdown(bots, healthcheck_site))
+    handler = lambda: spawn_task(graceful_shutdown(bots, healthcheck_site))
     if sys.platform != "win32":
         if hasattr(signal, 'SIGTERM'):
             loop.add_signal_handler(signal.SIGTERM, handler)
@@ -16979,7 +16980,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     if not board_id: return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
     if not message.reply_to_message:
@@ -16997,7 +16998,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     elif lang == 'jp': confirm_msg = "✅ モデレーターに報告しました。ありがとうございます！"
     
     sent_confirm = await message.answer(confirm_msg)
-    try: asyncio.create_task(delete_message_after_delay(sent_confirm, 10))
+    try: spawn_task(delete_message_after_delay(sent_confirm, 10))
     except Exception: pass
 
     # Get author id of reported message
@@ -17215,7 +17216,7 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
     if not board_id: return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     
-    try: asyncio.create_task(delete_message_after_delay(message, 5))
+    try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
     
     if not HAS_WORDCLOUD or not GRAPH_LIBS_AVAILABLE:
@@ -17265,7 +17266,7 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
         final_text = " ".join(filtered_words)
         
         if not final_text.strip():
-            await status_message.edit_text("Недостаточно текста за последние 24 часа для генерации облака слов.")
+            await status_message.edit_text("❌ Хуй там плавал, а не облако слов. Вы нафлудили слишком мало текста за сутки.")
             return
 
         def generate_image(txt):

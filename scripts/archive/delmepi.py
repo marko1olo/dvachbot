@@ -1,4 +1,5 @@
 import asyncio
+from common.task_manager import spawn_task
 import aiosqlite
 import logging
 import time
@@ -465,10 +466,10 @@ async def main():
         input_queue.put_nowait(f)
         
     sem = asyncio.Semaphore(CONCURRENCY_LIMIT)
-    writer_task = asyncio.create_task(db_writer(output_queue))
+    writer_task = spawn_task(db_writer(output_queue))
     
     workers = [
-        asyncio.create_task(worker(sem, input_queue, output_queue))
+        spawn_task(worker(sem, input_queue, output_queue))
         for _ in range(CONCURRENCY_LIMIT)
     ]
     
