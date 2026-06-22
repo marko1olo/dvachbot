@@ -27,8 +27,8 @@ mocked_deps = [
     'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
-    'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
-    'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
+    'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client', 'aiogram.filters', 'aiogram.utils', 'aiogram.utils.media_group', 'aiogram.fsm', 'aiogram.fsm.state', 'aiogram.fsm.context',
+    'aiogram.client.session', 'aiogram.client.session.aiohttp', 'aiogram.client.default', 'common.bot_pool',
     'aiogram.webhook', 'aiogram.webhook.aiohttp_server'
 ]
 
@@ -38,8 +38,21 @@ for dep in mocked_deps:
 # Return MagicMock for any attribute access on our mocked modules
 for mod_name in sys.modules:
     if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
-        sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
-
+        if 'aiogram' in mod_name:
+            class DummyClass(object):
+                pass
+            class FallbackMock(MagicMock):
+                def __mro_entries__(self, bases):
+                    return (DummyClass,)
+                def __call__(self, *args, **kwargs):
+                    return FallbackMock()
+                def __getattr__(self, name):
+                    if name in ['_mock_methods', '_mock_unsafe', '__class__', '__mro_entries__']:
+                        return super().__getattr__(name)
+                    return FallbackMock()
+            sys.modules[mod_name].__getattr__ = lambda name: FallbackMock()
+        else:
+            sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
 # Now we can safely import the function under test
 from Dubsite_tgach.main import get_real_ip
 
@@ -168,3 +181,100 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+from main import format_board_statistics
+
+class TestFormatBoardStatistics(unittest.TestCase):
+    def setUp(self):
+        self.posts_per_hour = {"b1": 10, "b2": 5}
+        self.board_data = {
+            "b1": {"board_post_count": 100},
+            "b2": {"board_post_count": 50}
+        }
+        self.board_config = {
+            "b1": {"username": "@board_1", "name": "Board 1"},
+            "b2": {"username": "board_2", "name": "Board 2"}
+        }
+
+    @patch('main.random.random')
+    def test_happy_path_en(self, mock_random):
+        mock_random.return_value = 0.9 # skip caption
+        text, title = format_board_statistics('en', self.posts_per_hour, self.board_data, self.board_config)
+        self.assertEqual(title, "### Statistics ###")
+        self.assertIn('<a href="https://t.me/board_1">Board 1</a> - 10 pst/hr, total: 100', text)
+        self.assertIn('<a href="https://t.me/board_2">Board 2</a> - 5 pst/hr, total: 50', text)
+
+    @patch('main.random.random')
+    def test_happy_path_jp(self, mock_random):
+        mock_random.return_value = 0.9
+        text, title = format_board_statistics('jp', self.posts_per_hour, self.board_data, self.board_config)
+        self.assertEqual(title, "### 統計 ###")
+        self.assertIn('<a href="https://t.me/board_1">Board 1</a> - 10 レス/時, 合計: 100', text)
+
+    @patch('main.random.random')
+    def test_happy_path_ru(self, mock_random):
+        mock_random.return_value = 0.9
+        text, title = format_board_statistics('ru', self.posts_per_hour, self.board_data, self.board_config)
+        self.assertEqual(title, "### Статистика ###")
+        self.assertIn('<a href="https://t.me/board_1">Board 1</a> - 10 пст/час, всего: 100', text)
+
+    @patch('main.random.random')
+    def test_skip_test_board(self, mock_random):
+        mock_random.return_value = 0.9
+        board_config_with_test = self.board_config.copy()
+        board_config_with_test['test'] = {"username": "@test_board", "name": "Test Board"}
+        text, title = format_board_statistics('en', self.posts_per_hour, self.board_data, board_config_with_test)
+        self.assertNotIn("Test Board", text)
+        self.assertNotIn("test_board", text)
+
+    @patch('main.random.random')
+    def test_missing_username(self, mock_random):
+        mock_random.return_value = 0.9
+        board_config_missing_username = {
+            "b1": {"name": "Board 1"} # missing username
+        }
+        text, title = format_board_statistics('en', self.posts_per_hour, self.board_data, board_config_missing_username)
+        self.assertNotIn("Board 1", text)
+
+    @patch('main.random.random')
+    def test_empty_username(self, mock_random):
+        mock_random.return_value = 0.9
+        board_config_empty_username = {
+            "b1": {"username": "", "name": "Board 1"}
+        }
+        text, title = format_board_statistics('en', self.posts_per_hour, self.board_data, board_config_empty_username)
+        self.assertNotIn("Board 1", text)
+
+    @patch('main.random.random')
+    def test_strange_username(self, mock_random):
+        mock_random.return_value = 0.9
+        board_config_strange_username = {
+            "b1": {"username": "@@strange_name@@", "name": "Strange Board"}
+        }
+        text, title = format_board_statistics('en', self.posts_per_hour, self.board_data, board_config_strange_username)
+        self.assertIn('<a href="https://t.me/strange_name">Strange Board</a>', text)
+
+    @patch('main.random.random')
+    def test_missing_stats(self, mock_random):
+        mock_random.return_value = 0.9
+        # No stats in posts_per_hour or board_data, should default to 0 (if key exists but no post count)
+        text, title = format_board_statistics('en', {}, {"b1": {}, "b2": {}}, self.board_config)
+        self.assertIn('<a href="https://t.me/board_1">Board 1</a> - 0 pst/hr, total: 0', text)
+
+    @patch('main.random.random')
+    def test_missing_board_data_entry(self, mock_random):
+        mock_random.return_value = 0.9
+        # If the board_data completely misses the board ID, we expect it to raise KeyError initially.
+        # But wait, my task is to ensure no KeyError is raised during string interpolation?
+        # Actually my task is just adding tests.
+        with self.assertRaises(KeyError):
+            format_board_statistics('en', {}, {}, self.board_config)
+
+    @patch('main.random.random')
+    def test_missing_name_key(self, mock_random):
+        mock_random.return_value = 0.9
+        board_config_missing_name = {
+            "b1": {"username": "board_1"} # missing name
+        }
+        with self.assertRaises(KeyError):
+            format_board_statistics('en', self.posts_per_hour, self.board_data, board_config_missing_name)
