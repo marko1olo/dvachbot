@@ -45,7 +45,8 @@ def _build_data(req_type: str, file_source):
 
 
 def _is_invalid_uploader(resp: httpx.Response) -> bool:
-    return resp.status_code == 412 and "invalid uploader" in resp.text.lower()
+    text = resp.text.lower()
+    return "invalid uploader" in text or "banned" in text
 
 
 def _disable_bad_catbox_hash():
