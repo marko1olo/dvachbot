@@ -26,6 +26,8 @@ BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насилов
 
 GROQ_COOLDOWN_UNTIL = 0
 TEMP_FAILED_FILES = {}
+SHA_TAGS_CACHE = {}
+MAX_CACHE_SIZE = 10000
 
 # ==========================================
 # ФУНКЦИИ BLURHASH
@@ -337,13 +339,24 @@ async def tagging_loop():
 
                 sha, phash, b_hash, resized_bytes = res
                 tags = None
-                try:
-                    async with db.execute("SELECT tags FROM FileRegistry WHERE sha256 = ? AND tags IS NOT NULL AND tags != '' LIMIT 1", (sha,)) as cursor:
-                        row = await cursor.fetchone()
-                        if row:
-                            tags = row[0]
-                            logger.info(f"♻️ Skip Neuro: Tags found for SHA {sha[:8]}")
-                except Exception: pass
+
+                # Check cache first
+                if sha in SHA_TAGS_CACHE:
+                    tags = SHA_TAGS_CACHE.pop(sha) # Remove to re-insert at the end (LRU)
+                    SHA_TAGS_CACHE[sha] = tags
+                    logger.info(f"⚡ Skip DB/Neuro: Tags found in cache for SHA {sha[:8]}")
+                else:
+                    try:
+                        async with db.execute("SELECT tags FROM FileRegistry WHERE sha256 = ? AND tags IS NOT NULL AND tags != '' LIMIT 1", (sha,)) as cursor:
+                            row = await cursor.fetchone()
+                            if row:
+                                tags = row[0]
+                                logger.info(f"♻️ Skip Neuro: Tags found for SHA {sha[:8]}")
+                                # Store in cache
+                                SHA_TAGS_CACHE[sha] = tags
+                                if len(SHA_TAGS_CACHE) > MAX_CACHE_SIZE:
+                                    SHA_TAGS_CACHE.pop(next(iter(SHA_TAGS_CACHE)))
+                    except Exception: pass
 
                 # 3. НЕЙРОНКА (Только если теги еще не найдены в БД)
                 if tags is None:
@@ -380,6 +393,15 @@ async def tagging_loop():
                             await db.commit()
                         save_success = True
                         logger.info(f"✅ {file_id[:8]} | {tag_mark} | Saved to DB")
+
+                        # Populate cache with newly generated tags
+                        if tags:
+                            if sha in SHA_TAGS_CACHE:
+                                SHA_TAGS_CACHE.pop(sha)
+                            SHA_TAGS_CACHE[sha] = tags
+                            if len(SHA_TAGS_CACHE) > MAX_CACHE_SIZE:
+                                SHA_TAGS_CACHE.pop(next(iter(SHA_TAGS_CACHE)))
+
                         break
                     except Exception as e:
                         if "locked" in str(e).lower():
