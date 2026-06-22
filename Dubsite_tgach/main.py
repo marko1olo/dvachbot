@@ -2170,10 +2170,11 @@ async def enrich_heavy_data(posts: List[dict]):
             try:
                 db = await get_pool()
                 placeholders = ','.join('?' for _ in ids)
-                q = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
-                res = defaultdict(list)
+                q = f"SELECT target_post_num, json_group_array(source_post_num) FROM Backlinks WHERE target_post_num IN ({placeholders}) GROUP BY target_post_num"
+                res = {}
                 async with db.execute(q, ids) as cursor:
-                    async for row in cursor: res[row[0]].append(row[1])
+                    async for row in cursor:
+                        res[row[0]] = json.loads(row[1])
                 return res
             except: return {}
         tasks.append(fetch_backlinks_task(all_post_ids))
@@ -6073,7 +6074,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
