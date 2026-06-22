@@ -94,6 +94,89 @@ def get_real_ip(request: Request) -> str:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host
+TROLL_PATTERNS_REGEX = re.compile('|'.join(map(re.escape, [
+    '/.env',
+    '/.git',
+    '/.ssh',
+    '/.bash',
+    '/.profile',
+    '/.history',
+    '/.aws',
+    '/.rhosts',
+    '/.sh_history',
+    '/.wget',
+    '/.htpasswd',
+    '/.htaccess',
+    '/.ds_store',
+    '/.bak',
+    '/.old',
+    '/.save',
+    '/.log',
+    '/.txt',
+    '/.conf',
+    '/.sql',
+    '/goform',
+    '/hello.world',
+    '/mcp',
+    '/sse',
+    '/wp-',
+    '/wp/',
+    '/xmlrpc',
+    '/wlwmanifest',
+    '/bitrix',
+    '/joomla',
+    '/drupal',
+    '/laravel',
+    '/symfony',
+    '/storage/logs',
+    '/vendor',
+    '/composer',
+    '/admin',
+    '/phpmyadmin',
+    '/setup',
+    '/config',
+    '/backup',
+    '/dump',
+    '/db.sql',
+    '/console',
+    '/shell',
+    '/root',
+    '/eval',
+    '/invoker',
+    '/actuator',
+    '/api/v1',
+    '/dashboard',
+    '/cpanel',
+    '/whm',
+    '/sql',
+    '/install',
+    '/+CSCOL+/',
+    '/+CSCOL+',
+    '/+CSCOE+/',
+    '/+CSCOE+',
+    '/autodiscover',
+    '/owa',
+    '/exchange',
+    '/ecp',
+    '/_catalogs',
+    '/_vti',
+    '/hnap1',
+    '/nmap',
+    '/evox',
+    '/sdk',
+    '/phpunit',
+    '/cgi-bin',
+    '/~',
+    '/_',
+    '/1.bak',
+    '/0.bak',
+    '/a.bak',
+    '/12.bak',
+    '/config.json',
+    '/config.php',
+    '/onfig.js',
+])))
+
 GEOIP_READER = None
 
 @alru_cache(maxsize=10000, ttl=3600)
@@ -1412,27 +1495,12 @@ async def custom_404_handler(request: Request, exc):
         return Response(status_code=404)
 
     # 2. ПРОВЕРКА НА БОТА-СКАНЕРА (Только для подозрительных путей)
-    # ПАТТЕРНЫ ИЗ ВАШИХ ЛОГОВ
-    troll_patterns = [
-        '/.env', '/.git', '/.ssh', '/.bash', '/.profile', '/.history', '/.aws', 
-        '/.rhosts', '/.sh_history', '/.wget', '/.htpasswd', '/.htaccess', '/.ds_store',
-        '/.bak', '/.old', '/.save', '/.log', '/.txt', '/.conf', '/.sql', '/goform', '/hello.world', '/mcp', '/sse',
-        '/wp-', '/wp/', '/xmlrpc', '/wlwmanifest', '/bitrix', '/joomla', '/drupal',
-        '/laravel', '/symfony', '/storage/logs', '/vendor', '/composer',
-        '/admin', '/phpmyadmin', '/setup', '/config', '/backup', '/dump', '/db.sql',
-        '/console', '/shell', '/root', '/eval', '/invoker', '/actuator', '/api/v1',
-        '/dashboard', '/cpanel', '/whm', '/sql', '/install', '/+CSCOL+/','/+CSCOL+', '/+CSCOE+/', '/+CSCOE+',
-        '/autodiscover', '/owa', '/exchange', '/ecp', '/_catalogs', '/_vti', 
-        '/hnap1', '/nmap', '/evox', '/sdk', '/phpunit', '/cgi-bin', 
-        '/~', '/_', '/1.bak', '/0.bak', '/a.bak', '/12.bak', '/config.json', '/config.php', '/onfig.js',
-    ]
-    
     is_bot = False
     
     # Проверка только если путь НЕ безопасный
     if path.startswith(('/.', '/_', '/~', '/api/v', '/wp-')):
         is_bot = True
-    elif any(p in path for p in troll_patterns):
+    elif TROLL_PATTERNS_REGEX.search(path):
         is_bot = True
     elif path.endswith(('.php', '.asp', '.aspx', '.jsp', '.cgi', '.sh', '.sql', '.bak', '.old', '.save', '.log', '.rar', '.zip', '.7z', '.env', '.ini')):
         is_bot = True
@@ -2661,28 +2729,6 @@ async def custom_404_handler(request: Request, exc):
     path = request.url.path.lower()
     client_ip = get_real_ip(request)
     
-    # ПАТТЕРНЫ ИЗ ВАШИХ ЛОГОВ (И НЕ ТОЛЬКО)
-    troll_patterns = [
-        # System & Configs
-        '/.env', '/.git', '/.ssh', '/.bash', '/.profile', '/.history', '/.aws', 
-        '/.rhosts', '/.sh_history', '/.wget', '/.htpasswd', '/.htaccess', '/.ds_store',
-        '/.bak', '/.old', '/.save', '/.log', '/.txt', '/.conf', '/.sql', '/goform', '/hello.world', '/mcp', '/sse',
-        
-        # CMS & Frameworks
-        '/wp-', '/wp/', '/xmlrpc', '/wlwmanifest', '/bitrix', '/joomla', '/drupal',
-        '/laravel', '/symfony', '/storage/logs', '/vendor', '/composer',
-        
-        # Admin Panels & DBs
-        '/admin', '/phpmyadmin', '/setup', '/config', '/backup', '/dump', '/db.sql',
-        '/console', '/shell', '/root', '/eval', '/invoker', '/actuator', '/api/v1',
-        '/dashboard', '/cpanel', '/whm', '/sql', '/install', '/+CSCOL+/','/+CSCOL+', '/+CSCOE+/', '/+CSCOE+',
-        
-        # Scanners (из логов пользователя)
-        '/autodiscover', '/owa', '/exchange', '/ecp', '/_catalogs', '/_vti', 
-        '/hnap1', '/nmap', '/evox', '/sdk', '/phpunit', '/cgi-bin', 
-        '/~', '/_', '/1.bak', '/0.bak', '/a.bak', '/12.bak', '/config.json', '/config.php', '/onfig.js',
-    ]
-    
     # 1. МГНОВЕННАЯ ПРОВЕРКА (Оптимизирована под логи)
     is_bot = False
     
@@ -2691,8 +2737,8 @@ async def custom_404_handler(request: Request, exc):
     if path.startswith(('/.', '/_', '/~', '/api/v', '/wp-')):
         is_bot = True
     
-    # Проверка вхождений (медленнее, но точнее)
-    elif any(p in path for p in troll_patterns):
+    # Проверка вхождений (быстро через regex)
+    elif TROLL_PATTERNS_REGEX.search(path):
         is_bot = True
     
     # Проверка расширений (для мусора типа index.php.bak)
@@ -6073,7 +6119,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
