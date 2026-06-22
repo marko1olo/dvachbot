@@ -8,7 +8,7 @@ from urllib.parse import urlparse, urlunparse, quote, unquote
 import aiohttp
 import socket
 from dotenv import load_dotenv
-from typing import Optional, List, Dict, Callable, Awaitable
+from typing import Optional, List, Dict, Awaitable
 from aiohttp import ClientTimeout
 import json
 import time
@@ -22,8 +22,6 @@ PROXY_STATE_COOLDOWN = 60  # 60 секунд
 PROXY_STATE_LOCK = asyncio.Lock()
 PROXY_URL = "http://127.0.0.1:2334" 
 
-async def _get_proxy_usage_strategy() -> bool: return True
-async def _update_proxy_state_on_failure(): pass
 
 async def _get_proxy_usage_strategy() -> bool:
     """Определяет, следует ли использовать прокси, на основе кэшированного состояния."""

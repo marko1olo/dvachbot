@@ -1,4 +1,5 @@
 import asyncio
+from common.task_manager import spawn_task
 import logging
 import os
 import sys
@@ -119,7 +120,7 @@ async def main():
     # Создаем воркеров
     tasks = []
     for i, token in enumerate(BOT_TOKENS):
-        task = asyncio.create_task(worker(token, i+1))
+        task = spawn_task(worker(token, i+1))
         tasks.append(task)
 
     # Ждем, пока очередь опустеет

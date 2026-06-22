@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+from common.task_manager import spawn_task
 import time
 import random
 from pyrogram import Client
@@ -75,7 +76,7 @@ async def get_active_client(bot_token: str):
     """
     # 0. Периодическая очистка (с вероятностью 5% при каждом вызове)
     if len(_ACTIVE_CLIENTS) > 5 and random.random() < 0.05:
-        asyncio.create_task(_cleanup_idle_clients())
+        spawn_task(_cleanup_idle_clients())
 
     # 1. Проверка кулдауна
     if time.time() < _CONNECTION_COOLDOWN.get(bot_token, 0):

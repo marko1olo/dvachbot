@@ -19,6 +19,8 @@ Logging:
 """
 import logging
 import asyncio
+from common.http_utils import api_retry
+from common.task_manager import spawn_task
 import httpx
 import json
 import re
@@ -80,10 +82,11 @@ async def _safe_groq_json(messages, max_tokens=300):
             verify=False
         ) as client:
             try:
-                resp = await client.post(
+                resp = await _execute_groq_post(
+                    client,
                     "https://api.groq.com/openai/v1/chat/completions",
                     headers={"Authorization": f"Bearer {token}"},
-                    json={
+                    json_data={
                         "model": GROQ_MODEL,
                         "messages": messages,
                         "max_tokens": max_tokens,
@@ -137,6 +140,7 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
     import base64
     import time
     import asyncio
+from common.http_utils import api_retry
 
     logger.info(f"🔍 [DeepCheck] Starting analysis for file_id: {file_id}")
 
@@ -222,7 +226,7 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
 
                     # Логируем событие в БД
                     log_msg = f"☢️ NEURO-NUKE: User {uid} (IP: {ip_addr or 'unknown'}) banned FOREVER for CSAM attempt on post #{pid}"
-                    asyncio.create_task(log_global_event('bot', log_msg))
+                    spawn_task(log_global_event('bot', log_msg))
 
                     # 3. Уведомляем админов в Telegram
                     if bot:

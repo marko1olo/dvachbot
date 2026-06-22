@@ -93,5 +93,78 @@ class TestGetRealIp(unittest.TestCase):
         )
         self.assertEqual(get_real_ip(request), "9.10.11.12")
 
+
+from Dubsite_tgach.main import clean_title_text
+
+class TestCleanTitleText(unittest.TestCase):
+    def test_empty_string(self):
+        self.assertEqual(clean_title_text(""), "")
+        self.assertEqual(clean_title_text(None), "")
+
+    def test_remove_html_tags(self):
+        self.assertEqual(clean_title_text("<h1>Hello</h1>"), "Hello")
+        self.assertEqual(clean_title_text("<p>Some <b>bold</b> text</p>"), "Some bold text")
+
+    def test_remove_brackets(self):
+        self.assertEqual(clean_title_text("This is [some tag] text"), "This is text")
+        self.assertEqual(clean_title_text("[Prefix] Just the title"), "Just the title")
+
+    def test_excessive_whitespace(self):
+        self.assertEqual(clean_title_text("   Too   much   space   "), "Too much space")
+        self.assertEqual(clean_title_text("New\nlines\tand\ttabs"), "New lines and tabs")
+
+    def test_combined(self):
+        self.assertEqual(
+            clean_title_text("\n\n [Tag]   <h1>  Super Title  </h1>   [123] \t"),
+            "Super Title"
+        )
+        self.assertEqual(
+            clean_title_text("Title with <a href='https://example.com'>link</a> and [brackets]"),
+            "Title with link and"
+        )
+
 if __name__ == "__main__":
     unittest.main()
+
+from Dubsite_tgach.main import format_bayan_label
+from unittest.mock import patch
+
+class TestFormatBayanLabel(unittest.TestCase):
+    @patch('Dubsite_tgach.main.random.choice')
+    def test_bayan_low(self, mock_choice):
+        mock_choice.return_value = "Mocked_Low"
+        # 2 and 3 should be 'low'
+        self.assertEqual(format_bayan_label(2), "♻️ Mocked_Low (2)")
+        self.assertEqual(format_bayan_label(3), "♻️ Mocked_Low (3)")
+        # Make sure the phrases are chosen properly by looking at what was passed
+        self.assertEqual(len(mock_choice.call_args[0][0]), 3) # "bayan_low" array in RU has 3 items
+
+    @patch('Dubsite_tgach.main.random.choice')
+    def test_bayan_mid(self, mock_choice):
+        mock_choice.return_value = "Mocked_Mid"
+        # 4 to 10 should be 'mid'
+        self.assertEqual(format_bayan_label(4), "♻️ Mocked_Mid (4)")
+        self.assertEqual(format_bayan_label(10), "♻️ Mocked_Mid (10)")
+
+    @patch('Dubsite_tgach.main.random.choice')
+    def test_bayan_high(self, mock_choice):
+        mock_choice.return_value = "Mocked_High"
+        # > 10 should be 'high'
+        self.assertEqual(format_bayan_label(11), "♻️ Mocked_High (11)")
+        self.assertEqual(format_bayan_label(100), "♻️ Mocked_High (100)")
+
+    def test_bayan_count_zero_or_one(self):
+        # 0 or 1 should return empty string
+        self.assertEqual(format_bayan_label(0), "")
+        self.assertEqual(format_bayan_label(1), "")
+        self.assertEqual(format_bayan_label(-1), "")
+
+    @patch('Dubsite_tgach.main.random.choice')
+    def test_bayan_language_fallback(self, mock_choice):
+        mock_choice.return_value = "Mocked_Eng"
+        # English translations are present
+        res = format_bayan_label(5, lang='en')
+        self.assertEqual(res, "♻️ Mocked_Eng (5)")
+        # Assuming the fallback logic works for a missing lang
+        res = format_bayan_label(5, lang='missing_lang')
+        self.assertEqual(res, "♻️ Mocked_Eng (5)")

@@ -1,4 +1,5 @@
 import asyncio
+from common.task_manager import spawn_task
 import logging
 import re
 import os
@@ -13,7 +14,6 @@ from site_tgach.huggingface import upload_to_hf
 from site_tgach.mtproto_client import upload_file_mtproto
 from fastapi import UploadFile, HTTPException
 from PIL import Image
-#from site_tgach.neuro_moderator import check_image_content
 from common.bot_pool import global_bot_pool 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
@@ -417,7 +417,7 @@ async def process_and_upload_image(
     except Exception as e:
         logger.error(f"DB Register error: {e}")
 
-    asyncio.create_task(_upload_mirrors_task(
+    spawn_task(_upload_mirrors_task(
         current_bot, 
         result_data['original_file_id'], 
         file_bytes=contents,
@@ -425,8 +425,6 @@ async def process_and_upload_image(
         related_id=result_data['thumbnail_file_id']
     ))
     
-    #if thumbnail_bytes:
-       #asyncio.create_task(check_image_content(thumbnail_bytes, result_data['original_file_id']))
 
     return result_data
 async def create_thumbnail_in_memory(image_bytes: bytes) -> bytes | None:

@@ -1,4 +1,6 @@
 import asyncio
+from common.http_utils import api_retry
+from common.task_manager import spawn_task
 """
 tagging_worker.py
 This module contains the implementation of a tagging worker for processing images and videos 
@@ -205,7 +207,8 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
                 transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
                 async with httpx.AsyncClient(proxy=strategy["proxy"], transport=transport, verify=False, timeout=GROQ_TIMEOUT) as http_client:
                     client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client)
-                    resp = await client.chat.completions.create(
+                    resp = await _execute_tagging(
+                        client,
                         model=GROQ_MODEL,
                         messages=[{"role": "user", "content": [{"type": "text", "text": TAGGING_PROMPT}, {"type": "image_url", "image_url": {"url": url}}]}],
                         max_tokens=250
@@ -455,7 +458,7 @@ async def tagging_loop():
                 
                 if should_deep_check:
                     logger.warning(f"🛡️ Triggered DEEP CHECK for {file_id}")
-                    asyncio.create_task(run_deep_check(resized_bytes, file_id))
+                    spawn_task(run_deep_check(resized_bytes, file_id))
                 
                 if not tags:
                     TEMP_FAILED_FILES[file_id] = time.time() + 60

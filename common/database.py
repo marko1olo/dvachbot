@@ -3072,11 +3072,14 @@ def cleanup_old_posts_from_db(limit: int = 50000):
             tids = [r[0] for r in con.execute("SELECT thread_id FROM Threads WHERE is_archived = 1 AND last_updated_at < ?", (archive_cutoff,)).fetchall()]
             
             if tids:
-                for tid in tids:
+                chunk_size = 50
+                for i in range(0, len(tids), chunk_size):
+                    chunk = tids[i:i + chunk_size]
+                    placeholders = ",".join("?" * len(chunk))
                     try:
                         con.execute("BEGIN IMMEDIATE")
-                        con.execute("DELETE FROM Posts WHERE thread_id = ?", (tid,))
-                        con.execute("DELETE FROM Threads WHERE thread_id = ?", (tid,))
+                        con.execute(f"DELETE FROM Posts WHERE thread_id IN ({placeholders})", chunk)
+                        con.execute(f"DELETE FROM Threads WHERE thread_id IN ({placeholders})", chunk)
                         con.execute("COMMIT")
                         time.sleep(0.05)
                     except:
@@ -7010,7 +7013,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                     )
                     
                     # FIX: Если thread_id is None, используем ID родительского поста
-                    effective_thread_id = str(thread_id) if thread_id else str(reply_post_num)
+                    effective_thread_id = str(thread_id) if thread_id else str(source_post_num)
                     
                     await db.execute(
                         """INSERT INTO UserReplies 

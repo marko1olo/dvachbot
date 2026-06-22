@@ -1,6 +1,7 @@
 import sys
 import os
 import asyncio
+from common.task_manager import spawn_task
 import json
 import time
 import re
@@ -798,7 +799,7 @@ class ConnectionManager:
         if 'admin_feed' in self.active_connections:
             admin_conns = list(self.active_connections['admin_feed'])
             for ac in admin_conns:
-                asyncio.create_task(self._safe_send(ac, message_str, 'admin_feed'))
+                spawn_task(self._safe_send(ac, message_str, 'admin_feed'))
 manager = ConnectionManager()
 
 @asynccontextmanager
@@ -831,18 +832,18 @@ async def lifespan(app: FastAPI):
         app.state.file_uploader_bot = None 
     FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")
     app.state.broadcast_queue = asyncio.Queue(maxsize=1000)
-    db_task = asyncio.create_task(queue_listener(manager))
-    ws_task = asyncio.create_task(websocket_broadcaster(app.state.broadcast_queue, manager))
-    spam_task = asyncio.create_task(site_spam_cleanup_task())
-    shadow_task = asyncio.create_task(shadow_cleanup_task())
-    captcha_task = asyncio.create_task(captcha_cleanup_task())
-    tagging_task = asyncio.create_task(tagging_loop())
-    maintenance_task = asyncio.create_task(db_maintenance_task())
+    db_task = spawn_task(queue_listener(manager))
+    ws_task = spawn_task(websocket_broadcaster(app.state.broadcast_queue, manager))
+    spam_task = spawn_task(site_spam_cleanup_task())
+    shadow_task = spawn_task(shadow_cleanup_task())
+    captcha_task = spawn_task(captcha_cleanup_task())
+    tagging_task = spawn_task(tagging_loop())
+    maintenance_task = spawn_task(db_maintenance_task())
     from site_tgach.hf_batcher import hf_batch_loop
-    batcher_task = asyncio.create_task(hf_batch_loop())
+    batcher_task = spawn_task(hf_batch_loop())
     from site_tgach.neuro_poster import NeuroManager
     neuro_manager = NeuroManager(app.state.file_uploader_bot)
-    asyncio.create_task(refresh_random_indexes())
+    spawn_task(refresh_random_indexes())
     app.state.neuro_manager = neuro_manager 
     NEURO_ENABLED = False 
     async def neuro_loop():
@@ -865,11 +866,11 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error(f"Neuro loop crash: {e}")
                 await asyncio.sleep(60)
-    backup_task = asyncio.create_task(backup_loop(app.state.file_uploader_bot))
-    neuro_task = asyncio.create_task(neuro_loop())
-    mirror_task = asyncio.create_task(process_mirror_queue())
-    sim_task = asyncio.create_task(process_import_queue(app.state.broadcast_queue))
-    scanner_task = asyncio.create_task(scanner_loop(app.state)) 
+    backup_task = spawn_task(backup_loop(app.state.file_uploader_bot))
+    neuro_task = spawn_task(neuro_loop())
+    mirror_task = spawn_task(process_mirror_queue())
+    sim_task = spawn_task(process_import_queue(app.state.broadcast_queue))
+    scanner_task = spawn_task(scanner_loop(app.state)) 
     try:
         tasks = [db_task, ws_task, spam_task, shadow_task, maintenance_task, neuro_task, batcher_task, backup_task, mirror_task, captcha_task, tagging_task, sim_task, scanner_task]
     except UnboundLocalError:
@@ -1438,7 +1439,7 @@ async def custom_404_handler(request: Request, exc):
 
     if is_bot:
         BOT_VIOLATIONS[client_ip] += 1
-        # Баним только явных сканеров
+        # ⏳ Баним уебка...лько явных сканеров
         return await honey_pot_troll(request)
 
     return templates.TemplateResponse("error.jinja2", {
@@ -1524,7 +1525,7 @@ def to_makaba_post(post_data: dict, board_id: str) -> dict:
         "endless": 1 if post_data.get('is_endless') else 0
     }
 def log_system_event(message: str):
-    asyncio.create_task(log_global_event('site', message))
+    spawn_task(log_global_event('site', message))
     timestamp = datetime.now().strftime("%H:%M:%S")
     SYSTEM_LOGS.appendleft(f"[{timestamp}] {message}")
 def format_post_text(text: str) -> str:
@@ -3465,7 +3466,7 @@ async def api_makaba_posting(
     
     await backend.set(cooldown_key, str(time.time()), expire=limit_seconds)
 
-    asyncio.create_task(process_cross_links(board, new_post_num, comment, getattr(request.state, 'stream', 'ru')))
+    spawn_task(process_cross_links(board, new_post_num, comment, getattr(request.state, 'stream', 'ru')))
 
     if new_post_num and file_owners_to_save:
         from common.database import add_to_mirror_queue, add_to_hf_queue
@@ -3473,7 +3474,7 @@ async def api_makaba_posting(
             for oid, _ in file_owners_to_save:
                 await add_to_mirror_queue(oid, 'catbox')
                 await add_to_hf_queue(oid)
-        asyncio.create_task(_run_mirrors_bg())
+        spawn_task(_run_mirrors_bg())
     
     if not is_shadow_final:
         broadcast_post = await get_post_for_broadcast(new_post_num)
@@ -3488,7 +3489,7 @@ async def api_makaba_posting(
         thread_id = await get_thread_op_by_post_num(reply_to)
         if thread_id:
             await update_thread_last_updated(thread_id, time.time())
-            asyncio.create_task(process_backlinks(new_post_num, content['text'], reply_to))
+            spawn_task(process_backlinks(new_post_num, content['text'], reply_to))
             if board not in ["thread", "test"]:
                 await process_mentions_and_notify(new_post_num, board, content['text'], reply_to)
                 
@@ -4306,12 +4307,12 @@ async def api_admin_stealth_edit(
             for oid, _ in file_owners_to_save:
                 await add_to_mirror_queue(oid, 'catbox')
                 await add_to_hf_queue(oid)
-        asyncio.create_task(_run_mirrors_bg())
+        spawn_task(_run_mirrors_bg())
     
     broadcast_data = await get_post_for_broadcast(post_num)
     if broadcast_data:
-        asyncio.create_task(manager.broadcast_post_update(broadcast_data))
-        asyncio.create_task(add_post_to_random_cache(broadcast_data))
+        spawn_task(manager.broadcast_post_update(broadcast_data))
+        spawn_task(add_post_to_random_cache(broadcast_data))
         
     return {"status": "ok", "new_content": content}
 @app.websocket("/ws/{board_id}/{mode}")
@@ -4890,16 +4891,16 @@ async def api_create_post(
     final_thread_id = 0 
     local_logger.info("Creating background task for cross-links...")
     if not is_shadow_final:
-        asyncio.create_task(process_cross_links(board_id, new_post_num, sanitized_text, stream))
+        spawn_task(process_cross_links(board_id, new_post_num, sanitized_text, stream))
     
-    asyncio.create_task(process_backlinks(new_post_num, sanitized_text, reply_to))
+    spawn_task(process_backlinks(new_post_num, sanitized_text, reply_to))
     if new_post_num and file_owners_to_save:
         from common.database import add_to_mirror_queue, add_to_hf_queue
         async def _run_mirrors_bg():
             for oid, _ in file_owners_to_save:
                 await add_to_mirror_queue(oid, 'catbox')
                 await add_to_hf_queue(oid)
-        asyncio.create_task(_run_mirrors_bg())
+        spawn_task(_run_mirrors_bg())
     POST_RATE_LIMITER.append(time.time())
     while len(POST_RATE_LIMITER) > 0 and POST_RATE_LIMITER[0] < time.time() - 60:
         POST_RATE_LIMITER.popleft()
@@ -4933,7 +4934,7 @@ async def api_create_post(
                     except Exception as e:
                         logger.error(f"Delayed bump failed: {e}")
 
-                asyncio.create_task(delayed_bump(board_id, final_thread_id, stream, nm))
+                spawn_task(delayed_bump(board_id, final_thread_id, stream, nm))
         except: pass
     elif post_mode == 'reply' and thread_op_num:
         async with get_db_connection() as conn:
@@ -4947,7 +4948,7 @@ async def api_create_post(
             
         if is_endless:
             from common.database import trim_thread_posts
-            asyncio.create_task(trim_thread_posts(str(thread_op_num), max_posts=1000))
+            spawn_task(trim_thread_posts(str(thread_op_num), max_posts=1000))
         else:
             if await get_post_count_in_thread(thread_op_num) >= BUMP_LIMIT:
                 async with ARCHIVE_LOCKS[thread_op_num]:
@@ -4965,7 +4966,7 @@ async def api_create_post(
         
     local_logger.info("--- END api_create_post ---")
     if broadcast_post:
-        asyncio.create_task(add_post_to_random_cache(broadcast_post))
+        spawn_task(add_post_to_random_cache(broadcast_post))
         return broadcast_post
         
     return {
@@ -5708,7 +5709,7 @@ async def api_admin_endless_thread(data: AdminEndlessRequest, user: dict = Depen
     from common.database import toggle_thread_endless, trim_thread_posts
     await toggle_thread_endless(data.thread_id, data.endless)
     if data.endless:
-        asyncio.create_task(trim_thread_posts(data.thread_id, max_posts=1000))
+        spawn_task(trim_thread_posts(data.thread_id, max_posts=1000))
     status = "endless (cyclic)" if data.endless else "normal"
     log_system_event(f"🔄 ENDLESS: Thread {data.thread_id} is now {status}")
     return {"status": "ok"}
@@ -5742,7 +5743,7 @@ async def api_admin_delete_post(data: AdminAction, request: Request, user: dict 
         log_system_event(f"🗑️ DEL: Post #{data.post_num} deleted by {user.get('id')} ({user.get('role')})")
         # Мгновенное удаление у всех пользователей
         if post:
-            asyncio.create_task(manager.broadcast_system_event('delete', data.post_num, post['board_id']))
+            spawn_task(manager.broadcast_system_event('delete', data.post_num, post['board_id']))
         return {"message": "Deleted"}  
     raise HTTPException(status_code=404, detail="Error deleting post")
 @app.post("/api/admin/delete_after")
@@ -6072,7 +6073,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "Ошибка данных", "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
                 
                 res.append({
                     "id": r[0],

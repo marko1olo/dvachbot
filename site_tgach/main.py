@@ -31,6 +31,7 @@ This module is designed to be extensible and maintainable, allowing for future e
     """
 import os
 import asyncio
+from common.task_manager import spawn_task
 import json
 import time
 import re
@@ -133,6 +134,8 @@ def get_real_ip(request: Request) -> str:
     return request.client.host
 GEOIP_READER = None
 
+_geoip_init_lock = asyncio.Lock()
+
 @alru_cache(maxsize=10000, ttl=3600)
 async def get_country_by_ip(ip: str) -> str:
     global GEOIP_READER
@@ -144,9 +147,12 @@ async def get_country_by_ip(ip: str) -> str:
             import geoip2.database
             db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
             if os.path.exists(db_full_path):
-                GEOIP_READER = geoip2.database.Reader(db_full_path)
-        except:
-            pass
+                async with _geoip_init_lock:
+                    if GEOIP_READER is None:
+                        GEOIP_READER = await asyncio.to_thread(geoip2.database.Reader, db_full_path)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to load GeoIP DB: {e}")
 
     if GEOIP_READER:
         try:
@@ -1109,24 +1115,24 @@ async def lifespan(app: FastAPI):
     step_started = startup_mark("background tasks begin")
     FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")
     app.state.broadcast_queue = asyncio.Queue(maxsize=1000)
-    db_task = asyncio.create_task(queue_listener(manager))
-    ws_task = asyncio.create_task(websocket_broadcaster(app.state.broadcast_queue, manager))
-    spam_task = asyncio.create_task(site_spam_cleanup_task())
-    cache_cleanup_task = asyncio.create_task(site_cache_cleanup_task())
-    mtproto_task = asyncio.create_task(mtproto_cleanup_task())
-    shadow_task = asyncio.create_task(shadow_cleanup_task())
-    captcha_task = asyncio.create_task(captcha_cleanup_task())
-    tagging_task = asyncio.create_task(tagging_loop())
+    db_task = spawn_task(queue_listener(manager))
+    ws_task = spawn_task(websocket_broadcaster(app.state.broadcast_queue, manager))
+    spam_task = spawn_task(site_spam_cleanup_task())
+    cache_cleanup_task = spawn_task(site_cache_cleanup_task())
+    mtproto_task = spawn_task(mtproto_cleanup_task())
+    shadow_task = spawn_task(shadow_cleanup_task())
+    captcha_task = spawn_task(captcha_cleanup_task())
+    tagging_task = spawn_task(tagging_loop())
     maintenance_task = None
     if SITE_DB_MAINTENANCE_ENABLED:
-        maintenance_task = asyncio.create_task(db_maintenance_task())
+        maintenance_task = spawn_task(db_maintenance_task())
     else:
         logger.info("INFO:     Site DB maintenance disabled; bot/database maintenance remains authoritative.")
     from site_tgach.hf_batcher import hf_batch_loop
-    batcher_task = asyncio.create_task(hf_batch_loop())
+    batcher_task = spawn_task(hf_batch_loop())
     from site_tgach.neuro_poster import NeuroManager
     neuro_manager = NeuroManager(app.state.file_uploader_bot)
-    random_index_task = asyncio.create_task(refresh_random_indexes())
+    random_index_task = spawn_task(refresh_random_indexes())
     app.state.neuro_manager = neuro_manager 
     NEURO_ENABLED = False 
     async def neuro_loop():
@@ -1150,14 +1156,14 @@ async def lifespan(app: FastAPI):
                 logger.error(f"Neuro loop crash: {e}")
                 await asyncio.sleep(60)
     if app.state.file_uploader_bot:
-        backup_task = asyncio.create_task(backup_loop(app.state.file_uploader_bot))
+        backup_task = spawn_task(backup_loop(app.state.file_uploader_bot))
     else:
         backup_task = None
-    neuro_task = asyncio.create_task(neuro_loop())
-    mirror_task = asyncio.create_task(process_mirror_queue())
-    sim_task = asyncio.create_task(process_import_queue(app.state.broadcast_queue))
-    scanner_task = asyncio.create_task(scanner_loop(app.state)) 
-    tor_task = asyncio.create_task(update_tor_nodes_task())
+    neuro_task = spawn_task(neuro_loop())
+    mirror_task = spawn_task(process_mirror_queue())
+    sim_task = spawn_task(process_import_queue(app.state.broadcast_queue))
+    scanner_task = spawn_task(scanner_loop(app.state)) 
+    tor_task = spawn_task(update_tor_nodes_task())
     startup_mark("background tasks done", step_started)
     try:
         tasks = [
@@ -2069,7 +2075,7 @@ def to_makaba_post(post_data: dict, board_id: str) -> dict:
         "endless": 1 if post_data.get('is_endless') else 0
     }
 def log_system_event(message: str):
-    asyncio.create_task(log_global_event('site', message))
+    spawn_task(log_global_event('site', message))
     timestamp = datetime.now().strftime("%H:%M:%S")
     SYSTEM_LOGS.appendleft(f"[{timestamp}] {message}")
 def format_post_text(text: str) -> str:
@@ -4189,7 +4195,7 @@ async def api_makaba_posting(
     
     await backend.set(cooldown_key, str(time.time()), expire=limit_seconds)
 
-    asyncio.create_task(process_cross_links(board, new_post_num, comment, getattr(request.state, 'stream', 'ru')))
+    spawn_task(process_cross_links(board, new_post_num, comment, getattr(request.state, 'stream', 'ru')))
     
     if not is_shadow_final:
         broadcast_post = await get_post_for_broadcast(new_post_num)
@@ -4204,7 +4210,7 @@ async def api_makaba_posting(
         thread_id = await get_thread_op_by_post_num(reply_to)
         if thread_id:
             await update_thread_last_updated(thread_id, time.time())
-            asyncio.create_task(process_backlinks(new_post_num, content['text'], reply_to))
+            spawn_task(process_backlinks(new_post_num, content['text'], reply_to))
             if board not in ["thread", "test"]:
                 await process_mentions_and_notify(new_post_num, board, content['text'], reply_to)
                 
@@ -5052,8 +5058,8 @@ async def api_admin_stealth_edit(
 
     broadcast_data = await get_post_for_broadcast(post_num)
     if broadcast_data:
-        asyncio.create_task(manager.broadcast_post_update(broadcast_data))
-        asyncio.create_task(add_post_to_random_cache(broadcast_data))
+        spawn_task(manager.broadcast_post_update(broadcast_data))
+        spawn_task(add_post_to_random_cache(broadcast_data))
         
     return {"status": "ok", "new_content": content}
 @app.websocket("/ws/{board_id}/{mode}")
@@ -5661,13 +5667,13 @@ async def api_create_post(
     final_thread_id = 0 
     local_logger.info("Creating background task for cross-links...")
     if not is_shadow_final:
-        asyncio.create_task(process_cross_links(board_id, new_post_num, sanitized_text, stream))
+        spawn_task(process_cross_links(board_id, new_post_num, sanitized_text, stream))
     
     async def delayed_backlinks():
         await asyncio.sleep(0.25) # Даем базе "вздохнуть" после тяжелого INSERT
         await process_backlinks(new_post_num, sanitized_text, reply_to)
         
-    asyncio.create_task(delayed_backlinks())
+    spawn_task(delayed_backlinks())
     POST_RATE_LIMITER.append(time.time())
     while len(POST_RATE_LIMITER) > 0 and POST_RATE_LIMITER[0] < time.time() - 60:
         POST_RATE_LIMITER.popleft()
@@ -5701,7 +5707,7 @@ async def api_create_post(
                     except Exception as e:
                         logger.error(f"Delayed bump failed: {e}")
 
-                asyncio.create_task(delayed_bump(board_id, final_thread_id, stream, nm))
+                spawn_task(delayed_bump(board_id, final_thread_id, stream, nm))
         except: pass
     elif post_mode == 'reply' and thread_op_num:
         async with get_db_connection() as conn:
@@ -5715,7 +5721,7 @@ async def api_create_post(
             
         if is_endless:
             from common.database import trim_thread_posts
-            asyncio.create_task(trim_thread_posts(str(thread_op_num), max_posts=1000))
+            spawn_task(trim_thread_posts(str(thread_op_num), max_posts=1000))
         else:
             if await get_post_count_in_thread(thread_op_num) >= BUMP_LIMIT:
                 async with ARCHIVE_LOCKS[thread_op_num]:
@@ -5736,7 +5742,7 @@ async def api_create_post(
         
     local_logger.info("--- END api_create_post ---")
     if broadcast_post:
-        asyncio.create_task(add_post_to_random_cache(broadcast_post))
+        spawn_task(add_post_to_random_cache(broadcast_post))
         return broadcast_post
         
     return {
@@ -6738,7 +6744,7 @@ async def api_admin_endless_thread(data: AdminEndlessRequest, user: dict = Depen
     from common.database import toggle_thread_endless, trim_thread_posts
     await toggle_thread_endless(data.thread_id, data.endless)
     if data.endless:
-        asyncio.create_task(trim_thread_posts(data.thread_id, max_posts=1000))
+        spawn_task(trim_thread_posts(data.thread_id, max_posts=1000))
     status = "endless (cyclic)" if data.endless else "normal"
     log_system_event(f"🔄 ENDLESS: Thread {data.thread_id} is now {status}")
     return {"status": "ok"}
@@ -6787,7 +6793,7 @@ async def api_admin_delete_post(data: AdminAction, request: Request, user: dict 
 
         log_system_event(f"🗑️ DEL: Post #{data.post_num} deleted by {user.get('id')}")
         # Уведомляем открытые вкладки через WS
-        asyncio.create_task(manager.broadcast_system_event('delete', data.post_num, bid))
+        spawn_task(manager.broadcast_system_event('delete', data.post_num, bid))
         return {"message": "Deleted"}
     
     raise HTTPException(status_code=500, detail="Error deleting post")
@@ -7046,7 +7052,7 @@ async def get_cached_file_path(file_id: str, allow_protected_tokens: bool = Fals
 
             for start in range(0, len(candidates), batch_size):
                 tasks = [
-                    asyncio.create_task(fetch_with_bot(bot_id, token))
+                    spawn_task(fetch_with_bot(bot_id, token))
                     for bot_id, token in candidates[start:start + batch_size]
                 ]
                 try:
@@ -7442,7 +7448,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "Ошибка данных", "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
                 
                 res.append({
                     "id": r[0],
