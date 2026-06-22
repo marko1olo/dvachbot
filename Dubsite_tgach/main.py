@@ -11,6 +11,7 @@ import tracemalloc
 import io
 import random
 import secrets
+import functools
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.locales import TRANSLATIONS
 from common.async_file_io import (
@@ -270,6 +271,15 @@ logging.getLogger("uvicorn.error").addFilter(NoParsingFilter())
 BUMP_LIMIT = 600
 CAPTCHA_SESSIONS = {}
 SPAM_WORDS_CACHE: Dict[str, set] = defaultdict(set)
+
+@functools.lru_cache(maxsize=128)
+def _get_spam_pattern(stop_words_frozenset):
+    if not stop_words_frozenset:
+        return None
+    # Sort by length descending to match longest phrases first
+    sorted_words = sorted(list(stop_words_frozenset), key=len, reverse=True)
+    return re.compile("|".join(map(re.escape, sorted_words)))
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 URL_PATTERN = re.compile(r'(https?://[^\s<>"\'`]+)')
@@ -3376,8 +3386,13 @@ async def api_makaba_posting(
     if comment:
         comment = clean_zalgo(comment)
     stop_words = SPAM_WORDS_CACHE.get('all', set()) | SPAM_WORDS_CACHE.get(board, set())
-    if any(word in (comment or "").lower() for word in stop_words):
-        log_system_event(f"🛡️ SPAM BLOCKED (Makaba): User {author_id} tried to post stop-word.")
+
+    spam_pattern = _get_spam_pattern(frozenset(stop_words))
+    if spam_pattern:
+        match = spam_pattern.search((comment or "").lower())
+        if match:
+            word = match.group(0)
+            log_system_event(f"🛡️ SPAM BLOCKED (Makaba): User {author_id} tried to post '{word}'")
         await backend.set(cooldown_key, str(time.time()), expire=limit_seconds)
         return JSONResponse({"Error": "Spam detected", "Status": "Error"})
 
@@ -4546,13 +4561,15 @@ async def api_create_post(
     if images is None:
         images = []   
     clean_text_for_check = re.sub(r'[\u200b\u200c\u200d\u2060\ufeff]', '', text).lower()
-    if stop_words:
-        for word in stop_words:
-            if word in clean_text_for_check:
-                log_system_event(f"🛡️ SPAM BLOCKED: User {author_id} tried to post '{word}'")
-                await backend.set(key, str(time.time()), expire=limit_seconds)
-                return {
-                    "id": int(time.time()),
+    spam_pattern = _get_spam_pattern(frozenset(stop_words))
+    if spam_pattern:
+        match = spam_pattern.search(clean_text_for_check)
+        if match:
+            word = match.group(0)
+            log_system_event(f"🛡️ SPAM BLOCKED: User {author_id} tried to post '{word}'")
+            await backend.set(key, str(time.time()), expire=limit_seconds)
+            return {
+                "id": int(time.time()),
                     "board_id": board_id,
                     "author_id": author_id,
                     "content": {"text": text, "files": [], "type": "text"},
@@ -6073,7 +6090,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
