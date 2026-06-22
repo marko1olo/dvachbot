@@ -809,15 +809,11 @@ async def lifespan(app: FastAPI):
     await initialize_database()
     await sync_boards_with_config(BOARD_CONFIG)
     async with get_db_connection() as conn:
-        async with conn.execute("SELECT board_id, name, description FROM Boards WHERE is_approved = 1") as cursor:
+        async with conn.execute("SELECT board_id, name, description, banner_data, is_approved FROM Boards") as cursor:
             async for row in cursor:
-                bid, bname, bdesc = row
-                if bid not in BOARD_CONFIG:
+                bid, bname, bdesc, bdata, is_approved = row
+                if is_approved == 1 and bid not in BOARD_CONFIG:
                     BOARD_CONFIG[bid] = {'name': bname, 'description': bdesc}
-    async with get_db_connection() as conn:
-        async with conn.execute("SELECT board_id, banner_data FROM Boards") as cursor:
-            async for row in cursor:
-                bid, bdata = row
                 if bid in BOARD_CONFIG and bdata:
                     try:
                         BOARD_CONFIG[bid]['banner_data'] = json.loads(bdata)
@@ -6073,7 +6069,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
