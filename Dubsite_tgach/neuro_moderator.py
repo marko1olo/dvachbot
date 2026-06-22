@@ -1,12 +1,9 @@
-import base64
 import logging
 import asyncio
-from common.http_utils import api_retry
 import httpx
-import json
 from httpx import AsyncHTTPTransport # <--- Импорт транспорта
 
-from common.token_pool import hf_accounts, groq_pool 
+from common.token_pool import groq_pool
 from common.database import get_pool, add_to_mod_queue
 from common.db_pool import db_lock
 
