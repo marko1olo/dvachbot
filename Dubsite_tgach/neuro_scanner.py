@@ -3,14 +3,12 @@ from common.task_manager import spawn_task
 import logging
 import httpx
 import time
-import json
 import random
 from common.config import STORAGE_CHANNELS, ADMIN_IDS
-from common.bot_pool import global_bot_pool
 from common.database import get_db_connection, get_system_setting, log_global_event
 from common.db_pool import db_lock
 from site_tgach.importer import ThreadImporter
-from site_tgach.neuro_poster import NeuroManager, AI_CONFIG
+from site_tgach.neuro_poster import NeuroManager
 
 logger = logging.getLogger("neuro_scanner")
 
@@ -136,7 +134,8 @@ class NeuroScanner:
         # 4. Расчет интервалов (Pacing)
         # Вычисляем "естественную" скорость треда
         life_time_seconds = time.time() - best_candidate['timestamp']
-        if life_time_seconds < 1: life_time_seconds = 1
+        if life_time_seconds < 1:
+            life_time_seconds = 1
         
         avg_seconds_per_post = life_time_seconds / best_candidate['posts_count']
         
@@ -200,7 +199,8 @@ class NeuroScanner:
         
         try:
             res = await self.neuro._safe_api_call(messages, max_tokens=5, temperature=0.1)
-            if not res: return 0
+            if not res:
+                return 0
             # Ищем число в ответе
             import re
             match = re.search(r'\d+', res)
@@ -218,7 +218,8 @@ class NeuroScanner:
                 "SELECT 1 FROM ImportQueue WHERE original_post_num = ? LIMIT 1", 
                 (orig_num,)
             )
-            if await res.fetchone(): return True
+            if await res.fetchone():
+                return True
             
             # Проверяем в выполненных заявках (history)
             # В ImportRequests мы храним URL.
@@ -227,7 +228,8 @@ class NeuroScanner:
                 "SELECT 1 FROM ImportRequests WHERE url LIKE ? LIMIT 1",
                 (url_pattern,)
             )
-            if await res2.fetchone(): return True
+            if await res2.fetchone():
+                return True
             
         return False
 
@@ -251,7 +253,8 @@ class NeuroScanner:
         for admin_id in ADMIN_IDS:
             try:
                 await self.bot.send_message(admin_id, msg, parse_mode="HTML")
-            except: pass
+            except Exception:
+                pass
 
 async def scanner_loop(app_state):
     await asyncio.sleep(60)
@@ -284,7 +287,8 @@ async def scanner_loop(app_state):
             except (ValueError, TypeError):
                 interval_minutes = 66
             
-            if interval_minutes < 10: interval_minutes = 10
+            if interval_minutes < 10:
+                interval_minutes = 10
 
             # 3. Сканируем
             success = await scanner.scan_and_schedule(board_source='b', target_board='b', target_stream='ru')

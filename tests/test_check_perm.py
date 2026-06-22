@@ -13,9 +13,9 @@ try:
     import Dubsite_tgach.main
     Dubsite_tgach.main.ADMIN_IDS = [12345, 67890]
     from Dubsite_tgach.main import check_perm
-except ImportError as e:
-    print(f"ImportError: {e}")
-    sys.exit(1)
+except Exception as e:
+    print(f"Error loading main module: {e}")
+    raise
 
 class TestCheckPerm(unittest.TestCase):
     def test_empty_user(self):
