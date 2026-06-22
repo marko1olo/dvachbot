@@ -43,6 +43,8 @@ install_logging_redaction()
 logger = logging.getLogger("importer")
 
 PROXY_URL = "http://127.0.0.1:10808"
+HTTPX_LOCAL_ADDRESS = os.getenv("HTTPX_LOCAL_ADDRESS", "0.0.0.0")
+BIND_IPV4 = HTTPX_LOCAL_ADDRESS if HTTPX_LOCAL_ADDRESS else None
 RE_LINK_REF = re.compile(r'(?:>>|&gt;&gt;)(\d+)')
 
 class MemoryUploadFile:
@@ -166,7 +168,7 @@ class ThreadImporter:
                         http2=False, 
                         timeout=180.0,
                         proxy=PROXY_URL,
-                        transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=3)
+                        transport=httpx.AsyncHTTPTransport(local_address=BIND_IPV4, retries=3)
                     ) as clean_client:
                         resp = await clean_client.get(url, headers=clean_headers)
                 else:
@@ -456,7 +458,7 @@ class ThreadImporter:
 
         # Configured Transport from New Version
         transport = httpx.AsyncHTTPTransport(
-            local_address="0.0.0.0", # Принудительный IPv4 (Fix для OpenVPN)
+            local_address=BIND_IPV4, # Принудительный IPv4 (Fix для OpenVPN)
             retries=3,
             verify=False,
             http2=False              # Строго HTTP/1.1
