@@ -29,7 +29,13 @@ mocked_deps = [
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
     'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
-    'aiogram.webhook', 'aiogram.webhook.aiohttp_server'
+    'aiogram.webhook', 'aiogram.webhook.aiohttp_server',
+    'aiogram.client.default', 'aiogram.filters', 'aiogram.fsm',
+    'aiogram.fsm.context', 'aiogram.fsm.state', 'aiogram.utils',
+    'aiogram.utils.keyboard', 'aiogram.types.input_file',
+    'aiogram.exceptions', 'aiogram.types.message',
+    'aiogram.utils.media_group', 'aiogram.fsm.storage',
+    'aiogram.fsm.storage.memory', 'aiogram.fsm.storage.base'
 ]
 
 for dep in mocked_deps:
@@ -168,3 +174,47 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+from common.html_utils import clean_html_tags
+
+class TestCleanHtmlTags(unittest.TestCase):
+    def test_empty_string(self):
+        self.assertEqual(clean_html_tags(""), "")
+        self.assertEqual(clean_html_tags(None), None)
+
+    def test_no_tags(self):
+        text = "Hello, World!"
+        self.assertEqual(clean_html_tags(text), text)
+
+    def test_simple_tags(self):
+        self.assertEqual(clean_html_tags("<b>bold</b>"), "bold")
+        self.assertEqual(clean_html_tags("<i>italic</i>"), "italic")
+        self.assertEqual(clean_html_tags("<u>underline</u>"), "underline")
+        self.assertEqual(clean_html_tags("<s>strikethrough</s>"), "strikethrough")
+
+    def test_nested_tags(self):
+        self.assertEqual(clean_html_tags("<b><i>nested</i></b>"), "nested")
+
+    def test_malformed_tags(self):
+        self.assertEqual(clean_html_tags("< b>malformed</b>"), "malformed")
+        self.assertEqual(clean_html_tags("<b >malformed</ b>"), "malformed")
+        self.assertEqual(clean_html_tags("<script>alert('xss');</script>"), "alert('xss');")
+
+    def test_tags_with_attributes(self):
+        self.assertEqual(clean_html_tags('<a href="https://example.com">link</a>'), "link")
+        self.assertEqual(clean_html_tags('<img src="image.jpg" alt="image"/>'), "")
+        self.assertEqual(clean_html_tags('<script src="malicious.js"></script>'), "")
+
+    def test_legitimate_content_next_to_tags(self):
+        self.assertEqual(clean_html_tags('Text before <script src="malicious.js"></script> Text after'), "Text before  Text after")
+        self.assertEqual(clean_html_tags("Word <b>bold</b> word"), "Word bold word")
+
+    def test_unclosed_tags(self):
+        self.assertEqual(clean_html_tags("<b>unclosed"), "unclosed")
+
+    def test_angle_brackets_as_text(self):
+        # We expect it might match if it looks like a tag. Let's test standard behavior.
+        # `< 5` is not a tag (no >).
+        # NOTE: Using the real logic of main.py which currently replaces everything between < and >
+        # as a tag so "1 < 5 and 5 > 1" -> "1  1"
+        self.assertEqual(clean_html_tags("1 < 5 and 5 > 1"), "1  1")

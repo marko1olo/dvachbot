@@ -258,7 +258,7 @@ ANIME_COMMAND_MAP = {
     "LOLICON": get_loli_image,
     "LOLIS": get_loli_image,
 }
-RE_HTML_TAGS = re.compile(r'<[^>]+>')
+from common.html_utils import RE_HTML_TAGS, clean_html_tags
 RE_YOU_PATTERN = re.compile(r">>(\d+)")
 RE_SCRIPT_TAG = re.compile(r'<\s*script\b[^>]*>.*?<\s*/\s*script\s*>', flags=re.IGNORECASE | re.DOTALL)
 RE_SCRIPT_SINGLE = re.compile(r'<\s*script\b[^>]*>', flags=re.IGNORECASE)
@@ -900,10 +900,7 @@ aiohttp_log = logging.getLogger('aiohttp')
 aiohttp_log.setLevel(logging.CRITICAL) 
 aiogram_log = logging.getLogger('aiogram')
 aiogram_log.setLevel(logging.CRITICAL) # <--- ИЗМЕНЕНО НА CRITICAL, чтобы не видеть ошибки апдейтов
-def clean_html_tags(text: str) -> str:
 
-    if not text: return text
-    return RE_HTML_TAGS.sub('', text)
 def sanitize_html(text: str) -> str:
 
     if not text: return ""
