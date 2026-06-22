@@ -24,7 +24,7 @@ mocked_deps = [
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
     'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
-    'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
+    'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
