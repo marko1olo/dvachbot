@@ -29,7 +29,7 @@ mocked_deps = [
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
     'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
-    'aiogram.webhook', 'aiogram.webhook.aiohttp_server'
+    'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'aiogram.client.default', 'aiogram.filters', 'aiogram.utils', 'aiogram.utils.keyboard', 'aiogram.utils.media_group', 'aiogram.fsm', 'aiogram.fsm.state', 'aiogram.fsm.context', 'openai', 'aiogram.types.input_file', 'periodic_publisher', 'stats_generator', 'numpy', 'httpx', 'aiosqlite', 'aiohttp'
 ]
 
 for dep in mocked_deps:
@@ -168,3 +168,84 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+# Extract pure function dynamically from main.py since main.py has side effects on import
+# We do this using AST instead of importing to avoid importing aiogram middlewares etc
+import ast
+
+def extract_function_from_main(func_name):
+    # Local dummy implementations for builtins used by the pure functions
+    def dummy_escape_html(text):
+        return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+    main_py_path = os.path.join(PROJECT_ROOT, 'main.py')
+    if not os.path.exists(main_py_path):
+        main_py_path = os.path.join(PROJECT_ROOT, 'Dubsite_tgach', 'main.py')
+
+    with open(main_py_path, 'r', encoding='utf-8') as f:
+        source = f.read()
+
+    tree = ast.parse(source)
+    funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in (func_name,)]
+
+    module = types.ModuleType('extracted_funcs')
+    module.__dict__['escape_html'] = dummy_escape_html
+
+    code = compile(ast.Module(body=funcs, type_ignores=[]), filename='<ast>', mode='exec')
+    exec(code, module.__dict__)
+
+    return module.__dict__[func_name]
+
+# Grab our function for testing
+generate_poll_text_display = extract_function_from_main('generate_poll_text_display')
+
+class TestGeneratePollTextDisplay(unittest.TestCase):
+    def test_empty_or_missing_data(self):
+        self.assertEqual(generate_poll_text_display({}), "")
+        self.assertEqual(generate_poll_text_display(None), "")
+        self.assertEqual(generate_poll_text_display({"question": "Test"}), "")
+        self.assertEqual(generate_poll_text_display({"options": []}), "")
+
+    def test_zero_votes(self):
+        poll_data = {
+            "question": "Is this working?",
+            "options": ["Yes", "No"],
+            "votes": {}
+        }
+        result = generate_poll_text_display(poll_data)
+        self.assertIn("IS THIS WORKING?", result)
+        self.assertIn("1. Yes:", result)
+        self.assertIn("[──────────────] 0 (0%)", result)
+        self.assertIn("2. No:", result)
+
+    def test_with_votes(self):
+        poll_data = {
+            "question": "Favorite Color?",
+            "options": ["Red", "Blue", "Green"],
+            "votes": {
+                "0": ["user1", "user2"],
+                "1": ["user3", "user4", "user5", "user6", "user7", "user8"],
+                "2": []
+            }
+        }
+        result = generate_poll_text_display(poll_data)
+        self.assertIn("FAVORITE COLOR?", result)
+        self.assertIn("1. Red:", result)
+        self.assertIn("2 (25%)", result)
+        self.assertIn("[███───────────]", result)
+        self.assertIn("2. Blue:", result)
+        self.assertIn("6 (75%)", result)
+        self.assertIn("[██████████────]", result)
+        self.assertIn("3. Green:", result)
+        self.assertIn("0 (0%)", result)
+        self.assertIn("[──────────────]", result)
+
+    def test_html_escape(self):
+        poll_data = {
+            "question": "<script>alert(1)</script>",
+            "options": ["<b>bold</b>", "normal"],
+            "votes": {}
+        }
+        result = generate_poll_text_display(poll_data)
+        self.assertIn("&LT;SCRIPT&GT;ALERT(1)&LT;/SCRIPT&GT;", result)
+        self.assertIn("&lt;b&gt;bold&lt;/b&gt;", result)
