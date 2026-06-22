@@ -51,6 +51,62 @@ class TestImporter(unittest.TestCase):
         self.assertEqual(normalized, "Text ||hidden||")
 
 
+    def test_normalize_html_sync_site_tgach(self):
+        from site_tgach.importer import ThreadImporter
+        importer_instance = ThreadImporter(bot=None, file_storage_channel_id=123)
+
+        # Test empty string
+        self.assertEqual(importer_instance._normalize_html_sync(""), "")
+
+        # Test forum-specific string replacements
+        test_strings = {
+            "Двач": "тгач",
+            "харкач": "тгач",
+            "сосач": "тгач",
+            "двачер": "тгачер",
+            "Двощ": "тгач",
+            "абу": "админ",
+            "mailru": "tganon",
+            "2ch": "tgach",
+            "2chan": "tgachan", # 2ch -> tgach, an -> an -> tgachan
+            "4chan": "tgach"
+        }
+        for original, expected in test_strings.items():
+            self.assertEqual(importer_instance._normalize_html_sync(original), expected)
+
+        # Test removal of unwanted tags (using html.parser fallback because lxml parses <wbr>Hello as <wbr>Hello</wbr> and drops it)
+        # We test tags that won't wrap trailing text in lxml.
+        raw_html = "<script>alert(1)</script><style>body { color: red; }</style><iframe></iframe><object></object><embed></embed><applet></applet><form></form><button>Click</button><meta name='description'><link rel='stylesheet'><img src='test.jpg'>Hello"
+        self.assertEqual(importer_instance._normalize_html_sync(raw_html), "Hello")
+
+        # Test <br> replacement
+        raw_html = "Hello<br>World<br/>!"
+        self.assertEqual(importer_instance._normalize_html_sync(raw_html), "Hello\nWorld\n!")
+
+        # Test <p> and <div> unwrapping and \n insertion
+        raw_html = "<p>Paragraph 1</p><div>Div 1</div>"
+        self.assertEqual(importer_instance._normalize_html_sync(raw_html), "Paragraph 1\nDiv 1")
+
+        # Test spoiler format conversion
+        raw_html = "This is a <span class=\"spoiler\">secret</span> message."
+        self.assertEqual(importer_instance._normalize_html_sync(raw_html), "This is a ||secret|| message.")
+
+        # Test link replacing with href text
+        raw_html = "<a href='https://example.com'>link text</a>"
+        self.assertEqual(importer_instance._normalize_html_sync(raw_html), "link text")
+
+        # Test (OP) stripping
+        raw_html = "User (OP)"
+        self.assertEqual(importer_instance._normalize_html_sync(raw_html), "User")
+
+        # Test multiple space collapsing
+        raw_html = "Too    many     spaces"
+        self.assertEqual(importer_instance._normalize_html_sync(raw_html), "Too many spaces")
+
+        # Test multiple newline collapsing
+        raw_html = "Line 1\n\n\n\nLine 2"
+        self.assertEqual(importer_instance._normalize_html_sync(raw_html), "Line 1\n\nLine 2")
+
     def test_normalize_html_sync_ast_unescape(self):
         import inspect
         import ast
