@@ -29,7 +29,12 @@ mocked_deps = [
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
     'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
-    'aiogram.webhook', 'aiogram.webhook.aiohttp_server'
+    'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'fastapi', 'fastapi.responses',
+    'fastapi.middleware', 'fastapi.middleware.cors', 'fastapi.staticfiles', 'fastapi.templating',
+    'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip',
+    'orjson', 'starlette', 'starlette.middleware', 'starlette.middleware.base', 'starlette.requests',
+    'starlette.middleware.sessions', 'starlette.types', 'starlette.responses', 'pydantic', 'discord_webhook', 'httpx',
+    'itsdangerous'
 ]
 
 for dep in mocked_deps:

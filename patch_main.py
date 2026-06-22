@@ -15,8 +15,62 @@ def patch_main():
     cooldown_new = """SUMMARIZE_COOLDOWN = 60 * 30
 ROAST_COOLDOWN = 60 * 5  # 5 minutes
 
+from html.parser import HTMLParser
+from html import escape
+
+class TGHTMLParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.result = []
+        self.open_tags = []
+        self.allowed_tags = {'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del', 'code', 'pre', 'a', 'tg-spoiler', 'tg-emoji'}
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.allowed_tags:
+            self.open_tags.append(tag)
+            if attrs:
+                attr_str = " ".join([f'{k}="{escape(v)}"' if v is not None else k for k, v in attrs])
+                self.result.append(f"<{tag} {attr_str}>")
+            else:
+                self.result.append(f"<{tag}>")
+        else:
+            if attrs:
+                attr_str = " ".join([f'{k}="{escape(v)}"' if v is not None else k for k, v in attrs])
+                self.result.append(f"&lt;{tag} {attr_str}&gt;")
+            else:
+                self.result.append(f"&lt;{tag}&gt;")
+
+    def handle_endtag(self, tag):
+        if tag in self.open_tags:
+            idx = len(self.open_tags) - 1 - self.open_tags[::-1].index(tag)
+            for t in reversed(self.open_tags[idx:]):
+                self.result.append(f"</{t}>")
+            self.open_tags = self.open_tags[:idx]
+        elif tag in self.allowed_tags:
+            pass
+        else:
+            self.result.append(f"&lt;/{tag}&gt;")
+
+    def handle_data(self, data):
+        self.result.append(data.replace('<', '&lt;').replace('>', '&gt;'))
+
+    def handle_entityref(self, name):
+        self.result.append(f"&{name};")
+
+    def handle_charref(self, name):
+        self.result.append(f"&#{name};")
+
+    def close(self):
+        super().close()
+        for t in reversed(self.open_tags):
+            self.result.append(f"</{t}>")
+        self.open_tags.clear()
+
+    def get_data(self):
+        return "".join(self.result)
+
 def clean_html_for_tg(text: str) -> str:
-    \"\"\"Convert some markdown to HTML and strip unsupported tags.\"\"\"
+    """Convert some markdown to HTML, strip unsupported tags, and fix unclosed tags."""
     if not text: return ""
     # Convert **bold** to <b>bold</b>
     text = re.sub(r'\\*\\*(.*?)\\*\\*', r'<b>\\1</b>', text)
@@ -25,14 +79,14 @@ def clean_html_for_tg(text: str) -> str:
     # Convert `code` to <code>code</code>
     text = re.sub(r'`(.*?)`', r'<code>\\1</code>', text)
     
-    # Strip dangerous unclosed tags or unsupported tags using a simple regex
     # We will just replace <br> with newline
     text = text.replace('<br>', '\\n').replace('<br/>', '\\n').replace('<br />', '\\n')
     
-    # Very rudimentary unclosed tag fix:
-    # Just rely on the prompt instructing the LLM, and escape any raw < that is not part of a known tag
-    text = re.sub(r'<(?!/?(b|i|u|s|code|pre|a\\b)[>\\s])', '&lt;', text)
-    return text
+    # Use HTMLParser to fix unclosed tags and escape unsupported ones
+    parser = TGHTMLParser()
+    parser.feed(text)
+    parser.close()
+    return parser.get_data()
 """
     content = content.replace(cooldown_old, cooldown_new)
 

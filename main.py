@@ -474,6 +474,60 @@ def generate_anon_name(user_id: int) -> str:
     suffix = rng.choice(NICK_SUFFIXES)
     return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
 
+from html.parser import HTMLParser
+from html import escape
+
+class TGHTMLParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.result = []
+        self.open_tags = []
+        self.allowed_tags = {'b', 'strong', 'i', 'em', 'u', 'ins', 's', 'strike', 'del', 'code', 'pre', 'a', 'tg-spoiler', 'tg-emoji'}
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.allowed_tags:
+            self.open_tags.append(tag)
+            if attrs:
+                attr_str = " ".join([f'{k}="{escape(v)}"' if v is not None else k for k, v in attrs])
+                self.result.append(f"<{tag} {attr_str}>")
+            else:
+                self.result.append(f"<{tag}>")
+        else:
+            if attrs:
+                attr_str = " ".join([f'{k}="{escape(v)}"' if v is not None else k for k, v in attrs])
+                self.result.append(f"&lt;{tag} {attr_str}&gt;")
+            else:
+                self.result.append(f"&lt;{tag}&gt;")
+
+    def handle_endtag(self, tag):
+        if tag in self.open_tags:
+            idx = len(self.open_tags) - 1 - self.open_tags[::-1].index(tag)
+            for t in reversed(self.open_tags[idx:]):
+                self.result.append(f"</{t}>")
+            self.open_tags = self.open_tags[:idx]
+        elif tag in self.allowed_tags:
+            pass
+        else:
+            self.result.append(f"&lt;/{tag}&gt;")
+
+    def handle_data(self, data):
+        self.result.append(data.replace('<', '&lt;').replace('>', '&gt;'))
+
+    def handle_entityref(self, name):
+        self.result.append(f"&{name};")
+
+    def handle_charref(self, name):
+        self.result.append(f"&#{name};")
+
+    def close(self):
+        super().close()
+        for t in reversed(self.open_tags):
+            self.result.append(f"</{t}>")
+        self.open_tags.clear()
+
+    def get_data(self):
+        return "".join(self.result)
+
 def clean_html_for_tg(text: str) -> str:
 
     import re
@@ -482,8 +536,11 @@ def clean_html_for_tg(text: str) -> str:
     text = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
     text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
     text = text.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
-    text = re.sub(r'<(?!/?(b|i|u|s|code|pre|a\b)[>\s])', '&lt;', text)
-    return text
+
+    parser = TGHTMLParser()
+    parser.feed(text)
+    parser.close()
+    return parser.get_data()
 
 DB_POST_LIMIT = CONFIG_DB_POST_LIMIT  # Максимальное количество постов, которое будет храниться в БД
 DB_CLEANUP_INTERVAL = timedelta(hours=2) # Как часто проводить очистку БД
