@@ -244,9 +244,11 @@ async def get_tasks(db) -> list[dict]:
         """
         try:
             async with db.execute(query_gaps) as cursor:
+                task_fids = {t['fid'] for t in tasks}
                 async for row in cursor:
-                    if not any(t['fid'] == row[0] for t in tasks):
+                    if row[0] not in task_fids:
                         tasks.append({'fid': row[0], 'type': row[1], 'bot_id': file_owners.get(row[0])})
+                        task_fids.add(row[0])
         except Exception: pass
 
     return tasks[:BATCH_SIZE]
