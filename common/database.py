@@ -7019,7 +7019,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                         """INSERT INTO UserReplies 
                            (user_id, board_id, thread_id, post_num, parent_num, is_read, created_at) 
                            VALUES (?, ?, ?, ?, ?, 0, ?)""",
-                        (original_author_id, board_id, effective_thread_id, source_post_num, reply_post_num, curr_time)
+                        (original_author_id, board_id, effective_thread_id, reply_post_num, source_post_num, curr_time)
                     )
                 
                 await db.execute("COMMIT")
