@@ -14,7 +14,6 @@ from site_tgach.huggingface import upload_to_hf
 from site_tgach.mtproto_client import upload_file_mtproto
 from fastapi import UploadFile, HTTPException
 from PIL import Image
-from common.bot_pool import global_bot_pool 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 from common.board_config import SHADOW_CHANNEL_ID
