@@ -6,7 +6,6 @@ import random
 import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
-from datetime import datetime, timedelta
 import pandas as pd
 
 # Use non-interactive backend
