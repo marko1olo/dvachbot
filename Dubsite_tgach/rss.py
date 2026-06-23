@@ -1,8 +1,12 @@
 from fastapi import Response
 import time
+import json
+import re
 from email.utils import formatdate
 from common.db_pool import get_pool
 from common.board_config import BOARD_CONFIG
+
+HTML_CLEANER = re.compile('<[^<]+?>')
 
 async def generate_rss(board_id: str, request):
     """Генерирует RSS 2.0 для конкретной доски."""
@@ -24,22 +28,20 @@ async def generate_rss(board_id: str, request):
     try:
         # Берем последние 20 тредов
         query = """
-            SELECT p.post_num, p.content, p.timestamp 
+            SELECT p.post_num, json_extract(p.content, '$.text'), p.timestamp
             FROM Posts p
             JOIN Threads t ON CAST(p.post_num AS TEXT) = t.thread_id
             WHERE p.board_id = ? 
             ORDER BY p.timestamp DESC LIMIT 20
         """
         async with db.execute(query, (board_id,)) as cursor:
-            async for row in cursor:
-                pid, content_raw, ts = row
-                import json
+            rows = await cursor.fetchall()
+            for row in rows:
+                pid, text_raw, ts = row
                 try:
-                    content = json.loads(content_raw)
-                    text = content.get('text', '')[:100] or "Media Thread"
+                    text = (text_raw or '')[:100] or "Media Thread"
                     # Очистка от HTML для RSS
-                    import re
-                    clean_text = re.sub('<[^<]+?>', '', text)
+                    clean_text = HTML_CLEANER.sub('', text)
                     
                     link = f"{base_url}/{board_id}/res/{pid}.html"
                     
