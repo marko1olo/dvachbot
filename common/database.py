@@ -3736,17 +3736,7 @@ async def sync_boards_with_config(board_config: dict):
     """
     Синхронизирует доски из конфига с БД.
     """
-    boards_to_sync = []
-    for board_id, info in board_config.items():
-        description = info.get("description", "")
-        if isinstance(description, dict):
-            description = json.dumps(description, ensure_ascii=False)
-        boards_to_sync.append((
-            board_id,
-            info.get("name", "Unnamed Board"),
-            description
-        ))
-    if not boards_to_sync:
+    if not board_config:
         return
 
     from common.db_pool import get_pool, db_lock
@@ -3757,6 +3747,8 @@ async def sync_boards_with_config(board_config: dict):
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
 
+                # Оптимизация: используем генератор напрямую в executemany, чтобы избежать N+1 execute
+                # и лишних аллокаций памяти (по сравнению с циклом for ... append).
                 await db.executemany(
                     """
                     INSERT INTO Boards (board_id, name, description) VALUES (?, ?, ?)
@@ -3764,11 +3756,18 @@ async def sync_boards_with_config(board_config: dict):
                         name = excluded.name,
                         description = excluded.description
                     """,
-                    boards_to_sync
+                    (
+                        (
+                            board_id,
+                            info.get("name", "Unnamed Board"),
+                            json.dumps(info.get("description", ""), ensure_ascii=False) if isinstance(info.get("description", ""), dict) else info.get("description", "")
+                        )
+                        for board_id, info in board_config.items()
+                    )
                 )
 
                 await db.execute("COMMIT")
-                print(f"✅ Синхронизация досок с БД завершена. Проверено {len(boards_to_sync)} досок.")
+                print(f"✅ Синхронизация досок с БД завершена. Проверено {len(board_config)} досок.")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
