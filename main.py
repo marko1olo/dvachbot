@@ -16548,18 +16548,21 @@ async def event_loop_health_tick_task():
                     "is_shutting_down": is_shutting_down,
                     "drain_shutdown_requested": drain_shutdown_requested,
                 }
-                _write_heartbeat_payload(payload)
+                await _write_heartbeat_payload(payload)
                 event_loop_last_tick = time.time()
             except Exception:
                 pass
         await asyncio.sleep(1)
 
 
-def _write_heartbeat_payload(payload: dict) -> None:
-    tmp_path = f"{BOT_HEARTBEAT_PATH}.tmp"
+def _sync_write_heartbeat_payload(payload: dict, tmp_path: str, final_path: str) -> None:
     with open(tmp_path, "w", encoding="utf-8") as heartbeat_file:
         json.dump(payload, heartbeat_file, ensure_ascii=False, separators=(",", ":"))
-    os.replace(tmp_path, BOT_HEARTBEAT_PATH)
+    os.replace(tmp_path, final_path)
+
+async def _write_heartbeat_payload(payload: dict) -> None:
+    tmp_path = f"{BOT_HEARTBEAT_PATH}.tmp"
+    await asyncio.to_thread(_sync_write_heartbeat_payload, payload, tmp_path, BOT_HEARTBEAT_PATH)
 
 async def controlled_stop_watcher_task():
     global drain_shutdown_requested, drain_shutdown_requested_at
