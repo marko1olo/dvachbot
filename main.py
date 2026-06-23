@@ -356,8 +356,10 @@ class BoardMiddleware(BaseMiddleware):
                                 await event.delete()
                             elif isinstance(event, types.CallbackQuery):
                                 pass 
-                        except Exception: 
+                        except (TelegramBadRequest, TelegramForbiddenError):
                             pass
+                        except Exception as e:
+                            logging.getLogger("tgach.runtime").warning(f"Error deleting message for banned user: {e}")
                         return 
                         
                     # Анти-рейд
@@ -377,7 +379,10 @@ class BoardMiddleware(BaseMiddleware):
                             try:
                                 if isinstance(event, types.Message):
                                     await event.delete()
-                            except Exception: pass
+                            except (TelegramBadRequest, TelegramForbiddenError):
+                                pass
+                            except Exception as e:
+                                logging.getLogger("tgach.runtime").warning(f"Error deleting message during lockdown: {e}")
                             return
                         
                         # Регистрируем первого захода нового юзера
@@ -398,7 +403,10 @@ class BoardMiddleware(BaseMiddleware):
                                 try:
                                     if isinstance(event, types.Message):
                                         await event.delete()
-                                except Exception: pass
+                                except (TelegramBadRequest, TelegramForbiddenError):
+                                    pass
+                                except Exception as e:
+                                    logging.getLogger("tgach.runtime").warning(f"Error deleting message on raid detection: {e}")
                                 return
 
         return await handler(event, data)
