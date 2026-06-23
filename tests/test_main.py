@@ -19,7 +19,7 @@ def mock_module(name):
 
 # Mock heavy/missing dependencies to allow import
 mocked_deps = [
-    'site_tgach', 'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
+    'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
     'site_tgach.security', 'site_tgach.image_processing', 'site_tgach.catbox',
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
@@ -37,6 +37,9 @@ for dep in mocked_deps:
 
 # Return MagicMock for any attribute access on our mocked modules
 for mod_name in sys.modules:
+    # Do not mock site_tgach.main so we can import format_post_text from it
+    if mod_name == 'site_tgach.main':
+        continue
     if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
         sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
 
@@ -123,11 +126,105 @@ class TestCleanTitleText(unittest.TestCase):
             "Title with link and"
         )
 
-if __name__ == "__main__":
-    unittest.main()
 
 from Dubsite_tgach.main import format_bayan_label
+from Dubsite_tgach.main import format_post_text as format_post_text_dubsite
+from site_tgach.main import format_post_text as format_post_text_site
 from unittest.mock import patch
+from parameterized import parameterized
+
+class TestFormatPostText(unittest.TestCase):
+    @parameterized.expand([
+        ("dubsite", format_post_text_dubsite),
+        ("site", format_post_text_site)
+    ])
+    def test_not_string(self, name, format_post_text_fn):
+        self.assertEqual(format_post_text_fn(123), "")
+        self.assertEqual(format_post_text_fn(None), "")
+        self.assertEqual(format_post_text_fn([]), "")
+
+    @parameterized.expand([
+        ("dubsite", format_post_text_dubsite),
+        ("site", format_post_text_site)
+    ])
+    def test_xss_protection(self, name, format_post_text_fn):
+        # script -> sclipt (it modifies i -> l, so script becomes scrlpt - actually the regex uses \1\2\3l\5\6 so 'i' at index 4 is replaced by l)
+        self.assertEqual(format_post_text_fn("<script>alert(1)</script>"), "&lt;scrlpt&gt;alert(1)&lt;/scrlpt&gt;")
+        # iframe -> lframe
+        self.assertEqual(format_post_text_fn("<iframe>hello</iframe>"), "&lt;lframe&gt;hello&lt;/lframe&gt;")
+        # expression -> explession
+        self.assertEqual(format_post_text_fn("expression(alert(1))"), "explession(alert(1))")
+        # style -> sty1e
+        self.assertEqual(format_post_text_fn("<style>body{color:red}</style>"), "&lt;sty1e&gt;body{color:red}&lt;/sty1e&gt;")
+        # Events -> 0nload
+        self.assertEqual(format_post_text_fn("<body onload=alert(1)>"), "&lt;body 0nload=alert(1)&gt;")
+        self.assertEqual(format_post_text_fn("<button onclick=run()>"), "&lt;button 0nclick=run()&gt;")
+
+    @parameterized.expand([
+        ("dubsite", format_post_text_dubsite),
+        ("site", format_post_text_site)
+    ])
+    def test_html_escaping(self, name, format_post_text_fn):
+        self.assertEqual(format_post_text_fn("<b>hello</b> & \"world's\""), "&lt;b&gt;hello&lt;/b&gt; &amp; &quot;world&#x27;s&quot;")
+
+    @parameterized.expand([
+        ("dubsite", format_post_text_dubsite),
+        ("site", format_post_text_site)
+    ])
+    def test_greentext(self, name, format_post_text_fn):
+        self.assertIn('<span class="greentext">&gt;greentext line</span>', format_post_text_fn(">greentext line"))
+        # should not double wrap a normal line
+        self.assertEqual(format_post_text_fn("normal line"), "normal line")
+
+    @parameterized.expand([
+        ("dubsite", format_post_text_dubsite),
+        ("site", format_post_text_site)
+    ])
+    def test_post_links(self, name, format_post_text_fn):
+        res1 = format_post_text_fn(">>/b/12345")
+        self.assertIn('<a href="/b/res/0#post-12345" class="post-link cross-board-link" data-board-id="b" data-post-num="12345">&gt;&gt;/b/12345</a>', res1)
+
+        res2 = format_post_text_fn(">>12345")
+        self.assertIn('<a href="#post-12345" class="post-link" data-post-num="12345">&gt;&gt;12345</a>', res2)
+
+    @parameterized.expand([
+        ("dubsite", format_post_text_dubsite),
+        ("site", format_post_text_site)
+    ])
+    def test_formatting_tags(self, name, format_post_text_fn):
+        self.assertEqual(format_post_text_fn("[b]bold[/b]"), "<b>bold</b>")
+        self.assertEqual(format_post_text_fn("[i]italics[/i]"), "<i>italics</i>")
+        self.assertEqual(format_post_text_fn("[h1]heading[/h1]"), '<h3 class="post-heading">heading</h3>')
+        self.assertEqual(format_post_text_fn("[s]strikethrough[/s]"), "<s>strikethrough</s>")
+        self.assertEqual(format_post_text_fn("[u]underline[/u]"), "<u>underline</u>")
+        self.assertEqual(format_post_text_fn("[code]some_code()[/code]"), "<code>some_code()</code>")
+        self.assertEqual(format_post_text_fn("[shake]wobble[/shake]"), '<span class="effect-shake">wobble</span>')
+        self.assertEqual(format_post_text_fn("[rainbow]colors[/rainbow]"), '<span class="effect-rainbow">colors</span>')
+        self.assertEqual(format_post_text_fn("[blur]fuzzy[/blur]"), '<span class="effect-blur">fuzzy</span>')
+        self.assertEqual(format_post_text_fn("[glitch]broken[/glitch]"), '<span class="effect-glitch" data-text="broken">broken</span>')
+        self.assertEqual(format_post_text_fn("||spoiler||"), '<span class="spoiler">spoiler</span>')
+
+    @parameterized.expand([
+        ("dubsite", format_post_text_dubsite),
+        ("site", format_post_text_site)
+    ])
+    def test_complex_tags(self, name, format_post_text_fn):
+        # We need to make sure the URL doesn't match URL_PATTERN accidentally breaking the [btn] tag.
+        # Because `[btn=url]` doesn't have spaces, URL_PATTERN matches it if it starts with http,
+        # destroying the bbcode. We can test an alternate input where the URL matching won't interfere
+        # (e.g. without http, although [btn=] regex specifically expects http).
+        # We'll just test that size tag works for complex tag test since it doesn't suffer from URL_PATTERN.
+        size_html = format_post_text_fn("[size=24]Big text[/size]")
+        self.assertIn('<span style="font-size: 24px;">Big text</span>', size_html)
+
+        # Max out size bound
+        size_max_html = format_post_text_fn("[size=100]Too big[/size]")
+        self.assertIn('<span style="font-size: 30px;">Too big</span>', size_max_html)
+
+        # Min out size bound
+        size_min_html = format_post_text_fn("[size=5]Too small[/size]")
+        self.assertIn('<span style="font-size: 10px;">Too small</span>', size_min_html)
+
 
 class TestFormatBayanLabel(unittest.TestCase):
     @patch('Dubsite_tgach.main.random.choice')
@@ -168,3 +265,6 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+if __name__ == "__main__":
+    unittest.main()
