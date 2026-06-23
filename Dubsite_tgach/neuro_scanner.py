@@ -6,7 +6,6 @@ import time
 import json
 import random
 from common.config import STORAGE_CHANNELS, ADMIN_IDS
-from common.bot_pool import global_bot_pool
 from common.database import get_db_connection, get_system_setting, log_global_event
 from common.db_pool import db_lock
 from site_tgach.importer import ThreadImporter
