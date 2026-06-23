@@ -1,12 +1,10 @@
 import base64
 import logging
 import asyncio
-from common.http_utils import api_retry
 import httpx
-import json
 from httpx import AsyncHTTPTransport # <--- Импорт транспорта
 
-from common.token_pool import hf_accounts, groq_pool 
+from common.token_pool import groq_pool
 from common.database import get_pool, add_to_mod_queue
 from common.db_pool import db_lock
 
@@ -24,7 +22,6 @@ async def check_image_content(image_bytes: bytes, file_id: str):
     Генерирует теги через Groq (Llama Vision) и сохраняет в БД.
     Проверяет на запрещенку по ключевым словам.
     """
-    import base64
     
     # Кодируем
     try:
@@ -51,7 +48,8 @@ async def check_image_content(image_bytes: bytes, file_id: str):
     # Ротация токенов
     for i in range(3):
         token = groq_pool.get_token()
-        if not token: break
+        if not token:
+            break
 
         try:
             # === ФИКС ДЛЯ VPN/TUN ===
