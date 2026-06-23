@@ -104,7 +104,7 @@ def find_logical_garbage(cur, tables):
     posts_orphaned_thread = cur.fetchone()[0]
     if posts_orphaned_thread > 0:
         print(f"{Colors.WARNING}⚠️  Посты, привязанные к удаленным тредам: {posts_orphaned_thread}{Colors.ENDC}")
-        print(f"   (Это может быть нормально, если удаляли тред, но посты остались как 'призраки'. Лучше почистить)")
+        print("   (Это может быть нормально, если удаляли тред, но посты остались как 'призраки'. Лучше почистить)")
         garbage_found = True
     else:
         print(f"{Colors.OKGREEN}✓ Посты корректно привязаны к тредам{Colors.ENDC}")
@@ -121,9 +121,10 @@ def find_logical_garbage(cur, tables):
     for table, col in tables_to_check.items():
         if table in tables:
             safe_table = table.replace('"', '""')
+            safe_col = col.replace('"', '""')
             cur.execute(f"""
                 SELECT COUNT(*) FROM "{safe_table}" t
-                LEFT JOIN Posts p ON t.{col} = p.post_num
+                LEFT JOIN Posts p ON t."{safe_col}" = p.post_num
                 WHERE p.post_num IS NULL
             """)
             orphans = cur.fetchone()[0]
@@ -226,13 +227,15 @@ def print_recommendations(garbage_found, dead_threads, orphan_tables, posts_orph
         print("Рекомендуемые действия:")
         
         if dead_threads > 0:
-            print(f"1. Выполнить очистку мертвых тредов:")
+            print("1. Выполнить очистку мертвых тредов:")
             print(f"   {Colors.OKCYAN}DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts);{Colors.ENDC}")
             
         if orphan_tables:
             print("2. Очистить очереди от ссылок на несуществующие посты:")
             for tbl, col in orphan_tables:
-                print(f"   {Colors.OKCYAN}DELETE FROM {tbl} WHERE {col} NOT IN (SELECT post_num FROM Posts);{Colors.ENDC}")
+                safe_tbl = tbl.replace('"', '""')
+                safe_col = col.replace('"', '""')
+                print(f"   {Colors.OKCYAN}DELETE FROM \"{safe_tbl}\" WHERE \"{safe_col}\" NOT IN (SELECT post_num FROM Posts);{Colors.ENDC}")
 
         if posts_orphaned_thread > 0:
             print("3. (Опционально) Удалить посты, чьи треды были удалены:")
