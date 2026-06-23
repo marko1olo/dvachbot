@@ -64,11 +64,11 @@ class TestBatchReplies(unittest.IsolatedAsyncioTestCase):
         
         # Verify formats:
         # Anon1: First post text
-        # Анон #7890 (ответ на №100): Reply text
-        # Анон #1111 (ответ на №100): Another reply
+        # Анон #7890 (Ответ на #100): Reply text
+        # Анон #1111 (Ответ на #100): Another reply
         self.assertIn("Anon1: First post text", chunk)
-        self.assertIn("Анон #7890 (ответ на №100): Reply text", chunk)
-        self.assertIn("Анон #1111 (ответ на №100): Another reply", chunk)
+        self.assertIn("Анон #7890 (Ответ на #100): Reply text", chunk)
+        self.assertIn("Анон #1111 (Ответ на #100): Another reply", chunk)
 
     async def test_get_board_chunk_includes_replies_en(self):
         # Post on English board 'int'
@@ -95,7 +95,7 @@ class TestBatchReplies(unittest.IsolatedAsyncioTestCase):
 
         chunk = await main.get_board_chunk('int', hours=1)
         self.assertIn("AnonInt: Hello world", chunk)
-        self.assertIn("Anon #8888 (reply to №200): Reply hello", chunk)
+        self.assertIn("Anon #8888 (reply to #200): Reply hello", chunk)
 
 if __name__ == '__main__':
     unittest.main()
