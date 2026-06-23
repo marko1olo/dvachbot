@@ -4995,6 +4995,34 @@ def localize_boards(lang: str) -> dict:
             board_copy['description'] = str(desc)
         localized[board_id] = board_copy
     return localized
+def _process_cleanup_rows(rows):
+    from bs4 import BeautifulSoup
+    import json
+    updates = []
+    count = 0
+    for row in rows:
+        post_num, raw_content = row
+        try:
+            content = json.loads(raw_content)
+            text = content.get('text', '')
+
+            if '<img' in text or '<IMG' in text:
+                soup = BeautifulSoup(text, "html.parser")
+                images = soup.find_all('img')
+
+                if images:
+                    for img in images:
+                        img.decompose()
+
+                    content['text'] = str(soup)
+                    new_json = json.dumps(content)
+
+                    updates.append((new_json, post_num))
+                    count += 1
+        except Exception:
+            continue
+    return updates, count
+
 @app.post("/api/admin/cleanup_html")
 async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
     """
@@ -5003,10 +5031,6 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
     if not user.get('is_admin'): 
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    count = 0
-    from bs4 import BeautifulSoup
-    import json
-    
     # Используем отдельное соединение для тяжелой задачи
     async with get_db_connection() as conn:
         # 1. Находим посты, где в тексте есть тег <img
@@ -5019,31 +5043,11 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
         if not rows:
             return {"status": "ok", "message": "База чиста, исправлять нечего."}
 
-        # 2. Проходимся и чистим
-        await conn.execute("BEGIN IMMEDIATE")
+        import asyncio
+        # 2. Проходимся и чистим в отдельном треде
+        updates, count = await asyncio.to_thread(_process_cleanup_rows, rows)
         
-        updates = []
-        for row in rows:
-            post_num, raw_content = row
-            try:
-                content = json.loads(raw_content)
-                text = content.get('text', '')
-                
-                if '<img' in text or '<IMG' in text:
-                    soup = BeautifulSoup(text, "html.parser")
-                    images = soup.find_all('img')
-                    
-                    if images:
-                        for img in images:
-                            img.decompose()
-                    
-                        content['text'] = str(soup)
-                        new_json = json.dumps(content)
-                        
-                        updates.append((new_json, post_num))
-                        count += 1
-            except Exception:
-                continue
+        await conn.execute("BEGIN IMMEDIATE")
         
         if updates:
             await conn.executemany(
@@ -6073,7 +6077,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
