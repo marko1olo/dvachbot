@@ -1,13 +1,10 @@
 import sqlite3
 import os
 
-db_path = "dvach_bot.db"
-if not os.path.exists(db_path):
-    print("No DB found")
-    exit()
-
-conn = sqlite3.connect(db_path)
+conn = sqlite3.connect(":memory:")
 cur = conn.cursor()
+cur.execute("CREATE TABLE Posts (id INTEGER PRIMARY KEY, title TEXT)")
+cur.execute("CREATE INDEX idx_posts_title ON Posts(title)")
 
 def print_indexes(table):
     cur.execute("SELECT * FROM pragma_index_list(?)", (table,))
@@ -23,7 +20,3 @@ def print_indexes(table):
         print(f"  - {idx_name}: {columns}")
 
 print_indexes("Posts")
-print_indexes("PostCopies")
-print_indexes("ChannelCopies")
-print_indexes("FileMirrors")
-print_indexes("ImportRefMap")
