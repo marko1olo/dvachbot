@@ -5799,6 +5799,7 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
         # 2. Проходимся и чистим
         await conn.execute("BEGIN IMMEDIATE")
         
+        updates = []
         for row in rows:
             post_num, raw_content = row
             try:
@@ -5816,13 +5817,16 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
                         content['text'] = str(soup)
                         new_json = json.dumps(content)
                         
-                        await conn.execute(
-                            "UPDATE Posts SET content = ? WHERE post_num = ?", 
-                            (new_json, post_num)
-                        )
+                        updates.append((new_json, post_num))
                         count += 1
             except Exception:
                 continue
+
+        if updates:
+            await conn.executemany(
+                "UPDATE Posts SET content = ? WHERE post_num = ?",
+                updates
+            )
         
         await conn.execute("COMMIT")
 
