@@ -2091,8 +2091,10 @@ async def db_maintenance_task():
                         logger.warning(f"⚠️ DB Optimization warning: {opt_err}")
                         
                 except Exception as e:
-                    try: await db.execute("ROLLBACK")
-                    except: pass
+                    try:
+                        await db.execute("ROLLBACK")
+                    except Exception as rollback_err:
+                        logger.error(f"⚠️ FTS Maintenance ROLLBACK error: {rollback_err}")
                     logger.error(f"⚠️ FTS Maintenance error: {e}")
             
             logger.info("✅ [DB] Maintenance complete.")
@@ -6073,7 +6075,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
