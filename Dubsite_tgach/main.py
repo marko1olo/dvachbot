@@ -1245,11 +1245,10 @@ async def sitemap_xml(request: Request):
         urls.append(f"{base_url}/{board_id}/catalog/")
     db = await get_pool()
     try:
-        query = "SELECT board_id, thread_id, last_updated_at FROM Threads ORDER BY last_updated_at DESC LIMIT 10000"
+        query = "SELECT board_id, thread_id FROM Threads ORDER BY last_updated_at DESC LIMIT 10000"
         async with db.execute(query) as cursor:
-            async for row in cursor:
-                bid, tid, ts = row
-                date_str = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
+            rows = await cursor.fetchall()
+            for bid, tid in rows:
                 urls.append(f"{base_url}/{bid}/res/{tid}.html")
     except Exception as e:
         print(f"Sitemap error: {e}")
@@ -6073,7 +6072,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
