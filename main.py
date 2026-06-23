@@ -17293,7 +17293,7 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
         )
         posts = await rows.fetchall()
         
-        text_corpus = ""
+        text_corpus_parts = []
         for row in posts:
             try:
                 content_dict = json.loads(row[0])
@@ -17308,10 +17308,11 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
                     text = re.sub(r'<[^>]+>', ' ', text)
                     # Remove URLs
                     text = re.sub(r'http[s]?://\S+', ' ', text)
-                    text_corpus += text + " "
+                    text_corpus_parts.append(text)
             except Exception:
                 continue
                 
+        text_corpus = " ".join(text_corpus_parts)
         words = re.findall(r'[а-яА-Яa-zA-Z]{3,}', text_corpus.lower())
         filtered_words = [w for w in words if w not in STOP_WORDS]
         final_text = " ".join(filtered_words)
