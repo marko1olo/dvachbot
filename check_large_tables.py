@@ -1,5 +1,9 @@
 import sqlite3
 
+def quote_identifier(s: str) -> str:
+    """Safely quote SQL identifiers (table names, column names)."""
+    return '"' + s.replace('"', '""') + '"'
+
 def check_indexes():
     conn = sqlite3.connect('dvach_bot.db')
     cursor = conn.cursor()
@@ -9,14 +13,16 @@ def check_indexes():
     tables = [row[0] for row in cursor.fetchall()]
     
     for table in tables:
-        cursor.execute(f"PRAGMA index_list({table});")
+        safe_table = quote_identifier(table)
+        cursor.execute(f"PRAGMA index_list({safe_table});")  # nosec B608
         indexes = cursor.fetchall()
-        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+        cursor.execute(f"SELECT COUNT(*) FROM {safe_table}")  # nosec B608
         count = cursor.fetchone()[0]
         if count > 10000:
             print(f"Table {table}: {count} rows")
             for idx in indexes:
-                cursor.execute(f"PRAGMA index_info({idx[1]})")
+                safe_idx = quote_identifier(idx[1])
+                cursor.execute(f"PRAGMA index_info({safe_idx})")  # nosec B608
                 cols = [row[2] for row in cursor.fetchall()]
                 print(f"  Index: {idx[1]} -> Columns: {cols}")
 
