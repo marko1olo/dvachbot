@@ -16,10 +16,23 @@ def print_indexes(table):
         print(f"No indexes for {table}")
         return
     print(f"Indexes for {table}:")
+
+    query = f"""
+        SELECT il.name, ii.name
+        FROM pragma_index_list('{table}') il
+        JOIN pragma_index_info(il.name) ii
+        ORDER BY il.seq, ii.seqno;
+    """
+    cur.execute(query)
+    results = cur.fetchall()
+
+    index_columns = {}
+    for idx_name, col_name in results:
+        index_columns.setdefault(idx_name, []).append(col_name)
+
     for idx in indexes:
         idx_name = idx[1]
-        cur.execute(f"PRAGMA index_info('{idx_name}')")
-        columns = [c[2] for c in cur.fetchall()]
+        columns = index_columns.get(idx_name, [])
         print(f"  - {idx_name}: {columns}")
 
 print_indexes("Posts")
