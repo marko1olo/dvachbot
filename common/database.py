@@ -2217,7 +2217,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                     )
                     # FIX: Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
                     site_notifs = [
-                        (r_id, board_id, str(t_id) if t_id else str(rep_num), src_num, rep_num, 0, current_time)
+                        (r_id, board_id, str(t_id) if t_id is not None else str(rep_num), src_num, rep_num, 0, current_time)
                         for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert
                     ]
                     await db.executemany(
