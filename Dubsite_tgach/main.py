@@ -2357,9 +2357,9 @@ async def favourites_page(request: Request, user: dict | None = Depends(get_opti
 async def overboard_page(request: Request, user: dict | None = Depends(get_optional_user)):
 
     sort_mode = request.query_params.get("sort", "bump")
-    if sort_mode not in ["bump", "new", "random"]: sort_mode = "bump"
+    if sort_mode not in ("bump", "new", "random"): sort_mode = "bump"
     view_mode = request.query_params.get("view", "threads")
-    if view_mode not in ["threads", "posts", "all"]: view_mode = "threads"
+    if view_mode not in ("threads", "posts", "all"): view_mode = "threads"
     
     selected_boards = request.query_params.getlist("boards") or None
     observer_id = user['id'] if user else getattr(request.state, 'guest_id', 0)
@@ -6073,7 +6073,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
