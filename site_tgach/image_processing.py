@@ -69,7 +69,7 @@ from aiogram.exceptions import (
     TelegramForbiddenError
 )
 from concurrent.futures import ThreadPoolExecutor
-import blurhash
+
 MIRROR_SEMAPHORE = asyncio.Semaphore(10) # Максимум 10 одновременных заливов
 logging.basicConfig(level=logging.INFO)
 install_logging_redaction()
