@@ -16548,7 +16548,7 @@ async def event_loop_health_tick_task():
                     "is_shutting_down": is_shutting_down,
                     "drain_shutdown_requested": drain_shutdown_requested,
                 }
-                _write_heartbeat_payload(payload)
+                await asyncio.to_thread(_write_heartbeat_payload, payload)
                 event_loop_last_tick = time.time()
             except Exception:
                 pass
