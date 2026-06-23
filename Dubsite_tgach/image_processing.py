@@ -2,8 +2,6 @@ import asyncio
 from common.task_manager import spawn_task
 import logging
 import re
-import os
-import hashlib
 import math
 import imagehash
 from io import BytesIO
@@ -14,17 +12,14 @@ from site_tgach.huggingface import upload_to_hf
 from site_tgach.mtproto_client import upload_file_mtproto
 from fastapi import UploadFile, HTTPException
 from PIL import Image
-from common.bot_pool import global_bot_pool 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 from common.board_config import SHADOW_CHANNEL_ID
 from aiogram.exceptions import (
     TelegramRetryAfter, 
     TelegramNetworkError, 
-    TelegramBadRequest, 
-    TelegramForbiddenError
+    TelegramBadRequest
 )
-import blurhash
 MIRROR_SEMAPHORE = asyncio.Semaphore(10) # Максимум 10 одновременных заливов
 logging.basicConfig(level=logging.INFO)
 install_logging_redaction()
