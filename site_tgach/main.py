@@ -7050,26 +7050,39 @@ async def get_cached_file_path(file_id: str, allow_protected_tokens: bool = Fals
                     return None
                 return path, token, bot_id
 
-            for start in range(0, len(candidates), batch_size):
-                tasks = [
-                    spawn_task(fetch_with_bot(bot_id, token))
-                    for bot_id, token in candidates[start:start + batch_size]
-                ]
+            pending = set()
+            candidate_iter = iter(candidates)
+
+            for _ in range(batch_size):
                 try:
-                    for task in asyncio.as_completed(tasks):
-                        result = await task
+                    bot_id, token = next(candidate_iter)
+                    pending.add(spawn_task(fetch_with_bot(bot_id, token)))
+                except StopIteration:
+                    break
+
+            try:
+                while pending:
+                    done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        try:
+                            result = await task
+                        except Exception:
+                            result = None
+
                         if result:
-                            for pending in tasks:
-                                if not pending.done():
-                                    pending.cancel()
-                            await asyncio.gather(*tasks, return_exceptions=True)
                             return await save_success(*result)
-                finally:
-                    pending_tasks = [task for task in tasks if not task.done()]
-                    for pending in pending_tasks:
-                        pending.cancel()
-                    if pending_tasks:
-                        await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+                        try:
+                            bot_id, token = next(candidate_iter)
+                            pending.add(spawn_task(fetch_with_bot(bot_id, token)))
+                        except StopIteration:
+                            pass
+            finally:
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
             return None
 
         for stream_code in ('ru', 'en', 'jp'):
@@ -7448,7 +7461,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
