@@ -759,7 +759,8 @@ class ConnectionManager:
                     self.active_connections[key].discard(connection)
                     if not self.active_connections[key]:
                         del self.active_connections[key]
-            except: pass
+            except Exception as e:
+                logging.warning(f"Error cleaning up connection for {key}: {e}")
 
     async def broadcast_post(self, post_data: dict, board_id: str):
         stream = post_data.get('stream', 'ru')
@@ -6073,7 +6074,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
