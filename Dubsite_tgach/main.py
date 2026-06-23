@@ -1916,7 +1916,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                 if not oid or oid.startswith('<'): 
                     continue
                 fname = file_info.get('filename', '').lower()
-                if fname.endswith(('.mp4', '.webm', '.mov', '.mkv')) and file_info.get('type') not in ['voice', 'audio']:
+                if fname.endswith(('.mp4', '.webm', '.mov', '.mkv')) and file_info.get('type') not in {'voice', 'audio'}:
                     file_info['type'] = 'video'
                 if fname.endswith('.webm') and file_info.get('type') == 'sticker':
                     file_info['type'] = 'video'
@@ -6073,7 +6073,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
