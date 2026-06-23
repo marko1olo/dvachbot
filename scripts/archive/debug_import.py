@@ -68,18 +68,30 @@ async def debug_import():
         columns = all_posts_data[0].keys()
         query = f"INSERT INTO Posts ({', '.join(columns)}) VALUES ({', '.join(['?'] * len(columns))});"
 
-        for post in all_posts_data:
-            values_tuple = tuple(post.get(col) for col in columns)
+        chunk_size = 500
+        for i in range(0, len(all_posts_data), chunk_size):
+            chunk = all_posts_data[i:i + chunk_size]
+            values = [tuple(post.get(col) for col in columns) for post in chunk]
+
             try:
-                # Каждая вставка - отдельная транзакция
-                await db.execute(query, values_tuple)
+                await db.execute("BEGIN;")
+                await db.executemany(query, values)
                 await db.commit()
-                successful_imports += 1
-            except aiosqlite.IntegrityError as e:
-                failed_imports += 1
-                await asyncio.to_thread(_append_import_error, ERROR_LOG_FILE, e, post)
-                # Откатываем неудачную транзакцию
+                successful_imports += len(values)
+            except aiosqlite.IntegrityError:
                 await db.rollback()
+                # Если чанк упал из-за дубля (или другой IntegrityError),
+                # откатываемся к построчной вставке для этого чанка,
+                # чтобы залогировать конкретную ошибку
+                for post, val in zip(chunk, values):
+                    try:
+                        await db.execute(query, val)
+                        await db.commit()
+                        successful_imports += 1
+                    except aiosqlite.IntegrityError as e:
+                        failed_imports += 1
+                        await asyncio.to_thread(_append_import_error, ERROR_LOG_FILE, e, post)
+                        await db.rollback()
 
         print(f"\n--- Диагностика 'Posts' завершена ---")
         print(f" -> ✅ Успешно импортировано: {successful_imports}")
