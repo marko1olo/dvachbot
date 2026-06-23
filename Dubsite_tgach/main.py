@@ -4194,7 +4194,8 @@ async def api_admin_set_banner(data: BoardBannerRequest, user: dict = Depends(ge
             await db.execute("COMMIT")
         except Exception as e:
             try: await db.execute("ROLLBACK")
-            except: pass
+            except Exception as rollback_err:
+                logger.warning(f"Rollback failed during banner update: {rollback_err}")
             logger.error(f"Banner update error: {e}")
             raise HTTPException(status_code=500, detail="DB Error")
 
@@ -6073,7 +6074,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
