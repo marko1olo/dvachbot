@@ -6806,7 +6806,8 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
                 await add_or_activate_user(target_id, b_id)
                 await update_shadow_mute(target_id, b_id, 0)
                 count += 1
-        except Exception: pass
+        except Exception as e:
+            runtime_logger.error(f"Error during global unban on board {b_id} for user {target_id}: {e}")
     await log_global_event('bot', f"🕊️ GUNBAN: Админ {message.from_user.id} ГЛОБАЛЬНО РАЗБАНИЛ {target_id} на {count} досках")
     if lang == 'en': final = f"✅ User <code>{target_id}</code> unbanned/unmuted on {count} boards."
     elif lang == 'jp': final = f"✅ ユーザー <code>{target_id}</code> を {count} 個の板でBAN/ミュート解除しました。"
