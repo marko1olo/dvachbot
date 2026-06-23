@@ -63,6 +63,7 @@ async def _process_single_task(task):
         file_ext = ".dat"
         fresh_file_id = file_id 
         download_success = False # Флаг успешного скачивания
+        file_info = None
         
         try:
             file_info = await bot.get_file(file_id)
