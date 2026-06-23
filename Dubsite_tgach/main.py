@@ -931,6 +931,7 @@ class BlockBadBots:
             "bytespider", "claudebot", "amazonbot", "semrushbot", 
             "dotbot", "mj12bot", "ahrefsbot", "gptbot", "ccbot"
         ]
+        self.bot_pattern = re.compile('|'.join(map(re.escape, self.blocked_agents)))
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -939,7 +940,7 @@ class BlockBadBots:
 
         headers = dict(scope.get("headers", []))
         user_agent = headers.get(b"user-agent", b"").decode("latin-1").lower()
-        if any(bot in user_agent for bot in self.blocked_agents):
+        if bool(self.bot_pattern.search(user_agent)):
             response = Response("Go away, bot.", status_code=403)
             await response(scope, receive, send)
             return
@@ -6073,7 +6074,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
