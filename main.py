@@ -258,13 +258,7 @@ ANIME_COMMAND_MAP = {
     "LOLICON": get_loli_image,
     "LOLIS": get_loli_image,
 }
-RE_HTML_TAGS = re.compile(r'<[^>]+>')
-RE_YOU_PATTERN = re.compile(r">>(\d+)")
-RE_SCRIPT_TAG = re.compile(r'<\s*script\b[^>]*>.*?<\s*/\s*script\s*>', flags=re.IGNORECASE | re.DOTALL)
-RE_SCRIPT_SINGLE = re.compile(r'<\s*script\b[^>]*>', flags=re.IGNORECASE)
-RE_DANGEROUS_TAGS = re.compile(r'<\s*(iframe|svg|form|object|embed|link|a)\b[^>]*>.*?<\s*/\s*\1\s*>', flags=re.IGNORECASE | re.DOTALL)
-RE_DANGEROUS_SINGLE = re.compile(r'<\s*(iframe|svg|form|object|embed|link|a)\b[^>]*>', flags=re.IGNORECASE)
-RE_EVENT_HANDLERS = re.compile(r'\s+on\w+\s*=\s*["\'].*?["\']', flags=re.IGNORECASE)
+from common.text_utils import clean_html_tags, sanitize_html, RE_HTML_TAGS, RE_YOU_PATTERN, RE_SCRIPT_TAG, RE_SCRIPT_SINGLE, RE_DANGEROUS_TAGS, RE_DANGEROUS_SINGLE, RE_EVENT_HANDLERS
 RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
 RE_SYSTEM_HEADER_CLEAN = re.compile(r'^(###.*?###|<i>.*?</i>)\s*\n?', flags=re.MULTILINE)
 RE_NEWLINES = re.compile(r'\n{2,}')
@@ -951,34 +945,6 @@ aiohttp_log = logging.getLogger('aiohttp')
 aiohttp_log.setLevel(logging.CRITICAL) 
 aiogram_log = logging.getLogger('aiogram')
 aiogram_log.setLevel(logging.CRITICAL) # <--- ИЗМЕНЕНО НА CRITICAL, чтобы не видеть ошибки апдейтов
-def clean_html_tags(text: str) -> str:
-
-    if not text: return text
-    return RE_HTML_TAGS.sub('', text)
-def sanitize_html(text: str) -> str:
-
-    if not text: return ""
-    
-    # --- НАЧАЛО ИЗМЕНЕНИЙ (Перехват и конвертация гиперссылок) ---
-    def link_replacer(match):
-        url = match.group(1)
-        content = match.group(2)
-        # Очищаем URL от протокола и www. для эстетики
-        clean_url = re.sub(r'^https?://', '', url, flags=re.IGNORECASE)
-        clean_url = re.sub(r'^www\.', '', clean_url, flags=re.IGNORECASE)
-        # Возвращаем текст и ссылку рядом в скобках
-        return f"{content} <i>({clean_url})</i>"
-        
-    # Ищем теги <a href="URL">ТЕКСТ</a> и обрабатываем их до основного санитайзера
-    text = re.sub(r'<\s*a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\s*/\s*a\s*>', link_replacer, text, flags=re.IGNORECASE | re.DOTALL)
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
-    text = RE_SCRIPT_TAG.sub('', text)
-    text = RE_SCRIPT_SINGLE.sub('', text)
-    text = RE_DANGEROUS_TAGS.sub('', text)
-    text = RE_DANGEROUS_SINGLE.sub('', text)
-    text = RE_EVENT_HANDLERS.sub('', text)
-    return text
 def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, int]) -> str:
     """Улучшенная версия: не использует замок, работает с переданным словарем авторов."""
     if not text or ">>" not in text:
