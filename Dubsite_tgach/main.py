@@ -1552,7 +1552,13 @@ def format_post_text(text: str) -> str:
     # --- ФОРМАТИРОВАНИЕ ---
     text = re.sub(r'&lt;br\s*/?&gt;', '\n', text, flags=re.IGNORECASE) 
     
-    processed_text = URL_PATTERN.sub(r'<a href="\1" target="_blank" rel="noopener noreferrer">\1</a>', text)
+    def url_replacer(match):
+        url = match.group(1)
+        if match.string.rfind('[btn=', 0, match.start()) != -1 and match.string.find(']', match.end()) != -1:
+            return url
+        return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>'
+
+    processed_text = URL_PATTERN.sub(url_replacer, text)
     
     lines = []
     for line in processed_text.split('\n'):
@@ -6073,7 +6079,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],

@@ -1,0 +1,17 @@
+--- Dubsite_tgach/main.py
++++ Dubsite_tgach/main.py
+@@ -1551,7 +1551,13 @@
+     # --- ФОРМАТИРОВАНИЕ ---
+     text = re.sub(r'&lt;br\s*/?&gt;', '\n', text, flags=re.IGNORECASE)
+
+-    processed_text = URL_PATTERN.sub(r'<a href="\1" target="_blank" rel="noopener noreferrer">\1</a>', text)
++    def url_replacer(match):
++        url = match.group(1)
++        if match.string.rfind('[btn=', 0, match.start()) != -1 and match.string.find(']', match.end()) != -1:
++            return url
++        return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>'
++
++    processed_text = URL_PATTERN.sub(url_replacer, text)
+
+     lines = []
+     for line in processed_text.split('\n'):

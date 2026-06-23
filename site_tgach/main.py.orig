@@ -1,8 +1,8 @@
 import sys
 """
 main.py
-This module serves as the main entry point for the FastAPI application, handling various functionalities 
-related to a web service that interacts with users and processes requests. 
+This module serves as the main entry point for the FastAPI application, handling various functionalities
+related to a web service that interacts with users and processes requests.
 Key Features:
 - Implements a FastAPI application with various endpoints for user interactions.
 - Integrates with external services for image processing, translation, and database management.
@@ -76,9 +76,9 @@ from site_tgach.image_processing import apply_grimdark_filter_async, shutdown_im
 from site_tgach.mtproto_client import _cleanup_idle_clients, close_all_mtproto_clients
 try:
     from japanese_translator import (
-        get_random_anime_image, 
-        get_monogatari_image, 
-        get_nsfw_anime_image, 
+        get_random_anime_image,
+        get_monogatari_image,
+        get_nsfw_anime_image,
         get_loli_image
     )
 except ImportError:
@@ -107,7 +107,7 @@ async def get_setting_cached(key: str) -> str:
 import uvicorn
 import aiohttp
 from fastapi import (
-    FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect, 
+    FastAPI, Request, HTTPException, WebSocket, WebSocketDisconnect,
     File, UploadFile, Form, Depends, BackgroundTasks, Body
 )
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -139,9 +139,9 @@ _geoip_init_lock = asyncio.Lock()
 @alru_cache(maxsize=10000, ttl=3600)
 async def get_country_by_ip(ip: str) -> str:
     global GEOIP_READER
-    if ip in ("127.0.0.1", "localhost", "::1"): 
+    if ip in ("127.0.0.1", "localhost", "::1"):
         return "XX"
-    
+
     if GEOIP_READER is None:
         try:
             import geoip2.database
@@ -170,9 +170,9 @@ async def get_country_by_ip(ip: str) -> str:
         try:
             transport = AsyncHTTPTransport(local_address="0.0.0.0")
             async with httpx.AsyncClient(
-                timeout=3.0, 
+                timeout=3.0,
                 verify=False,
-                proxy=strategy["proxy"], 
+                proxy=strategy["proxy"],
                 transport=transport,
                 trust_env=True
             ) as client:
@@ -181,7 +181,7 @@ async def get_country_by_ip(ip: str) -> str:
                     return resp.json().get('countryCode', 'XX')
         except:
             continue
-        
+
     return "XX"
 limiter = Limiter(key_func=get_real_ip)
 from pydantic import BaseModel
@@ -339,7 +339,7 @@ IP_TROLL_CONFIG = {}
 
 TELEGRAM_FILE_SEMAPHORE = asyncio.Semaphore(250)
 UPLOAD_SEMAPHORE = asyncio.Semaphore(4)
-POST_RATE_LIMITER = deque() 
+POST_RATE_LIMITER = deque()
 SITE_CACHE_CLEANUP_INTERVAL_SEC = int(os.getenv("SITE_CACHE_CLEANUP_INTERVAL_SEC", "300"))
 SITE_FASTAPI_CACHE_MAX_KEYS = int(os.getenv("SITE_FASTAPI_CACHE_MAX_KEYS", "5000"))
 SITE_THREAD_VERSION_TTL_SEC = int(os.getenv("SITE_THREAD_VERSION_TTL_SEC", "86400"))
@@ -461,7 +461,7 @@ def _file_owner_pairs_for_upload_result(res_data: dict, uploader_bot_id: int | N
 
 # Лимиты для удержания ботов в ловушках (защита слотов соединений сервера)
 ACTIVE_TROLL_CONNS = 0
-MAX_TROLL_CONNS = 128 
+MAX_TROLL_CONNS = 128
 from common.database import get_archived_threads, get_chat_posts_for_board
 from common.database import restore_thread_from_archive
 from common.database import toggle_thread_pin
@@ -485,9 +485,9 @@ class NoParsingFilter(logging.Filter):
     def filter(self, record):
         msg = record.getMessage()
         if (
-            "Data should not be empty" in msg or 
-            "_SelectorSocketTransport" in msg or 
-            "_ProactorBasePipeTransport" in msg or 
+            "Data should not be empty" in msg or
+            "_SelectorSocketTransport" in msg or
+            "_ProactorBasePipeTransport" in msg or
             "WinError 10054" in msg
         ):
             return False
@@ -573,12 +573,12 @@ RE_ANIME_STACK = re.compile(rf"/({'|'.join(ANIME_COMMAND_MAP.keys())})(?:(\d+)|(
 def _resize_image_if_needed(image_bytes: bytes) -> bytes:
     MAX_DIMENSION_SUM = 10000
     MAX_ASPECT_RATIO = 20.0
-    MAX_FILE_SIZE_BYTES = 9.5 * 1024 * 1024 
+    MAX_FILE_SIZE_BYTES = 9.5 * 1024 * 1024
     if not image_bytes: return image_bytes
     header = image_bytes[:12]
     is_media_format = (
-        b'ftyp' in header or 
-        header.startswith(b'\x1A\x45\xDF\xA3') or 
+        b'ftyp' in header or
+        header.startswith(b'\x1A\x45\xDF\xA3') or
         header.startswith(b'GIF8')
     )
     if is_media_format:
@@ -590,19 +590,19 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
             format_original = img.format
             if getattr(img, "is_animated", False):
                 return image_bytes
-            
+
             needs_resize_dims = (
-                (width + height > MAX_DIMENSION_SUM) or 
-                (width / height > MAX_ASPECT_RATIO) or 
+                (width + height > MAX_DIMENSION_SUM) or
+                (width / height > MAX_ASPECT_RATIO) or
                 (height / width > MAX_ASPECT_RATIO)
             )
             if not needs_resize_dims and input_size <= MAX_FILE_SIZE_BYTES:
                 if format_original == 'PNG' and input_size > 5 * 1024 * 1024:
-                    pass 
+                    pass
                 else:
                     output_buffer = io.BytesIO()
                     save_fmt = format_original if format_original in ['PNG', 'WEBP'] else 'JPEG'
-                    
+
                     save_img = img
                     if save_fmt == 'JPEG' and img.mode in ('RGBA', 'LA', 'P'):
                         save_img = img.convert("RGB")
@@ -793,7 +793,7 @@ def check_perm(user: dict, required_role: str) -> bool:
     Проверяет, достаточно ли прав у пользователя для действия.
     Возвращает True/False.
     """
-    if not user: 
+    if not user:
         return False
     if user.get('id') in ADMIN_IDS:
         return True
@@ -806,11 +806,11 @@ async def check_and_punish_site_spam(board_id: str, user_id: int, text: str, t):
     if clean_text in {'🎲', '🎰', '🏀', '⚽', '🎯', '🎳'}:
         await apply_regular_mute(user_id, board_id, 60)
         log_system_event(f"🎲 AUTO-MUTE (Site): User {user_id} muted for 1 min (Casino spam) on /{board_id}/")
-        
+
         phrases = t('casino_phrases', ["No casino allowed."])
         if not isinstance(phrases, list): phrases = [phrases]
         phrase = random.choice(phrases)
-        
+
         raise HTTPException(status_code=400, detail=t('casino_ban_message').format(phrase))
     user_history = site_spam_tracker[board_id][user_id]
     now = time.time()
@@ -841,7 +841,7 @@ async def captcha_cleanup_task():
             if expired:
                 logger.info(f"🧹 [Captcha] Cleaned {len(expired)} expired sessions.")
         except Exception as e:
-            logger.error(f"⚠️ Captcha cleanup error: {e}")  
+            logger.error(f"⚠️ Captcha cleanup error: {e}")
 async def site_spam_cleanup_task():
     while True:
         await asyncio.sleep(3600)
@@ -851,7 +851,7 @@ async def site_spam_cleanup_task():
             for board_id in list(site_spam_tracker.keys()):
                 board_data = site_spam_tracker[board_id]
                 inactive_users = [
-                    uid for uid, hist in board_data.items() 
+                    uid for uid, hist in board_data.items()
                     if not hist['timestamps'] or (now - hist['timestamps'][-1] > 3600)
                 ]
                 for uid in inactive_users:
@@ -879,7 +879,7 @@ async def shadow_cleanup_task():
                     del IP_BAN_LIST[ip]
                 logger.info("✅ [Firewall] Memory cleaned.")
         except Exception as e:
-            logger.error(f"⚠️ Maintenance task error: {e}")   
+            logger.error(f"⚠️ Maintenance task error: {e}")
 def get_user_id_from_session(request: Request) -> str:
     user = request.session.get('user')
     if user and user.get('id'):
@@ -893,14 +893,14 @@ async def notify_admins(bot: Bot, text: str):
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(admin_id, text, parse_mode="HTML")
-            await asyncio.sleep(0.05) 
+            await asyncio.sleep(0.05)
         except TelegramRetryAfter as e:
             logger.warning(f"⏳ FloodWait {e.retry_after}s при отправке админу {admin_id}")
             await asyncio.sleep(e.retry_after + 1)
             try:
                 await bot.send_message(admin_id, text, parse_mode="HTML")
             except Exception:
-                pass 
+                pass
         except TelegramForbiddenError:
             logger.warning(f"❌ Админ {admin_id} заблокировал бота! Сообщение не доставлено.")
         except Exception as e:
@@ -914,7 +914,7 @@ def generate_negative_id(token: str) -> int:
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, set[WebSocket]] = defaultdict(set)
-        self.ip_counts: Dict[str, int] = defaultdict(int) 
+        self.ip_counts: Dict[str, int] = defaultdict(int)
 
     async def connect(self, websocket: WebSocket, board_id: str, mode: str, stream: str):
         client_ip = websocket.client.host
@@ -922,9 +922,9 @@ class ConnectionManager:
             client_ip = websocket.headers.get("x-real-ip")
         elif websocket.headers.get("x-forwarded-for"):
             client_ip = websocket.headers.get("x-forwarded-for").split(",")[0].strip()
-        
+
         self.ip_counts[client_ip] += 1
-        
+
         if self.ip_counts[client_ip] > 20:
             self.ip_counts[client_ip] -= 1
             logger.warning(f"⛔ WS Limit Reached for {client_ip}")
@@ -939,11 +939,11 @@ class ConnectionManager:
         logger.info(f"🔌 WS Connect: {client_ip} | Board: {board_id}")
         key = f"{board_id}/{mode}/{stream}"
         self.active_connections[key].add(websocket)
-        
+
         if self.ip_counts[client_ip] == 1:
             v_logger.info(f"[LIVE] {client_ip} | Started session")
-        
-        websocket.state_client_ip = client_ip 
+
+        websocket.state_client_ip = client_ip
 
     def disconnect(self, websocket: WebSocket, board_id: str, mode: str, stream: str):
         key = f"{board_id}/{mode}/{stream}"
@@ -951,7 +951,7 @@ class ConnectionManager:
             self.active_connections[key].discard(websocket)
             if not self.active_connections[key]:
                 del self.active_connections[key]
-        
+
         if hasattr(websocket, 'state_client_ip'):
             ip = websocket.state_client_ip
             if self.ip_counts[ip] > 0:
@@ -961,12 +961,12 @@ class ConnectionManager:
                 del self.ip_counts[ip]
     async def broadcast_post_update(self, post_data: dict):
         enriched = _convert_and_enrich_posts([post_data])[0]
-        
+
         message = orjson.dumps({
             "event_type": "update",
             "post": enriched
         }).decode('utf-8')
-        
+
         board_id = post_data.get('board_id')
         targets = [
             f"{board_id}/threads/ru", f"{board_id}/threads/en", f"{board_id}/threads/jp",
@@ -974,7 +974,7 @@ class ConnectionManager:
             "overboard/threads/ru", "overboard/threads/en", "overboard/threads/jp",
             "overboard/chat/ru", "overboard/chat/en", "overboard/chat/jp"
         ]
-        
+
         tasks = [self._safe_send(conn, message, key) for key in targets if key in self.active_connections for conn in self.active_connections[key]]
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -984,14 +984,14 @@ class ConnectionManager:
             "post_num": post_num,
             "board_id": board_id
         }).decode('utf-8')
-        
+
         targets = [
             f"{board_id}/threads/ru", f"{board_id}/threads/en", f"{board_id}/threads/jp",
             f"{board_id}/chat/ru", f"{board_id}/chat/en", f"{board_id}/chat/jp",
             "overboard/threads/ru", "overboard/threads/en", "overboard/threads/jp",
             "overboard/chat/ru", "overboard/chat/en", "overboard/chat/jp"
         ]
-        
+
         tasks = []
         for key in targets:
             if key in self.active_connections:
@@ -1015,18 +1015,18 @@ class ConnectionManager:
         stream = post_data.get('stream', 'ru')
         is_thread = post_data.get('thread_id') is not None
         enriched_post = _convert_and_enrich_posts([post_data])[0]
-        
+
         if 'content' not in enriched_post or not isinstance(enriched_post['content'], dict):
              enriched_post['content'] = {}
-        
+
         if 'post_num' in enriched_post:
              enriched_post['id'] = enriched_post.pop('post_num')
         pid = enriched_post.get('id')
         tid = enriched_post.get('thread_id')
         enriched_post['is_op_post'] = bool(pid and tid and pid == tid)
         message_bytes = orjson.dumps(enriched_post)
-        message_str = message_bytes.decode('utf-8') 
-        if not message_str: 
+        message_str = message_bytes.decode('utf-8')
+        if not message_str:
             return
         target_mode = "threads" if is_thread else "chat"
         key = f"{board_id}/{target_mode}/{stream}"
@@ -1100,18 +1100,18 @@ async def lifespan(app: FastAPI):
         file_uploader_bot = Bot(token=FILE_UPLOADER_BOT_TOKEN)
         app.state.file_uploader_bot = file_uploader_bot
         startup_mark("file uploader bot done", step_started)
-        
-        # Инициализируем пул ботов заранее (улучшение UX). 
+
+        # Инициализируем пул ботов заранее (улучшение UX).
         # Это предотвратит задержку при обработке первого поста пользователем.
         if global_bot_pool:
             step_started = startup_mark("global bot pool init begin")
             logger.info("INFO:     Preloading Bot Pool...")
             global_bot_pool.init_pool()
             startup_mark("global bot pool init done", step_started)
-            
+
     except Exception as e:
         logger.critical(f"🔥 BOT INIT FAILED: {e}. Uploads will fail!")
-        app.state.file_uploader_bot = None 
+        app.state.file_uploader_bot = None
     step_started = startup_mark("background tasks begin")
     FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")
     app.state.broadcast_queue = asyncio.Queue(maxsize=1000)
@@ -1133,10 +1133,10 @@ async def lifespan(app: FastAPI):
     from site_tgach.neuro_poster import NeuroManager
     neuro_manager = NeuroManager(app.state.file_uploader_bot)
     random_index_task = spawn_task(refresh_random_indexes())
-    app.state.neuro_manager = neuro_manager 
-    NEURO_ENABLED = False 
+    app.state.neuro_manager = neuro_manager
+    NEURO_ENABLED = False
     async def neuro_loop():
-        from site_tgach.neuro_poster import POSTING_INTERVALS 
+        from site_tgach.neuro_poster import POSTING_INTERVALS
         await asyncio.sleep(30)
         while True:
             try:
@@ -1162,7 +1162,7 @@ async def lifespan(app: FastAPI):
     neuro_task = spawn_task(neuro_loop())
     mirror_task = spawn_task(process_mirror_queue())
     sim_task = spawn_task(process_import_queue(app.state.broadcast_queue))
-    scanner_task = spawn_task(scanner_loop(app.state)) 
+    scanner_task = spawn_task(scanner_loop(app.state))
     tor_task = spawn_task(update_tor_nodes_task())
     startup_mark("background tasks done", step_started)
     try:
@@ -1218,28 +1218,28 @@ from starlette.responses import Response
 async def country_cookie_middleware(request: Request, call_next):
     if request.url.path.startswith(("/static", "/files", "/ws", "/api")):
         return await call_next(request)
-    
+
     response = await call_next(request)
-    
+
     try:
         client_ip = get_real_ip(request)
         country = await get_country_by_ip(client_ip)
         response.set_cookie(
-            key="user_country", 
-            value=country, 
-            max_age=3600, 
-            httponly=True, 
+            key="user_country",
+            value=country,
+            max_age=3600,
+            httponly=True,
             samesite="lax"
         )
     except Exception:
         pass
-        
+
     return response
 class BlockBadBots:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
         self.blocked_agents = [
-            "bytespider", "claudebot", "amazonbot", "semrushbot", 
+            "bytespider", "claudebot", "amazonbot", "semrushbot",
             "dotbot", "mj12bot", "ahrefsbot", "gptbot", "ccbot"
         ]
 
@@ -1289,7 +1289,7 @@ async def custom_access_log_middleware(request: Request, call_next):
     if any(path.startswith(prefix) for prefix in IGNORED_PREFIXES) or \
        any(x in path for x in ["wp-", ".php", ".xml"]):
         return await call_next(request)
-         
+
     client_ip = get_real_ip(request)
 
     # 1. Фиксация нового посетителя (Вход)
@@ -1300,7 +1300,7 @@ async def custom_access_log_middleware(request: Request, call_next):
 
     # 2. Определение человекочитаемого действия
     action = f"{request.method} {path}" # Дефолт
-    
+
     if path == "/":
         action = "Main page"
     elif "/res/" in path:
@@ -1345,24 +1345,24 @@ async def custom_access_log_middleware(request: Request, call_next):
             request.headers.get("content-length", "-"),
         )
     client_ip = get_real_ip(request)
-    
+
     timestamp = datetime.now().strftime("%H:%M:%S")
     status_code = response.status_code
     if path.startswith("/files/") and status_code < 400:
         print(f"[{timestamp}] {client_ip:<13} file accepted ({process_time:.0f}ms)")
         return response
-    status_color = "\033[32m" 
-    if status_code >= 500: status_color = "\033[31m" 
+    status_color = "\033[32m"
+    if status_code >= 500: status_color = "\033[31m"
     elif status_code >= 400: status_color = "\033[33m"
-    elif status_code >= 300: status_color = "\033[36m" 
+    elif status_code >= 300: status_color = "\033[36m"
     reset_color = "\033[0m"
     redirect_tag = ""
     if status_code in (307, 302, 301) and "location" in response.headers:
         loc = response.headers["location"]
-        if "huggingface.co" in loc: redirect_tag = " \033[33m-> [HF]\033[0m" 
+        if "huggingface.co" in loc: redirect_tag = " \033[33m-> [HF]\033[0m"
         elif "catbox.moe" in loc: redirect_tag = " \033[35m-> [CB]\033[0m"
         elif "0x0.st" in loc: redirect_tag = " \033[36m-> [0x0]\033[0m"
-        elif "api.telegram.org" in loc: redirect_tag = " \033[34m-> [TG]\033[0m" 
+        elif "api.telegram.org" in loc: redirect_tag = " \033[34m-> [TG]\033[0m"
         else: redirect_tag = " -> [OTHER]"
 
     print(f"[{timestamp}] {client_ip:<13} {request.method} {request.url.path} {status_color}{status_code}{reset_color}{redirect_tag} ({process_time:.0f}ms)")
@@ -1378,8 +1378,8 @@ def clean_zalgo(text: str) -> str:
     for char in text:
         if unicodedata.category(char) == 'Mn':
             count += 1
-            if count > 4: 
-                continue 
+            if count > 4:
+                continue
         else:
             count = 0
         clean_chars.append(char)
@@ -1396,10 +1396,10 @@ def is_bot_by_headers(request: Request) -> bool:
     referer = request.headers.get("referer", "")
     accept_lang = request.headers.get("accept-language", "")
     path = request.url.path
-    
+
     # 1. Список явных библиотек для автоматизации
     bot_uas = [
-        "python-requests", "aiohttp", "httpx", "curl", "wget", 
+        "python-requests", "aiohttp", "httpx", "curl", "wget",
         "go-http-client", "libwww-perl", "python-urllib", "art-grabber"
     ]
     if any(bot in ua for bot in bot_uas):
@@ -1430,12 +1430,12 @@ async def ddos_guard_middleware(request: Request, call_next):
 
     if path in SITE_HEALTH_PATHS or client_ip in LOCAL_DIAGNOSTIC_IPS:
         return await call_next(request)
-    
+
     # 2. Потом проверяем черный список
     blacklist_raw = await get_setting_cached('ip_blacklist') or ""
     if client_ip in blacklist_raw.split(','):
         return Response("Banned by AI security", status_code=403)
-    
+
     is_tor = client_ip in TOR_EXIT_NODES
     # 1. Проверка белого списка (кэшированная настройка из БД)
     whitelist_raw = await get_setting_cached('ip_whitelist') or ""
@@ -1449,15 +1449,15 @@ async def ddos_guard_middleware(request: Request, call_next):
             # ПРОВЕРКА ЛИМИТА: Если ловушки полные, просто блокируем
             if ACTIVE_TROLL_CONNS >= MAX_TROLL_CONNS:
                 return Response("Too many requests", status_code=429)
-                
+
             m = cfg['mode']
-            if m == 'gzip': 
+            if m == 'gzip':
                 return StreamingResponse(managed_troll_generator(gzip_bomb_generator()), media_type="application/x-gzip", headers={"Content-Encoding": "gzip"})
-            if m == 'html': 
+            if m == 'html':
                 return StreamingResponse(managed_troll_generator(html_depth_charge_generator()), media_type="text/html")
-            if m == 'xml': 
+            if m == 'xml':
                 return StreamingResponse(managed_troll_generator(xml_tarpit_generator()), media_type="application/xml")
-            if m == 'js': 
+            if m == 'js':
                 return StreamingResponse(managed_troll_generator(js_infinite_stream_generator()), media_type="application/javascript")
             if m == 'slow':
                 return StreamingResponse(managed_troll_generator(slow_death_generator()), media_type="text/plain")
@@ -1470,9 +1470,9 @@ async def ddos_guard_middleware(request: Request, call_next):
             if ACTIVE_TROLL_CONNS >= MAX_TROLL_CONNS:
                 return Response("Banned", status_code=403)
             return StreamingResponse(
-                managed_troll_generator(slow_death_generator()), 
-                media_type="text/plain", 
-                status_code=200 
+                managed_troll_generator(slow_death_generator()),
+                media_type="text/plain",
+                status_code=200
             )
         else:
             del IP_BAN_LIST[client_ip]
@@ -1481,36 +1481,36 @@ async def ddos_guard_middleware(request: Request, call_next):
     # Не проверяем флуд для статических файлов, чтобы не банить анонов за загрузку стилей/картинок
     if not path.startswith(("/static/", "/files/", "/favicon.ico")):
         now = time.time()
-        
+
         # Разделяем логику лимитов: для ботов — жестко, для людей — мягко.
         is_suspicious = is_bot_by_headers(request)
-        
+
         flood_key = f"{client_ip}|{request.method}|{path}"
-        
+
         # Авто-очистка трекера при переполнении (защита RAM)
         if len(REQUEST_FLOOD_TRACKER) > 10000:
             REQUEST_FLOOD_TRACKER.clear()
-        
+
         history = REQUEST_FLOOD_TRACKER[flood_key]
         REQUEST_FLOOD_TRACKER[flood_key] = [t for t in history if now - t < 5]
         REQUEST_FLOOD_TRACKER[flood_key].append(now)
-        
+
         # ЛОГИКА НАКАЗАНИЯ:
         # Если это выявленный БОТ (по заголовкам) -> лимит 3 запроса за 5 секунд.
         # Если это АНОН (нормальные заголовки) -> лимит 15 запросов за 5 секунд.
-        
+
         limit_count = 3 if is_suspicious else 30
-        
+
         if len(REQUEST_FLOOD_TRACKER[flood_key]) > limit_count:
             # Наказываем: Бан на 12 часов + Gzip-бомба
-            IP_BAN_LIST[client_ip] = now + 43200 
-            
+            IP_BAN_LIST[client_ip] = now + 43200
+
             reason = "Header pattern match" if is_suspicious else "Flood detected"
             log_system_event(f"🔨 AUTO-BAN: {client_ip} ({reason} on {path})")
-            
+
             del REQUEST_FLOOD_TRACKER[flood_key]
-            
-            # Скармливаем боту Gzip-бомбу (10МБ нулей, сжатых до 10КБ). 
+
+            # Скармливаем боту Gzip-бомбу (10МБ нулей, сжатых до 10КБ).
             # При распаковке скрипты на Python/JS часто вылетают по памяти.
             filename = f"error_log_{secrets.token_hex(4)}.gz"
             if ACTIVE_TROLL_CONNS >= MAX_TROLL_CONNS:
@@ -1577,8 +1577,8 @@ templates = Jinja2Templates(directory=os.path.join(site_root, "templates"))
 @app.get("/robots.txt", response_class=Response)
 async def robots_txt(request: Request):
     base_url = str(request.base_url).rstrip('/')
-    content = fr"""# 
-#  _______  ___    _   ___ _  _ 
+    content = fr"""#
+#  _______  ___    _   ___ _  _
 # |_   _| \/  _\  /_\ / __| || |
 #   | | | |/ _ \ / _ \ (__| __ |
 #   |_| |_/_/ \_/_/ \_\___|_||_|
@@ -1699,14 +1699,14 @@ async def sitemap_xml(request: Request):
     base_url = str(request.base_url).rstrip('/')
     # Статичные страницы
     static_pages = [
-        "", "/rules/", "/about/", "/faq/", 
+        "", "/rules/", "/about/", "/faq/",
         "/archive/threads/", "/archive/chat/", "/useful/", "/tags/"
     ]
-    
+
     now_date = datetime.now().strftime('%Y-%m-%d')
     xml_content = ['<?xml version="1.0" encoding="UTF-8"?>']
     xml_content.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
-    
+
     # 1. Добавляем статику
     for page in static_pages:
         xml_content.append(f'  <url><loc>{base_url}{page}</loc><lastmod>{now_date}</lastmod><changefreq>daily</changefreq></url>')
@@ -1772,12 +1772,12 @@ async def global_data_middleware(request: Request, call_next):
 @app.get("/.env", include_in_schema=False)
 @app.get("/wp-login.php", include_in_schema=False)
 @app.get("/admin/phpmyadmin", include_in_schema=False)
-@app.get("/autodiscover/autodiscover.json", include_in_schema=False) 
-@app.get("/owa/auth/logon.aspx", include_in_schema=False)       
+@app.get("/autodiscover/autodiscover.json", include_in_schema=False)
+@app.get("/owa/auth/logon.aspx", include_in_schema=False)
 async def bot_trap(request: Request):
     """Ловушка для мамкиных хакеров."""
-    ip = get_real_ip(request) 
-    IP_BAN_LIST[ip] = time.time() + 86400 
+    ip = get_real_ip(request)
+    IP_BAN_LIST[ip] = time.time() + 86400
     logger.warning(f"🪤 BOT TRAPPED: {ip} tried to access sensitive paths. Banned.")
     return Response("Nice try, script kiddie.", status_code=418)
 @app.middleware("http")
@@ -1817,10 +1817,10 @@ async def access_control_middleware(request: Request, call_next):
 async def language_middleware(request: Request, call_next):
     try:
         host = request.headers.get("host", "").lower()
-        
+
         # Жесткая привязка домена к языку/потоку
         forced_stream = None
-        
+
         if "tgchan.top" in host:
             domain_lang = "en"
             site_name = "TGCHAN"
@@ -1844,7 +1844,7 @@ async def language_middleware(request: Request, call_next):
             # Форсируем stream в запросе, чтобы БД-фильтры сработали автоматически
             request.state.stream = forced_stream
         else:
-            user_lang_cookie = request.cookies.get("stream") 
+            user_lang_cookie = request.cookies.get("stream")
             lang = user_lang_cookie if user_lang_cookie in ['ru', 'en', 'jp'] else domain_lang
             if ENABLE_MULTILANG:
                 stream = lang
@@ -1855,13 +1855,13 @@ async def language_middleware(request: Request, call_next):
         request.state.site_name = site_name
         request.state.t = get_t(lang)
         request.state.stream = stream
-        
+
         protocol = "https" if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https" else "http"
         request.state.canonical_url = f"{protocol}://{host}{request.url.path}"
 
         request.state.host_ru = "tgach.top"
         request.state.host_en = "tgchan.top"
-        
+
     except Exception:
         request.state.lang = "ru"
         request.state.t = get_t("ru")
@@ -1872,7 +1872,7 @@ async def language_middleware(request: Request, call_next):
             return await call_next(request)
         except RuntimeError as e:
             if str(e) == "No response returned.":
-                return Response("OK", status_code=200) 
+                return Response("OK", status_code=200)
             raise e
     try:
         response = await call_next(request)
@@ -1891,9 +1891,9 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, custom_rate_limit_handler)
 IS_PRODUCTION = os.getenv("SITE_URL", "").startswith("https")
 app.add_middleware(
-    SessionMiddleware, 
-    secret_key=SECRET_KEY, 
-    same_site='lax', 
+    SessionMiddleware,
+    secret_key=SECRET_KEY,
+    same_site='lax',
     https_only=IS_PRODUCTION
 )
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
@@ -1901,44 +1901,44 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
 async def custom_404_handler(request: Request, exc):
     path = request.url.path.lower()
     client_ip = get_real_ip(request)
-    
+
     # 1. БЕЛЫЙ СПИСОК (Файлы и треды) - для предотвращения ложных срабатываний
     is_safe_path = (
-        path.endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp4', '.webm', '.mov', '.mkv', 
+        path.endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp4', '.webm', '.mov', '.mkv',
                        '.css', '.js', '.map', '.ico', '.svg', '.woff', '.woff2', '.ttf', '.json', '.html'))
         or '/res/' in path
         or '/img/' in path
         or '/files/' in path
         or '/static/' in path
     )
-    
+
     if is_safe_path:
         return Response(status_code=404)
 
     # 2. ПРОВЕРКА НА БОТА-СКАНЕРА (объединенный и улучшенный список)
     troll_patterns = [
         # System & Configs
-        '/.env', '/.git', '/.ssh', '/.bash', '/.profile', '/.history', '/.aws', 
+        '/.env', '/.git', '/.ssh', '/.bash', '/.profile', '/.history', '/.aws',
         '/.rhosts', '/.sh_history', '/.wget', '/.htpasswd', '/.htaccess', '/.ds_store',
         '/.bak', '/.old', '/.save', '/.log', '/.txt', '/.conf', '/.sql', '/goform', '/hello.world', '/mcp', '/sse',
-        
+
         # CMS & Frameworks
         '/wp-', '/wp/', '/xmlrpc', '/wlwmanifest', '/bitrix', '/joomla', '/drupal',
         '/laravel', '/symfony', '/storage/logs', '/vendor', '/composer', '/ajax',
-        
+
         # Admin Panels & DBs
         '/admin', '/phpmyadmin', '/setup', '/config', '/backup', '/dump', '/db.sql',
         '/console', '/shell', '/root', '/eval', '/invoker', '/actuator', '/api/v1',
         '/dashboard', '/cpanel', '/whm', '/sql', '/install', '/+CSCOL+/','/+CSCOL+', '/+CSCOE+/', '/+CSCOE+',
-        
+
         # Scanners
-        '/autodiscover', '/owa', '/exchange', '/ecp', '/_catalogs', '/_vti', 
-        '/hnap1', '/nmap', '/evox', '/sdk', '/phpunit', '/cgi-bin', 
+        '/autodiscover', '/owa', '/exchange', '/ecp', '/_catalogs', '/_vti',
+        '/hnap1', '/nmap', '/evox', '/sdk', '/phpunit', '/cgi-bin',
         '/~', '/_', '/1.bak', '/0.bak', '/a.bak', '/12.bak', '/config.json', '/config.php', '/onfig.js',
     ]
-    
+
     is_bot = False
-    
+
     if path.startswith(('/.', '/_', '/~', '/api/v', '/wp-')):
         is_bot = True
     elif any(p in path for p in troll_patterns):
@@ -1948,20 +1948,20 @@ async def custom_404_handler(request: Request, exc):
 
     if is_bot:
         BOT_VIOLATIONS[client_ip] += 1
-        
+
         # АВТО-ЗАХВАТ: Регистрация в реестре троллинга на 24 часа
         troll_mode = "gzip" if ('.env' in path or 'config' in path) else "slow"
         IP_TROLL_CONFIG[client_ip] = {
             "mode": troll_mode,
             "expires": time.time() + 86400
         }
-        
+
         log_system_event(f"🪤 AUTO-TRAP: {client_ip} triggered bot-filter on {path}. Penalty: {troll_mode.upper()} for 24h")
         return await honey_pot_troll(request)
 
     return templates.TemplateResponse(request=request, name="error.jinja2", context={
-        "request": request, 
-        "status_code": 404, 
+        "request": request,
+        "status_code": 404,
         "detail": "Страница не найдена"
     }, status_code=404)
 @app.exception_handler(500)
@@ -2069,9 +2069,9 @@ def to_makaba_post(post_data: dict, board_id: str) -> dict:
         "email": "sage" if post_data.get('sage') else "",
         "op": 1 if post_data.get('is_op_post') else 0,
         "trip": "",
-        "banned": 0, 
-        "closed": 1 if post_data.get('is_archived') else 0, 
-        "sticky": 1 if post_data.get('is_pinned') else 0, 
+        "banned": 0,
+        "closed": 1 if post_data.get('is_archived') else 0,
+        "sticky": 1 if post_data.get('is_pinned') else 0,
         "endless": 1 if post_data.get('is_endless') else 0
     }
 def log_system_event(message: str):
@@ -2081,7 +2081,7 @@ def log_system_event(message: str):
 def format_post_text(text: str) -> str:
     if not isinstance(text, str):
         return ""
-    
+
     # --- СУПЕР-ЗАЩИТА ОТ XSS (искажение ключевых слов) ---
     # script -> sclipt (i -> l)
     text = re.sub(r'(s)(c)(r)(i)(p)(t)', r'\1\2\3l\5\6', text, flags=re.IGNORECASE)
@@ -2090,26 +2090,20 @@ def format_post_text(text: str) -> str:
     # expression -> explession (для CSS) (r -> l чтобы сломать слово)
     text = re.sub(r'(e)(x)(p)(r)(e)(s)(s)(i)(o)(n)', r'\1\2\3l\5\6\7\8\9\10', text, flags=re.IGNORECASE)
     # style -> sty1e (l -> 1)
-    text = re.sub(r'(s)(t)(y)(l)(e)', r'\1\2\3\4e', text, flags=re.IGNORECASE).replace('style', 'sty1e').replace('STYLE', 'STY1E') 
+    text = re.sub(r'(s)(t)(y)(l)(e)', r'\1\2\3\4e', text, flags=re.IGNORECASE).replace('style', 'sty1e').replace('STYLE', 'STY1E')
     # События (onload, onerror, onclick...) -> 0nload...
     text = re.sub(r'\bon(load|error|click|mouse|key|focus|blur|change|submit)', r'0n\1', text, flags=re.IGNORECASE)
     # javascript: -> javasclipt: (уже покрыто заменой script, но на всякий случай)
-    
+
     # --- ЭКРАНИРОВАНИЕ HTML ---
     # Превращает < > " ' & в безопасные сущности
     text = html.escape(text, quote=True)
 
     # --- ФОРМАТИРОВАНИЕ ---
-    text = re.sub(r'&lt;br\s*/?&gt;', '\n', text, flags=re.IGNORECASE) 
-    
-    def url_replacer(match):
-        url = match.group(1)
-        if match.string.rfind('[btn=', 0, match.start()) != -1 and match.string.find(']', match.end()) != -1:
-            return url
-        return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>'
+    text = re.sub(r'&lt;br\s*/?&gt;', '\n', text, flags=re.IGNORECASE)
 
-    processed_text = URL_PATTERN.sub(url_replacer, text)
-    
+    processed_text = URL_PATTERN.sub(r'<a href="\1" target="_blank" rel="noopener noreferrer">\1</a>', text)
+
     lines = []
     for line in processed_text.split('\n'):
         stripped = line.strip()
@@ -2138,7 +2132,7 @@ def format_post_text(text: str) -> str:
     processed_text = re.sub(r'\[h1\](.*?)\[/h1\]', r'<h3 class="post-heading">\1</h3>', processed_text, flags=re.DOTALL)
     def btn_replacer(match):
         url = match.group(1)
-        safe_url = html.escape(url, quote=True) 
+        safe_url = html.escape(url, quote=True)
         text = match.group(2)
         return f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-small post-btn">{text}</a>'
 
@@ -2146,25 +2140,25 @@ def format_post_text(text: str) -> str:
     def size_replacer(match):
         try:
             s = int(match.group(1))
-            s = max(10, min(30, s)) 
+            s = max(10, min(30, s))
             return f'<span style="font-size: {s}px;">{match.group(2)}</span>'
         except: return match.group(2)
     processed_text = re.sub(r'\[size=(\d+)\](.*?)\[/size\]', size_replacer, processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[s\](.*?)\[/s\]', r'<s>\1</s>', processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[u\](.*?)\[/u\]', r'<u>\1</u>', processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[code\](.*?)\[/code\]', r'<code>\1</code>', processed_text, flags=re.DOTALL)
-    
+
     processed_text = re.sub(r'\[shake\](.*?)\[/shake\]', r'<span class="effect-shake">\1</span>', processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[rainbow\](.*?)\[/rainbow\]', r'<span class="effect-rainbow">\1</span>', processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[blur\](.*?)\[/blur\]', r'<span class="effect-blur">\1</span>', processed_text, flags=re.DOTALL)
-    
+
     def _glitch_replacer(match):
         content = match.group(1)
         return f'<span class="effect-glitch" data-text="{content}">{content}</span>'
-        
+
     processed_text = re.sub(r'\[glitch\](.*?)\[/glitch\]', _glitch_replacer, processed_text, flags=re.DOTALL)
     processed_text = SPOILER_PATTERN.sub(r'<span class="spoiler">\1</span>', processed_text)
-    
+
     return processed_text
 def sanitize_html(text: str) -> str:
     if not text:
@@ -2229,10 +2223,10 @@ def format_poll_for_html(poll_data: dict) -> str:
     if not poll_data or 'question' not in poll_data:
         return ""
     question = html.escape(poll_data["question"], quote=True)
-    options = [html.escape(opt, quote=True) for opt in poll_data.get('options', [])]    
+    options = [html.escape(opt, quote=True) for opt in poll_data.get('options', [])]
     votes = poll_data.get('votes', {})
     total_votes = sum(len(v) for v in votes.values())
-    
+
     html_parts = [f'<div class="poll-display"><h4>📊 {question}</h4>']
     for i, option_text in enumerate(options):
         vote_count = len(votes.get(str(i), []))
@@ -2253,7 +2247,7 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
     """
     base_original_url = file_info.get('original_url', '')
     base_thumbnail_url = file_info.get('thumbnail_url', '')
-    
+
     # Проверка валидности HF (из глобального списка VALID_HF_REPOS)
     hf_candidate = mirrors.get('huggingface')
     hf_valid = is_hf_link_allowed(hf_candidate, VALID_HF_REPOS)
@@ -2261,7 +2255,7 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
 
     # --- ВЫБОР ОРИГИНАЛА ---
     selected_original = base_original_url # По умолчанию Telegram Proxy
-    
+
     if not is_ru:
         # Для ИНО-IP: Приоритет Catbox (быстрее всего)
         if 'catbox' in mirrors:
@@ -2282,7 +2276,7 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
 
     # --- ВЫБОР ПРЕВЬЮ (Thumbnail) ---
     selected_thumbnail = base_thumbnail_url
-    
+
     # Приоритет №1: Telegra.ph (самый быстрый CDN для превью)
     if 'telegraph' in thumb_mirrors:
         selected_thumbnail = thumb_mirrors['telegraph']
@@ -2303,14 +2297,14 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
                 selected_thumbnail = hf_thumb
             elif zeroxzero_thumb:
                 selected_thumbnail = zeroxzero_thumb
-            
+
     return selected_original, selected_thumbnail
 async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
     if not posts: return
     all_fids = []
     poll_post_ids = []
-    all_post_ids = [] 
-    
+    all_post_ids = []
+
     for p in posts:
         all_post_ids.append(p['id'])
         files = p.get('content', {}).get('files', [])
@@ -2319,7 +2313,7 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
             if fid: all_fids.append(fid)
             tid = f.get('thumbnail_file_id')
             if tid: all_fids.append(tid)
-        
+
         if p.get('latest_replies'):
             for r in p['latest_replies']:
                 all_post_ids.append(r['id'])
@@ -2329,31 +2323,31 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
                     if rfid: all_fids.append(rfid)
                     rtid = rf.get('thumbnail_file_id')
                     if rtid: all_fids.append(rtid)
-        
+
         if 'poll_data' in p.get('content', {}):
             poll_post_ids.append(p['id'])
-        
+
         if p.get('latest_replies'):
             for r in p['latest_replies']:
                 if 'poll_data' in r.get('content', {}):
                     poll_post_ids.append(r['id'])
-    
+
     dupe_map, blur_map, mirror_map = {}, {}, {}
     backlinks_map = defaultdict(list)
     tasks = []
-    
+
     if all_fids:
         from common.database import get_mirrors_batch
         tasks.append(get_duplicate_counts(all_fids))
         tasks.append(get_blurhashes_batch(all_fids))
         tasks.append(get_mirrors_batch(all_fids))
-    
+
     if poll_post_ids:
         for pid in poll_post_ids:
             tasks.append(get_poll_results(pid))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     res_idx = 0
     if all_fids:
         dupe_map = results[res_idx] if not isinstance(results[res_idx], Exception) else {}
@@ -2362,7 +2356,7 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
         res_idx += 1
         mirror_map = results[res_idx] if not isinstance(results[res_idx], Exception) else {}
         res_idx += 1
-        
+
     poll_results_map = {}
     if poll_post_ids:
         for i, pid in enumerate(poll_post_ids):
@@ -2393,13 +2387,13 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
                 if not fid: continue
                 f['blurhash'] = blur_map.get(fid)
                 f['dupe_count'] = dupe_map.get(fid, 0)
-                
+
                 mirrors = mirror_map.get(fid, {})
                 tid = f.get('thumbnail_file_id')
                 thumb_mirrors = mirror_map.get(tid, {}) if tid else {}
-                
+
                 f['original_url'], f['thumbnail_url'] = _select_mirror_strategically(f, mirrors, thumb_mirrors, is_ru)
-        
+
         if p.get('content', {}).get('files'): update_files(p['content']['files'])
         if p.get('latest_replies'):
             for r in p['latest_replies']:
@@ -2407,7 +2401,7 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
                 r_mem_bl = r.get('backlinks', [])
                 r['backlinks'] = sorted(list(set(r_mem_bl) | set(r_db_bl)))
                 if r.get('content', {}).get('files'): update_files(r['content']['files'])
-        
+
         def apply_votes(post_obj):
             if 'poll_data' in post_obj.get('content', {}):
                 real_votes = poll_results_map.get(post_obj['id'], {})
@@ -2416,7 +2410,7 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
                     for opt_idx, count in real_votes.items():
                         frontend_votes[str(opt_idx)] = [0] * count
                 post_obj['content']['poll_data']['votes'] = frontend_votes
-        
+
         apply_votes(p)
         if p.get('latest_replies'):
             for r in p['latest_replies']:
@@ -2433,12 +2427,12 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                 post['content'] = json.loads(post['content'])
             except:
                 post['content'] = {"text": str(post.get('content', '')), "type": "text"}
-        
+
         if not isinstance(post.get('content'), dict):
             post['content'] = {"text": "", "type": "text"}
         if post.get('latest_replies'):
             post['latest_replies'] = _convert_and_enrich_posts(post['latest_replies'])
-            
+
         content = post['content']
         if content.get('type') == 'media_group' and 'media' in content:
             file_list = []
@@ -2446,7 +2440,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
             for item in content['media']:
                 f_type = item.get('type')
                 f_id = item.get('file_id') or item.get('media')
-                if not found_caption and item.get('caption'): 
+                if not found_caption and item.get('caption'):
                     found_caption = item.get('caption')
                 if f_id and isinstance(f_id, str) and not f_id.startswith("<"):
                      clean_type = 'image' if f_type == 'photo' else f_type
@@ -2457,7 +2451,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                         'filename': f"media_{f_id[:8]}.jpg" if clean_type == 'image' else f"media_{f_id[:8]}.mp4"
                      })
             content['files'] = file_list
-            if not content.get('text') and found_caption: 
+            if not content.get('text') and found_caption:
                 content['text'] = found_caption
         elif content.get('type') in {'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'} and 'files' not in content:
             file_info = {'type': content['type']}
@@ -2477,7 +2471,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                 mime = f_obj.get('mime_type', '')
                 if ctype == 'document' and mime.startswith('video/'):
                      file_info['type'] = 'video'
-                if f_id: 
+                if f_id:
                     file_info['original_file_id'] = f_id
             if file_info.get('original_file_id'):
                 content['files'] = [file_info]
@@ -2491,7 +2485,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                     file_info['original_file_id'] = clean_id
                     file_info['original_url'] = f"/files/{clean_id}"
                 oid = file_info.get('original_file_id')
-                if not oid or oid.startswith('<'): 
+                if not oid or oid.startswith('<'):
                     continue
                 fname = file_info.get('filename', '').lower()
                 if fname.endswith(('.mp4', '.webm', '.mov', '.mkv')) and file_info.get('type') not in ['voice', 'audio']:
@@ -2500,17 +2494,17 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                     file_info['type'] = 'video'
                 ftype = file_info.get('type', 'file')
                 ext_map = {
-                    'video': 'mp4', 
-                    'photo': 'jpg', 
+                    'video': 'mp4',
+                    'photo': 'jpg',
                     'image': 'jpg',
-                    'audio': 'mp3', 
-                    'voice': 'ogg', 
-                    'sticker': 'webp', 
+                    'audio': 'mp3',
+                    'voice': 'ogg',
+                    'sticker': 'webp',
                     'video_note': 'mp4',
-                    'animation': 'mp4', 
+                    'animation': 'mp4',
                     'gif': 'mp4'
                 }
-                
+
                 if not fname or fname.startswith('.') or fname == 'file' or '.' not in fname:
                     ext = ext_map.get(ftype, 'dat')
                     prefix = "vid" if ftype in ['video', 'animation', 'video_note', 'gif'] else ("aud" if ftype in ['audio', 'voice'] else "img")
@@ -2518,10 +2512,10 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                     file_info['filename'] = f"{prefix}_{short_id}.{ext}"
                 elif '.' not in fname and ftype in ext_map:
                      file_info['filename'] = f"{fname}.{ext_map[ftype]}"
-                
+
                 from urllib.parse import quote
                 safe_name = quote(str(file_info.get('filename', 'file')).strip('/'))
-                
+
                 oid_str = str(oid) if oid else ""
                 if oid_str.startswith(('http://', 'https://')):
                     file_info['original_url'] = oid_str
@@ -2579,13 +2573,13 @@ async def queue_listener(manager: 'ConnectionManager'):
                 new_posts, new_ts = await get_posts_from_broadcast_queue(last_ts)
                 if new_posts:
                     affected_boards = set()
-                    affected_threads = set() 
-                    
+                    affected_threads = set()
+
                     for p in new_posts:
                         if 'post_num' in p and 'id' not in p:
                             p['id'] = p['post_num']
                         affected_boards.add(p['board_id'])
-                        
+
                         t_id = p.get('thread_id')
                         if not t_id and p.get('is_op_post'):
                             t_id = p['id']
@@ -2596,10 +2590,10 @@ async def queue_listener(manager: 'ConnectionManager'):
                     # Инвалидация досок
                     for bid in affected_boards:
                         BOARD_VERSIONS[bid] = now
-                    
+
                     # ИЗМЕНЕНИЕ: Явное обновление оверборда
                     BOARD_VERSIONS['overboard'] = now
-                    
+
                     # Инвалидация тредов
                     for tid in affected_threads:
                         THREAD_VERSIONS[tid] = now
@@ -2608,7 +2602,7 @@ async def queue_listener(manager: 'ConnectionManager'):
 
                     for post in new_posts:
                         await manager.broadcast_post(post, post['board_id'])
-                        await asyncio.sleep(0.05) 
+                        await asyncio.sleep(0.05)
                 if new_ts > last_ts:
                     last_ts = new_ts
                 await asyncio.sleep(1)
@@ -2624,14 +2618,14 @@ async def db_maintenance_task():
     # Импортируем лок из пула (он общий, если site_tgach импортирует common)
     # Если common.db_pool используется и сайтом, и ботом - отлично.
     from common.db_pool import get_pool, db_lock
-    
+
     while True:
         try:
             logger.info("🧹 [DB] Starting cleanup & maintenance...")
-            
+
             # Запускаем тяжелую синхронную очистку в отдельном потоке
             await asyncio.to_thread(cleanup_old_posts_from_db)
-            
+
             # Асинхронные очистки очередей
             try:
                 await cleanup_broadcast_queue(retention_hours=6)
@@ -2642,42 +2636,42 @@ async def db_maintenance_task():
                 await cleanup_shadow_posts_db(hours=24)
             except Exception as e:
                 logger.warning(f"⚠️ Shadow cleanup postponed: {e}")
-            
+
             # Обслуживание FTS и оптимизация
             # Используем db_lock, так как здесь идет запись/модификация структуры
             async with db_lock:
                 try:
                     db = await get_pool()
                     await db.execute("BEGIN IMMEDIATE")
-                    
+
                     month_ago = time.time() - (30 * 86400)
                     await db.execute("DELETE FROM GlobalLogs WHERE created_at < ?", (month_ago,))
-                    
+
                     try:
                         await db.execute("INSERT INTO FileTagsFTS(FileTagsFTS) VALUES('optimize');")
                         await db.execute("INSERT INTO PostsFTS(PostsFTS) VALUES('optimize');")
                     except Exception as fts_err:
                         logger.warning(f"⚠️ FTS optimize skipped: {fts_err}")
-                    
+
                     await db.execute("COMMIT")
-                    
+
                     # PRAGMA команды выполняем вне транзакции, но под локом
                     # optimize и checkpoint могут быть долгими
                     try:
-                        await db.execute("PRAGMA optimize;") 
+                        await db.execute("PRAGMA optimize;")
                         await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
                     except Exception as opt_err:
                         logger.warning(f"⚠️ DB Optimization warning: {opt_err}")
-                        
+
                 except Exception as e:
                     try: await db.execute("ROLLBACK")
                     except: pass
                     logger.error(f"⚠️ FTS Maintenance error: {e}")
-            
+
             logger.info("✅ [DB] Maintenance complete.")
         except Exception as e:
             logger.error(f"⚠️ DB Maintenance error: {e}")
-        
+
         await asyncio.sleep(43200)
 async def websocket_broadcaster(queue: asyncio.Queue, manager: 'ConnectionManager'):
     logger.info("INFO:     WebSocket broadcaster started.")
@@ -2704,7 +2698,7 @@ async def enrich_heavy_data(posts: List[dict]):
     all_fids = []
     poll_post_ids = []
     all_post_ids = []
-    
+
     for p in posts:
         all_post_ids.append(p['id'])
         files = p.get('content', {}).get('files', [])
@@ -2713,7 +2707,7 @@ async def enrich_heavy_data(posts: List[dict]):
             if fid: all_fids.append(fid)
             tid = f.get('thumbnail_file_id')
             if tid: all_fids.append(tid)
-        
+
         if p.get('latest_replies'):
             for r in p['latest_replies']:
                 all_post_ids.append(r['id'])
@@ -2738,11 +2732,11 @@ async def enrich_heavy_data(posts: List[dict]):
         tasks.append(get_duplicate_counts(all_fids))
         tasks.append(get_blurhashes_batch(all_fids))
         tasks.append(get_mirrors_batch(all_fids))
-    
+
     if poll_post_ids:
         for pid in poll_post_ids:
             tasks.append(get_poll_results(pid))
-            
+
     # Бэклинки теперь тоже в пуле задач
     if all_post_ids:
         async def fetch_backlinks_task(ids):
@@ -2758,7 +2752,7 @@ async def enrich_heavy_data(posts: List[dict]):
         tasks.append(fetch_backlinks_task(all_post_ids))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
     dupe_map, blur_map, mirror_map = {}, {}, {}
     res_idx = 0
     if all_fids:
@@ -2805,20 +2799,20 @@ async def enrich_heavy_data(posts: List[dict]):
                 if not fid: continue
                 f['blurhash'] = blur_map.get(fid)
                 f['dupe_count'] = dupe_map.get(fid, 0)
-                
+
                 # Сохраняем зеркала в скрытые поля для фазы гидратации
                 f['_mirrors'] = mirror_map.get(fid, {})
                 tid = f.get('thumbnail_file_id')
                 f['_thumb_mirrors'] = mirror_map.get(tid, {}) if tid else {}
-        
+
         if p.get('content', {}).get('files'): attach_file_meta(p['content']['files'])
-        
+
         if p.get('latest_replies'):
             for r in p['latest_replies']:
                 r_db_bl = backlinks_map.get(r['id'], [])
                 r_mem_bl = r.get('backlinks', [])
                 r['backlinks'] = sorted(list(set(r_mem_bl) | set(r_db_bl)))
-                
+
                 if 'poll_data' in r.get('content', {}):
                      real_votes = poll_results_map.get(r['id'], {})
                      if real_votes:
@@ -2831,21 +2825,21 @@ async def enrich_heavy_data(posts: List[dict]):
 
 def finalize_posts_for_user(posts: List[dict], user_id: int, is_ru: bool, op_author_id: str = None):
     """
-    ЛЕГКАЯ ФАЗА: Гидратация. 
+    ЛЕГКАЯ ФАЗА: Гидратация.
     op_author_id (хэш-строка) передается при просмотре конкретного треда.
     """
     if not posts: return
-    
+
     # Предварительно вычисляем хэш текущего пользователя для сравнения
     user_hash = get_user_hash(user_id) if user_id else None
-    
+
     for p in posts:
         p_author_hash = p.get('author_id')
-        
+
         # 1. Метка "Это мой пост" (You)
         if user_hash and p_author_hash == user_hash:
             p['is_yours'] = True
-        
+
         # 2. Метка "Автор треда" (OP)
         # Если мы в контексте треда (op_author_id задан), помечаем посты его автора
         if op_author_id and p_author_hash == op_author_id:
@@ -2857,9 +2851,9 @@ def finalize_posts_for_user(posts: List[dict], user_id: int, is_ru: bool, op_aut
                 mirrors = f.get('_mirrors', {})
                 thumb_mirrors = f.get('_thumb_mirrors', {})
                 f['original_url'], f['thumbnail_url'] = _select_mirror_strategically(f, mirrors, thumb_mirrors, is_ru)
-        
+
         if p.get('content', {}).get('files'): apply_urls(p['content']['files'])
-        
+
         # Определяем OP для вложенных ответов (превью в ленте)
         # Если op_author_id не задан (лента), считаем текущий пост OP-ом
         effective_op_id = op_author_id if op_author_id else p_author_hash
@@ -2867,7 +2861,7 @@ def finalize_posts_for_user(posts: List[dict], user_id: int, is_ru: bool, op_aut
         if p.get('latest_replies'):
             for r in p['latest_replies']:
                 # Исправлено: сравниваем с хэшем (user_hash), а не int ID
-                if user_hash and r.get('author_id') == user_hash: 
+                if user_hash and r.get('author_id') == user_hash:
                     r['is_yours'] = True
                 # Исправлено: имя переменной (было current_op_id) и логика
                 if effective_op_id and r.get('author_id') == effective_op_id:
@@ -2885,15 +2879,15 @@ async def read_root(request: Request, user: dict | None = Depends(get_optional_u
             return RedirectResponse(url="/welcome")
     lang = getattr(request.state, 'lang', 'ru')
     local_boards = localize_boards(lang)
-    
+
     base_url = str(request.base_url).rstrip('/')
     meta_image = f"{base_url}/static/{random.choice(['logo.png', 'logo1.png'])}"
 
     return templates.TemplateResponse(request=request, name="index.jinja2", context={
-        "request": request, 
+        "request": request,
         "boards": local_boards,
         "BOT_USERNAME": BOT_USERNAME,
-        "site_mode": SITE_ACCESS_MODE, 
+        "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
         "meta_image": meta_image
     })
@@ -2907,7 +2901,7 @@ def login_page(request: Request):
 @app.get("/rules/")
 async def rules_page(request: Request):
     return templates.TemplateResponse(request=request, name="rules.jinja2", context={
-        "request": request, 
+        "request": request,
         "BOT_USERNAME": BOT_USERNAME
     })
 @app.get("/auth/logout")
@@ -2919,9 +2913,9 @@ async def search_page(request: Request, query: str = "", user: dict | None = Dep
     clean_query = query.strip()
     if clean_query:
         clean_query = clean_query.replace('"', '""')
-    
+
     observer_id = user['id'] if user else getattr(request.state, 'guest_id', 0)
-    
+
     results = await search_posts(clean_query, observer_id=observer_id) if clean_query else []
     results = _convert_and_enrich_posts(results)
     await enrich_extra_data(results)
@@ -2932,7 +2926,7 @@ async def search_page(request: Request, query: str = "", user: dict | None = Dep
 @app.get("/admin/serverConfig.json", include_in_schema=False)
 async def api_dummy_config():
     """Заглушка для подавления 404 ошибок в логах от админки."""
-    return JSONResponse({})   
+    return JSONResponse({})
 @app.get("/.well-known/security.txt", response_class=Response)
 async def security_txt():
     return RedirectResponse(url="/static/security.txt")
@@ -2951,7 +2945,7 @@ async def overboard_page(request: Request, user: dict | None = Depends(get_optio
     if sort_mode not in ["bump", "new", "random"]: sort_mode = "bump"
     view_mode = request.query_params.get("view", "threads")
     if view_mode not in ["threads", "posts", "all"]: view_mode = "threads"
-    
+
     selected_boards = request.query_params.getlist("boards") or None
     posts = []
     is_skeleton = False
@@ -2972,15 +2966,15 @@ async def overboard_page(request: Request, user: dict | None = Depends(get_optio
 
     lang = getattr(request.state, 'lang', 'ru')
     local_boards = localize_boards(lang)
-    
+
     return templates.TemplateResponse(request=request, name="overboard.jinja2", context={
-        "request": request, 
+        "request": request,
         "posts": posts,
-        "site_mode": SITE_ACCESS_MODE, 
+        "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
         "boards": local_boards,
         "all_boards": {k: v for k, v in local_boards.items() if k != 'test'},
-        "current_sort": sort_mode, 
+        "current_sort": sort_mode,
         "current_view": view_mode,
         "selected_boards": selected_boards or [],
         "is_skeleton": is_skeleton
@@ -3003,9 +2997,9 @@ async def about_page(request: Request, user: dict | None = Depends(get_optional_
 @app.get("/my/")
 async def my_posts_page(request: Request, user: dict | None = Depends(get_optional_user)):
     return templates.TemplateResponse(request=request, name="my_posts.jinja2", context={
-        "request": request, 
+        "request": request,
         "boards": BOARD_CONFIG,
-        "site_mode": SITE_ACCESS_MODE, 
+        "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
         "BOT_USERNAME": BOT_USERNAME
     })
@@ -3013,9 +3007,9 @@ async def my_posts_page(request: Request, user: dict | None = Depends(get_option
 @app.get("/my/replies")
 async def my_replies_page(request: Request, user: dict | None = Depends(get_optional_user)):
     return templates.TemplateResponse(request=request, name="my_replies.jinja2", context={
-        "request": request, 
+        "request": request,
         "boards": BOARD_CONFIG,
-        "site_mode": SITE_ACCESS_MODE, 
+        "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
         "BOT_USERNAME": BOT_USERNAME
     })
@@ -3042,9 +3036,9 @@ async def api_my_replies_read(data: MarkReadRequest, user: dict = Depends(get_cu
 @app.get("/useful/")
 async def useful_page(request: Request, user: dict | None = Depends(get_optional_user)):
     return templates.TemplateResponse(request=request, name="useful.jinja2", context={
-        "request": request, 
-        "boards": BOARD_CONFIG, 
-        "site_mode": SITE_ACCESS_MODE, 
+        "request": request,
+        "boards": BOARD_CONFIG,
+        "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
         "BOT_USERNAME": BOT_USERNAME,
         "t": request.state.t
@@ -3055,10 +3049,10 @@ async def archive_hub_page(request: Request, user: dict | None = Depends(get_opt
     if SITE_ACCESS_MODE == "PRIVATE" and not user:
          return RedirectResponse(url="/login")
     return templates.TemplateResponse(request=request, name="archive_hub.jinja2", context={
-        "request": request, 
+        "request": request,
         "boards": BOARD_CONFIG,
         "BOT_USERNAME": BOT_USERNAME,
-        "site_mode": SITE_ACCESS_MODE, 
+        "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user}
     })
 @app.get("/api/file/tags")
@@ -3074,7 +3068,7 @@ async def search_tags_page(request: Request, tags: str = "", page: int = 1, user
     # Кэшируем только для гостей (чтобы у админов работали кнопки)
     cache_key = f"search_tags:{tags}:{page}"
     backend = FastAPICache.get_backend()
-    
+
     if not user and backend:
         cached_html = await backend.get(cache_key)
         if cached_html:
@@ -3083,17 +3077,17 @@ async def search_tags_page(request: Request, tags: str = "", page: int = 1, user
     # 2. Если в кэше нет - ищем в базе
     tag_list = [t.strip() for t in tags.split(',') if t.strip()]
     search_images = []
-    
+
     if tag_list:
         offset = (page - 1) * 60
         files_found = await search_files_by_tags(tag_list, limit=60, offset=offset)
         file_scores = {f['file_id']: f['score'] for f in files_found}
         file_ids = list(file_scores.keys())
-        
+
         raw_posts = await get_posts_by_file_ids(file_ids)
         posts = _convert_and_enrich_posts(raw_posts)
         await enrich_extra_data(posts)
-        
+
         # Сортировка по релевантности
         def calculate_relevance(post):
             content_files = post.get('content', {}).get('files', [])
@@ -3121,12 +3115,12 @@ async def search_tags_page(request: Request, tags: str = "", page: int = 1, user
 
     # 3. Рендерим шаблон в текст
     html_content = templates.get_template("search_results.jinja2").render({
-        "request": request, 
-        "query": f"Tags: {tags}", 
+        "request": request,
+        "query": f"Tags: {tags}",
         "search_images": search_images,
         "boards": BOARD_CONFIG,
-        "BOT_USERNAME": BOT_USERNAME, 
-        "site_mode": SITE_ACCESS_MODE, 
+        "BOT_USERNAME": BOT_USERNAME,
+        "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
         "is_tag_search": True
     })
@@ -3143,7 +3137,7 @@ async def tags_index_page(request: Request, user: dict | None = Depends(get_opti
     # Кэшируем страницу целиком на 5 минут для всех
     cache_key = "tags_index_page_html"
     backend = FastAPICache.get_backend()
-    
+
     if not user and backend:
         cached = await backend.get(cache_key)
         if cached: return HTMLResponse(content=cached)
@@ -3151,10 +3145,10 @@ async def tags_index_page(request: Request, user: dict | None = Depends(get_opti
     # Получаем топ тегов
     tags = await get_recent_tags_summary(limit_files=5000, top_n=200)
     tags.sort(key=lambda x: x[0])
-    
+
     lang = getattr(request.state, 'lang', 'ru')
     base_title = "Popular Tags" if lang == 'en' else "Популярные теги"
-    
+
     html_content = templates.get_template("tags_index.jinja2").render({
         "request": request,
         "tags": tags,
@@ -3174,11 +3168,11 @@ async def tags_index_page(request: Request, user: dict | None = Depends(get_opti
 @app.get("/tags/{tag_name}")
 async def tag_seo_page(request: Request, tag_name: str, page: int = 1, user: dict | None = Depends(get_optional_user)):
     clean_tag = tag_name.strip().replace('-', ' ')
-    
+
     # Кэшируем страницу конкретного тега
     cache_key = f"seo_tag:{clean_tag}:{page}"
     backend = FastAPICache.get_backend()
-    
+
     if not user and backend:
         cached = await backend.get(cache_key)
         if cached: return HTMLResponse(content=cached)
@@ -3187,11 +3181,11 @@ async def tag_seo_page(request: Request, tag_name: str, page: int = 1, user: dic
     offset = (page - 1) * 60
     files_found = await search_files_by_tags([clean_tag], limit=60, offset=offset)
     file_ids = [f['file_id'] for f in files_found]
-    
+
     raw_posts = await get_posts_by_file_ids(file_ids)
     posts = _convert_and_enrich_posts(raw_posts)
     await enrich_extra_data(posts, is_ru=True)
-    
+
     search_images = []
     for post in posts:
         # Упрощенная сборка картинок для SEO
@@ -3205,12 +3199,12 @@ async def tag_seo_page(request: Request, tag_name: str, page: int = 1, user: dic
     meta_desc = f"Best {clean_tag} content."
 
     html_content = templates.get_template("search_results.jinja2").render({
-        "request": request, 
-        "query": f"Tag: {clean_tag}", 
+        "request": request,
+        "query": f"Tag: {clean_tag}",
         "search_images": search_images,
         "boards": BOARD_CONFIG,
-        "BOT_USERNAME": BOT_USERNAME, 
-        "site_mode": SITE_ACCESS_MODE, 
+        "BOT_USERNAME": BOT_USERNAME,
+        "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
         "is_tag_search": True,
         "meta_title": meta_title,
@@ -3423,10 +3417,10 @@ async def managed_troll_generator(gen):
 async def honey_pot_troll(request: Request):
     client_ip = get_real_ip(request)
     path = request.url.path.lower()
-    
+
     if path.endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp4', '.webm', '.mov', '.mkv', '.html', '.js', '.css')):
         return Response(status_code=404)
-    
+
     user = request.session.get("user")
     if user and user.get("is_admin"):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
@@ -3440,7 +3434,7 @@ async def honey_pot_troll(request: Request):
     if hit_count >= 20:
         IP_BAN_LIST[client_ip] = time.time() + 86400 * 365
         return StreamingResponse(
-            managed_troll_generator(gzip_bomb_generator()), 
+            managed_troll_generator(gzip_bomb_generator()),
             media_type="application/octet-stream",
             headers={"Content-Encoding": "gzip"}
         )
@@ -3449,25 +3443,25 @@ async def honey_pot_troll(request: Request):
     path = request.url.path.lower()
     method = request.method.upper() # Получаем метод
     accept = request.headers.get("Accept", "").lower()
-    
+
     strategy = "slow" # По умолчанию - медленная смерть
-    
+
     # НОВОЕ: Если это PROPFIND - сразу XML ловушку (это WebDAV протокол)
     if method == "PROPFIND":
         strategy = "xml"
-    
+
     # 1. Если ищет файлы/архивы -> GZIP BOMB
     elif any(x in path for x in ['.zip', '.tar', '.gz', '.sql', '.dump', '.bak', 'backup', 'admin', '.env', '.old']):
         strategy = "gzip"
-        
+
     # 2. Если ищет веб-страницу -> HTML DEPTH CHARGE
     elif "html" in accept or path.endswith(('.php', '.asp', '/')):
         strategy = "html"
-        
+
     # 3. Если ищет XML/RSS/SharePoint (_vti_bin) -> XML TARPIT
     elif "xml" in accept or "_vti" in path or ".rss" in path or ".xml" in path:
         strategy = "xml"
-        
+
     # 4. Если ищет скрипты -> JS INFINITY
     elif ".js" in path or "json" in accept:
         strategy = "js"
@@ -3485,19 +3479,19 @@ async def honey_pot_troll(request: Request):
                 "Content-Disposition": f'attachment; filename="{filename}"',
             }
         )
-    
+
     elif strategy == 'html':
         return StreamingResponse(
             managed_troll_generator(html_depth_charge_generator()),
             media_type="text/html"
         )
-        
+
     elif strategy == 'xml':
         return StreamingResponse(
             managed_troll_generator(xml_tarpit_generator()),
             media_type="application/xml"
         )
-        
+
     elif strategy == 'js':
         return StreamingResponse(
             managed_troll_generator(js_infinite_stream_generator()),
@@ -3578,9 +3572,9 @@ async def fake_admin_dashboard(request: Request):
 @app.post("/api/admin/troll_ip")
 async def api_admin_troll_ip(data: AdminTrollRequest, user: dict = Depends(get_required_user)):
     """Включает режим ловушки для конкретного IP."""
-    if not user.get('is_admin'): 
+    if not user.get('is_admin'):
         raise HTTPException(403, "Forbidden")
-    
+
     # Валидация IP (базовая)
     try:
         ipaddress.ip_address(data.ip)
@@ -3592,19 +3586,19 @@ async def api_admin_troll_ip(data: AdminTrollRequest, user: dict = Depends(get_r
         "mode": data.mode,
         "expires": expires
     }
-    
+
     # Также дублируем в основной бан-лист для веса
     IP_BAN_LIST[data.ip] = expires
-    
+
     log_system_event(f"🪤 TROLL ENABLED: {data.ip} | Mode: {data.mode} | For: {data.duration // 60} min")
     return {"status": "ok", "message": f"IP {data.ip} trapped in {data.mode} hell."}
 
 @app.get("/api/admin/troll_list")
 async def api_admin_troll_list(user: dict = Depends(get_required_user)):
     """Возвращает список текущих активных ловушек."""
-    if not user.get('is_admin'): 
+    if not user.get('is_admin'):
         raise HTTPException(403, "Forbidden")
-    
+
     now = time.time()
     active_traps = []
     for ip, cfg in list(IP_TROLL_CONFIG.items()):
@@ -3616,7 +3610,7 @@ async def api_admin_troll_list(user: dict = Depends(get_required_user)):
             })
         else:
             del IP_TROLL_CONFIG[ip]
-            
+
     return active_traps
 @app.post("/api/admin/toggle_pow")
 async def api_toggle_pow(data: PowToggleRequest, user: dict = Depends(get_required_user)):
@@ -3644,13 +3638,13 @@ async def api_get_system_setting(key: str, user: dict = Depends(get_required_use
 async def api_firewall_status(user: dict = Depends(get_required_user)):
     """Показывает текущие баны в оперативной памяти."""
     if not user.get('is_admin'): raise HTTPException(403, "Forbidden")
-    
+
     now = time.time()
     # Показываем только активные баны
     active_bans = {ip: f"{int(exp - now)} сек" for ip, exp in IP_BAN_LIST.items() if exp > now}
     # Показываем подозрительных (у кого > 0 нарушений)
     suspicious = {ip: count for ip, count in BOT_VIOLATIONS.items() if count > 0}
-    
+
     return {
         "banned_ips": active_bans,
         "suspicious_ips": suspicious,
@@ -3664,7 +3658,7 @@ class FirewallClearRequest(BaseModel):
 async def api_firewall_clear(data: FirewallClearRequest, user: dict = Depends(get_required_user)):
     """Снимает бан в памяти (без перезагрузки)."""
     if not user.get('is_admin'): raise HTTPException(403, "Forbidden")
-    
+
     if data.ip:
         IP_BAN_LIST.pop(data.ip, None)
         BOT_VIOLATIONS.pop(data.ip, None)
@@ -3678,7 +3672,7 @@ async def api_firewall_clear(data: FirewallClearRequest, user: dict = Depends(ge
 async def api_admin_recent_posts(user: dict = Depends(get_required_user)):
     """Возвращает последние посты для Live Feed при загрузке."""
     if not check_perm(user, 'janitor'): raise HTTPException(403, "Forbidden")
-    
+
     posts = await get_recent_posts_global(30)
     result = []
     for p in posts:
@@ -3686,7 +3680,7 @@ async def api_admin_recent_posts(user: dict = Depends(get_required_user)):
         preview = (txt[:100] + '...') if len(txt) > 100 else txt
         if not preview and p.get('content', {}).get('files'):
             preview = "[Медиа файл]"
-            
+
         result.append({
             "id": p['id'],
             "board": p['board_id'],
@@ -3700,12 +3694,12 @@ async def api_admin_recent_posts(user: dict = Depends(get_required_user)):
 async def api_admin_inspect_user(data: AdminInspectUserRequest, user: dict = Depends(get_required_user)):
     """Возвращает полное досье на юзера."""
     if not check_perm(user, 'mod'): raise HTTPException(403, "Forbidden")
-    
+
     info = await get_full_user_info(data.user_id)
     if not info:
         return {"found": False}
     info['user_hash'] = get_user_hash(info['user_id'])
-    
+
     return {"found": True, "data": info}
 @app.get("/api/admin/pow_status")
 async def api_get_pow_status(user: dict = Depends(get_required_user)):
@@ -3716,7 +3710,7 @@ async def api_get_pow_status(user: dict = Depends(get_required_user)):
 async def api_public_pow_challenge():
     """
     Отдает задачу клиенту.
-    Если PoW выключен глобально, можно отдавать difficulty=0, 
+    Если PoW выключен глобально, можно отдавать difficulty=0,
     но лучше проверять настройку.
     """
     val = await get_system_setting('pow_enabled')
@@ -3791,7 +3785,7 @@ async def api_captcha_generate(request: Request):
         response_data.update({"hint": f"Отшлепай её! ({required_slaps} раз)"})
     elif mode == 'humiliation':
         phrases = [
-            "Я люблю члены", "Слава Украине", "Слава России", 
+            "Я люблю члены", "Слава Украине", "Слава России",
             "Я дегенерат", "Абу хуесос",
             "Джулуп", "Перемога", "Админ пидор",
             "Админ хуйло", "Я бот", "Я не человек",
@@ -3806,7 +3800,7 @@ async def api_captcha_generate(request: Request):
             "Ссу в рот админу", "Пойду посру", "Я тупой школьник", "Меня ебало семеро",
             "666", "228", "Всем привет", "Степан Бандера", "Гомосексуализм", "Две вагины",
             "Цп в лс", "Я русский", "Я хохол", "Труп бомжа", "Я люблю лоликон",
-            "Прости меня", "Кадыров пидор", "Аллах акбар", "Я нищий", 
+            "Прости меня", "Кадыров пидор", "Аллах акбар", "Я нищий",
             "Есть одна тян", "Гомонигры", "Донт вейв", "Лоликон", "Швайнокарась", "Контрнахрюк",
             "Опущенный", "У меня нет отца", "Я вырос в детдоме", "Выключи капчу", "Ебала жаба гадюку",
             "Я жалкое чмо", "Меня никто не любит", "Я хочу поесть говна", "Буду дрочить"
@@ -3902,11 +3896,11 @@ async def admin_feed_websocket(websocket: WebSocket):
         manager.disconnect(websocket, "admin_feed", "feed", "ru")
 @app.get("/api/media-feed/{board_id}")
 async def api_get_media_feed(board_id: str, request: Request, page: int = 1, user: dict = Depends(get_current_user_or_guest)):
-    if board_id not in BOARD_CONFIG: 
-        raise HTTPException(status_code=404, detail="Board not found")    
-    stream = getattr(request.state, 'stream', 'ru')    
+    if board_id not in BOARD_CONFIG:
+        raise HTTPException(status_code=404, detail="Board not found")
+    stream = getattr(request.state, 'stream', 'ru')
     observer_id = user['id']
-    raw_posts = await get_board_media_posts(board_id, page=page, page_size=20, stream=stream, observer_id=observer_id)    
+    raw_posts = await get_board_media_posts(board_id, page=page, page_size=20, stream=stream, observer_id=observer_id)
     posts = _convert_and_enrich_posts(raw_posts)
     is_ru = await is_request_from_ru(request)
     await enrich_extra_data(posts, is_ru=is_ru)
@@ -3931,14 +3925,14 @@ async def read_board_mode_select(board_id: str, request: Request, user: dict | N
     lang = getattr(request.state, 'lang', 'ru')
     local_boards = localize_boards(lang)
     board_info = BOARD_CONFIG[board_id]
-    
+
     return templates.TemplateResponse(request=request, name="board_hub.jinja2", context={
-        "request": request, 
-        "board_id": board_id, 
+        "request": request,
+        "board_id": board_id,
         "boards": local_boards,
         "board_info": board_info,
         "BOT_USERNAME": BOT_USERNAME,
-        "site_mode": SITE_ACCESS_MODE, 
+        "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user}
     })
 @app.get("/img/random")
@@ -4023,7 +4017,7 @@ async def archive_threads_view(request: Request, page: int = 1, user: dict | Non
     has_next = len(raw_posts) > limit
     posts = raw_posts[:limit]
     posts = _convert_and_enrich_posts(posts)
-    
+
     is_ru = await is_request_from_ru(request)
     await enrich_extra_data(posts, is_ru=is_ru)
     return templates.TemplateResponse(request=request, name="archive_threads.jinja2", context={
@@ -4051,10 +4045,10 @@ async def api_makaba_posting(
     local_logger = RequestIdAdapter(logging.getLogger(__name__), {'request_id': request_id})
     t = request.state.t
     current_ts = time.time()
-    
+
     if task != "post": return JSONResponse({"Error": "Unknown task", "Status": "Error"}, 400)
     if board not in BOARD_CONFIG: return JSONResponse({"Error": "Invalid board", "Status": "Error"}, 404)
-    
+
     is_new_thread = not thread or thread == "0"
     reply_to = int(thread) if not is_new_thread else None
     post_mode = 'new_thread' if is_new_thread else 'reply'
@@ -4097,12 +4091,12 @@ async def api_makaba_posting(
             created_at = row[0] if row and row[0] is not None else time.time()
             if (time.time() - created_at) < 86400 and not user.get('is_admin'):
                 return JSONResponse({"Error": "Lockdown mode active. New users restricted.", "Status": "Error"}, status_code=403)
-    
+
     if await get_user_status(author_id, board) == 'banned':
         lang = getattr(request.state, 'lang', 'ru')
         msg = TRANSLATIONS.get(lang, TRANSLATIONS['ru']).get('err_banned_board', "Banned")
         return JSONResponse({"Error": msg, "Status": "Error"})
-    
+
     form_data = await request.form()
     files_to_process = []
     for key in form_data:
@@ -4128,86 +4122,86 @@ async def api_makaba_posting(
     files_data = []
     file_owners_to_save = []
     has_banned_content = False
-    
+
     if files_to_process:
-        if len(files_to_process) > 5: 
+        if len(files_to_process) > 5:
             lang = getattr(request.state, 'lang', 'ru')
             msg = TRANSLATIONS.get(lang, TRANSLATIONS['ru']).get('err_max_files_4', "Max 5 files")
             return JSONResponse({"Error": msg, "Status": "Error"})
-        
+
         stream = getattr(request.state, 'stream', 'ru')
         from common.config import STORAGE_CHANNELS
         target_channel_id = STORAGE_CHANNELS.get(stream, STORAGE_CHANNELS['ru'])
-        
+
         async def upload_task(f):
             async with UPLOAD_SEMAPHORE:
                 TELEGRAM_SINGLE_FILE_LIMIT = 50 * 1024 * 1024
                 return await upload_with_bot_pool(f, stream, target_channel_id, TELEGRAM_SINGLE_FILE_LIMIT, local_logger)
-        
+
         tasks = [upload_task(f) for f in files_to_process]
         upload_results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         for res in upload_results:
             if isinstance(res, Exception) or not res:
                 continue
-            
+
             res_data, uploader_id = res
             if not res_data: continue
 
             if res_data.get("banned"):
                 has_banned_content = True
                 continue
-            
+
             if res_data.get('original_file_id'):
                 oid = res_data['original_file_id']
                 res_data['original_url'] = f"/files/{oid}"
-                
+
                 if res_data.get('thumbnail_file_id'):
                     tid = res_data['thumbnail_file_id']
                     res_data['thumbnail_url'] = f"/files/{tid}"
                 file_owners_to_save.extend(_file_owner_pairs_for_upload_result(res_data, uploader_id))
-                
+
                 files_data.append(res_data)
-    
+
     if not comment and not files_data:
         lang = getattr(request.state, 'lang', 'ru')
         msg = TRANSLATIONS.get(lang, TRANSLATIONS['ru']).get('post_empty', "Empty post")
         return JSONResponse({"Error": msg, "Status": "Error"})
-    
+
     content = {"text": comment, "files": files_data, "type": "files" if files_data else "text"}
-    if email == 'sage': 
+    if email == 'sage':
         content['sage'] = True
-    
+
     is_shadow_muted = await get_shadow_mute_status(author_id, board)
     is_shadow_final = is_shadow_muted or has_banned_content
 
     new_post_num = await create_post(
-        author_id=author_id, 
-        board_id=board, 
-        content=content, 
+        author_id=author_id,
+        board_id=board,
+        content=content,
         timestamp=current_ts,
-        reply_to=reply_to, 
+        reply_to=reply_to,
         is_shadow_muted=is_shadow_final,
-        is_from_site=True, 
-        post_mode=post_mode, 
+        is_from_site=True,
+        post_mode=post_mode,
         stream=getattr(request.state, 'stream', 'ru'),
         thread_id_from_bot=str(thread_op_num) if thread_op_num else None,
         request_id_for_log=request_id,
         file_owners=file_owners_to_save
     )
-    
+
     if not new_post_num:
         return JSONResponse({"Error": "DB Error", "Status": "Error"})
-    
+
     await backend.set(cooldown_key, str(time.time()), expire=limit_seconds)
 
     spawn_task(process_cross_links(board, new_post_num, comment, getattr(request.state, 'stream', 'ru')))
-    
+
     if not is_shadow_final:
         broadcast_post = await get_post_for_broadcast(new_post_num)
         if broadcast_post:
             await request.app.state.broadcast_queue.put(broadcast_post)
-    
+
     if post_mode == 'new_thread':
         title = content['text'][:100] or t('default_thread_title')
         await create_thread_entry(new_post_num, board, author_id, title, time.time(), stream=getattr(request.state, 'stream', 'ru'))
@@ -4219,7 +4213,7 @@ async def api_makaba_posting(
             spawn_task(process_backlinks(new_post_num, content['text'], reply_to))
             if board not in ["thread", "test"]:
                 await process_mentions_and_notify(new_post_num, board, content['text'], reply_to)
-                
+
     return {"Status": "OK", "Num": new_post_num}
 @app.get("/archive/chat/")
 async def archive_chat_view(request: Request, page: int = 1, user: dict | None = Depends(get_optional_user)):
@@ -4230,7 +4224,7 @@ async def archive_chat_view(request: Request, page: int = 1, user: dict | None =
     has_next = len(raw_posts) > limit
     posts = raw_posts[:limit]
     posts = _convert_and_enrich_posts(posts)
-    
+
     is_ru = await is_request_from_ru(request)
     await enrich_extra_data(posts, is_ru=is_ru)
     return templates.TemplateResponse(request=request, name="archive_chat.jinja2", context={
@@ -4265,7 +4259,7 @@ async def api_get_my_posts_content(
     from common.database import get_posts_batch
     posts = await get_posts_batch(unique_ids)
     posts = _convert_and_enrich_posts(posts)
-    
+
     is_ru = await is_request_from_ru(request)
     await enrich_extra_data(posts, is_ru=is_ru)
     if backend:
@@ -4274,26 +4268,26 @@ async def api_get_my_posts_content(
 @app.get("/{board_id}/threads/")
 async def read_board_threads(board_id: str, request: Request, sort: str = "bump", user: dict | None = Depends(get_optional_user)):
     if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
-    
+
     # --- HYBRID DELIVERY SYSTEM ---
     user_agent = request.headers.get('user-agent', '').lower()
     # Список ботов, которым нужен SSR (Server-Side Rendering)
     bot_markers = ['bot', 'crawl', 'slurp', 'spider', 'mediapartners', 'whatsapp', 'telegram', 'discord', 'facebook', 'pinterest']
     is_bot = any(marker in user_agent for marker in bot_markers)
-    
+
     op_posts = []
     is_skeleton = False
-    
+
     sort_mode = "new" if sort == "new" else "bump"
 
     if is_bot:
         # SSR для ботов: грузим данные сразу
         observer_id = user['id'] if user else getattr(request.state, 'guest_id', 0)
         op_posts = await get_op_posts_for_board(
-            board_id, 
-            sort_by=sort_mode, 
-            page=1, 
-            page_size=25, 
+            board_id,
+            sort_by=sort_mode,
+            page=1,
+            page_size=25,
             stream=request.state.stream,
             observer_id=observer_id
         )
@@ -4326,12 +4320,12 @@ async def read_board_chat(board_id: str, request: Request, user: dict | None = D
     if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
     observer_id = user['id']
     chat_posts = await get_chat_posts_for_board(
-        board_id, 
-        offset=0, 
-        stream=request.state.stream, 
+        board_id,
+        offset=0,
+        stream=request.state.stream,
         observer_id=observer_id
     )
-    
+
     return templates.TemplateResponse(request=request, name="chat.jinja2", context={
         "request": request, "board_id": board_id, "boards": BOARD_CONFIG,
         "board_info": BOARD_CONFIG[board_id], "posts": _convert_and_enrich_posts(chat_posts),
@@ -4347,7 +4341,7 @@ async def read_res_root_redirect(board_id: str):
 async def read_thread(board_id: str, post_num: int, request: Request, user: dict | None = Depends(get_optional_user)):
     board_id = board_id.lower()
     if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
-    
+
     # ПРЕ-ВАЛИДАЦИЯ: Находим реальный ID треда (ОП-поста)
     real_thread_id = await get_thread_op_by_post_num(post_num)
     if not real_thread_id:
@@ -4357,25 +4351,25 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
     user_agent = request.headers.get('user-agent', '').lower()
     bot_markers = ['bot', 'crawl', 'slurp', 'spider', 'mediapartners', 'whatsapp', 'telegram', 'discord', 'facebook', 'pinterest']
     is_bot = any(marker in user_agent for marker in bot_markers)
-    
+
     op_post = None
     replies = []
     is_skeleton = False
-    
+
     if is_bot:
         # SSR: Полный рендеринг для ботов по real_thread_id
         user_id = user['id'] if user else None
         thread_data = await get_thread_by_op_post(real_thread_id, current_user_id=user_id)
         if not thread_data: raise HTTPException(status_code=404, detail="Thread not found")
         op_post, replies = thread_data
-        
+
         full_list = _convert_and_enrich_posts([op_post] + replies)
         is_ru = await is_request_from_ru(request)
         await enrich_extra_data(full_list, is_ru=is_ru)
-        
+
         op_post = full_list[0]
         replies = full_list[1:]
-        
+
         if user_id:
             user_hash = get_user_hash(user_id)
             if op_post.get('author_id') == user_hash: op_post['is_op_yours'] = True
@@ -4399,13 +4393,13 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
     # Кэширование HTML только для анонимов и ботов (SSR)
     # Для скелета кэш не нужен (он и так легкий)
     cache_key = f"thread_html:{board_id}:{post_num}:{stream}"
-    
+
     # ... Мета-данные ...
     raw_text = op_post.get('content', {}).get('text', '')
     meta_desc = clean_title_text(raw_text)[:200]
-    if not meta_desc: 
+    if not meta_desc:
         meta_desc = f"Тред #{post_num} в разделе /{board_id}/"
-    
+
     base_url = str(request.base_url).rstrip('/')
     meta_image = ""
     files = op_post.get('content', {}).get('files', [])
@@ -4421,7 +4415,7 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
     thread_type_val = op_post.get('thread_type', 'default')
     is_unlocked = True
     is_archived_val = op_post.get('is_archived', False)
-    
+
     if not is_skeleton and not is_bot:
          pass
     elif is_skeleton:
@@ -4429,27 +4423,27 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
 
     context = {
         "request": request,
-        "board_id": board_id, 
+        "board_id": board_id,
         "boards": BOARD_CONFIG,
-        "board_info": BOARD_CONFIG[board_id], 
-        "op_post": op_post, 
+        "board_info": BOARD_CONFIG[board_id],
+        "op_post": op_post,
         "replies": replies,
-        "BOT_USERNAME": BOT_USERNAME, 
+        "BOT_USERNAME": BOT_USERNAME,
         "is_archived": is_archived_val,
-        "site_mode": SITE_ACCESS_MODE, 
+        "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
         "thread_type": thread_type_val,
         "is_unlocked": is_unlocked,
         "meta_description": meta_desc,
         "meta_image": meta_image,
-        "is_skeleton": is_skeleton 
+        "is_skeleton": is_skeleton
     }
     html_content = templates.get_template("thread.jinja2").render(context)
-    
+
     if not user and not is_skeleton:
         backend = FastAPICache.get_backend()
         if backend:
-            await backend.set(cache_key, html_content, expire=10) 
+            await backend.set(cache_key, html_content, expire=10)
 
     return HTMLResponse(content=html_content)
 @app.get("/{board_id}/res/{post_num}/gallery")
@@ -4470,7 +4464,7 @@ async def read_board_catalog(board_id: str, request: Request, user: dict | None 
     user_agent = request.headers.get('user-agent', '').lower()
     bot_markers = ['bot', 'crawl', 'slurp', 'spider', 'mediapartners', 'whatsapp', 'telegram', 'discord', 'facebook', 'pinterest']
     is_bot = any(marker in user_agent for marker in bot_markers)
-    
+
     threads = []
     is_skeleton = False
     current_sort = request.query_params.get("sort", "bump")
@@ -4486,7 +4480,7 @@ async def read_board_catalog(board_id: str, request: Request, user: dict | None 
 
     return templates.TemplateResponse(request=request, name="catalog.jinja2", context={
         "request": request, "board_id": board_id, "boards": BOARD_CONFIG,
-        "board_info": BOARD_CONFIG[board_id], 
+        "board_info": BOARD_CONFIG[board_id],
         "threads": threads,
         "site_mode": SITE_ACCESS_MODE, "session": {"user": user},
         "is_skeleton": is_skeleton,
@@ -4513,11 +4507,11 @@ async def api_get_meta(url: str):
         addr_info = await asyncio.get_running_loop().run_in_executor(
             None, lambda: socket.getaddrinfo(hostname, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
         )
-        
+
         for item in addr_info:
             ip_str = item[4][0]
             ip_obj = ipaddress.ip_address(ip_str)
-            # Блокируем приватные сети (10.x, 172.x, 192.x), петли (127.x), 
+            # Блокируем приватные сети (10.x, 172.x, 192.x), петли (127.x),
             # линк-локальные (169.254.x) и прочие системные адреса
             if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast:
                 logger.warning(f"🚨 SSRF ATTEMPT BLOCKED: {hostname} -> {ip_str}")
@@ -4553,9 +4547,9 @@ async def api_get_meta(url: str):
                         downloaded += len(chunk)
                         if downloaded > 1024 * 1024: # 1MB limit
                             break
-                    
+
                     raw_html = b"".join(chunks).decode("utf-8", errors="ignore")
-                
+
                 # Если скачали успешно, парсим и возвращаем
                 loop = asyncio.get_running_loop()
                 soup = await loop.run_in_executor(None, BeautifulSoup, raw_html, "html.parser")
@@ -4570,7 +4564,7 @@ async def api_get_meta(url: str):
                 }
         except Exception:
             continue # Пробуем следующий метод
-            
+
     return {}
 
 @app.get("/api/my-alerts")
@@ -4594,7 +4588,7 @@ class BoardRequest(BaseModel):
 async def api_request_board(data: BoardRequest, user: dict = Depends(get_required_user)):
     if not re.match(r'^[a-z0-9]{2,10}$', data.board_id):
         raise HTTPException(400, "ID доски должен быть 2-10 символов (a-z, 0-9).")
-    if data.board_id in BOARD_CONFIG: 
+    if data.board_id in BOARD_CONFIG:
         raise HTTPException(400, "Такая доска уже есть.")
     is_approved = 1 if user.get('is_admin') else 0
     if await create_board(data.board_id, data.name, data.description, user['id'], is_approved):
@@ -4638,25 +4632,25 @@ async def api_get_scanner_status(user: dict = Depends(get_required_user)):
 @app.post("/api/admin/configure_scanner")
 async def api_config_scanner(data: NeuroScannerConfigRequest, user: dict = Depends(get_required_user)):
     if not user.get('is_admin'): raise HTTPException(status_code=403, detail="Forbidden")
-    
+
     await set_system_setting('neuro_scanner_enabled', "true" if data.enabled else "false")
-    
+
     safe_interval = max(10, min(1440, data.interval))
     await set_system_setting('neuro_scanner_interval', str(safe_interval))
-    
+
     status = "ON" if data.enabled else "OFF"
     log_system_event(f"🕵️ NEURO-SCANNER config: {status}, check every {safe_interval} min")
-    
+
     # Если включили - будим воркер мгновенно
     if data.enabled:
         SCANNER_TRIGGER.set()
-        
+
     return {"status": "ok", "enabled": data.enabled, "interval": safe_interval}
 @app.post("/api/admin/board/approve")
 async def api_admin_approve_board(data: BoardAction, user: dict = Depends(get_required_user)):
     if not user.get('is_admin'): raise HTTPException(403, "Forbidden")
     await approve_board(data.board_id)
-    BOARD_CONFIG[data.board_id] = {'name': f"/{data.board_id}/", 'description': 'User Board'} 
+    BOARD_CONFIG[data.board_id] = {'name': f"/{data.board_id}/", 'description': 'User Board'}
     localize_boards.cache_clear()
     return {"status": "approved"}
 @app.post("/api/admin/board/delete")
@@ -4670,17 +4664,17 @@ async def api_admin_delete_board(data: BoardAction, user: dict = Depends(get_req
 @app.post("/api/admin/move_thread")
 async def api_admin_move_thread(
     request: Request,
-    data: MoveThreadRequest, 
+    data: MoveThreadRequest,
     user: dict = Depends(get_required_user)
 ):
-    if not check_perm(user, 'mod'): 
+    if not check_perm(user, 'mod'):
         raise HTTPException(status_code=403, detail="Нужен ранг Moderator")
     if data.target_board not in BOARD_CONFIG:
         raise HTTPException(status_code=400, detail="Такой доски нет")
-    
+
     from common.database import move_thread_to_board
     success = await move_thread_to_board(data.thread_id, data.target_board)
-    
+
     if success:
         log_system_event(f"🚚 MOVE: Thread {data.thread_id} moved to /{data.target_board}/ by {user['id']}")
         # Локализуем ответ
@@ -4729,12 +4723,12 @@ async def api_server_pulse():
                 stats["temp"] = entries[0].current
                 break
     except:
-        pass 
+        pass
     return stats
 @app.post("/api/settings/stream")
 async def api_set_stream(
-    data: StreamChangeRequest, 
-    response: Response, 
+    data: StreamChangeRequest,
+    response: Response,
     user: dict = Depends(get_current_user_or_guest)
 ):
     """
@@ -4747,10 +4741,10 @@ async def api_set_stream(
         await set_user_stream(int(user['id']), 'b', data.stream)
     json_response = JSONResponse({"status": "ok", "stream": data.stream})
     json_response.set_cookie(
-        key="stream", 
-        value=data.stream, 
-        max_age=31536000, 
-        httponly=True, 
+        key="stream",
+        value=data.stream,
+        max_age=31536000,
+        httponly=True,
         samesite="lax"
     )
     return json_response
@@ -4771,8 +4765,8 @@ async def api_process_audio(request: Request, effect: str = Form(...), file: Upl
     output_path = input_path + "_processed.ogg"
     try:
         cmd = [
-            "ffmpeg", "-y", 
-            "-i", input_path, 
+            "ffmpeg", "-y",
+            "-i", input_path,
             "-af", af_filter,
             "-c:a", "libvorbis",
             "-f", "ogg",
@@ -4827,8 +4821,8 @@ class AdminAlertRequest(BaseModel):
 @app.post("/api/feedback")
 @limiter.limit("2/minute", key_func=get_user_id_from_session)
 async def api_send_feedback(
-    request: Request, 
-    data: FeedbackRequestModel, 
+    request: Request,
+    data: FeedbackRequestModel,
     bg_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user_or_guest)
 ):
@@ -4849,10 +4843,10 @@ async def api_send_feedback(
     raise HTTPException(500, "Save error")
 @app.post("/api/admin/send_alert")
 async def api_admin_send_alert(data: AdminAlertRequest, user: dict = Depends(get_required_user)):
-    if not user.get('is_admin'): 
+    if not user.get('is_admin'):
         raise HTTPException(status_code=404, detail="Not Found")
     await create_alert(
-        data.user_id, data.content, data.image_url, 
+        data.user_id, data.content, data.image_url,
         data.btn_text, data.btn_link, data.target_board
     )
     log_system_event(f"🔔 ALERT: Sent to user {data.user_id}")
@@ -4871,9 +4865,9 @@ async def api_force_neuro(data: NeuroForceRequest, request: Request, user: dict 
 
     try:
         result_log = await request.app.state.neuro_manager.make_post(
-            data.board_id, 
-            settings=settings, 
-            stream=data.stream, 
+            data.board_id,
+            settings=settings,
+            stream=data.stream,
             forced_mode=data.mode
         )
         return {"status": "ok", "log": result_log}
@@ -4882,7 +4876,7 @@ async def api_force_neuro(data: NeuroForceRequest, request: Request, user: dict 
         return {"status": "error", "log": str(e)}
 @app.post("/api/admin/restore_thread")
 async def api_admin_restore_thread(data: AdminRestoreRequest, user: dict = Depends(get_required_user)):
-    if not user.get('is_admin'): 
+    if not user.get('is_admin'):
         raise HTTPException(status_code=404, detail="Not Found")
     await restore_thread_from_archive(data.thread_id)
     log_system_event(f"⚡ RESTORE: Thread {data.thread_id} restored by admin")
@@ -4910,13 +4904,13 @@ async def api_admin_pin_thread(data: AdminPinRequest, user: dict = Depends(get_r
 @app.post("/api/admin/toggle_blur")
 async def api_admin_toggle_blur(data: ToggleBlurRequest, request: Request, user: dict = Depends(get_required_user)):
     if not check_perm(user, 'mod'): raise HTTPException(status_code=403, detail="Нужен ранг Moderator")
-    
+
     new_state = await toggle_post_censorship(data.post_num)
-    
+
     # Сброс кэша для этого поста, чтобы пользователи сразу увидели изменения
     from fastapi_cache import FastAPICache
     await FastAPICache.clear(namespace="main", key=f"api_get_post:{data.post_num}")
-    
+
     # Если это ОП-пост, сбрасываем кэш треда
     post_data = await get_post_by_num(data.post_num)
     if post_data:
@@ -4933,25 +4927,25 @@ async def api_admin_toggle_blur(data: ToggleBlurRequest, request: Request, user:
     updated_post = await get_post_for_broadcast(data.post_num)
     if updated_post:
         await request.app.state.broadcast_queue.put(updated_post)
-        
+
     log_system_event(f"🌫️ CENSOR: Post #{data.post_num} censorship set to {new_state} by {user['id']}")
     return {"status": "ok", "is_censored": new_state}
 @app.post("/api/admin/set_banner")
 async def api_admin_set_banner(data: BoardBannerRequest, user: dict = Depends(get_required_user)):
     if not check_perm(user, 'admin'): raise HTTPException(status_code=403, detail="Нужен ранг Admin")
-    
+
     banner_json = json.dumps({"img": data.image_url, "link": data.link_url})
-    
+
     # Импортируем лок
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
             await db.execute("BEGIN IMMEDIATE")
-            
+
             await db.execute("UPDATE Boards SET banner_data = ? WHERE board_id = ?", (banner_json, data.board_id))
-            
+
             await db.execute("COMMIT")
         except Exception as e:
             try: await db.execute("ROLLBACK")
@@ -4961,10 +4955,10 @@ async def api_admin_set_banner(data: BoardBannerRequest, user: dict = Depends(ge
 
     if data.board_id in BOARD_CONFIG:
         BOARD_CONFIG[data.board_id]['banner_data'] = {"img": data.image_url, "link": data.link_url}
-    
+
     # Сбрасываем кэш локализации, чтобы новый баннер отобразился у всех
     localize_boards.cache_clear()
-    
+
     log_system_event(f"🖼️ BANNER: Updated for /{data.board_id}/")
     return {"status": "ok"}
 @app.post("/api/admin/set_role")
@@ -4981,17 +4975,17 @@ async def api_admin_stealth_edit(
     request: Request,
     post_num: int = Form(...),
     text: str = Form(...),
-    delete_files: Optional[str] = Form(None), 
+    delete_files: Optional[str] = Form(None),
     new_images: List[UploadFile] = File(None),
     user: dict = Depends(get_required_user)
 ):
     if not check_perm(user, 'admin'): raise HTTPException(status_code=403, detail="Нужен ранг Admin")
     post = await get_post_by_num(post_num)
-    if not post: 
+    if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     content = post.get('content', {})
     current_files = content.get('files', [])
-    
+
     file_owners_to_save = []
 
     if delete_files:
@@ -5010,12 +5004,12 @@ async def api_admin_stealth_edit(
                         raw = await img.read()
                         from site_tgach.image_processing import apply_grimdark_filter_async
                         processed = await apply_grimdark_filter_async(raw)
-                        
+
                         img.file.seek(0)
                         img.file.truncate(0)
                         img.file.write(processed)
                         img.file.seek(0)
-                        if hasattr(img, 'size'): 
+                        if hasattr(img, 'size'):
                             img.size = len(processed)
                         processed_images_list.append(img)
                     except Exception as e:
@@ -5034,7 +5028,7 @@ async def api_admin_stealth_edit(
                 if res_data:
                     if res_data.get("banned"):
                         continue
-                        
+
                     if res_data.get('original_file_id'):
                         res_data['original_url'] = f"/files/{res_data['original_file_id']}"
                     if res_data.get('thumbnail_file_id'):
@@ -5046,13 +5040,13 @@ async def api_admin_stealth_edit(
                     current_files.append(res_data)
             except Exception as e:
                 logger.error(f"Error processing image in stealth_edit: {e}")
-    
+
     content['text'] = clean_zalgo(text or "")
-    
+
     content['files'] = current_files
     content['type'] = 'files' if current_files else 'text'
     await update_post_content(post_num, content)
-    
+
     from fastapi_cache import FastAPICache
     await FastAPICache.clear(namespace="main", key=f"api_get_post:{post_num}")
 
@@ -5066,15 +5060,15 @@ async def api_admin_stealth_edit(
     if broadcast_data:
         spawn_task(manager.broadcast_post_update(broadcast_data))
         spawn_task(add_post_to_random_cache(broadcast_data))
-        
+
     return {"status": "ok", "new_content": content}
 @app.websocket("/ws/{board_id}/{mode}")
 async def websocket_endpoint(websocket: WebSocket, board_id: str, mode: str):
     if board_id in ("admin_feed", "overboard"):
         pass
-    elif board_id not in BOARD_CONFIG: 
+    elif board_id not in BOARD_CONFIG:
         await websocket.close(); return
-        
+
     if board_id not in BOARD_CONFIG and board_id != "overboard":
         await websocket.close(code=1008)
         return
@@ -5105,16 +5099,16 @@ async def api_get_lockdown_status(user: dict = Depends(get_required_user)):
 @app.post("/api/post/{board_id}")
 @limiter.limit("30/minute", key_func=get_user_id_from_session, error_message="Слишком часто. Подождите минуту.")
 async def api_create_post(
-    request: Request, board_id: str, 
+    request: Request, board_id: str,
     user: dict = Depends(get_current_user_or_guest),
     text: Optional[str] = Form(None), reply_to: Optional[int] = Form(None),
     images: List[UploadFile] = File(None), post_mode: str = Form(...),
     poll_question: Optional[str] = Form(None), poll_options: List[str] = Form(None),
     sage: Optional[str] = Form(None),
     picrandom: Optional[bool] = Form(False),
-    email: Optional[str] = Form(None), 
+    email: Optional[str] = Form(None),
     thread_type: Optional[str] = Form('default'),
-    username: Optional[str] = Form(None),  
+    username: Optional[str] = Form(None),
     captcha_id: Optional[str] = Form(None),
     captcha_x: Optional[int] = Form(None),
     captcha_y: Optional[int] = Form(None),
@@ -5128,9 +5122,9 @@ async def api_create_post(
     if reply_to and reply_to > 0 and post_mode != 'chat_post':
         post_mode = 'reply'
     client_ip = get_real_ip(request)
-    
+
     is_shadow_muted = False
-    
+
     # Если юзер из Tor или плохой сети - принудительный Shadow Ban
     if is_ip_restricted(client_ip):
         is_shadow_muted = True
@@ -5138,7 +5132,7 @@ async def api_create_post(
 
     # Если юзер в теневом бане (любом), обнуляем файлы для загрузки (экономим ресурсы)
     if is_shadow_muted:
-        all_files_to_upload = [] 
+        all_files_to_upload = []
         # Вместо загрузки создаем пустой контент
         content = {"text": clean_zalgo(text or ""), "files": [], "type": "text"}
         if sage: content['sage'] = True
@@ -5155,10 +5149,10 @@ async def api_create_post(
         thread_type = 'default'
     if email:
         log_system_event(f"🤖 BOT TRAPPED: IP {get_remote_address(request)} filled honeypot.")
-        return {"Status": "OK", "Num": 0} 
+        return {"Status": "OK", "Num": 0}
     if username:
         log_system_event(f"🤖 BOT TRAPPED: IP {get_remote_address(request)} filled honeypot.")
-        return {"Status": "OK", "Num": 0} 
+        return {"Status": "OK", "Num": 0}
     captcha_enabled = (await get_system_setting('captcha_enabled')) == "true"
     is_guest = user.get('is_guest', False)
     user_is_trusted = False
@@ -5199,7 +5193,7 @@ async def api_create_post(
         session = CAPTCHA_SESSIONS.get(captcha_id)
         if not session:
             raise HTTPException(400, t('captcha_expired'))
-        
+
         try:
             mode = session['mode']
             if mode == 'monkey':
@@ -5218,7 +5212,7 @@ async def api_create_post(
                 if session['word'] != str(captcha_value):
                     raise HTTPException(400, t('err_cap_word'))
             elif mode == 'escobar':
-                if str(captcha_value) != "success": 
+                if str(captcha_value) != "success":
                     raise HTTPException(400, t('err_cap_escobar'))
             elif mode == 'fan':
                 if str(captcha_value) != "success":
@@ -5250,7 +5244,7 @@ async def api_create_post(
             elif mode == 'can':
                 if str(captcha_value) != "opened":
                     raise HTTPException(400, t('err_cap_can'))
-            
+
             captcha_verified = True
         except HTTPException as e:
             if captcha_id and captcha_id in CAPTCHA_SESSIONS:
@@ -5267,7 +5261,7 @@ async def api_create_post(
                 if not user.get('is_admin'):
                     hours_left = int((86400 - age_seconds) / 3600)
                     raise HTTPException(
-                        status_code=403, 
+                        status_code=403,
                         detail=t('err_bunker_mode').format(hours_left)
                     )
     stream = getattr(request.state, 'stream', 'ru')
@@ -5297,16 +5291,16 @@ async def api_create_post(
     key = f"cooldown_{board_id}_{author_id}_{action_key}"
     backend = FastAPICache.get_backend()
     last_post_time = await backend.get(key)
-    
+
     if last_post_time:
         try:
             elapsed = time.time() - float(last_post_time)
             if elapsed < limit_seconds:
                 wait_time = int(limit_seconds - elapsed) + 1
                 msg = f"Нихуя ты скорострел. Погоди {wait_time} сек, анон."
-                
+
                 raise HTTPException(
-                    status_code=429, 
+                    status_code=429,
                     detail=msg,
                     headers={"Retry-After": str(wait_time)}
                 )
@@ -5317,7 +5311,7 @@ async def api_create_post(
     if text is None:
         text = ""
     if images is None:
-        images = []   
+        images = []
     clean_text_for_check = re.sub(r'[\u200b\u200c\u200d\u2060\ufeff]', '', text).lower()
     if stop_words:
         for word in stop_words:
@@ -5334,10 +5328,10 @@ async def api_create_post(
                     "thread_id": 0,
                     "is_op_post": post_mode == 'new_thread',
                     "shadow_deleted": True
-                }   
+                }
     if await get_user_status(author_id, board_id) == 'banned':
         logger.warning(f"🚫 REJECTED: User {author_id} is BANNED on /{board_id}/ (IP: {request.state.client_ip})")
-        
+
         lang = getattr(request.state, 'lang', 'ru')
         msg = TRANSLATIONS.get(lang, TRANSLATIONS['ru']).get('err_banned_board', "Banned.")
         raise HTTPException(status_code=403, detail=msg)
@@ -5377,7 +5371,7 @@ async def api_create_post(
             raise HTTPException(status_code=403, detail="Thread archived.")
     elif post_mode == 'new_thread':
         thread_op_num = None
-    
+
     files_to_process = []
     if images:
         for img in images:
@@ -5386,26 +5380,26 @@ async def api_create_post(
 
     user_files_count = len(files_to_process)
     files_to_generate_count = 5 - user_files_count
-    
+
     anime_tasks = []
     first_cmd_name = None
-    
+
     if files_to_generate_count > 0 and text and '/' in text:
         cmd_matches = RE_ANIME_STACK.findall(text)
         if cmd_matches:
             for cmd_name, num1, num2 in cmd_matches:
                 if not first_cmd_name: first_cmd_name = cmd_name.lower()
                 if files_to_generate_count <= 0: break
-                
+
                 cmd_lower = cmd_name.lower()
                 if cmd_lower in ANIME_COMMAND_MAP:
                     count_str = num1 or num2 or "1"
                     try:
                         req_count = int(count_str)
                     except: req_count = 1
-                    
+
                     to_take = min(req_count, files_to_generate_count)
-                    
+
                     fetcher = ANIME_COMMAND_MAP[cmd_lower]
                     for _ in range(to_take):
                         anime_tasks.append(fetcher())
@@ -5415,17 +5409,17 @@ async def api_create_post(
     if anime_tasks:
         url_results = await asyncio.gather(*anime_tasks, return_exceptions=True)
         valid_urls = [u for u in url_results if isinstance(u, str) and u.startswith('http')]
-        
+
         if valid_urls:
             dl_tasks = [_download_image_with_proxy(u) for u in valid_urls]
             dl_results = await asyncio.gather(*dl_tasks, return_exceptions=True)
-            
+
             for i, res in enumerate(dl_results):
                 if isinstance(res, tuple) and res[0]:
                     img_bytes, img_len = res
                     img_bytes = await asyncio.to_thread(_resize_image_if_needed, img_bytes)
                     orig_url = valid_urls[i]
-                    
+
                     ext = "jpg"
                     if orig_url:
                         parts = orig_url.split('.')
@@ -5433,7 +5427,7 @@ async def api_create_post(
                             clean_ext = parts[-1].split('?')[0].lower()
                             if clean_ext in ['png', 'gif', 'webp', 'jpeg', 'jpg']:
                                 ext = clean_ext
-                    
+
                     mime = "image/jpeg"
                     if ext == 'gif': mime = "image/gif"
                     elif ext == 'png': mime = "image/png"
@@ -5480,7 +5474,7 @@ async def api_create_post(
 
     files_data = []
     file_owners_to_save = []
-    has_banned_content = False 
+    has_banned_content = False
     is_shadow_muted = await get_shadow_mute_status(author_id, board_id)
 
     if is_shadow_muted and all_files_to_upload:
@@ -5492,7 +5486,7 @@ async def api_create_post(
                 file_type = 'video'
             elif f.content_type and f.content_type.startswith('audio/'):
                 file_type = 'audio'
-            
+
             files_data.append({
                 'type': file_type,
                 'filename': f.filename,
@@ -5504,10 +5498,10 @@ async def api_create_post(
     elif all_files_to_upload:
         if not getattr(request.app.state, 'file_uploader_bot', None):
             raise HTTPException(status_code=503, detail="File upload system unavailable (Bot init failed)")
-        
+
         from common.config import STORAGE_CHANNELS
         target_channel_id = STORAGE_CHANNELS.get(stream, STORAGE_CHANNELS['ru'])
-        
+
         async def upload_task(file_obj):
             async with UPLOAD_SEMAPHORE:
                 TELEGRAM_SINGLE_FILE_LIMIT = 50 * 1024 * 1024
@@ -5521,7 +5515,7 @@ async def api_create_post(
                 if res_data.get("banned"):
                     has_banned_content = True
                     log_system_event(f"⛔ SHADOW FILTER: Banned file '{res_data.get('filename')}' ({res_data.get('reason')}).")
-                    continue 
+                    continue
                 if res_data.get('original_file_id'):
                     oid = res_data['original_file_id']
                     res_data['original_url'] = f"/files/{oid}"
@@ -5540,7 +5534,7 @@ async def api_create_post(
         predictions = t('magic_8ball_answers', [])
         if not isinstance(predictions, list):
              predictions = ["Yes.", "No.", "Maybe."]
-        
+
         if predictions:
             prediction = random.choice(predictions)
             sanitized_text += f'<span class="magic-8ball">{prediction}</span>'
@@ -5555,7 +5549,7 @@ async def api_create_post(
     content = {"text": final_text, "files": files_data}
     if sage:
         content['sage'] = True
-    is_shadow_final = is_shadow_muted or has_banned_content 
+    is_shadow_final = is_shadow_muted or has_banned_content
     if post_mode == 'poll':
         raw_opts = [opt.strip() for opt in (poll_options or []) if opt and opt.strip()]
         clean_opts = list(dict.fromkeys(raw_opts))
@@ -5565,7 +5559,7 @@ async def api_create_post(
             'poll_data': {
                 'question': poll_question.strip(),
                 'options': clean_opts,
-                'votes': {}, 
+                'votes': {},
                 'voted_users': {}
             },
             'type': "poll"
@@ -5588,7 +5582,7 @@ async def api_create_post(
             if files_data:
                 for f in files_data:
                     ftype = f.get('type', 'file')
-                    if t_type == 'media': 
+                    if t_type == 'media':
                         valid_file_attached = True
                     elif t_type == 'image' and ftype in ['image', 'photo', 'sticker']:
                         valid_file_attached = True
@@ -5607,13 +5601,13 @@ async def api_create_post(
             elif not is_unlocked:
                 # Получаем локализованные названия
                 type_names = {
-                    'image': t('tt_image'), 
-                    'video': t('tt_video'), 
-                    'audio': t('tt_audio'), 
+                    'image': t('tt_image'),
+                    'video': t('tt_video'),
+                    'audio': t('tt_audio'),
                     'media': t('tt_media')
                 }
                 req_str = type_names.get(t_type, t_type.upper())
-                
+
                 # ЗАЩИТА: Безопасная сборка строки ответа
                 base_msg = str(t('err_thread_type', 'В этом треде требуется файл:'))
                 if "{0}" in base_msg:
@@ -5622,9 +5616,9 @@ async def api_create_post(
                     err_msg = base_msg.format(req_str)
                 else:
                     err_msg = f"{base_msg} [{req_str}]"
-                    
+
                 raise HTTPException(
-                    status_code=400, 
+                    status_code=400,
                     detail=err_msg
                 )
     await backend.set(key, str(time.time()), expire=limit_seconds)
@@ -5636,14 +5630,14 @@ async def api_create_post(
         try:
             # Внутри api_create_post
             new_post_num = await create_post(
-                author_id=author_id, 
-                board_id=board_id, 
-                content=content, 
+                author_id=author_id,
+                board_id=board_id,
+                content=content,
                 timestamp=current_ts,
-                reply_to=reply_to, 
+                reply_to=reply_to,
                 is_shadow_muted=is_shadow_final,
-                is_from_site=True, 
-                post_mode=post_mode, 
+                is_from_site=True,
+                post_mode=post_mode,
                 stream=stream,
                 ip=client_ip, # ПЕРЕДАЕМ IP ДЛЯ ИСТОРИИ И БАНОВ
                 thread_id_from_bot=str(thread_op_num) if thread_op_num else None,
@@ -5657,11 +5651,11 @@ async def api_create_post(
             if "locked" in str(e).lower():
                 await asyncio.sleep(0.2)
             else:
-                raise e      
+                raise e
     if not new_post_num:
         local_logger.error("create_post FAILED after all retries.")
         raise HTTPException(status_code=500, detail="DB Error / Busy")
-    
+
     # ПРАВКА: Мгновенный сброс кэша доски и overboard, чтобы пост (даже shadow) появился сразу
     now_ts = time.time()
     BOARD_VERSIONS[board_id] = now_ts
@@ -5670,15 +5664,15 @@ async def api_create_post(
     if captcha_verified and captcha_id in CAPTCHA_SESSIONS:
         del CAPTCHA_SESSIONS[captcha_id]
 
-    final_thread_id = 0 
+    final_thread_id = 0
     local_logger.info("Creating background task for cross-links...")
     if not is_shadow_final:
         spawn_task(process_cross_links(board_id, new_post_num, sanitized_text, stream))
-    
+
     async def delayed_backlinks():
         await asyncio.sleep(0.25) # Даем базе "вздохнуть" после тяжелого INSERT
         await process_backlinks(new_post_num, sanitized_text, reply_to)
-        
+
     spawn_task(delayed_backlinks())
     POST_RATE_LIMITER.append(time.time())
     while len(POST_RATE_LIMITER) > 0 and POST_RATE_LIMITER[0] < time.time() - 60:
@@ -5703,10 +5697,10 @@ async def api_create_post(
         try:
             neuro_enabled = await get_system_setting('neuro_enabled')
             if neuro_enabled == 'true':
-                nm = request.app.state.neuro_manager 
-                
+                nm = request.app.state.neuro_manager
+
                 async def delayed_bump(bid, tid, s, manager):
-                    delay = random.randint(300, 1800) 
+                    delay = random.randint(300, 1800)
                     await asyncio.sleep(delay)
                     try:
                         await manager.make_post(bid, stream=s, forced_mode="reply", forced_thread_id=tid)
@@ -5724,7 +5718,7 @@ async def api_create_post(
             await update_thread_last_updated(thread_op_num, current_ts)
         if not is_shadow_final and board_id not in ["thread", "test"]:
             await process_mentions_and_notify(new_post_num, board_id, sanitized_text, author_id, reply_to)
-            
+
         if is_endless:
             from common.database import trim_thread_posts
             spawn_task(trim_thread_posts(str(thread_op_num), max_posts=1000))
@@ -5733,7 +5727,7 @@ async def api_create_post(
                 async with ARCHIVE_LOCKS[thread_op_num]:
                     if not await is_thread_archived(thread_op_num):
                         await archive_thread_in_db(thread_op_num)
-                    if thread_op_num in ARCHIVE_LOCKS: 
+                    if thread_op_num in ARCHIVE_LOCKS:
                         del ARCHIVE_LOCKS[thread_op_num]
         final_thread_id = thread_op_num
         # ПРАВКА: Сброс кэша конкретного треда
@@ -5745,20 +5739,20 @@ async def api_create_post(
         broadcast_post = await get_post_for_broadcast(new_post_num)
         if broadcast_post:
             await request.app.state.broadcast_queue.put(broadcast_post)
-        
+
     local_logger.info("--- END api_create_post ---")
     if broadcast_post:
         spawn_task(add_post_to_random_cache(broadcast_post))
         return broadcast_post
-        
+
     return {
         "id": new_post_num,
-        "board_id": board_id, 
+        "board_id": board_id,
         "author_id": author_id,
-        "content": content, 
-        "timestamp": current_ts, 
-        "reply_to_post_num": reply_to, 
-        "thread_id": final_thread_id, 
+        "content": content,
+        "timestamp": current_ts,
+        "reply_to_post_num": reply_to,
+        "thread_id": final_thread_id,
         "is_op_post": post_mode == 'new_thread'
     }
 @lru_cache(maxsize=8)
@@ -5782,54 +5776,54 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
     """
     Разовый скрипт для очистки базы от битых тегов <img> в тексте постов.
     """
-    if not user.get('is_admin'): 
+    if not user.get('is_admin'):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     count = 0
     from bs4 import BeautifulSoup
     import json
-    
+
     # Используем отдельное соединение для тяжелой задачи
     from common.db_pool import db_lock
     async with db_lock, get_db_connection() as conn:
         # 1. Находим посты, где в тексте есть тег <img
         # LIKE '%<img%' работает быстро
         query = "SELECT post_num, content FROM Posts WHERE content LIKE '%<img%'"
-        
+
         async with conn.execute(query) as cursor:
             rows = await cursor.fetchall()
-        
+
         if not rows:
             return {"status": "ok", "message": "База чиста, исправлять нечего."}
 
         # 2. Проходимся и чистим
         await conn.execute("BEGIN IMMEDIATE")
-        
+
         for row in rows:
             post_num, raw_content = row
             try:
                 content = json.loads(raw_content)
                 text = content.get('text', '')
-                
+
                 if '<img' in text or '<IMG' in text:
                     soup = BeautifulSoup(text, "html.parser")
                     images = soup.find_all('img')
-                    
+
                     if images:
                         for img in images:
                             img.decompose()
-                    
+
                         content['text'] = str(soup)
                         new_json = json.dumps(content)
-                        
+
                         await conn.execute(
-                            "UPDATE Posts SET content = ? WHERE post_num = ?", 
+                            "UPDATE Posts SET content = ? WHERE post_num = ?",
                             (new_json, post_num)
                         )
                         count += 1
             except Exception:
                 continue
-        
+
         await conn.execute("COMMIT")
 
     log_system_event(f"🧹 HTML CLEANUP: Очищено {count} постов от битых картинок.")
@@ -5837,16 +5831,16 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
 @app.post("/api/admin/import_thread")
 async def api_import_thread(
     request: Request,
-    bg_tasks: BackgroundTasks, 
-    data: dict = Body(...), 
+    bg_tasks: BackgroundTasks,
+    data: dict = Body(...),
     user: dict | None = Depends(get_optional_user)
 ):
-    if not user or not user.get("is_admin"): 
+    if not user or not user.get("is_admin"):
         raise HTTPException(status_code=404, detail="Not Found")
     url = data.get("url")
     board_id = data.get("board_id")
     target_stream = data.get("stream", "ru")
-    
+
     use_sim = data.get("use_simulation", False)
     sim_settings = {
         "enabled": use_sim,
@@ -5862,7 +5856,7 @@ async def api_import_thread(
     existing_bot = request.app.state.file_uploader_bot
     target_channel_id = STORAGE_CHANNELS.get(target_stream, STORAGE_CHANNELS['ru'])
     importer = ThreadImporter(existing_bot, target_channel_id)
-    
+
     mode = "SIMULATION" if use_sim else "INSTANT"
     log_system_event(f"Запущен импорт ({mode}): {url} -> /{board_id}/ [{target_stream}]")
     from common.database import get_db_connection
@@ -5878,7 +5872,7 @@ async def api_import_thread(
     except Exception as e:
         print(f"Warning logging import request: {e}")
 
-    bg_tasks.add_task(importer.process_thread, url, board_id, target_stream, sim_settings) 
+    bg_tasks.add_task(importer.process_thread, url, board_id, target_stream, sim_settings)
     return {"status": "ok", "stream": target_stream}
 
 class CancelImportRequest(BaseModel):
@@ -5887,10 +5881,10 @@ class CancelImportRequest(BaseModel):
 @app.get("/api/admin/active_simulations")
 async def api_get_active_simulations(user: dict = Depends(get_required_user)):
     if not user.get('is_admin'): raise HTTPException(status_code=403, detail="Forbidden")
-    
+
     from common.database import get_db_connection
     simulations = []
-    
+
     async with get_db_connection() as conn:
         query = """
             SELECT task_id, board_id, MAX(thread_title), COUNT(*), MIN(publish_at), MAX(publish_at)
@@ -5913,17 +5907,17 @@ async def api_get_active_simulations(user: dict = Depends(get_required_user)):
 @app.post("/api/admin/cancel_simulation")
 async def api_cancel_simulation(data: CancelImportRequest, user: dict = Depends(get_required_user)):
     if not user.get('is_admin'): raise HTTPException(status_code=403, detail="Forbidden")
-    
+
     from common.database import get_db_connection
     from common.db_pool import db_lock
-    
+
     async with db_lock, get_db_connection() as conn:
         await conn.execute("BEGIN IMMEDIATE")
         await conn.execute("DELETE FROM ImportQueue WHERE task_id = ?", (data.task_id,))
         await conn.execute("DELETE FROM ImportRefMap WHERE task_id = ?", (data.task_id,))
-        
+
         await conn.execute("COMMIT")
-        
+
     log_system_event(f"🚫 Импорт отменен админом. Task ID: {data.task_id}")
     return {"status": "ok"}
 @app.get("/api/admin/spam_words")
@@ -6169,7 +6163,7 @@ async def api_admin_stats(user: dict | None = Depends(get_optional_user)):
     queues = await get_system_queue_counts()
 
     return {
-        "total_posts": posts, 
+        "total_posts": posts,
         "total_threads": threads,
         "top_boards": [{"board": r[0], "count": r[1]} for r in top],
         "active_connections": sum(len(s) for s in manager.active_connections.values()),
@@ -6183,13 +6177,13 @@ async def roulette_page(request: Request, user: dict | None = Depends(get_option
         "request": request,
         "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
-        "boards": BOARD_CONFIG 
+        "boards": BOARD_CONFIG
     })
 @app.get("/api/tv/next")
 @limiter.limit("25/minute")
 async def api_roulette_next(request: Request, boards: Optional[str] = None):
     from common.database import get_random_video_post, get_file_mirrors
-    
+
     # Парсим список досок из query string (?boards=b,a,gd)
     allowed_boards = None
     if boards:
@@ -6261,7 +6255,7 @@ async def api_public_announcement():
     text = await get_system_setting('global_announcement')
     return {"text": text}
 @app.get("/api/locales")
-@cache(expire=86400) 
+@cache(expire=86400)
 async def api_get_locales():
 
     return TRANSLATIONS
@@ -6269,11 +6263,11 @@ async def api_get_locales():
 @limiter.limit("3/hour", key_func=get_user_id_from_session)
 async def api_user_request_import(
     request: Request,
-    data: ImportRequestModel, 
+    data: ImportRequestModel,
     user: dict = Depends(get_current_user_or_guest)
 ):
-    t = request.state.t 
-    
+    t = request.state.t
+
     if "2ch" not in data.url and "4chan" not in data.url and "arch" not in data.url:
         raise HTTPException(400, t('err_import_url'))
     if data.board_id not in BOARD_CONFIG:
@@ -6341,12 +6335,12 @@ async def admin_dashboard(request: Request, user: dict | None = Depends(get_opti
     if role == 'user' and not is_root:
         raise HTTPException(status_code=403, detail="Forbidden")
     return templates.TemplateResponse(request=request, name="admin.jinja2", context={
-        "request": request, 
-        "boards": BOARD_CONFIG, 
-        "site_mode": SITE_ACCESS_MODE, 
+        "request": request,
+        "boards": BOARD_CONFIG,
+        "site_mode": SITE_ACCESS_MODE,
         "session": {"user": user},
-        "user_role": role, 
-        "is_root": is_root 
+        "user_role": role,
+        "is_root": is_root
     })
 @app.get("/api/admin/system_health")
 async def api_admin_health(user: dict | None = Depends(get_optional_user)):
@@ -6361,7 +6355,7 @@ async def api_admin_health(user: dict | None = Depends(get_optional_user)):
     }
 @app.get("/api/admin/logs")
 async def api_admin_logs(user: dict | None = Depends(get_optional_user)):
-    if not user or not user.get("is_admin"): 
+    if not user or not user.get("is_admin"):
         raise HTTPException(status_code=404, detail="Not Found")
     async with get_db_connection() as conn:
         query = "SELECT source, event_text, created_at FROM GlobalLogs ORDER BY created_at DESC LIMIT 100"
@@ -6383,47 +6377,47 @@ async def api_get_post(post_num: int, request: Request):
     return enriched_list[0]
 @app.get("/api/thread/{board_id}/{thread_id}")
 async def api_get_thread(
-    board_id: str, 
+    board_id: str,
     thread_id: int,
     request: Request,
     user: dict = Depends(get_current_user_or_guest)
 ):
     board_id = board_id.lower()
-    
+
     # Кэширование на основе версии доски (обновляется при любом посте)
     current_version = BOARD_VERSIONS[board_id]
     stream = getattr(request.state, 'stream', 'ru')
     # Кэш общий для всех (без shadow-постов)
     cache_key = f"api_thread_full_v2:{board_id}:{thread_id}:{stream}:{current_version}"
-    
+
     backend = FastAPICache.get_backend()
     cached_data = await backend.get(cache_key)
-    
+
     posts_flat = []
-    
+
     if cached_data:
         try:
             posts_flat = orjson.loads(cached_data)
-        except: 
+        except:
             posts_flat = []
-    
+
     if not posts_flat:
         # CACHE MISS: Тяжелая загрузка из БД (только публичные посты)
         # get_thread_by_op_post возвращает (op, replies)
         thread_data = await get_thread_by_op_post(thread_id, current_user_id=None)
-        
+
         if not thread_data:
              # Если тред не найден или скрыт
              # Можно проверить shadow явно, но get_thread_by_op_post(None) уже фильтрует
              return []
-        
+
         op, replies = thread_data
         raw_list = [op] + replies
-        
+
         # Стандартизация и обогащение (ТЯЖЕЛАЯ ФАЗА)
         posts_flat = _convert_and_enrich_posts(raw_list)
         await enrich_heavy_data(posts_flat)
-        
+
         if posts_flat:
              await backend.set(cache_key, orjson.dumps(posts_flat), expire=600)
 
@@ -6432,7 +6426,7 @@ async def api_get_thread(
     else:
         import copy
         posts_flat = copy.deepcopy(posts_flat)
-        
+
     is_ru = await is_request_from_ru(request)
     # Передаем ID автора первого поста как op_author_id
     op_id = posts_flat[0].get('author_id') if posts_flat else None
@@ -6503,7 +6497,7 @@ async def api_thread_vibe(thread_id: int, request: Request):
     cache_key = f"vibe_v3_{stream}_{thread_id}"
     backend = FastAPICache.get_backend()
     cached_data_raw = await backend.get(cache_key)
-    
+
     if cached_data_raw:
         try:
             cached_data = json.loads(cached_data_raw)
@@ -6512,7 +6506,7 @@ async def api_thread_vibe(thread_id: int, request: Request):
                 return {"vibe": cached_data.get('vibe'), "icon": cached_data.get('icon')}
         except: pass
     thread_data = await get_thread_by_op_post(thread_id)
-    if not thread_data: 
+    if not thread_data:
         raise HTTPException(404, "Thread not found")
     op_post, replies = thread_data
     optimized_text = optimize_thread_context(op_post, replies, max_posts=50)
@@ -6521,8 +6515,8 @@ async def api_thread_vibe(thread_id: int, request: Request):
     icon_text = vibe_to_icon(vibe_raw)
     if vibe_raw and "API Error" not in vibe_raw:
         to_cache = json.dumps({
-            "count": current_count, 
-            "vibe": vibe_raw, 
+            "count": current_count,
+            "vibe": vibe_raw,
             "icon": icon_text
         })
         await backend.set(cache_key, to_cache, expire=86400)
@@ -6560,63 +6554,63 @@ async def api_get_chat_posts(board_id: str, request: Request, page: int = 0, use
     limit = 50
     offset = page * limit
     raw_posts = await get_chat_posts_for_board(
-        board_id, 
-        offset=offset, 
-        stream=request.state.stream, 
+        board_id,
+        offset=offset,
+        stream=request.state.stream,
         observer_id=observer_id
     )
     posts = _convert_and_enrich_posts(raw_posts)
-    
+
     is_ru = await is_request_from_ru(request)
     await enrich_extra_data(posts, is_ru=is_ru)
     return posts
 
 @app.get("/api/threads/{board_id}")
 async def api_get_threads(
-    board_id: str, 
-    request: Request, 
-    page: int = 0, 
-    sort: str = "bump", 
+    board_id: str,
+    request: Request,
+    page: int = 0,
+    sort: str = "bump",
     page_size: int = 25,
     user: dict = Depends(get_current_user_or_guest)
 ):
     board_id = board_id.lower()
-    if board_id != "overboard" and board_id not in BOARD_CONFIG: 
+    if board_id != "overboard" and board_id not in BOARD_CONFIG:
         raise HTTPException(status_code=404, detail="Board not found")
-    
+
     current_version = BOARD_VERSIONS[board_id] if board_id in BOARD_VERSIONS else time.time()
     stream = getattr(request.state, 'stream', 'ru')
     view_mode = request.query_params.get("view", "threads")
     selected_boards_list = request.query_params.getlist("boards")
     selected_boards_str = ",".join(sorted(selected_boards_list))
-    
+
     # Ключ кэша теперь учитывает режим отображения (view_mode)
     cache_key = f"api_threads_v3:{board_id}:{view_mode}:{sort}:{page}:{stream}:{current_version}:{selected_boards_str}"
-    
+
     backend = FastAPICache.get_backend()
     cached_data = await backend.get(cache_key)
-    
+
     posts_container = []
-    
+
     if cached_data:
         try:
             posts_container = orjson.loads(cached_data)
-        except: 
+        except:
             posts_container = []
-    
+
     if not posts_container:
         target_board = board_id
         if board_id == "overboard":
             target_board = selected_boards_list if selected_boards_list else None
-        
+
         if board_id == "overboard" and view_mode in ['posts', 'all']:
             # Режим ленты одиночных постов
             include_chat = (view_mode == 'all')
             raw_posts = await get_global_feed_posts(
-                target_board, 
-                page=page+1, 
-                page_size=page_size, 
-                stream=stream, 
+                target_board,
+                page=page+1,
+                page_size=page_size,
+                stream=stream,
                 observer_id=None, # Для кэша всегда None
                 include_chat=include_chat,
                 sort_by=sort
@@ -6625,20 +6619,20 @@ async def api_get_threads(
         else:
             # Режим списка тредов
             op_posts = await get_op_posts_for_board(
-                target_board, 
-                sort_by=("new" if sort == "new" else "bump"), 
-                page=page+1, 
-                page_size=page_size, 
+                target_board,
+                sort_by=("new" if sort == "new" else "bump"),
+                page=page+1,
+                page_size=page_size,
                 stream=stream,
                 observer_id=None, # Для кэша всегда None
                 ignore_pin=(board_id == "overboard")
             )
             posts_container = await asyncio.to_thread(_convert_and_enrich_posts, op_posts)
-        
+
         await enrich_heavy_data(posts_container)
-        
+
         if posts_container:
-            await backend.set(cache_key, orjson.dumps(posts_container), expire=600) 
+            await backend.set(cache_key, orjson.dumps(posts_container), expire=600)
 
     # Создаем копию для персонализации (You маркеры и зеркала)
     import copy
@@ -6646,21 +6640,21 @@ async def api_get_threads(
 
     is_ru = await is_request_from_ru(request)
     user_id = user['id']
-    
+
     finalize_posts_for_user(posts_final, user_id, is_ru)
 
     # Проставляем служебные счетчики
     for p in posts_final:
         rc = p.get('reply_count', 0)
-        p['posts_count'] = rc + 1 
-        p['anon_count'] = p.get('anon_count', 1) 
+        p['posts_count'] = rc + 1
+        p['anon_count'] = p.get('anon_count', 1)
 
     return posts_final
 @app.post("/api/report")
 @limiter.limit("5/minute")
 async def api_report_post(
-    data: ReportPost, 
-    request: Request, 
+    data: ReportPost,
+    request: Request,
     bg_tasks: BackgroundTasks,
     user: dict = Depends(get_current_user_or_guest)
 ):
@@ -6675,9 +6669,9 @@ async def api_report_post(
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     sender_hash = str(user['id'])
-    
+
     success = await create_report(data.post_num, data.category, data.reason, sender_hash)
-    
+
     if not success:
         return {"message": ok_msg}
 
@@ -6712,21 +6706,21 @@ class BanSingleFileRequest(BaseModel):
 @app.post("/api/admin/ban_single_file")
 async def api_ban_single_file(data: BanSingleFileRequest, user: dict = Depends(get_required_user)):
     if not check_perm(user, 'mod'): raise HTTPException(403, "Forbidden")
-    
+
     # Чтение (безопасно без лока в WAL)
     db = await get_pool()
     async with db.execute("SELECT sha256, phash FROM FileRegistry WHERE file_id = ?", (data.file_id,)) as cursor:
         row = await cursor.fetchone()
-    
+
     if not row:
         return {"status": "error", "message": "File not found in registry"}
-    
+
     sha, phash = row
     from common.database import ban_hash
     # ban_hash уже использует db_lock и BEGIN IMMEDIATE
     if sha: await ban_hash(sha, 'sha256', data.reason)
     if phash: await ban_hash(phash, 'phash', data.reason)
-    
+
     log_system_event(f"🚫 FILE BAN: {data.file_id} banned by {user['id']}")
     return {"status": "ok", "message": "File banned (SHA + pHash)"}
 @app.get("/api/admin/reports")
@@ -6758,7 +6752,7 @@ async def api_admin_endless_thread(data: AdminEndlessRequest, user: dict = Depen
 @limiter.limit("30/minute")
 async def api_admin_delete_post(data: AdminAction, request: Request, user: dict = Depends(get_required_user)):
     if not check_perm(user, 'janitor'): raise HTTPException(status_code=403, detail="Нужен ранг Janitor")
-    
+
     post = await get_post_by_num(data.post_num)
     if not post: raise HTTPException(404, "Post not found")
 
@@ -6785,11 +6779,11 @@ async def api_admin_delete_post(data: AdminAction, request: Request, user: dict 
         now = time.time()
         bid = post['board_id']
         tid = str(post.get('thread_id') or post['id'])
-        
+
         BOARD_VERSIONS[bid] = now
         BOARD_VERSIONS['overboard'] = now
         THREAD_VERSIONS[tid] = now
-        
+
         from fastapi_cache import FastAPICache
         # Чистим кэш конкретной ручки API для этого поста
         await FastAPICache.clear(namespace="main", key=f"api_get_post:{data.post_num}")
@@ -6801,7 +6795,7 @@ async def api_admin_delete_post(data: AdminAction, request: Request, user: dict 
         # Уведомляем открытые вкладки через WS
         spawn_task(manager.broadcast_system_event('delete', data.post_num, bid))
         return {"message": "Deleted"}
-    
+
     raise HTTPException(status_code=500, detail="Error deleting post")
 @app.post("/api/admin/delete_after")
 async def api_admin_delete_after(data: AdminDeleteAfterRequest, user: dict = Depends(get_required_user)):
@@ -6874,14 +6868,14 @@ async def api_send_bottle(data: BottleSendRequest, request: Request, user: dict 
         raise HTTPException(status_code=403, detail=msg)
     sender = int(user['id'])
     post = await get_post_by_num(data.post_num)
-    if not post: 
+    if not post:
         msg = "Post not found" if lang == 'en' else ("投稿が見つかりません" if lang == 'jp' else "Пост не найден")
         raise HTTPException(status_code=404, detail=msg)
     recipient = post.get('author_id')
-    if not recipient or recipient == sender: 
+    if not recipient or recipient == sender:
         msg = "Invalid recipient" if lang == 'en' else ("無効な受信者です" if lang == 'jp' else "Нельзя отправить самому себе")
         raise HTTPException(status_code=400, detail=msg)
-    if not data.text.strip() or len(data.text) > 280: 
+    if not data.text.strip() or len(data.text) > 280:
         msg = "Invalid text" if lang == 'en' else ("テキストが無効です" if lang == 'jp' else "Некорректный текст")
         raise HTTPException(status_code=400, detail=msg)
     if await create_bottle(sender, recipient, data.text.strip()):
@@ -6903,11 +6897,11 @@ async def api_read_bottle(request: Request, user: dict = Depends(get_required_us
 @limiter.limit("15/minute")
 async def auth_by_token(data: TokenAuth, request: Request):
     lang = getattr(request.state, 'lang', 'ru')
-    if not data.token.strip(): 
+    if not data.token.strip():
         msg = "Empty token" if lang == 'en' else ("トークンが空です" if lang == 'jp' else "Пустой токен")
         raise HTTPException(status_code=400, detail=msg)
     u = await get_user_by_token(data.token.strip())
-    if not u: 
+    if not u:
         msg = "Invalid token" if lang == 'en' else ("無効なトークンです" if lang == 'jp' else "Неверный токен")
         raise HTTPException(status_code=403, detail=msg)
     uid = int(u["user_id"])
@@ -6916,7 +6910,7 @@ async def auth_by_token(data: TokenAuth, request: Request):
     is_admin = is_admin_hard or role_db == 'admin'
     is_mod = role_db == 'mod'
     request.session['user'] = {
-        'id': uid, 
+        'id': uid,
         'role': role_db,
         'is_admin': role_db == 'admin' or uid in ADMIN_IDS
     }
@@ -6924,7 +6918,7 @@ async def auth_by_token(data: TokenAuth, request: Request):
     return {"message": success_msg}
 @app.post("/api/get-my-posts")
 async def api_get_my_posts(
-    post_nums: List[int] = Body(...), 
+    post_nums: List[int] = Body(...),
     user: dict = Depends(get_current_user_or_guest)
 ):
     return await get_user_posts_from_list(int(user['id']), post_nums)
@@ -6939,7 +6933,7 @@ async def _fetch_telegram_path(file_id: str, bot_token: str):
             connector=connector,
             timeout=aiohttp.ClientTimeout(total=10)
         )
-    
+
     async with TELEGRAM_FILE_SEMAPHORE:
         try:
             url = f"https://api.telegram.org/bot{bot_token}/getFile?file_id={file_id}"
@@ -6948,7 +6942,7 @@ async def _fetch_telegram_path(file_id: str, bot_token: str):
                 if resp.status != 200: return None
                 data = await resp.json()
                 return data["result"]["file_path"] if data.get("ok") else None
-        except Exception: 
+        except Exception:
             return None
 
 def _bot_id_from_token(token: str | None) -> int | None:
@@ -7015,7 +7009,7 @@ async def get_cached_file_path(file_id: str, allow_protected_tokens: bool = Fals
     # ПРАВКА: Пытаемся получить владельца несколько раз, если база занята
     owner_id = await get_file_owner_id(file_id)
     tried_tokens = set()
-    
+
     # ПРАВКА: Функция-хелпер для сохранения успеха
     async def save_success(path, token, bot_id=None):
         if bot_id:
@@ -7217,7 +7211,7 @@ async def _proxy_protected_telegram_file(
 @app.get("/games/abu")
 async def game_abu_page(request: Request, user: dict | None = Depends(get_optional_user)):
     return templates.TemplateResponse(request=request, name="game_abu.jinja2", context={
-        "request": request, 
+        "request": request,
         "user": user,
         "site_mode": SITE_ACCESS_MODE
     })
@@ -7231,7 +7225,7 @@ async def check_url_alive(url: str) -> bool:
         if now - ts < 600:
             return is_alive
     try:
-        async with httpx.AsyncClient(timeout=1.5, verify=False) as client: 
+        async with httpx.AsyncClient(timeout=1.5, verify=False) as client:
             resp = await client.head(url)
             is_alive = resp.status_code == 200
             URL_STATUS_CACHE[url] = (is_alive, now)
@@ -7250,7 +7244,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     # Если file_id уже является полной ссылкой, перенаправляем
     if file_id.startswith(('http://', 'https://')):
         return RedirectResponse(url=file_id, status_code=301)
-        
+
     # Динамическое определение страны по IP
     client_ip = get_real_ip(request)
     user_country = await get_country_by_ip(client_ip)
@@ -7262,18 +7256,18 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
         "Pragma": "no-cache",
         "Expires": "0"
     }
-    
+
     # --- SMART WAIT LOOP ---
     # Ждем до 2.5 секунд появления зеркал или кэша пути.
     # Это спасает от 404 сразу после постинга.
     backend = FastAPICache.get_backend()
     mirrors = {}
-    
+
     # ПРАВКА: Видео через Bot API не прогрузятся, поэтому для них ждем HF дольше (до 7.5 сек)
     is_video_ext = any(x in request.url.path.lower() for x in ['mp4', 'webm', 'mov', 'gif'])
     max_attempts = 15 if is_video_ext else 8
-    
-    for attempt in range(max_attempts): 
+
+    for attempt in range(max_attempts):
         # 1. Проверяем зеркала в кэше/БД
         cache_key = f"mirrors:{file_id}"
         if backend:
@@ -7281,7 +7275,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
             if cached:
                 try: mirrors = json.loads(cached)
                 except: mirrors = {}
-        
+
         if not mirrors:
             mirrors = await get_file_mirrors(file_id)
             if mirrors and backend:
@@ -7290,23 +7284,23 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
         # Проверка валидности HF (из глобального списка VALID_HF_REPOS)
         hf_candidate = mirrors.get('huggingface')
         hf_valid = is_hf_link_allowed(hf_candidate, VALID_HF_REPOS)
-        
+
         # 1. Сначала проверяем зеркала
         catbox_link = mirrors.get('catbox')
         zeroxzero_link = mirrors.get('0x0')
         if (is_ru and hf_valid) or (not is_ru and (catbox_link or hf_valid or zeroxzero_link)):
              break
-             
+
         # 2. Если файл новый (нет в кэше зеркал), пробуем Telegram СРАЗУ
         cached_path_info = await get_cached_file_path(file_id)
         if cached_path_info:
              break
-             
+
         # Если это первая попытка и файл - картинка (AgAC), пробуем форсировать путь
         if attempt == 0 and file_id.startswith('AgAC'):
              cached_path_info = await get_cached_file_path(file_id)
              if cached_path_info: break # Путь есть, можно отдавать
-             
+
         # Если ничего нет - ждем
         if attempt < 7:
             await asyncio.sleep(0.5)
@@ -7320,7 +7314,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     # 1. HuggingFace — ПРИОРИТЕТ №1 (Для РФ и ИНО)
     if is_hf_link_allowed(hf_link, VALID_HF_REPOS):
         return RedirectResponse(url=hf_link, status_code=307, headers=no_cache_headers)
-    
+
     # 2. Catbox — ПРИОРИТЕТ №2 для ИНО (В РФ пропускаем)
     if catbox_link and not is_ru:
         return RedirectResponse(url=catbox_link, status_code=307, headers=no_cache_headers)
@@ -7335,8 +7329,8 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
         # Если это видео и мы в РФ, а HF еще нет — Telegram Direct может выдать 404,
         # но это всё равно лучше, чем Catbox, который в РФ не работает.
         return RedirectResponse(
-            url=f"https://api.telegram.org/file/bot{token}/{path}", 
-            status_code=307, 
+            url=f"https://api.telegram.org/file/bot{token}/{path}",
+            status_code=307,
             headers={"Cache-Control": "public, max-age=3600"}
         )
 
@@ -7346,7 +7340,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
         if info_shadow:
             path, token = info_shadow
             return RedirectResponse(
-                url=f"https://api.telegram.org/file/bot{token}/{path}", 
+                url=f"https://api.telegram.org/file/bot{token}/{path}",
                 status_code=307,
                 headers={"Cache-Control": "public, max-age=3600"}
             )
@@ -7411,14 +7405,14 @@ async def api_poll_vote(data: PollVote, request: Request, user: dict = Depends(g
          raise HTTPException(status_code=403, detail="Forbidden")
     uid = int(user['id'])
     post = await get_post_by_num(data.post_num)
-    if not post or 'poll_data' not in post.get('content', {}): 
+    if not post or 'poll_data' not in post.get('content', {}):
         raise HTTPException(status_code=404, detail="Poll not found")
     options_count = len(post['content']['poll_data'].get('options', []))
     if not (0 <= data.option_index < options_count):
         raise HTTPException(status_code=400, detail="Invalid option")
     success = await save_poll_vote_db(data.post_num, uid, data.option_index)
     if not success:
-        raise HTTPException(status_code=403, detail="Already voted")    
+        raise HTTPException(status_code=403, detail="Already voted")
     broadcast_data = await get_post_for_broadcast(data.post_num)
     if broadcast_data:
         try:
@@ -7428,7 +7422,7 @@ async def api_poll_vote(data: PollVote, request: Request, user: dict = Depends(g
     return {"status": "success"}
 @app.post("/api/favourites")
 async def api_get_favourite_threads(data: FavouriteThreads):
-    if not data.thread_ids: 
+    if not data.thread_ids:
         return []
     db = await get_pool()
     clean_ids = [int(tid) for tid in data.thread_ids if str(tid).isdigit()]
@@ -7437,15 +7431,15 @@ async def api_get_favourite_threads(data: FavouriteThreads):
 
     placeholders = ','.join('?' for _ in clean_ids)
     query = f"""
-        SELECT 
-            p.post_num, p.board_id, p.content, p.timestamp, p.author_id, 
+        SELECT
+            p.post_num, p.board_id, p.content, p.timestamp, p.author_id,
             t.is_archived, t.is_pinned, t.is_endless, t.thread_type,
             p.is_shadow, p.is_op_hidden, p.stream
-        FROM Posts p 
-        JOIN Threads t ON p.post_num = t.thread_num 
+        FROM Posts p
+        JOIN Threads t ON p.post_num = t.thread_num
         WHERE p.post_num IN ({placeholders})
     """
-    
+
     try:
         async with db.execute(query, clean_ids) as cursor:
             rows = await cursor.fetchall()
@@ -7455,7 +7449,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
                     content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
-                
+
                 res.append({
                     "id": r[0],
                     "board_id": r[1],
@@ -7473,7 +7467,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
             posts = _convert_and_enrich_posts(res)
             await enrich_extra_data(posts)
             for post in posts:
-                post['reply_count'] = 0 
+                post['reply_count'] = 0
                 post['posts_count'] = 1
                 post['anon_count'] = 1
             return posts
@@ -7489,35 +7483,35 @@ async def api_admin_wipe(data: dict = Body(...), user: dict | None = Depends(get
     if not check_perm(user, 'admin'): raise HTTPException(status_code=403, detail="Нужен ранг Admin")
     pid = data.get("post_num")
     if not pid: raise HTTPException(status_code=400, detail="No post ID")
-    
+
     from common.db_pool import get_db_connection as get_pool_conn # Или просто get_pool, но тут использовался контекст
     # В оригинале использовался get_db_connection() который создает новое соединение.
     # Чтобы использовать db_lock эффективно, лучше использовать get_pool().
-    
+
     from common.db_pool import get_pool, db_lock
-    
+
     async with db_lock:
         try:
             db = await get_pool()
             # Чтение можно без транзакции, если мы не боимся фантомов, но для вайпа лучше сразу залочить
             await db.execute("BEGIN IMMEDIATE")
-            
+
             async with db.execute("SELECT author_id FROM Posts WHERE post_num = ?", (pid,)) as cursor:
                 row = await cursor.fetchone()
-            
-            if not row: 
+
+            if not row:
                 await db.execute("COMMIT")
                 raise HTTPException(status_code=404, detail="Not found")
-            
+
             author_id = row[0]
             await db.execute("DELETE FROM Posts WHERE author_id = ?", (author_id,))
             await db.execute("DELETE FROM Threads WHERE op_id = ?", (author_id,))
-            
+
             await db.execute("COMMIT")
-            
+
             log_system_event(f"☢️ WIPE: User {author_id} wiped completely.")
             return {"status": "ok"}
-            
+
         except HTTPException:
             raise
         except Exception as e:
@@ -7527,7 +7521,7 @@ async def api_admin_wipe(data: dict = Body(...), user: dict | None = Depends(get
             raise HTTPException(status_code=500, detail="DB Error")
 @app.get("/api/admin/alerts_history")
 async def api_admin_alerts_history(user: dict = Depends(get_required_user)):
-    if not user.get('is_admin'): 
+    if not user.get('is_admin'):
         raise HTTPException(status_code=404, detail="Not Found")
     alerts = await get_all_alerts_for_admin(limit=50)
     return alerts
@@ -7543,11 +7537,11 @@ async def api_admin_get_users(board_id: str, user: dict = Depends(get_required_u
 async def api_shadow_ban(data: ShadowBanRequest, user: dict = Depends(get_required_user)):
     """
     Выдает теневой бан.
-    Логика: 
+    Логика:
     1. Если передан post_num > 0 -> ищем автора этого поста.
     2. Если post_num == 0 -> используем data.target как прямой ID пользователя.
     """
-    if not check_perm(user, 'mod'): 
+    if not check_perm(user, 'mod'):
         raise HTTPException(status_code=403, detail="Недостаточно прав (нужен Moderator)")
     user_id_to_ban = None
     board_id_of_post = None
@@ -7587,7 +7581,7 @@ async def api_shadow_ban(data: ShadowBanRequest, user: dict = Depends(get_requir
         from common.db_pool import db_lock
         async with db_lock, get_db_connection() as conn:
             await conn.execute(
-                """INSERT INTO AdminActionQueue (action_type, user_id, board_id, expires_at) 
+                """INSERT INTO AdminActionQueue (action_type, user_id, board_id, expires_at)
                    VALUES (?, ?, ?, ?)""",
                 ('shadow_mute', user_id_to_ban, target_board, expires_at)
             )
@@ -7597,9 +7591,9 @@ async def api_shadow_ban(data: ShadowBanRequest, user: dict = Depends(get_requir
             f"👻 SHADOW BAN: Мод {user['id']} забанил {user_id_to_ban} {scope_log} на {data.duration // 60} мин."
         )
         return {
-            "status": "ok", 
-            "user_id": user_id_to_ban, 
-            "board": target_board, 
+            "status": "ok",
+            "user_id": user_id_to_ban,
+            "board": target_board,
             "expires": expires_at
         }
     except Exception as e:
@@ -7615,17 +7609,17 @@ if __name__ == "__main__":
     if sys.platform == 'win32':
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    
+
     while True:
         try:
             print("🚀 Starting server...")
             uvicorn.run(
-                "main:app", 
-                host="0.0.0.0", 
-                port=8000, 
-                reload=False, 
+                "main:app",
+                host="0.0.0.0",
+                port=8000,
+                reload=False,
                 loop="asyncio",
-                proxy_headers=True,     
+                proxy_headers=True,
                 forwarded_allow_ips='*',
                 log_config=None,
                 access_log=False,
