@@ -6682,13 +6682,13 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     )
     try:
         await message.reply(passport_text, parse_mode="HTML")
-    except Exception:
+    except (TelegramBadRequest, TelegramForbiddenError):
         try:
             await message.answer(passport_text, parse_mode="HTML")
-        except Exception:
+        except (TelegramBadRequest, TelegramForbiddenError):
             pass
     try: await message.delete()
-    except Exception: pass
+    except (TelegramBadRequest, TelegramForbiddenError): pass
 @dp.message(Command("ans"))
 async def cmd_admin_answer(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
