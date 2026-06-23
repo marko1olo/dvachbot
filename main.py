@@ -5647,6 +5647,230 @@ async def message_broadcaster(bots: dict[str, Bot]):
         for board_id, bot_instance in bots.items()
     ]
     await asyncio.gather(*tasks)
+async def _process_single_message(worker_name: str, board_id: str, bot_instance: Bot, queue: asyncio.Queue, b_data: dict, msg_data: dict):
+    if not msg_data:
+        await asyncio.sleep(0.05)
+        return
+    if not await validate_message_format(msg_data):
+        return
+    post_num = msg_data['post_num']
+    if post_num in posts_pending_deletion:
+        print(f"[{board_id}] Worker пропустил пост #{post_num}, т.к. он помечен на удаление.")
+        return
+    initial_recipients = msg_data['recipients']
+    content = msg_data['content']
+    content['post_num'] = post_num
+    keyboard = msg_data.get('keyboard')
+    thread_id = msg_data.get('thread_id')
+    delivery_phase = msg_data.get("delivery_phase", "full")
+    if msg_data.get("durable_delivery_id"):
+        initial_recipients = await _remove_already_delivered_recipients(post_num, initial_recipients)
+        msg_data["recipients"] = initial_recipients
+        if not initial_recipients:
+            await _delete_durable_delivery_item(msg_data, "already_delivered")
+            return
+    passive_slice_size = _passive_slice_size_for_content(content, board_id)
+    if (
+        PRIORITY_SPLIT_FANOUT_ENABLED
+        and delivery_phase == "passive"
+        and not thread_id
+        and PASSIVE_MAX_PREEMPTIONS > 0
+        and len(initial_recipients) > passive_slice_size
+        and _queue_has_full_message(queue)
+    ):
+        preemptions = int(msg_data.get("passive_preemptions", 0) or 0)
+        if preemptions < PASSIVE_MAX_PREEMPTIONS:
+            msg_data["passive_preemptions"] = preemptions + 1
+            await queue.put(msg_data)
+            runtime_logger.warning(
+                "delivery_passive_preempted %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": board_id,
+                        "post_num": post_num,
+                        "preemptions": msg_data["passive_preemptions"],
+                        "max_preemptions": PASSIVE_MAX_PREEMPTIONS,
+                        "queue_size": queue.qsize(),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            return
+    active_recipients = set()
+    if thread_id:
+        active_recipients = {
+            uid for uid in initial_recipients
+            if uid > 0 and uid not in b_data['users']['banned']
+        }
+    else:
+        user_states = b_data.get('user_state', {})
+        recipients_on_main = {
+            uid for uid in initial_recipients
+            if uid > 0 and user_states.get(uid, {}).get('location', 'main') == 'main'
+        }
+        active_recipients = {uid for uid in recipients_on_main if uid not in b_data['users']['banned']}
+    if not active_recipients:
+        if msg_data.get("durable_delivery_id"):
+            await _delete_durable_delivery_item(msg_data, "no_active_recipients")
+        return
+    try:
+        original_recipients_for_post = int(msg_data.get("original_recipients") or len(active_recipients))
+    except (TypeError, ValueError):
+        original_recipients_for_post = len(active_recipients)
+    recipients_to_send = active_recipients
+    passive_recipients_for_later = set()
+    delivery_phase_for_send = delivery_phase
+    deferred_reason = None
+    planned_passive_durable_id = None
+    if (
+        delivery_phase == "full"
+        and PRIORITY_SPLIT_FANOUT_ENABLED
+        and not thread_id
+    ):
+        priority_recipients, passive_recipients = _split_recipients_for_delivery(board_id, active_recipients)
+        if priority_recipients and len(passive_recipients) >= PRIORITY_SPLIT_MIN_PASSIVE:
+            recipients_to_send = set(priority_recipients)
+            passive_recipients_for_later = set(passive_recipients)
+            delivery_phase_for_send = "priority"
+            deferred_reason = "split_priority_first"
+    elif (
+        delivery_phase == "passive"
+        and PRIORITY_SPLIT_FANOUT_ENABLED
+        and not thread_id
+        and len(active_recipients) > passive_slice_size
+    ):
+        ordered_passive = list(active_recipients)
+        recipients_to_send = set(ordered_passive[:passive_slice_size])
+        passive_recipients_for_later = set(ordered_passive[passive_slice_size:])
+        delivery_phase_for_send = "passive_slice"
+        deferred_reason = "passive_slice"
+    reply_info_copy = {}
+    async with storage_lock:
+        if post_num in post_to_messages:
+            reply_info_copy = post_to_messages[post_num].copy()
+    started_at = time.time()
+    enqueued_at = msg_data.get("enqueued_at")
+    queue_wait_sec = None
+    if enqueued_at is not None:
+        try:
+            queue_wait_sec = max(0.0, started_at - float(enqueued_at))
+        except (TypeError, ValueError):
+            queue_wait_sec = None
+    current_deliveries[board_id] = {
+        "post_num": post_num,
+        "started_at": started_at,
+        "enqueued_at": enqueued_at,
+        "queue_wait_sec": round(queue_wait_sec, 3) if queue_wait_sec is not None else None,
+        "recipients": len(recipients_to_send),
+        "original_recipients": original_recipients_for_post,
+        "passive_deferred": len(passive_recipients_for_later),
+        "passive_slice_size": passive_slice_size,
+        "phase": delivery_phase_for_send,
+        "thread_id": thread_id,
+    }
+    if passive_recipients_for_later and not msg_data.get("durable_delivery_id"):
+        planned_passive_item = _build_passive_queue_item(
+            PassiveQueueItemParams(
+                source_item=msg_data,
+                recipients=passive_recipients_for_later,
+                post_num=post_num,
+                original_recipients=original_recipients_for_post,
+                enqueued_at=enqueued_at,
+                started_at=started_at,
+            )
+        )
+        planned_passive_durable_id = await _persist_durable_delivery_item(
+            board_id,
+            planned_passive_item,
+            "planned_before_send",
+        )
+    budget_deferred_count = 0
+    delivered_now_count = 0
+    try:
+        delivery_results = await send_message_to_users(
+            bot_instance=bot_instance,
+            board_id=board_id,
+            recipients=recipients_to_send,
+            content=content,
+            reply_info=reply_info_copy,
+            keyboard=keyboard,
+            verbose=True,
+            queue_enqueued_at=enqueued_at,
+            queue_wait_sec=queue_wait_sec,
+            delivery_phase=delivery_phase_for_send,
+            delivery_original_recipients=original_recipients_for_post,
+            delivery_deferred_recipients=len(passive_recipients_for_later),
+        )
+        delivered_now_count = len(delivery_results)
+        budget_deferred = getattr(delivery_results, "remaining_recipients", set())
+        if budget_deferred:
+            budget_deferred_count = len(budget_deferred)
+            passive_recipients_for_later.update(budget_deferred)
+            budget_reason = getattr(delivery_results, "interrupted_reason", None) or "phase_budget"
+            deferred_reason = f"{deferred_reason}+{budget_reason}" if deferred_reason else budget_reason
+    except Exception:
+        if planned_passive_durable_id and passive_recipients_for_later:
+            planned_passive_item["durable_delivery_id"] = planned_passive_durable_id
+            await queue.put(planned_passive_item)
+            runtime_logger.warning(
+                "delivery_durable_requeued_after_send_error %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "id": planned_passive_durable_id,
+                        "board_id": board_id,
+                        "post_num": post_num,
+                        "deferred": len(passive_recipients_for_later),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        raise
+    finally:
+        current_delivery = current_deliveries.get(board_id)
+        if current_delivery and current_delivery.get("post_num") == post_num:
+            current_deliveries.pop(board_id, None)
+    if passive_recipients_for_later:
+        passive_item = _build_passive_queue_item(
+            PassiveQueueItemParams(
+                source_item=msg_data,
+                recipients=passive_recipients_for_later,
+                post_num=post_num,
+                original_recipients=original_recipients_for_post,
+                enqueued_at=enqueued_at,
+                started_at=started_at,
+            )
+        )
+        if planned_passive_durable_id:
+            passive_item["durable_delivery_id"] = planned_passive_durable_id
+        await _persist_durable_delivery_item(board_id, passive_item, "deferred_after_send")
+        await queue.put(passive_item)
+        runtime_logger.info(
+            "delivery_passive_deferred %s",
+            json.dumps(
+                {
+                    "ts": round(time.time(), 3),
+                    "board_id": board_id,
+                    "post_num": post_num,
+                    "phase": delivery_phase_for_send,
+                    "reason": deferred_reason,
+                    "requested_now": len(recipients_to_send),
+                    "sent_now": delivered_now_count,
+                    "deferred": len(passive_recipients_for_later),
+                    "budget_deferred": budget_deferred_count,
+                    "queue_size": queue.qsize(),
+                    "passive_slice_size": passive_slice_size,
+                    "content_type": str(content.get("type")),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+    elif msg_data.get("durable_delivery_id"):
+        await _delete_durable_delivery_item(msg_data, "completed")
 async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
     """
     Воркер обработки очереди сообщений.
@@ -5657,230 +5881,7 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
     while True:
         msg_data = await queue.get()
         try:
-            if not msg_data:
-                await asyncio.sleep(0.05)
-                continue
-            if not await validate_message_format(msg_data):
-                continue
-            post_num = msg_data['post_num']
-            if post_num in posts_pending_deletion:
-                print(f"[{board_id}] Worker пропустил пост #{post_num}, т.к. он помечен на удаление.")
-                continue
-            initial_recipients = msg_data['recipients']
-            content = msg_data['content']
-            content['post_num'] = post_num
-            keyboard = msg_data.get('keyboard') 
-            thread_id = msg_data.get('thread_id')
-
-            delivery_phase = msg_data.get("delivery_phase", "full")
-            if msg_data.get("durable_delivery_id"):
-                initial_recipients = await _remove_already_delivered_recipients(post_num, initial_recipients)
-                msg_data["recipients"] = initial_recipients
-                if not initial_recipients:
-                    await _delete_durable_delivery_item(msg_data, "already_delivered")
-                    continue
-            passive_slice_size = _passive_slice_size_for_content(content, board_id)
-            if (
-                PRIORITY_SPLIT_FANOUT_ENABLED
-                and delivery_phase == "passive"
-                and not thread_id
-                and PASSIVE_MAX_PREEMPTIONS > 0
-                and len(initial_recipients) > passive_slice_size
-                and _queue_has_full_message(queue)
-            ):
-                preemptions = int(msg_data.get("passive_preemptions", 0) or 0)
-                if preemptions < PASSIVE_MAX_PREEMPTIONS:
-                    msg_data["passive_preemptions"] = preemptions + 1
-                    await queue.put(msg_data)
-                    runtime_logger.warning(
-                        "delivery_passive_preempted %s",
-                        json.dumps(
-                            {
-                                "ts": round(time.time(), 3),
-                                "board_id": board_id,
-                                "post_num": post_num,
-                                "preemptions": msg_data["passive_preemptions"],
-                                "max_preemptions": PASSIVE_MAX_PREEMPTIONS,
-                                "queue_size": queue.qsize(),
-                            },
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
-                    )
-                    continue
-            active_recipients = set()
-            if thread_id:
-                active_recipients = {
-                    uid for uid in initial_recipients
-                    if uid > 0 and uid not in b_data['users']['banned']
-                }
-            else:
-                user_states = b_data.get('user_state', {})
-                recipients_on_main = {
-                    uid for uid in initial_recipients
-                    if uid > 0 and user_states.get(uid, {}).get('location', 'main') == 'main'
-                }
-                active_recipients = {uid for uid in recipients_on_main if uid not in b_data['users']['banned']}
-            if not active_recipients:
-                if msg_data.get("durable_delivery_id"):
-                    await _delete_durable_delivery_item(msg_data, "no_active_recipients")
-                continue
-            try:
-                original_recipients_for_post = int(msg_data.get("original_recipients") or len(active_recipients))
-            except (TypeError, ValueError):
-                original_recipients_for_post = len(active_recipients)
-            recipients_to_send = active_recipients
-            passive_recipients_for_later = set()
-            delivery_phase_for_send = delivery_phase
-            deferred_reason = None
-            planned_passive_durable_id = None
-            if (
-                delivery_phase == "full"
-                and PRIORITY_SPLIT_FANOUT_ENABLED
-                and not thread_id
-            ):
-                priority_recipients, passive_recipients = _split_recipients_for_delivery(board_id, active_recipients)
-                if priority_recipients and len(passive_recipients) >= PRIORITY_SPLIT_MIN_PASSIVE:
-                    recipients_to_send = set(priority_recipients)
-                    passive_recipients_for_later = set(passive_recipients)
-                    delivery_phase_for_send = "priority"
-                    deferred_reason = "split_priority_first"
-            elif (
-                delivery_phase == "passive"
-                and PRIORITY_SPLIT_FANOUT_ENABLED
-                and not thread_id
-                and len(active_recipients) > passive_slice_size
-            ):
-                ordered_passive = list(active_recipients)
-                recipients_to_send = set(ordered_passive[:passive_slice_size])
-                passive_recipients_for_later = set(ordered_passive[passive_slice_size:])
-                delivery_phase_for_send = "passive_slice"
-                deferred_reason = "passive_slice"
-            reply_info_copy = {}
-            async with storage_lock:
-                if post_num in post_to_messages:
-                    reply_info_copy = post_to_messages[post_num].copy()
-            started_at = time.time()
-            enqueued_at = msg_data.get("enqueued_at")
-            queue_wait_sec = None
-            if enqueued_at is not None:
-                try:
-                    queue_wait_sec = max(0.0, started_at - float(enqueued_at))
-                except (TypeError, ValueError):
-                    queue_wait_sec = None
-            current_deliveries[board_id] = {
-                "post_num": post_num,
-                "started_at": started_at,
-                "enqueued_at": enqueued_at,
-                "queue_wait_sec": round(queue_wait_sec, 3) if queue_wait_sec is not None else None,
-                "recipients": len(recipients_to_send),
-                "original_recipients": original_recipients_for_post,
-                "passive_deferred": len(passive_recipients_for_later),
-                "passive_slice_size": passive_slice_size,
-                "phase": delivery_phase_for_send,
-                "thread_id": thread_id,
-            }
-            if passive_recipients_for_later and not msg_data.get("durable_delivery_id"):
-                planned_passive_item = _build_passive_queue_item(
-                    PassiveQueueItemParams(
-                        source_item=msg_data,
-                        recipients=passive_recipients_for_later,
-                        post_num=post_num,
-                        original_recipients=original_recipients_for_post,
-                        enqueued_at=enqueued_at,
-                        started_at=started_at,
-                    )
-                )
-                planned_passive_durable_id = await _persist_durable_delivery_item(
-                    board_id,
-                    planned_passive_item,
-                    "planned_before_send",
-                )
-            budget_deferred_count = 0
-            delivered_now_count = 0
-            try:
-                delivery_results = await send_message_to_users(
-                    bot_instance=bot_instance,
-                    board_id=board_id,
-                    recipients=recipients_to_send,
-                    content=content,
-                    reply_info=reply_info_copy,
-                    keyboard=keyboard,
-                    verbose=True,
-                    queue_enqueued_at=enqueued_at,
-                    queue_wait_sec=queue_wait_sec,
-                    delivery_phase=delivery_phase_for_send,
-                    delivery_original_recipients=original_recipients_for_post,
-                    delivery_deferred_recipients=len(passive_recipients_for_later),
-                )
-                delivered_now_count = len(delivery_results)
-                budget_deferred = getattr(delivery_results, "remaining_recipients", set())
-                if budget_deferred:
-                    budget_deferred_count = len(budget_deferred)
-                    passive_recipients_for_later.update(budget_deferred)
-                    budget_reason = getattr(delivery_results, "interrupted_reason", None) or "phase_budget"
-                    deferred_reason = f"{deferred_reason}+{budget_reason}" if deferred_reason else budget_reason
-            except Exception:
-                if planned_passive_durable_id and passive_recipients_for_later:
-                    planned_passive_item["durable_delivery_id"] = planned_passive_durable_id
-                    await queue.put(planned_passive_item)
-                    runtime_logger.warning(
-                        "delivery_durable_requeued_after_send_error %s",
-                        json.dumps(
-                            {
-                                "ts": round(time.time(), 3),
-                                "id": planned_passive_durable_id,
-                                "board_id": board_id,
-                                "post_num": post_num,
-                                "deferred": len(passive_recipients_for_later),
-                            },
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
-                    )
-                raise
-            finally:
-                current_delivery = current_deliveries.get(board_id)
-                if current_delivery and current_delivery.get("post_num") == post_num:
-                    current_deliveries.pop(board_id, None)
-            if passive_recipients_for_later:
-                passive_item = _build_passive_queue_item(
-                    PassiveQueueItemParams(
-                        source_item=msg_data,
-                        recipients=passive_recipients_for_later,
-                        post_num=post_num,
-                        original_recipients=original_recipients_for_post,
-                        enqueued_at=enqueued_at,
-                        started_at=started_at,
-                    )
-                )
-                if planned_passive_durable_id:
-                    passive_item["durable_delivery_id"] = planned_passive_durable_id
-                await _persist_durable_delivery_item(board_id, passive_item, "deferred_after_send")
-                await queue.put(passive_item)
-                runtime_logger.info(
-                    "delivery_passive_deferred %s",
-                    json.dumps(
-                        {
-                            "ts": round(time.time(), 3),
-                            "board_id": board_id,
-                            "post_num": post_num,
-                            "phase": delivery_phase_for_send,
-                            "reason": deferred_reason,
-                            "requested_now": len(recipients_to_send),
-                            "sent_now": delivered_now_count,
-                            "deferred": len(passive_recipients_for_later),
-                            "budget_deferred": budget_deferred_count,
-                            "queue_size": queue.qsize(),
-                            "passive_slice_size": passive_slice_size,
-                            "content_type": str(content.get("type")),
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                )
-            elif msg_data.get("durable_delivery_id"):
-                await _delete_durable_delivery_item(msg_data, "completed")
+            await _process_single_message(worker_name, board_id, bot_instance, queue, b_data, msg_data)
         except asyncio.CancelledError:
             break
         except Exception as e:
