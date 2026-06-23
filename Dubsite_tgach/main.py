@@ -1284,7 +1284,10 @@ async def global_data_middleware(request: Request, call_next):
                     try:
                         token_uns = signer.unsign(raw_token, max_age=31536000).decode()
                         guest_id = generate_negative_id(token_uns)
-                    except: pass
+                    except BadSignature:
+                        pass
+                    except Exception as e:
+                        logger.warning(f"Error parsing guest_token: {e}")
             request.state.user_hash = get_user_hash(guest_id) if guest_id else ""
     return await call_next(request)
 @app.get("/.env", include_in_schema=False)
@@ -6073,7 +6076,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
