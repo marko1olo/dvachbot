@@ -6555,7 +6555,7 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     if not board_id: return
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     user_id = message.from_user.id
@@ -8711,7 +8711,7 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
 async def cmd_roll(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     result = random.randint(1, 100)
@@ -8754,7 +8754,7 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
 async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     if board_id == 'int':
@@ -8834,7 +8834,7 @@ async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream:
 async def cmd_gopnik(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     if board_id == 'int': # Отключаем на int
@@ -8881,7 +8881,7 @@ async def cmd_gopnik(message: types.Message, board_id: str | None, stream: str =
 async def cmd_schizo(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     if board_id == 'int':
@@ -9104,7 +9104,7 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
 async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     if board_id == 'int':
@@ -9155,7 +9155,7 @@ async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 
 async def cmd_wh40k(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     b_data = board_data[board_id]
@@ -12428,7 +12428,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
 async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     user_id = message.from_user.id
@@ -12497,7 +12497,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
 @dp.message(Command("top"))
 async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     from common.db_pool import get_pool, db_lock
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -12563,7 +12563,7 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
 async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     b_data = board_data[board_id]
@@ -14864,7 +14864,7 @@ async def cmd_roll(message: types.Message, board_id: str | None, stream: str = '
 
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: 
         try: await message.delete()
@@ -17032,7 +17032,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not message.reply_to_message:
         msg = "⚠️ Ответьте на подозрительное сообщение командой <code>/report</code>, чтобы позвать модераторов."
@@ -17050,7 +17050,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     
     sent_confirm = await message.answer(confirm_msg)
     try: spawn_task(delete_message_after_delay(sent_confirm, 10))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     # Get author id of reported message
     author_id = None
@@ -17268,7 +17268,7 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
     
     if not HAS_WORDCLOUD or not GRAPH_LIBS_AVAILABLE:
         await message.answer("❌ Компоненты WordCloud или Matplotlib не установлены.")
