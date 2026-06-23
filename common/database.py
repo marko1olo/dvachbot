@@ -1,3 +1,4 @@
+from typing import overload
 import aiosqlite
 """
 This module provides an asynchronous interface for managing a SQLite database 
@@ -2447,12 +2448,37 @@ async def get_post_author_by_copy(recipient_id: int, message_id: int) -> int | N
                 return result[0] if result else None
         except Exception:
             return None
-async def get_post_copies(post_num: int) -> list[tuple[int, int]]:
+@overload
+async def get_post_copies(post_num: int) -> list[tuple[int, int]]: ...
+
+@overload
+async def get_post_copies(post_num: list[int]) -> dict[int, list[tuple[int, int]]]: ...
+
+async def get_post_copies(post_num: int | list[int]) -> list[tuple[int, int]] | dict[int, list[tuple[int, int]]]:
     """
-    Возвращает список всех копий для указанного поста.
+    Возвращает список всех копий для указанного поста,
+    либо словарь со списками копий для нескольких постов.
     """
     from common.db_pool import get_pool, db_lock
     
+    if isinstance(post_num, list):
+        if not post_num:
+            return {}
+        async with db_lock:
+            try:
+                db = await get_pool()
+                placeholders = ','.join('?' for _ in post_num)
+                query = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
+
+                result = {num: [] for num in post_num}
+                async with db.execute(query, post_num) as cursor:
+                    rows = await cursor.fetchall()
+                    for p_num, recipient_id, message_id in rows:
+                        result[p_num].append((recipient_id, message_id))
+                return result
+            except Exception:
+                return {num: [] for num in post_num}
+
     async with db_lock:
         try:
             db = await get_pool()
