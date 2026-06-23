@@ -17293,28 +17293,30 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
         )
         posts = await rows.fetchall()
         
-        text_corpus = ""
-        for row in posts:
-            try:
-                content_dict = json.loads(row[0])
-                text = ""
-                if content_dict.get('type') == 'text':
-                    text = content_dict.get('text', '')
-                elif content_dict.get('type') in ['photo', 'video', 'animation', 'document']:
-                    text = content_dict.get('caption', '')
-                
-                if text:
-                    # Remove HTML tags
-                    text = re.sub(r'<[^>]+>', ' ', text)
-                    # Remove URLs
-                    text = re.sub(r'http[s]?://\S+', ' ', text)
-                    text_corpus += text + " "
-            except Exception:
-                continue
-                
-        words = re.findall(r'[а-яА-Яa-zA-Z]{3,}', text_corpus.lower())
-        filtered_words = [w for w in words if w not in STOP_WORDS]
-        final_text = " ".join(filtered_words)
+        def process_posts(posts_list):
+            text_corpus = ""
+            for row in posts_list:
+                try:
+                    content_dict = json.loads(row[0])
+                    text = ""
+                    if content_dict.get('type') == 'text':
+                        text = content_dict.get('text', '')
+                    elif content_dict.get('type') in ['photo', 'video', 'animation', 'document']:
+                        text = content_dict.get('caption', '')
+
+                    if text:
+                        # Remove HTML tags
+                        text = re.sub(r'<[^>]+>', ' ', text)
+                        # Remove URLs
+                        text = re.sub(r'http[s]?://\S+', ' ', text)
+                        text_corpus += text + " "
+                except Exception:
+                    continue
+
+            words = re.findall(r'[а-яА-Яa-zA-Z]{3,}', text_corpus.lower())
+            return " ".join([w for w in words if w not in STOP_WORDS])
+
+        final_text = await asyncio.to_thread(process_posts, posts)
         
         if not final_text.strip():
             await status_message.edit_text("❌ Хуй там плавал, а не облако слов. Вы нафлудили слишком мало текста за сутки.")
