@@ -168,3 +168,46 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+from Dubsite_tgach.main import generate_negative_id
+import hashlib
+
+class TestGenerateNegativeId(unittest.TestCase):
+    def test_deterministic_output(self):
+        """Ensure calling with the same token multiple times produces the exact same integer output."""
+        token = "deterministic_token"
+        result1 = generate_negative_id(token)
+        result2 = generate_negative_id(token)
+        result3 = generate_negative_id(token)
+        self.assertEqual(result1, result2)
+        self.assertEqual(result1, result3)
+
+    def test_different_tokens(self):
+        """Ensure calling with different tokens produces different integer outputs."""
+        token1 = "token_alpha"
+        token2 = "token_beta"
+        result1 = generate_negative_id(token1)
+        result2 = generate_negative_id(token2)
+        self.assertNotEqual(result1, result2)
+
+    def test_negative_range(self):
+        """Ensure the output is less than or equal to -1."""
+        tokens = ["test1", "hello", "12345", "long_token_" * 10]
+        for token in tokens:
+            result = generate_negative_id(token)
+            self.assertIsInstance(result, int)
+            self.assertLessEqual(result, -1)
+            self.assertGreaterEqual(result, -2147483648)
+
+    def test_known_values(self):
+        """Ensure the output matches manual dynamic calculation for a specific token."""
+        token = "test_token"
+        # Manual calculation to verify correctness of the hash and integer logic
+        hash_val = hashlib.sha256(token.encode()).hexdigest()
+        val = int(hash_val[:8], 16)
+        expected_result = -(val % 2147483647) - 1
+
+        result = generate_negative_id(token)
+        self.assertEqual(result, expected_result)
+        # Check against the pre-calculated expected value for "test_token"
+        self.assertEqual(result, -1275787636)
