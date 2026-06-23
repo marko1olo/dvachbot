@@ -1889,7 +1889,8 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                     file_info['original_file_id'] = content['photo'][-1].get('file_id')
                     file_info['thumbnail_file_id'] = content['photo'][0].get('file_id')
                     file_info['type'] = 'image'
-                except: pass
+                except (IndexError, AttributeError) as e:
+                    logger.warning(f"Error parsing photo info: {e}")
             else:
                 f_obj = content.get(ctype) or content
                 f_id = f_obj.get('file_id')
@@ -6073,7 +6074,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
