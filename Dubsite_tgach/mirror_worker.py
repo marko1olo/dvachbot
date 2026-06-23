@@ -5,7 +5,6 @@ from common.database import (
     get_pending_mirror_tasks, reschedule_mirror_task, remove_mirror_task, 
     add_file_mirror, get_file_owner_id, get_file_mirrors 
 )
-from common.db_pool import get_pool
 from site_tgach.catbox import upload_url_to_catbox, upload_file_to_catbox
 from common.bot_pool import global_bot_pool
 from aiogram.exceptions import TelegramBadRequest
