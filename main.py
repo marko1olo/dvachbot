@@ -2875,8 +2875,8 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
         except Exception as e:
             try:
                 await db.execute("ROLLBACK")
-            except Exception:
-                pass
+            except Exception as rollback_err:
+                print(f"⚠️ Ошибка ROLLBACK при верификации для {user_id}: {rollback_err}")
             print(f"⚠️ Ошибка верификации для {user_id}: {e}")
 async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
     """
@@ -2929,7 +2929,8 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                     
                 except Exception as e:
                     try: await db.execute("ROLLBACK")
-                    except Exception: pass
+                    except Exception as rollback_err:
+                        print(f"⚠️ Ошибка ROLLBACK в delete_user_posts: {rollback_err}")
                     
                     if "locked" in str(e).lower() or "busy" in str(e).lower():
                         await asyncio.sleep(0.2 * (attempt + 1))
@@ -10696,7 +10697,8 @@ async def sync_boards_with_config():
                 return
             except Exception as e:
                 try: await db.execute("ROLLBACK")
-                except Exception: pass
+                except Exception as rollback_err:
+                    print(f"⚠️ Ошибка ROLLBACK при синхронизации досок с БД: {rollback_err}")
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await asyncio.sleep(0.5 * (attempt + 1))
