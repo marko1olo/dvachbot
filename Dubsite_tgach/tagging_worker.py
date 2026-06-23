@@ -208,45 +208,42 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
 # ПОЛУЧЕНИЕ ЗАДАЧ
 # ==========================================
 async def get_tasks(db) -> list[dict]:
-    file_owners = {}
-    try:
-        async with db.execute("SELECT file_id, bot_id FROM FileOwners") as cursor:
-            async for row in cursor:
-                file_owners[row[0]] = row[1]
-    except Exception: pass
-    
     tasks = []
     # 1. Основная очередь из реестра
     query_registry = f"""
-        SELECT file_id, file_type
-        FROM FileRegistry
-        WHERE file_type IN ('image', 'photo') 
-        AND (tags IS NULL OR tags = '')
-        ORDER BY created_at DESC
+        SELECT r.file_id, r.file_type, o.bot_id
+        FROM FileRegistry r
+        LEFT JOIN FileOwners o ON r.file_id = o.file_id
+        WHERE r.file_type IN ('image', 'photo')
+        AND (r.tags IS NULL OR r.tags = '')
+        ORDER BY r.created_at DESC
         LIMIT {BATCH_SIZE * 5}
     """
     try:
         async with db.execute(query_registry) as cursor:
             async for row in cursor:
-                tasks.append({'fid': row[0], 'type': row[1], 'bot_id': file_owners.get(row[0])})
+                tasks.append({'fid': row[0], 'type': row[1], 'bot_id': row[2]})
     except Exception as e:
         logger.error(f"DB Error getting registry tasks: {e}")
 
     # 2. Поиск пропущенных файлов (Gaps) в последних 200 постах
     if len(tasks) < BATCH_SIZE:
         query_gaps = """
-            SELECT DISTINCT json_extract(j.value, '$.original_file_id') as fid, json_extract(j.value, '$.type') as ftype
+            SELECT DISTINCT json_extract(j.value, '$.original_file_id') as fid,
+                   json_extract(j.value, '$.type') as ftype,
+                   o.bot_id
             FROM Posts p, json_each(p.content, '$.files') j
+            LEFT JOIN FileOwners o ON json_extract(j.value, '$.original_file_id') = o.file_id
             WHERE p.post_num > (SELECT MAX(post_num) - 250 FROM Posts)
-              AND ftype IN ('image', 'photo')
-              AND fid NOT IN (SELECT file_id FROM FileRegistry)
+              AND json_extract(j.value, '$.type') IN ('image', 'photo')
+              AND json_extract(j.value, '$.original_file_id') NOT IN (SELECT file_id FROM FileRegistry)
             LIMIT 10
         """
         try:
             async with db.execute(query_gaps) as cursor:
                 async for row in cursor:
                     if not any(t['fid'] == row[0] for t in tasks):
-                        tasks.append({'fid': row[0], 'type': row[1], 'bot_id': file_owners.get(row[0])})
+                        tasks.append({'fid': row[0], 'type': row[1], 'bot_id': row[2]})
         except Exception: pass
 
     return tasks[:BATCH_SIZE]
