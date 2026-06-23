@@ -1796,11 +1796,11 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
         try:
             db = await get_pool()
             placeholders = ','.join('?' for _ in all_post_ids)
-            query = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
+            query = f"SELECT target_post_num, json_group_array(source_post_num) FROM Backlinks WHERE target_post_num IN ({placeholders}) GROUP BY target_post_num"
             async with db.execute(query, all_post_ids) as cursor:
                 async for row in cursor:
-                    target, source = row
-                    backlinks_map[target].append(source)
+                    target, sources_json = row
+                    backlinks_map[target].extend(json.loads(sources_json))
         except Exception as e:
             print(f"Backlinks fetch error: {e}")
 
@@ -2170,10 +2170,10 @@ async def enrich_heavy_data(posts: List[dict]):
             try:
                 db = await get_pool()
                 placeholders = ','.join('?' for _ in ids)
-                q = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
+                q = f"SELECT target_post_num, json_group_array(source_post_num) FROM Backlinks WHERE target_post_num IN ({placeholders}) GROUP BY target_post_num"
                 res = defaultdict(list)
                 async with db.execute(q, ids) as cursor:
-                    async for row in cursor: res[row[0]].append(row[1])
+                    async for row in cursor: res[row[0]].extend(json.loads(row[1]))
                 return res
             except: return {}
         tasks.append(fetch_backlinks_task(all_post_ids))
@@ -6073,7 +6073,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
