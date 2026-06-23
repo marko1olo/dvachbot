@@ -240,22 +240,31 @@ class ThreadImporter:
             target_url = target_url.replace('.html', '.json')
 
         logger.info(f"🌐 Fetching JSON: {target_url}")
-        try:
-            MAX_JSON_SIZE = 10 * 1024 * 1024 
-            async with self.client.stream("GET", target_url, follow_redirects=True) as response:
-                if response.status_code != 200:
-                    raise Exception(f"HTTP {response.status_code}")
-                data_accumulated = b""
-                async for chunk in response.aiter_bytes():
-                    data_accumulated += chunk
-                    if len(data_accumulated) > MAX_JSON_SIZE:
-                        raise Exception("JSON too large (Limit 10MB)")
-                return json.loads(data_accumulated)
-        except Exception as e:
-            logger.error(f"Fetch error: {e}")
-            raise e
-        except json.JSONDecodeError:
-            raise Exception("Server returned non-JSON response")
+        MAX_JSON_SIZE = 10 * 1024 * 1024
+        retries = 5
+
+        for attempt in range(retries):
+            try:
+                async with self.client.stream("GET", target_url, follow_redirects=True) as response:
+                    if response.status_code != 200:
+                        raise Exception(f"HTTP {response.status_code}")
+                    data_accumulated = b""
+                    async for chunk in response.aiter_bytes():
+                        data_accumulated += chunk
+                        if len(data_accumulated) > MAX_JSON_SIZE:
+                            raise Exception("JSON too large (Limit 10MB)")
+                    try:
+                        return json.loads(data_accumulated)
+                    except json.JSONDecodeError:
+                        raise Exception("Server returned non-JSON response")
+            except Exception as e:
+                # Do not retry on these specific data errors
+                if str(e) == "Server returned non-JSON response" or str(e) == "JSON too large (Limit 10MB)":
+                    raise
+                logger.error(f"Fetch error: {e}")
+                if attempt == retries - 1:
+                    raise Exception("Failed to fetch resource after retries")
+                await asyncio.sleep(1)
 
     def extract_posts_data(self, json_data: Any) -> List[Dict]:
         if isinstance(json_data, dict):
