@@ -186,9 +186,8 @@ class ThreadImporter:
                     verify=False, 
                     http2=False, 
                     timeout=90.0,
-                    proxy=PROXY_URL,
                     cookies=req_cookies,
-                    transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
+                    transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2, proxy=PROXY_URL)
                 ) as media_client:
                     resp = await media_client.get(url, headers=req_headers)
                 
@@ -479,7 +478,8 @@ class ThreadImporter:
             local_address="0.0.0.0", # Принудительный IPv4 (Fix для OpenVPN)
             retries=3,
             verify=False,
-            http2=False              # Строго HTTP/1.1
+            http2=False,             # Строго HTTP/1.1
+            proxy=PROXY_URL
         )
 
         async with httpx.AsyncClient(
@@ -488,7 +488,6 @@ class ThreadImporter:
             headers=headers, 
             cookies=cookies,
             trust_env=True,
-            proxy=PROXY_URL,
             timeout=180.0
         ) as client:
             self.client = client
