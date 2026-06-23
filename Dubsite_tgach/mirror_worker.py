@@ -64,17 +64,20 @@ async def _process_single_task(task):
         fresh_file_id = file_id 
         download_success = False # Флаг успешного скачивания
         
+        file_info = None
+
         try:
             file_info = await bot.get_file(file_id)
             fresh_file_id = file_info.file_id 
             
-            if file_info.file_path:
+            if file_info and getattr(file_info, "file_path", None):
                 _, ext = os.path.splitext(file_info.file_path)
                 if ext: file_ext = ext
 
-            tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
-            if mirror_type == 'catbox':
-                success_link = await upload_url_to_catbox(tg_url)
+            if file_info and getattr(file_info, "file_path", None):
+                tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+                if mirror_type == 'catbox':
+                    success_link = await upload_url_to_catbox(tg_url)
         except TelegramBadRequest as e:
             if "file_id_invalid" in str(e).lower() or "wrong file_id" in str(e).lower():
                 logger.error(f"❌ File {file_id[:10]} is dead in TG. Removing task.")
