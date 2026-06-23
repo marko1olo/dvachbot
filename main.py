@@ -506,6 +506,7 @@ reply_coverage_updated_at = 0.0
 network_retry_state = defaultdict(lambda: {'attempt': 0, 'last_error_time': 0})
 GLOBAL_BOTS = {} # Словарь для хранения всех экземпляров ботов
 is_shutting_down = False
+shutdown_event = threading.Event()
 drain_shutdown_requested = False
 drain_shutdown_requested_at = 0.0
 event_loop_stall_watchdog_started = False
@@ -2171,6 +2172,7 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
     if is_shutting_down:
         return
     is_shutting_down = True
+    shutdown_event.set()
     
     # Импортируем лок для безопасного доступа к БД
     from common.db_pool import get_pool, db_lock, close_pool
@@ -16701,7 +16703,7 @@ def _event_loop_stall_watchdog_loop():
                     print(f"⚠️ [WATCHDOG] Failed to write event-loop stall dump: {type(exc).__name__}: {exc}")
                 except Exception:
                     pass
-        time.sleep(5)
+        shutdown_event.wait(5)
 
 def start_event_loop_stall_watchdog():
     global event_loop_stall_watchdog_started
