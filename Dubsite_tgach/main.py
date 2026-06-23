@@ -4935,7 +4935,8 @@ async def api_create_post(
                         logger.error(f"Delayed bump failed: {e}")
 
                 spawn_task(delayed_bump(board_id, final_thread_id, stream, nm))
-        except: pass
+        except Exception as e:
+            logger.error(f"Failed to setup delayed bump: {e}")
     elif post_mode == 'reply' and thread_op_num:
         async with get_db_connection() as conn:
             row = await (await conn.execute("SELECT is_endless FROM Threads WHERE thread_id = ?", (str(thread_op_num),))).fetchone()
@@ -6073,7 +6074,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
