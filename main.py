@@ -2181,7 +2181,9 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
     try:
         await dp.stop_polling()
         print("⏸ Polling остановлен.")
-    except Exception: pass
+    except Exception as e:
+        print(f"⚠️ Ошибка при остановке polling: {e}")
+        runtime_logger.warning(f"Ошибка при остановке polling: {e}")
 
     # Сброс WAL на диск
     print("💾 Сброс данных из WAL на диск...")
