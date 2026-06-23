@@ -8,7 +8,8 @@ def patch_main():
     # 1. Add ROAST imports
     import_str_old = "    SUMMARIZE_PROMPTS_BOARD, SUMMARIZE_PROMPTS_BOARD_EN, SUMMARIZE_PROMPTS_BOARD_JP,"
     import_str_new = import_str_old + "\n    ROAST_PROMPTS, ROAST_PROMPTS_EN, ROAST_PROMPTS_JP,"
-    content = content.replace(import_str_old, import_str_new)
+    if "ROAST_PROMPTS," not in content:
+        content = content.replace(import_str_old, import_str_new)
 
     # 2. Add ROAST_COOLDOWN and clean_html_for_tg
     cooldown_old = "SUMMARIZE_COOLDOWN = 60 * 30"
@@ -32,14 +33,57 @@ def clean_html_for_tg(text: str) -> str:
     # Very rudimentary unclosed tag fix:
     # Just rely on the prompt instructing the LLM, and escape any raw < that is not part of a known tag
     text = re.sub(r'<(?!/?(b|i|u|s|code|pre|a\\b)[>\\s])', '&lt;', text)
-    return text
+
+    # Balance tags
+    allowed_tags = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
+    parts = re.split(r'(</?[a-zA-Z]+\\b[^>]*>)', text)
+    stack = []
+    out = []
+
+    for part in parts:
+        if part.startswith('<') and part.endswith('>'):
+            m = re.match(r'<(/)?([a-zA-Z]+)\\b([^>]*)>', part)
+            if m:
+                is_closing = bool(m.group(1))
+                tag_name = m.group(2).lower()
+                attrs = m.group(3)
+
+                if tag_name in allowed_tags:
+                    if not is_closing:
+                        stack.append(tag_name)
+                        out.append(part)
+                    else:
+                        if stack and stack[-1] == tag_name:
+                            stack.pop()
+                            out.append(part)
+                        else:
+                            if tag_name in stack:
+                                while stack and stack[-1] != tag_name:
+                                    out.append(f'</{stack.pop()}>')
+                                stack.pop()
+                                out.append(part)
+                            else:
+                                out.append(f'&lt;/{tag_name}{attrs}&gt;')
+                else:
+                    out.append(part)
+            else:
+                out.append(part)
+        else:
+            out.append(part)
+
+    while stack:
+        out.append(f'</{stack.pop()}>')
+
+    return "".join(out)
 """
     content = content.replace(cooldown_old, cooldown_new)
 
     # 3. Patch cmd_summarize to use clean_html_for_tg
     summarize_success_old = "summary = await summarize_text_with_hf(prompt, chunk, hf_token)"
     summarize_success_new = "summary = await summarize_text_with_hf(prompt, chunk, hf_token)\n        summary = clean_html_for_tg(summary)"
-    content = content.replace(summarize_success_old, summarize_success_new)
+    if "summary = clean_html_for_tg(summary)" not in content.split("def cmd_roast(")[0]:
+        # only replace if not already patched in cmd_summarize
+        content = content.replace(summarize_success_old, summarize_success_new)
 
     # 4. Add cmd_roast
     # I'll insert it right after cmd_summarize

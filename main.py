@@ -483,7 +483,48 @@ def clean_html_for_tg(text: str) -> str:
     text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
     text = text.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
     text = re.sub(r'<(?!/?(b|i|u|s|code|pre|a\b)[>\s])', '&lt;', text)
-    return text
+
+    # Balance tags
+    allowed_tags = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
+    parts = re.split(r'(</?[a-zA-Z]+\b[^>]*>)', text)
+    stack = []
+    out = []
+
+    for part in parts:
+        if part.startswith('<') and part.endswith('>'):
+            m = re.match(r'<(/)?([a-zA-Z]+)\b([^>]*)>', part)
+            if m:
+                is_closing = bool(m.group(1))
+                tag_name = m.group(2).lower()
+                attrs = m.group(3)
+
+                if tag_name in allowed_tags:
+                    if not is_closing:
+                        stack.append(tag_name)
+                        out.append(part)
+                    else:
+                        if stack and stack[-1] == tag_name:
+                            stack.pop()
+                            out.append(part)
+                        else:
+                            if tag_name in stack:
+                                while stack and stack[-1] != tag_name:
+                                    out.append(f'</{stack.pop()}>')
+                                stack.pop()
+                                out.append(part)
+                            else:
+                                out.append(f'&lt;/{tag_name}{attrs}&gt;')
+                else:
+                    out.append(part)
+            else:
+                out.append(part)
+        else:
+            out.append(part)
+
+    while stack:
+        out.append(f'</{stack.pop()}>')
+
+    return "".join(out)
 
 DB_POST_LIMIT = CONFIG_DB_POST_LIMIT  # Максимальное количество постов, которое будет храниться в БД
 DB_CLEANUP_INTERVAL = timedelta(hours=2) # Как часто проводить очистку БД
