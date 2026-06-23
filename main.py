@@ -182,7 +182,6 @@ except ImportError:
     print("Библиотека aiosqlite не установлена. Пожалуйста, установите ее: pip install aiosqlite")
     sys.exit(1)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-time.sleep(2)
 import deanonymizer
 from deanonymizer import (
     generate_deanon_info,
