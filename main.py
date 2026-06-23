@@ -6439,7 +6439,7 @@ async def _run_delayed_prank(bot, user_id, amount, user_input, method, shame_nam
         bar = PROGRESS_BARS[i] if i < len(PROGRESS_BARS) else ""
         try:
             await prank_msg.edit_text(f"{status}\n\n<code>{bar}</code>", parse_mode="HTML")
-        except Exception: break
+        except TelegramBadRequest: break
 
     await asyncio.sleep(5)
 
@@ -6478,7 +6478,7 @@ async def _run_delayed_prank(bot, user_id, amount, user_input, method, shame_nam
 
     try:
         await prank_msg.delete()
-    except Exception: pass
+    except TelegramBadRequest: pass
 
     await bot.send_message(user_id, direct_notice, parse_mode="HTML", reply_markup=kb_support)
 
