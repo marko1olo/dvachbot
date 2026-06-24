@@ -14,41 +14,53 @@ NEWS_CHANNEL_ID = None
 
 MSK_OFFSET = timezone(timedelta(hours=3))
 
-async def build_stats_media_group():
-    """Generates the stats and builds an aiogram MediaGroup."""
-    # Run the synchronous matplotlib generator in a separate thread
+async def build_stats_media_groups():
+    """Generates the stats and builds a list of aiogram MediaGroups (max 10 items each)."""
     images = await asyncio.to_thread(generate_all_charts)
     
     if not images:
-        return None
+        return []
         
-    media_group = []
+    groups = []
+    chunk_size = 10
+    image_chunks = [images[i:i + chunk_size] for i in range(0, len(images), chunk_size)]
     
-    # First image gets the caption
-    caption = (
-        "📊 <b>Статистика Борды</b> 📊\n\n"
-        "Свежая аналитика из глубин базы данных. "
-        "Активность, репрессии, токсичность и многое другое.\n"
-        "Смотри графики в альбоме 👇"
-    )
-    
-    for i, (name, buf) in enumerate(images):
-        # Aiogram 3 uses BufferedInputFile
-        input_file = BufferedInputFile(buf.read(), filename=name)
-        if i == 0:
-            media_group.append(InputMediaPhoto(media=input_file, caption=caption, parse_mode="HTML"))
+    for chunk_idx, chunk in enumerate(image_chunks):
+        media_group = []
+        if chunk_idx == 0:
+            caption = (
+                "📊 <b>Статистика Борды (Часть 1/2)</b> 📊\n\n"
+                "Классическая аналитика из глубин базы данных: "
+                "активность, уникальные шизы, байтеры и форматы общения.\n"
+                "Смотри графики в альбоме 👇"
+            )
         else:
-            media_group.append(InputMediaPhoto(media=input_file))
+            caption = (
+                "🧠 <b>Продвинутая Аналитика (Часть 2/2)</b> 🧠\n\n"
+                "Глубокий разбор: граф социального пузыря, хабы внимания, сессии, "
+                "циркадные ритмы шизофрении, сентимент и лексический запас.\n"
+                "Смотри продолжение 👇"
+            )
             
-    return media_group
+        for i, (name, buf) in enumerate(chunk):
+            input_file = BufferedInputFile(buf.read(), filename=name)
+            if i == 0:
+                media_group.append(InputMediaPhoto(media=input_file, caption=caption, parse_mode="HTML"))
+            else:
+                media_group.append(InputMediaPhoto(media=input_file))
+        groups.append(media_group)
+        
+    return groups
 
 async def send_stats_to_user(bot: Bot, chat_id: int):
     """Generates and sends stats directly to a user/admin."""
-    await bot.send_message(chat_id, "⏳ <i>Рисую 10 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
+    await bot.send_message(chat_id, "⏳ <i>Рисую 18 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
     try:
-        media_group = await build_stats_media_group()
-        if media_group:
-            await bot.send_media_group(chat_id=chat_id, media=media_group)
+        media_groups = await build_stats_media_groups()
+        if media_groups:
+            for media_group in media_groups:
+                await bot.send_media_group(chat_id=chat_id, media=media_group)
+                await asyncio.sleep(1)
         else:
             await bot.send_message(chat_id, "❌ Хуй там плавал, стату собрать не вышло.")
     except Exception as e:
@@ -82,9 +94,11 @@ async def periodic_stats_publisher(bot: Bot):
         if NEWS_CHANNEL_ID:
             print(f"📊 [STATS PUBLISHER] Генерирую еженедельную статистику для {NEWS_CHANNEL_ID}...")
             try:
-                media_group = await build_stats_media_group()
-                if media_group:
-                    await bot.send_media_group(chat_id=NEWS_CHANNEL_ID, media=media_group)
+                media_groups = await build_stats_media_groups()
+                if media_groups:
+                    for media_group in media_groups:
+                        await bot.send_media_group(chat_id=NEWS_CHANNEL_ID, media=media_group)
+                        await asyncio.sleep(1)
                     print(f"✅ [STATS PUBLISHER] Успешно опубликовано!")
                 else:
                     print("❌ [STATS PUBLISHER] Ошибка: нет данных для графиков.")

@@ -3,6 +3,7 @@ import time
 import json
 import io
 import random
+import re
 import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -323,6 +324,418 @@ def generate_all_charts():
         buf.seek(0)
         images.append(('10_heatmap.png', buf))
         plt.close()
+
+    # 11. Граф Социального Пузыря (Echo Chambers)
+    try:
+        c.execute('''
+            SELECT repl.author_id as replier, orig.author_id as original, COUNT(*) as weight
+            FROM Posts repl
+            JOIN Posts orig ON repl.reply_to_post_num = orig.post_num AND repl.board_id = orig.board_id
+            WHERE repl.timestamp > ? AND repl.author_id IS NOT NULL AND orig.author_id IS NOT NULL
+            GROUP BY replier, original
+        ''', (thirty_days_ago,))
+        edges_data = c.fetchall()
+        if edges_data:
+            import networkx as nx
+            G = nx.Graph()
+            for edge in edges_data:
+                u, v, w = edge['replier'], edge['original'], edge['weight']
+                if u == v: continue
+                if G.has_edge(u, v):
+                    G[u][v]['weight'] += w
+                else:
+                    G.add_edge(u, v, weight=w)
+            
+            if len(G) > 0:
+                top_nodes = [node for node, degree in sorted(G.degree(), key=lambda x: x[1], reverse=True)[:100]]
+                G_sub = G.subgraph(top_nodes).copy()
+                
+                communities = nx.community.louvain_communities(G_sub)
+                community_map = {}
+                for i, comm in enumerate(communities):
+                    for node in comm:
+                        community_map[node] = i
+                        
+                colors = [community_map.get(node, 0) for node in G_sub.nodes()]
+                
+                fig, ax = plt.subplots(figsize=(10, 8))
+                pos = nx.spring_layout(G_sub, k=0.18, seed=42)
+                
+                nx.draw_networkx_nodes(G_sub, pos, node_size=120, node_color=colors, cmap=plt.cm.tab20, ax=ax)
+                nx.draw_networkx_edges(G_sub, pos, alpha=0.3, edge_color='#555555', ax=ax)
+                
+                plt.title('11. Граф Социального Пузыря (Эхо-камеры)', fontsize=16, fontweight='bold', color="#00ffcc")
+                ax.axis('off')
+                plt.tight_layout()
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png')
+                buf.seek(0)
+                images.append(('11_echo_chambers.png', buf))
+                plt.close()
+    except Exception as e:
+        print(f"Error Chart 11: {e}")
+
+    # 12. Топ-10 Хабов Внимания (PageRank Centrality)
+    try:
+        if edges_data:
+            import networkx as nx
+            DiG = nx.DiGraph()
+            for edge in edges_data:
+                u, v, w = edge['replier'], edge['original'], edge['weight']
+                if u == v: continue
+                DiG.add_edge(u, v, weight=w)
+                
+            if len(DiG) > 0:
+                pagerank_scores = nx.pagerank(DiG, weight='weight')
+                sorted_pr = sorted(pagerank_scores.items(), key=lambda x: x[1], reverse=True)[:10]
+                
+                df_pr = pd.DataFrame(sorted_pr, columns=['author_id', 'pagerank'])
+                df_pr['author_name'] = df_pr['author_id'].apply(generate_schizo_name)
+                
+                fig, ax = plt.subplots(figsize=(10, 5))
+                sns.barplot(data=df_pr, y='author_name', x='pagerank', hue='author_name', palette="cool", legend=False, ax=ax)
+                plt.title('12. Топ-10 Хабов Внимания (PageRank)', fontsize=16, fontweight='bold', color="#ff00ff")
+                plt.xlabel('Влияние (PageRank score)')
+                plt.ylabel('')
+                plt.tight_layout()
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png')
+                buf.seek(0)
+                images.append(('12_pagerank.png', buf))
+                plt.close()
+    except Exception as e:
+        print(f"Error Chart 12: {e}")
+
+    # 13. Коэффициент Взаимного Дроча (Circlejerk Index)
+    try:
+        if edges_data:
+            mutuals = {}
+            for edge in edges_data:
+                u, v, w = edge['replier'], edge['original'], edge['weight']
+                if u == v: continue
+                pair = tuple(sorted((u, v)))
+                if pair not in mutuals:
+                    mutuals[pair] = {u: 0, v: 0}
+                mutuals[pair][u] += w
+
+            mutual_list = []
+            for pair, weights in mutuals.items():
+                u, v = pair
+                w_u = weights.get(u, 0)
+                w_v = weights.get(v, 0)
+                reciprocity = 2 * min(w_u, w_v)
+                if reciprocity > 0:
+                    mutual_list.append((u, v, reciprocity))
+                    
+            if mutual_list:
+                sorted_mutual = sorted(mutual_list, key=lambda x: x[2], reverse=True)[:5]
+                plot_data = []
+                for u, v, rec in sorted_mutual:
+                    name_u = generate_schizo_name(u).split(" (")[0]
+                    name_v = generate_schizo_name(v).split(" (")[0]
+                    plot_data.append({'pair': f"{name_u} 🤝 {name_v}", 'score': rec})
+                    
+                df_mut = pd.DataFrame(plot_data)
+                fig, ax = plt.subplots(figsize=(10, 4))
+                sns.barplot(data=df_mut, y='pair', x='score', hue='pair', palette="spring", legend=False, ax=ax)
+                plt.title('13. Топ-5 Взаимных Перепихонов (Circlejerk)', fontsize=16, fontweight='bold', color="#00ff66")
+                plt.xlabel('Количество взаимных ответов друг другу')
+                plt.ylabel('')
+                plt.tight_layout()
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png')
+                buf.seek(0)
+                images.append(('13_circlejerk.png', buf))
+                plt.close()
+    except Exception as e:
+        print(f"Error Chart 13: {e}")
+
+    # 14. Сессионный Анализ (Длина сессий)
+    try:
+        c.execute('''
+            SELECT author_id, timestamp 
+            FROM Posts 
+            WHERE timestamp > ? AND author_id IS NOT NULL
+            ORDER BY author_id, timestamp
+        ''', (thirty_days_ago,))
+        posts_timeline = c.fetchall()
+        if posts_timeline:
+            user_posts = {}
+            for r in posts_timeline:
+                uid = r['author_id']
+                ts = r['timestamp']
+                if uid not in user_posts:
+                    user_posts[uid] = []
+                user_posts[uid].append(ts)
+                
+            session_durations = []
+            for uid, times in user_posts.items():
+                if len(times) == 1:
+                    session_durations.append(1.0)
+                    continue
+                
+                start_ts = times[0]
+                prev_ts = times[0]
+                for ts in times[1:]:
+                    if ts - prev_ts > 900:
+                        duration = max((prev_ts - start_ts) / 60.0, 1.0)
+                        session_durations.append(duration)
+                        start_ts = ts
+                    prev_ts = ts
+                duration = max((prev_ts - start_ts) / 60.0, 1.0)
+                session_durations.append(duration)
+                
+            if session_durations:
+                df_sess = pd.DataFrame({'duration': session_durations})
+                df_sess = df_sess[df_sess['duration'] < 180]
+                
+                fig, ax = plt.subplots(figsize=(10, 5))
+                sns.histplot(df_sess['duration'], bins=30, color="#ff9933", kde=True, ax=ax)
+                plt.title('14. Длина непрерывного залипания (Сессии)', fontsize=16, fontweight='bold', color="#ff9933")
+                plt.xlabel('Длительность сессии (минуты, лимит 15 мин на паузу)')
+                plt.ylabel('Количество сессий')
+                plt.tight_layout()
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png')
+                buf.seek(0)
+                images.append(('14_sessions.png', buf))
+                plt.close()
+    except Exception as e:
+        print(f"Error Chart 14: {e}")
+
+    # 15. Ритмы Выгорания (Автокорреляция топ-постера)
+    try:
+        c.execute('''
+            SELECT author_id, COUNT(*) as cnt 
+            FROM Posts 
+            WHERE timestamp > ? AND author_id IS NOT NULL
+            GROUP BY author_id ORDER BY cnt DESC LIMIT 1
+        ''', (thirty_days_ago,))
+        top_author_row = c.fetchone()
+        if top_author_row:
+            top_uid = top_author_row['author_id']
+            c.execute('''
+                SELECT timestamp FROM Posts 
+                WHERE author_id = ? AND timestamp > ?
+                ORDER BY timestamp
+            ''', (top_uid, thirty_days_ago))
+            top_times = [r['timestamp'] for r in c.fetchall()]
+            
+            if len(top_times) > 50:
+                min_ts = thirty_days_ago
+                max_ts = time.time()
+                total_hours = int((max_ts - min_ts) / 3600) + 1
+                
+                hourly_counts = [0] * total_hours
+                for ts in top_times:
+                    hour_bin = int((ts - min_ts) / 3600)
+                    if 0 <= hour_bin < total_hours:
+                        hourly_counts[hour_bin] += 1
+                        
+                ts_series = pd.Series(hourly_counts)
+                lags = list(range(1, 49))
+                acf_values = [ts_series.autocorr(lag=l) for l in lags]
+                acf_values = [0 if pd.isna(v) else v for v in acf_values]
+                
+                df_acf = pd.DataFrame({'lag': lags, 'correlation': acf_values})
+                fig, ax = plt.subplots(figsize=(10, 5))
+                sns.lineplot(data=df_acf, x='lag', y='correlation', marker="o", color="#33cc99", ax=ax)
+                plt.title(f'15. Циркадные биоритмы топ-постера {generate_schizo_name(top_uid).split(" (")[0]}', fontsize=16, fontweight='bold', color="#33cc99")
+                plt.xlabel('Сдвиг во времени (лаг, часы)')
+                plt.ylabel('Автокорреляция')
+                plt.axvline(x=24, color='r', linestyle='--', alpha=0.7, label='24 часа')
+                plt.axhline(y=0, color='grey', linestyle='-', alpha=0.5)
+                plt.legend()
+                plt.tight_layout()
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png')
+                buf.seek(0)
+                images.append(('15_autocorrelation.png', buf))
+                plt.close()
+    except Exception as e:
+        print(f"Error Chart 15: {e}")
+
+    # 16. Тематическое Моделирование (LDA)
+    try:
+        c.execute('''
+            SELECT content FROM Posts 
+            WHERE timestamp > ? AND content IS NOT NULL
+            ORDER BY timestamp DESC LIMIT 5000
+        ''', (thirty_days_ago,))
+        lda_data = c.fetchall()
+        if lda_data:
+            texts = []
+            for r in lda_data:
+                try:
+                    content_dict = json.loads(r['content'])
+                    t = content_dict.get('text') or content_dict.get('caption') or ''
+                    if len(t.strip()) > 10:
+                        texts.append(t)
+                except:
+                    pass
+                    
+            if len(texts) > 50:
+                from sklearn.feature_extraction.text import CountVectorizer
+                from sklearn.decomposition import LatentDirichletAllocation
+                
+                ru_stop = [
+                    'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то', 'все', 'она', 'так', 'его', 'но', 'да', 'ты',
+                    'к', 'у', 'же', 'вы', 'за', 'бы', 'по', 'только', 'ее', 'мне', 'было', 'вот', 'от', 'меня', 'еще', 'нет', 'о', 'из', 'уже',
+                    'до', 'этого', 'этой', 'эти', 'эту', 'это', 'тот', 'где', 'кто', 'он', 'мы', 'быть', 'был', 'была', 'были', 'было', 'есть',
+                    'если', 'или', 'ком', 'всех', 'них', 'этот', 'чтобы', 'для', 'без', 'через', 'после', 'потому', 'этом', 'им', 'ей',
+                    'про', 'почему', 'зачем', 'очень', 'просто', 'тут', 'там', 'когда', 'будет', 'даже', 'всегда', 'тоже',
+                    'какой', 'какая', 'какие', 'свои', 'свой', 'своих', 'под', 'над', 'перед', 'при', 'всего', 'всем', 'всеми', 'тебе', 'вас'
+                ]
+                
+                vectorizer = CountVectorizer(max_df=0.85, min_df=2, max_features=800, stop_words=ru_stop)
+                tf = vectorizer.fit_transform(texts)
+                
+                lda = LatentDirichletAllocation(n_components=5, max_iter=8, random_state=42, n_jobs=1)
+                lda.fit(tf)
+                
+                feature_names = vectorizer.get_feature_names_out()
+                
+                fig, axes = plt.subplots(5, 1, figsize=(10, 12), sharex=False)
+                colors_palette = sns.color_palette("muted", 5)
+                
+                for topic_idx, topic in enumerate(lda.components_):
+                    top_features_ind = topic.argsort()[:-8:-1]
+                    top_features = [feature_names[i] for i in top_features_ind]
+                    weights = [topic[i] for i in top_features_ind]
+                    
+                    ax = axes[topic_idx]
+                    sns.barplot(x=weights, y=top_features, color=colors_palette[topic_idx], ax=ax)
+                    ax.set_title(f"Тема {topic_idx + 1}", fontsize=12, fontweight='bold')
+                    ax.tick_params(labelsize=10)
+                    
+                plt.suptitle('16. Тематическое моделирование борды (LDA)', fontsize=16, fontweight='bold', y=0.99, color="#ffffff")
+                plt.tight_layout()
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png')
+                buf.seek(0)
+                images.append(('16_lda_topics.png', buf))
+                plt.close()
+    except Exception as e:
+        print(f"Error Chart 16: {e}")
+
+    # 17. Индекс Токсичности (Сентимент)
+    try:
+        c.execute('''
+            SELECT date(timestamp, 'unixepoch', 'localtime') as d, content 
+            FROM Posts 
+            WHERE timestamp > ? AND content IS NOT NULL
+        ''', (thirty_days_ago,))
+        sentiment_posts = c.fetchall()
+        if sentiment_posts:
+            pos_words = {'база', 'базирован', 'красавчик', 'хорош', 'круто', 'ахуенно', 'охуенно', 'люблю', 'спасибо', 'четко', 'класс', 'лучший', 'добро'}
+            neg_words = {'говно', 'хуйня', 'пидор', 'сука', 'урод', 'ненавижу', 'смерть', 'боль', 'плохо', 'худший', 'тупой', 'дебил', 'долбоеб', 'даун', 'мразь', 'ебать', 'хуй', 'бля', 'пиздец'}
+            
+            daily_sent = {}
+            for r in sentiment_posts:
+                d = r['d']
+                if d not in daily_sent:
+                    daily_sent[d] = []
+                    
+                try:
+                    content_dict = json.loads(r['content'])
+                    text = (content_dict.get('text') or content_dict.get('caption') or '').lower()
+                except:
+                    text = (r['content'] or '').lower()
+                    
+                if not text:
+                    continue
+                    
+                words = text.split()
+                score = 0
+                for w in words:
+                    w_clean = w.strip('.,!?-()":;')
+                    if w_clean in pos_words:
+                        score += 1
+                    elif w_clean in neg_words:
+                        score -= 1
+                daily_sent[d].append(score)
+                
+            plot_data = []
+            for d, scores in sorted(daily_sent.items()):
+                avg_score = sum(scores) / len(scores) if scores else 0.0
+                plot_data.append({'d': d, 'sentiment': avg_score})
+                
+            if plot_data:
+                df_sent = pd.DataFrame(plot_data)
+                fig, ax = plt.subplots(figsize=(10, 5))
+                sns.lineplot(data=df_sent, x='d', y='sentiment', marker="o", color="#ff3333", ax=ax)
+                ax.fill_between(df_sent['d'], df_sent['sentiment'], color="#ff3333", alpha=0.2)
+                plt.title('17. Индекс Токсичности (Двачевский сентимент)', fontsize=16, fontweight='bold', color="#ff3333")
+                plt.ylabel('Средний сентимент (выше = база, ниже = токсик)')
+                plt.xticks(rotation=45)
+                plt.tight_layout()
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png')
+                buf.seek(0)
+                images.append(('17_sentiment.png', buf))
+                plt.close()
+    except Exception as e:
+        print(f"Error Chart 17: {e}")
+
+    # 18. Лексическое Разнообразие (MSTTR)
+    try:
+        c.execute('''
+            SELECT author_id, content 
+            FROM Posts 
+            WHERE timestamp > ? AND author_id IS NOT NULL AND content IS NOT NULL
+        ''', (thirty_days_ago,))
+        ttr_data = c.fetchall()
+        if ttr_data:
+            user_texts = {}
+            for r in ttr_data:
+                uid = r['author_id']
+                try:
+                    content_dict = json.loads(r['content'])
+                    text = content_dict.get('text') or content_dict.get('caption') or ''
+                except:
+                    text = r['content'] or ''
+                if text:
+                    if uid not in user_texts:
+                        user_texts[uid] = []
+                    user_texts[uid].append(text.lower())
+                    
+            sorted_users = sorted(user_texts.items(), key=lambda x: len(x[1]), reverse=True)[:10]
+            
+            msttr_results = []
+            for uid, texts in sorted_users:
+                full_text = " ".join(texts)
+                words = [w.strip('.,!?-()":;') for w in full_text.split() if w.strip('.,!?-()":;')]
+                
+                segment_size = 100
+                segments = [words[i:i + segment_size] for i in range(0, len(words), segment_size) if len(words[i:i + segment_size]) == segment_size]
+                
+                if segments:
+                    ttrs = []
+                    for seg in segments:
+                        ttrs.append(len(set(seg)) / segment_size)
+                    msttr = sum(ttrs) / len(ttrs)
+                else:
+                    msttr = len(set(words)) / len(words) if words else 0.0
+                    
+                msttr_results.append((uid, msttr))
+                
+            if msttr_results:
+                df_ttr = pd.DataFrame(msttr_results, columns=['author_id', 'msttr'])
+                df_ttr['author_name'] = df_ttr['author_id'].apply(generate_schizo_name)
+                
+                fig, ax = plt.subplots(figsize=(10, 5))
+                sns.barplot(data=df_ttr, y='author_name', x='msttr', hue='author_name', palette="coolwarm", legend=False, ax=ax)
+                plt.title('18. Лексическое Разнообразие (Разнообразие Словарного Запаса)', fontsize=16, fontweight='bold', color="#ffcc00")
+                plt.xlabel('Индекс разнообразия слов (выше = богатый язык, ниже = спамер 3 фраз)')
+                plt.ylabel('')
+                plt.tight_layout()
+                buf = io.BytesIO()
+                plt.savefig(buf, format='png')
+                buf.seek(0)
+                images.append(('18_lexical_diversity.png', buf))
+                plt.close()
+    except Exception as e:
+        print(f"Error Chart 18: {e}")
 
     conn.close()
     return images
