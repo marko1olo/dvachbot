@@ -3264,6 +3264,7 @@ async def api_makaba_catalog(board_id: str):
         makaba_threads.append(op_obj)
     return {"threads": makaba_threads}
 @app.get("/{board_id}/res/{thread_num}.json")
+@cache(expire=10)
 async def api_makaba_thread(board_id: str, thread_num: int):
 
     if board_id not in BOARD_CONFIG: return JSONResponse({}, status_code=404)
