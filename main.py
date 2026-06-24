@@ -3910,15 +3910,18 @@ def smart_wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTy
             wrapped_lines.append('')
             continue
         words = line.split()
-        current_line = ""
+        current_line_words = []
         for word in words:
-            test_line = current_line + word + " "
+            current_line_words.append(word)
+            test_line = " ".join(current_line_words) + " "
             if draw.textlength(test_line, font=font) <= max_width:
-                current_line += word + " "
-            else:
-                wrapped_lines.append(current_line.strip())
-                current_line = word + " "
-        wrapped_lines.append(current_line.strip())
+                continue
+            if len(current_line_words) > 1:
+                current_line_words.pop()
+                wrapped_lines.append(" ".join(current_line_words))
+                current_line_words = [word]
+        if current_line_words:
+            wrapped_lines.append(" ".join(current_line_words))
     return "\n".join(wrapped_lines)
 def generate_wipe_image(text: str) -> bytes | None:
     """
