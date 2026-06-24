@@ -24,7 +24,7 @@ mocked_deps = [
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
     'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
-    'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
+    'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'uvicorn',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
@@ -168,3 +168,95 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+from unittest.mock import patch, AsyncMock, MagicMock
+
+class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # Reset GEOIP_READER before each test
+        import Dubsite_tgach.main
+        self.original_geoip = Dubsite_tgach.main.GEOIP_READER
+        Dubsite_tgach.main.GEOIP_READER = None
+
+        # We also need to mock httpx.AsyncClient to avoid real network requests
+        self.patcher = patch('httpx.AsyncClient')
+        self.mock_client_cls = self.patcher.start()
+        self.mock_client = AsyncMock()
+        self.mock_client_cls.return_value.__aenter__.return_value = self.mock_client
+
+        # Mock PROXY_URL so it runs fast
+        import Dubsite_tgach.main
+        Dubsite_tgach.main.PROXY_URL = None
+
+    async def asyncTearDown(self):
+        self.patcher.stop()
+        import Dubsite_tgach.main
+        Dubsite_tgach.main.GEOIP_READER = self.original_geoip
+
+    async def test_localhost(self):
+        from Dubsite_tgach.main import get_country_by_ip
+        get_country_by_ip.cache_clear()
+        self.assertEqual(await get_country_by_ip("127.0.0.1"), "XX")
+        self.assertEqual(await get_country_by_ip("localhost"), "XX")
+        self.assertEqual(await get_country_by_ip("::1"), "XX")
+
+    async def test_geoip_success(self):
+        from Dubsite_tgach.main import get_country_by_ip
+        get_country_by_ip.cache_clear()
+
+        import Dubsite_tgach.main
+        mock_reader = MagicMock()
+        mock_reader.country.return_value.country.iso_code = "FR"
+        Dubsite_tgach.main.GEOIP_READER = mock_reader
+
+        self.assertEqual(await get_country_by_ip("8.8.8.8"), "FR")
+        mock_reader.country.assert_called_once_with("8.8.8.8")
+
+    async def test_geoip_exception_http_fallback(self):
+        from Dubsite_tgach.main import get_country_by_ip
+        get_country_by_ip.cache_clear()
+
+        import Dubsite_tgach.main
+        mock_reader = MagicMock()
+        mock_reader.country.side_effect = Exception("GEOIP Error")
+        Dubsite_tgach.main.GEOIP_READER = mock_reader
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"countryCode": "DE"}
+        self.mock_client.get.return_value = mock_response
+
+        self.assertEqual(await get_country_by_ip("8.8.4.4"), "DE")
+        mock_reader.country.assert_called_once_with("8.8.4.4")
+        self.mock_client.get.assert_called_once()
+
+    async def test_geoip_exception_http_exception(self):
+        from Dubsite_tgach.main import get_country_by_ip
+        get_country_by_ip.cache_clear()
+
+        import Dubsite_tgach.main
+        mock_reader = MagicMock()
+        mock_reader.country.side_effect = Exception("GEOIP Error")
+        Dubsite_tgach.main.GEOIP_READER = mock_reader
+
+        self.mock_client.get.side_effect = Exception("HTTP Error")
+
+        self.assertEqual(await get_country_by_ip("1.1.1.1"), "XX")
+        mock_reader.country.assert_called_once_with("1.1.1.1")
+        # Strategies has length 2
+        self.assertEqual(self.mock_client.get.call_count, 2)
+
+    async def test_all_fail_fallback(self):
+        from Dubsite_tgach.main import get_country_by_ip
+        get_country_by_ip.cache_clear()
+
+        import Dubsite_tgach.main
+        mock_reader = MagicMock()
+        mock_reader.country.side_effect = Exception("GEOIP Error")
+        Dubsite_tgach.main.GEOIP_READER = mock_reader
+
+        self.mock_client.get.side_effect = Exception("HTTP Error")
+
+        self.assertEqual(await get_country_by_ip("2.2.2.2"), "XX")
+        mock_reader.country.assert_called_once_with("2.2.2.2")
+        self.assertEqual(self.mock_client.get.call_count, 2)
