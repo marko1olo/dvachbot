@@ -15687,16 +15687,8 @@ async def handle_poll(message: types.Message, board_id: str | None, stream: str 
     except TelegramBadRequest:
         pass
 
-@dp.message(~F.media_group_id)
-async def handle_message(message: Message, board_id: str | None, stream: str = 'ru'):
-    user_id = message.from_user.id
-    if not board_id: return
-    if board_id in THREAD_BOARDS:
-        if await ensure_user_in_valid_thread(message.bot, board_id, user_id):
-            try: await message.delete()
-            except TelegramBadRequest: pass
-            return
-    b_data = board_data[board_id]
+
+async def _handle_media_counter(message: Message, board_id: str, stream: str, user_id: int, b_data: dict) -> None:
     if message.content_type in ['photo', 'video', 'document']:
         counter = b_data['single_photo_counter'][user_id]
         if not message.media_group_id:
@@ -15715,78 +15707,159 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             b_data['single_photo_counter'][user_id] = 0
     elif message.content_type == 'text':
         b_data['single_photo_counter'][user_id] = 0
-    try:
-        if message.content_type == 'dice':
+
+async def _handle_dice_message(message: Message, board_id: str, stream: str, user_id: int, b_data: dict) -> bool:
+    if message.content_type == 'dice':
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        last_insult_time = b_data.get('last_roll_time', {}).get(user_id, 0)
+        now = time.time()
+        if now - last_insult_time > 5:
+            lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+            if lang == 'en':
+                phrases = CASINO_FUCK_OFF_PHRASES_EN
+            elif lang == 'jp':
+                phrases = CASINO_FUCK_OFF_PHRASES_JP
+            else:
+                phrases = CASINO_FUCK_OFF_PHRASES
+            fuck_off_text = random.choice(phrases)
             try:
-                await message.delete()
+                sent_msg = await message.answer(fuck_off_text)
+                spawn_task(delete_message_after_delay(sent_msg, 7))
+                b_data.setdefault('last_roll_time', {})[user_id] = now
             except Exception:
                 pass
-            last_insult_time = b_data.get('last_roll_time', {}).get(user_id, 0)
-            now = time.time()
-            if now - last_insult_time > 5:
-                lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-                if lang == 'en':
-                    phrases = CASINO_FUCK_OFF_PHRASES_EN
-                elif lang == 'jp':
-                    phrases = CASINO_FUCK_OFF_PHRASES_JP
-                else:
-                    phrases = CASINO_FUCK_OFF_PHRASES
-                fuck_off_text = random.choice(phrases)
-                try:
-                    sent_msg = await message.answer(fuck_off_text)
-                    spawn_task(delete_message_after_delay(sent_msg, 7))
-                    b_data.setdefault('last_roll_time', {})[user_id] = now
-                except Exception: 
-                    pass
-            return
-        supported_types = ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'] 
-        if message.content_type not in supported_types:
+        return True
+    return False
+
+async def _validate_message_and_user(message: Message, board_id: str, user_id: int, b_data: dict) -> bool:
+    supported_types = ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note']
+    if message.content_type not in supported_types:
+        await message.delete()
+        return False
+    if message.content_type == 'text' and not (message.text and message.text.strip()):
+        await message.delete()
+        return False
+    if user_id in b_data['users']['banned']:
+        try:
             await message.delete()
-            return
-        if message.content_type == 'text' and not (message.text and message.text.strip()):
+        except TelegramBadRequest: pass
+        return False
+    mute_until = b_data['mutes'].get(user_id)
+    if mute_until and mute_until > datetime.now(UTC):
+        try:
             await message.delete()
-            return
-        if user_id in b_data['users']['banned']:
-            try:
-                await message.delete()
+        except TelegramBadRequest: pass
+        return False
+    elif mute_until:
+        b_data['mutes'].pop(user_id, None)
+
+    b_data['last_activity'][user_id] = datetime.now(UTC)
+    if user_id not in b_data['users']['active']:
+        b_data['users']['active'].add(user_id)
+        b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set()}
+        await add_or_activate_user(user_id, board_id)
+        print(f"✅ [{board_id}] Добавлен новый пользователь: ID {user_id}")
+
+    if board_id != 'trash' and not await check_spam(user_id, message, board_id):
+        try:
+            await message.delete()
+        except TelegramBadRequest: pass
+        msg_type = message.content_type
+        if msg_type in ['photo', 'video', 'document'] and message.caption:
+            msg_type = 'text'
+        await apply_penalty(message.bot, user_id, msg_type, board_id)
+        return False
+    return True
+
+async def _resolve_reply_to_post(message: Message) -> int | None:
+    reply_to_post = None
+    if message.reply_to_message:
+        async with storage_lock:
+            lookup_key = (message.chat.id, message.reply_to_message.message_id)
+            reply_to_post = message_to_post.get(lookup_key)
+        if not reply_to_post:
+            info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
+            if info:
+                reply_to_post = info[0]
+        if not reply_to_post:
+            replied_msg = message.reply_to_message
+            text_to_scan = replied_msg.text or replied_msg.caption or ""
+            match = re.search(r"(?:№|#|Post No\.|Пост №|レス番)\s*(\d+)", text_to_scan, re.IGNORECASE)
+            if match:
+                potential_id = int(match.group(1))
+                if await get_post_by_num(potential_id):
+                    reply_to_post = potential_id
+                    async with storage_lock:
+                        message_to_post[lookup_key] = reply_to_post
+                    print(f"👀 ID #{reply_to_post} восстановлен через чтение текста сообщения!")
+    return reply_to_post
+
+def _build_post_content(message: Message, processed_html_text: str) -> tuple[dict, str | None]:
+    content = {'type': message.content_type}
+    text_for_corpus = None
+    if message.content_type == 'text':
+        text_for_corpus = message.text
+        safe_html_text = sanitize_html(processed_html_text)
+        content.update({'text': safe_html_text})
+    elif message.content_type in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
+        text_for_corpus = message.caption
+        file_id_obj = getattr(message, message.content_type, [])
+        if isinstance(file_id_obj, list): file_id_obj = file_id_obj[-1]
+        safe_caption_html = sanitize_html(processed_html_text)
+        content.update({'file_id': file_id_obj.file_id, 'caption': safe_caption_html})
+        file_name = getattr(file_id_obj, 'file_name', None)
+        mime_type = getattr(file_id_obj, 'mime_type', None)
+        if file_name:
+            content['filename'] = file_name
+        if mime_type:
+            content['mime_type'] = mime_type
+    elif message.content_type in ['sticker', 'video_note']:
+        file_id_obj = getattr(message, message.content_type)
+        content.update({'file_id': file_id_obj.file_id})
+        if message.content_type == 'sticker' and message.sticker.emoji:
+             text_for_corpus = message.sticker.emoji
+    return content, text_for_corpus
+
+@dp.message(~F.media_group_id)
+async def handle_message(message: Message, board_id: str | None, stream: str = 'ru'):
+    user_id = message.from_user.id
+    if not board_id: return
+    if board_id in THREAD_BOARDS:
+        if await ensure_user_in_valid_thread(message.bot, board_id, user_id):
+            try: await message.delete()
             except TelegramBadRequest: pass
             return
-        mute_until = b_data['mutes'].get(user_id)
-        if mute_until and mute_until > datetime.now(UTC):
-            try:
-                await message.delete()
-            except TelegramBadRequest: pass
+
+    b_data = board_data[board_id]
+
+    await _handle_media_counter(message, board_id, stream, user_id, b_data)
+
+    try:
+        if await _handle_dice_message(message, board_id, stream, user_id, b_data):
             return
-        elif mute_until:
-            b_data['mutes'].pop(user_id, None)
-        b_data['last_activity'][user_id] = datetime.now(UTC)
-        if user_id not in b_data['users']['active']:
-            b_data['users']['active'].add(user_id)
-            b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set()}
-            await add_or_activate_user(user_id, board_id)
-            print(f"✅ [{board_id}] Добавлен новый пользователь: ID {user_id}")
-        if board_id != 'trash' and not await check_spam(user_id, message, board_id):
-            try:
-                await message.delete()
-            except TelegramBadRequest: pass
-            msg_type = message.content_type
-            if msg_type in ['photo', 'video', 'document'] and message.caption:
-                msg_type = 'text'
-            await apply_penalty(message.bot, user_id, msg_type, board_id)
+
+        if not await _validate_message_and_user(message, board_id, user_id, b_data):
             return
+
         is_sage = False 
         html_text_content = message.html_text or getattr(message, 'caption_html_text', None) or ""
         plain_text_check = (message.text or message.caption or "").lower().strip()
         if plain_text_check.startswith("sage") or plain_text_check.startswith("сажа"):
             is_sage = True
+
         def replacer(match):
             plain_text_quote = clean_html_tags(match.group(0))
             return f"↪️ <code>{escape_html(plain_text_quote)}</code>"
+
         processed_html_text = RE_REPLY_QUOTE_FORMAT.sub(replacer, html_text_content)
     except (TelegramBadRequest, TelegramForbiddenError): return
     except Exception as e:
         print(f"Error in handle_message: {e}")
         return
+
     # Собираем текст для поиска мульти-ответов из текста или подписи к медиа
     input_text = message.text or message.caption or ""
     multi_reply_blocks, limit_hit = _parse_and_split_multi_replies(input_text)
@@ -15869,58 +15942,23 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             try: await message.bot.send_message(user_id, "Replies limit reached (3 max).", disable_notification=True)
             except Exception: pass
         return
+
     try: await message.delete()
     except TelegramBadRequest: pass
-    reply_to_post = None
-    if message.reply_to_message:
-        async with storage_lock:
-            lookup_key = (message.chat.id, message.reply_to_message.message_id)
-            reply_to_post = message_to_post.get(lookup_key)
-        if not reply_to_post:
-            info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
-            if info:
-                reply_to_post = info[0]
-        if not reply_to_post:
-            replied_msg = message.reply_to_message
-            text_to_scan = replied_msg.text or replied_msg.caption or ""
-            match = re.search(r"(?:№|#|Post No\.|Пост №|レス番)\s*(\d+)", text_to_scan, re.IGNORECASE)
-            if match:
-                potential_id = int(match.group(1))
-                if await get_post_by_num(potential_id):
-                    reply_to_post = potential_id
-                    async with storage_lock:
-                        message_to_post[lookup_key] = reply_to_post
-                    print(f"👀 ID #{reply_to_post} восстановлен через чтение текста сообщения!")
-    content = {'type': message.content_type}
-    text_for_corpus = None
-    if message.content_type == 'text':
-        text_for_corpus = message.text
-        safe_html_text = sanitize_html(processed_html_text)
-        content.update({'text': safe_html_text})
-    elif message.content_type in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
-        text_for_corpus = message.caption
-        file_id_obj = getattr(message, message.content_type, [])
-        if isinstance(file_id_obj, list): file_id_obj = file_id_obj[-1]
-        safe_caption_html = sanitize_html(processed_html_text)
-        content.update({'file_id': file_id_obj.file_id, 'caption': safe_caption_html})
-        file_name = getattr(file_id_obj, 'file_name', None)
-        mime_type = getattr(file_id_obj, 'mime_type', None)
-        if file_name:
-            content['filename'] = file_name
-        if mime_type:
-            content['mime_type'] = mime_type
-    elif message.content_type in ['sticker', 'video_note']:
-        file_id_obj = getattr(message, message.content_type)
-        content.update({'file_id': file_id_obj.file_id})
-        if message.content_type == 'sticker' and message.sticker.emoji:
-             text_for_corpus = message.sticker.emoji
+
+    reply_to_post = await _resolve_reply_to_post(message)
+
+    content, text_for_corpus = _build_post_content(message, processed_html_text)
+
     if text_for_corpus:
         async with storage_lock: last_messages.append(text_for_corpus)
         if board_id != 'trash':
             spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_for_corpus, board_id, stream=stream))
+
     if not is_shadow_muted and text_for_corpus:
         if _is_spam_filtered(text_for_corpus, board_id, user_id):
             is_shadow_muted = True
+
     user_settings = b_data.get('user_settings', {}).get(user_id, {})
     if (message.content_type == 'animation' and user_settings.get('shadow_gif')) or \
        (message.content_type == 'sticker' and user_settings.get('shadow_sticker')):
@@ -15953,6 +15991,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             is_shadow_muted=False,
             stream=stream
         )
+
 async def database_cleanup_task():
     """
     Периодически очищает таблицы-очереди от старых записей (Broadcast и Notifications).
