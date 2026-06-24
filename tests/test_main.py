@@ -25,11 +25,17 @@ mocked_deps = [
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
     'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
     'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
+    'fastapi', 'fastapi.responses', 'fastapi.middleware', 'fastapi.middleware.cors',
+    'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip',
+    'fastapi.staticfiles', 'fastapi.templating', 'fastapi.exceptions',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
-    'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
-    'aiogram.webhook', 'aiogram.webhook.aiohttp_server'
+    'aiogram.client.default', 'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
+    'aiogram.filters', 'aiogram.fsm', 'aiogram.fsm.context', 'aiogram.fsm.state', 'aiogram.fsm.storage', 'aiogram.fsm.storage.memory',
+    'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'orjson', 'pydantic',
+    'aiogram.utils', 'aiogram.utils.media_group', 'aiogram.utils.keyboard',
+    'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types'
 ]
 
 for dep in mocked_deps:
@@ -168,3 +174,40 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+import ast
+
+def get_clean_html_function():
+    with open("main.py", "r", encoding="utf-8") as f:
+        source = f.read()
+
+    # Extract the function dynamically to avoid importing main.py's side effects
+    module = ast.parse(source)
+    for node in module.body:
+        if isinstance(node, ast.FunctionDef) and node.name == 'clean_html_for_tg':
+            # compile and eval
+            code = compile(ast.Module(body=[node], type_ignores=[]), filename="<ast>", mode="exec")
+            namespace = {'re': __import__('re')}
+            exec(code, namespace)
+            return namespace['clean_html_for_tg']
+    return None
+
+clean_html_for_tg = get_clean_html_function()
+
+class TestCleanHtmlForTg(unittest.TestCase):
+    def test_balanced_tags(self):
+        self.assertEqual(clean_html_for_tg("hello <b>world</b>"), "hello <b>world</b>")
+        self.assertEqual(clean_html_for_tg("<b><i>test</i></b>"), "<b><i>test</i></b>")
+        self.assertEqual(clean_html_for_tg("<a href='test'>link</a>"), "<a href='test'>link</a>")
+
+    def test_unclosed_tags(self):
+        self.assertEqual(clean_html_for_tg("hello <b>world"), "hello <b>world</b>")
+        self.assertEqual(clean_html_for_tg("hello <b><i>world</b>"), "hello <b><i>world</i></b>")
+
+    def test_stray_closing_tags(self):
+        self.assertEqual(clean_html_for_tg("hello <b>world</i>"), "hello <b>world&lt;/i&gt;</b>")
+        self.assertEqual(clean_html_for_tg("hello </b>world"), "hello &lt;/b&gt;world")
+
+    def test_invalid_tags(self):
+        self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script>world&lt;/script>")
+        self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown>world")
