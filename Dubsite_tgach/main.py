@@ -6073,7 +6073,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
                 
                 res.append({
                     "id": r[0],

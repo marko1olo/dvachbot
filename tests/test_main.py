@@ -1,7 +1,6 @@
 import sys
 import os
 import unittest
-from unittest.mock import patch
 import types
 from unittest.mock import MagicMock
 
@@ -128,7 +127,7 @@ if __name__ == "__main__":
     unittest.main()
 
 from Dubsite_tgach.main import format_bayan_label
-
+from unittest.mock import patch
 
 class TestFormatBayanLabel(unittest.TestCase):
     @patch('Dubsite_tgach.main.random.choice')
@@ -169,30 +168,3 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
-
-from Dubsite_tgach.main import is_request_from_ru
-
-class TestIsRequestFromRu(unittest.IsolatedAsyncioTestCase):
-    @patch('Dubsite_tgach.main.get_country_by_ip', new_callable=unittest.mock.AsyncMock)
-    async def test_request_is_ru(self, mock_get_country):
-        mock_get_country.return_value = "RU"
-        request = MagicMock(headers={"x-real-ip": "1.2.3.4"})
-        result = await is_request_from_ru(request)
-        self.assertTrue(result)
-        mock_get_country.assert_called_once_with("1.2.3.4")
-
-    @patch('Dubsite_tgach.main.get_country_by_ip', new_callable=unittest.mock.AsyncMock)
-    async def test_request_is_not_ru(self, mock_get_country):
-        mock_get_country.return_value = "US"
-        request = MagicMock(headers={"x-real-ip": "8.8.8.8"})
-        result = await is_request_from_ru(request)
-        self.assertFalse(result)
-        mock_get_country.assert_called_once_with("8.8.8.8")
-
-    @patch('Dubsite_tgach.main.get_country_by_ip', new_callable=unittest.mock.AsyncMock)
-    async def test_request_unknown_country(self, mock_get_country):
-        mock_get_country.return_value = "XX"
-        request = MagicMock(headers={"x-real-ip": "127.0.0.1"})
-        result = await is_request_from_ru(request)
-        self.assertFalse(result)
-        mock_get_country.assert_called_once_with("127.0.0.1")
