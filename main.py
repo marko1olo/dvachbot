@@ -2513,7 +2513,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         check_content = msg.animation.file_id
     elif msg.content_type == 'audio':
         return True
-    elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
+    elif msg.content_type in {'photo', 'video', 'document'} and msg.caption:
         check_content = msg.caption
     else:
         check_content = None
@@ -2531,7 +2531,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
                     # Check if contents are duplicates
                     contents = [c for t, b, c in user_cb]
                     is_duplicate = False
-                    if msg.content_type == 'text' or (msg.content_type in ['photo', 'video', 'document'] and msg.caption):
+                    if msg.content_type == 'text' or (msg.content_type in {'photo', 'video', 'document'} and msg.caption):
                         import difflib
                         r1 = difflib.SequenceMatcher(None, contents[0], contents[1]).ratio()
                         r2 = difflib.SequenceMatcher(None, contents[1], contents[2]).ratio()
@@ -2564,7 +2564,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         content = msg.animation.file_id
     elif msg.content_type == 'audio':
         return True # Handled above
-    elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
+    elif msg.content_type in {'photo', 'video', 'document'} and msg.caption:
         msg_type = 'text'
         content = msg.caption
     else:
@@ -4834,7 +4834,7 @@ async def send_message_to_users(
             ct = str(current_content.get("type") or "").split('.')[-1].lower()
             if ct == "text":
                 return await _send_plain_text_parts(reason, plain_text)
-            if ct in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
+            if ct in {'photo', 'video', 'animation', 'document', 'audio', 'voice'}:
                 file_source = _plain_media_source(ct)
                 if not file_source:
                     return await _send_plain_text_parts(reason, plain_text)
@@ -4845,7 +4845,7 @@ async def send_message_to_users(
                     'disable_notification': is_sage,
                     'request_timeout': request_timeout,
                 }
-                if has_spoiler and ct in ['photo', 'video', 'animation']:
+                if has_spoiler and ct in {'photo', 'video', 'animation'}:
                     common_plain_kwargs['has_spoiler'] = True
                 send_method = getattr(bot_instance, f"send_{ct}")
                 if len(plain_text) > 1024:
@@ -4899,7 +4899,7 @@ async def send_message_to_users(
                     return res
                 stats['success'] += 1
                 return res
-            if ct in ['sticker', 'video_note', 'dice']:
+            if ct in {'sticker', 'video_note', 'dice'}:
                 text_result = await _send_plain_text_parts(reason, plain_text)
                 if ct == 'dice':
                     await bot_instance.send_dice(
@@ -5469,7 +5469,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
         post_data = messages_storage.get(post_num)
         if not post_data: return
         content_type = post_data.get('content', {}).get('type')
-        can_be_edited = content_type in ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'media_group']
+        can_be_edited = content_type in {'text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'media_group'}
         if not can_be_edited: return
         post_data_copy = post_data.copy()
         content_copy = post_data.get('content', {}).copy()
@@ -10945,7 +10945,7 @@ def _sync_generate_thread_archive(board_id: str, thread_id: str, thread_info: di
                     else:
                         formatted_lines.append(safe_line)
                 post_body = "<br>".join(formatted_lines)
-            elif content.get('type') in ['photo', 'video', 'animation', 'document', 'audio']:
+            elif content.get('type') in {'photo', 'video', 'animation', 'document', 'audio'}:
                 media_type_map = {'photo': 'Изображение', 'video': 'Видео', 'animation': 'GIF', 'document': 'Документ', 'audio': 'Аудио'}
                 media_type = media_type_map.get(content.get('type'), 'Медиа')
                 caption = escape_html(clean_html_tags(content.get('caption', '')))
@@ -12975,7 +12975,7 @@ async def _process_stacked_anime_command(
             media_items = []
             from aiogram.types import BufferedInputFile
             for ibytes, mtype, ext in successful_downloads:
-                tg_type = 'video' if mtype in ['video', 'animation'] else 'photo'
+                tg_type = 'video' if mtype in {'video', 'animation'} else 'photo'
                 input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
                 media_items.append({'type': tg_type, 'media': input_file})
                 
@@ -13348,7 +13348,7 @@ async def cmd_admin_say(message: types.Message, board_id: str | None, stream: st
         text_to_say = raw_html.strip()
     content_type = message.content_type
     file_id = None
-    if content_type in ['photo', 'video', 'animation', 'document', 'audio']:
+    if content_type in {'photo', 'video', 'animation', 'document', 'audio'}:
         file_id_obj = getattr(message, content_type)[-1] if content_type == 'photo' else getattr(message, content_type)
         file_id = file_id_obj.file_id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -14616,7 +14616,7 @@ async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | No
     if message.text and message.reply_to_message:
         reply_to_check = message.reply_to_message
     media_type = reply_to_check.content_type
-    if media_type in ['photo', 'video', 'animation']:
+    if media_type in {'photo', 'video', 'animation'}:
         file_id_obj = getattr(reply_to_check, media_type)
         if isinstance(file_id_obj, list): file_id_obj = file_id_obj[-1]
         attached_media = {'type': media_type, 'file_id': file_id_obj.file_id}
@@ -15697,7 +15697,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             except TelegramBadRequest: pass
             return
     b_data = board_data[board_id]
-    if message.content_type in ['photo', 'video', 'document']:
+    if message.content_type in {'photo', 'video', 'document'}:
         counter = b_data['single_photo_counter'][user_id]
         if not message.media_group_id:
             b_data['single_photo_counter'][user_id] += 1
@@ -15770,7 +15770,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 await message.delete()
             except TelegramBadRequest: pass
             msg_type = message.content_type
-            if msg_type in ['photo', 'video', 'document'] and message.caption:
+            if msg_type in {'photo', 'video', 'document'} and message.caption:
                 msg_type = 'text'
             await apply_penalty(message.bot, user_id, msg_type, board_id)
             return
@@ -15897,7 +15897,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         text_for_corpus = message.text
         safe_html_text = sanitize_html(processed_html_text)
         content.update({'text': safe_html_text})
-    elif message.content_type in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
+    elif message.content_type in {'photo', 'video', 'animation', 'document', 'audio', 'voice'}:
         text_for_corpus = message.caption
         file_id_obj = getattr(message, message.content_type, [])
         if isinstance(file_id_obj, list): file_id_obj = file_id_obj[-1]
@@ -15909,7 +15909,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             content['filename'] = file_name
         if mime_type:
             content['mime_type'] = mime_type
-    elif message.content_type in ['sticker', 'video_note']:
+    elif message.content_type in {'sticker', 'video_note'}:
         file_id_obj = getattr(message, message.content_type)
         content.update({'file_id': file_id_obj.file_id})
         if message.content_type == 'sticker' and message.sticker.emoji:
@@ -17300,7 +17300,7 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
                 text = ""
                 if content_dict.get('type') == 'text':
                     text = content_dict.get('text', '')
-                elif content_dict.get('type') in ['photo', 'video', 'animation', 'document']:
+                elif content_dict.get('type') in {'photo', 'video', 'animation', 'document'}:
                     text = content_dict.get('caption', '')
                 
                 if text:
