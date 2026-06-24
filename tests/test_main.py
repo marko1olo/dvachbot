@@ -168,3 +168,42 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+import importlib
+class TestMainPsutilImport(unittest.TestCase):
+    def test_psutil_import_error_handled(self):
+        """Test that ImportError on psutil is gracefully handled."""
+        import Dubsite_tgach.main
+
+        real_import = __import__
+        def mock_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == 'psutil':
+                raise ImportError("Mocked ImportError for psutil")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with patch('builtins.__import__', side_effect=mock_import):
+            import Dubsite_tgach.main
+            importlib.reload(Dubsite_tgach.main)
+            self.assertIsNone(Dubsite_tgach.main.psutil)
+
+        # Restore state by reloading normally
+        import Dubsite_tgach.main
+        importlib.reload(Dubsite_tgach.main)
+
+    def test_missing_secret_key_raises_error(self):
+        """Test that missing SECRET_KEY raises a ValueError."""
+        original_key = os.environ.get("SECRET_KEY")
+        if "SECRET_KEY" in os.environ:
+            del os.environ["SECRET_KEY"]
+
+        try:
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaises(ValueError) as context:
+                    import Dubsite_tgach.main
+                    importlib.reload(Dubsite_tgach.main)
+                self.assertIn("Необходимо установить SECRET_KEY в вашем .env файле.", str(context.exception))
+        finally:
+            if original_key:
+                os.environ["SECRET_KEY"] = original_key
+            import Dubsite_tgach.main
+            importlib.reload(Dubsite_tgach.main)
