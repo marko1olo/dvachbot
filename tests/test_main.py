@@ -2,7 +2,9 @@ import sys
 import os
 import unittest
 import types
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch, AsyncMock
+import asyncio
+
 
 # Setup required env var
 os.environ["SECRET_KEY"] = "test-secret-key-12345"
@@ -24,7 +26,7 @@ mocked_deps = [
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
     'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
-    'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
+    'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'uvicorn',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
@@ -38,7 +40,11 @@ for dep in mocked_deps:
 # Return MagicMock for any attribute access on our mocked modules
 for mod_name in sys.modules:
     if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
-        sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
+        class SiteTgachMock(MagicMock):
+            def __await__(self):
+                async def dummy(): return self
+                return dummy().__await__()
+        sys.modules[mod_name].__getattr__ = lambda name: SiteTgachMock()
 
 # Now we can safely import the function under test
 from Dubsite_tgach.main import get_real_ip
@@ -127,7 +133,6 @@ if __name__ == "__main__":
     unittest.main()
 
 from Dubsite_tgach.main import format_bayan_label
-from unittest.mock import patch
 
 class TestFormatBayanLabel(unittest.TestCase):
     @patch('Dubsite_tgach.main.random.choice')
@@ -168,3 +173,51 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+from Dubsite_tgach.main import get_country_by_ip
+
+class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls):
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+    async def asyncSetUp(self):
+        if hasattr(get_country_by_ip, 'cache_clear'):
+            get_country_by_ip.cache_clear()
+
+    @patch('Dubsite_tgach.main.GEOIP_READER')
+    @patch('Dubsite_tgach.main.AsyncHTTPTransport')
+    async def test_get_country_by_ip_httpx_fallback(self, mock_transport, mock_geoip):
+        mock_geoip.country.side_effect = Exception("GeoIP Error")
+
+        with patch('Dubsite_tgach.main.httpx.AsyncClient', autospec=True) as mock_async_client_class:
+            mock_client_instance = mock_async_client_class.return_value.__aenter__.return_value
+
+            # 1. Test Exception raising during HTTP request
+            # Needs side_effect to be called twice due to multiple proxies failing
+            mock_client_instance.get = AsyncMock(side_effect=Exception("HTTPX Error"))
+            country = await get_country_by_ip("8.8.8.8")
+            self.assertEqual(country, "XX")
+            if hasattr(get_country_by_ip, 'cache_clear'):
+                get_country_by_ip.cache_clear()
+
+            # 2. Test 200 response
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {'countryCode': 'US'}
+            # We want it to just return this value
+            mock_client_instance.get = AsyncMock(return_value=mock_resp)
+
+            country = await get_country_by_ip("8.8.8.8")
+            self.assertEqual(country, "US")
+            if hasattr(get_country_by_ip, 'cache_clear'):
+                get_country_by_ip.cache_clear()
+
+            # 3. Test non-200 response
+            mock_resp_500 = MagicMock()
+            mock_resp_500.status_code = 500
+            # Needs to return 500 twice for proxy and direct
+            mock_client_instance.get = AsyncMock(return_value=mock_resp_500)
+
+            country = await get_country_by_ip("8.8.8.8")
+            self.assertEqual(country, "XX")
