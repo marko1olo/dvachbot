@@ -168,3 +168,27 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+from unittest.mock import patch
+
+class TestMainImport(unittest.TestCase):
+    def test_psutil_import_error_handled(self):
+        original_main = sys.modules.get('Dubsite_tgach.main')
+        if 'Dubsite_tgach.main' in sys.modules:
+            del sys.modules['Dubsite_tgach.main']
+
+        import builtins
+        real_import = builtins.__import__
+
+        def mock_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == 'psutil':
+                raise ImportError("No module named 'psutil'")
+            return real_import(name, globals, locals, fromlist, level)
+
+        try:
+            with patch('builtins.__import__', side_effect=mock_import):
+                import Dubsite_tgach.main as reloaded_main
+                self.assertIsNone(reloaded_main.psutil)
+        finally:
+            if original_main:
+                sys.modules['Dubsite_tgach.main'] = original_main
