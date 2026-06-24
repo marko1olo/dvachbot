@@ -35,13 +35,11 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
     """
     Summarize text using a cascade of OpenAI-compatible endpoints:
     1. Gemini API (gemini-3.0-flash)
-    2. Gemini API (models/gemini-3.1-flash-lite)
-    3. Groq API (llama-3.1-8b-instant)
+    2. Groq API (llama-3.3-70b-versatile)
     """
     models_cascade = [
         ("gemini-3.0-flash", "gemini"),
-        ("models/gemini-3.1-flash-lite", "gemini"),
-        ("llama-3.1-8b-instant", "groq")
+        ("llama-3.3-70b-versatile", "groq")
     ]
     
     messages = [
