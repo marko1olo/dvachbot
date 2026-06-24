@@ -114,9 +114,17 @@ def generate_all_charts():
                 daily_stats[d] = {'total': 0, 'toxic': 0}
             
             daily_stats[d]['total'] += 1
-            content_lower = r['content'].lower()
-            if any(root in content_lower for root in swear_roots):
-                daily_stats[d]['toxic'] += 1
+            content_raw = r['content']
+            if content_raw:
+                try:
+                    content_data = json.loads(content_raw)
+                    text = content_data.get('text', '') or content_data.get('caption', '') or ''
+                except Exception:
+                    text = content_raw
+                
+                content_lower = text.lower()
+                if any(root in content_lower for root in swear_roots):
+                    daily_stats[d]['toxic'] += 1
                 
         plot_data = []
         for d, stats in sorted(daily_stats.items()):
