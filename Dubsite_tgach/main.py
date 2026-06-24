@@ -4262,10 +4262,10 @@ async def api_admin_stealth_edit(
             new_images = processed_images_list
 
         stream = getattr(request.state, 'stream', 'ru')
+        u_bot_id, u_bot = global_bot_pool.get_next_bot(stream)
         for file_obj in new_images:
             if not file_obj.filename:
                 continue
-            u_bot_id, u_bot = global_bot_pool.get_next_bot(stream)
             content_type = file_obj.content_type or ""
             func = process_and_upload_voice if content_type.startswith("audio/") else process_and_upload_image
             try:
