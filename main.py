@@ -274,15 +274,20 @@ RE_REPLY_QUOTE = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d
 RE_REPLY_QUOTE_FORMAT = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
 RE_MULTI_REPLY = re.compile(r'>>(\d+)')
 FONTS_CACHE = []
-try:
-    font_files = ["font1.ttf", "font2.ttf", "font3.ttf", "font4.ttf"]
-    for ff in font_files:
-        if os.path.exists(ff):
-            FONTS_CACHE.append(ImageFont.truetype(ff, 40))
-    if not FONTS_CACHE:
+
+def init_fonts_cache():
+    try:
+        font_files = ["font1.ttf", "font2.ttf", "font3.ttf", "font4.ttf"]
+        for ff in font_files:
+            if os.path.exists(ff):
+                FONTS_CACHE.append(ImageFont.truetype(ff, 40))
+        if not FONTS_CACHE:
+            FONTS_CACHE.append(ImageFont.load_default())
+    except Exception:
         FONTS_CACHE.append(ImageFont.load_default())
-except Exception:
-    FONTS_CACHE.append(ImageFont.load_default())
+
+init_fonts_cache()
+
 class MultiLangMiddleware(BaseMiddleware):
     """
     Определяет языковой поток пользователя (ru/en/jp).
