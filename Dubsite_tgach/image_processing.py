@@ -527,9 +527,14 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
         
         try:
             file_info = await bot.get_file(file_id)
-            tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+            file_path = getattr(file_info, "file_path", None)
             
-            catbox_link = await upload_url_to_catbox(tg_url)
+            if file_path:
+                tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
+                catbox_link = await upload_url_to_catbox(tg_url)
+            else:
+                catbox_link = None
+
             if catbox_link:
                 await add_file_mirror(file_id, 'catbox', catbox_link)
             else:
