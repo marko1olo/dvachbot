@@ -24,7 +24,7 @@ mocked_deps = [
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
     'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
-    'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
+    'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'uvicorn',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
@@ -37,7 +37,8 @@ for dep in mocked_deps:
 
 # Return MagicMock for any attribute access on our mocked modules
 for mod_name in sys.modules:
-    if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
+    # avoid overriding things in geoip2 and async_lru modules that we might need exactly
+    if (mod_name.startswith('site_tgach.') or mod_name in mocked_deps) and not mod_name.startswith('geoip2') and mod_name != 'async_lru':
         sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
 
 # Now we can safely import the function under test
@@ -168,3 +169,171 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+from unittest.mock import patch, AsyncMock
+from async_lru import alru_cache
+
+class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # Reset cache before every test
+        import Dubsite_tgach.main as main_module
+        if hasattr(main_module.get_country_by_ip, "cache_clear"):
+            main_module.get_country_by_ip.cache_clear()
+
+        # We need to reach into main to reset the global GEOIP_READER
+        from Dubsite_tgach.main import GEOIP_READER
+        self.original_geoip_reader = GEOIP_READER
+        import Dubsite_tgach.main as main_module
+        main_module.GEOIP_READER = None
+
+    async def asyncTearDown(self):
+        import Dubsite_tgach.main as main_module
+        main_module.GEOIP_READER = self.original_geoip_reader
+
+    @patch('Dubsite_tgach.main.os.path.exists')
+    @patch('Dubsite_tgach.main.httpx.AsyncClient')
+    async def test_get_country_by_ip_reader_exception(self, mock_async_client, mock_exists):
+        """Test the path where GEOIP_READER initialization raises an exception."""
+        mock_exists.return_value = True
+
+        # We want reader initialization to fail
+        def mock_reader_init(path):
+            raise Exception("Mocked reader initialization error")
+
+        # Mock the entire geoip2 module properly so we can raise exception on Reader init
+        mocked_geoip2 = mock_module('geoip2')
+        mocked_geoip2_database = mock_module('geoip2.database')
+        mocked_geoip2.database = mocked_geoip2_database
+        with patch.dict(sys.modules, {'geoip2': mocked_geoip2, 'geoip2.database': mocked_geoip2_database}):
+            import geoip2.database
+            geoip2.database.Reader = mock_reader_init
+
+            from Dubsite_tgach.main import get_country_by_ip
+
+            # Use an IP that doesn't fast-return
+            ip = "8.8.8.8"
+
+            # We mock the http fallback so it doesn't actually make network requests
+            mock_client_instance = AsyncMock()
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {'countryCode': 'US'}
+            mock_client_instance.get.return_value = mock_response
+            mock_async_client.return_value = mock_client_instance
+
+            country = await get_country_by_ip(ip)
+
+            import Dubsite_tgach.main as main_module
+            self.assertIsNone(main_module.GEOIP_READER)
+            self.assertEqual(country, 'US')
+
+
+    @patch('Dubsite_tgach.main.os.path.exists')
+    async def test_get_country_by_ip_reader_import_error(self, mock_exists):
+        """Test the path where importing geoip2.database raises an exception."""
+        mock_exists.return_value = True
+
+        # Instead of patching sys.modules which can be tricky to override import error
+        # We can just make the mock raise an ImportError when an attribute is accessed or imported
+        mocked_geoip2 = mock_module('geoip2')
+        # Setting a property that will raise when accessed might work, or simpler:
+
+        # We actually want 'import geoip2.database' to fail.
+        # A mock module doesn't easily raise on import unless it's in sys.modules with a property.
+        # But an easier way is to patch builtins.__import__ directly for this scope
+        original_import = __import__
+        def mock_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == 'geoip2.database':
+                raise ImportError("Mocked import error for geoip2.database")
+            return original_import(name, globals, locals, fromlist, level)
+
+        import builtins
+        with patch.object(builtins, '__import__', side_effect=mock_import):
+            from Dubsite_tgach.main import get_country_by_ip
+            ip = "127.0.0.1" # fast path
+            # To hit the logic, we must use a non-fast-path IP
+            ip = "8.8.8.8"
+
+            # Since HTTP requests will fail or succeed and we don't mock it, we mock httpx
+            with patch('Dubsite_tgach.main.httpx.AsyncClient') as mock_async_client:
+                mock_client_instance = AsyncMock()
+                mock_client_instance.__aenter__.return_value = mock_client_instance
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = {'countryCode': 'CA'}
+                mock_client_instance.get.return_value = mock_response
+                mock_async_client.return_value = mock_client_instance
+
+                country = await get_country_by_ip(ip)
+
+                import Dubsite_tgach.main as main_module
+                self.assertIsNone(main_module.GEOIP_READER)
+                self.assertEqual(country, 'CA')
+
+    @patch('Dubsite_tgach.main.os.path.exists')
+    @patch('Dubsite_tgach.main.httpx.AsyncClient')
+    async def test_get_country_by_ip_reader_success(self, mock_async_client, mock_exists):
+        """Test the path where GEOIP_READER successfully reads."""
+        mock_exists.return_value = True
+
+        # We want reader initialization to succeed
+        def mock_reader_init(path):
+            mock_reader = MagicMock()
+            mock_reader.country.return_value.country.iso_code = "GB"
+            return mock_reader
+
+        mocked_geoip2 = mock_module('geoip2')
+        mocked_geoip2_database = mock_module('geoip2.database')
+        mocked_geoip2.database = mocked_geoip2_database
+        with patch.dict(sys.modules, {'geoip2': mocked_geoip2, 'geoip2.database': mocked_geoip2_database}):
+            import geoip2.database
+            geoip2.database.Reader = mock_reader_init
+
+            from Dubsite_tgach.main import get_country_by_ip
+
+            ip = "8.8.8.8"
+
+            country = await get_country_by_ip(ip)
+
+            import Dubsite_tgach.main as main_module
+            self.assertIsNotNone(main_module.GEOIP_READER)
+            self.assertEqual(country, 'GB')
+
+    @patch('Dubsite_tgach.main.os.path.exists')
+    @patch('Dubsite_tgach.main.httpx.AsyncClient')
+    async def test_get_country_by_ip_reader_query_exception(self, mock_async_client, mock_exists):
+        """Test the path where GEOIP_READER successfully initializes but throws during query."""
+        mock_exists.return_value = True
+
+        # We want reader initialization to succeed but query to fail
+        def mock_reader_init(path):
+            mock_reader = MagicMock()
+            mock_reader.country.side_effect = Exception("Query Exception")
+            return mock_reader
+
+        mocked_geoip2 = mock_module('geoip2')
+        mocked_geoip2_database = mock_module('geoip2.database')
+        mocked_geoip2.database = mocked_geoip2_database
+        with patch.dict(sys.modules, {'geoip2': mocked_geoip2, 'geoip2.database': mocked_geoip2_database}):
+            import geoip2.database
+            geoip2.database.Reader = mock_reader_init
+
+            from Dubsite_tgach.main import get_country_by_ip
+
+            ip = "8.8.8.8"
+
+            # Mock HTTP fallback
+            mock_client_instance = AsyncMock()
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {'countryCode': 'DE'}
+            mock_client_instance.get.return_value = mock_response
+            mock_async_client.return_value = mock_client_instance
+
+            country = await get_country_by_ip(ip)
+
+            import Dubsite_tgach.main as main_module
+            self.assertIsNotNone(main_module.GEOIP_READER)
+            self.assertEqual(country, 'DE')
