@@ -24,12 +24,12 @@ mocked_deps = [
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
     'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
-    'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
+    'bs4', 'slowapi', 'slowapi.util', 'slowapi.errors', 'uvicorn',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
     'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
-    'aiogram.webhook', 'aiogram.webhook.aiohttp_server'
+    'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'PIL', 'PIL.Image'
 ]
 
 for dep in mocked_deps:
@@ -168,3 +168,67 @@ class TestFormatBayanLabel(unittest.TestCase):
         # Assuming the fallback logic works for a missing lang
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
+
+from unittest.mock import patch, AsyncMock
+import Dubsite_tgach.main as main_module
+from Dubsite_tgach.main import get_country_by_ip
+
+class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        main_module.GEOIP_READER = None
+        if hasattr(get_country_by_ip, 'cache_clear'):
+            get_country_by_ip.cache_clear()
+
+    async def test_localhost(self):
+        self.assertEqual(await get_country_by_ip("127.0.0.1"), "XX")
+        self.assertEqual(await get_country_by_ip("localhost"), "XX")
+        self.assertEqual(await get_country_by_ip("::1"), "XX")
+
+    @patch('Dubsite_tgach.main.GEOIP_READER')
+    async def test_geoip_reader_success(self, mock_reader):
+        main_module.GEOIP_READER = mock_reader
+        mock_response = MagicMock()
+        mock_response.country.iso_code = "US"
+        mock_reader.country.return_value = mock_response
+
+        res = await get_country_by_ip("8.8.8.8")
+        self.assertEqual(res, "US")
+        mock_reader.country.assert_called_once_with("8.8.8.8")
+
+    @patch('Dubsite_tgach.main.GEOIP_READER')
+    @patch('httpx.AsyncClient.get', new_callable=AsyncMock)
+    async def test_geoip_reader_exception_fallback_to_http(self, mock_get, mock_reader):
+        main_module.GEOIP_READER = mock_reader
+        mock_reader.country.side_effect = Exception("Not found")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"countryCode": "CA"}
+        mock_get.return_value = mock_response
+
+        res = await get_country_by_ip("1.1.1.1")
+        self.assertEqual(res, "CA")
+
+    @patch('Dubsite_tgach.main.GEOIP_READER', new=None)
+    @patch('os.path.exists', return_value=False)
+    @patch('httpx.AsyncClient.get', new_callable=AsyncMock)
+    async def test_http_api_success(self, mock_get, mock_exists):
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"countryCode": "GB"}
+        mock_get.return_value = mock_response
+
+        res = await get_country_by_ip("2.2.2.2")
+        self.assertEqual(res, "GB")
+
+    @patch('Dubsite_tgach.main.GEOIP_READER', new=None)
+    @patch('os.path.exists', return_value=False)
+    @patch('httpx.AsyncClient.get', new_callable=AsyncMock)
+    async def test_http_api_failure_all_strategies(self, mock_get, mock_exists):
+
+        # Simulate network failure or non-200 for all HTTP strategies
+        mock_get.side_effect = Exception("Connection error")
+
+        res = await get_country_by_ip("3.3.3.3")
+        self.assertEqual(res, "XX")
