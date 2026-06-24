@@ -2764,9 +2764,23 @@ async def format_thread_post_header(board_id: str, local_post_num: int, author_i
         return f"{circle}{prefix}Пост №{post_num_formatted}"
 async def format_header(board_id: str, post_num: int, author_id: int = 0, stream: str = 'ru') -> str:
     """
-    Форматирование заголовка. 
-    Исправлено: принимает author_id для совместимости, реализует смену День/Ночь.
+    Форматирование заголовка с поддержкой VIP префиксов из Теневого Магазина.
     """
+    custom_prefix = ""
+    if author_id > 0:
+        from common.db_pool import get_pool
+        import time
+        db = await get_pool()
+        async with db.execute("SELECT custom_prefix, prefix_expires_at FROM Users WHERE user_id = ?", (author_id,)) as c:
+            row = await c.fetchone()
+            if row and row[0] and row[1]:
+                if int(time.time()) < row[1]:
+                    custom_prefix = f"<b>{row[0]}</b> "
+                    
+    res = await _format_header_inner(board_id, post_num, stream)
+    return custom_prefix + res
+
+async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru') -> str:
     board_data[board_id].setdefault('board_post_count', 0)
     board_data[board_id]['board_post_count'] += 1
     post_num_formatted = str(post_num)
@@ -3213,6 +3227,77 @@ async def process_shadow_reject(ctx: ShadowRejectContext):
     )
     print(f"👻 [SHADOW] Теневой отброс медиа от {ctx.user_id} на доске {ctx.board_id}")
 
+SHADOW_REPLACEMENTS = [
+    "я люблю глотать сперму",
+    "моя мать — портовая шлюха",
+    "я тупой куколд",
+    "я сосу хуи за копейки",
+    "я обосрался прямо в штаны",
+    "я опущенный петух",
+    "я ем говно на завтрак",
+    "мой отчим меня ебет",
+    "я терпила и горжусь этим",
+    "я мамин пирожочек с хуем во рту",
+    "я порвался, несите зашивать",
+    "у меня сперматоксикоз и нет друзей",
+    "я фанат соловьева и пью мочу",
+    "меня вчера отпиздили школьники",
+    "я жалкий скуф с пивным пузом",
+    "мой iq равен температуре в комнате",
+    "я сижу на бутылке правосудия",
+    "я грязный хуесос без личной жизни",
+    "я макака, пустите меня в зоопарк",
+    "в моей голове насрано",
+    "я люблю, когда на меня ссут",
+    "я куколд-наблюдатель 80 левела",
+    "дайте мне хуй, я буду его сосать",
+    "я биомусор, извините что родился",
+    "я подзалупный творожок"
+]
+
+SHADOW_WORDS_REGEX = re.compile(
+    r'(?i)(?<![а-яёa-z])(к\s*а\s*л(?:\s+о\s*в\s*ы\s*е\s+м\s*а\s*с\s*с\s*ы)?|k\s*a\s*l|б\s*а\s*я\s*н|б\s*о\s*я\s*н|b\s*a\s*y\s*a\s*n|b\s*o\s*y\s*a\s*n)(?![а-яёa-z])'
+)
+
+POLITICAL_REPLACEMENTS = [
+    (re.compile(r'(?i)\bх\s*о\s*х\s*о\s*л\b'), ['великий укр']),
+    (re.compile(r'(?i)\bх\s*о\s*х\s*л\s*ы\b'), ['славные украинцы']),
+    (re.compile(r'(?i)\bх\s*о\s*х\s*л\s*о\s*в\b'), ['богоподобных украинцев']),
+    (re.compile(r'(?i)\bх\s*о\s*х\s*л\s*а\b'), ['великого укра']),
+    (re.compile(r'(?i)\bх\s*о\s*х\s*л\s*а\s*м\b'), ['великим украм']),
+    (re.compile(r'(?i)\bх\s*о\s*х\s*л\s*а\s*м\s*и\b'), ['великими украми']),
+    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*и\s*й\b'), ['руснявый', 'пидорусский']),
+    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*и\s*е\b'), ['руснявые', 'пидорусские']),
+    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*и\s*х\b'), ['руснявых', 'пидорусских']),
+    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*о\s*г\s*о\b'), ['руснявого', 'пидорусского']),
+    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*о\s*м\s*у\b'), ['руснявому', 'пидорусскому']),
+    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*и\s*м\b'), ['руснявым', 'пидорусским']),
+    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*а\s*я\b'), ['руснявая', 'пидорусская']),
+    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*о\s*й\b'), ['руснявой', 'пидорусской']),
+    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*у\s*ю\b'), ['руснявую', 'пидорусскую'])
+]
+
+def apply_shadow_autoreplace(content: dict) -> dict:
+    if not content:
+        return content
+        
+    modified = content.copy()
+    
+    def replacer(match):
+        return random.choice(SHADOW_REPLACEMENTS)
+        
+    for key in ('text', 'caption'):
+        text_val = modified.get(key)
+        if text_val:
+            words = text_val.split()
+            if len(words) <= 12:
+                text_val = SHADOW_WORDS_REGEX.sub(replacer, text_val)
+                for pattern, replacements in POLITICAL_REPLACEMENTS:
+                    text_val = pattern.sub(lambda m, reps=replacements: random.choice(reps), text_val)
+                modified[key] = text_val
+                
+    return modified
+
 async def process_new_post(
     bot_instance: Bot,
     board_id: str,
@@ -3255,9 +3340,25 @@ async def process_new_post(
                 active_stream_users = stream_users.intersection(b_data['users']['active'])
                 recipients = active_stream_users - {user_id}
         now_dt = datetime.now(UTC)
-        final_content = await _apply_mode_transformations(content, board_id)
+        author_content = await _apply_mode_transformations(content, board_id)
+        
+        if user_id > 0:
+            from common.db_pool import get_pool
+            import time
+            db = await get_pool()
+            async with db.execute("SELECT cursed_until FROM Users WHERE user_id = ?", (user_id,)) as c:
+                row = await c.fetchone()
+                if row and row[0] and int(time.time()) < row[0]:
+                    if 'text' in author_content and author_content['text']:
+                        author_content['text'] += "\n\n<i>[Я ХУЕСОС 🤮]</i>"
+                        
+        final_content = apply_shadow_autoreplace(author_content)
+        
         final_content['reply_to_post'] = reply_to_post
+        author_content['reply_to_post'] = reply_to_post
+        
         image_bytes_to_send = final_content.pop('image_bytes', None)
+        author_image_bytes = author_content.pop('image_bytes', None)
         current_post_num = await create_post(
             board_id=board_id,
             author_id=user_id,
@@ -3289,23 +3390,28 @@ async def process_new_post(
             mark_weekly_active_delivery_user(board_id, user_id)
         locally_created_posts.append(current_post_num)
         final_content['post_num'] = current_post_num
+        author_content['post_num'] = current_post_num
         if thread_id:
             thread_info = b_data.get('threads_data', {}).get(thread_id)
             local_post_num = len(thread_info.get('posts', [])) + 1
             header_text = await format_thread_post_header(board_id, local_post_num, user_id, thread_info, stream=stream)
         else:
-            header_text = await format_header(board_id, current_post_num, stream=stream)
+            header_text = await format_header(board_id, current_post_num, author_id=user_id, stream=stream)
         final_content['header'] = header_text
+        author_content['header'] = header_text
         await update_post_content(current_post_num, final_content)
         if image_bytes_to_send:
             final_content['image_bytes'] = image_bytes_to_send
+        if author_image_bytes:
+            author_content['image_bytes'] = author_image_bytes
+            
         author_results = None
         try:
             author_results = await send_message_to_users(
                 bot_instance=bot_instance,
                 board_id=board_id,
                 recipients={user_id},
-                content=final_content,
+                content=author_content,
                 reply_info=reply_info_for_author,
                 verbose=False
             )
@@ -3330,7 +3436,7 @@ async def process_new_post(
                             print("    -> Скачивание не удалось.")
                             continue
                         processed_bytes = await loop.run_in_executor(None, _resize_image_if_needed, download_result[0])
-                        fallback_content = final_content.copy()
+                        fallback_content = author_content.copy()
                         fallback_content.pop('image_url', None)
                         fallback_content['image_bytes'] = processed_bytes
                         author_results = await send_message_to_users(
@@ -3338,7 +3444,8 @@ async def process_new_post(
                             content=fallback_content, reply_info=reply_info_for_author
                         )
                         if author_results:
-                            final_content = fallback_content
+                            final_content.pop('image_url', None)
+                            final_content['image_bytes'] = processed_bytes
                             fallback_succeeded = True
                             print(f"✅ 'Спасательный Цикл' для поста #{current_post_num} успешен.")
                             break
@@ -6265,6 +6372,250 @@ async def cmd_global_pin(message: types.Message, board_id: str | None, stream: s
     else:
         final = f"✅ Пост #{post_num} закреплен (Успешно: {count_success}).\nНовые пользователи тоже увидят его."
     await status_msg.edit_text(final)
+@dp.message(Command("shop", "store", "market"))
+async def cmd_shop(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    
+    from common.db_pool import get_pool
+    db = await get_pool()
+    
+    async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
+        row = await c.fetchone()
+        balance = row[0] if row and row[0] is not None else 0
+
+    text = (
+        f"🛒 <b>Теневой Магазин (Black Market)</b>\n"
+        f"Твой баланс: <code>{int(balance)}.00 RUB</code>\n\n"
+        f"Трать свои фейк-рубли на грязь и власть:\n"
+        f"1. 🔇 <b>Мут-Ган (1 час)</b> — <i>500 RUB</i>\n"
+        f"   (Выстрели в любого анона и отправь его в мут)\n"
+        f"2. 🤡 <b>Авто-Клоун (24ч)</b> — <i>1000 RUB</i>\n"
+        f"   (Бот будет автоматически ставить 🤡 на все посты жертвы)\n"
+        f"3. 👑 <b>VIP Префикс (24ч)</b> — <i>300 RUB</i>\n"
+        f"   (Случайный префикс к твоему ID: от позора до элиты)\n"
+        f"4. 🎲 <b>Инверсия кармы (1 час)</b> — <i>2000 RUB</i>\n"
+        f"   (Все лайки выбранной жертвы будут превращаться в дизлайки)\n"
+        f"5. 🕵️ <b>Псевдо-Деанон (Скам)</b> — <i>1500 RUB</i>\n"
+        f"   (Напугать анона фейковым сливом IP-адреса)\n"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔇 Купить Мут-Ган (500)", callback_data="shop_buy_mute")],
+        [InlineKeyboardButton(text="🤮 Купить Проклятие (800)", callback_data="shop_buy_curse")],
+        [InlineKeyboardButton(text="👑 Ролл Префикса (300)", callback_data="shop_buy_prefix")]
+    ])
+
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("shop_buy_"))
+async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    item = callback.data.split("_")[2] # mute, curse, prefix
+    
+    costs = {"mute": 500, "curse": 800, "prefix": 300}
+    price = costs.get(item, 999999)
+
+    from common.db_pool import get_pool, db_lock
+    db = await get_pool()
+    
+    async with db.execute("SELECT SUM(balance), MAX(active_items) FROM Users WHERE user_id = ?", (user_id,)) as c:
+        row = await c.fetchone()
+        balance = row[0] if row and row[0] is not None else 0
+        active_items_str = row[1] if row and len(row) > 1 and row[1] else "{}"
+        
+    if balance < price:
+        await callback.answer(f"❌ Не хватает бабок! Нужно {price} RUB, у тебя {int(balance)} RUB.", show_alert=True)
+        return
+
+    import json
+    import time
+    import random
+    try:
+        active_items = json.loads(active_items_str)
+    except:
+        active_items = {}
+
+    msg = ""
+    # 1. Mute-Gun
+    if item == "mute":
+        if active_items.get("mute_gun"):
+            await callback.answer("У тебя уже есть Мут-Ган! Сделай Reply на пост с командой /shoot", show_alert=True)
+            return
+        active_items["mute_gun"] = True
+        msg = "🔫 Ты купил Мут-Ган!\nТеперь сделай Reply на пост любой жертвы в чате и напиши /shoot, чтобы отправить его на парашу (мут 1 час)."
+    
+    # 2. Curse
+    elif item == "curse":
+        if active_items.get("curse"):
+            await callback.answer("У тебя уже есть флакон! Сделай Reply на пост с командой /curse", show_alert=True)
+            return
+        active_items["curse"] = True
+        msg = "🤮 Ты купил Проклятие Хуесоса!\nСделай Reply на пост жертвы и напиши /curse. Следующие 2 часа к его постам будет приклеиваться клеймо."
+    
+    # 3. Prefix
+    elif item == "prefix":
+        prefixes = [
+            "[Скуф]", "[Опущенный]", "[Калоед]", "[Подпивас]", "[Шитпостер]", 
+            "[Гой]", "[Мамкин Трейдер]", "[Инцел]", "[Анимешник]", "[Чмо]",
+            "[Вумен ☕️]", "[Гигачад]", "[Бог Борды]", "[VIP Анон]", "[Владелец]"
+        ]
+        if random.random() < 0.9:
+            chosen = random.choice(prefixes[:11])
+        else:
+            chosen = random.choice(prefixes[11:])
+        
+        expires = int(time.time()) + 86400
+        
+        async with db_lock:
+            await db.execute("UPDATE Users SET custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ?", (chosen, expires, user_id))
+        msg = f"👑 Рулетка крутится...\nТебе выпал префикс: {chosen}\nОн будет отображаться в твоем паспорте и (скоро) в заголовках постов 24 часа."
+
+    # Списываем баланс. Временно списываем с текущей доски, даже если уйдет в минус (сумма по всем доскам компенсирует)
+    async with db_lock:
+        await db.execute("UPDATE Users SET balance = balance - ?, active_items = ? WHERE user_id = ? AND board_id = ?", 
+                         (price, json.dumps(active_items), user_id, board_id))
+        await db.commit()
+
+    await callback.answer(msg, show_alert=True)
+
+    new_bal = balance - price
+    text = callback.message.html_text.replace(f"{int(balance)}.00", f"{int(new_bal)}.00")
+    try:
+        await callback.message.edit_text(text, reply_markup=callback.message.reply_markup, parse_mode="HTML")
+    except:
+        pass
+
+@dp.message(Command("shoot"))
+async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    
+    if not message.reply_to_message:
+        await message.answer("⚠️ Сделай Reply на пост жертвы с командой /shoot!")
+        return
+
+    from common.db_pool import get_pool, db_lock
+    import json
+    import time
+    db = await get_pool()
+    
+    async with db.execute("SELECT active_items FROM Users WHERE user_id = ?", (user_id,)) as c:
+        row = await c.fetchone()
+        active_items_str = row[0] if row and row[0] else "{}"
+        
+    try:
+        active_items = json.loads(active_items_str)
+    except:
+        active_items = {}
+
+    if not active_items.get("mute_gun"):
+        await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
+        return
+
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0:
+        await message.answer("🚫 Не удалось найти автора поста...")
+        return
+        
+    if target_id == user_id:
+        await message.answer("Ты пытаешься выстрелить в самого себя? Идиот.")
+        return
+
+    # Apply mute
+    mute_duration = 3600
+    current_time = int(time.time())
+    unban_time = current_time + mute_duration
+    
+    async with db_lock:
+        await db.execute("UPDATE Users SET is_banned = 1, ban_reason = ?, unban_time = ? WHERE user_id = ?",
+                         ("Убит Мут-Ганом из Теневого Магазина", unban_time, target_id))
+        
+        active_items["mute_gun"] = False
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
+        await db.commit()
+    
+    alert = (
+        f"💥 <b>ВЫСТРЕЛ ИЗ МУТ-ГАНА!</b>\n\n"
+        f"Какой-то богатенький анон только что купил Мут-Ган за 500 RUB и пристрелил автора этого поста!\n"
+        f"Автор отправляется на парашу на 1 час."
+    )
+    await message.bot.send_message(message.chat.id, alert, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+    
+    try:
+        await message.bot.send_message(target_id, "💥 <b>В тебя выстрелили из Мут-Гана!</b>\nТебя отправили в мут на 1 час.", parse_mode="HTML")
+    except:
+        pass
+        
+    try:
+        await message.delete()
+    except:
+        pass
+
+@dp.message(Command("curse", "vomit"))
+async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    
+    from common.db_pool import get_pool, db_lock
+    import json
+    import time
+    db = await get_pool()
+
+    async with db.execute("SELECT active_items FROM Users WHERE user_id = ?", (user_id,)) as c:
+        row = await c.fetchone()
+        active_items_str = row[0] if row and row[0] else "{}"
+    try:
+        active_items = json.loads(active_items_str)
+    except:
+        active_items = {}
+
+    if not active_items.get("curse"):
+        await message.answer("У тебя нет Проклятия! Купи его в магазине: /shop")
+        return
+
+    if not message.reply_to_message:
+        await message.answer("⚠️ Сделай Reply на пост жертвы с командой /curse!")
+        return
+
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0:
+        await message.answer("🚫 Не удалось найти автора поста...")
+        return
+        
+    if target_id == user_id:
+        await message.answer("Зачем ты блюешь на себя?")
+        return
+
+    curse_duration = 7200
+    current_time = int(time.time())
+    cursed_until = current_time + curse_duration
+    
+    async with db_lock:
+        await db.execute("UPDATE Users SET cursed_until = ? WHERE user_id = ?", (cursed_until, target_id))
+        
+        active_items["curse"] = False
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ?", (json.dumps(active_items), user_id))
+        await db.commit()
+    
+    alert = (
+        f"🤮 <b>ПРОКЛЯТИЕ ХУЕСОСА!</b>\n\n"
+        f"Какой-то анон купил флакон с блевотой за 800 RUB и вылил его на автора этого поста!\n"
+        f"Следующие 2 часа к каждому его посту будет приклеиваться клеймо позора."
+    )
+    await message.bot.send_message(message.chat.id, alert, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+    
+    try:
+        await message.bot.send_message(target_id, "🤮 <b>На тебя вылили Проклятие Хуесоса!</b>\nВсе твои посты следующие 2 часа будут осквернены.", parse_mode="HTML")
+    except:
+        pass
+        
+    try:
+        await message.delete()
+    except:
+        pass
+
 @dp.message(Command("wallet", "balance", "money"))
 async def cmd_wallet(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -8116,7 +8467,6 @@ async def cmd_delete_thread(message: types.Message, board_id: str | None, stream
     except Exception: pass
     await message.answer(confirm, parse_mode="HTML")
     await message.delete()
-@dp.message(Command("summarize", "sum", "summary", "samamri", "sammary"))
 
 async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=None):
     b_data = board_data.get(board_id)
@@ -8288,7 +8638,7 @@ async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 
     
     await processing_msg.edit_text(roast_text, parse_mode='HTML')
 
-
+@dp.message(Command("summarize", "sum", "summary", "samamri", "sammary"))
 async def cmd_summarize(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id:
         print("[summarize] Board ID not found")
@@ -16944,6 +17294,7 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="getid", description="Узнать свой ID"),
         BotCommand(command="whois", description="Информация о пользователе"),
         BotCommand(command="wallet", description="Баланс кошелька"),
+        BotCommand(command="shop", description="Теневой Магазин"),
         BotCommand(command="passport", description="Паспорт и статистика"),
         BotCommand(command="threads", description="Список тредов"),
         BotCommand(command="search", description="Поиск постов"),
