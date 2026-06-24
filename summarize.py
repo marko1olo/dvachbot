@@ -94,6 +94,8 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
                             if completion.choices and len(completion.choices) > 0:
                                 result = completion.choices[0].message.content
                                 if result:
+                                    import re
+                                    result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
                                     logger.info(f"Success using model {model_name} via {provider} ({strategy['name']})")
                                     return result.strip()
                 except Exception as e:

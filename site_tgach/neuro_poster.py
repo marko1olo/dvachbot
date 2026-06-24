@@ -210,7 +210,11 @@ class NeuroManager:
                             http_client=http_client
                         ) as client:
                             completion = await _execute_completion(client, target_model, messages, max_tokens, temperature)
-                            return completion.choices[0].message.content.strip()
+                            content = completion.choices[0].message.content
+                            if content:
+                                import re
+                                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                            return content
 
                 except Exception as e:
                     err_str = str(e)
