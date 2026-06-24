@@ -224,8 +224,10 @@
             <div class="post {% if op_post.content.sage %}is-sage{% endif %}" id="post-{{ op_post.id }}" data-reports="{{ op_post.report_count }}">
                 <div class="post-header">
                     <canvas class="identicon" data-userid="{{ op_post.author_id }}" width="20" height="20"></canvas>
-                    <span>
-                        {% if board_id == 'wh40k' %}
+                    <span class="post-author" {% if session.user and session.user.is_admin %}data-nick="{{ op_post.author_id | nick_from_hash }}"{% endif %}>
+                        {% if session.user and session.user.is_admin %}
+                            {{ op_post.author_id | nick_from_hash }}
+                        {% elif board_id == 'wh40k' %}
                             {{ ['Гвардеец', 'Служитель', 'Сервитор', 'Еретик', 'Хаосит', 'Техножрец', 'Инквизитор'] | random }}
                         {% else %}
                             {{ request.state.t('anon_name') }}
@@ -476,8 +478,10 @@
                     <div class="post {% if reply.content.sage %}is-sage{% endif %} {% if reply.author_id == session.user.id %}is-yours{% endif %} {% if reply.is_reply_to_you %}reply-to-you{% endif %} {% if reply.author_id == op_post.author_id %}is-by-op{% endif %}" id="post-{{ reply.id }}" data-reports="{{ reply.report_count }}">
                         <div class="post-header">
                             <canvas class="identicon" data-userid="{{ reply.author_id }}" width="20" height="20"></canvas>
-                            <span>
-                                {% if board_id == 'wh40k' %}
+                            <span class="post-author" {% if session.user and session.user.is_admin %}data-nick="{{ reply.author_id | nick_from_hash }}"{% endif %}>
+                                {% if session.user and session.user.is_admin %}
+                                    {{ reply.author_id | nick_from_hash }}
+                                {% elif board_id == 'wh40k' %}
                                     {{ ['Гвардеец', 'Служитель', 'Сервитор', 'Еретик', 'Хаосит', 'Техножрец', 'Инквизитор'] | random }}
                                 {% else %}
                                     {{ request.state.t('anon_name') }}

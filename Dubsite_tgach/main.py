@@ -11,6 +11,7 @@ import tracemalloc
 import io
 import random
 import secrets
+import functools
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.locales import TRANSLATIONS
 from common.async_file_io import (
@@ -270,6 +271,31 @@ logging.getLogger("uvicorn.error").addFilter(NoParsingFilter())
 BUMP_LIMIT = 600
 CAPTCHA_SESSIONS = {}
 SPAM_WORDS_CACHE: Dict[str, set] = defaultdict(set)
+
+TROLL_PATTERNS_REGEX = re.compile('|'.join(map(re.escape, [
+    '/.env', '/.git', '/.ssh', '/.bash', '/.profile', '/.history', '/.aws',
+    '/.rhosts', '/.sh_history', '/.wget', '/.htpasswd', '/.htaccess', '/.ds_store',
+    '/.bak', '/.old', '/.save', '/.log', '/.txt', '/.conf', '/.sql',
+    '/goform', '/hello.world', '/mcp', '/sse', '/wp-', '/wp/', '/xmlrpc',
+    '/wlwmanifest', '/bitrix', '/joomla', '/drupal', '/laravel', '/symfony',
+    '/storage/logs', '/vendor', '/composer', '/admin', '/phpmyadmin', '/setup',
+    '/config', '/backup', '/dump', '/db.sql', '/console', '/shell', '/root',
+    '/eval', '/invoker', '/actuator', '/api/v1', '/dashboard', '/cpanel', '/whm',
+    '/sql', '/install', '/+CSCOL+/', '/+CSCOL+', '/+CSCOE+/', '/+CSCOE+',
+    '/autodiscover', '/owa', '/exchange', '/ecp', '/_catalogs', '/_vti',
+    '/hnap1', '/nmap', '/evox', '/sdk', '/phpunit', '/cgi-bin',
+    '/~', '/_', '/1.bak', '/0.bak', '/a.bak', '/12.bak',
+    '/config.json', '/config.php', '/onfig.js',
+])))
+
+
+@functools.lru_cache(maxsize=128)
+def _get_spam_pattern(stop_words_frozenset):
+    if not stop_words_frozenset:
+        return None
+    sorted_words = sorted(list(stop_words_frozenset), key=len, reverse=True)
+    return re.compile('|'.join(map(re.escape, sorted_words)))
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 URL_PATTERN = re.compile(r'(https?://[^\s<>"\'`]+)')
@@ -1413,26 +1439,12 @@ async def custom_404_handler(request: Request, exc):
 
     # 2. ПРОВЕРКА НА БОТА-СКАНЕРА (Только для подозрительных путей)
     # ПАТТЕРНЫ ИЗ ВАШИХ ЛОГОВ
-    troll_patterns = [
-        '/.env', '/.git', '/.ssh', '/.bash', '/.profile', '/.history', '/.aws', 
-        '/.rhosts', '/.sh_history', '/.wget', '/.htpasswd', '/.htaccess', '/.ds_store',
-        '/.bak', '/.old', '/.save', '/.log', '/.txt', '/.conf', '/.sql', '/goform', '/hello.world', '/mcp', '/sse',
-        '/wp-', '/wp/', '/xmlrpc', '/wlwmanifest', '/bitrix', '/joomla', '/drupal',
-        '/laravel', '/symfony', '/storage/logs', '/vendor', '/composer',
-        '/admin', '/phpmyadmin', '/setup', '/config', '/backup', '/dump', '/db.sql',
-        '/console', '/shell', '/root', '/eval', '/invoker', '/actuator', '/api/v1',
-        '/dashboard', '/cpanel', '/whm', '/sql', '/install', '/+CSCOL+/','/+CSCOL+', '/+CSCOE+/', '/+CSCOE+',
-        '/autodiscover', '/owa', '/exchange', '/ecp', '/_catalogs', '/_vti', 
-        '/hnap1', '/nmap', '/evox', '/sdk', '/phpunit', '/cgi-bin', 
-        '/~', '/_', '/1.bak', '/0.bak', '/a.bak', '/12.bak', '/config.json', '/config.php', '/onfig.js',
-    ]
-    
     is_bot = False
-    
+
     # Проверка только если путь НЕ безопасный
     if path.startswith(('/.', '/_', '/~', '/api/v', '/wp-')):
         is_bot = True
-    elif any(p in path for p in troll_patterns):
+    elif TROLL_PATTERNS_REGEX.search(path):
         is_bot = True
     elif path.endswith(('.php', '.asp', '.aspx', '.jsp', '.cgi', '.sh', '.sql', '.bak', '.old', '.save', '.log', '.rar', '.zip', '.7z', '.env', '.ini')):
         is_bot = True
@@ -2661,38 +2673,16 @@ async def custom_404_handler(request: Request, exc):
     path = request.url.path.lower()
     client_ip = get_real_ip(request)
     
-    # ПАТТЕРНЫ ИЗ ВАШИХ ЛОГОВ (И НЕ ТОЛЬКО)
-    troll_patterns = [
-        # System & Configs
-        '/.env', '/.git', '/.ssh', '/.bash', '/.profile', '/.history', '/.aws', 
-        '/.rhosts', '/.sh_history', '/.wget', '/.htpasswd', '/.htaccess', '/.ds_store',
-        '/.bak', '/.old', '/.save', '/.log', '/.txt', '/.conf', '/.sql', '/goform', '/hello.world', '/mcp', '/sse',
-        
-        # CMS & Frameworks
-        '/wp-', '/wp/', '/xmlrpc', '/wlwmanifest', '/bitrix', '/joomla', '/drupal',
-        '/laravel', '/symfony', '/storage/logs', '/vendor', '/composer',
-        
-        # Admin Panels & DBs
-        '/admin', '/phpmyadmin', '/setup', '/config', '/backup', '/dump', '/db.sql',
-        '/console', '/shell', '/root', '/eval', '/invoker', '/actuator', '/api/v1',
-        '/dashboard', '/cpanel', '/whm', '/sql', '/install', '/+CSCOL+/','/+CSCOL+', '/+CSCOE+/', '/+CSCOE+',
-        
-        # Scanners (из логов пользователя)
-        '/autodiscover', '/owa', '/exchange', '/ecp', '/_catalogs', '/_vti', 
-        '/hnap1', '/nmap', '/evox', '/sdk', '/phpunit', '/cgi-bin', 
-        '/~', '/_', '/1.bak', '/0.bak', '/a.bak', '/12.bak', '/config.json', '/config.php', '/onfig.js',
-    ]
-    
     # 1. МГНОВЕННАЯ ПРОВЕРКА (Оптимизирована под логи)
     is_bot = False
-    
+
     # Проверка префиксов (очень быстро)
     # Добавил '~' и '_' так как в логах их дофига: /~webmaster, /_vti_bin
     if path.startswith(('/.', '/_', '/~', '/api/v', '/wp-')):
         is_bot = True
-    
-    # Проверка вхождений (медленнее, но точнее)
-    elif any(p in path for p in troll_patterns):
+
+    # Проверка вхождений — compiled regex, O(n) вместо O(k*n)
+    elif TROLL_PATTERNS_REGEX.search(path):
         is_bot = True
     
     # Проверка расширений (для мусора типа index.php.bak)
@@ -3376,10 +3366,13 @@ async def api_makaba_posting(
     if comment:
         comment = clean_zalgo(comment)
     stop_words = SPAM_WORDS_CACHE.get('all', set()) | SPAM_WORDS_CACHE.get(board, set())
-    if any(word in (comment or "").lower() for word in stop_words):
-        log_system_event(f"🛡️ SPAM BLOCKED (Makaba): User {author_id} tried to post stop-word.")
-        await backend.set(cooldown_key, str(time.time()), expire=limit_seconds)
-        return JSONResponse({"Error": "Spam detected", "Status": "Error"})
+    _spam_pat = _get_spam_pattern(frozenset(stop_words))
+    if _spam_pat:
+        _spam_match = _spam_pat.search((comment or "").lower())
+        if _spam_match:
+            log_system_event(f"🛡️ SPAM BLOCKED (Makaba): User {author_id} tried to post '{_spam_match.group(0)}'")
+            await backend.set(cooldown_key, str(time.time()), expire=limit_seconds)
+            return JSONResponse({"Error": "Spam detected", "Status": "Error"})
 
     files_data = []
     file_owners_to_save = []
@@ -4546,22 +4539,23 @@ async def api_create_post(
     if images is None:
         images = []   
     clean_text_for_check = re.sub(r'[\u200b\u200c\u200d\u2060\ufeff]', '', text).lower()
-    if stop_words:
-        for word in stop_words:
-            if word in clean_text_for_check:
-                log_system_event(f"🛡️ SPAM BLOCKED: User {author_id} tried to post '{word}'")
-                await backend.set(key, str(time.time()), expire=limit_seconds)
-                return {
-                    "id": int(time.time()),
-                    "board_id": board_id,
-                    "author_id": author_id,
-                    "content": {"text": text, "files": [], "type": "text"},
-                    "timestamp": time.time(),
-                    "reply_to_post_num": reply_to,
-                    "thread_id": 0,
-                    "is_op_post": post_mode == 'new_thread',
-                    "shadow_deleted": True
-                }   
+    _spam_pat2 = _get_spam_pattern(frozenset(stop_words))
+    if _spam_pat2:
+        _spam_match2 = _spam_pat2.search(clean_text_for_check)
+        if _spam_match2:
+            log_system_event(f"🛡️ SPAM BLOCKED: User {author_id} tried to post '{_spam_match2.group(0)}'")
+            await backend.set(key, str(time.time()), expire=limit_seconds)
+            return {
+                "id": int(time.time()),
+                "board_id": board_id,
+                "author_id": author_id,
+                "content": {"text": text, "files": [], "type": "text"},
+                "timestamp": time.time(),
+                "reply_to_post_num": reply_to,
+                "thread_id": 0,
+                "is_op_post": post_mode == 'new_thread',
+                "shadow_deleted": True
+            }   
     if await get_user_status(author_id, board_id) == 'banned':
         logger.warning(f"🚫 REJECTED: User {author_id} is BANNED on /{board_id}/ (IP: {request.state.client_ip})")
         

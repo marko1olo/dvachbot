@@ -208,13 +208,6 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
 # ПОЛУЧЕНИЕ ЗАДАЧ
 # ==========================================
 async def get_tasks(db) -> list[dict]:
-    file_owners = {}
-    try:
-        async with db.execute("SELECT file_id, bot_id FROM FileOwners") as cursor:
-            async for row in cursor:
-                file_owners[row[0]] = row[1]
-    except Exception: pass
-    
     tasks = []
     # 1. Основная очередь из реестра
     query_registry = f"""
@@ -228,7 +221,7 @@ async def get_tasks(db) -> list[dict]:
     try:
         async with db.execute(query_registry) as cursor:
             async for row in cursor:
-                tasks.append({'fid': row[0], 'type': row[1], 'bot_id': file_owners.get(row[0])})
+                tasks.append({'fid': row[0], 'type': row[1]})
     except Exception as e:
         logger.error(f"DB Error getting registry tasks: {e}")
 
@@ -246,8 +239,23 @@ async def get_tasks(db) -> list[dict]:
             async with db.execute(query_gaps) as cursor:
                 async for row in cursor:
                     if not any(t['fid'] == row[0] for t in tasks):
-                        tasks.append({'fid': row[0], 'type': row[1], 'bot_id': file_owners.get(row[0])})
+                        tasks.append({'fid': row[0], 'type': row[1]})
         except Exception: pass
+
+    # Fetch FileOwners only for the actual task file_ids (targeted, not full-table)
+    file_ids = [t['fid'] for t in tasks]
+    file_owners = {}
+    if file_ids:
+        placeholders = ', '.join(['?'] * len(file_ids))
+        query_owners = f"SELECT file_id, bot_id FROM FileOwners WHERE file_id IN ({placeholders})"
+        try:
+            async with db.execute(query_owners, file_ids) as cursor:
+                async for row in cursor:
+                    file_owners[row[0]] = row[1]
+        except Exception as e:
+            logger.error(f"DB Error getting file owners: {e}")
+    for t in tasks:
+        t['bot_id'] = file_owners.get(t['fid'])
 
     return tasks[:BATCH_SIZE]
 

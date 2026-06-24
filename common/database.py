@@ -2054,10 +2054,16 @@ async def get_thread_op_by_post_num(post_num: int) -> Optional[int]:
         for attempt in range(10):
             try:
                 db = await get_pool()
-                query = "SELECT thread_id FROM Posts WHERE post_num = ? LIMIT 1"
+                query = "SELECT thread_id, reply_to_post_num FROM Posts WHERE post_num = ? LIMIT 1"
                 async with db.execute(query, (post_num,)) as cursor:
                     row = await cursor.fetchone()
-                    return row[0] if row else None
+                    if row:
+                        thread_id, reply_to = row
+                        if thread_id:
+                            return thread_id
+                        if reply_to is None:
+                            return post_num
+                    return None
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await asyncio.sleep(0.1 * (attempt + 1))

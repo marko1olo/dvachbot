@@ -481,6 +481,25 @@ def get_user_hash(user_id: Union[int, str]) -> str:
 
     if not user_id: return "system"
     return hashlib.sha256((str(user_id) + SECRET_KEY).encode()).hexdigest()[:12]
+
+# --- Детерминированные ники из хеша автора ---
+_SITE_NICK_PREFIXES = ["Базированный", "Всратый", "Мамкин", "Поехавший", "Соевый", "Диванный", "Опущенный", "Гойский", "Толстый", "Порватый", "Латентный", "Просветленный", "Элитный", "Подпивасный", "Двачевский", "Педальный", "Токсичный", "Кринжовый", "Аутичный", "Думерский", "Рядовой", "Школьный", "Отбитый", "Метаироничный", "Скрытый", "Сигма", "Альфа", "Омега", "Сажный", "Вайбовый", "Копиумный", "Попущенный", "Лютый", "Абсолютный", "Печальный", "Нищуковский", "Душный", "Шизоидный", "Паленый", "Забивной", "Плюшевый", "Астральный", "Комнатный"]
+_SITE_NICK_SUFFIXES = ["Битард", "Скуф", "Шиз", "Анон", "Ньюфаг", "Олдфаг", "Омеган", "Шитпостер", "Сыч", "Двачер", "Чухан", "Куколд", "Нормис", "Гигачад", "Подпивас", "Зумер", "Бумер", "Сояк", "Инцел", "Думер", "Говноед", "Симп", "Чмоня", "Байтер", "Ноулайфер", "Тролль", "Моралфаг", "Альтушка", "Масик", "Школьник", "Дед", "Хиккан", "Скуфидон", "Терпила", "Вахтер", "Тентакль", "Мыслитель", "Философ", "Дворник", "Эрудит", "Чел"]
+
+def nick_from_hash(author_id: str) -> str:
+    """Детерминированный ник из 12-символьного хеша автора. Без раскрытия identity."""
+    if not author_id or author_id == 'system':
+        return "Аноним"
+    # Берём первые 8 hex-символов как seed
+    try:
+        seed = int(author_id[:8], 16)
+    except (ValueError, TypeError):
+        return "Аноним"
+    rng = random.Random(seed)
+    prefix = rng.choice(_SITE_NICK_PREFIXES)
+    suffix = rng.choice(_SITE_NICK_SUFFIXES)
+    return f"{prefix} {suffix}"
+
 class NoParsingFilter(logging.Filter):
     def filter(self, record):
         msg = record.getMessage()
@@ -2562,7 +2581,8 @@ templates.env.filters.update({
     'format_poll': format_poll_for_html,
     'format_iso_time': format_iso_time,
     'bayan_label': format_bayan_label,
-    'clean_title': clean_title_text
+    'clean_title': clean_title_text,
+    'nick_from_hash': nick_from_hash,
 })
 async def queue_listener(manager: 'ConnectionManager'):
     last_ts = time.time()
@@ -2947,6 +2967,17 @@ async def overboard_page(request: Request, user: dict | None = Depends(get_optio
     if view_mode not in ["threads", "posts", "all"]: view_mode = "threads"
     
     selected_boards = request.query_params.getlist("boards") or None
+    boards_key = ",".join(sorted(selected_boards)) if selected_boards else "all"
+    stream = getattr(request.state, 'stream', 'ru')
+    
+    cache_key = f"bot_overboard_html:{sort_mode}:{view_mode}:{boards_key}:{stream}"
+    if is_bot and not user:
+        backend = FastAPICache.get_backend()
+        if backend:
+            cached = await backend.get(cache_key)
+            if cached:
+                return HTMLResponse(content=cached)
+
     posts = []
     is_skeleton = False
 
@@ -2967,7 +2998,7 @@ async def overboard_page(request: Request, user: dict | None = Depends(get_optio
     lang = getattr(request.state, 'lang', 'ru')
     local_boards = localize_boards(lang)
     
-    return templates.TemplateResponse(request=request, name="overboard.jinja2", context={
+    context = {
         "request": request, 
         "posts": posts,
         "site_mode": SITE_ACCESS_MODE, 
@@ -2978,7 +3009,16 @@ async def overboard_page(request: Request, user: dict | None = Depends(get_optio
         "current_view": view_mode,
         "selected_boards": selected_boards or [],
         "is_skeleton": is_skeleton
-    })
+    }
+    
+    html_content = templates.get_template("overboard.jinja2").render(context)
+    
+    if is_bot and not user:
+        backend = FastAPICache.get_backend()
+        if backend:
+            await backend.set(cache_key, html_content, expire=300) # Кэш на 5 минут
+            
+    return HTMLResponse(content=html_content)
 @app.get("/history/")
 async def history_page(request: Request, user: dict | None = Depends(get_optional_user)):
     return templates.TemplateResponse(request=request, name="history.jinja2", context={
@@ -4280,6 +4320,15 @@ async def read_board_threads(board_id: str, request: Request, sort: str = "bump"
     is_skeleton = False
     
     sort_mode = "new" if sort == "new" else "bump"
+    stream = getattr(request.state, 'stream', 'ru')
+    
+    cache_key = f"bot_board_html:{board_id}:{sort_mode}:{stream}"
+    if is_bot and not user:
+        backend = FastAPICache.get_backend()
+        if backend:
+            cached = await backend.get(cache_key)
+            if cached:
+                return HTMLResponse(content=cached)
 
     if is_bot:
         # SSR для ботов: грузим данные сразу
@@ -4305,14 +4354,23 @@ async def read_board_threads(board_id: str, request: Request, sort: str = "bump"
     base_url = str(request.base_url).rstrip('/')
     meta_image = f"{base_url}/static/{random.choice(['logo.png', 'logo1.png'])}"
 
-    return templates.TemplateResponse(request=request, name="board.jinja2", context={
+    context = {
         "request": request, "board_id": board_id, "boards": BOARD_CONFIG,
         "board_info": BOARD_CONFIG[board_id], "posts": op_posts,
         "BOT_USERNAME": BOT_USERNAME, "current_sort": sort_mode,
         "site_mode": SITE_ACCESS_MODE, "session": {"user": user},
         "meta_image": meta_image,
         "is_skeleton": is_skeleton # Флаг для шаблона
-    })
+    }
+    
+    html_content = templates.get_template("board.jinja2").render(context)
+    
+    if is_bot and not user:
+        backend = FastAPICache.get_backend()
+        if backend:
+            await backend.set(cache_key, html_content, expire=300) # Кэш на 5 минут
+            
+    return HTMLResponse(content=html_content)
 @app.get("/{board_id}/rss.xml")
 async def get_rss_feed(board_id: str, request: Request):
     return await generate_rss(board_id, request)
@@ -4389,11 +4447,17 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
         }
         replies = []
 
-    # Общая логика для мета-тегов и шаблона
     stream = getattr(request.state, 'stream', 'ru')
     # Кэширование HTML только для анонимов и ботов (SSR)
     # Для скелета кэш не нужен (он и так легкий)
     cache_key = f"thread_html:{board_id}:{post_num}:{stream}"
+    
+    if not user and not is_skeleton:
+        backend = FastAPICache.get_backend()
+        if backend:
+            cached = await backend.get(cache_key)
+            if cached:
+                return HTMLResponse(content=cached)
     
     # ... Мета-данные ...
     raw_text = op_post.get('content', {}).get('text', '')
@@ -4444,21 +4508,34 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
     if not user and not is_skeleton:
         backend = FastAPICache.get_backend()
         if backend:
-            await backend.set(cache_key, html_content, expire=10) 
+            await backend.set(cache_key, html_content, expire=300) 
 
     return HTMLResponse(content=html_content)
 @app.get("/{board_id}/res/{post_num}/gallery")
 async def thread_gallery_page(board_id: str, post_num: int, request: Request, user: dict | None = Depends(get_optional_user)):
     if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
+    # Кеш HTML для анонимов на 10 сек (галерея тяжелая — много файлов)
+    if not user:
+        _gcache_key = f"gallery_html:{board_id}:{post_num}"
+        _gbackend = FastAPICache.get_backend()
+        if _gbackend:
+            _gcached = await _gbackend.get(_gcache_key)
+            if _gcached:
+                return HTMLResponse(content=_gcached)
     media_posts_raw = await get_all_media_from_thread(post_num)
     media_posts = _convert_and_enrich_posts(media_posts_raw)
     is_ru = await is_request_from_ru(request)
     await enrich_extra_data(media_posts, is_ru=is_ru)
-    return templates.TemplateResponse(request=request, name="gallery.jinja2", context={
+    html_content = templates.get_template("gallery.jinja2").render({
         "request": request, "board_id": board_id, "boards": BOARD_CONFIG,
         "op_post_num": post_num, "media_posts": media_posts,
         "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
     })
+    if not user:
+        _gbackend = FastAPICache.get_backend()
+        if _gbackend:
+            await _gbackend.set(_gcache_key, html_content, expire=10)
+    return HTMLResponse(content=html_content)
 @app.get("/{board_id}/catalog/")
 async def read_board_catalog(board_id: str, request: Request, user: dict | None = Depends(get_optional_user)):
     if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
