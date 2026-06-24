@@ -320,19 +320,12 @@ class DeduplicationMiddleware(BaseMiddleware):
             return 
         self.cache[unique_key] = current_time
         return await handler(event, data)
-
-NEW_USER_JOIN_HISTORY = deque(maxlen=20)
-RECENT_JOINERS_CACHE = {}
-RAID_LOCKDOWN_UNTIL = 0
-RAID_LOCKDOWN_THRESHOLD = 3
-RAID_LOCKDOWN_WINDOW = 60
-RAID_LOCKDOWN_DURATION = 300
-
 class BoardMiddleware(BaseMiddleware):
     """
     1. Определяет board_id.
     2. Реализует "Глухой Бан" (Hard Ban).
-    3. Реализует автоматическую защиту от рейдов (Lockdown).
+       Если юзер забанен, бот удаляет его сообщение и прекращает обработку.
+       Юзер не получает ответов ни на что (включая /help, /start), думая, что бот сломался.
     """
     async def __call__(
         self,
@@ -340,8 +333,6 @@ class BoardMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any]
     ) -> Any:
-        global RAID_LOCKDOWN_UNTIL, NEW_USER_JOIN_HISTORY, RECENT_JOINERS_CACHE
-        
         board_id = get_board_id(event)
         data['board_id'] = board_id
         if board_id:
@@ -359,48 +350,6 @@ class BoardMiddleware(BaseMiddleware):
                         except Exception: 
                             pass
                         return 
-                        
-                    # Анти-рейд
-                    now = time.time()
-                    is_new_user = uid not in b_data['users']['active']
-                    is_recent_joiner = False
-                    
-                    if uid in RECENT_JOINERS_CACHE:
-                        if now - RECENT_JOINERS_CACHE[uid] <= 3600:
-                            is_recent_joiner = True
-                        else:
-                            del RECENT_JOINERS_CACHE[uid]
-
-                    if is_new_user or is_recent_joiner:
-                        # Проверяем как ручной локдаун (от админа), так и автоматический
-                        if b_data.get('lockdown', False) or now < RAID_LOCKDOWN_UNTIL:
-                            try:
-                                if isinstance(event, types.Message):
-                                    await event.delete()
-                            except Exception: pass
-                            return
-                        
-                        # Регистрируем первого захода нового юзера
-                        if is_new_user and uid not in RECENT_JOINERS_CACHE:
-                            # Очистка старых записей из кэша
-                            if len(RECENT_JOINERS_CACHE) > 2000:
-                                cutoff = now - 3600
-                                expired = [k for k, v in RECENT_JOINERS_CACHE.items() if v < cutoff]
-                                for k in expired:
-                                    del RECENT_JOINERS_CACHE[k]
-
-                            RECENT_JOINERS_CACHE[uid] = now
-                            NEW_USER_JOIN_HISTORY.append(now)
-                            recent_joins = sum(1 for t in NEW_USER_JOIN_HISTORY if now - t <= RAID_LOCKDOWN_WINDOW)
-                            if recent_joins > RAID_LOCKDOWN_THRESHOLD:
-                                RAID_LOCKDOWN_UNTIL = now + RAID_LOCKDOWN_DURATION
-                                print(f"🚨🚨🚨 РЕЙД ДЕТЕКТ! Активирован локдаун новых пользователей на {RAID_LOCKDOWN_DURATION} секунд! (зашло {recent_joins} за {RAID_LOCKDOWN_WINDOW}с) 🚨🚨🚨")
-                                try:
-                                    if isinstance(event, types.Message):
-                                        await event.delete()
-                                except Exception: pass
-                                return
-
         return await handler(event, data)
 from common.board_config import BOARD_CONFIG
 THREAD_BOARDS = {'thread', 'test'} # Доски, на которых будет работать система тредов
@@ -6897,9 +6846,9 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
         if u_set.get('shadow_gif'): status.append("NoGIF")
         if u_set.get('shadow_sticker'): status.append("NoSticker")
         if u_set.get('lie_media'): status.append("LieMedia")
-        spam_v_data = b_data.get('spam_violations', {}).get(target_id, {})
-        spam_level = spam_v_data.get('level', 0) if isinstance(spam_v_data, dict) else 0
-        if spam_level > 0: status.append(f"⚠️ Spam Level: {spam_level}")
+
+        spam_v = b_data.get('spam_violations', {}).get(target_id, 0)
+        if spam_v > 0: status.append(f"⚠️ Spam: {spam_v}")
         
         if status:
             total_activity = True
@@ -8644,13 +8593,12 @@ async def cmd_airdrop(message: Message, board_id: str | None):
             await message.answer("🤷‍♂️ У всех и так есть бабки, эирдроп не нужен.")
             return
 
-        for uid in users_to_fix:
-            amount = random.randint(8, 15)
-            # Начисляем только в ОДНУ (любую) существующую запись юзера, чтобы избежать дублей
-            await db.execute("""
-                UPDATE Users SET balance = ? 
-                WHERE rowid = (SELECT rowid FROM Users WHERE user_id = ? LIMIT 1)
-            """, (amount, uid))
+        updates = [(random.randint(8, 15), uid) for uid in users_to_fix]
+        # Начисляем только в ОДНУ (любую) существующую запись юзера, чтобы избежать дублей
+        await db.executemany("""
+            UPDATE Users SET balance = ?
+            WHERE rowid = (SELECT rowid FROM Users WHERE user_id = ? LIMIT 1)
+        """, updates)
         
     await message.answer(f"🚀 <b>ЭИРДРОП ЗАВЕРШЕН!</b>\nНачислил бабки {len(users_to_fix)} нищим анонам.")
 @dp.callback_query(F.data == "show_active_threads")
