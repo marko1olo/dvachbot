@@ -5936,7 +5936,8 @@ async def check_url_alive(url: str) -> bool:
         if now - ts < 600:
             return is_alive
     try:
-        async with httpx.AsyncClient(timeout=1.5, verify=False) as client: 
+        transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
+        async with httpx.AsyncClient(timeout=1.5, verify=False, transport=transport) as client:
             resp = await client.head(url)
             is_alive = resp.status_code == 200
             URL_STATUS_CACHE[url] = (is_alive, now)
@@ -6073,7 +6074,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],
