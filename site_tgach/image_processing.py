@@ -42,9 +42,6 @@ Dependencies:
 """
 import logging
 import re
-import os
-import hashlib
-import httpx
 import time
 import math
 import imagehash
@@ -58,18 +55,15 @@ from site_tgach.zeroxzero import is_0x0_available, upload_url_to_0x0, upload_byt
 from site_tgach.mtproto_client import upload_file_mtproto
 from fastapi import UploadFile, HTTPException
 from PIL import Image, ImageOps  
-from common.bot_pool import global_bot_pool 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 from common.board_config import SHADOW_CHANNEL_ID
 from aiogram.exceptions import (
     TelegramRetryAfter, 
     TelegramNetworkError, 
-    TelegramBadRequest, 
-    TelegramForbiddenError
+    TelegramBadRequest
 )
 from concurrent.futures import ThreadPoolExecutor
-import blurhash
 MIRROR_SEMAPHORE = asyncio.Semaphore(10) # Максимум 10 одновременных заливов
 logging.basicConfig(level=logging.INFO)
 install_logging_redaction()
@@ -196,7 +190,6 @@ async def process_and_upload_image(
 ) -> dict:
     import os
     import hashlib
-    from common.bot_pool import global_bot_pool
     
     content_type = file.content_type
     original_filename = file.filename or "file"
