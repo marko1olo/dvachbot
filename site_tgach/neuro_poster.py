@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import asyncio
 from common.http_utils import api_retry
 import logging
@@ -194,8 +195,8 @@ class NeuroManager:
 
             for strategy in strategies:
                 try:
-                    # local_address="0.0.0.0" фиксит проблемы с TUN на Windows
-                    transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
+                    # local_address=HTTP_LOCAL_ADDRESS фиксит проблемы с TUN на Windows
+                    transport = httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS, retries=1)
                     
                     async with httpx.AsyncClient(
                         proxy=strategy["proxy"], 

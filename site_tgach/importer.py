@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import asyncio
 """
 importer.py
@@ -188,7 +189,7 @@ class ThreadImporter:
                     timeout=90.0,
                     proxy=PROXY_URL,
                     cookies=req_cookies,
-                    transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
+                    transport=httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS, retries=2)
                 ) as media_client:
                     resp = await media_client.get(url, headers=req_headers)
                 
@@ -476,7 +477,7 @@ class ThreadImporter:
 
         # Configured Transport from New Version
         transport = httpx.AsyncHTTPTransport(
-            local_address="0.0.0.0", # Принудительный IPv4 (Fix для OpenVPN)
+            local_address=HTTP_LOCAL_ADDRESS, # Принудительный IPv4 (Fix для OpenVPN)
             retries=3,
             verify=False,
             http2=False              # Строго HTTP/1.1

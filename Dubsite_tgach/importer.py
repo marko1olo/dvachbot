@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import asyncio
 import httpx
 import re
@@ -166,7 +167,7 @@ class ThreadImporter:
                         http2=False, 
                         timeout=180.0,
                         proxy=PROXY_URL,
-                        transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=3)
+                        transport=httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS, retries=3)
                     ) as clean_client:
                         resp = await clean_client.get(url, headers=clean_headers)
                 else:
@@ -456,7 +457,7 @@ class ThreadImporter:
 
         # Configured Transport from New Version
         transport = httpx.AsyncHTTPTransport(
-            local_address="0.0.0.0", # Принудительный IPv4 (Fix для OpenVPN)
+            local_address=HTTP_LOCAL_ADDRESS, # Принудительный IPv4 (Fix для OpenVPN)
             retries=3,
             verify=False,
             http2=False              # Строго HTTP/1.1

@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import asyncio
 from common.http_utils import api_retry
 import logging
@@ -178,7 +179,7 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
         
         for strategy in strategies:
             try:
-                transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
+                transport = httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS)
                 async with httpx.AsyncClient(proxy=strategy["proxy"], transport=transport, verify=False, timeout=GROQ_TIMEOUT) as http_client:
                     client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client)
                     resp = await client.chat.completions.create(

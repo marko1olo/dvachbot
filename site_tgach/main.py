@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import sys
 """
 main.py
@@ -168,7 +169,7 @@ async def get_country_by_ip(ip: str) -> str:
 
     for strategy in strategies:
         try:
-            transport = AsyncHTTPTransport(local_address="0.0.0.0")
+            transport = AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS)
             async with httpx.AsyncClient(
                 timeout=3.0, 
                 verify=False,
@@ -264,7 +265,7 @@ async def update_tor_nodes_task():
     url = "https://check.torproject.org/exit-addresses"
     while True:
         try:
-            transport = AsyncHTTPTransport(local_address="0.0.0.0")
+            transport = AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS)
             async with httpx.AsyncClient(transport=transport, timeout=30.0, verify=False) as client:
                 resp = await client.get(url)
                 if resp.status_code == 200:
@@ -495,7 +496,7 @@ class NoParsingFilter(logging.Filter):
 PROXY_URL = "http://127.0.0.1:10808"
 BOT_VIOLATIONS = defaultdict(int)
 IP_WHITELIST = set() # Сюда можно будет добавлять IP через админку (или пока вручную)
-GEO_IP_CLIENT = httpx.AsyncClient(timeout=3.0, verify=False, transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=5))
+GEO_IP_CLIENT = httpx.AsyncClient(timeout=3.0, verify=False, transport=httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS, retries=5))
 # Применяем фильтр к asyncio
 logging.getLogger("asyncio").addFilter(NoParsingFilter())
 logging.getLogger("uvicorn.error").addFilter(NoParsingFilter())
@@ -4530,7 +4531,7 @@ async def api_get_meta(url: str):
 
     for strategy in strategies:
         try:
-            transport = AsyncHTTPTransport(local_address="0.0.0.0")
+            transport = AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS)
             async with httpx.AsyncClient(
                 timeout=5.0,
                 verify=False,
@@ -7448,7 +7449,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],

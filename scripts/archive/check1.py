@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import os
 import asyncio
 import httpx
@@ -12,8 +13,8 @@ async def check_token(token, repo):
     headers = {"Authorization": f"Bearer {token}"}
     
     # ИСПОЛЬЗУЕМ ТОЧНО ТАКУЮ ЖЕ КОНФИГУРАЦИЮ СЕТИ, КАК В MAIN.PY
-    # local_address="0.0.0.0" критически важен для работы через VPN в TUN режиме
-    transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=3)
+    # local_address=HTTP_LOCAL_ADDRESS критически важен для работы через VPN в TUN режиме
+    transport = httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS, retries=3)
     
     try:
         async with httpx.AsyncClient(

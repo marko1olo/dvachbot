@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import asyncio
 import logging
 import os
@@ -180,7 +181,7 @@ async def _process_single_task(task):
                         if file_info and getattr(file_info, "file_path", None):
                             dl_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
                             
-                            transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
+                            transport = httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS, retries=2)
                             async with httpx.AsyncClient(timeout=60.0, verify=False, transport=transport) as client:
                                 async with client.stream("GET", dl_url) as r:
                                     if r.status_code == 200:

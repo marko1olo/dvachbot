@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 
 
 import base64
@@ -74,7 +75,7 @@ async def _safe_groq_json(messages, max_tokens=300):
             logger.error("❌ No Groq tokens available.")
             return None
 
-        transport = AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
+        transport = AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS, retries=1)
         async with httpx.AsyncClient(
             timeout=GROQ_TIMEOUT, 
             proxy=PROXY_URL, 

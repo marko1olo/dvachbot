@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import asyncio
 import logging
 import os
@@ -116,7 +117,7 @@ async def _download_http_safe(url, path):
     strategies = [{"proxy": PROXY_URL, "name": "Proxy"}, {"proxy": None, "name": "Direct"}]
     for strat in strategies:
         try:
-            transport = AsyncHTTPTransport(local_address="0.0.0.0")
+            transport = AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS)
             async with httpx.AsyncClient(timeout=300.0, proxy=strat["proxy"], transport=transport, verify=False) as client:
                 async with client.stream("GET", url) as r:
                     if r.status_code == 200:

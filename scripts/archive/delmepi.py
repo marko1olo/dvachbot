@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import asyncio
 from common.task_manager import spawn_task
 import aiosqlite
@@ -286,7 +287,7 @@ async def get_neuro_tags(image_bytes):
         if not token: return None
         
         try:
-            transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
+            transport = httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS)
             http_client = httpx.AsyncClient(
                 proxy=PROXY_URL,
                 transport=transport,

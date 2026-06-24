@@ -78,3 +78,9 @@ CIS_COUNTRY_CODES = {'RU', 'UA', 'BY', 'KZ', 'KG', 'TJ', 'UZ', 'AM', 'AZ', 'MD',
 # Превращаем строку "123,456" в множество {123, 456}
 admin_env = os.getenv("ADMINS", "")
 ADMIN_IDS = {int(x.strip()) for x in admin_env.split(",") if x.strip().isdigit()}
+
+# Network overrides
+# To force IPv4 (e.g. for OpenVPN TUN compatibility), we use 0.0.0.0 by default.
+# Set to empty string in .env to disable local_address binding.
+_http_local_addr = os.getenv("HTTP_LOCAL_ADDRESS", "0.0.0.0")
+HTTP_LOCAL_ADDRESS = _http_local_addr if _http_local_addr else None

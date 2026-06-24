@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import os
 import httpx
 import logging
@@ -52,7 +53,7 @@ async def summarize_text_with_gemini(prompt: str, text_dump: str, keys: list[str
         
         for strategy in strategies:
             try:
-                transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
+                transport = httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS, retries=1)
                 async with httpx.AsyncClient(
                     proxy=strategy["proxy"], 
                     transport=transport,
@@ -108,7 +109,7 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
 
         for strategy in strategies:
             try:
-                transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
+                transport = httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS, retries=1)
                 async with httpx.AsyncClient(
                     proxy=strategy["proxy"], 
                     transport=transport,

@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import httpx
 import logging
 import os
@@ -76,7 +77,7 @@ async def _upload_logic(req_type, file_source, is_file=False):
             proxy_cfg = strategy["proxy"]
             mode_name = strategy["name"]
             
-            bind_addr = "0.0.0.0" if not proxy_cfg else None
+            bind_addr = HTTP_LOCAL_ADDRESS if not proxy_cfg else None
             transport = httpx.AsyncHTTPTransport(local_address=bind_addr, retries=3)
 
             async with httpx.AsyncClient(

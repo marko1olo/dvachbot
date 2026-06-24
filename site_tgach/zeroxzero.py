@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import asyncio
 import logging
 import os
@@ -63,7 +64,7 @@ async def _post_0x0(data=None, files=None, timeout=120.0) -> str | None:
     for strategy in strategies:
         try:
             proxy_cfg = strategy["proxy"]
-            transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0" if not proxy_cfg else None, retries=2)
+            transport = httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS if not proxy_cfg else None, retries=2)
             async with httpx.AsyncClient(
                 timeout=timeout,
                 verify=False,

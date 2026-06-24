@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import httpx
 import logging
 import os
@@ -58,8 +59,8 @@ async def _upload_logic(req_type, file_source, is_file=False):
             proxy_cfg = strategy["proxy"]
             mode_name = strategy["name"]
             
-            # ИЗМЕНЕНИЕ: Возвращаем local_address="0.0.0.0", так как это работает в HF и нужно для вашего VPN/TUN
-            transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
+            # ИЗМЕНЕНИЕ: Возвращаем local_address=HTTP_LOCAL_ADDRESS, так как это работает в HF и нужно для вашего VPN/TUN
+            transport = httpx.AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS, retries=2)
 
             async with httpx.AsyncClient(
                 timeout=request_timeout, 

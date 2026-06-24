@@ -1,3 +1,4 @@
+from common.config import HTTP_LOCAL_ADDRESS
 import base64
 import logging
 import asyncio
@@ -55,7 +56,7 @@ async def check_image_content(image_bytes: bytes, file_id: str):
 
         try:
             # === ФИКС ДЛЯ VPN/TUN ===
-            transport = AsyncHTTPTransport(local_address="0.0.0.0")
+            transport = AsyncHTTPTransport(local_address=HTTP_LOCAL_ADDRESS)
 
             async with httpx.AsyncClient(
                 timeout=GROQ_TIMEOUT, 
