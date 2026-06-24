@@ -31,21 +31,15 @@ def dict_factory(cursor, row):
         d[col[0]] = row[idx]
     return d
 
-NICK_PREFIXES = ["Шиз", "Аутист", "Дед", "Попущ", "Биомусор", "Анон", "Гигачад", "Школьник", "Скуф", "Сыч", "Альтушка", "Тролль", "Омежка"]
-NICK_SUFFIXES = ["Интеллектуал", "Качалка", "Пердед", "Шпана", "Ноулайфер", "Шизофреник", "Анимешник", "Говнопостер", "Таксист", "Подпивас", "Куколд", "Скуфидон"]
+NICK_PREFIXES = ["Базированный", "Всратый", "Мамкин", "Поехавший", "Соевый", "Диванный", "Опущенный", "Гойский", "Толстый", "Порватый", "Латентный", "Просветленный", "Элитный", "Подпивасный", "Двачевский", "Педальный", "Токсичный", "Кринжовый", "Аутичный", "Думерский", "Рядовой", "Школьный", "Отбитый", "Метаироничный", "Скрытый", "Сигма", "Альфа", "Омега", "Сажный", "Вайбовый", "Копиумный", "Попущенный", "Лютый", "Абсолютный", "Печальный", "Нищуковский", "Душный", "Шизоидный", "Паленый", "Забивной", "Плюшевый", "Астральный", "Комнатный"]
+NICK_SUFFIXES = ["Битард", "Скуф", "Шиз", "Анон", "Ньюфаг", "Олдфаг", "Омеган", "Шитпостер", "Сыч", "Двачер", "Чухан", "Куколд", "Нормис", "Гигачад", "Подпивас", "Зумер", "Бумер", "Сояк", "Инцел", "Думер", "Говноед", "Симп", "Чмоня", "Байтер", "Ноулайфер", "Тролль", "Моралфаг", "Альтушка", "Масик", "Школьник", "Дед", "Хиккан", "Скуфидон", "Терпила", "Вахтер", "Тентакль", "Мыслитель", "Философ", "Дворник", "Эрудит", "Чел"]
 
 def generate_schizo_name(user_id: int) -> str:
     if not user_id: return "Анонимус"
-    random.seed(user_id)
-    prefix = random.choice(NICK_PREFIXES)
-    suffix = random.choice(NICK_SUFFIXES)
+    rng = random.Random(user_id)
+    prefix = rng.choice(NICK_PREFIXES)
+    suffix = rng.choice(NICK_SUFFIXES)
     return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
-
-def generate_provocateur_name(user_id: int) -> str:
-    if not user_id: return "Анонимус"
-    random.seed(user_id + 999) # different seed to vary names
-    titles = ["Байтер", "Жертва Буллинга", "Провокатор", "Корм для Троллей", "Клоун"]
-    return f"{random.choice(titles)} (#{str(user_id)[-4:]})"
 
 def generate_all_charts():
     """Generates exactly 10 toxic charts and returns a list of io.BytesIO objects"""
@@ -180,7 +174,7 @@ def generate_all_charts():
     data = c.fetchall()
     if data:
         df = pd.DataFrame(data)
-        df['author_name'] = df['author_id'].apply(generate_provocateur_name)
+        df['author_name'] = df['author_id'].apply(generate_schizo_name)
         fig, ax = plt.subplots(figsize=(10, 4))
         sns.barplot(data=df, y='author_name', x='cnt', hue='author_name', palette="viridis", legend=False, ax=ax)
         plt.title('5. Главные Байтеры (Кому больше всего реплаят)', fontsize=16, fontweight='bold', color="#33ccff")
@@ -431,9 +425,9 @@ def generate_all_charts():
                 sorted_mutual = sorted(mutual_list, key=lambda x: x[2], reverse=True)[:5]
                 plot_data = []
                 for u, v, rec in sorted_mutual:
-                    name_u = generate_schizo_name(u).split(" (")[0]
-                    name_v = generate_schizo_name(v).split(" (")[0]
-                    plot_data.append({'pair': f"{name_u} 🤝 {name_v}", 'score': rec})
+                    name_u = generate_schizo_name(u)
+                    name_v = generate_schizo_name(v)
+                    plot_data.append({'pair': f"{name_u} & {name_v}", 'score': rec})
                     
                 df_mut = pd.DataFrame(plot_data)
                 fig, ax = plt.subplots(figsize=(10, 4))
