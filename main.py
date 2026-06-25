@@ -46,7 +46,6 @@ import shutil
 import signal
 import sys
 import io
-import glob
 import time
 import witching_hour
 import periodic_publisher
