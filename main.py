@@ -67,7 +67,7 @@ from typing import Tuple
 from dotenv import load_dotenv
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-from common.html_utils import escape_html
+from common.html_utils import escape_html, get_truncated_quote_text, get_quote_media_summary
 from common.token_generator import generate_unique_token
 from common.database import (
     initialize_database, is_database_migrated, load_state_from_db, get_and_clear_reaction_queue, get_post_by_num, get_stream_active_users, 
@@ -4149,40 +4149,16 @@ def _format_quote_block(quote_info: dict | None) -> str | None:
     quote_text_raw = quote_info.get('text') or ''
     quote_text_clean = clean_html_tags(quote_text_raw) or ''
 
-    quote_parts =[]
-    if quote_text_clean:
-        if len(quote_text_clean) > 140:
-            quote_text = escape_html(quote_text_clean[:140]) + "..."
-        else:
-            quote_text = escape_html(quote_text_clean)
-        quote_parts.append(quote_text)
+    quote_parts = []
 
-    files_in_quote = quote_info.get('files',[])
-    if files_in_quote:
-        photo_count = sum(1 for f in files_in_quote if f.get('type') == 'photo')
-        video_count = sum(1 for f in files_in_quote if f.get('type') == 'video')
-        gif_count = sum(1 for f in files_in_quote if f.get('type') == 'animation')
-        document_count = sum(1 for f in files_in_quote if f.get('type') == 'document')
-        audio_count = sum(1 for f in files_in_quote if f.get('type') == 'audio')
-        voice_count = sum(1 for f in files_in_quote if f.get('type') == 'voice')
-        sticker_count = sum(1 for f in files_in_quote if f.get('type') == 'sticker')
-        video_note_count = sum(1 for f in files_in_quote if f.get('type') == 'video_note')
-        known_quote_types = {'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'}
-        other_count = sum(1 for f in files_in_quote if f.get('type') not in known_quote_types)
+    truncated_text = get_truncated_quote_text(quote_text_clean)
+    if truncated_text:
+        quote_parts.append(truncated_text)
 
-        media_counts =[]
-        if photo_count > 0: media_counts.append(f"{photo_count} фото")
-        if video_count > 0: media_counts.append(f"{video_count} видео")
-        if gif_count > 0: media_counts.append(f"{gif_count} GIF")
-        if document_count > 0: media_counts.append(f"{document_count} doc")
-        if audio_count > 0: media_counts.append(f"{audio_count} audio")
-        if voice_count > 0: media_counts.append(f"{voice_count} voice")
-        if sticker_count > 0: media_counts.append(f"{sticker_count} sticker")
-        if video_note_count > 0: media_counts.append(f"{video_note_count} video note")
-        if other_count > 0: media_counts.append(f"{other_count} file")
-
-        if media_counts:
-            quote_parts.append(f"<i>[{', '.join(media_counts)}]</i>")
+    files_in_quote = quote_info.get('files', [])
+    media_summary = get_quote_media_summary(files_in_quote)
+    if media_summary:
+        quote_parts.append(media_summary)
 
     final_quote_text = "\n".join(quote_parts).strip()
     if final_quote_text:
