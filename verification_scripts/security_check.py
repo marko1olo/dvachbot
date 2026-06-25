@@ -20,6 +20,7 @@ def run_step(args: list[str], required: bool = True) -> dict[str, Any]:
     import os
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
+    env["PYTHONPATH"] = str(ROOT)
     result = subprocess.run(
         [sys.executable, *args],
         cwd=ROOT,
