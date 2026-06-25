@@ -718,6 +718,9 @@ class ThreadImporter:
                 for i in range(0, len(prepared_posts), chunk_size):
                     await conn.execute("BEGIN")
                     chunk = prepared_posts[i : i + chunk_size]
+
+                    update_params = []
+
                     for p_data in chunk:
                         new_id = id_map[p_data["old_id"]]
                         original_text = p_data["text"]
@@ -725,8 +728,7 @@ class ThreadImporter:
                         fixed_text, reply_to_id = await self._fix_content_links_and_find_reply(original_text, id_map)
                         if fixed_text != original_text or reply_to_id is not None:
                             new_content_obj = {"text": fixed_text, "files": p_data["files"], "type": "files" if p_data["files"] else "text"}
-                            await conn.execute("UPDATE posts SET content = ?, reply_to_post_num = ? WHERE post_num = ?", 
-                                             (json.dumps(new_content_obj), reply_to_id, new_id))
+                            update_params.append((json.dumps(new_content_obj), reply_to_id, new_id))
                         
                             backlink_pairs = []
                             if reply_to_id:
@@ -745,6 +747,9 @@ class ThreadImporter:
                                     "INSERT OR IGNORE INTO Backlinks (target_post_num, source_post_num) VALUES (?, ?)",
                                     backlink_pairs
                                 )
+
+                    if update_params:
+                        await conn.executemany("UPDATE posts SET content = ?, reply_to_post_num = ? WHERE post_num = ?", update_params)
                             
                     await conn.commit()
 
