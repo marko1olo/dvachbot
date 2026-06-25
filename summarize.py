@@ -39,8 +39,8 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
     """
     if model_preference == "gemini":
         models_cascade = [
+            ("gemini-3-flash-preview", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
         ]
     elif model_preference == "qwen":
         models_cascade = [
@@ -53,10 +53,10 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
     else:
         # Default: Groq first (free), Gemini as fallback for large chunks
         models_cascade = [
+            ("gemini-3-flash-preview", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
             ("llama-3.3-70b-versatile", "groq"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
         ]
     
     messages = [
