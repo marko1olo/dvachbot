@@ -4342,28 +4342,32 @@ def _normalize_quote_file_type(raw_type) -> str:
     return 'file'
 
 
+def _extract_quote_files(items) -> list[dict]:
+    if not isinstance(items, list):
+        return []
+    result = []
+    for item in items:
+        if isinstance(item, dict):
+            result.append({'type': _normalize_quote_file_type(item.get('type'))})
+        else:
+            result.append({'type': 'file'})
+    return result
+
+
 def _quote_info_from_content(replied_content: dict | None) -> dict | None:
     if not isinstance(replied_content, dict):
         return None
     quote_text = replied_content.get('text') or replied_content.get('caption') or ''
-    files = []
     content_type = _normalize_quote_file_type(replied_content.get('type'))
+    files = []
     media_items = replied_content.get('media')
     if isinstance(media_items, list):
-        for item in media_items:
-            if isinstance(item, dict):
-                files.append({'type': _normalize_quote_file_type(item.get('type'))})
-            else:
-                files.append({'type': 'file'})
+        files.extend(_extract_quote_files(media_items))
     elif media_items:
         files.append({'type': content_type})
-    file_items = replied_content.get('files')
-    if isinstance(file_items, list):
-        for item in file_items:
-            if isinstance(item, dict):
-                files.append({'type': _normalize_quote_file_type(item.get('type'))})
-            else:
-                files.append({'type': 'file'})
+
+    files.extend(_extract_quote_files(replied_content.get('files')))
+
     if replied_content.get('file_id') or replied_content.get('image_bytes') or replied_content.get('image_url'):
         files.append({'type': content_type})
     if content_type in {'sticker', 'video_note', 'voice'} and not files:
