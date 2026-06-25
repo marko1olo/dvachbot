@@ -173,9 +173,14 @@ def process_image_cpu(image_bytes):
     except Exception as e:
         return None, f"CPU Error: {e}"
 
-# ==========================================
-# НЕЙРОНКА (GROQ)
-# ==========================================
+@api_retry
+async def _execute_tagging(client, model, messages, max_tokens):
+    return await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens
+    )
+
 async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
     global GROQ_COOLDOWN_UNTIL
     

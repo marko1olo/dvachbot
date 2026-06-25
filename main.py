@@ -11191,13 +11191,38 @@ async def reply_notifier_task():
                     
                     bot_instance = GLOBAL_BOTS[board_id]
                     lang = 'en' if board_id == 'int' else 'ru'
-                    
+
+                    thread_id = source_post_data.get('thread_id')
+                    if not thread_id:
+                        from common.db_pool import get_pool, db_lock
+                        pool = get_pool()
+                        if pool:
+                            try:
+                                async with db_lock:
+                                    async with pool.execute("SELECT thread_id FROM Posts WHERE post_num = ?", (source_post_num,)) as cursor:
+                                        row = await cursor.fetchone()
+                                        if row:
+                                            thread_id = row[0]
+                            except Exception as db_err:
+                                print(f"Error querying thread_id in notifier: {db_err}")
+                    if not thread_id:
+                        thread_id = source_post_num
+
+                    webapp_url = os.getenv("WEBAPP_URL", "https://tgach.top").rstrip('/')
+                    thread_url = f"{webapp_url}/{board_id}/res/{thread_id}.html#{reply_post_num}"
+
                     if lang == 'en':
                         text = f"📢 Someone replied to your post >>{source_post_num} with post >>{reply_post_num}"
+                        btn_text = "Read on Website 🌐"
                     else:
                         text = f"📢 На ваш пост >>{source_post_num} ответили постом >>{reply_post_num}"
+                        btn_text = "Читать на сайте 🌐"
+
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text=btn_text, url=thread_url)]
+                    ])
                     try:
-                        await bot_instance.send_message(recipient_id, text)
+                        await bot_instance.send_message(recipient_id, text, reply_markup=keyboard)
                     except (TelegramForbiddenError, TelegramBadRequest):
                         pass 
                     except Exception as e:
