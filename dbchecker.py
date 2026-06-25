@@ -257,28 +257,23 @@ def print_recommendations(garbage_found, dead_threads, orphan_tables, posts_orph
     print("\nДля полной оптимизации (сжатия) базы рекомендуется выполнить SQL команду:")
     print(f"{Colors.OKCYAN}VACUUM;{Colors.ENDC}")
 
-def probe_database():
-    db_path = get_db_path()
-
-    if not db_path:
-        print(f"{Colors.FAIL}❌ База данных не найдена в текущей директории.{Colors.ENDC}")
-        print("Ожидались: dvach_bot.db или tgach.db")
-        sys.exit(1)
-
+def print_startup_info(db_path):
     print(f"{Colors.HEADER}{Colors.BOLD}=== ЗАПУСК ГЛУБОКОГО АНАЛИЗА БД: {db_path} ==={Colors.ENDC}")
     print(f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     file_size = os.path.getsize(db_path)
     print(f"Физический размер файла: {Colors.OKCYAN}{format_size(file_size)}{Colors.ENDC}")
 
+def get_db_connection(db_path):
     try:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
+        return conn
     except Exception as e:
         print(f"{Colors.FAIL}Критическая ошибка подключения: {e}{Colors.ENDC}")
         sys.exit(1)
 
+def run_analysis(cur, db_path):
     check_integrity(cur)
 
     cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
@@ -294,6 +289,21 @@ def probe_database():
     analyze_users(cur)
 
     print_recommendations(garbage_found, dead_threads, orphan_tables, posts_orphaned_thread, db_path)
+
+def probe_database():
+    db_path = get_db_path()
+
+    if not db_path:
+        print(f"{Colors.FAIL}❌ База данных не найдена в текущей директории.{Colors.ENDC}")
+        print("Ожидались: dvach_bot.db или tgach.db")
+        sys.exit(1)
+
+    print_startup_info(db_path)
+
+    conn = get_db_connection(db_path)
+    cur = conn.cursor()
+
+    run_analysis(cur, db_path)
 
     conn.close()
 
