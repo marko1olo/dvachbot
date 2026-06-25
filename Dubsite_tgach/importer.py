@@ -659,21 +659,28 @@ class ThreadImporter:
                 for i in range(0, len(replies_data), chunk_size):
                     await conn.execute("BEGIN")
                     chunk = replies_data[i : i + chunk_size]
-                    for p_data in chunk:
-                        content = json.dumps({
-                            "text": p_data["text"], 
-                            "files": p_data["files"], 
-                            "type": "files" if p_data["files"] else "text"
-                        })
-                        cur = await conn.execute(
-                            """INSERT INTO posts 
-                               (board_id, thread_id, content, timestamp, author_id, reply_to_post_num, stream) 
-                               VALUES (?, ?, ?, ?, ?, NULL, ?) RETURNING post_num""",
-                            (target_board, new_thread_id, content, p_data["timestamp"], p_data["author_id"], stream)
-                        )
-                        new_id = (await cur.fetchone())[0]
-                        self.created_post_ids.append(new_id)
-                        id_map[p_data["old_id"]] = new_id
+                    if chunk:
+                        params = []
+                        for p_data in chunk:
+                            content_json = json.dumps({
+                                "text": p_data["text"],
+                                "files": p_data["files"],
+                                "type": "files" if p_data["files"] else "text"
+                            })
+                            params.extend([target_board, new_thread_id, content_json, p_data["timestamp"], p_data["author_id"], stream])
+
+                        placeholders = ", ".join(["(?, ?, ?, ?, ?, NULL, ?)"] * len(chunk))
+                        query = f"""INSERT INTO posts
+                                   (board_id, thread_id, content, timestamp, author_id, reply_to_post_num, stream)
+                                   VALUES {placeholders} RETURNING post_num"""
+
+                        cur = await conn.execute(query, params)
+                        rows = await cur.fetchall()
+
+                        for p_data, row in zip(chunk, rows):
+                            new_id = row[0]
+                            self.created_post_ids.append(new_id)
+                            id_map[p_data["old_id"]] = new_id
                     await conn.commit()
                     await asyncio.sleep(0.05)
                 
