@@ -779,6 +779,36 @@ def _stage1_dict_replace(text: str) -> tuple[str, set]:
     return result, replaced_spans
 
 
+def _replace_char(chars: list[str], i: int) -> None:
+    c = chars[i]
+    cl = c.lower()
+
+    if cl == 'ы':
+        chars[i] = 'и' if c.islower() else 'И'
+    elif cl == 'э':
+        chars[i] = 'є' if c.islower() else 'Є'
+    elif cl == 'и':
+        if i > 0 and chars[i - 1].lower() in 'аеёиоуыэюяієї':
+            if random.random() < 0.6:
+                chars[i] = 'ї' if c.islower() else 'Ї'
+        else:
+            if random.random() < 0.5:
+                chars[i] = 'i' if c.islower() else 'I'
+    elif cl == 'е':
+        if i == 0 or not chars[i - 1].isalpha():
+            if random.random() < 0.4:
+                chars[i] = 'є' if c.islower() else 'Є'
+    elif cl == 'г':
+        if random.random() < 0.10:
+            chars[i] = 'ґ' if c.islower() else 'Ґ'
+
+def _process_triplet_tsya(chars: list[str], i: int, replaced_spans: set) -> None:
+    if i >= 2 and i < len(chars):
+        triplet = ''.join(chars[i - 2:i + 1]).lower()
+        if triplet == 'тся' and (i - 2) not in replaced_spans:
+            chars[i - 1] = 'ь' if chars[i - 1].islower() else 'Ь'
+            chars.insert(i, 'с' if chars[i].islower() else 'С')
+
 def _stage2_linguistic(text: str, replaced_spans: set) -> str:
     chars = list(text)
     i = 0
@@ -787,39 +817,8 @@ def _stage2_linguistic(text: str, replaced_spans: set) -> str:
             i += 1
             continue
 
-        c = chars[i]
-        cl = c.lower()
-
-        if cl == 'ы':
-            new_c = 'и' if c.islower() else 'И'
-            chars[i] = new_c
-        elif cl == 'э':
-            new_c = 'є' if c.islower() else 'Є'
-            chars[i] = new_c
-        elif cl == 'и':
-            if i > 0 and chars[i - 1].lower() in 'аеёиоуыэюяієї':
-                if random.random() < 0.6:
-                    new_c = 'ї' if c.islower() else 'Ї'
-                    chars[i] = new_c
-            else:
-                if random.random() < 0.5:
-                    new_c = 'i' if c.islower() else 'I'
-                    chars[i] = new_c
-        elif cl == 'е':
-            if i == 0 or not chars[i - 1].isalpha():
-                if random.random() < 0.4:
-                    new_c = 'є' if c.islower() else 'Є'
-                    chars[i] = new_c
-        elif cl == 'г':
-            if random.random() < 0.10:
-                new_c = 'ґ' if c.islower() else 'Ґ'
-                chars[i] = new_c
-
-        if i >= 2 and i < len(chars):
-            triplet = ''.join(chars[i - 2:i + 1]).lower()
-            if triplet == 'тся' and (i - 2) not in replaced_spans:
-                chars[i - 1] = 'ь' if chars[i - 1].islower() else 'Ь'
-                chars.insert(i, 'с' if chars[i].islower() else 'С')
+        _replace_char(chars, i)
+        _process_triplet_tsya(chars, i, replaced_spans)
 
         i += 1
 
