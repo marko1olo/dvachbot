@@ -116,6 +116,10 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
                 except Exception as e:
                     err_str = f"{type(e).__name__}: {e}"
                     logger.warning(f"⚠️ {provider} call failed ({model_name}) via {strategy['name']}: {err_str}")
+                    if "413" in err_str or "too large" in err_str.lower() or "context_length_exceeded" in err_str.lower():
+                        logger.warning(f"⚠️ {model_name}: request too large, skipping to next model.")
+                        keys = []  # exhaust key loop → jump to next model
+                        break
                     if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower():
                         logger.warning(f"⚠️ {provider} Rate Limit. Switching key...")
                         break
