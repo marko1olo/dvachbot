@@ -7791,6 +7791,68 @@ async def graph_data_collector():
         except Exception as e:
             print(f"⛔ Ошибка в сборщике статистики для графика (graph_data_collector): {e}")
             await asyncio.sleep(300)
+def _prepare_graph_data(board_id: str, days: int):
+    """Подготавливает DataFrame для графика, фильтруя и ресемплируя данные."""
+    board_data_for_graph = graph_stats.get(board_id)
+    if not board_data_for_graph:
+        return None
+    df = pd.DataFrame.from_dict(board_data_for_graph, orient='index', columns=['posts'])
+    df.index = pd.to_datetime(df.index, utc=True)
+    start_date_utc = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=days)
+    df_filtered = df[df.index >= start_date_utc].copy()
+    if df_filtered.empty:
+        return None
+    resample_period = '1H' if days <= 1 else '3H'
+    end_date_utc = df_filtered.index.max()
+    if pd.isna(end_date_utc):
+        return None
+    date_range_utc = pd.date_range(start=start_date_utc, end=end_date_utc, freq=resample_period, tz='UTC')
+    df_resampled = df_filtered.resample(resample_period).sum().reindex(date_range_utc).fillna(0)
+    if df_resampled.empty or df_resampled['posts'].max() == 0:
+        return None
+    return df_resampled
+
+
+def _setup_graph_axes(ax, days: int, df_resampled, board_id: str):
+    """Настраивает оси, сетку и подписи графика."""
+    board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
+    period_str = f"{days} day(s)" if board_id == 'int' else f"{days} дн."
+    ax.set_title(f"Активность доски {board_name} за {period_str}", fontsize=16, color='white', pad=20)
+
+    max_val = df_resampled['posts'].max()
+    if max_val < 5:
+        nice_max = 5
+    else:
+        power = 10 ** math.floor(math.log10(max_val)) if max_val > 0 else 1
+        nice_max = math.ceil(max_val / power) * power
+        if nice_max * 0.8 > max_val:
+             nice_max = math.ceil(max_val / (power/2)) * (power/2)
+    ax.set_ylim(0, nice_max * 1.05)
+    ax.set_yticks(np.linspace(0, nice_max, 6, dtype=int))
+    ax.set_ylabel("Постов в час" if days <= 1 else "Постов за 3 часа", fontsize=12, color='white')
+
+    MSK = timezone(timedelta(hours=3))
+    if days <= 1:
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=4, tz=MSK))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H', tz=MSK))
+        ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1, tz=MSK))
+        ax.set_xlabel("Время (МСК)", fontsize=12, color='white')
+    else:
+        day_interval = max(1, days // 7)
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=day_interval, tz=MSK))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b', tz=MSK))
+        ax.xaxis.set_minor_locator(mdates.HourLocator(interval=3, tz=MSK))
+
+    ax.set_facecolor('#0d1117')
+    ax.grid(True, which='major', linestyle='--', linewidth=0.4, color='#30363d')
+    ax.grid(True, which='minor', linestyle=':', linewidth=0.2, color='#21262d')
+    for spine in ax.spines.values():
+        spine.set_color('#30363d')
+    ax.tick_params(axis='x', which='major', labelsize=10, length=6, width=1.5, colors='white', rotation=0, ha="center")
+    ax.tick_params(axis='y', which='major', labelsize=10, colors='white')
+    ax.tick_params(axis='both', which='minor', length=4, width=0.5)
+
+
 def generate_statistics_graph(board_id: str, days: int) -> bytes | None:
     """
     Генерирует изображение графика статистики постов для указанной доски за заданный период.
@@ -7801,75 +7863,36 @@ def generate_statistics_graph(board_id: str, days: int) -> bytes | None:
         return None
     plt.close('all') 
     try:
-        board_data_for_graph = graph_stats.get(board_id)
-        if not board_data_for_graph:
+        df_resampled = _prepare_graph_data(board_id, days)
+        if df_resampled is None:
             return None
-        df = pd.DataFrame.from_dict(board_data_for_graph, orient='index', columns=['posts'])
-        df.index = pd.to_datetime(df.index, utc=True)
-        start_date_utc = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=days)
-        df_filtered = df[df.index >= start_date_utc].copy()
-        if df_filtered.empty:
-            return None
-        resample_period = '1H' if days <= 1 else '3H'
-        end_date_utc = df_filtered.index.max()
-        if pd.isna(end_date_utc):
-            return None
-        date_range_utc = pd.date_range(start=start_date_utc, end=end_date_utc, freq=resample_period, tz='UTC')
-        df_resampled = df_filtered.resample(resample_period).sum().reindex(date_range_utc).fillna(0)
-        if df_resampled.empty or df_resampled['posts'].max() == 0:
-            return None
+
         plt.style.use('dark_background')
         num_points = len(df_resampled)
         width = max(10, min(20, num_points * 0.3))
         height = 6 if width <= 12 else 7
+
         fig, ax = plt.subplots(figsize=(width, height), dpi=110)
         line_color = '#00ffff'
         ax.plot(df_resampled.index, df_resampled['posts'], color=line_color, linewidth=2.5, marker='o', markersize=4, markeredgecolor='white', markerfacecolor=line_color, zorder=10)
         ax.fill_between(df_resampled.index, df_resampled['posts'], color=line_color, alpha=0.1, zorder=5)
-        board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
-        period_str = f"{days} day(s)" if board_id == 'int' else f"{days} дн."
-        ax.set_title(f"Активность доски {board_name} за {period_str}", fontsize=16, color='white', pad=20)
-        max_val = df_resampled['posts'].max()
-        if max_val < 5:
-            nice_max = 5
-        else:
-            power = 10 ** math.floor(math.log10(max_val)) if max_val > 0 else 1
-            nice_max = math.ceil(max_val / power) * power
-            if nice_max * 0.8 > max_val:
-                 nice_max = math.ceil(max_val / (power/2)) * (power/2)
-        ax.set_ylim(0, nice_max * 1.05)
-        ax.set_yticks(np.linspace(0, nice_max, 6, dtype=int))
-        ax.set_ylabel("Постов в час" if days <= 1 else "Постов за 3 часа", fontsize=12, color='white')
-        MSK = timezone(timedelta(hours=3))
-        if days <= 1:
-            ax.xaxis.set_major_locator(mdates.HourLocator(interval=4, tz=MSK))
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H', tz=MSK))
-            ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1, tz=MSK))
-            ax.set_xlabel("Время (МСК)", fontsize=12, color='white')
-        else:
-            day_interval = max(1, days // 7)
-            ax.xaxis.set_major_locator(mdates.DayLocator(interval=day_interval, tz=MSK))
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b', tz=MSK))
-            ax.xaxis.set_minor_locator(mdates.HourLocator(interval=3, tz=MSK))
+
+        _setup_graph_axes(ax, days, df_resampled, board_id)
+
         fig.patch.set_facecolor('#0d1117')
-        ax.set_facecolor('#0d1117')
-        ax.grid(True, which='major', linestyle='--', linewidth=0.4, color='#30363d')
-        ax.grid(True, which='minor', linestyle=':', linewidth=0.2, color='#21262d')
-        for spine in ax.spines.values():
-            spine.set_color('#30363d')
-        ax.tick_params(axis='x', which='major', labelsize=10, length=6, width=1.5, colors='white', rotation=0, ha="center")
-        ax.tick_params(axis='y', which='major', labelsize=10, colors='white')
-        ax.tick_params(axis='both', which='minor', length=4, width=0.5)
         fig.tight_layout(pad=1.5)
+
         buf = io.BytesIO()
         fig.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none')
         buf.seek(0)
+
         plt.close(fig)
         plt.close('all') # Закрываем вообще всё
         fig = None
         ax = None
         import gc
         gc.collect()
+
         return buf.getvalue()
     except Exception as e:
         import traceback
