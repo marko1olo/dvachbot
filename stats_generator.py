@@ -41,16 +41,8 @@ def generate_schizo_name(user_id: int) -> str:
     suffix = rng.choice(NICK_SUFFIXES)
     return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
 
-def generate_all_charts():
-    """Generates exactly 10 toxic charts and returns a list of io.BytesIO objects"""
-    conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-    conn.row_factory = dict_factory
-    c = conn.cursor()
-    
-    thirty_days_ago = time.time() - (30 * 24 * 3600)
-    images = []
-    
-    # 1. Объем высеров (Posts per day)
+def _generate_chart_1(c, thirty_days_ago, images):
+    """1. Объем высеров (Posts per day)"""
     c.execute('''
         SELECT date(timestamp, 'unixepoch', 'localtime') as d, COUNT(*) as cnt 
         FROM Posts 
@@ -70,8 +62,9 @@ def generate_all_charts():
         buf.seek(0)
         images.append(('1_posts.png', buf))
         plt.close()
-        
-    # 2. Уникальные шизы (Weekly Active Users)
+
+def _generate_chart_2(c, thirty_days_ago, images):
+    """2. Уникальные шизы (Weekly Active Users)"""
     c.execute('''
         SELECT strftime('%Y-%W', datetime(timestamp, 'unixepoch', 'localtime')) as week, COUNT(DISTINCT author_id) as cnt 
         FROM Posts 
@@ -92,7 +85,8 @@ def generate_all_charts():
         images.append(('2_wau.png', buf))
         plt.close()
 
-    # 3. Матоемкость борды
+def _generate_chart_3(c, thirty_days_ago, images):
+    """3. Матоемкость борды"""
     c.execute('''
         SELECT date(timestamp, 'unixepoch', 'localtime') as d, content 
         FROM Posts 
@@ -140,7 +134,8 @@ def generate_all_charts():
         images.append(('3_toxicity.png', buf))
         plt.close()
 
-    # 4. Топ-10 Главных Шизоидов
+def _generate_chart_4(c, thirty_days_ago, images):
+    """4. Топ-10 Главных Шизоидов"""
     c.execute('''
         SELECT author_id, COUNT(*) as cnt 
         FROM Posts 
@@ -163,7 +158,8 @@ def generate_all_charts():
         images.append(('4_top_schizos.png', buf))
         plt.close()
 
-    # 5. Главные Провокаторы (Топ-5 юзеров, кому больше всего отвечают)
+def _generate_chart_5(c, thirty_days_ago, images):
+    """5. Главные Провокаторы (Топ-5 юзеров, кому больше всего отвечают)"""
     c.execute('''
         SELECT orig.author_id, COUNT(*) as cnt 
         FROM Posts repl
@@ -187,7 +183,8 @@ def generate_all_charts():
         images.append(('5_provocateurs.png', buf))
         plt.close()
 
-    # 6. Гистограмма длины постов (Одноклеточные vs Пасты)
+def _generate_chart_6(c, thirty_days_ago, images):
+    """6. Гистограмма длины постов (Одноклеточные vs Пасты)"""
     c.execute('''
         SELECT content FROM Posts WHERE timestamp > ?
     ''', (thirty_days_ago,))
@@ -222,7 +219,8 @@ def generate_all_charts():
             images.append(('6_post_length.png', buf))
             plt.close()
 
-    # 7. Клуб Полуночников (Night vs Day)
+def _generate_chart_7(c, thirty_days_ago, images):
+    """7. Клуб Полуночников (Night vs Day)"""
     c.execute('''
         SELECT 
             SUM(CASE WHEN cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) BETWEEN 1 AND 6 THEN 1 ELSE 0 END) as night_posts,
@@ -243,7 +241,8 @@ def generate_all_charts():
         images.append(('7_night_owls.png', buf))
         plt.close()
 
-    # 8. Медиа-зависимость (Картинкодрочеры vs Текстовики)
+def _generate_chart_8(c, thirty_days_ago, images):
+    """8. Медиа-зависимость (Картинкодрочеры vs Текстовики)"""
     c.execute('''
         SELECT 
             SUM(CASE WHEN content LIKE '%"type": "text"%' THEN 1 ELSE 0 END) as text_posts,
@@ -264,7 +263,8 @@ def generate_all_charts():
         images.append(('8_media.png', buf))
         plt.close()
 
-    # 9. Уровень дискуссии (Реплаи vs Крик в пустоту)
+def _generate_chart_9(c, thirty_days_ago, images):
+    """9. Уровень дискуссии (Реплаи vs Крик в пустоту)"""
     c.execute('''
         SELECT 
             SUM(CASE WHEN reply_to_post_num IS NOT NULL THEN 1 ELSE 0 END) as replies,
@@ -285,7 +285,8 @@ def generate_all_charts():
         images.append(('9_dialogs.png', buf))
         plt.close()
 
-    # 10. Тепловая карта активности (Heatmap)
+def _generate_chart_10(c, thirty_days_ago, images):
+    """10. Тепловая карта активности (Heatmap)"""
     c.execute('''
         SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w, 
                cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h, 
@@ -319,7 +320,8 @@ def generate_all_charts():
         images.append(('10_heatmap.png', buf))
         plt.close()
 
-    # 11. Граф Социального Пузыря (Echo Chambers)
+def _generate_chart_11(c, thirty_days_ago, images):
+    """11. Граф Социального Пузыря (Echo Chambers)"""
     try:
         c.execute('''
             SELECT repl.author_id as replier, orig.author_id as original, COUNT(*) as weight
@@ -369,8 +371,17 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 11: {e}")
 
-    # 12. Топ-10 Хабов Внимания (PageRank Centrality)
+def _generate_chart_12(c, thirty_days_ago, images):
+    """12. Топ-10 Хабов Внимания (PageRank Centrality)"""
     try:
+        c.execute('''
+            SELECT repl.author_id as replier, orig.author_id as original, COUNT(*) as weight
+            FROM Posts repl
+            JOIN Posts orig ON repl.reply_to_post_num = orig.post_num AND repl.board_id = orig.board_id
+            WHERE repl.timestamp > ? AND repl.author_id IS NOT NULL AND orig.author_id IS NOT NULL
+            GROUP BY replier, original
+        ''', (thirty_days_ago,))
+        edges_data = c.fetchall()
         if edges_data:
             import networkx as nx
             DiG = nx.DiGraph()
@@ -400,8 +411,17 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 12: {e}")
 
-    # 13. Коэффициент Взаимного Дроча (Circlejerk Index)
+def _generate_chart_13(c, thirty_days_ago, images):
+    """13. Коэффициент Взаимного Дроча (Circlejerk Index)"""
     try:
+        c.execute('''
+            SELECT repl.author_id as replier, orig.author_id as original, COUNT(*) as weight
+            FROM Posts repl
+            JOIN Posts orig ON repl.reply_to_post_num = orig.post_num AND repl.board_id = orig.board_id
+            WHERE repl.timestamp > ? AND repl.author_id IS NOT NULL AND orig.author_id IS NOT NULL
+            GROUP BY replier, original
+        ''', (thirty_days_ago,))
+        edges_data = c.fetchall()
         if edges_data:
             mutuals = {}
             for edge in edges_data:
@@ -444,7 +464,8 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 13: {e}")
 
-    # 14. Сессионный Анализ (Длина сессий)
+def _generate_chart_14(c, thirty_days_ago, images):
+    """14. Сессионный Анализ (Длина сессий)"""
     try:
         c.execute('''
             SELECT author_id, timestamp 
@@ -497,7 +518,8 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 14: {e}")
 
-    # 15. Ритмы Выгорания (Автокорреляция топ-постера)
+def _generate_chart_15(c, thirty_days_ago, images):
+    """15. Ритмы Выгорания (Автокорреляция топ-постера)"""
     try:
         c.execute('''
             SELECT author_id, COUNT(*) as cnt 
@@ -549,7 +571,8 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 15: {e}")
 
-    # 16. Тематическое Моделирование (LDA)
+def _generate_chart_16(c, thirty_days_ago, images):
+    """16. Тематическое Моделирование (LDA)"""
     try:
         c.execute('''
             SELECT content FROM Posts 
@@ -612,7 +635,8 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 16: {e}")
 
-    # 17. Индекс Токсичности (Сентимент)
+def _generate_chart_17(c, thirty_days_ago, images):
+    """17. Индекс Токсичности (Сентимент)"""
     try:
         c.execute('''
             SELECT date(timestamp, 'unixepoch', 'localtime') as d, content 
@@ -671,7 +695,8 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 17: {e}")
 
-    # 18. Лексическое Разнообразие (MSTTR)
+def _generate_chart_18(c, thirty_days_ago, images):
+    """18. Лексическое Разнообразие (MSTTR)"""
     try:
         c.execute('''
             SELECT author_id, content 
@@ -731,6 +756,33 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 18: {e}")
 
+
+def generate_all_charts():
+    """Generates exactly 10 toxic charts and returns a list of io.BytesIO objects"""
+    conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
+    conn.row_factory = dict_factory
+    c = conn.cursor()
+
+    thirty_days_ago = time.time() - (30 * 24 * 3600)
+    images = []
+    _generate_chart_1(c, thirty_days_ago, images)
+    _generate_chart_2(c, thirty_days_ago, images)
+    _generate_chart_3(c, thirty_days_ago, images)
+    _generate_chart_4(c, thirty_days_ago, images)
+    _generate_chart_5(c, thirty_days_ago, images)
+    _generate_chart_6(c, thirty_days_ago, images)
+    _generate_chart_7(c, thirty_days_ago, images)
+    _generate_chart_8(c, thirty_days_ago, images)
+    _generate_chart_9(c, thirty_days_ago, images)
+    _generate_chart_10(c, thirty_days_ago, images)
+    _generate_chart_11(c, thirty_days_ago, images)
+    _generate_chart_12(c, thirty_days_ago, images)
+    _generate_chart_13(c, thirty_days_ago, images)
+    _generate_chart_14(c, thirty_days_ago, images)
+    _generate_chart_15(c, thirty_days_ago, images)
+    _generate_chart_16(c, thirty_days_ago, images)
+    _generate_chart_17(c, thirty_days_ago, images)
+    _generate_chart_18(c, thirty_days_ago, images)
     conn.close()
     return images
 
