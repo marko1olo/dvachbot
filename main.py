@@ -63,7 +63,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, UTC
 from enum import Enum
 from logging.handlers import RotatingFileHandler
-from typing import Tuple
 from dotenv import load_dotenv
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
