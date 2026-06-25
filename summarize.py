@@ -108,7 +108,6 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
                             completion = await client.chat.completions.create(
                                 model=model_name,
                                 messages=messages,
-                                max_tokens=2000,
                                 temperature=0.8
                             )
                             if completion.choices and len(completion.choices) > 0:
