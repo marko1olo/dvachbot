@@ -659,21 +659,35 @@ class ThreadImporter:
                 for i in range(0, len(replies_data), chunk_size):
                     await conn.execute("BEGIN")
                     chunk = replies_data[i : i + chunk_size]
+                    if not chunk:
+                        await conn.commit()
+                        continue
+
+                    flat_params = []
+                    old_ids = []
                     for p_data in chunk:
-                        content = json.dumps({
+                        p_content = json.dumps({
                             "text": p_data["text"], 
                             "files": p_data["files"], 
                             "type": "files" if p_data["files"] else "text"
                         })
-                        cur = await conn.execute(
-                            """INSERT INTO posts 
-                               (board_id, thread_id, content, timestamp, author_id, reply_to_post_num, stream) 
-                               VALUES (?, ?, ?, ?, ?, NULL, ?) RETURNING post_num""",
-                            (target_board, new_thread_id, content, p_data["timestamp"], p_data["author_id"], stream)
-                        )
-                        new_id = (await cur.fetchone())[0]
+                        flat_params.extend([target_board, new_thread_id, p_content, p_data["timestamp"], p_data["author_id"], stream])
+                        old_ids.append(p_data["old_id"])
+
+                    placeholders = ", ".join(["(?, ?, ?, ?, ?, NULL, ?)"] * len(chunk))
+                    cur = await conn.execute(
+                        f"""INSERT INTO posts
+                           (board_id, thread_id, content, timestamp, author_id, reply_to_post_num, stream)
+                           VALUES {placeholders} RETURNING post_num""",
+                        flat_params
+                    )
+
+                    rows = await cur.fetchall()
+                    for idx, row in enumerate(rows):
+                        new_id = row[0]
                         self.created_post_ids.append(new_id)
-                        id_map[p_data["old_id"]] = new_id
+                        id_map[old_ids[idx]] = new_id
+
                     await conn.commit()
                     await asyncio.sleep(0.05)
                 
