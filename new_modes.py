@@ -1488,8 +1488,7 @@ def _apply_america_effects(text: str) -> str:
 
     return text
 
-def _apply_holiday_effects(text: str) -> str:
-    # 1. Drunk Typos (30% chance)
+def _apply_holiday_drunk_typos(text: str) -> str:
     if random.random() < 0.30:
         chars = list(text)
         layout = {
@@ -1506,8 +1505,10 @@ def _apply_holiday_effects(text: str) -> str:
                 replaced = all_layout[c]
                 chars[i] = replaced.upper() if chars[i].isupper() else replaced
         text = "".join(chars)
+    return text
 
-    # 2. Vowel stretching
+
+def _apply_holiday_vowel_stretching(text: str) -> str:
     vowels = "аеиоуыэюяёАЕИОУЫЭЮЯЁ"
     words = text.split()
     for i in range(len(words)):
@@ -1517,9 +1518,10 @@ def _apply_holiday_effects(text: str) -> str:
                 v_idx = random.choice(v_indices)
                 char = words[i][v_idx]
                 words[i] = words[i][:v_idx] + char * random.randint(2, 4) + words[i][v_idx+1:]
-    text = " ".join(words)
+    return " ".join(words)
 
-    # 3. Drunken sounds injection
+
+def _apply_holiday_drunken_sounds(text: str) -> str:
     if random.random() < 0.25:
         sounds = ["*ик*", "*бульк*", "*упал под стол*", "(лицом в оливье)", "(разбил рюмку)"]
         words = text.split()
@@ -1527,22 +1529,33 @@ def _apply_holiday_effects(text: str) -> str:
             idx = random.randint(0, len(words))
             words.insert(idx, random.choice(sounds))
             text = " ".join(words)
+    return text
 
-    # 4. Drunken Shouting (UPPERCASE)
+
+def _apply_holiday_drunken_shouting(text: str) -> str:
     words = text.split()
     for i in range(len(words)):
         if random.random() < 0.15:
             words[i] = words[i].upper()
-    text = " ".join(words)
+    return " ".join(words)
 
-    # 5. Toasts
+
+def _apply_holiday_toasts(text: str) -> str:
     if random.random() < 0.30:
         toasts = [
             " «НУ, ЗА ЗДОРОВЬЕ АНОНА!»", " «ТАМАДА, НАЛИВАЙ!»", 
             " «ГОРЬКО!»", " «ПОЕХАЛИ!»", " «НУ, ЗА ПОНИМАНИЕ!»"
         ]
         text += random.choice(toasts)
+    return text
 
+
+def _apply_holiday_effects(text: str) -> str:
+    text = _apply_holiday_drunk_typos(text)
+    text = _apply_holiday_vowel_stretching(text)
+    text = _apply_holiday_drunken_sounds(text)
+    text = _apply_holiday_drunken_shouting(text)
+    text = _apply_holiday_toasts(text)
     return text
 
 def _apply_oldweb_effects(text: str) -> str:
