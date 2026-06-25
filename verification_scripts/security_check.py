@@ -17,11 +17,15 @@ SUMMARY_PATH = SECURITY_CHECK_SUMMARY
 def run_step(args: list[str], required: bool = True) -> dict[str, Any]:
     print(f"security_check: running {' '.join(args)}", flush=True)
     started = time.perf_counter()
+    import os
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
     result = subprocess.run(
         [sys.executable, *args],
         cwd=ROOT,
         text=True,
         capture_output=True,
+        env=env,
     )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     if result.stdout:
@@ -40,26 +44,26 @@ def run_step(args: list[str], required: bool = True) -> dict[str, Any]:
 
 def run_inventory(strict_enabled: bool) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
-    steps.append(run_step(["secret_artifact_inventory.py"]))
+    steps.append(run_step(["verification_scripts/secret_artifact_inventory.py"]))
     if steps[-1]["exit_code"] != 0:
         return steps
 
-    steps.append(run_step(["secret_findings_baseline.py"]))
+    steps.append(run_step(["verification_scripts/secret_findings_baseline.py"]))
     if steps[-1]["exit_code"] != 0:
         return steps
 
-    steps.append(run_step(["secret_artifact_redactor.py", "--from-report"]))
+    steps.append(run_step(["verification_scripts/secret_artifact_redactor.py", "--from-report"]))
     if steps[-1]["exit_code"] != 0:
         return steps
 
-    plan_args = ["secret_remediation_plan.py"]
+    plan_args = ["verification_scripts/secret_remediation_plan.py"]
     if strict_enabled:
         plan_args.append("--fail-on-actions")
     steps.append(run_step(plan_args))
     if steps[-1]["exit_code"] != 0:
         return steps
 
-    steps.append(run_step(["security_report_validator.py"]))
+    steps.append(run_step(["verification_scripts/security_report_validator.py"]))
     if steps[-1]["exit_code"] != 0:
         return steps
 
@@ -83,12 +87,12 @@ def main() -> int:
     inventory_enabled = "--inventory" in sys.argv[1:]
     strict_enabled = "--strict" in sys.argv[1:]
     steps: list[dict[str, Any]] = []
-    repository_args = ["repository_health.py"]
-    cookie_args = ["cookie_artifact_audit.py", "--fail-on-parse-issues"]
-    local_artifact_args = ["local_artifact_audit.py"]
-    python_quality_args = ["python_quality_audit.py"]
-    import_graph_args = ["import_graph_audit.py"]
-    async_blocking_args = ["async_blocking_audit.py"]
+    repository_args = ["verification_scripts/repository_health.py"]
+    cookie_args = ["verification_scripts/cookie_artifact_audit.py", "--fail-on-parse-issues"]
+    local_artifact_args = ["verification_scripts/local_artifact_audit.py"]
+    python_quality_args = ["verification_scripts/python_quality_audit.py"]
+    import_graph_args = ["verification_scripts/import_graph_audit.py"]
+    async_blocking_args = ["verification_scripts/async_blocking_audit.py"]
     if strict_enabled:
         repository_args.append("--fail-on-issues")
         cookie_args.append("--fail-on-sensitive")
@@ -98,18 +102,18 @@ def main() -> int:
         async_blocking_args.append("--fail-on-high")
 
     checks = [
-        ["source_integrity_audit.py", "--fail-on-issues"],
+        ["verification_scripts/source_integrity_audit.py", "--fail-on-issues"],
         repository_args,
-        ["gitignore_policy_audit.py", "--fail-on-missing"],
+        ["verification_scripts/gitignore_policy_audit.py", "--fail-on-missing"],
         cookie_args,
         local_artifact_args,
         python_quality_args,
         import_graph_args,
         async_blocking_args,
         ["-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"],
-        ["env_example_validator.py"],
-        ["env_contract_audit.py", "--fail-on-missing"],
-        ["secret_scan.py"],
+        ["verification_scripts/env_example_validator.py"],
+        ["verification_scripts/env_contract_audit.py", "--fail-on-missing"],
+        ["verification_scripts/secret_scan.py"],
     ]
 
     for args in checks:
@@ -129,7 +133,7 @@ def main() -> int:
 
     write_summary(steps, inventory_enabled, strict_enabled)
     if inventory_enabled:
-        status_step = run_step(["security_status.py"])
+        status_step = run_step(["verification_scripts/security_status.py"])
         steps.append(status_step)
         if status_step["exit_code"] != 0:
             write_summary(steps, inventory_enabled, strict_enabled)
