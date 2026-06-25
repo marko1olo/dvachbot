@@ -69,6 +69,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from common.html_utils import escape_html
 from common.token_generator import generate_unique_token
+from common.image_utils import resize_image_if_needed_bot as _resize_image_if_needed
 from common.database import (
     initialize_database, is_database_migrated, load_state_from_db, get_and_clear_reaction_queue, get_post_by_num, get_stream_active_users, 
     update_board_settings, add_or_activate_user, update_user_status, get_and_clear_broadcast_queue, mark_broadcast_posts_sent, get_channel_message_id,
@@ -11252,72 +11253,6 @@ async def sync_boards_with_config():
                     continue
                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при синхронизации досок с БД: {e}")
                 break
-def _resize_image_if_needed(image_bytes: bytes) -> bytes:
-    """
-    (СИНХРОННАЯ) Оптимизированная проверка.
-    ВАЖНО: Пропускает видео (MP4, WebM) и GIF без изменений, чтобы не ломать кодировку.
-    """
-    MAX_DIMENSION_SUM = 10000
-    MAX_ASPECT_RATIO = 20.0
-    MAX_FILE_SIZE_BYTES = 9.5 * 1024 * 1024 
-    if not image_bytes: return image_bytes
-    header = image_bytes[:12]
-    is_media_format = (
-        b'ftyp' in header or 
-        header.startswith(b'\x1A\x45\xDF\xA3') or 
-        header.startswith(b'GIF8')
-    )
-
-    if is_media_format:
-        return image_bytes
-
-    try:
-        input_size = len(image_bytes)
-        with Image.open(io.BytesIO(image_bytes)) as img:
-            width, height = img.size
-            format_original = img.format
-            if getattr(img, "is_animated", False):
-                return image_bytes
-
-            needs_resize_dims = (
-                (width + height > MAX_DIMENSION_SUM) or 
-                (width / height > MAX_ASPECT_RATIO) or 
-                (height / width > MAX_ASPECT_RATIO)
-            )
-            if not needs_resize_dims and input_size <= MAX_FILE_SIZE_BYTES:
-                if format_original == 'PNG' and input_size > 5 * 1024 * 1024:
-                    pass 
-                else:
-                    return image_bytes
-            img = img.convert("RGB")
-            new_width, new_height = width, height
-            if width + height > MAX_DIMENSION_SUM:
-                scale_factor = MAX_DIMENSION_SUM / (width + height)
-                new_width = int(width * scale_factor)
-                new_height = int(height * scale_factor)
-            if new_width / new_height > MAX_ASPECT_RATIO:
-                new_width = int(new_height * MAX_ASPECT_RATIO)
-            elif new_height / new_width > MAX_ASPECT_RATIO:
-                new_height = int(new_width * MAX_ASPECT_RATIO)
-
-            if new_width != width or new_height != height:
-                img = img.resize((max(1, new_width), max(1, new_height)), Image.LANCZOS)
-            quality = 95
-            output_buffer = io.BytesIO()
-            img.save(output_buffer, format='JPEG', quality=quality)
-            current_size = output_buffer.tell()
-            while current_size > MAX_FILE_SIZE_BYTES and quality > 10:
-                output_buffer.seek(0)
-                output_buffer.truncate(0)
-                if quality < 60:
-                    img = img.resize((int(img.width * 0.85), int(img.height * 0.85)), Image.LANCZOS)
-                quality -= 10
-                img.save(output_buffer, format='JPEG', quality=quality)
-                current_size = output_buffer.tell()
-                
-            return output_buffer.getvalue()
-    except Exception as e:
-        return image_bytes
 def _contextual_reply_allowed(user_id: int, board_id: str) -> tuple[bool, str | None]:
     if not CONTEXTUAL_REPLIES_ENABLED:
         contextual_reply_stats["skipped_disabled"] += 1
