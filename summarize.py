@@ -35,12 +35,12 @@ def _load_google_keys() -> list[str]:
 async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     """
     Summarize text using a cascade of OpenAI-compatible endpoints:
-    Supports choosing model/provider: gemini, qwen, llama, or default groq (Qwen + Llama).
+    Supports choosing model/provider: gemini, qwen, llama, or default groq (Qwen + Llama + Gemini fallback).
     """
     if model_preference == "gemini":
         models_cascade = [
-            ("gemini-3.5-flash", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini")
+            ("gemini-2.5-flash-lite-preview-06-17", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
         ]
     elif model_preference == "qwen":
         models_cascade = [
@@ -51,10 +51,12 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
             ("llama-3.3-70b-versatile", "groq")
         ]
     else:
-        # Default to free/unlimited models (Qwen and Llama on Groq)
+        # Default: Groq first (free), Gemini as fallback for large chunks
         models_cascade = [
             ("qwen/qwen3.6-27b", "groq"),
-            ("llama-3.3-70b-versatile", "groq")
+            ("llama-3.3-70b-versatile", "groq"),
+            ("gemini-2.5-flash-lite-preview-06-17", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
         ]
     
     messages = [
