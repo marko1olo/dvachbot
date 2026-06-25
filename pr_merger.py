@@ -2,7 +2,8 @@ import subprocess
 
 def run_cmd(cmd, check=True):
     try:
-        return subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT).decode('utf-8').strip()
+        # Note: shell=True removed to prevent command injection
+        return subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode('utf-8').strip()
     except subprocess.CalledProcessError as e:
         if check:
             raise
@@ -12,10 +13,10 @@ def main():
     print("Starting Automated PR Triage...")
     
     # 1. Skip fetch
-    # run_cmd("git fetch --all")
+    # run_cmd(["git", "fetch", "--all"])
     
     # 2. List remote branches
-    output = run_cmd("git --no-pager branch -r")
+    output = run_cmd(["git", "--no-pager", "branch", "-r"])
     branches = [b.strip() for b in output.split('\n') if b.strip() and '->' not in b and 'origin/main' not in b]
     
     # 3. Filter branches
@@ -25,11 +26,11 @@ def main():
             continue
             
         try:
-            log = run_cmd(f"git --no-pager log main..{branch} --oneline")
+            log = run_cmd(["git", "--no-pager", "log", f"main..{branch}", "--oneline"])
             if not log:
                 continue # No commits to merge
             
-            diffstat = run_cmd(f"git --no-pager diff --shortstat main...{branch}")
+            diffstat = run_cmd(["git", "--no-pager", "diff", "--shortstat", f"main...{branch}"])
             if not diffstat.strip():
                 continue # Empty diff, already merged or empty
                 
@@ -56,13 +57,13 @@ def main():
         print(f"Attempting merge for: {branch} ...")
         
         # Start merge
-        merge_cmd = f'git merge --no-edit -m "Merge {branch}" {branch}'
+        merge_cmd = ["git", "merge", "--no-edit", "-m", f"Merge {branch}", branch]
         try:
             res = run_cmd(merge_cmd, check=False)
             
             if "Merge conflict" in res or "CONFLICT" in res:
                 print(f"  [CONFLICT] Aborting...")
-                run_cmd("git merge --abort", check=False)
+                run_cmd(["git", "merge", "--abort"], check=False)
                 failed.append((branch, "Conflict"))
             elif "Already up to date" in res:
                 print(f"  [ALREADY MERGED]")
@@ -72,7 +73,7 @@ def main():
                 
         except Exception as e:
             print(f"  [FAILED] with exception. Aborting...")
-            run_cmd("git merge --abort", check=False)
+            run_cmd(["git", "merge", "--abort"], check=False)
             failed.append((branch, "Error"))
 
     # Summary
