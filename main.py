@@ -8830,82 +8830,43 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
 
     if thread_id:
         if lang == 'en':
-            if length_choice == 'short':
-                prompt = (
-                    f"You are a toxic 4chan anon. Give an ultra-short, cynical roast (1-2 sentences) of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). "
-                    "Highlight only the biggest fail or topic. Use board slang. "
-                    "Output ONLY plain text or basic HTML. DO NOT use Markdown."
-                )
-                info_text = "For the last 6 hours in the thread"
-            elif length_choice == 'long':
-                prompt = (
-                    f"You are a paranoid 4chan archivist. Write a crazy long, extremely detailed, and structured chronicle of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). "
-                    "Write a massive text, analyzing every single discussion topic in detail. Highlight specific participants by their IDs (e.g. Anon #1234, Anon #5678) and lay out the chronology of their arguments with mock quotes and savage analysis. "
-                    "Your report must be a structured long-read with bold subheadings (use <b>, <i>, <u>, <s> for formatting) consisting of at least 6-8 heavy, informative paragraphs. "
-                    "Use board slang and pure toxicity. "
-                    "Output ONLY plain text or basic HTML. DO NOT use Markdown."
-                )
-                info_text = "For the last 6 hours in the thread"
-            else:
-                prompt = (
-                    f"You are a toxic 4chan anon. Write a detailed and cynical summary of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). "
-                    "Describe the main discussion topics, who took what stance, and who got roasted or seethed. "
-                    "Use board slang, profanity, be cynical and rude. Output a structured breakdown with funny headings. "
-                    "Output ONLY plain text or basic HTML. DO NOT use Markdown."
-                )
-                info_text = "For the last 6 hours in the thread"
+            prompt = random.choice([
+                # Short style
+                f"You are a toxic 4chan anon. Give an ultra-short, cynical roast (1-2 sentences) of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Highlight only the biggest fail or topic. Use board slang. Output ONLY plain text or basic HTML. DO NOT use Markdown.",
+                # Long style
+                f"You are a paranoid 4chan archivist. Write a crazy long, extremely detailed, and structured chronicle of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Write a massive text, analyzing every single discussion topic in detail. Highlight specific participants by their IDs (e.g. Anon #1234, Anon #5678) and lay out the chronology of their arguments with mock quotes and savage analysis. Your report must be a structured long-read with bold subheadings (use <b>, <i>, <u>, <s> for formatting) consisting of at least 6-8 heavy, informative paragraphs. Use board slang and pure toxicity. Output ONLY plain text or basic HTML. DO NOT use Markdown.",
+                # Medium style
+                f"You are a toxic 4chan anon. Write a detailed and cynical summary of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Describe the main discussion topics, who took what stance, and who got roasted or seethed. Use board slang, profanity, be cynical and rude. Output a structured breakdown with funny headings. Output ONLY plain text or basic HTML. DO NOT use Markdown."
+            ])
+            info_text = "For the last 6 hours in the thread"
         elif lang == 'jp':
             prompt = (
                 f"お前は2chねらーだ。スレ「{escape_html(thread_info.get('title', ''))}」（「|」で区切られた投稿）の流れを3行で解説しろ。"
-                "毒舌で、ネットスラング（草、ｗ、～だろ）を多用しろ。丁寧語禁止。煽り全開で。"
+                "毒舌で, ネットスラング（草、ｗ、～だろ）を多用しろ。丁寧語禁止。煽り全開で。"
             )
             info_text = "スレッドでの過去6時間の間に"
         else:
-            if length_choice == 'short':
-                prompt = (
-                    f"Ты — токсичный битард с Двача. Выдай ультра-короткую, циничную прожарку (1-2 предложения) за последние 6 часов обсуждения в треде «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). "
-                    "Опиши только самый главный обосрач или тему. Пиши нагло, со сленгом. "
-                    "Output ONLY plain text or basic HTML. DO NOT use Markdown."
-                )
-                info_text = "За последние 6 часов в треде"
-            elif length_choice == 'long':
-                prompt = (
-                    f"Ты — поехавший летописец-архивариус Двача. Твоя задача — составить ебануто длинный, подробнейший и глубокий отчет о спорах в треде «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). "
-                    "Пиши очень подробно, расписывай каждую замеченную тему обсуждения (даже мелкую), выдели участников по их ID (например, Анон #1234, Анон #5678) и покажи детальную хронологию их споров с цитатами и едким анализом. "
-                    "Твой отчет должен быть структурированным, с разметкой подзаголовков (используй <b>, <i>, <u>, <s> для форматирования) и состоять из огромного лонгрида (не менее 6-8 крупных, содержательных абзацев с подробностями). "
-                    "Пиши нагло, используй двачерский сленг и мат. "
-                    "Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags."
-                )
-                info_text = "За последние 6 часов в треде"
-            else:
-                prompt = (
-                    f"Ты — Анон с имиджборды (Двач). Твоя задача: написать подробный, циничный и едкий разбор треда «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). "
-                    "Детально опиши главные темы спора, кто какую позицию отстаивал, кто сильнее всего сгорел или обосрался. "
-                    "Пиши грязно, используй сленг, мат, будь веселым, токсичным и циничным ублюдком. "
-                    "Оформи структурированный разбор с забавными подзаголовками, подробно раскрывая суть. "
-                    "Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags."
-                )
-                info_text = "За последние 6 часов в треде"
+            prompt = random.choice([
+                # Short style
+                f"Ты — токсичный битард с Двача. Выдай ультра-короткую, циничную прожарку (1-2 предложения) за последние 6 часов обсуждения в треде «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). Опиши только самый главный обосрач или тему. Пиши нагло, со сленгом. Output ONLY plain text or basic HTML. DO NOT use Markdown.",
+                # Long style
+                f"Ты — поехавший летописец-архивариус Двача. Твоя задача — составить ебануто длинный, подробнейший и глубокий отчет о спорах в треде «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). Пиши очень подробно, расписывай каждую замеченную тему обсуждения (даже мелкую), выдели участников по их ID (например, Анон #1234, Анон #5678) и покажи детальную хронологию их споров с цитатами и едким анализом. Твой отчет должен быть структурированным, с разметкой подзаголовков (используй <b>, <i>, <u>, <s> для форматирования) и состоять из огромного лонгрида (не менее 6-8 крупных, содержательных абзацев с подробностями). Пиши нагло, используй двачерский сленг и мат. Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags.",
+                # Medium style
+                f"Ты — Анон с имиджборды (Двач). Твоя задача: написать подробный, циничный и едкий разбор треда «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). Детально опиши главные темы спора, кто какую позицию отстаивал, кто сильнее всего сгорел или обосрался. Пиши грязно, используй сленг, мат, будь веселым, токсичным и циничным ублюдком. Оформи структурированный разбор с забавными подзаголовками, подробно раскрывая суть. Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags."
+            ])
+            info_text = "За последние 6 часов в треде"
         chunk = await get_board_chunk(board_id, thread_id=thread_id, lang=lang)
     else:
         if lang == 'en':
-            if length_choice == 'short':
-                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_SHORT_EN)
-            elif length_choice == 'long':
-                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_LONG_EN)
-            else:
-                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_EN)
+            all_en_prompts = SUMMARIZE_PROMPTS_BOARD_SHORT_EN + SUMMARIZE_PROMPTS_BOARD_EN + SUMMARIZE_PROMPTS_BOARD_LONG_EN
+            prompt = random.choice(all_en_prompts)
             info_text = "For the last 6 hours on the board"
         elif lang == 'jp':
             prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_JP)
             info_text = "板での過去6時間の間に"
         else:
-            if length_choice == 'short':
-                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_SHORT)
-            elif length_choice == 'long':
-                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_LONG)
-            else:
-                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD)
+            all_ru_prompts = SUMMARIZE_PROMPTS_BOARD_SHORT + SUMMARIZE_PROMPTS_BOARD + SUMMARIZE_PROMPTS_BOARD_LONG
+            prompt = random.choice(all_ru_prompts)
             info_text = "За последние 6 часов на доске"
         chunk = await get_board_chunk(board_id, hours=6, lang=lang)
 

@@ -1,12 +1,13 @@
 import os
 import httpx
 import logging
+import asyncio
 from openai import AsyncOpenAI
 from common.token_pool import groq_pool
 
 logger = logging.getLogger("summarize")
 
-PROXY_URL = "http://127.0.0.1:10808" 
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "http://127.0.0.1:10808"
 
 GROQ_CONFIG = {
     "base_url": "https://api.groq.com/openai/v1",
