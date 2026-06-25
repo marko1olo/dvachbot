@@ -8679,6 +8679,40 @@ async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 
     
     await processing_msg.edit_text(roast_text, parse_mode='HTML')
 
+def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
+    import re
+    if lang == 'ru':
+        if count % 10 == 1 and count % 100 != 11:
+            p_word = "абзац"
+            p_word_adj = "крупный абзац"
+        elif count % 10 in [2, 3, 4] and count % 100 not in [12, 13, 14]:
+            p_word = "абзаца"
+            p_word_adj = "крупных абзаца"
+        else:
+            p_word = "абзацев"
+            p_word_adj = "крупных абзацев"
+        
+        prompt = re.sub(r'объемом ровно в 1-2 абзаца', f'объемом ровно в {count} {p_word}', prompt)
+        prompt = re.sub(r'ровно 3-4 абзаца', f'ровно {count} {p_word}', prompt)
+        prompt = re.sub(r'строго 6-8 крупных абзацев', f'строго {count} {p_word_adj}', prompt)
+        prompt = re.sub(r'не менее 6-8 крупных, содержательных абзацев с подробностями', f'ровно {count} {p_word_adj} с подробностями', prompt)
+        prompt = re.sub(r'1-2 предложения', f'ровно {count} {p_word}', prompt)
+        prompt = re.sub(r'ультра-короткую, циничную прожарку', f'циничную прожарку', prompt)
+        
+        prompt += f"\n\nВАЖНО: Твой отчет должен быть структурированным и состоять СТРОГО из {count} абзацев (не больше и не меньше!). Каждый абзац должен быть содержательным, плотным и отделен от других пустой строкой. Не используй Markdown-разметку (только HTML, например <b>, <i>)."
+    elif lang == 'en':
+        p_word = "paragraphs" if count > 1 else "paragraph"
+        prompt = re.sub(r'1-2 sentences', f'{count} {p_word}', prompt)
+        prompt = re.sub(r'at least 6-8 heavy, informative paragraphs', f'exactly {count} heavy, informative {p_word}', prompt)
+        prompt = re.sub(r'3-4 paragraphs', f'exactly {count} {p_word}', prompt)
+        
+        prompt += f"\n\nIMPORTANT: Your report must be structured and consist of EXACTLY {count} paragraphs (no more, no less!). Each paragraph must be informative, dense, separated by a blank line, and use only HTML formatting (no Markdown)."
+    elif lang == 'jp':
+        prompt = re.sub(r'3行で', f'{count}段落で', prompt)
+        prompt += f"\n\n重要：要約は必ず正確に{count}段落で構成してください（多くても少なくてもいけません！）。各段落は空白行で区切られている必要があります。Markdownは使用せず、HTMLタグのみを使用してください。"
+        
+    return prompt
+
 @dp.message(Command("summarize", "sum", "summary", "samamri", "sammary"))
 async def cmd_summarize(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id:
@@ -8729,20 +8763,36 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             else:
                 context_name = f"треда «{thread_title}»"
 
-    # Parse length and model arguments from message text if available
-    length_choice = random.choice(['short', 'medium', 'long'])
+    # Parse length, paragraph count and model arguments from message text if available
+    paragraph_count = None
     model_preference = 'groq' # Default to free/unlimited models (qwen, llama)
+    chosen_tier = None
+    
     if message.text:
         args = message.text.lower().split()
         if len(args) > 1:
             for arg in args[1:]:
-                # Length check
+                # Check if it's an exact number of paragraphs
+                try:
+                    clean_arg = re.sub(r'(абзац(ев|а)?|п|p|段落|lines|line|l)$', '', arg)
+                    val = int(clean_arg)
+                    if 1 <= val <= 25:
+                        paragraph_count = val
+                        continue
+                except ValueError:
+                    pass
+                
+                # Check keywords
                 if arg in ['short', 'краткое', 'короткое', 'быстрое', 'к']:
-                    length_choice = 'short'
+                    chosen_tier = 'short'
                 elif arg in ['medium', 'среднее', 'нормальное', 'с']:
-                    length_choice = 'medium'
-                elif arg in ['long', 'длинное', 'лонг', 'лонгрид', 'ебанутое', 'д']:
-                    length_choice = 'long'
+                    chosen_tier = 'medium'
+                elif arg in ['long', 'длинное', 'лонг', 'лонгрид', 'д']:
+                    chosen_tier = 'long'
+                elif arg in ['extra_long', 'огромное', 'очень длинное']:
+                    chosen_tier = 'extra_long'
+                elif arg in ['huge', 'гигантское', 'ебанутое']:
+                    chosen_tier = 'huge'
                 # Model / provider check
                 elif arg in ['gemini', 'google', 'гугл', 'джемини', 'г']:
                     model_preference = 'gemini'
@@ -8752,6 +8802,31 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
                     model_preference = 'qwen'
                 elif arg in ['groq', 'грок', 'free', 'шара']:
                     model_preference = 'groq'
+
+    # If neither paragraph_count nor chosen_tier is specified, pick a random tier
+    if paragraph_count is None and chosen_tier is None:
+        chosen_tier = random.choice(['short', 'medium', 'long', 'extra_long', 'huge'])
+
+    # Map tier to paragraph count range if not explicitly set
+    if paragraph_count is None:
+        if chosen_tier == 'short':
+            paragraph_count = random.randint(1, 2)
+        elif chosen_tier == 'medium':
+            paragraph_count = random.randint(3, 5)
+        elif chosen_tier == 'long':
+            paragraph_count = random.randint(6, 9)
+        elif chosen_tier == 'extra_long':
+            paragraph_count = random.randint(10, 14)
+        elif chosen_tier == 'huge':
+            paragraph_count = random.randint(15, 20)
+
+    # Determine length_choice for prompts and status messages
+    if paragraph_count <= 2:
+        length_choice = 'short'
+    elif paragraph_count <= 5:
+        length_choice = 'medium'
+    else:
+        length_choice = 'long'
 
     if thread_id:
         if lang == 'en':
@@ -8834,6 +8909,9 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             info_text = "За последние 6 часов на доске"
         chunk = await get_board_chunk(board_id, hours=6, lang=lang)
 
+    # Dynamically inject exact paragraph count constraint into the selected prompt
+    prompt = adjust_prompt_paragraphs(prompt, paragraph_count, lang=lang)
+
     hf_token = os.getenv("HF_TOKEN")
     if not chunk or len(chunk) < 100:
         print(f"[summarize] Мало сообщений для summarize (len={len(chunk)})")
@@ -8848,20 +8926,29 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
 
     if lang == 'en':
         if length_choice == 'short':
-            status_text = "⏳ Generating a quick summary..."
-        elif length_choice == 'long':
-            status_text = "⏳ Preparing a detailed long-read for Telegraph..."
+            status_text = f"⏳ Generating a quick summary ({paragraph_count} paragraph{'s' if paragraph_count > 1 else ''})..."
+        elif paragraph_count >= 6:
+            status_text = f"⏳ Preparing a detailed long-read for Telegraph ({paragraph_count} paragraphs)..."
         else:
-            status_text = "⏳ Generating summary, please wait ~30 seconds..."
+            status_text = f"⏳ Generating summary, please wait ~30 seconds ({paragraph_count} paragraphs)..."
     elif lang == 'jp':
-        status_text = "⏳ サマリーを生成中、30秒ほどお待ちください..."
+        status_text = f"⏳ サマリーを生成中 ({paragraph_count}段落)、30秒ほどお待ちください..."
     else:
-        if length_choice == 'short':
-            status_text = "⏳ Генерирую быстрое саммари..."
-        elif length_choice == 'long':
-            status_text = "⏳ Готовлю ебануто длинный лонгрид для Telegraph..."
+        # Russian plural endings: 1 абзац, 2-4 абзаца, 5+ абзацев
+        if paragraph_count % 10 == 1 and paragraph_count % 100 != 11:
+            p_word = "абзац"
+        elif paragraph_count % 10 in [2, 3, 4] and paragraph_count % 100 not in [12, 13, 14]:
+            p_word = "абзаца"
         else:
-            status_text = "⏳ Генерирую среднее саммари..."
+            p_word = "абзацев"
+            
+        if length_choice == 'short':
+            status_text = f"⏳ Генерирую быстрое саммари ({paragraph_count} {p_word})..."
+        elif paragraph_count >= 6:
+            status_text = f"⏳ Готовлю ебануто длинный лонгрид для Telegraph ({paragraph_count} {p_word})..."
+        else:
+            status_text = f"⏳ Генерирую среднее саммари ({paragraph_count} {p_word})..."
+            
     await message.answer(status_text)
 
     try:
@@ -8889,7 +8976,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         await message.answer(err_msg)
         return
 
-    should_use_telegraph = (length_choice == 'long' or len(summary) >= 1200)
+    should_use_telegraph = (paragraph_count >= 6 or len(summary) >= 1200)
     telegraph_url = None
 
     if should_use_telegraph:
