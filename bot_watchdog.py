@@ -149,6 +149,40 @@ def _heartbeat_is_fresh(payload: dict | None) -> bool:
     )
 
 
+def _extract_queue_total_from_log_text(text: str) -> int | None:
+    latest: int | None = None
+    for match in re.finditer(r"runtime_snapshot (\{.*\})", text):
+        try:
+            payload = json.loads(match.group(1))
+            total = payload.get("queues", {}).get("total")
+            if isinstance(total, int):
+                latest = total
+        except Exception:
+            continue
+
+    for match in re.finditer(r"\[runtime\].*?queues=(\d+).*?maps=", text):
+        try:
+            latest = int(match.group(1))
+        except ValueError:
+            continue
+
+    return latest
+
+
+def _extract_queue_total_from_logs() -> int | None:
+    latest: int | None = None
+    for path in (LOG_DIR / "bot_runtime.log", STDOUT_LOG):
+        text = _read_tail(path)
+        if not text:
+            continue
+
+        extracted = _extract_queue_total_from_log_text(text)
+        if extracted is not None:
+            latest = extracted
+
+    return latest
+
+
 def _extract_latest_queue_total() -> int | None:
     heartbeat = _read_heartbeat()
     if _heartbeat_is_fresh(heartbeat):
@@ -156,28 +190,7 @@ def _extract_latest_queue_total() -> int | None:
         if heartbeat_total is not None:
             return heartbeat_total
 
-    latest: int | None = None
-    for path in (LOG_DIR / "bot_runtime.log", STDOUT_LOG):
-        text = _read_tail(path)
-        if not text:
-            continue
-
-        for match in re.finditer(r"runtime_snapshot (\{.*\})", text):
-            try:
-                payload = json.loads(match.group(1))
-                total = payload.get("queues", {}).get("total")
-                if isinstance(total, int):
-                    latest = total
-            except Exception:
-                continue
-
-        for match in re.finditer(r"\[runtime\].*?queues=(\d+).*?maps=", text):
-            try:
-                latest = int(match.group(1))
-            except ValueError:
-                continue
-
-    return latest
+    return _extract_queue_total_from_logs()
 
 
 def _health_probe() -> tuple[bool, str]:
