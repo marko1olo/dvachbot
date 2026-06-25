@@ -12874,15 +12874,9 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
         pm_sent = "✅ Статистика отправлена вам в личные сообщения."
         unlock = "❌ Разблокируйте бота, чтобы получить статистику в ЛС."
     try:
-        await message.bot.send_message(user_id, stats_text, parse_mode="HTML")
-        temp_msg = await message.answer(pm_sent)
-        spawn_task(delete_message_after_delay(temp_msg, 5))
-    except TelegramForbiddenError:
-        await message.answer(unlock)
+        await message.answer(stats_text, parse_mode="HTML")
     except Exception: pass
     try: await wait_msg.delete()
-    except Exception: pass
-    try: await message.delete()
     except Exception: pass
 
 @dp.message(Command("top"))

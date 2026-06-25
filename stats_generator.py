@@ -43,7 +43,7 @@ def generate_schizo_name(user_id: int) -> str:
 
 def generate_all_charts():
     """Generates exactly 10 toxic charts and returns a list of io.BytesIO objects"""
-    conn = sqlite3.connect('dvach_bot.db', uri=True)
+    conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
     conn.row_factory = dict_factory
     c = conn.cursor()
     

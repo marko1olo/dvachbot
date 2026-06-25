@@ -38,7 +38,8 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
     2. Groq API (llama-3.3-70b-versatile)
     """
     models_cascade = [
-        ("gemini-3.0-flash", "gemini"),
+        ("gemini-3.5-flash", "gemini"),
+        ("gemini-3.1-flash-lite", "gemini"),
         ("llama-3.3-70b-versatile", "groq")
     ]
     
