@@ -1789,17 +1789,8 @@ def _collect_board_map_totals() -> dict:
     for timestamps in image_spam_tracker.values():
         totals["image_spam_items"] += _safe_len(timestamps)
     return totals
-def _collect_runtime_snapshot() -> dict:
+def _collect_board_totals() -> dict:
 
-    queue_sizes = {board: message_queues[board].qsize() for board in BOARDS if board in message_queues}
-    top_queues = sorted(queue_sizes.items(), key=lambda item: item[1], reverse=True)[:5]
-    queue_age_summary = _summarize_live_queue_ages(queue_sizes)
-    priority_counts = {board: _safe_len(weekly_active_users.get(board, set())) for board in BOARDS}
-    pending_done = 0
-    try:
-        pending_done = sum(1 for task in pending_edit_tasks.values() if task.done())
-    except Exception:
-        pending_done = -1
     board_totals = {
         "active_users": 0,
         "shadow_mutes": 0,
@@ -1821,6 +1812,19 @@ def _collect_runtime_snapshot() -> dict:
         reaction_queue = b_data.get("reaction_queue", {})
         if isinstance(reaction_queue, dict):
             board_totals["reaction_queue_items"] += sum(_safe_len(q) for q in reaction_queue.values())
+    return board_totals
+def _collect_runtime_snapshot() -> dict:
+
+    queue_sizes = {board: message_queues[board].qsize() for board in BOARDS if board in message_queues}
+    top_queues = sorted(queue_sizes.items(), key=lambda item: item[1], reverse=True)[:5]
+    queue_age_summary = _summarize_live_queue_ages(queue_sizes)
+    priority_counts = {board: _safe_len(weekly_active_users.get(board, set())) for board in BOARDS}
+    pending_done = 0
+    try:
+        pending_done = sum(1 for task in pending_edit_tasks.values() if task.done())
+    except Exception:
+        pending_done = -1
+    board_totals = _collect_board_totals()
     board_map_totals = _collect_board_map_totals()
     recipient_counts = _recipient_counts_snapshot()
     try:
