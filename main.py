@@ -202,7 +202,7 @@ from japanese_translator import (
     get_nsfw_anime_image, get_loli_image, get_dynamic_proxy_url,
     _get_proxy_usage_strategy, _update_proxy_state_on_failure
 )
-from summarize import summarize_text_with_hf
+from summarize import summarize_text_with_hf, create_telegraph_page_async
 from thread_texts import thread_messages
 from ukrainian_mode import UKRAINIAN_PHRASES, ukrainian_transform
 from zaputin_mode import PATRIOTIC_PHRASES, zaputin_transform
