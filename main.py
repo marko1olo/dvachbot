@@ -8729,14 +8729,45 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             else:
                 context_name = f"треда «{thread_title}»"
 
+    # Parse length argument from message text if available
+    length_choice = random.choice(['short', 'medium', 'long'])
+    if message.text:
+        args = message.text.split()
+        if len(args) > 1:
+            req_len = args[1].lower().strip()
+            if req_len in ['short', 'краткое', 'короткое', 'быстрое', 'к']:
+                length_choice = 'short'
+            elif req_len in ['medium', 'среднее', 'нормальное', 'с']:
+                length_choice = 'medium'
+            elif req_len in ['long', 'длинное', 'лонг', 'лонгрид', 'ебанутое', 'д']:
+                length_choice = 'long'
+
     if thread_id:
         if lang == 'en':
-            prompt = (
-                f"You are a toxic 4chan anon. Summarize this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). "
-                "Use internet slang, profanity, be cynical and rude. "
-                "Roast the participants if they are stupid. Keep it short (2-3 sentences). No filters."
-            )
-            info_text = "For the last 6 hours in the thread"
+            if length_choice == 'short':
+                prompt = (
+                    f"You are a toxic 4chan anon. Give an ultra-short, cynical roast (1-2 sentences) of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). "
+                    "Highlight only the biggest fail or topic. Use board slang. "
+                    "Output ONLY plain text or basic HTML. DO NOT use Markdown."
+                )
+                info_text = "For the last 6 hours in the thread"
+            elif length_choice == 'long':
+                prompt = (
+                    f"You are a paranoid 4chan archivist. Write a crazy long, extremely detailed, and structured chronicle of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). "
+                    "Write a massive text, analyzing every single discussion topic in detail. Highlight specific participants by their IDs (e.g. Anon #1234, Anon #5678) and lay out the chronology of their arguments with mock quotes and savage analysis. "
+                    "Your report must be a structured long-read with bold subheadings (use <b>, <i>, <u>, <s> for formatting) consisting of at least 6-8 heavy, informative paragraphs. "
+                    "Use board slang and pure toxicity. "
+                    "Output ONLY plain text or basic HTML. DO NOT use Markdown."
+                )
+                info_text = "For the last 6 hours in the thread"
+            else:
+                prompt = (
+                    f"You are a toxic 4chan anon. Write a detailed and cynical summary of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). "
+                    "Describe the main discussion topics, who took what stance, and who got roasted or seethed. "
+                    "Use board slang, profanity, be cynical and rude. Output a structured breakdown with funny headings. "
+                    "Output ONLY plain text or basic HTML. DO NOT use Markdown."
+                )
+                info_text = "For the last 6 hours in the thread"
         elif lang == 'jp':
             prompt = (
                 f"お前は2chねらーだ。スレ「{escape_html(thread_info.get('title', ''))}」（「|」で区切られた投稿）の流れを3行で解説しろ。"
@@ -8744,24 +8775,51 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             )
             info_text = "スレッドでの過去6時間の間に"
         else:
-            prompt = (
-                f"Ты — Анон с имиджборды (Двач). Твоя задача: прочитать этот срач треда «{escape_html(thread_info.get('title', ''))}» (посты разделены '|') "
-                "и кратко пояснить, чё там происходит. "
-                "Пиши грязно, используй сленг, мат, будь веселым, ебанутым, токсичным и циничным ублюдком. "
-                "Высмей участников, если они тупят. Не используй возвышенных слов. "
-                "Формат: 2-3 предложения по сути. Без цензуры."
-            )
-            info_text = "За последние 6 часов в треде"
+            if length_choice == 'short':
+                prompt = (
+                    f"Ты — токсичный битард с Двача. Выдай ультра-короткую, циничную прожарку (1-2 предложения) за последние 6 часов обсуждения в треде «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). "
+                    "Опиши только самый главный обосрач или тему. Пиши нагло, со сленгом. "
+                    "Output ONLY plain text or basic HTML. DO NOT use Markdown."
+                )
+                info_text = "За последние 6 часов в треде"
+            elif length_choice == 'long':
+                prompt = (
+                    f"Ты — поехавший летописец-архивариус Двача. Твоя задача — составить ебануто длинный, подробнейший и глубокий отчет о спорах в треде «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). "
+                    "Пиши очень подробно, расписывай каждую замеченную тему обсуждения (даже мелкую), выдели участников по их ID (например, Анон #1234, Анон #5678) и покажи детальную хронологию их споров с цитатами и едким анализом. "
+                    "Твой отчет должен быть структурированным, с разметкой подзаголовков (используй <b>, <i>, <u>, <s> для форматирования) и состоять из огромного лонгрида (не менее 6-8 крупных, содержательных абзацев с подробностями). "
+                    "Пиши нагло, используй двачерский сленг и мат. "
+                    "Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags."
+                )
+                info_text = "За последние 6 часов в треде"
+            else:
+                prompt = (
+                    f"Ты — Анон с имиджборды (Двач). Твоя задача: написать подробный, циничный и едкий разбор треда «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). "
+                    "Детально опиши главные темы спора, кто какую позицию отстаивал, кто сильнее всего сгорел или обосрался. "
+                    "Пиши грязно, используй сленг, мат, будь веселым, токсичным и циничным ублюдком. "
+                    "Оформи структурированный разбор с забавными подзаголовками, подробно раскрывая суть. "
+                    "Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags."
+                )
+                info_text = "За последние 6 часов в треде"
         chunk = await get_board_chunk(board_id, thread_id=thread_id, lang=lang)
     else:
         if lang == 'en':
-            prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_EN)
+            if length_choice == 'short':
+                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_SHORT_EN)
+            elif length_choice == 'long':
+                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_LONG_EN)
+            else:
+                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_EN)
             info_text = "For the last 6 hours on the board"
         elif lang == 'jp':
             prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_JP)
             info_text = "板での過去6時間の間に"
         else:
-            prompt = random.choice(SUMMARIZE_PROMPTS_BOARD)
+            if length_choice == 'short':
+                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_SHORT)
+            elif length_choice == 'long':
+                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_LONG)
+            else:
+                prompt = random.choice(SUMMARIZE_PROMPTS_BOARD)
             info_text = "За последние 6 часов на доске"
         chunk = await get_board_chunk(board_id, hours=6, lang=lang)
 
@@ -8771,18 +8829,28 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         if lang == 'en':
             err_msg = f"{info_text} there were too few messages to summarize."
         elif lang == 'jp':
-            err_msg = f"{info_text} サмаリーを作成するのに十分なメッセージがありませんでした。"
+            err_msg = f"{info_text} サマリーを作成するのに十分なメッセージがありませんでした。"
         else:
             err_msg = f"{info_text} было мало сообщений для саммари."
         await message.answer(err_msg)
         return
 
     if lang == 'en':
-        status_text = "⏳ Generating summary, please wait ~30 seconds..."
+        if length_choice == 'short':
+            status_text = "⏳ Generating a quick summary..."
+        elif length_choice == 'long':
+            status_text = "⏳ Preparing a detailed long-read for Telegraph..."
+        else:
+            status_text = "⏳ Generating summary, please wait ~30 seconds..."
     elif lang == 'jp':
         status_text = "⏳ サマリーを生成中、30秒ほどお待ちください..."
     else:
-        status_text = "⏳ Генерирую саммари, ждите ~30 секунд..."
+        if length_choice == 'short':
+            status_text = "⏳ Генерирую быстрое саммари..."
+        elif length_choice == 'long':
+            status_text = "⏳ Готовлю ебануто длинный лонгрид для Telegraph..."
+        else:
+            status_text = "⏳ Генерирую среднее саммари..."
     await message.answer(status_text)
 
     try:
@@ -8793,7 +8861,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         if lang == 'en':
             err_msg = "Error generating summary."
         elif lang == 'jp':
-            err_msg = "サмаリーの生成中にエラーが発生しました。"
+            err_msg = "サマリーの生成中にエラーが発生しました。"
         else:
             err_msg = "Ошибка при генерации саммари."
         await message.answer(err_msg)
@@ -8810,16 +8878,45 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         await message.answer(err_msg)
         return
 
-    summary = summary[:4000]
+    should_use_telegraph = (length_choice == 'long' or len(summary) >= 1200)
+    telegraph_url = None
+
+    if should_use_telegraph:
+        date_str = datetime.now().strftime('%d.%m.%Y %H:%M')
+        if lang == 'en':
+            title = f"Summary of {context_name} - {date_str}"
+        elif lang == 'jp':
+            title = f"{context_name} の要約 - {date_str}"
+        else:
+            title = f"Саммари {context_name} - {date_str}"
+
+        telegraph_url = await create_telegraph_page_async(title, summary, author="ТГАЧ")
+
+        if telegraph_url:
+            if lang == 'en':
+                summary = f"📝 <b>DETAILED SUMMARY ({context_name})</b>\n\nToo long to post here! I've published it as a Telegraph article:\n🔗 <a href=\"{telegraph_url}\">Read on Telegraph</a>"
+            elif lang == 'jp':
+                summary = f"📝 <b>詳細な要約 ({context_name})</b>\n\nここには収まりきらないため、Telegraphに投稿しました：\n🔗 <a href=\"{telegraph_url}\">Telegraphで読む</a>"
+            else:
+                summary = f"📝 <b>ЕБАНУТЫЙ ЛОНГРИД ({context_name})</b>\n\nНе осилил прочитать чат? Старый анон расписал всё по полочкам в этой статье:\n🔗 <a href=\"{telegraph_url}\">Читать на Telegraph</a>"
+        else:
+            print("[summarize] Telegraph creation failed, falling back to direct message")
+            summary = summary[:4000]
+    else:
+        summary = summary[:4000]
+
     print(f"[summarize] Final summary length: {len(summary)}")
     now_dt = datetime.now(UTC)
 
-    if lang == 'en':
-        post_text = f"Summary of {context_name}:\n\n{summary}"
-    elif lang == 'jp':
-        post_text = f"{context_name} の要約:\n\n{summary}"
+    if should_use_telegraph and telegraph_url:
+        post_text = summary
     else:
-        post_text = f"Саммари {context_name}:\n\n{summary}"
+        if lang == 'en':
+            post_text = f"Summary of {context_name}:\n\n{summary}"
+        elif lang == 'jp':
+            post_text = f"{context_name} の要約:\n\n{summary}"
+        else:
+            post_text = f"Саммари {context_name}:\n\n{summary}"
 
     content = {
         'type': 'text',

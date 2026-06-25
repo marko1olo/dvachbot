@@ -108,3 +108,66 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
                     continue
 
     return "Нейронка сдохла. Не удалось сгенерировать саммари."
+
+
+TELEGRAPH_TOKEN_FILE = os.path.join("data", "telegraph_token.txt")
+_telegraph_token_cache = None
+
+def get_telegraph_token() -> str:
+    global _telegraph_token_cache
+    if _telegraph_token_cache:
+        return _telegraph_token_cache
+    
+    # Try environment variable first (same as stomchat)
+    env_token = os.getenv("TELEGRAPH_TOKEN")
+    if env_token:
+        _telegraph_token_cache = env_token.strip()
+        return _telegraph_token_cache
+
+    if os.path.exists(TELEGRAPH_TOKEN_FILE):
+        try:
+            with open(TELEGRAPH_TOKEN_FILE, "r", encoding="utf-8") as f:
+                token = f.read().strip()
+                if token:
+                    _telegraph_token_cache = token
+                    return token
+        except Exception:
+            pass
+    try:
+        from html_telegraph_poster import TelegraphPoster
+        poster = TelegraphPoster(use_api=True)
+        poster.create_api_token("tgach_bot", "ТГАЧ")
+        token = poster.access_token
+        if token:
+            os.makedirs("data", exist_ok=True)
+            with open(TELEGRAPH_TOKEN_FILE, "w", encoding="utf-8") as f:
+                f.write(token)
+            _telegraph_token_cache = token
+            return token
+    except Exception as e:
+        logger.error(f"Failed to generate Telegraph token: {e}")
+    return ""
+
+def _create_telegraph_page_blocking(title: str, html_content: str, author: str = "ТГАЧ") -> str:
+    from html_telegraph_poster import TelegraphPoster
+    token = get_telegraph_token()
+    poster = TelegraphPoster(use_api=True, access_token=token)
+    
+    # Format line breaks as <br> for Telegraph
+    formatted_body = html_content.replace("\n", "<br>")
+    
+    page = poster.post(
+        title=title,
+        author=author,
+        text=formatted_body
+    )
+    return page["url"]
+
+async def create_telegraph_page_async(title: str, html_content: str, author: str = "ТГАЧ") -> str | None:
+    try:
+        url = await asyncio.to_thread(_create_telegraph_page_blocking, title, html_content, author)
+        return url
+    except Exception as e:
+        logger.error(f"Failed to create Telegraph page: {e}")
+        return None
+
