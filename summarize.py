@@ -31,17 +31,30 @@ def _load_google_keys() -> list[str]:
         return [k.strip() for k in raw_env.split(",") if k.strip()]
     return []
 
-async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | None = None) -> str:
+async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     """
     Summarize text using a cascade of OpenAI-compatible endpoints:
-    1. Gemini API (gemini-3.0-flash)
-    2. Groq API (llama-3.3-70b-versatile)
+    Supports choosing model/provider: gemini, qwen, llama, or default groq (Qwen + Llama).
     """
-    models_cascade = [
-        ("gemini-3.5-flash", "gemini"),
-        ("gemini-3.1-flash-lite", "gemini"),
-        ("llama-3.3-70b-versatile", "groq")
-    ]
+    if model_preference == "gemini":
+        models_cascade = [
+            ("gemini-3.5-flash", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini")
+        ]
+    elif model_preference == "qwen":
+        models_cascade = [
+            ("qwen/qwen3.6-27b", "groq")
+        ]
+    elif model_preference == "llama":
+        models_cascade = [
+            ("llama-3.3-70b-versatile", "groq")
+        ]
+    else:
+        # Default to free/unlimited models (Qwen and Llama on Groq)
+        models_cascade = [
+            ("qwen/qwen3.6-27b", "groq"),
+            ("llama-3.3-70b-versatile", "groq")
+        ]
     
     messages = [
         {"role": "system", "content": prompt},

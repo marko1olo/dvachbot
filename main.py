@@ -8729,18 +8729,29 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             else:
                 context_name = f"треда «{thread_title}»"
 
-    # Parse length argument from message text if available
+    # Parse length and model arguments from message text if available
     length_choice = random.choice(['short', 'medium', 'long'])
+    model_preference = 'groq' # Default to free/unlimited models (qwen, llama)
     if message.text:
-        args = message.text.split()
+        args = message.text.lower().split()
         if len(args) > 1:
-            req_len = args[1].lower().strip()
-            if req_len in ['short', 'краткое', 'короткое', 'быстрое', 'к']:
-                length_choice = 'short'
-            elif req_len in ['medium', 'среднее', 'нормальное', 'с']:
-                length_choice = 'medium'
-            elif req_len in ['long', 'длинное', 'лонг', 'лонгрид', 'ебанутое', 'д']:
-                length_choice = 'long'
+            for arg in args[1:]:
+                # Length check
+                if arg in ['short', 'краткое', 'короткое', 'быстрое', 'к']:
+                    length_choice = 'short'
+                elif arg in ['medium', 'среднее', 'нормальное', 'с']:
+                    length_choice = 'medium'
+                elif arg in ['long', 'длинное', 'лонг', 'лонгрид', 'ебанутое', 'д']:
+                    length_choice = 'long'
+                # Model / provider check
+                elif arg in ['gemini', 'google', 'гугл', 'джемини', 'г']:
+                    model_preference = 'gemini'
+                elif arg in ['llama', 'ллама', 'л']:
+                    model_preference = 'llama'
+                elif arg in ['qwen', 'квен', 'кв']:
+                    model_preference = 'qwen'
+                elif arg in ['groq', 'грок', 'free', 'шара']:
+                    model_preference = 'groq'
 
     if thread_id:
         if lang == 'en':
@@ -8854,7 +8865,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     await message.answer(status_text)
 
     try:
-        summary = await summarize_text_with_hf(prompt, chunk, hf_token)
+        summary = await summarize_text_with_hf(prompt, chunk, hf_token, model_preference=model_preference)
         summary = clean_html_for_tg(summary)
     except Exception as e:
         print(f"[summarize] Error during HF summarize: {e}")
