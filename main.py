@@ -275,16 +275,9 @@ RE_ANIME_STACK = re.compile(rf"/({'|'.join(ANIME_COMMAND_MAP.keys())})(?:(\d+)|(
 RE_REPLY_QUOTE = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
 RE_REPLY_QUOTE_FORMAT = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
 RE_MULTI_REPLY = re.compile(r'>>(\d+)')
-FONTS_CACHE = []
-try:
-    font_files = ["font1.ttf", "font2.ttf", "font3.ttf", "font4.ttf"]
-    for ff in font_files:
-        if os.path.exists(ff):
-            FONTS_CACHE.append(ImageFont.truetype(ff, 40))
-    if not FONTS_CACHE:
-        FONTS_CACHE.append(ImageFont.load_default())
-except Exception:
-    FONTS_CACHE.append(ImageFont.load_default())
+
+from common.image_utils import generate_wipe_image
+
 class MultiLangMiddleware(BaseMiddleware):
     """
     Определяет языковой поток пользователя (ru/en/jp).
@@ -4049,100 +4042,6 @@ async def admin_action_sync_worker():
         except Exception as e:
             print(f"Sync error: {e}")
             await asyncio.sleep(10)
-def smart_wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
-    """
-    Переносит текст по словам, основываясь на реальной пиксельной ширине.
-    """
-    wrapped_lines = []
-    user_lines = text.split('\n')
-    for line in user_lines:
-        if not line:
-            wrapped_lines.append('')
-            continue
-        words = line.split()
-        current_line = ""
-        for word in words:
-            test_line = current_line + word + " "
-            if draw.textlength(test_line, font=font) <= max_width:
-                current_line += word + " "
-            else:
-                wrapped_lines.append(current_line.strip())
-                current_line = word + " "
-        wrapped_lines.append(current_line.strip())
-    return "\n".join(wrapped_lines)
-def generate_wipe_image(text: str) -> bytes | None:
-    """
-    Создает изображение 512x512 с текстом, искажениями и шумом.
-    Исправлена ошибка DeprecationWarning для Pillow 10+.
-    """
-    try:
-        IMAGE_SIZE = (512, 512)
-        BACKGROUND_COLOR = (20, 20, 20)
-        TEXT_COLOR = (240, 240, 240)
-        background = Image.new('RGBA', IMAGE_SIZE, BACKGROUND_COLOR)
-        if not FONTS_CACHE:
-            print("⛔ КРИТИЧЕСКАЯ ОШИБКА: Шрифты не загружены (FONTS_CACHE пуст)!")
-            error_img = Image.new('RGB', IMAGE_SIZE, BACKGROUND_COLOR)
-            draw = ImageDraw.Draw(error_img)
-            try:
-                error_font = ImageFont.load_default()
-            except Exception:
-                return None
-            draw.multiline_text(
-                (50, 200), "ERROR:\nFONTS NOT FOUND", 
-                fill=(255, 50, 50), font=error_font, align="center"
-            )
-            buffer = io.BytesIO()
-            error_img.save(buffer, format='PNG')
-            return buffer.getvalue()
-        font = random.choice(FONTS_CACHE)
-        temp_draw = ImageDraw.Draw(background)
-        MAX_TEXT_WIDTH = IMAGE_SIZE[0] - 40 
-        wrapped_text = smart_wrap_text(temp_draw, text, font, MAX_TEXT_WIDTH)
-        text_layer = Image.new('RGBA', IMAGE_SIZE, (255, 255, 255, 0))
-        draw = ImageDraw.Draw(text_layer)
-        draw.multiline_text(
-            (IMAGE_SIZE[0] / 2, IMAGE_SIZE[1] / 2),
-            wrapped_text,
-            font=font,
-            fill=TEXT_COLOR,
-            anchor="mm",
-            align="center"
-        )
-        angle = random.uniform(-15, 15) # Уменьшил угол для читаемости
-        rotated_text_layer = text_layer.rotate(angle, expand=False, resample=Image.BICUBIC)
-        img_array = np.array(rotated_text_layer)
-        rows, cols, channels = img_array.shape
-        amplitude = random.uniform(3, 10)
-        frequency = random.uniform(0.05, 0.1)
-        x_indices = np.arange(cols)
-        y_offsets = (amplitude * np.sin(x_indices * frequency)).astype(int)
-        y_indices = np.arange(rows).reshape(-1, 1) + y_offsets.reshape(1, -1)
-        y_indices = np.clip(y_indices, 0, rows - 1)
-        distorted_array = np.zeros_like(img_array)
-        for x in range(cols):
-            shift = y_offsets[x]
-            if shift > 0:
-                distorted_array[shift:, x] = img_array[:-shift, x]
-            elif shift < 0:
-                distorted_array[:shift, x] = img_array[-shift:, x]
-            else:
-                distorted_array[:, x] = img_array[:, x]
-        distorted_layer = Image.fromarray(distorted_array, 'RGBA')
-        background.alpha_composite(distorted_layer)
-        noise_array = np.random.randint(0, 50, (IMAGE_SIZE[1], IMAGE_SIZE[0]), dtype=np.uint8)
-        noise_layer = Image.fromarray(noise_array, 'L').convert('RGBA')
-        noise_layer.putalpha(Image.new('L', IMAGE_SIZE, 30))
-        final_image = Image.alpha_composite(background, noise_layer)
-        buffer = io.BytesIO()
-        final_image.convert("RGB").save(buffer, format='PNG')
-        buffer.seek(0)
-        return buffer.getvalue()
-    except Exception as e:
-        print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА в generate_wipe_image: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
 def _format_quote_block(quote_info: dict | None) -> str | None:
     if not quote_info:
         return None
