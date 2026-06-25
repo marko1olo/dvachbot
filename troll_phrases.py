@@ -159,10 +159,63 @@ MEDIA_PHRASES = [
     "Срочно удали это убожество, не позорься."
 ]
 
+def _generate_normal_phrase() -> str:
+    """Генерирует обычную фразу тролля"""
+    roll = random.random()
+    if roll < 0.2:
+        return random.choice(SHORT_PHRASES) + (random.choice(EMOJIS) if random.random() > 0.7 else "")
+    elif roll < 0.35:
+        return random.choice(UNIQUE_PHRASES)
+    elif roll < 0.45:
+        return random.choice(EMOJIS) * random.randint(1, 4)
+
+    pattern = random.randint(1, 8)
+    prefix = random.choice(PREFIXES)
+    subj = random.choice(SUBJECTS)
+    act = random.choice(ACTIONS)
+    adv = random.choice(ADVICES)
+    emj = random.choice(EMOJIS) if random.random() > 0.4 else ""
+
+    if pattern == 1:
+        res = f"{prefix} {subj} {act} {emj}"
+    elif pattern == 2:
+        res = f"{subj} {act}, {adv} {emj}"
+    elif pattern == 3:
+        res = f"{prefix} {adv}. {subj} {act} {emj}"
+    elif pattern == 4:
+        res = f"{adv}, {subj} {emj}"
+    elif pattern == 5:
+        res = f"Твое лицо когда {subj} {act} {emj}"
+    elif pattern == 6:
+        res = f"Зачем ты {act}, если ты {subj}? {adv} {emj}"
+    elif pattern == 7:
+        res = f"Даже {subj} не {act} так сильно, как ты. {adv} {emj}"
+    else:  # pattern == 8
+        act2 = random.choice(ACTIONS)
+        while act2 == act:
+            act2 = random.choice(ACTIONS)
+        res = f"{prefix} {subj} {act}, а потом {act2}. {adv} {emj}"
+
+    res = res.strip()
+    if res:
+        res = res[0].upper() + res[1:]
+    return res
+
+def _add_quote(res: str, quote_text: str) -> str:
+    """С вероятностью 40% добавляет цитату к сгенерированной фразе"""
+    if random.random() < 0.4:
+        # Берем случайное предложение из текста
+        sentences = [s.strip() for s in quote_text.replace('\\n', '. ').split('.') if len(s.strip()) > 3]
+        if sentences:
+            quote = random.choice(sentences)
+            # Ограничиваем длину цитаты
+            if len(quote) > 100:
+                quote = quote[:97] + "..."
+            res = f">{quote}\\n\\n{res}"
+    return res
+
 def get_random_troll_phrase(context_type="normal", quote_text=None) -> str:
     """Генерирует фразу с учетом контекста и возможной цитаты"""
-    res = ""
-    
     if context_type == "chain":
         res = random.choice(CHAIN_PHRASES)
     elif context_type == "speed":
@@ -170,57 +223,10 @@ def get_random_troll_phrase(context_type="normal", quote_text=None) -> str:
     elif context_type == "media":
         res = random.choice(MEDIA_PHRASES)
     else:
-        # Нормальная генерация (как было)
-        roll = random.random()
-        if roll < 0.2:
-            res = random.choice(SHORT_PHRASES) + (random.choice(EMOJIS) if random.random() > 0.7 else "")
-        elif roll < 0.35:
-            res = random.choice(UNIQUE_PHRASES)
-        elif roll < 0.45:
-            res = random.choice(EMOJIS) * random.randint(1, 4)
-        else:
-            pattern = random.randint(1, 8)
-            prefix = random.choice(PREFIXES)
-            subj = random.choice(SUBJECTS)
-            act = random.choice(ACTIONS)
-            adv = random.choice(ADVICES)
-            emj = random.choice(EMOJIS) if random.random() > 0.4 else ""
-            
-            if pattern == 1:
-                res = f"{prefix} {subj} {act} {emj}"
-            elif pattern == 2:
-                res = f"{subj} {act}, {adv} {emj}"
-            elif pattern == 3:
-                res = f"{prefix} {adv}. {subj} {act} {emj}"
-            elif pattern == 4:
-                res = f"{adv}, {subj} {emj}"
-            elif pattern == 5:
-                res = f"Твое лицо когда {subj} {act} {emj}"
-            elif pattern == 6:
-                res = f"Зачем ты {act}, если ты {subj}? {adv} {emj}"
-            elif pattern == 7:
-                res = f"Даже {subj} не {act} так сильно, как ты. {adv} {emj}"
-            elif pattern == 8:
-                act2 = random.choice(ACTIONS)
-                while act2 == act:
-                    act2 = random.choice(ACTIONS)
-                res = f"{prefix} {subj} {act}, а потом {act2}. {adv} {emj}"
-                
-            res = res.strip()
-            if res:
-                res = res[0].upper() + res[1:]
+        res = _generate_normal_phrase()
     
     # Добавление цитаты
     if quote_text and context_type == "normal":
-        # С вероятностью 40% добавляем цитату
-        if random.random() < 0.4:
-            # Берем случайное предложение из текста
-            sentences = [s.strip() for s in quote_text.replace('\\n', '. ').split('.') if len(s.strip()) > 3]
-            if sentences:
-                quote = random.choice(sentences)
-                # Ограничиваем длину цитаты
-                if len(quote) > 100:
-                    quote = quote[:97] + "..."
-                res = f">{quote}\\n\\n{res}"
+        res = _add_quote(res, quote_text)
                 
     return res
