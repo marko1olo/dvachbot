@@ -1655,40 +1655,28 @@ async def _maybe_punch_up_text(text: str, mode_key: str, board_id: str) -> str:
             }, ensure_ascii=False, separators=(",", ":"))
         )
     return result
-def _summarize_live_queue_ages(queue_sizes: dict) -> dict:
+def _process_board_queue(queue, now: float) -> tuple[list[float], float | None, str | int | None]:
+    queued_items = list(getattr(queue, "_queue", []))
+    ages = []
+    oldest_post = None
+    oldest_age = None
+    for item in queued_items:
+        if not isinstance(item, dict):
+            continue
+        enqueued_at = item.get("enqueued_at")
+        if enqueued_at is None:
+            continue
+        try:
+            age = max(0.0, now - float(enqueued_at))
+        except (TypeError, ValueError):
+            continue
+        ages.append(age)
+        if oldest_age is None or age > oldest_age:
+            oldest_age = age
+            oldest_post = item.get("post_num")
+    return ages, oldest_age, oldest_post
 
-    now = time.time()
-    by_board = {}
-    oldest = []
-    for board_id, queue in message_queues.items():
-        queued_items = list(getattr(queue, "_queue", []))
-        ages = []
-        oldest_post = None
-        oldest_age = None
-        for item in queued_items:
-            if not isinstance(item, dict):
-                continue
-            enqueued_at = item.get("enqueued_at")
-            if enqueued_at is None:
-                continue
-            try:
-                age = max(0.0, now - float(enqueued_at))
-            except (TypeError, ValueError):
-                continue
-            ages.append(age)
-            if oldest_age is None or age > oldest_age:
-                oldest_age = age
-                oldest_post = item.get("post_num")
-        if queue_sizes.get(board_id, 0) or ages:
-            info = {"size": queue_sizes.get(board_id, 0)}
-            if ages:
-                info.update({
-                    "oldest_age_sec": round(max(ages), 1),
-                    "avg_age_sec": round(sum(ages) / len(ages), 1),
-                    "oldest_post": oldest_post,
-                })
-                oldest.append((board_id, info["oldest_age_sec"], oldest_post))
-            by_board[board_id] = info
+def _process_in_flight_deliveries(now: float) -> dict:
     in_flight = {}
     for board_id, item in list(current_deliveries.items()):
         started_at = item.get("started_at")
@@ -1703,6 +1691,28 @@ def _summarize_live_queue_ages(queue_sizes: dict) -> dict:
         except (TypeError, ValueError):
             data["age_sec"] = None
         in_flight[board_id] = data
+    return in_flight
+
+def _summarize_live_queue_ages(queue_sizes: dict) -> dict:
+
+    now = time.time()
+    by_board = {}
+    oldest = []
+    for board_id, queue in message_queues.items():
+        ages, oldest_age, oldest_post = _process_board_queue(queue, now)
+        if queue_sizes.get(board_id, 0) or ages:
+            info = {"size": queue_sizes.get(board_id, 0)}
+            if ages:
+                info.update({
+                    "oldest_age_sec": round(max(ages), 1),
+                    "avg_age_sec": round(sum(ages) / len(ages), 1),
+                    "oldest_post": oldest_post,
+                })
+                oldest.append((board_id, info["oldest_age_sec"], oldest_post))
+            by_board[board_id] = info
+
+    in_flight = _process_in_flight_deliveries(now)
+
     return {
         "by_board": by_board,
         "oldest": sorted(oldest, key=lambda item: item[1], reverse=True)[:5],
