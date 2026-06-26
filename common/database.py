@@ -7038,7 +7038,6 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                 if original_author_id > 0 and original_author_id != reply_author_id:
                     curr_time = time.time()
 
-                    # FIX: Если thread_id is None, используем ID родительского поста
                     effective_thread_id = str(thread_id) if thread_id else str(source_post_num)
 
                     await db.execute(
