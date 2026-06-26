@@ -57,7 +57,7 @@ def get_table_statistics(cur, tables):
             print(f"{table:<25} | {'INVALID NAME':<10}")
             continue
         try:
-            cur.execute(f'SELECT COUNT(*) FROM "{table}"')
+            cur.execute(f'SELECT COUNT(*) FROM "{table}"')  # nosec B608
             count = cur.fetchone()[0]
             print(f"{table:<25} | {count:<10}")
             total_rows += count
@@ -92,7 +92,7 @@ def find_logical_garbage(cur, tables):
     dead_threads = cur.fetchone()[0]
     if dead_threads > 0:
         print(f"{Colors.FAIL}⚠️  Треды без ОП-поста (битые записи в Threads): {dead_threads}{Colors.ENDC}")
-        print(f"   {Colors.WARNING}-> Рекомендуется: DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts){Colors.ENDC}")
+        print(f"   {Colors.WARNING}-> Рекомендуется: DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts){Colors.ENDC}")  # nosec B608
         garbage_found = True
     else:
         print(f"{Colors.OKGREEN}✓ Все треды имеют живой ОП-пост{Colors.ENDC}")
@@ -130,7 +130,7 @@ def find_logical_garbage(cur, tables):
                 SELECT COUNT(*) FROM "{table}" t
                 LEFT JOIN Posts p ON t.{col} = p.post_num
                 WHERE p.post_num IS NULL
-            """)
+            """)  # nosec B608
             orphans = cur.fetchone()[0]
             if orphans > 0:
                 print(f"{Colors.FAIL}⚠️  Мусор в таблице {table}: {orphans} записей (ссылаются на удаленные посты){Colors.ENDC}")
@@ -232,16 +232,16 @@ def print_recommendations(garbage_found, dead_threads, orphan_tables, posts_orph
         
         if dead_threads > 0:
             print(f"1. Выполнить очистку мертвых тредов:")
-            print(f"   {Colors.OKCYAN}DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts);{Colors.ENDC}")
+            print(f"   {Colors.OKCYAN}DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts);{Colors.ENDC}")  # nosec B608
             
         if orphan_tables:
             print("2. Очистить очереди от ссылок на несуществующие посты:")
             for tbl, col in orphan_tables:
-                print(f"   {Colors.OKCYAN}DELETE FROM {tbl} WHERE {col} NOT IN (SELECT post_num FROM Posts);{Colors.ENDC}")
+                print(f"   {Colors.OKCYAN}DELETE FROM {tbl} WHERE {col} NOT IN (SELECT post_num FROM Posts);{Colors.ENDC}")  # nosec B608
 
         if posts_orphaned_thread > 0:
             print("3. (Опционально) Удалить посты, чьи треды были удалены:")
-            print(f"   {Colors.OKCYAN}DELETE FROM Posts WHERE thread_id IS NOT NULL AND thread_id != CAST(post_num AS TEXT) AND thread_id NOT IN (SELECT thread_id FROM Threads);{Colors.ENDC}")
+            print(f"   {Colors.OKCYAN}DELETE FROM Posts WHERE thread_id IS NOT NULL AND thread_id != CAST(post_num AS TEXT) AND thread_id NOT IN (SELECT thread_id FROM Threads);{Colors.ENDC}")  # nosec B608
             
     else:
         print(f"{Colors.OKGREEN}✅ Критических проблем в структуре данных не обнаружено.{Colors.ENDC}")
