@@ -836,13 +836,15 @@ async def lifespan(app: FastAPI):
     await sync_boards_with_config(BOARD_CONFIG)
     async with get_db_connection() as conn:
         async with conn.execute("SELECT board_id, name, description FROM Boards WHERE is_approved = 1") as cursor:
-            async for row in cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
                 bid, bname, bdesc = row
                 if bid not in BOARD_CONFIG:
                     BOARD_CONFIG[bid] = {'name': bname, 'description': bdesc}
     async with get_db_connection() as conn:
         async with conn.execute("SELECT board_id, banner_data FROM Boards") as cursor:
-            async for row in cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
                 bid, bdata = row
                 if bid in BOARD_CONFIG and bdata:
                     try:
@@ -1273,7 +1275,8 @@ async def sitemap_xml(request: Request):
     try:
         query = "SELECT board_id, thread_id, last_updated_at FROM Threads ORDER BY last_updated_at DESC LIMIT 10000"
         async with db.execute(query) as cursor:
-            async for row in cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
                 bid, tid, ts = row
                 date_str = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
                 urls.append(f"{base_url}/{bid}/res/{tid}.html")
@@ -1810,8 +1813,8 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
             placeholders = ','.join('?' for _ in all_post_ids)
             query = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
             async with db.execute(query, all_post_ids) as cursor:
-                async for row in cursor:
-                    target, source = row
+                rows = await cursor.fetchall()
+                for target, source in rows:
                     backlinks_map[target].append(source)
         except Exception as e:
             print(f"Backlinks fetch error: {e}")
@@ -2185,7 +2188,8 @@ async def enrich_heavy_data(posts: List[dict]):
                 q = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
                 res = defaultdict(list)
                 async with db.execute(q, ids) as cursor:
-                    async for row in cursor: res[row[0]].append(row[1])
+                    rows = await cursor.fetchall()
+                    for row in rows: res[row[0]].append(row[1])
                 return res
             except: return {}
         tasks.append(fetch_backlinks_task(all_post_ids))
@@ -5114,7 +5118,8 @@ async def api_get_active_simulations(user: dict = Depends(get_required_user)):
             ORDER BY MIN(publish_at) ASC
         """
         async with conn.execute(query) as cursor:
-            async for row in cursor:
+            rows = await cursor.fetchall()
+            for row in rows:
                 simulations.append({
                     "task_id": row[0],
                     "board_id": row[1],

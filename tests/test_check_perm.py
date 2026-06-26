@@ -1,6 +1,11 @@
 import sys
 import os
 import unittest
+import asyncio
+import uvloop
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 
 # Setup required env var
 os.environ["SECRET_KEY"] = "test-secret-key-12345"
