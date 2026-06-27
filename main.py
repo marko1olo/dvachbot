@@ -2371,7 +2371,7 @@ async def board_statistics_broadcaster():
                             recipients = b_data['users']['active'] - b_data['users']['banned']
                     if not recipients: continue
                     full_stats_text, header_title = format_board_statistics(stream, posts_per_hour, board_data, BOARD_CONFIG)
-                    content = {"type": "text", "text": full_stats_text, "is_system_message": True}
+                    content = {"type": "text", "text": full_stats_text, "is_system_message": True, "archive_allowed": True}
                     post_num = await create_post(
                         board_id=board_id, author_id=0, content=content,
                         timestamp=now.timestamp(), is_from_site=False, stream=stream
@@ -3556,7 +3556,7 @@ async def process_new_post(
                 'recipients': recipients, 'content': final_content, 'post_num': current_post_num,
                 'board_id': board_id, 'thread_id': thread_id
             })
-        if not final_content.get('is_system_message'):
+        if not final_content.get('is_system_message') or final_content.get('archive_allowed'):
             spawn_task(_forward_post_to_realtime_archive(
                 bot_instance=bot_instance, board_id=board_id, post_num=current_post_num, content=final_content, is_shadow_muted=is_shadow_muted
             ))
@@ -7658,7 +7658,8 @@ async def cmd_admin_answer(message: types.Message, board_id: str | None, stream:
     content = {
         'type': 'text',
         'text': answer_text,
-        'is_system_message': True
+        'is_system_message': True,
+        'archive_allowed': True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -8153,7 +8154,8 @@ async def dvach_thread_poster():
             content = {
                 'type': 'text',
                 'text': thread_text,
-                'is_system_message': True
+                'is_system_message': True,
+                'archive_allowed': True
             }
             post_num = await create_post(
                 board_id=destination_board_id,
@@ -9111,7 +9113,8 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
     content_payload = {
         'type': 'text',
         'text': roast_text,
-        'is_system_message': True
+        'is_system_message': True,
+        'archive_allowed': True
     }
     
     pnum = await create_post(
@@ -9515,7 +9518,8 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     content = {
         'type': 'text',
         'text': post_text,
-        'is_system_message': True
+        'is_system_message': True,
+        'archive_allowed': True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -9917,7 +9921,8 @@ async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream:
     content = {
         "type": "text",
         "text": activation_text,
-        "is_system_message": True
+        "is_system_message": True,
+        "archive_allowed": True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -9972,7 +9977,7 @@ async def cmd_gopnik(message: types.Message, board_id: str | None, stream: str =
         return
     activation_text = random.choice(GOPNIK_PHRASES_START)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
     pnum = await create_post(
         board_id=board_id, author_id=0, content=content,
         timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
@@ -10019,7 +10024,7 @@ async def cmd_schizo(message: types.Message, board_id: str | None, stream: str =
         return
     activation_text = random.choice(SCHIZO_PHRASES_START)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
     pnum = await create_post(
         board_id=board_id, author_id=0, content=content,
         timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
@@ -10072,7 +10077,7 @@ async def activate_lightweight_mode(
         return
     activation_text = random.choice(start_phrases)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
     pnum = await create_post(
         board_id=board_id,
         author_id=0,
@@ -10194,7 +10199,7 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
     phrases = end_phrases_map.get(mode_to_disable, ["Режим отключен."])
     end_text = random.choice(phrases) if isinstance(phrases, list) else "Режим отключен."
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": end_text, "is_system_message": True}
+    content = {"type": "text", "text": end_text, "is_system_message": True, "archive_allowed": True}
     pnum = await create_post(
         board_id=board_id, 
         author_id=0, 
@@ -10243,7 +10248,7 @@ async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 
         return
     activation_text = random.choice(POLISH_PHRASES_START)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
     pnum = await create_post(
         board_id=board_id,
         author_id=0,
@@ -10289,7 +10294,7 @@ async def cmd_wh40k(message: types.Message, board_id: str | None, stream: str = 
         return
     activation_text = random.choice(WH40K_PHRASES_START)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
     pnum = await create_post(
         board_id=board_id, author_id=0, content=content,
         timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
@@ -10330,7 +10335,7 @@ async def cmd_yer(message: types.Message, board_id: str | None, stream: str = 'r
         return
     activation_text = random.choice(IMPERIAL_PHRASES_START)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
     pnum = await create_post(
         board_id=board_id, author_id=0, content=content,
         timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
@@ -13737,7 +13742,8 @@ async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 
     content = {
         "type": "text",
         "text": activation_text,
-        "is_system_message": True
+        "is_system_message": True,
+        "archive_allowed": True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -14332,7 +14338,8 @@ async def cmd_zaputin(message: types.Message, board_id: str | None, stream: str 
     content = {
         "type": "text",
         "text": activation_text,
-        "is_system_message": True
+        "is_system_message": True,
+        "archive_allowed": True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -14436,7 +14443,8 @@ async def cmd_suka_blyat(message: types.Message, board_id: str | None, stream: s
     content = {
         "type": "text",
         "text": activation_text,
-        "is_system_message": True
+        "is_system_message": True,
+        "archive_allowed": True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -14502,7 +14510,8 @@ async def cmd_admin_say(message: types.Message, board_id: str | None, stream: st
         return
     content = {
         'type': content_type if file_id else 'text',
-        'is_system_message': True 
+        'is_system_message': True,
+        'archive_allowed': True
     }
     if file_id:
         content['file_id'] = file_id
@@ -17358,6 +17367,7 @@ async def periodic_thread_digest():
                     'type': 'text',
                     'text': digest_text,
                     'is_system_message': True,
+                    'archive_allowed': True
                 }
                 pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
                 if pnum:
@@ -17599,7 +17609,7 @@ async def site_posts_broadcaster():
                         })
                         await mark_broadcast_posts_sent([post_num])
                         
-                        if not content.get('is_system_message'):
+                        if not content.get('is_system_message') or content.get('archive_allowed'):
                             bot_to_use = GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
                             if bot_to_use:
                                 spawn_task(_forward_post_to_realtime_archive(
