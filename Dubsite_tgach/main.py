@@ -1333,6 +1333,12 @@ async def sitemap_xml(request: Request):
                 urls.append(f"{base_url}/{bid}/res/{tid}.html")
     except Exception as e:
         print(f"Sitemap error: {e}")
+        
+    # Добавляем выпуски газеты за последние 90 дней
+    from datetime import timedelta
+    for d_offset in range(90):
+        d = (datetime.now() - timedelta(days=d_offset)).strftime('%Y-%m-%d')
+        urls.append(f"{base_url}/newspaper/{d}")
     xml_content = ['<?xml version="1.0" encoding="UTF-8"?>']
     xml_content.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
     for url in urls:

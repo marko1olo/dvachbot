@@ -5,6 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Газета ТГАЧ Daily — Выпуск от {{ data.date }}</title>
     <link rel="icon" href="/static/favicon.ico">
+    <meta name="description" content="Читать свежий выпуск газеты «Вестник ТГАЧ» от {{ data.date }}. Все интересные посты, статистика активности борды и медиахроника за сутки.">
+    <meta property="og:title" content="Газета ТГАЧ Daily — Выпуск от {{ data.date }}">
+    <meta property="og:description" content="Читать свежий выпуск газеты «Вестник ТГАЧ» от {{ data.date }}. Все интересные посты, статистика активности борды и медиахроника за сутки.">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="{{ request.url }}">
+    <meta property="og:image" content="{{ request.base_url }}static/logo.png">
+    
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "NewsArticle",
+      "headline": "Газета ТГАЧ Daily — Выпуск от {{ data.date }}",
+      "datePublished": "{{ data.date }}T00:00:00Z",
+      "author": {
+        "@type": "Organization",
+        "name": "ТГАЧ"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "ТГАЧ",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "{{ request.base_url }}static/logo.png"
+        }
+      },
+      "description": "Сводка событий, популярные треды и самые обсуждаемые посты имиджборды ТГАЧ за {{ data.date }}."
+    }
+    </script>
     <style>
         /* Базовые цвета и стили для создания эффекта винтажной газеты */
         :root {

@@ -1812,6 +1812,12 @@ async def sitemap_xml(request: Request):
     except Exception as e:
         logger.error(f"Sitemap tags error: {e}")
 
+    # 5. Добавляем архив газеты (последние 90 дней)
+    from datetime import timedelta
+    for d_offset in range(90):
+        d = (datetime.now() - timedelta(days=d_offset)).strftime('%Y-%m-%d')
+        xml_content.append(f'  <url><loc>{base_url}/newspaper/{d}</loc><lastmod>{d}</lastmod><changefreq>daily</changefreq></url>')
+
     xml_content.append('</urlset>')
     return Response(content="\n".join(xml_content), media_type="application/xml")
 @app.get("/ads.txt", include_in_schema=False)
