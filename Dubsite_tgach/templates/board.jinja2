@@ -323,7 +323,7 @@
                                                         {% endif %}
                                                         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
-                                                            class="post-image lazy-load" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
+                                                            class="post-image lazy-load" alt="[Пост /{{ board_id }}/ #{{ post.id }}] {{ post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                     </a>
                                                 {% elif file.type == 'sticker' %}
@@ -467,7 +467,7 @@
                                                             {% endif %}
                                                             <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                 data-src="{{ file.thumbnail_url or file.original_url }}" 
-                                                                class="post-image lazy-load" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
+                                                                class="post-image lazy-load" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                         </a>
                                                     {% elif file.type == 'sticker' %}

@@ -275,7 +275,7 @@
                                                         {% endif %}
                                                         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
-                                                            class="post-image lazy-load{% if op_post.content.is_censored %} blurred-media{% endif %}" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded'); var p=this.previousElementSibling; if(p && p.tagName==='CANVAS') p.style.opacity='0';">
+                                                            class="post-image lazy-load{% if op_post.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ op_post.id }}] {{ op_post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded'); var p=this.previousElementSibling; if(p && p.tagName==='CANVAS') p.style.opacity='0';">
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                     </a>
                                                 {% elif file.type == 'sticker' %}
@@ -518,7 +518,7 @@
                                                         {% endif %}
                                                         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
-                                                            class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded'); var p=this.previousElementSibling; if(p && p.tagName==='CANVAS') p.style.opacity='0';">
+                                                            class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded'); var p=this.previousElementSibling; if(p && p.tagName==='CANVAS') p.style.opacity='0';">
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                     </a>
                                                 {% elif file.type == 'sticker' %}
