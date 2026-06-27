@@ -79,8 +79,13 @@ def generate_all_charts():
     if data:
         df = pd.DataFrame(data)
         fig, ax = plt.subplots(figsize=(10, 5))
-        sns.lineplot(data=df, x='d', y='cnt', marker="o", color="#ff3366", ax=ax)
-        plt.title('1. Объем высеров (Посты по дням)', fontsize=16, fontweight='bold', color="#ff3366")
+        xs = list(range(len(df)))
+        ax.fill_between(xs, df['cnt'], alpha=0.18, color='#ff3366')
+        sns.lineplot(data=df, x='d', y='cnt', marker='o', color='#ff3366', ax=ax)
+        mean_v = df['cnt'].mean()
+        ax.axhline(mean_v, color='#ffaa44', linestyle='--', linewidth=1, alpha=0.7)
+        ax.text(len(df)*0.01, mean_v * 1.03, f'Среднее: {mean_v:.0f}', color='#ffaa44', fontsize=8)
+        plt.title('1. Объем высеров (Посты по дням)', fontsize=16, fontweight='bold', color='#ff3366')
         plt.xticks(rotation=45)
         plt.tight_layout()
         buf = io.BytesIO()
@@ -146,11 +151,14 @@ def generate_all_charts():
             
         df = pd.DataFrame(plot_data)
         fig, ax = plt.subplots(figsize=(10, 5))
-        sns.lineplot(data=df, x='d', y='toxic_percent', marker="X", color="#ff0000", ax=ax)
-        ax.fill_between(df['d'], df['toxic_percent'], color="#ff0000", alpha=0.3)
-        plt.title('3. Матоемкость (% постов с матами)', fontsize=16, fontweight='bold', color="#ff0000")
+        xs3 = list(range(len(df)))
+        ax.fill_between(xs3, df['toxic_percent'], color='#ff0000', alpha=0.25)
+        ax.plot(xs3, df['toxic_percent'], marker='X', color='#ff0000', linewidth=2)
+        step3 = max(1, len(df)//10)
+        ax.set_xticks(xs3[::step3])
+        ax.set_xticklabels(df['d'].tolist()[::step3], rotation=45, ha='right', fontsize=7)
+        plt.title('3. Матоемкость (% постов с матами)', fontsize=16, fontweight='bold', color='#ff0000')
         plt.ylabel('% постов с матом')
-        plt.xticks(rotation=45)
         plt.tight_layout()
         buf = io.BytesIO()
         plt.savefig(buf, format='png')
@@ -248,68 +256,46 @@ def generate_all_charts():
             images.append(('6_post_length.png', buf))
             plt.close()
 
-    # 7. Клуб Полуночников (Night vs Day)
+    # 7+8+9. Три пирога в одном — Ночники / Медиа / Диалог
     c.execute('''
         SELECT 
             SUM(CASE WHEN cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) BETWEEN 1 AND 6 THEN 1 ELSE 0 END) as night_posts,
-            SUM(CASE WHEN cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) NOT BETWEEN 1 AND 6 THEN 1 ELSE 0 END) as day_posts
-        FROM Posts 
-        WHERE timestamp > ?
-    ''', (thirty_days_ago,))
-    row = c.fetchone()
-    if row and (row['night_posts'] or row['day_posts']):
-        labels = ['Ночь (01:00-06:00)', 'Остальное время']
-        sizes = [row['night_posts'] or 0, row['day_posts'] or 0]
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140, colors=["#6600cc", "#ffcc00"])
-        plt.title('7. Клуб Полуночников', fontsize=16, fontweight='bold')
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('7_night_owls.png', buf))
-        plt.close()
-
-    # 8. Медиа-зависимость (Картинкодрочеры vs Текстовики)
-    c.execute('''
-        SELECT 
+            SUM(CASE WHEN cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) NOT BETWEEN 1 AND 6 THEN 1 ELSE 0 END) as day_posts,
             SUM(CASE WHEN content LIKE '%"type": "text"%' THEN 1 ELSE 0 END) as text_posts,
-            SUM(CASE WHEN content LIKE '%"type": "photo"%' OR content LIKE '%"type": "video"%' THEN 1 ELSE 0 END) as media_posts
-        FROM Posts 
-        WHERE timestamp > ?
-    ''', (thirty_days_ago,))
-    row = c.fetchone()
-    if row and (row['text_posts'] or row['media_posts']):
-        labels = ['Текст (Голый текст)', 'Медиа (Пикчи/Видео)']
-        sizes = [row['text_posts'] or 0, row['media_posts'] or 0]
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90, colors=["#cccccc", "#ff3399"])
-        plt.title('8. Картинкодрочеры vs Текстовики', fontsize=16, fontweight='bold')
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('8_media.png', buf))
-        plt.close()
-
-    # 9. Уровень дискуссии (Реплаи vs Крик в пустоту)
-    c.execute('''
-        SELECT 
+            SUM(CASE WHEN content LIKE '%"type": "photo"%' OR content LIKE '%"type": "video"%' OR content LIKE '%"type": "animation"%' THEN 1 ELSE 0 END) as media_posts,
             SUM(CASE WHEN reply_to_post_num IS NOT NULL THEN 1 ELSE 0 END) as replies,
             SUM(CASE WHEN reply_to_post_num IS NULL THEN 1 ELSE 0 END) as singles
-        FROM Posts 
-        WHERE timestamp > ?
+        FROM Posts WHERE timestamp > ?
     ''', (thirty_days_ago,))
-    row = c.fetchone()
-    if row and (row['replies'] or row['singles']):
-        labels = ['Реплаи (Диалог/Срач)', 'Отдельные посты (Крик в пустоту)']
-        sizes = [row['replies'] or 0, row['singles'] or 0]
-        fig, ax = plt.subplots(figsize=(8, 8))
-        ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=45, colors=["#00ff99", "#555555"])
-        plt.title('9. Уровень Дискуссии', fontsize=16, fontweight='bold')
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('9_dialogs.png', buf))
-        plt.close()
+    row789 = c.fetchone()
+    if row789:
+        fig, axes = plt.subplots(1, 3, figsize=(16, 6))
+        fig.patch.set_facecolor('#121212')
+        _donuts = [
+            {'ax': axes[0], 'sizes': [row789['night_posts'] or 0, row789['day_posts'] or 0],
+             'labels': ['Ночь\n(01-06)', 'День'], 'colors': ['#6600cc', '#ffcc00'],
+             'title': '7. Клуб\nПолуночников', 'tc': '#aa88ff'},
+            {'ax': axes[1], 'sizes': [row789['media_posts'] or 0, row789['text_posts'] or 0],
+             'labels': ['Медиа', 'Текст'], 'colors': ['#ff3399', '#cccccc'],
+             'title': '8. Картинко-\nдрочеры', 'tc': '#ff3399'},
+            {'ax': axes[2], 'sizes': [row789['replies'] or 0, row789['singles'] or 0],
+             'labels': ['Диалог', 'Монолог'], 'colors': ['#00ff99', '#555555'],
+             'title': '9. Уровень\nДискуссии', 'tc': '#00ff99'},
+        ]
+        for _d in _donuts:
+            _ax = _d['ax']; _ax.set_facecolor('#121212')
+            _ws, _ts, _ats = _ax.pie(
+                _d['sizes'], labels=_d['labels'], autopct='%1.1f%%', startangle=90,
+                colors=_d['colors'], wedgeprops=dict(width=0.55, edgecolor='#121212', linewidth=2),
+                pctdistance=0.75)
+            for _at in _ats: _at.set_fontsize(11); _at.set_fontweight('bold'); _at.set_color('#ffffff')
+            for _t in _ts: _t.set_color('#dddddd'); _t.set_fontsize(9)
+            _ax.set_title(_d['title'], fontsize=13, fontweight='bold', color=_d['tc'], pad=12)
+        plt.suptitle('7–9. Профиль Анона: время / формат / диалог (30д)',
+                     fontsize=14, fontweight='bold', color='#ffffff', y=1.02)
+        plt.tight_layout()
+        buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight'); buf.seek(0)
+        images.append(('7_8_9_donut_panel.png', buf)); plt.close()
 
     # 10. Тепловая карта активности (Heatmap)
     c.execute('''
@@ -751,11 +737,18 @@ def generate_all_charts():
             if plot_data:
                 df_sent = pd.DataFrame(plot_data)
                 fig, ax = plt.subplots(figsize=(10, 5))
-                sns.lineplot(data=df_sent, x='d', y='sentiment', marker="o", color="#ff3333", ax=ax)
-                ax.fill_between(df_sent['d'], df_sent['sentiment'], color="#ff3333", alpha=0.2)
-                plt.title('17. Индекс Токсичности (Двачевский сентимент)', fontsize=16, fontweight='bold', color="#ff3333")
+                xs17 = list(range(len(df_sent)))
+                vals17 = df_sent['sentiment'].tolist()
+                ax.plot(xs17, vals17, marker='o', color='#aaaaaa', linewidth=1.5, zorder=3)
+                ax.fill_between(xs17, vals17, 0, where=[v >= 0 for v in vals17], color='#33cc66', alpha=0.3, label='База')
+                ax.fill_between(xs17, vals17, 0, where=[v < 0 for v in vals17], color='#ff3333', alpha=0.3, label='Токсик')
+                ax.axhline(0, color='#555555', linewidth=1, linestyle='--')
+                step17 = max(1, len(df_sent)//10)
+                ax.set_xticks(xs17[::step17])
+                ax.set_xticklabels(df_sent['d'].tolist()[::step17], rotation=45, ha='right', fontsize=7)
+                ax.legend(fontsize=9)
+                plt.title('17. Индекс Токсичности (Двачевский сентимент)', fontsize=16, fontweight='bold', color='#ff3333')
                 plt.ylabel('Средний сентимент (выше = база, ниже = токсик)')
-                plt.xticks(rotation=45)
                 plt.tight_layout()
                 buf = io.BytesIO()
                 plt.savefig(buf, format='png')
@@ -1180,7 +1173,6 @@ def generate_all_charts():
         data = c2.fetchall()
         conn2.close()
         if data:
-            import numpy as _np2
             df = pd.DataFrame(data)
             df['cumsum'] = df['cnt'].cumsum()
             fig, ax = plt.subplots(figsize=(10, 4))
@@ -1254,14 +1246,15 @@ def generate_all_charts():
         avg_len = c2.fetchone()['n'] or 0
         conn2.close()
 
-        # Normalise each to 0-1 reference
+        # Normalise each metric against absolute reference baselines
+        # 500 posts/30d, 20% unique, 40% reply rate, 150 chars avg = 100%
         categories = ['Активность\n(30д)', 'Темп\n(7д/30д)', 'Уник.\nавторы', 'Диалог\n(%)', 'Длина\nпостов']
         ref_vals = [
-            min(posts30 / max(posts30, 500), 1.0),
-            min((posts7 * 4.3) / max(posts30, 1), 1.0),  # 7d annualised vs 30d
-            min(uniq30 / max(posts30, 1) * 5, 1.0),       # unique ratio
-            min(replies30 / max(posts30, 1), 1.0),
-            min(avg_len / 300, 1.0),
+            min(posts30 / 500.0, 1.0),
+            min((posts7 * 4.3) / max(posts30, 1), 1.0),
+            min((uniq30 / max(posts30, 1)) / 0.20, 1.0),
+            min((replies30 / max(posts30, 1)) / 0.40, 1.0),
+            min(avg_len / 150.0, 1.0),
         ]
         N = len(categories)
         angles = [n / float(N) * 2 * 3.14159 for n in range(N)]
@@ -1330,38 +1323,37 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 28: {e}")
 
-    # ── 29. Распределение длин постов (30д) ──────────────────────────────────
+    # ── 29. Тренд медиа vs текст по дням (30д) ─────────────────────────────
     try:
         conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
         conn2.row_factory = dict_factory
         c2 = conn2.cursor()
-        t30 = time.time() - 30 * 86400
+        t30_29 = time.time() - 30 * 86400
         c2.execute('''
-            SELECT LENGTH(json_extract(content, "$.text")) as ln
-            FROM Posts
-            WHERE timestamp > ? AND json_extract(content, "$.text") IS NOT NULL
-        ''', (t30,))
-        lengths = [row['ln'] for row in c2.fetchall() if row['ln'] and row['ln'] < 5000]
+            SELECT date(timestamp, 'unixepoch', 'localtime') as d,
+                   SUM(CASE WHEN content LIKE '%"type": "text"%' THEN 1 ELSE 0 END) as txt,
+                   SUM(CASE WHEN content LIKE '%"type": "photo"%' OR content LIKE '%"type": "video"%' OR content LIKE '%"type": "animation"%' OR content LIKE '%"type": "sticker"%' THEN 1 ELSE 0 END) as med
+            FROM Posts WHERE timestamp > ? GROUP BY d ORDER BY d
+        ''', (t30_29,))
+        rows29 = c2.fetchall()
         conn2.close()
-        if lengths:
-            import numpy as _np4
-            arr = _np4.array(lengths)
-            fig, ax = plt.subplots(figsize=(10, 4))
-            n, bins, patches = ax.hist(arr, bins=50, color='#d2a8ff', edgecolor='#1c2128', linewidth=0.4)
-            # Colour by count
-            for patch, count in zip(patches, n):
-                patch.set_facecolor(plt.cm.plasma(min(count / max(n), 1)))
-            median_l = float(_np4.median(arr))
-            ax.axvline(median_l, color='#ff7b72', linestyle='--', linewidth=1.5,
-                       label=f'Медиана: {int(median_l)} симв.')
-            ax.legend(fontsize=9)
-            ax.set_xlabel('Длина поста (символов)')
-            ax.set_ylabel('Количество постов')
-            ax.set_title('29. Распределение длин постов (30д)', fontsize=13,
-                         fontweight='bold', color='#d2a8ff')
+        if rows29:
+            df29 = pd.DataFrame(rows29)
+            xs29 = list(range(len(df29)))
+            fig, ax = plt.subplots(figsize=(11, 4))
+            ax.stackplot(xs29, df29['txt'], df29['med'],
+                         labels=['Текст', 'Медиа'],
+                         colors=['#58a6ff', '#ff3399'], alpha=0.82)
+            step29 = max(1, len(df29) // 10)
+            ax.set_xticks(xs29[::step29])
+            ax.set_xticklabels(df29['d'].tolist()[::step29], rotation=30, ha='right', fontsize=7.5)
+            ax.set_ylabel('Постов в день')
+            ax.legend(loc='upper left', fontsize=9)
+            ax.set_title('29. Тренд медиа vs текст по дням (30д)', fontsize=13,
+                         fontweight='bold', color='#ff3399')
             plt.tight_layout()
             buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('29_length_hist.png', buf)); plt.close()
+            images.append(('29_media_trend.png', buf)); plt.close()
     except Exception as e:
         print(f"Error Chart 29: {e}")
 
