@@ -7558,14 +7558,17 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     elif board_id == 'sex': flag = "🍆"
     if lang == 'en':
         labels = ["TGACH PASSPORT", "ID", "Rank", "Role", "Posts", "Diagnosis", "Inventory", "Kompromat", "Social Credit"]
+        anon_tag = f"Anon-{user_id % 10000:04d}"
     elif lang == 'jp':
         labels = ["TGちゃんパスポート", "ID", "ランク", "役割", "レス数", "診断", "持ち物", "秘密", "社会的信用"]
+        anon_tag = f"アノン-{user_id % 10000:04d}"
     else:
         labels = ["ПАСПОРТ ТГАЧЕРА", "ID", "Ранг", "Роль", "Постов", "Диагноз", "Инвентарь", "Компромат", "Соц. рейтинг"]
+        anon_tag = f"Анон-{user_id % 10000:04d}"
     passport_text = (
         f"🪪 <b>{labels[0]} {flag}</b>\n"
         f"<code>{'—'*22}</code>\n"
-        f"🆔 <b>{labels[1]}:</b> <code>**********</code>\n"
+        f"🆔 <b>{labels[1]}:</b> <code>{anon_tag}</code>\n"
         f"🏷 <b>{labels[2]}:</b> {rank}\n"
         f"💼 <b>{labels[3]}:</b> {role}\n"
         f"💩 <b>{labels[4]}:</b> {post_count}\n"
