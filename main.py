@@ -7132,7 +7132,123 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
 # active_duels: {challenger_id: {board_id, amount, ts, target_id or None}}
 # ══════════════════════════════════════════════════════════════════════════════
 _active_duels: dict = {}  # challenger_id -> {board_id, amount, ts, msg_id}
+_duel_cooldowns: dict = {} # user_id -> timestamp
 _DUEL_TIMEOUT = 120       # секунд на принятие
+
+async def accept_duel_logic(message: types.Message, challenger_id: int, board_id: str):
+    import time
+    from common.db_pool import get_pool, db_lock
+    db = await get_pool()
+    user_id = message.from_user.id
+    now = time.time()
+    
+    if challenger_id == user_id:
+        await message.answer("Нельзя принять собственный вызов, трус.")
+        return
+
+    async with db_lock:
+        # Проверяем балансы обоих под локом
+        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (challenger_id, board_id)) as c:
+            row = await c.fetchone()
+            ch_bal = row[0] if row and row[0] is not None else 0
+        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+            op_bal = row[0] if row and row[0] is not None else 0
+
+        # Проверяем, что дуэль все еще в списке
+        if challenger_id not in _active_duels:
+            await message.answer("⚔️ Эта дуэль уже была принята или истекла.")
+            return
+            
+        duel = _active_duels.pop(challenger_id)
+        amount = duel["amount"]
+
+        if ch_bal < amount:
+            await message.answer(f"⚔️ Вызывающий Анон-{challenger_id%10000:04d} уже не потянет ставку — слился.")
+            return
+        if op_bal < amount:
+            # Возвращаем дуэль обратно в пул
+            _active_duels[challenger_id] = duel
+            await message.answer(f"❌ У тебя недостаточно бабок. Нужно {amount} RUB, есть {int(op_bal)}.")
+            return
+
+        # Рандом
+        import random
+        winner_id = random.choice([challenger_id, user_id])
+        loser_id  = challenger_id if winner_id == user_id else user_id
+
+        await db.execute(
+            "UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?",
+            (amount, winner_id, board_id)
+        )
+        await db.execute(
+            "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ?",
+            (amount, loser_id, board_id)
+        )
+        await db.commit()
+
+    w_tag = f"Анон-{winner_id%10000:04d}"
+    l_tag = f"Анон-{loser_id%10000:04d}"
+    you_w = " (ты)" if winner_id == user_id else ""
+    you_l = " (ты)" if loser_id  == user_id else ""
+    await message.answer(
+        f"⚔️ <b>ДУЭЛЬ!</b>\n\n"
+        f"🎲 Монета летит...\n\n"
+        f"🏆 Победитель: <b>{w_tag}</b>{you_w} +{amount} RUB\n"
+        f"💀 Проигравший: <b>{l_tag}</b>{you_l} -{amount} RUB",
+        parse_mode="HTML"
+    )
+
+async def decline_duel_logic(message: types.Message, challenger_id: int):
+    user_id = message.from_user.id
+    if challenger_id not in _active_duels:
+        return False
+        
+    # Отклонить дуэль может либо создатель (отмена), либо любой другой пользователь (отклонение)
+    if user_id == challenger_id:
+        _active_duels.pop(challenger_id, None)
+        await message.answer("⚔️ Вызов на дуэль успешно отменен создателем.")
+        return True
+    else:
+        _active_duels.pop(challenger_id, None)
+        await message.answer(f"⚔️ Вызов на дуэль отклонен Аноном-{user_id%10000:04d}.")
+        return True
+
+@dp.message(Command("accept", "yes", "ok", "принять"))
+async def cmd_accept_shortcut(message: Message, board_id: str | None):
+    if not board_id: return
+    # Срабатывает СТРОГО по Reply к сообщению дуэли
+    if not message.reply_to_message:
+        return
+        
+    reply_msg_id = message.reply_to_message.message_id
+    now = time.time()
+    found_ch = None
+    for ch_id, duel in list(_active_duels.items()):
+        if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+            found_ch = ch_id
+            break
+            
+    if found_ch:
+        await accept_duel_logic(message, found_ch, board_id)
+
+@dp.message(Command("decl", "no", "отклонить"))
+async def cmd_decline_shortcut(message: Message, board_id: str | None):
+    if not board_id: return
+    # Срабатывает СТРОГО по Reply к сообщению дуэли
+    if not message.reply_to_message:
+        return
+        
+    reply_msg_id = message.reply_to_message.message_id
+    now = time.time()
+    found_ch = None
+    for ch_id, duel in list(_active_duels.items()):
+        if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+            found_ch = ch_id
+            break
+            
+    if found_ch:
+        await decline_duel_logic(message, found_ch)
 
 @dp.message(Command("duel"))
 async def cmd_duel(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -7144,71 +7260,31 @@ async def cmd_duel(message: types.Message, board_id: str | None, stream: str = '
     args = message.text.split()[1:]  # /duel 200  or  /duel accept
     db   = await get_pool()
 
-    # ── /duel accept ── отвечает тот, кто видит активный вызов через reply
+    # ── /duel accept ── отвечает тот, кто видит active вызов
     if args and args[0].lower() in ("accept", "принять", "+"):
-        # Ищем дуэль в active_duels для любого challenger на этой борде
         now = time.time()
         found_ch = None
+        
+        # Сначала пробуем найти строго по реплаю на сообщение-вызов
         if message.reply_to_message:
-            reply_user_id = message.reply_to_message.from_user.id
-            if reply_user_id in _active_duels:
-                duel = _active_duels[reply_user_id]
-                if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                    found_ch = reply_user_id
+            reply_msg_id = message.reply_to_message.message_id
+            for ch_id, duel in list(_active_duels.items()):
+                if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                    found_ch = ch_id
+                    break
+        
+        # Если по реплаю не нашли (или это обычный /duel accept), берем любой активный вызов на борде
         if not found_ch:
             for ch_id, duel in list(_active_duels.items()):
                 if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
                     found_ch = ch_id
                     break
+                    
         if not found_ch:
             await message.answer("⚔️ Нет активных вызовов на этой борде. Жди кого-нибудь смелого.")
             return
-        if found_ch == user_id:
-            await message.answer("Нельзя принять собственный вызов, трус.")
-            return
-        duel   = _active_duels.pop(found_ch)
-        amount = duel["amount"]
-
-        # Проверяем балансы обоих
-        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (found_ch, board_id)) as c:
-            ch_bal = (await c.fetchone() or [0])[0] or 0
-        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
-            op_bal = (await c.fetchone() or [0])[0] or 0
-
-        if ch_bal < amount:
-            await message.answer(f"⚔️ Вызывающий Анон-{found_ch%10000:04d} уже не потянет ставку — слился.")
-            return
-        if op_bal < amount:
-            await message.answer(f"❌ У тебя недостаточно бабок. Нужно {amount} RUB, есть {int(op_bal)}.")
-            return
-
-        # Рандом
-        import random
-        winner_id = random.choice([found_ch, user_id])
-        loser_id  = found_ch if winner_id == user_id else user_id
-
-        async with db_lock:
-            await db.execute(
-                "UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?",
-                (amount, winner_id, board_id)
-            )
-            await db.execute(
-                "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ?",
-                (amount, loser_id, board_id)
-            )
-            await db.commit()
-
-        w_tag = f"Анон-{winner_id%10000:04d}"
-        l_tag = f"Анон-{loser_id%10000:04d}"
-        you_w = " (ты)" if winner_id == user_id else ""
-        you_l = " (ты)" if loser_id  == user_id else ""
-        await message.answer(
-            f"⚔️ <b>ДУЭЛЬ!</b>\n\n"
-            f"🎲 Монета летит...\n\n"
-            f"🏆 Победитель: <b>{w_tag}</b>{you_w} +{amount} RUB\n"
-            f"💀 Проигравший: <b>{l_tag}</b>{you_l} -{amount} RUB",
-            parse_mode="HTML"
-        )
+            
+        await accept_duel_logic(message, found_ch, board_id)
         return
 
     # ── /duel <сумма> ── создать вызов
@@ -7217,46 +7293,59 @@ async def cmd_duel(message: types.Message, board_id: str | None, stream: str = '
     except:
         amount = 0
 
-    if amount < 50:
+    if amount < 50 or amount > 100000:
         await message.answer(
             "⚔️ <b>Дуэль</b> — вызов другого анона на ставку.\n\n"
             "Использование: <code>/duel 200</code> — выставить ставку 200 RUB.\n"
             "Любой анон может ответить: <code>/duel accept</code>\n"
             "Победитель забирает всю ставку, рандом 50/50.\n"
-            "<i>Минимальная ставка: 50 RUB</i>",
+            "<i>Минимальная ставка: 50 RUB, максимальная: 100 000 RUB</i>",
             parse_mode="HTML"
         )
         return
 
-    # Проверяем баланс
-    async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
-        bal = (await c.fetchone() or [0])[0] or 0
-
-    if bal < amount:
-        await message.answer(f"❌ Не хватает бабок. Ставка {amount} RUB, у тебя {int(bal)} RUB.")
+    # Проверяем кулдаун
+    now = time.time()
+    last_call = _duel_cooldowns.get(user_id, 0)
+    if now - last_call < 10:
+        await message.answer("⚠️ Не спамь вызовами дуэлей. Подожди 10 секунд.")
         return
 
-    # Снимаем ставку с резерва сразу (чтобы не спамили вызовы)
+    # Проверяем баланс под локом
+    async with db_lock:
+        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+            bal = row[0] if row and row[0] is not None else 0
+
+        if bal < amount:
+            await message.answer(f"❌ Не хватает бабок. Ставка {amount} RUB, у тебя {int(bal)} RUB.")
+            return
+
+    # Записываем время последнего вызова
+    _duel_cooldowns[user_id] = now
+
     # Удаляем старый вызов этого анона если был
     if user_id in _active_duels:
-        old = _active_duels.pop(user_id)
-        # Возвращать не надо — мы резерв не снимаем, просто заменяем
-        pass
+        _active_duels.pop(user_id)
 
-    _active_duels[user_id] = {
-        "board_id": board_id,
-        "amount":   amount,
-        "ts":       time.time(),
-    }
-
-    await message.answer(
+    # Отправляем сообщение-вызов
+    sent_msg = await message.answer(
         f"⚔️ <b>Анон-{user_id%10000:04d} вызывает на дуэль!</b>\n\n"
         f"Ставка: <code>{amount} RUB</code>\n"
         f"Победитель забирает всё, рандом 50/50.\n\n"
-        f"Чтобы принять — напиши <code>/duel accept</code>\n"
+        f"Чтобы принять — напиши <code>/duel accept</code> в ответ на это сообщение или просто в чат.\n"
         f"<i>Вызов активен 2 минуты.</i>",
         parse_mode="HTML"
     )
+    
+    # Сохраняем вызов с ID сообщения
+    _active_duels[user_id] = {
+        "board_id": board_id,
+        "amount":   amount,
+        "ts":       now,
+        "msg_id":   sent_msg.message_id
+    }
+    
     try: await message.delete()
     except: pass
 
@@ -7816,7 +7905,11 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         await message.answer("ID/Reply needed." if lang != 'ru' else "Нужен ID или реплай.")
+        try: await message.delete()
+        except Exception: pass
         return
+    try: await message.delete()
+    except Exception: pass
     if lang == 'en': msg = f"🕊️ Global Amnesty for <code>{target_id}</code>..."
     elif lang == 'jp': msg = f"🕊️ <code>{target_id}</code> へのグローバル恩赦..."
     else: msg = f"🕊️ Глобальная амнистия для <code>{target_id}</code>..."
@@ -9688,7 +9781,11 @@ async def cmd_gban(message: types.Message, board_id: str | None, stream: str = '
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         await message.answer("ID/Reply needed." if lang != 'ru' else "Нужен ID или реплай.")
+        try: await message.delete()
+        except Exception: pass
         return
+    try: await message.delete()
+    except Exception: pass
     if lang == 'en': msg = f"🔨 GLOBAL BANNING <code>{target_id}</code>..."
     elif lang == 'jp': msg = f"🔨 <code>{target_id}</code> をグローバルBAN中..."
     else: msg = f"🔨 Выписываю ГЛОБАЛЬНЫЙ БАН для <code>{target_id}</code>..."
@@ -9739,6 +9836,8 @@ async def cmd_gshadowmute(message: types.Message, board_id: str | None, stream: 
         elif lang == 'jp': usage = "使用法: <code>/gshadowmute &lt;ID&gt; [時間]</code> または返信。"
         else: usage = "Использование: <code>/gshadowmute &lt;id&gt; [время]</code> или ответом."
         await message.answer(usage, parse_mode="HTML")
+        try: await message.delete()
+        except Exception: pass
         return
     try:
         duration_str = duration_str.lower().replace(" ", "")
@@ -9749,7 +9848,11 @@ async def cmd_gshadowmute(message: types.Message, board_id: str | None, stream: 
         total_seconds = min(total_seconds, 2592000) 
     except (ValueError, AttributeError):
         await message.answer("❌ Error format" if lang != 'ru' else "❌ Неверный формат времени")
+        try: await message.delete()
+        except Exception: pass
         return
+    try: await message.delete()
+    except Exception: pass
     if lang == 'en': msg = f"👻 Applying GLOBAL SHADOW on <code>{target_id}</code> ({time_str})..."
     elif lang == 'jp': msg = f"👻 <code>{target_id}</code> にグローバルシャドウを適用中 ({time_str})..."
     else: msg = f"👻 Накладываю ГЛОБАЛЬНУЮ тень на <code>{target_id}</code> ({time_str})..."
@@ -9819,6 +9922,8 @@ async def cmd_search(message: types.Message, board_id: str | None, stream: str =
 @dp.message(Command("airdrop"))
 async def cmd_airdrop(message: Message, board_id: str | None):
     if not board_id or not is_admin(message.from_user.id, board_id): return
+    try: await message.delete()
+    except Exception: pass
     
     from common.db_pool import get_pool, db_lock
     async with db_lock:
@@ -9840,6 +9945,7 @@ async def cmd_airdrop(message: Message, board_id: str | None):
                 UPDATE Users SET balance = ? 
                 WHERE rowid = (SELECT rowid FROM Users WHERE user_id = ? LIMIT 1)
             """, (amount, uid))
+        await db.commit()
         
     await message.answer(f"🚀 <b>ЭИРДРОП ЗАВЕРШЕН!</b>\nНачислил бабки {len(users_to_fix)} нищим анонам.")
 @dp.callback_query(F.data == "show_active_threads")
@@ -9964,6 +10070,8 @@ async def cmd_quote(message: types.Message, board_id: str | None, stream: str = 
 @dp.message(Command("addmoney"))
 async def cmd_add_money_admin(message: Message, board_id: str | None):
     if not board_id or not is_admin(message.from_user.id, board_id): return
+    try: await message.delete()
+    except Exception: pass
     
     args = message.text.split()
     if len(args) < 3:
@@ -9979,9 +10087,13 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
             await db.execute("INSERT OR IGNORE INTO Users (user_id, board_id) VALUES (?, ?)", (target_id, board_id))
             # 2. Начисляем деньги ТОЛЬКО в эту запись (избегаем умножения)
             await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (amount, target_id, board_id))
+            await db.commit()
         
         await message.answer(f"✅ Нарисовано {amount} рублей для юзера {target_id}. Баланс пополнен (корзина /{board_id}/).")
-        await message.bot.send_message(target_id, f"🎁 <b>Администрация начислила вам бонус: {amount} RUB! Кошелек - /wallet </b>", parse_mode="HTML")
+        try:
+            await message.bot.send_message(target_id, f"🎁 <b>Администрация начислила вам бонус: {amount} RUB! Кошелек - /wallet </b>", parse_mode="HTML")
+        except Exception:
+            pass
     except Exception as e:
         await message.answer(f"Ошибка: {e}", parse_mode=None)
 @dp.message(Command("slavaukraine", "slava_ukraine", "ukraine", "ukraina", "hohol"))
@@ -10820,7 +10932,8 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
     except TelegramBadRequest:
         pass
 @dp.callback_query(F.data.startswith("menu_"))
-async def handle_quick_menu_click(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
+async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
+    await state.clear()
     if not board_id: return
     action = callback.data.split("_")[1]
     user_id = callback.from_user.id
@@ -12260,7 +12373,7 @@ async def archive_thread(bots: dict[str, Bot], board_id: str, thread_id: str, th
         await archive_thread_in_db(int(thread_id))
     except Exception as e:
         print(f"❌ Ошибка при архивации треда #{thread_id} в БД: {e}")
-@dp.message(Command("cancel"), FSMContext)
+@dp.message(Command("cancel"))
 async def cmd_cancel_fsm(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
     Отменяет любое FSM состояние, в котором находится пользователь.
@@ -13140,7 +13253,9 @@ async def cmd_unmute(message: types.Message, board_id: str | None, stream: str =
         target_id = await get_author_id_by_reply(message)
     else:
         parts = message.text.split()
-        if len(parts) == 2 and parts[1].isdigit(): target_id = int(parts[1])
+        if len(parts) == 2:
+            try: target_id = int(parts[1])
+            except ValueError: pass
     if not target_id:
         msg = "Need ID or reply." if lang == 'en' else ("IDまたは返信が必要です。" if lang == 'jp' else "Нужен ID или реплай.")
         await message.answer(msg); return
@@ -13397,8 +13512,9 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
         target_id = await get_author_id_by_reply(message)
     else:
         parts = message.text.split()
-        if len(parts) == 2 and parts[1].isdigit():
-            target_id = int(parts[1])
+        if len(parts) == 2:
+            try: target_id = int(parts[1])
+            except ValueError: pass
     if not target_id:
         if lang == 'en':
             msg = "Usage: <code>/unshadowmute &lt;id&gt;</code> or reply."
@@ -13576,27 +13692,31 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
         return
 
     # Send to target
+    delivered = False
     try:
         await message.bot.send_message(
             target_id, 
             f"🤫 <b>Тебе анонимно шепчут в /{board_id}/:</b>\n<i>{escape_html(text)}</i>", 
             parse_mode="HTML"
         )
+        delivered = True
     except Exception as e:
         runtime_logger.error(f"Whisper send failed: {e}")
+        await message.answer("❌ Не удалось доставить шёпот (пользователь не запустил бота или заблокировал его).")
         
-    # Send to admin
-    admins = BOARD_CONFIG.get(board_id, {}).get('admins', set())
-    sender_nick = generate_anon_name(message.from_user.id)
-    target_nick = generate_anon_name(target_id)
-    for admin_id in admins:
-        try:
-            await message.bot.send_message(
-                admin_id,
-                f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\\nОт: <code>{sender_nick}</code>\\nКому: <code>{target_nick}</code>\\nТекст: <i>{escape_html(text)}</i>",
-                parse_mode="HTML"
-            )
-        except Exception: pass
+    if delivered:
+        # Send to admin
+        admins = BOARD_CONFIG.get(board_id, {}).get('admins', set())
+        sender_nick = generate_anon_name(message.from_user.id)
+        target_nick = generate_anon_name(target_id)
+        for admin_id in admins:
+            try:
+                await message.bot.send_message(
+                    admin_id,
+                    f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\nОт: <code>{sender_nick}</code>\nКому: <code>{target_nick}</code>\nТекст: <i>{escape_html(text)}</i>",
+                    parse_mode="HTML"
+                )
+            except Exception: pass
 
 @dp.message(Command("redact"))
 async def cmd_redact(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -13619,18 +13739,34 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
         
     target_id = await get_author_id_by_reply(message)
     if target_id != message.from_user.id:
-        await message.answer("❌ Ты не можешь удалять чужие сообщения!")
+        await message.answer("❌ Ты не можешь редактировать чужие сообщения!")
         return
 
-    msg_status = await message.answer("⏳ Удаляем из всех чатов...")
+    msg_status = await message.answer("⏳ Удаляем контент из всех копий...")
     
-    # Get all copies
+    # Get board_id of the post
+    post_board = None
+    if post_num in messages_storage:
+        post_board = messages_storage[post_num].get('board_id')
+    if not post_board:
+        from common.db_pool import get_pool
+        db = await get_pool()
+        async with db.execute("SELECT board_id FROM Posts WHERE post_num = ?", (post_num,)) as c:
+            row = await c.fetchone()
+            if row:
+                post_board = row[0]
+    if not post_board:
+        post_board = board_id
+
+    # Get all user copies
     db_copies = await get_post_copies(post_num)
     success_count = 0
     for rec_id, msg_id in db_copies:
         try:
+            # Используем правильного бота доски для ЛС
+            target_bot = GLOBAL_BOTS.get(post_board) or message.bot
             try:
-                await message.bot.edit_message_text(
+                await target_bot.edit_message_text(
                     chat_id=rec_id,
                     message_id=msg_id,
                     text="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
@@ -13642,7 +13778,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                     pass
                 elif "there is no text in the message" in err_str or "message to edit not found" not in err_str:
                     try:
-                        await message.bot.edit_message_caption(
+                        await target_bot.edit_message_caption(
                             chat_id=rec_id,
                             message_id=msg_id,
                             caption="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
@@ -13655,6 +13791,39 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
         except Exception:
             pass
 
+    # Get and update all channel copies (mirrors)
+    from common.database import get_all_channel_copies
+    channel_copies = await get_all_channel_copies(post_num)
+    if channel_copies:
+        target_bot = GLOBAL_BOTS.get(post_board) or message.bot
+        for chan_id, msg_id in channel_copies:
+            try:
+                try:
+                    await target_bot.edit_message_text(
+                        chat_id=chan_id,
+                        message_id=msg_id,
+                        text="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
+                        parse_mode="HTML"
+                    )
+                except TelegramBadRequest as e:
+                    err_str = str(e).lower()
+                    if "message is not modified" in err_str:
+                        pass
+                    elif "there is no text in the message" in err_str or "message to edit not found" not in err_str:
+                        try:
+                            await target_bot.edit_message_caption(
+                                chat_id=chan_id,
+                                message_id=msg_id,
+                                caption="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
+                                parse_mode="HTML"
+                            )
+                        except Exception:
+                            pass
+                success_count += 1
+                await asyncio.sleep(0.04)
+            except Exception:
+                pass
+
     async with storage_lock:
         if post_num in messages_storage:
             content_dict = messages_storage[post_num].get('content', {})
@@ -13666,7 +13835,6 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
     # Update SQLite explicitly using the database connection
     try:
         from common.database import update_post_content
-        # Get the updated content dict or a default fallback
         content_dict = {}
         if post_num in messages_storage:
             content_dict = messages_storage[post_num].get('content', {})
@@ -13679,7 +13847,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
     try: await msg_status.delete()
     except Exception: pass
     
-    st_msg = await message.answer(f"✅ Успешно удалено у {success_count} пользователей.")
+    st_msg = await message.answer(f"✅ Успешно удалено у {success_count} пользователей/зеркал.")
     await asyncio.sleep(4)
     try: await st_msg.delete()
     except Exception: pass
@@ -14805,8 +14973,9 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
         target_id = await get_author_id_by_reply(message)
     else:
         parts = message.text.split()
-        if len(parts) == 2 and parts[1].isdigit():
-            target_id = int(parts[1])
+        if len(parts) == 2:
+            try: target_id = int(parts[1])
+            except ValueError: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         if lang == 'en':
@@ -15417,8 +15586,9 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
     parts = message.text.split()
-    if len(parts) == 2 and parts[1].isdigit():
-        target_id = int(parts[1])
+    if len(parts) == 2:
+        try: target_id = int(parts[1])
+        except ValueError: pass
     if not target_id:
         await message.answer("Нужно ответить на сообщение или указать ID: <code>/ban &lt;id&gt;</code>", parse_mode="HTML")
         return
@@ -15431,6 +15601,8 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
         ]
     ])
     await message.answer(f"⚠️ Вы уверены, что хотите забанить <b>{anon_name}</b> (ID: <code>{target_id}</code>) и снести его последние посты?", parse_mode="HTML", reply_markup=kb)
+    try: await message.delete()
+    except Exception: pass
 
 async def execute_ban(bot, message, target_id: int, board_id: str, admin_id: int):
     deleted_posts = await delete_user_posts(bot, target_id, 5, board_id)
@@ -15696,37 +15868,48 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
     if not board_id or not is_admin(message.from_user.id, board_id):
         return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    target_id = None
+    if message.reply_to_message:
+        target_id = await get_author_id_by_reply(message)
+    
     args = message.text.split()
-    if len(args) < 2:
-        if lang == 'en': usage = "Usage: <code>/unban &lt;user_id&gt;</code>"
-        elif lang == 'jp': usage = "使用法: <code>/unban &lt;user_id&gt;</code>"
-        else: usage = "Использование: <code>/unban &lt;user_id&gt;</code>"
+    if len(args) >= 2:
+        try:
+            target_id = int(args[1])
+        except ValueError:
+            pass
+            
+    if target_id is None:
+        if lang == 'en': usage = "Usage: <code>/unban &lt;user_id&gt;</code> or reply to user message."
+        elif lang == 'jp': usage = "使用法: <code>/unban &lt;user_id&gt;</code> またはユーザーメッセージに返信します。"
+        else: usage = "Использование: <code>/unban &lt;user_id&gt;</code> или ответ на сообщение пользователя."
         await message.answer(usage, parse_mode="HTML")
+        try: await message.delete()
+        except Exception: pass
         return
-    try:
-        user_id = int(args[1])
-        unbanned = False
-        async with storage_lock:
-            b_data = board_data[board_id]
-            if user_id in b_data['users']['banned']:
-                b_data['users']['banned'].discard(user_id)
-                b_data['users']['active'].add(user_id)
-                unbanned = True
-        board_name = BOARD_CONFIG[board_id]['name']
-        if unbanned:
-             await add_or_activate_user(user_id, board_id) 
-             if lang == 'en': msg = f"User {user_id} unbanned on {board_name}."
-             elif lang == 'jp': msg = f"ユーザー {user_id} のBANを解除しました ({board_name})。"
-             else: msg = f"Пользователь {user_id} разбанен на доске {board_name}."
-             await message.answer(msg)
-        else:
-            if lang == 'en': msg = f"User {user_id} was not banned."
-            elif lang == 'jp': msg = f"ユーザー {user_id} はBANされていません。"
-            else: msg = f"Пользователь {user_id} не был забанен на этой доске."
-            await message.answer(msg)
-    except ValueError:
-        await message.answer("Invalid ID")
-    await message.delete()
+        
+    unbanned = False
+    async with storage_lock:
+        b_data = board_data[board_id]
+        if target_id in b_data['users']['banned']:
+            b_data['users']['banned'].discard(target_id)
+            b_data['users']['active'].add(target_id)
+            unbanned = True
+            
+    board_name = BOARD_CONFIG[board_id]['name']
+    if unbanned:
+        await add_or_activate_user(target_id, board_id) 
+        if lang == 'en': msg = f"User {target_id} unbanned on {board_name}."
+        elif lang == 'jp': msg = f"ユーザー {target_id} のBANを解除しました ({board_name})。"
+        else: msg = f"Пользователь {target_id} разбанен на доске {board_name}."
+        await message.answer(msg)
+    else:
+        if lang == 'en': msg = f"User {target_id} was not banned."
+        elif lang == 'jp': msg = f"ユーザー {target_id} はBANされていません。"
+        else: msg = f"Пользователь {target_id} не был забанен на этой доске."
+        await message.answer(msg)
+    try: await message.delete()
+    except Exception: pass
 @dp.message(Command("del"))
 async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -17173,6 +17356,37 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             try: await message.bot.send_message(user_id, "Replies limit reached (3 max).", disable_notification=True)
             except Exception: pass
         return
+    # Проверка текстового ответа на дуэль (без слеша)
+    if message.reply_to_message and message.text:
+        text_clean = message.text.lower().strip()
+        if text_clean in ("accept", "принять", "yes", "да", "ok", "ок", "+"):
+            reply_msg_id = message.reply_to_message.message_id
+            now = time.time()
+            found_ch = None
+            for ch_id, duel in list(_active_duels.items()):
+                if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                    found_ch = ch_id
+                    break
+            if found_ch:
+                try: await message.delete()
+                except Exception: pass
+                await accept_duel_logic(message, found_ch, board_id)
+                return
+                
+        elif text_clean in ("decl", "отклонить", "no", "нет", "-"):
+            reply_msg_id = message.reply_to_message.message_id
+            now = time.time()
+            found_ch = None
+            for ch_id, duel in list(_active_duels.items()):
+                if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                    found_ch = ch_id
+                    break
+            if found_ch:
+                try: await message.delete()
+                except Exception: pass
+                await decline_duel_logic(message, found_ch)
+                return
+
     try: await message.delete()
     except TelegramBadRequest: pass
     reply_to_post = None
