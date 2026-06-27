@@ -192,7 +192,13 @@ async def process_queue_batch():
                             
                     except Exception as e:
                         err_str = str(e).lower()
-                        fatal_errors = ["file_id_invalid", "wrong file_id", "not found", "invalid", "unauthorized", "bad request"]
+                        if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
+                            logger.error(f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling.")
+                            if global_bot_pool:
+                                global_bot_pool.mark_bot_dead_by_token(bot.token)
+                            return None
+
+                        fatal_errors = ["file_id_invalid", "wrong file_id", "not found", "invalid", "bad request"]
                         if any(x in err_str for x in fatal_errors):
                             logger.error(f"🗑️ File {fid[:10]} is DEAD in Telegram. Marking for removal.")
                             return (fid, "deleted", sub)

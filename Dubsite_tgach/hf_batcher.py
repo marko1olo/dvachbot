@@ -155,7 +155,14 @@ async def process_queue_batch():
                             return (fid, final_filename, sub)
                             
                     except Exception as e:
-                        if "file is too big" not in str(e).lower() and "file_id_invalid" in str(e).lower():
+                        err_str = str(e).lower()
+                        if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
+                            logger.error(f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling.")
+                            if global_bot_pool:
+                                global_bot_pool.mark_bot_dead_by_token(bot.token)
+                            return None
+
+                        if "file is too big" not in err_str and "file_id_invalid" in err_str:
                             return (fid, "deleted", sub)
 
                     # 3. MTProto Fallback

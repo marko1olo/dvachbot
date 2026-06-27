@@ -15,11 +15,14 @@ ZEROXZERO_MAX_BYTES = int(os.getenv("ZEROXZERO_MAX_BYTES", str(512 * 1024 * 1024
 ZEROXZERO_COOLDOWN_SECONDS = int(os.getenv("ZEROXZERO_COOLDOWN_SECONDS", str(6 * 60 * 60)))
 ZEROXZERO_DISABLED_UNTIL = 0.0
 
+# Настройка прокси с сохранением схемы (socks5, http и т.д.)
 raw_proxy = os.getenv("ZEROXZERO_PROXY") or os.getenv("PROXY_URL")
 PROXY_URL = None
 if raw_proxy:
-    clean_addr = raw_proxy.split("://")[-1]
-    PROXY_URL = f"http://{clean_addr}"
+    if "://" not in raw_proxy:
+        PROXY_URL = f"http://{raw_proxy}"
+    else:
+        PROXY_URL = raw_proxy
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

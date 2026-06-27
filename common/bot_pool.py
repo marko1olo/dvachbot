@@ -27,13 +27,16 @@ class MultiStreamBotPool:
         }
         
         # Плоский список для закрытия сессий
-        self.all_bots: List[Bot] =[]
+        self.all_bots: List[Bot] = []
         
         # Кэш уникальных ботов, чтобы дубликаты токенов в .env не создавали лишние сессии aiohttp
         self._shared_bots: Dict[int, Bot] = {}
         
         # Множество загруженных потоков (защита от повторной загрузки)
         self._loaded_streams = set()
+        
+        # Множество отключенных/неактивных bot_id
+        self.disabled_bot_ids = set()
 
     def _get_stream_pool(self, stream_code: str) -> str:
         if stream_code == 'en':
@@ -64,13 +67,17 @@ class MultiStreamBotPool:
         if not pool_str:
             return
 
-        tokens =[t.strip() for t in pool_str.split(',') if t.strip()]
-        bots_list =[]
+        tokens = [t.strip() for t in pool_str.split(',') if t.strip()]
+        bots_list = []
 
         for t in tokens:
             try:
                 if ':' not in t: continue
                 bot_id = int(t.split(':')[0])
+                
+                # Если бот помечен как мертвый, пропускаем
+                if bot_id in self.disabled_bot_ids:
+                    continue
                 
                 # Если бот уже есть в ЭТОМ пуле
                 if bot_id in self.bots_map[stream_code]: 
@@ -136,6 +143,55 @@ class MultiStreamBotPool:
         if self.all_bots:
             return self.all_bots[0]
         return None
+
+    def mark_bot_dead(self, bot_id: int):
+        """Помечает бота как неактивного (logged out) и удаляет из всех пулов и итераторов."""
+        if bot_id in self.disabled_bot_ids:
+            return
+
+        self.disabled_bot_ids.add(bot_id)
+        logger.warning(f"🚨 Bot {bot_id} is logged out/dead. Disabling across all streams.")
+
+        # Удаляем из кэша уникальных ботов
+        bot = self._shared_bots.pop(bot_id, None)
+        if bot:
+            if bot in self.all_bots:
+                self.all_bots.remove(bot)
+            # Закрываем сессию асинхронно с проверкой наличия event loop
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._close_bot_session(bot))
+            except RuntimeError:
+                pass
+
+        # Удаляем из bots_map во всех регионах и перестраиваем итераторы
+        for stream_code, bots in self.bots_map.items():
+            if bot_id in bots:
+                del bots[bot_id]
+                bots_list = list(bots.items())
+                if bots_list:
+                    self.iterators[stream_code] = itertools.cycle(bots_list)
+                    logger.info(f"🔄 Rebuilt iterator for '{stream_code}', remaining: {len(bots_list)}")
+                else:
+                    self.iterators.pop(stream_code, None)
+                    logger.warning(f"⚠️ No active bots left for stream '{stream_code}'!")
+
+    def mark_bot_dead_by_token(self, token: str):
+        """Вспомогательный метод для удаления бота по токену."""
+        if not token or ':' not in str(token):
+            return
+        try:
+            bot_id = int(str(token).split(':', 1)[0])
+            self.mark_bot_dead(bot_id)
+        except (TypeError, ValueError):
+            pass
+
+    async def _close_bot_session(self, bot: Bot):
+        try:
+            await bot.session.close()
+            logger.info("🔌 Closed session for disabled bot")
+        except Exception as e:
+            logger.error(f"Error closing disabled bot session: {e}")
 
     async def close_all(self):
         logger.info("🔌 Closing all bot sessions...")

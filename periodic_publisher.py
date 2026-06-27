@@ -53,30 +53,51 @@ async def build_stats_media_groups():
     return groups
 
 async def send_stats_to_user(bot: Bot, chat_id: int):
-    """Generates and sends stats directly to a user/admin."""
-    await bot.send_message(chat_id, "⏳ <i>Рисую 18 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
+    """Generates and sends stats directly to a user/admin, and copies them to the archive."""
+    await bot.send_message(chat_id, "⏳ <i>Рисую 20 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
     try:
         media_groups = await build_stats_media_groups()
         if media_groups:
+            # Send to requesting user/admin
             for media_group in media_groups:
                 await bot.send_media_group(chat_id=chat_id, media=media_group)
                 await asyncio.sleep(1)
+                
+            # Send a copy to the Archive Channel if not already there
+            import os
+            archive_channel_id = int(os.getenv("ARCHIVE_CHANNEL_ID", -1002827087363))
+            if chat_id != archive_channel_id:
+                try:
+                    print(f"📊 Отправляю копию графиков в архивный канал {archive_channel_id}...")
+                    for media_group in media_groups:
+                        for item in media_group:
+                            if hasattr(item.media, 'data') and hasattr(item.media.data, 'seek'):
+                                item.media.data.seek(0)
+                            elif hasattr(item.media, 'seek'):
+                                item.media.seek(0)
+                        await bot.send_media_group(chat_id=archive_channel_id, media=media_group)
+                        await asyncio.sleep(1)
+                except Exception as e:
+                    print(f"⚠️ Не удалось скопировать графики в архивный канал: {e}")
         else:
             await bot.send_message(chat_id, "❌ Хуй там плавал, стату собрать не вышло.")
     except Exception as e:
         print(f"Error sending stats: {e}")
         await bot.send_message(chat_id, f"❌ Ошибка при генерации статистики: {e}")
 
-async def periodic_stats_publisher(bot: Bot):
+async def periodic_stats_publisher(bots: dict, active_users_getter):
     """
     Runs in the background and publishes stats every Sunday at 20:00 MSK.
+    Sends to the archive channel and broadcasts to all active users on board /b/.
     """
+    import os
+    ARCHIVE_CHANNEL_ID = int(os.getenv("ARCHIVE_CHANNEL_ID", -1002827087363))
+    
     while True:
         now_utc = datetime.now(timezone.utc)
         now_msk = now_utc.astimezone(MSK_OFFSET)
         
         # Target: Sunday (weekday == 6), 20:00:00
-        # Check if we need to schedule for next week or later today
         days_ahead = 6 - now_msk.weekday()
         if days_ahead < 0 or (days_ahead == 0 and now_msk.hour >= 20):
             days_ahead += 7
@@ -91,21 +112,60 @@ async def periodic_stats_publisher(bot: Bot):
         await asyncio.sleep(sleep_seconds)
         
         # Wake up and publish
-        if NEWS_CHANNEL_ID:
-            print(f"📊 [STATS PUBLISHER] Генерирую еженедельную статистику для {NEWS_CHANNEL_ID}...")
-            try:
-                media_groups = await build_stats_media_groups()
-                if media_groups:
-                    for media_group in media_groups:
-                        await bot.send_media_group(chat_id=NEWS_CHANNEL_ID, media=media_group)
-                        await asyncio.sleep(1)
-                    print(f"✅ [STATS PUBLISHER] Успешно опубликовано!")
-                else:
-                    print("❌ [STATS PUBLISHER] Ошибка: нет данных для графиков.")
-            except Exception as e:
-                print(f"❌ [STATS PUBLISHER] Ошибка при публикации: {e}")
-        else:
-            print("⚠️ [STATS PUBLISHER] Канал для новостей не задан (NEWS_CHANNEL_ID is None). Пропускаем публикацию.")
+        print("📊 [STATS PUBLISHER] Время публикации статистики! Генерирую графики...")
+        try:
+            media_groups = await build_stats_media_groups()
+            if media_groups:
+                archive_bot = bots.get('test') or bots.get('b') or next(iter(bots.values()))
+                
+                # 1. Send to ARCHIVE_CHANNEL_ID (collect file_ids to avoid uploading multiple times)
+                print(f"📊 [STATS PUBLISHER] Отправляю графики в архивный канал {ARCHIVE_CHANNEL_ID}...")
+                uploaded_groups_file_ids = []
+                for group_idx, media_group in enumerate(media_groups):
+                    messages = await archive_bot.send_media_group(chat_id=ARCHIVE_CHANNEL_ID, media=media_group)
+                    group_file_ids = [m.photo[-1].file_id for m in messages if m.photo]
+                    uploaded_groups_file_ids.append(group_file_ids)
+                    await asyncio.sleep(1)
+                
+                print("✅ [STATS PUBLISHER] Графики успешно отправлены в архивный канал.")
+                
+                # 2. Broadcast to all active users on board /b/
+                active_users = active_users_getter()
+                b_bot = bots.get('b') or next(iter(bots.values()))
+                
+                if b_bot and active_users and uploaded_groups_file_ids:
+                    print(f"📊 [STATS PUBLISHER] Рассылаю графики {len(active_users)} активным пользователям /b/...")
+                    
+                    caption_part1 = (
+                        "📊 <b>Еженедельная статистика (Часть 1/2)</b> 📊\n\n"
+                        "Смотри графики в альбоме 👇"
+                    )
+                    caption_part2 = (
+                        "🧠 <b>Еженедельная статистика (Часть 2/2)</b> 🧠\n\n"
+                        "Смотри продолжение 👇"
+                    )
+                    
+                    for user_id in active_users:
+                        try:
+                            for group_idx, file_ids in enumerate(uploaded_groups_file_ids):
+                                user_media_group = []
+                                caption = caption_part1 if group_idx == 0 else caption_part2
+                                for i, file_id in enumerate(file_ids):
+                                    if i == 0:
+                                        user_media_group.append(InputMediaPhoto(media=file_id, caption=caption, parse_mode="HTML"))
+                                    else:
+                                        user_media_group.append(InputMediaPhoto(media=file_id))
+                                await b_bot.send_media_group(chat_id=user_id, media=user_media_group)
+                                await asyncio.sleep(0.1)
+                            await asyncio.sleep(0.2)
+                        except Exception as e:
+                            print(f"⚠️ [STATS PUBLISHER] Ошибка отправки пользователю {user_id}: {e}")
+                            
+                print(f"✅ [STATS PUBLISHER] Еженедельная публикация статистики завершена!")
+            else:
+                print("❌ [STATS PUBLISHER] Ошибка: нет данных для графиков.")
+        except Exception as e:
+            print(f"❌ [STATS PUBLISHER] Ошибка при публикации: {e}")
             
         # Sleep an extra hour to avoid double-triggering
         await asyncio.sleep(3600)

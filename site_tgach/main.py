@@ -793,7 +793,8 @@ SYSTEM_LOGS = deque(maxlen=100)
 import asyncio
 import logging
 SITE_SPAM_RULES = {
-    'text': {'max_repeats': 4, 'window_sec': 15, 'max_per_window': 7, 'penalty_seconds': 300}
+    'text': {'max_repeats': 4, 'window_sec': 15, 'max_per_window': 7, 'penalty_seconds': 300},
+    'files': {'max_repeats': 3, 'window_sec': 60, 'max_per_window': 12, 'penalty_seconds': 600}
 }
 BOARD_VERSIONS = defaultdict(lambda: time.time())
 THREAD_VERSIONS = defaultdict(lambda: time.time())
@@ -820,7 +821,7 @@ def check_perm(user: dict, required_role: str) -> bool:
     user_level = ROLE_HIERARCHY.get(user_role, 0)
     req_level = ROLE_HIERARCHY.get(required_role, 0)
     return user_level >= req_level
-async def check_and_punish_site_spam(board_id: str, user_id: int, text: str, t):
+async def check_and_punish_site_spam(board_id: str, user_id: int, text: str, files: list, t):
     clean_text = text.strip()
     if clean_text in {'🎲', '🎰', '🏀', '⚽', '🎯', '🎳'}:
         await apply_regular_mute(user_id, board_id, 60)
@@ -833,22 +834,73 @@ async def check_and_punish_site_spam(board_id: str, user_id: int, text: str, t):
         raise HTTPException(status_code=400, detail=t('casino_ban_message').format(phrase))
     user_history = site_spam_tracker[board_id][user_id]
     now = time.time()
-    window = SITE_SPAM_RULES['text']['window_sec']
-    user_history['timestamps'] = [t for t in user_history['timestamps'] if t > now - window]
-    user_history['timestamps'].append(now)
-    user_history['last_texts'].append(clean_text)
-    violation = False
-    if len(user_history['timestamps']) >= SITE_SPAM_RULES['text']['max_per_window']:
-        violation = True
-    elif len(user_history['last_texts']) >= SITE_SPAM_RULES['text']['max_repeats']:
-        if len(set(user_history['last_texts'])) == 1:
-            violation = True
-    if violation:
+    
+    # 1. Text Spam check
+    text_violation = False
+    if clean_text:
+        window = SITE_SPAM_RULES['text']['window_sec']
+        user_history['timestamps'] = [t_val for t_val in user_history.get('timestamps', []) if t_val > now - window]
+        user_history['timestamps'].append(now)
+        user_history['last_texts'].append(clean_text)
+        
+        if len(user_history['timestamps']) >= SITE_SPAM_RULES['text']['max_per_window']:
+            text_violation = True
+        elif len(user_history['last_texts']) >= SITE_SPAM_RULES['text']['max_repeats']:
+            if len(set(user_history['last_texts'])) == 1:
+                text_violation = True
+                
+    if text_violation:
         user_history['timestamps'] = []
         user_history['last_texts'].clear()
         penalty = SITE_SPAM_RULES['text']['penalty_seconds']
         await apply_regular_mute(user_id, board_id, penalty)
         raise HTTPException(status_code=429, detail=f"🚫 Обнаружен спам! Вы получили мут на {penalty // 60} минут.")
+
+    # 2. Files/Images Spam check
+    if files:
+        if 'last_file_hashes' not in user_history:
+            from collections import deque
+            user_history['last_file_hashes'] = deque(maxlen=10)
+            user_history['file_timestamps'] = []
+            
+        file_hashes = []
+        import hashlib
+        for img in files:
+            try:
+                await img.seek(0)
+                content = await img.read()
+                await img.seek(0)
+                if content:
+                    h = hashlib.md5(content).hexdigest()
+                    file_hashes.append(h)
+            except Exception:
+                pass
+                
+        if file_hashes:
+            file_window = SITE_SPAM_RULES.get('files', {}).get('window_sec', 60)
+            user_history['file_timestamps'] = [t_val for t_val in user_history['file_timestamps'] if t_val > now - file_window]
+            
+            file_violation = False
+            for h in file_hashes:
+                user_history['file_timestamps'].append(now)
+                user_history['last_file_hashes'].append(h)
+                
+            max_files = SITE_SPAM_RULES.get('files', {}).get('max_per_window', 12)
+            max_repeats = SITE_SPAM_RULES.get('files', {}).get('max_repeats', 3)
+            
+            if len(user_history['file_timestamps']) >= max_files:
+                file_violation = True
+            elif len(user_history['last_file_hashes']) >= max_repeats:
+                last_hashes = list(user_history['last_file_hashes'])[-max_repeats:]
+                if len(set(last_hashes)) == 1:
+                    file_violation = True
+                    
+            if file_violation:
+                user_history['file_timestamps'] = []
+                user_history['last_file_hashes'].clear()
+                penalty = SITE_SPAM_RULES.get('files', {}).get('penalty_seconds', 600)
+                await apply_regular_mute(user_id, board_id, penalty)
+                raise HTTPException(status_code=429, detail=f"🚫 Обнаружен спам картинками! Вы получили мут на {penalty // 60} минут.")
 async def captcha_cleanup_task():
     while True:
         await asyncio.sleep(600)
@@ -5422,10 +5474,13 @@ async def api_create_post(
             remaining = int(row[0] - time.time())
             raise HTTPException(status_code=403, detail=t('err_mute_remaining').format(remaining))
     is_shadow_muted = await get_shadow_mute_status(author_id, board_id)
+    files_to_process = []
+    if images:
+        for img in images:
+            if getattr(img, 'filename', None):
+                files_to_process.append(img)
     if not is_shadow_muted:
-        check_text = text if text else ""
-        if check_text:
-            await check_and_punish_site_spam(board_id, author_id, check_text, t)
+        await check_and_punish_site_spam(board_id, author_id, text or "", files_to_process, t)
     thread_op_num = None
     if post_mode == 'chat_post':
         thread_op_num = None
@@ -5450,11 +5505,6 @@ async def api_create_post(
     elif post_mode == 'new_thread':
         thread_op_num = None
     
-    files_to_process = []
-    if images:
-        for img in images:
-            if getattr(img, 'filename', None):
-                files_to_process.append(img)
 
     user_files_count = len(files_to_process)
     files_to_generate_count = 5 - user_files_count

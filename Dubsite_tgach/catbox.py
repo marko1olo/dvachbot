@@ -3,16 +3,21 @@ import logging
 import os
 import random
 import asyncio 
+import time
 from pathlib import Path
 
 CATBOX_HASH = os.getenv("CATBOX_USER_HASH", None)
+CATBOX_HASH_DISABLE_SECONDS = 3600
+_CATBOX_HASH_DISABLED_UNTIL = 0.0
 
-# Очистка прокси от схемы (socks5:// и т.д.), чтобы httpx не ругался
+# Настройка прокси с сохранением схемы (socks5, http и т.д.)
 raw_proxy = os.getenv("CATBOX_PROXY") or os.getenv("PROXY_URL")
 PROXY_URL = None
 if raw_proxy:
-    clean_addr = raw_proxy.split("://")[-1]
-    PROXY_URL = f"http://{clean_addr}"
+    if "://" not in raw_proxy:
+        PROXY_URL = f"http://{raw_proxy}"
+    else:
+        PROXY_URL = raw_proxy
 
 logger = logging.getLogger("catbox")
 
@@ -36,13 +41,14 @@ async def _upload_logic(req_type, file_source, is_file=False):
     """
     Универсальная логика с защитой от спама (Backoff).
     """
+    global _CATBOX_HASH_DISABLED_UNTIL
     url = "https://catbox.moe/user/api.php"
     data = {'reqtype': req_type}
     
     if req_type == 'urlupload':
         data['url'] = file_source
     
-    if CATBOX_HASH: 
+    if bool(CATBOX_HASH) and time.time() >= _CATBOX_HASH_DISABLED_UNTIL: 
         data['userhash'] = CATBOX_HASH
     
     headers = {"User-Agent": random.choice(USER_AGENTS)}
@@ -90,6 +96,13 @@ async def _upload_logic(req_type, file_source, is_file=False):
                         resp = await _send_request(client, url, data, files)
                 else:
                     resp = await _send_request(client, url, data)
+
+                if data.get('userhash') and resp.status_code == 412 and "invalid uploader" in resp.text.lower():
+                    _CATBOX_HASH_DISABLED_UNTIL = time.time() + CATBOX_HASH_DISABLE_SECONDS
+                    logger.warning("Catbox userhash rejected; using anonymous upload for a while.")
+                    anonymous_data = dict(data)
+                    anonymous_data.pop('userhash', None)
+                    resp = await _send_request(client, url, anonymous_data, files)
 
                 if resp.status_code == 200:
                     link = resp.text.strip()

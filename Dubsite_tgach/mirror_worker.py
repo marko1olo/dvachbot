@@ -76,13 +76,19 @@ async def _process_single_task(task):
                 tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
                 if mirror_type == 'catbox':
                     success_link = await upload_url_to_catbox(tg_url)
-        except TelegramBadRequest as e:
-            if "file_id_invalid" in str(e).lower() or "wrong file_id" in str(e).lower():
+        except Exception as e:
+            err_str = str(e).lower()
+            if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
+                logger.error(f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling.")
+                if global_bot_pool:
+                    global_bot_pool.mark_bot_dead_by_token(bot.token)
+                await reschedule_mirror_task(task_id, attempt)
+                return
+
+            if "file_id_invalid" in err_str or "wrong file_id" in err_str:
                 logger.error(f"❌ File {file_id[:10]} is dead in TG. Removing task.")
                 await remove_mirror_task(task_id)
-                return
-        except Exception:
-            pass 
+                return 
         
         lpath = os.path.abspath(f"temp_mw_{task_id}{file_ext}")
         

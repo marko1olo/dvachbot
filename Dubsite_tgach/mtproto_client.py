@@ -174,6 +174,8 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
             _CONNECTION_COOLDOWN[bot_token] = time.time() + 300 # Бан на 5 минут
         elif "400" in err_str or "FILE_REFERENCE" in err_str:
              logger.warning(f"⚠️ [MTProto] Bad Request (dead file): {e}")
+        elif "THUMBNAIL_SOURCE" in err_str.upper():
+             logger.warning(f"⚠️ [MTProto] Pyrogram failed to parse thumb source for {file_id[:10]}")
         else:
             logger.error(f"❌ [MTProto] Download Error: {e}")
         return False

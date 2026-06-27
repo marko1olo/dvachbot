@@ -87,16 +87,7 @@ def _add_signature(text: str, profile: dict) -> str:
 def _decorate(text: str, profile: dict) -> str:
     if not text or not text.strip():
         return text
-    result = _swap_words(text, profile)
-    result = _inject(result, profile)
-    if len(result) < 950 and random.random() < profile.get("prefix_chance", 0.24):
-        result = f"{random.choice(profile['prefixes'])} {result}"
-    if len(result) < 950 and random.random() < profile.get("suffix_chance", 0.24):
-        result = f"{result} {random.choice(profile['suffixes'])}"
-    result = _add_signature(result, profile)
-    if len(result) > 3900:
-        result = result[:3890].rstrip() + "..."
-    return result
+    return _swap_words(text, profile)
 
 
 MODE_PUNCHUP_PROFILES: dict[str, dict] = {

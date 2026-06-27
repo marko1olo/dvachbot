@@ -137,10 +137,17 @@ async def _process_single_task(task):
                     success_link = await upload_url_to_catbox(tg_url)
                 elif mirror_type == '0x0':
                     success_link = await upload_url_to_0x0(tg_url)
-        except TelegramBadRequest as e:
-            is_photo = file_id.startswith("AgAC")
+        except Exception as e:
             err_str = str(e).lower()
-            if ("file_id_invalid" in err_str or "wrong file_id" in err_str):
+            if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
+                logger.error(f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling.")
+                if global_bot_pool:
+                    global_bot_pool.mark_bot_dead_by_token(bot.token)
+                await reschedule_mirror_task(task_id, attempt)
+                return
+
+            is_photo = file_id.startswith("AgAC")
+            if "file_id_invalid" in err_str or "wrong file_id" in err_str:
                 if not msg_info: 
                     logger.error(f"🗑️ File {file_id[:10]} is DEAD (No msg context). Removing task.")
                     await remove_mirror_task(task_id)
@@ -152,9 +159,7 @@ async def _process_single_task(task):
                 else:
                     logger.warning(f"⚠️ Bot API rejected {file_id[:10]}. Trying recovery via MTProto/Msg...")
             else:
-                logger.warning(f"⚠️ Bot API error for {file_id[:10]}: {e}")
-        except Exception:
-            pass 
+                logger.warning(f"⚠️ Bot API error for {file_id[:10]}: {e}") 
         
         fd, lpath = tempfile.mkstemp(prefix=f"dvach_mirror_{task_id}_", suffix=file_ext)
         os.close(fd)

@@ -25,6 +25,24 @@ sns.set_theme(style="darkgrid", rc={
     "font.family": "sans-serif"
 })
 
+RU_STOP = {
+    'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то', 'все', 'она', 'так', 'его', 'но', 'да', 'ты',
+    'к', 'у', 'же', 'вы', 'за', 'бы', 'по', 'только', 'ее', 'мне', 'было', 'вот', 'от', 'меня', 'еще', 'нет', 'о', 'из', 'уже',
+    'до', 'этого', 'этой', 'эти', 'эту', 'это', 'тот', 'где', 'кто', 'он', 'мы', 'быть', 'был', 'была', 'были', 'было', 'есть',
+    'если', 'или', 'ком', 'всех', 'них', 'этот', 'чтобы', 'для', 'без', 'через', 'после', 'потому', 'этом', 'им', 'ей',
+    'про', 'почему', 'зачем', 'очень', 'просто', 'тут', 'там', 'когда', 'будет', 'даже', 'всегда', 'тоже',
+    'какой', 'какая', 'какие', 'свои', 'свой', 'своих', 'под', 'над', 'перед', 'при', 'всего', 'всем', 'всеми', 'тебе', 'вас',
+    'как', 'так', 'это', 'был', 'была', 'будет', 'мне', 'меня', 'тебе', 'тебя', 'свой', 'свои', 'своих',
+    'все', 'всё', 'всех', 'всем', 'очень', 'просто', 'было', 'были', 'быть', 'один', 'два', 'три', 'когда',
+    'если', 'или', 'нет', 'да', 'уже', 'еще', 'ещё', 'только', 'вот', 'этот', 'эта', 'эти', 'это',
+    'можно', 'надо', 'может', 'потом', 'больше', 'вообще', 'себя', 'которые', 'который', 'себе', 'такой', 'пока', 'лучше', 'того', 'сейчас', 'здесь', 'быть', 'было', 'будет', 'если', 'этого', 'очень', 'просто', 'чтобы',
+    'какой', 'какие', 'какая', 'почему', 'зачем', 'хотя', 'тоже', 'даже', 'тут', 'там', 'где', 'когда', 'кто', 'что', 'как', 'потому',
+    'также', 'такое', 'теперь', 'нужно', 'только', 'будто', 'каждый', 'будто', 'очень', 'просто', 'чтобы', 'после', 'через', 'около', 'возле', 'снова', 'опять', 'назад', 'перед', 'один', 'когда',
+    # URLs, tech tags, bot specifics
+    'http', 'https', 'www', 'com', 'ru', 'org', 'net', 'href', 'html', 'code', 'emoji', 'span', 'div', 'class', 'style', 'br', 'li', 'ul', 'ol', 'pre', 'img', 'src', 'width', 'height', 'alt', 'title', 'target', 'blank', 'rel', 'noopener', 'noreferrer', 'data',
+    'tgach', 'тгач', 'chatbot', 'dvach', 'dvachbot', 'bot', 'id', 'user', 'author', 'posts', 'post', 'thread', 'board', 'text', 'type', 'message', 'telegram', 'entities', 'url'
+}
+
 def dict_factory(cursor, row):
     d = {}
     for idx, col in enumerate(cursor.description):
@@ -156,6 +174,10 @@ def generate_all_charts():
         plt.title('4. Топ-10 Главных Шизоидов (По количеству высеров)', fontsize=16, fontweight='bold', color="#ff9900")
         plt.xlabel('Количество постов')
         plt.ylabel('')
+        ax.set_xlim(0, df['cnt'].max() * 1.12)
+        for idx, row in df.iterrows():
+            ax.text(row['cnt'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['cnt'])}", 
+                    va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
         plt.tight_layout()
         buf = io.BytesIO()
         plt.savefig(buf, format='png')
@@ -180,6 +202,10 @@ def generate_all_charts():
         plt.title('5. Главные Байтеры (Кому больше всего реплаят)', fontsize=16, fontweight='bold', color="#33ccff")
         plt.xlabel('Количество полученных ответов')
         plt.ylabel('')
+        ax.set_xlim(0, df['cnt'].max() * 1.12)
+        for idx, row in df.iterrows():
+            ax.text(row['cnt'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['cnt'])}", 
+                    va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
         plt.tight_layout()
         buf = io.BytesIO()
         plt.savefig(buf, format='png')
@@ -298,18 +324,15 @@ def generate_all_charts():
     if data:
         df = pd.DataFrame(data)
         heatmap_data = df.pivot(index="w", columns="h", values="cnt").fillna(0)
-        # Weekdays: 0=Sunday in SQLite strftime('%w')
-        weekdays = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
-        # Fill missing weekdays if any
-        for i in range(7):
-            if i not in heatmap_data.index:
-                heatmap_data.loc[i] = 0
-        heatmap_data = heatmap_data.sort_index()
-        heatmap_data.index = weekdays
+        # Ensure all 24 hours are present in columns
+        heatmap_data = heatmap_data.reindex(columns=range(24), fill_value=0)
+        # Ensure all weekdays are present in index and reorder (1=Mon, 2=Tue... 6=Sat, 0=Sun)
+        heatmap_data = heatmap_data.reindex(index=[1, 2, 3, 4, 5, 6, 0], fill_value=0)
+        heatmap_data.index = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
         
         fig, ax = plt.subplots(figsize=(12, 6))
         sns.heatmap(heatmap_data, cmap="inferno", linewidths=.5, ax=ax)
-        plt.title('10. Тепловая карта активности (Часы / Дни)', fontsize=16, fontweight='bold', color="#ffaa00")
+        plt.title('10. Циркадные ритмы Анона (Активность по часам/дням)', fontsize=16, fontweight='bold', color="#ffaa00")
         plt.xlabel('Час (МСК)')
         plt.ylabel('День недели')
         plt.tight_layout()
@@ -391,6 +414,10 @@ def generate_all_charts():
                 plt.title('12. Топ-10 Хабов Внимания (PageRank)', fontsize=16, fontweight='bold', color="#ff00ff")
                 plt.xlabel('Влияние (PageRank score)')
                 plt.ylabel('')
+                ax.set_xlim(0, df_pr['pagerank'].max() * 1.15)
+                for idx, row in df_pr.iterrows():
+                    ax.text(row['pagerank'] + (ax.get_xlim()[1] * 0.01), idx, f"{row['pagerank']:.4f}", 
+                            va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
                 buf = io.BytesIO()
                 plt.savefig(buf, format='png')
@@ -435,6 +462,10 @@ def generate_all_charts():
                 plt.title('13. Топ-5 Взаимных Перепихонов (Circlejerk)', fontsize=16, fontweight='bold', color="#00ff66")
                 plt.xlabel('Количество взаимных ответов друг другу')
                 plt.ylabel('')
+                ax.set_xlim(0, df_mut['score'].max() * 1.12)
+                for idx, row in df_mut.iterrows():
+                    ax.text(row['score'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['score'])}", 
+                            va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
                 buf = io.BytesIO()
                 plt.savefig(buf, format='png')
@@ -497,117 +528,180 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 14: {e}")
 
-    # 15. Ритмы Выгорания (Автокорреляция топ-постера)
+    # 15. Мем-Радар: Взлетающие Тренды (Rising Keywords)
     try:
-        c.execute('''
-            SELECT author_id, COUNT(*) as cnt 
-            FROM Posts 
-            WHERE timestamp > ? AND author_id IS NOT NULL
-            GROUP BY author_id ORDER BY cnt DESC LIMIT 1
-        ''', (thirty_days_ago,))
-        top_author_row = c.fetchone()
-        if top_author_row:
-            top_uid = top_author_row['author_id']
-            c.execute('''
-                SELECT timestamp FROM Posts 
-                WHERE author_id = ? AND timestamp > ?
-                ORDER BY timestamp
-            ''', (top_uid, thirty_days_ago))
-            top_times = [r['timestamp'] for r in c.fetchall()]
+        now_ts = time.time()
+        seven_days_ago = now_ts - (7 * 24 * 3600)
+        fourteen_days_ago = now_ts - (14 * 24 * 3600)
+        
+        c.execute("SELECT content, author_id FROM Posts WHERE timestamp > ?", (seven_days_ago,))
+        this_week_posts = c.fetchall()
+        
+        c.execute("SELECT content, author_id FROM Posts WHERE timestamp BETWEEN ? AND ?", (fourteen_days_ago, seven_days_ago))
+        last_week_posts = c.fetchall()
+        
+        def clean_text_local(raw_content):
+            if not raw_content:
+                return ""
+            try:
+                content_dict = json.loads(raw_content)
+                text = content_dict.get('text', '') or content_dict.get('caption', '') or ''
+            except Exception:
+                text = raw_content
+            if not text:
+                return ""
+            text_clean = re.sub(r'<[^>]+>', '', text)
+            return text_clean
+
+        # Expand stop words dynamically
+        radar_stop = RU_STOP.union({
+            'prefixes', 'prefix', 'injections', 'injection', 'signatures', 'signature', 
+            'info', 'entry', 'exit', 'take', 'profit', 'zone', 'price', 'reason', 
+            'buy', 'sell', 'usdt', 'btc', 'eth', 'sol', 'xmr', 'ltc', 'trx', 'trc', 
+            'trc20', 'ton', 'sim', 'pnl', 'gross', 'net', 'limit', 'stop', 'cringe', 'report'
+        })
+
+        def get_word_counts(posts_list):
+            from collections import Counter
+            counts = Counter()
+            for row in posts_list:
+                # 1. Skip system posts
+                if row.get('author_id') in (0, 1163970492):
+                    continue
+                    
+                text = clean_text_local(row['content'])
+                
+                # 2. Skip logs and reports structurally
+                if text.count('|') >= 3:
+                    continue
+                if '[INFO]' in text or '[DEBUG]' in text or '[ERROR]' in text:
+                    continue
+                if 'ChatGPT Cringe Report' in text or 'нелепых и шаблонных фразах' in text:
+                    continue
+                    
+                tokens = re.findall(r'[a-zA-Zа-яА-ЯёЁ]{4,}', text.lower())
+                for t in tokens:
+                    if t not in radar_stop:
+                        counts[t] += 1
+            return counts
+
+        this_week_counts = get_word_counts(this_week_posts)
+        last_week_counts = get_word_counts(last_week_posts)
+        
+        rising_words = []
+        for word, c1 in this_week_counts.items():
+            c2 = last_week_counts.get(word, 0)
+            if c1 >= 5 and c1 > c2:
+                pct_change = ((c1 - c2) / c2) * 100 if c2 > 0 else c1 * 100
+                rising_words.append({'word': word, 'c1': c1, 'c2': c2, 'change': pct_change})
+                
+        rising_words = sorted(rising_words, key=lambda x: x['change'], reverse=True)[:20]
+        
+        if rising_words:
+            df_radar = pd.DataFrame(rising_words)
+            df_left = df_radar.iloc[:10].reset_index(drop=True)
+            df_right = df_radar.iloc[10:20].reset_index(drop=True)
             
-            if len(top_times) > 50:
-                min_ts = thirty_days_ago
-                max_ts = time.time()
-                total_hours = int((max_ts - min_ts) / 3600) + 1
-                
-                hourly_counts = [0] * total_hours
-                for ts in top_times:
-                    hour_bin = int((ts - min_ts) / 3600)
-                    if 0 <= hour_bin < total_hours:
-                        hourly_counts[hour_bin] += 1
-                        
-                ts_series = pd.Series(hourly_counts)
-                lags = list(range(1, 49))
-                acf_values = [ts_series.autocorr(lag=l) for l in lags]
-                acf_values = [0 if pd.isna(v) else v for v in acf_values]
-                
-                df_acf = pd.DataFrame({'lag': lags, 'correlation': acf_values})
-                fig, ax = plt.subplots(figsize=(10, 5))
-                sns.lineplot(data=df_acf, x='lag', y='correlation', marker="o", color="#33cc99", ax=ax)
-                plt.title(f'15. Циркадные биоритмы топ-постера {generate_schizo_name(top_uid).split(" (")[0]}', fontsize=16, fontweight='bold', color="#33cc99")
-                plt.xlabel('Сдвиг во времени (лаг, часы)')
-                plt.ylabel('Автокорреляция')
-                plt.axvline(x=24, color='r', linestyle='--', alpha=0.7, label='24 часа')
-                plt.axhline(y=0, color='grey', linestyle='-', alpha=0.5)
-                plt.legend()
-                plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('15_autocorrelation.png', buf))
-                plt.close()
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 7))
+            
+            # Left subplot (Top 1-10)
+            if not df_left.empty:
+                sns.barplot(data=df_left, x='change', y='word', hue='word', palette="Reds_r", legend=False, ax=ax1)
+                ax1.set_title('Топ 1–10 (Наибольший взлет)', fontsize=12, fontweight='bold', color="#ff3333")
+                ax1.set_xlabel('Прирост (%)')
+                ax1.set_ylabel('')
+                for idx, row in df_left.iterrows():
+                    ax1.text(row['change'] + (ax1.get_xlim()[1]*0.01), idx, f"+{int(row['change'])}%", 
+                            va='center', fontsize=9, fontweight='bold', color="#ff3333")
+                            
+            # Right subplot (Top 11-20)
+            if not df_right.empty:
+                sns.barplot(data=df_right, x='change', y='word', hue='word', palette="Oranges_r", legend=False, ax=ax2)
+                ax2.set_title('Топ 11–20 (Умеренный взлет)', fontsize=12, fontweight='bold', color="#ff9933")
+                ax2.set_xlabel('Прирост (%)')
+                ax2.set_ylabel('')
+                for idx, row in df_right.iterrows():
+                    ax2.text(row['change'] + (ax2.get_xlim()[1]*0.01), idx, f"+{int(row['change'])}%", 
+                            va='center', fontsize=9, fontweight='bold', color="#ff9933")
+                            
+            plt.suptitle('15. Мем-Радар: Взлетающие Тренды (Прирост за неделю)', fontsize=16, fontweight='bold', color="#ffaa00", y=0.96)
+            plt.tight_layout(rect=[0, 0, 1, 0.95])
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            images.append(('15_autocorrelation.png', buf))
+            plt.close()
     except Exception as e:
         print(f"Error Chart 15: {e}")
 
-    # 16. Тематическое Моделирование (LDA)
+    # 16. Частотный Шитпост-Словарь (Топ-15 Слов)
     try:
+        from collections import Counter
         c.execute('''
             SELECT content FROM Posts 
             WHERE timestamp > ? AND content IS NOT NULL
-            ORDER BY timestamp DESC LIMIT 5000
         ''', (thirty_days_ago,))
-        lda_data = c.fetchall()
-        if lda_data:
-            texts = []
-            for r in lda_data:
+        word_data = c.fetchall()
+        if word_data:
+            ru_stop = {
+                'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то', 'все', 'она', 'так', 'его', 'но', 'да', 'ты',
+                'к', 'у', 'же', 'вы', 'за', 'бы', 'по', 'только', 'ее', 'мне', 'было', 'вот', 'от', 'меня', 'еще', 'нет', 'о', 'из', 'уже',
+                'до', 'этого', 'этой', 'эти', 'эту', 'это', 'тот', 'где', 'кто', 'он', 'мы', 'быть', 'был', 'была', 'были', 'было', 'есть',
+                'если', 'или', 'ком', 'всех', 'них', 'этот', 'чтобы', 'для', 'без', 'через', 'после', 'потому', 'этом', 'им', 'ей',
+                'про', 'почему', 'зачем', 'очень', 'просто', 'тут', 'там', 'когда', 'будет', 'даже', 'всегда', 'тоже',
+                'какой', 'какая', 'какие', 'свои', 'свой', 'своих', 'под', 'над', 'перед', 'при', 'всего', 'всем', 'всеми', 'тебе', 'вас',
+                'как', 'так', 'это', 'был', 'была', 'будет', 'мне', 'меня', 'тебе', 'тебя', 'свой', 'свои', 'своих',
+                'все', 'всё', 'всех', 'всем', 'очень', 'просто', 'было', 'были', 'быть', 'один', 'два', 'три', 'когда',
+                'если', 'или', 'нет', 'да', 'уже', 'еще', 'ещё', 'только', 'вот', 'этот', 'эта', 'эти', 'это',
+                'можно', 'надо', 'может', 'потом', 'больше', 'вообще', 'себя', 'которые', 'который', 'себе', 'такой', 'пока', 'лучше', 'того', 'сейчас', 'здесь', 'быть', 'было', 'будет', 'если', 'этого', 'очень', 'просто', 'чтобы',
+                'какой', 'какие', 'какая', 'почему', 'зачем', 'хотя', 'тоже', 'даже', 'тут', 'там', 'где', 'когда', 'кто', 'что', 'как', 'потому',
+                'также', 'такое', 'теперь', 'нужно', 'только', 'будто', 'каждый', 'будто', 'очень', 'просто', 'чтобы', 'после', 'через', 'около', 'возле', 'снова', 'опять', 'назад', 'перед', 'один', 'когда',
+                # URLs, tech tags, bot specifics
+                'http', 'https', 'www', 'com', 'ru', 'org', 'net', 'href', 'html', 'code', 'emoji', 'span', 'div', 'class', 'style', 'br', 'li', 'ul', 'ol', 'pre', 'img', 'src', 'width', 'height', 'alt', 'title', 'target', 'blank', 'rel', 'noopener', 'noreferrer', 'data',
+                'tgach', 'тгач', 'chatbot', 'dvach', 'dvachbot', 'bot', 'id', 'user', 'author', 'posts', 'post', 'thread', 'board', 'text', 'type', 'message', 'telegram', 'entities', 'url'
+            }
+            
+            words_list = []
+            for r in word_data:
+                content_raw = r['content']
+                if not content_raw:
+                    continue
                 try:
-                    content_dict = json.loads(r['content'])
-                    t = content_dict.get('text') or content_dict.get('caption') or ''
-                    if len(t.strip()) > 10:
-                        texts.append(t)
-                except:
-                    pass
-                    
-            if len(texts) > 50:
-                from sklearn.feature_extraction.text import CountVectorizer
-                from sklearn.decomposition import LatentDirichletAllocation
+                    content_dict = json.loads(content_raw)
+                    text = content_dict.get('text', '') or content_dict.get('caption', '') or ''
+                except Exception:
+                    text = content_raw
+                if not text:
+                    continue
                 
-                ru_stop = [
-                    'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то', 'все', 'она', 'так', 'его', 'но', 'да', 'ты',
-                    'к', 'у', 'же', 'вы', 'за', 'бы', 'по', 'только', 'ее', 'мне', 'было', 'вот', 'от', 'меня', 'еще', 'нет', 'о', 'из', 'уже',
-                    'до', 'этого', 'этой', 'эти', 'эту', 'это', 'тот', 'где', 'кто', 'он', 'мы', 'быть', 'был', 'была', 'были', 'было', 'есть',
-                    'если', 'или', 'ком', 'всех', 'них', 'этот', 'чтобы', 'для', 'без', 'через', 'после', 'потому', 'этом', 'им', 'ей',
-                    'про', 'почему', 'зачем', 'очень', 'просто', 'тут', 'там', 'когда', 'будет', 'даже', 'всегда', 'тоже',
-                    'какой', 'какая', 'какие', 'свои', 'свой', 'своих', 'под', 'над', 'перед', 'при', 'всего', 'всем', 'всеми', 'тебе', 'вас'
-                ]
+                # Strip HTML tags
+                text_clean = re.sub(r'<[^>]+>', '', text)
                 
-                vectorizer = CountVectorizer(max_df=0.85, min_df=2, max_features=800, stop_words=ru_stop)
-                tf = vectorizer.fit_transform(texts)
+                # Tokenize cyrillic and latin words
+                tokens = re.findall(r'[a-zA-Zа-яА-ЯёЁ]+', text_clean.lower())
+                for token in tokens:
+                    if len(token) > 3 and token not in ru_stop:
+                        words_list.append(token)
+            
+            counter = Counter(words_list)
+            top_words = counter.most_common(30)
+            if top_words:
+                df_words = pd.DataFrame(top_words, columns=['Слово', 'Частота'])
                 
-                lda = LatentDirichletAllocation(n_components=5, max_iter=8, random_state=42, n_jobs=1)
-                lda.fit(tf)
-                
-                feature_names = vectorizer.get_feature_names_out()
-                
-                fig, axes = plt.subplots(5, 1, figsize=(10, 12), sharex=False)
-                colors_palette = sns.color_palette("muted", 5)
-                
-                for topic_idx, topic in enumerate(lda.components_):
-                    top_features_ind = topic.argsort()[:-8:-1]
-                    top_features = [feature_names[i] for i in top_features_ind]
-                    weights = [topic[i] for i in top_features_ind]
-                    
-                    ax = axes[topic_idx]
-                    sns.barplot(x=weights, y=top_features, color=colors_palette[topic_idx], ax=ax)
-                    ax.set_title(f"Тема {topic_idx + 1}", fontsize=12, fontweight='bold')
-                    ax.tick_params(labelsize=10)
-                    
-                plt.suptitle('16. Тематическое моделирование борды (LDA)', fontsize=16, fontweight='bold', y=0.99, color="#ffffff")
+                fig, ax = plt.subplots(figsize=(10, 10))
+                sns.barplot(data=df_words, x='Частота', y='Слово', hue='Слово', palette="plasma", legend=False, ax=ax)
+                plt.title('16. Частотный Шитпост-Словарь (Топ-30 Слов)', fontsize=16, fontweight='bold', color="#ff33cc")
+                plt.xlabel('Количество упоминаний за 30 дней')
+                plt.ylabel('')
+                ax.set_xlim(0, df_words['Частота'].max() * 1.12)
+                for idx, row in df_words.iterrows():
+                    ax.text(row['Частота'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['Частота'])}", 
+                            va='center', ha='left', fontsize=9, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
                 buf = io.BytesIO()
                 plt.savefig(buf, format='png')
                 buf.seek(0)
-                images.append(('16_lda_topics.png', buf))
+                images.append(('16_top_words.png', buf))
                 plt.close()
     except Exception as e:
         print(f"Error Chart 16: {e}")
@@ -722,6 +816,10 @@ def generate_all_charts():
                 plt.title('18. Лексическое Разнообразие (Разнообразие Словарного Запаса)', fontsize=16, fontweight='bold', color="#ffcc00")
                 plt.xlabel('Индекс разнообразия слов (выше = богатый язык, ниже = спамер 3 фраз)')
                 plt.ylabel('')
+                ax.set_xlim(0, df_ttr['msttr'].max() * 1.15)
+                for idx, row in df_ttr.iterrows():
+                    ax.text(row['msttr'] + (ax.get_xlim()[1] * 0.01), idx, f"{row['msttr']:.3f}", 
+                            va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
                 buf = io.BytesIO()
                 plt.savefig(buf, format='png')
@@ -731,8 +829,257 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 18: {e}")
 
+    # 19. Популярность разделов (Посты по доскам)
+    try:
+        c.execute('''
+            SELECT board_id, COUNT(*) as cnt 
+            FROM Posts 
+            WHERE timestamp > ? 
+            GROUP BY board_id 
+            ORDER BY cnt DESC
+        ''', (thirty_days_ago,))
+        board_data = c.fetchall()
+        if board_data:
+            df_board = pd.DataFrame(board_data, columns=['board_id', 'cnt'])
+            if len(df_board) > 6:
+                top_boards = df_board.head(5).copy()
+                others_cnt = df_board.iloc[5:]['cnt'].sum()
+                others_row = pd.DataFrame([{'board_id': 'other', 'cnt': others_cnt}])
+                df_board_plot = pd.concat([top_boards, others_row], ignore_index=True)
+            else:
+                df_board_plot = df_board
+                
+            fig, ax = plt.subplots(figsize=(8, 8))
+            ax.pie(df_board_plot['cnt'], labels=df_board_plot['board_id'], autopct='%1.1f%%', startangle=140, 
+                   colors=sns.color_palette("hls", len(df_board_plot)))
+            plt.title('19. Популярность разделов (Посты по доскам)', fontsize=16, fontweight='bold', color="#ffffff")
+            plt.tight_layout()
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            images.append(('19_boards.png', buf))
+            plt.close()
+    except Exception as e:
+        print(f"Error Chart 19: {e}")
+
+    # 20. Неравенство богатства битардов (Кривая Лоренца и Индекс Джини)
+    # 20. Профиль Чтива (Качество постов по дням)
+    try:
+        c.execute("SELECT date(timestamp, 'unixepoch', 'localtime') as d, content FROM Posts WHERE timestamp > ?", (thirty_days_ago,))
+        posts_data = c.fetchall()
+        
+        def clean_text_local2(raw_content):
+            if not raw_content:
+                return ""
+            try:
+                content_dict = json.loads(raw_content)
+                text = content_dict.get('text', '') or content_dict.get('caption', '') or ''
+            except Exception:
+                text = raw_content
+            if not text:
+                return ""
+            text_clean = re.sub(r'<[^>]+>', '', text)
+            return text_clean
+
+        plot_rows = []
+        for r in posts_data:
+            d = r['d']
+            text = clean_text_local2(r['content'])
+            if not text:
+                continue
+                
+            words = text.split()
+            word_count = len(words)
+            char_count = len(text)
+            
+            if word_count <= 3:
+                cat = "Односложные высеры (1-3 слова)"
+            elif char_count <= 100:
+                cat = "Короткие комменты (<100 симв.)"
+            elif char_count <= 400:
+                cat = "Обсуждения (100-400 симв.)"
+            else:
+                cat = "Лонгриды / Пасты (>400 симв.)"
+                
+            plot_rows.append({'d': d, 'category': cat})
+            
+        if plot_rows:
+            df_reading = pd.DataFrame(plot_rows)
+            df_counts = df_reading.groupby(['d', 'category']).size().reset_index(name='cnt')
+            pivot_df = df_counts.pivot(index='d', columns='category', values='cnt').fillna(0)
+            
+            categories_order = [
+                "Односложные высеры (1-3 слова)",
+                "Короткие комменты (<100 симв.)",
+                "Обсуждения (100-400 симв.)",
+                "Лонгриды / Пасты (>400 симв.)"
+            ]
+            pivot_df = pivot_df.reindex(columns=categories_order, fill_value=0)
+            
+            row_sums = pivot_df.sum(axis=1)
+            pivot_pct = pivot_df.div(row_sums, axis=0).fillna(0) * 100
+            
+            fig, ax = plt.subplots(figsize=(10, 6))
+            colors = ["#ff3333", "#ff9933", "#3399ff", "#33cc66"]
+            pivot_pct.plot.area(ax=ax, color=colors, alpha=0.85)
+            
+            plt.title('20. Профиль Чтива (Качество постов по дням)', fontsize=16, fontweight='bold', color="#ffffff")
+            plt.xlabel('Дата')
+            plt.ylabel('Доля (%)')
+            plt.ylim(0, 100)
+            plt.legend(loc='lower left', facecolor='#121212', edgecolor='#333333')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            images.append(('20_lorenz.png', buf))
+            plt.close()
+    except Exception as e:
+        print(f"Error Chart 20: {e}")
+
     conn.close()
     return images
+
+def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
+    import sys
+    import os
+    from PIL import Image, ImageDraw, ImageFont
+    
+    conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
+    c = conn.cursor()
+    
+    # 1. Fetch user profile
+    c.execute("SELECT balance, role, created_at, lie_media, custom_prefix FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+    profile = c.fetchone()
+    if profile:
+        balance, role, created_at, lie_media, custom_prefix = profile
+    else:
+        balance, role, created_at, lie_media, custom_prefix = 0.0, 'user', time.time(), 0, None
+        
+    # 2. Count actual posts
+    c.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ? AND board_id = ?", (user_id, board_id))
+    posts_count = c.fetchone()[0]
+    
+    # 3. Count reactions received
+    c.execute("""
+        SELECT COUNT(*) FROM ReactionQueue rq 
+        JOIN Posts p ON rq.post_num = p.post_num 
+        WHERE p.author_id = ? AND p.board_id = ?
+    """, (user_id, board_id))
+    rx_received = c.fetchone()[0]
+    
+    # 4. Count reactions given
+    c.execute("SELECT COUNT(*) FROM ReactionQueue WHERE user_id = ?", (user_id,))
+    rx_given = c.fetchone()[0]
+    
+    # 5. Count mutes
+    c.execute("SELECT COUNT(*) FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+    mutes_count = c.fetchone()[0]
+    
+    # 6. Rank among other users on this board
+    c.execute("""
+        SELECT user_id FROM Users 
+        WHERE board_id = ? 
+        ORDER BY posts_count DESC, balance DESC;
+    """, (board_id,))
+    all_users = [r[0] for r in c.fetchall()]
+    try:
+        rank = all_users.index(user_id) + 1
+    except ValueError:
+        rank = len(all_users) + 1
+        
+    conn.close()
+    
+    schizo_name = generate_schizo_name(user_id)
+    
+    role_name = {
+        'admin': 'Админ',
+        'mod': 'Модератор',
+        'janitor': 'Дворник',
+        'user': 'Анон'
+    }.get(role, 'Анон')
+    
+    # Slang comment based on rank and posts
+    if posts_count == 0:
+        slang_comment = "Ньюфаг детектед. Иди читай правила борды, анон."
+    elif rank <= 3:
+        slang_comment = "ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц."
+    elif posts_count > 300:
+        slang_comment = "Почетный Скуф борды. Запах подпиваса и базированных мыслей за версту."
+    elif balance < 10:
+        slang_comment = "Нищук детектед. Проиграл все коины в рулетку или забанен за сажу."
+    else:
+        slang_comment = "Обычный сыч. Бамп в тред, сажу в комменты."
+        
+    text_report = (
+        f"☘️ <b>Статистика пользователя {schizo_name}</b> (/${board_id}/)\n\n"
+        f"👤 <b>Статус:</b> {role_name} {f'({custom_prefix})' if custom_prefix else ''}\n"
+        f"🏅 <b>Ранг борды:</b> #{rank} из {len(all_users)}\n"
+        f"📝 <b>Написано постов:</b> {posts_count}\n"
+        f"🎭 <b>Получено реакций:</b> +{rx_received}\n"
+        f"⚡ <b>Поставлено реакций:</b> {rx_given}\n"
+        f"💰 <b>Баланс:</b> {balance:.2f} 🪙\n"
+        f"🔇 <b>Схвачено мутов:</b> {mutes_count}\n"
+        f"🌀 <b>Кринж-фактор:</b> {lie_media}%\n\n"
+        f"💬 <i>\"{slang_comment}\"</i>"
+    )
+    
+    width, height = 800, 450
+    img = Image.new('RGB', (width, height), color='#1d1f21')
+    draw = ImageDraw.Draw(img)
+    
+    try:
+        font_path = "font1.ttf" if os.path.exists("font1.ttf") else "arial.ttf"
+        font_title = ImageFont.truetype(font_path, 28)
+        font_subtitle = ImageFont.truetype(font_path, 20)
+        font_body = ImageFont.truetype(font_path, 18)
+        font_mono = ImageFont.truetype(font_path, 16)
+    except Exception:
+        font_title = font_subtitle = font_body = font_mono = ImageFont.load_default()
+        
+    draw.rectangle([15, 15, width-15, height-15], outline='#373b41', width=3)
+    draw.rectangle([20, 20, width-20, height-20], outline='#282a2e', width=1)
+    
+    draw.text((40, 40), schizo_name, fill='#b58900', font=font_title)
+    
+    status_text = f"ID: {user_id}  |  Board: /{board_id}/  |  Role: {role.upper()}"
+    draw.text((40, 80), status_text, fill='#8abeb7', font=font_subtitle)
+    
+    draw.line([40, 115, width-40, 115], fill='#373b41', width=2)
+    
+    stats = [
+        ("Посты (Posts):", str(posts_count), '#c5c8c6'),
+        ("Ранг (Board Rank):", f"#{rank} / {len(all_users)}", '#f0c674'),
+        ("Получено реакций:", f"+{rx_received}", '#b58900'),
+        ("Поставлено реакций:", str(rx_given), '#859900'),
+        ("Баланс (Balance):", f"{balance:.2f} coins", '#8abeb7'),
+        ("Количество мутов:", str(mutes_count), '#cc6666'),
+        ("Кринж-эффект (Lie):", f"{lie_media}%", '#b294bb')
+    ]
+    
+    y = 135
+    for label, val, val_color in stats:
+        draw.text((60, y), label, fill='#969896', font=font_body)
+        draw.text((320, y), val, fill=val_color, font=font_body)
+        y += 35
+        
+    draw.line([500, 135, 500, height-60], fill='#373b41', width=1)
+    
+    avatar_box = [540, 140, 740, 320]
+    draw.rectangle(avatar_box, fill='#282a2e', outline='#373b41', width=2)
+    
+    draw.text((560, 190), "BOARD", fill='#859900', font=font_subtitle)
+    draw.text((560, 220), "CERTIFIED", fill='#859900', font=font_subtitle)
+    draw.text((560, 250), role.upper(), fill='#cc6666', font=font_subtitle)
+    
+    draw.line([520, 345, width-60, 345], fill='#373b41', width=1)
+    draw.text((520, 360), f"\"{slang_comment}\"", fill='#969896', font=font_mono)
+    
+    buf = io.BytesIO()
+    img.save(buf, format='png')
+    buf.seek(0)
+    return buf, text_report
 
 if __name__ == "__main__":
     imgs = generate_all_charts()

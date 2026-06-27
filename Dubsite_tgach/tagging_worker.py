@@ -326,7 +326,13 @@ async def tagging_loop():
                         await db.commit()
                     continue
                 except Exception as e:
-                    logger.warning(f"❌ DL fail {file_id}: {e}")
+                    err_str = str(e).lower()
+                    if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
+                        logger.error(f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling.")
+                        if global_bot_pool:
+                            global_bot_pool.mark_bot_dead_by_token(bot.token)
+                    else:
+                        logger.warning(f"❌ DL fail {file_id}: {e}")
                     TEMP_FAILED_FILES[file_id] = time.time() + 120
                     continue
 
