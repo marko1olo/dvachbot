@@ -1193,6 +1193,7 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.youtube.com https://cdn.jsdelivr.net; "
@@ -1213,7 +1214,7 @@ class CachedStaticFiles(StaticFiles):
 
     def file_response(self, *args, **kwargs):
         resp = super().file_response(*args, **kwargs)
-        resp.headers["Cache-Control"] = "public, max-age=3600"
+        resp.headers["Cache-Control"] = "public, max-age=31536000"
         return resp
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():

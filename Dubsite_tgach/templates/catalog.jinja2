@@ -164,7 +164,7 @@
                         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                              data-src="{{ thread.content.files[0].thumbnail_url }}" 
                              class="lazy-load" 
-                             alt="thumb"
+                             alt="[Тред /{{ board_id }}/ #{{ thread.id }}] {{ thread.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"
                              loading="lazy"
                              referrerpolicy="no-referrer">
                     {% elif thread.content.files and thread.content.files[0].type in ['video', 'video_note', 'animation'] %}
