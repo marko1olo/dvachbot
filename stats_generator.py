@@ -1247,7 +1247,7 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         f"📝 <b>Написано постов:</b> {posts_count}\n"
         f"🎭 <b>Получено реакций:</b> +{rx_received}\n"
         f"⚡ <b>Поставлено реакций:</b> {rx_given}\n"
-        f"💰 <b>Баланс:</b> {balance:.2f} 🪙\n"
+        f"💰 <b>Баланс:</b> {int(balance)} RUB\n"
         f"🔇 <b>Схвачено мутов:</b> {mutes_count}\n"
         f"🌀 <b>Кринж-фактор:</b> {lie_media}%\n\n"
         f"💬 <i>\"{slang_comment}\"</i>"
@@ -1281,7 +1281,7 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         ("Ранг (Board Rank):", f"#{rank} / {len(all_users)}", '#f0c674'),
         ("Получено реакций:", f"+{rx_received}", '#b58900'),
         ("Поставлено реакций:", str(rx_given), '#859900'),
-        ("Баланс (Balance):", f"{balance:.2f} coins", '#8abeb7'),
+        ("Баланс (Balance):", f"{int(balance)} RUB", '#8abeb7'),
         ("Количество мутов:", str(mutes_count), '#cc6666'),
         ("Кринж-эффект (Lie):", f"{lie_media}%", '#b294bb')
     ]
