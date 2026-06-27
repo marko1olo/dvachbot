@@ -10,6 +10,7 @@
     <meta property="og:type" content="article">
     <meta property="og:title" content="/{{ board_id }}/ — {{ op_post.content.text | clean_title | truncate(60) }}">
     <meta property="og:description" content="{{ meta_description }}">
+    <meta name="description" content="{{ meta_description }}">
     <meta property="og:url" content="{{ request.url }}">
     <link rel="canonical" href="{{ request.state.canonical_url }}">
     <meta property="og:image" content="{{ meta_image }}">
