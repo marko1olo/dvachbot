@@ -205,21 +205,25 @@ def generate_all_charts():
     if data:
         df = pd.DataFrame(data)
         df['author_name'] = df['author_id'].apply(generate_schizo_name)
-        fig, ax = plt.subplots(figsize=(10, 4))
-        sns.barplot(data=df, y='author_name', x='cnt', hue='author_name', palette="viridis", legend=False, ax=ax)
-        plt.title('5. Главные Байтеры (Кому больше всего реплаят)', fontsize=16, fontweight='bold', color="#33ccff")
-        plt.xlabel('Количество полученных ответов')
-        plt.ylabel('')
-        ax.set_xlim(0, df['cnt'].max() * 1.12)
-        for idx, row in df.iterrows():
-            ax.text(row['cnt'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['cnt'])}", 
-                    va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
+        half5 = len(df) // 2
+        df5_l = df.iloc[:half5].reset_index(drop=True)
+        df5_r = df.iloc[half5:].reset_index(drop=True)
+        fig, (ax5l, ax5r) = plt.subplots(1, 2, figsize=(18, 7))
+        for ax5, df5, t5 in [(ax5l, df5_l, 'Топ 1–10'), (ax5r, df5_r, 'Топ 11–20')]:
+            sns.barplot(data=df5, y='author_name', x='cnt', hue='author_name',
+                        palette='cool', legend=False, ax=ax5)
+            ax5.set_xlim(0, df['cnt'].max() * 1.15)
+            ax5.set_xlabel('Ответов получено')
+            ax5.set_ylabel('')
+            ax5.set_title(t5, fontsize=12, color='#33ccff')
+            for i, row in df5.iterrows():
+                ax5.text(row['cnt'] + df['cnt'].max()*0.01, i, str(int(row['cnt'])),
+                         va='center', ha='left', fontsize=8.5, fontweight='bold', color='#ffffff')
+        plt.suptitle('5. Главные Байтеры — Топ-20 (Кому больше всего реплаят)',
+                     fontsize=15, fontweight='bold', color='#33ccff', y=1.01)
         plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('5_provocateurs.png', buf))
-        plt.close()
+        buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight'); buf.seek(0)
+        images.append(('5_provocateurs.png', buf)); plt.close()
 
     # 6. Гистограмма длины постов (Одноклеточные vs Пасты)
     c.execute('''
@@ -1402,6 +1406,107 @@ def generate_all_charts():
             images.append(('30_cohorts.png', buf)); plt.close()
     except Exception as e:
         print(f"Error Chart 30: {e}")
+
+    # ── 31. Активность борд по неделям (12 нед) stacked area ─────────────────
+    try:
+        _conn31 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
+        _conn31.row_factory = dict_factory
+        _c31 = _conn31.cursor()
+        _t84 = time.time() - 84 * 86400
+        _c31.execute('''
+            SELECT strftime('%Y-%W', datetime(timestamp, 'unixepoch', 'localtime')) as wk,
+                   board_id, COUNT(*) as cnt
+            FROM Posts WHERE timestamp > ? AND board_id IS NOT NULL
+            GROUP BY wk, board_id ORDER BY wk
+        ''', (_t84,))
+        _rows31 = _c31.fetchall(); _conn31.close()
+        if _rows31:
+            _df31 = pd.DataFrame(_rows31)
+            _bt31 = _df31.groupby('board_id')['cnt'].sum().sort_values(ascending=False)
+            _top_b31 = _bt31.index[:7].tolist()
+            _df31['board_id'] = _df31['board_id'].apply(lambda b: b if b in _top_b31 else 'other')
+            _df31 = _df31.groupby(['wk', 'board_id'], as_index=False)['cnt'].sum()
+            _piv31 = _df31.pivot(index='wk', columns='board_id', values='cnt').fillna(0)
+            _piv31 = _piv31.reindex(sorted(_piv31.index))
+            _bords31 = list(_piv31.columns)
+            _xs31 = list(range(len(_piv31)))
+            _cl31 = list(plt.cm.Set2.colors[:len(_bords31)])
+            fig, ax = plt.subplots(figsize=(13, 5))
+            ax.stackplot(_xs31, [_piv31[b].values for b in _bords31],
+                         labels=_bords31, colors=_cl31[:len(_bords31)], alpha=0.85)
+            _step31 = max(1, len(_piv31) // 10)
+            ax.set_xticks(_xs31[::_step31])
+            ax.set_xticklabels(_piv31.index.tolist()[::_step31], rotation=30, ha='right', fontsize=8)
+            ax.set_ylabel('Постов в неделю')
+            ax.legend(loc='upper left', fontsize=9, framealpha=0.7)
+            ax.set_title('31. Активность борд по неделям (12 нед)',
+                         fontsize=13, fontweight='bold', color='#ffa657')
+            plt.tight_layout()
+            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
+            images.append(('31_boards_weekly.png', buf)); plt.close()
+    except Exception as e:
+        print(f"Error Chart 31: {e}")
+
+    # ── 32. Стрик-чемпионы (60д) Top-20, dual-column ─────────────────────────
+    try:
+        import datetime as _dt32
+        from collections import defaultdict as _dd32
+        _conn32 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
+        _conn32.row_factory = dict_factory
+        _c32 = _conn32.cursor()
+        _t60 = time.time() - 60 * 86400
+        _c32.execute('''
+            SELECT author_id, date(timestamp, 'unixepoch', 'localtime') as d
+            FROM Posts
+            WHERE timestamp > ? AND author_id IS NOT NULL AND author_id != 0
+            GROUP BY author_id, d ORDER BY author_id, d
+        ''', (_t60,))
+        _rows32 = _c32.fetchall(); _conn32.close()
+        if _rows32:
+            _ud32 = _dd32(list)
+            for _r32 in _rows32:
+                _ud32[_r32['author_id']].append(_r32['d'])
+            _streaks32 = []
+            for _uid32, _days32 in _ud32.items():
+                _ds32 = sorted(set(_days32)); _mx32 = 1; _cur32 = 1
+                for _i32 in range(1, len(_ds32)):
+                    _d0_32 = _dt32.date.fromisoformat(_ds32[_i32-1])
+                    _d1_32 = _dt32.date.fromisoformat(_ds32[_i32])
+                    if (_d1_32 - _d0_32).days == 1:
+                        _cur32 += 1; _mx32 = max(_mx32, _cur32)
+                    else:
+                        _cur32 = 1
+                _streaks32.append({'author_id': _uid32, 'streak': _mx32, 'days': len(_ds32)})
+            _streaks32 = sorted(_streaks32, key=lambda x: x['streak'], reverse=True)[:20]
+            _df32 = pd.DataFrame(_streaks32)
+            _df32['author_name'] = _df32['author_id'].apply(generate_schizo_name)
+            _half32 = len(_df32) // 2
+            _df32l = _df32.iloc[:_half32].reset_index(drop=True)
+            _df32r = _df32.iloc[_half32:].reset_index(drop=True)
+            _mx_s32 = _df32['streak'].max() or 1
+            fig, (_ax32l, _ax32r) = plt.subplots(1, 2, figsize=(18, 7))
+            for _ax32, _d32, _t32 in [(_ax32l, _df32l.iloc[::-1].reset_index(drop=True), 'Топ 1–10'),
+                                        (_ax32r, _df32r.iloc[::-1].reset_index(drop=True), 'Топ 11–20')]:
+                _colors32 = [plt.cm.RdYlGn(v / _mx_s32) for v in _d32['streak']]
+                _bars32 = _ax32.barh(_d32['author_name'], _d32['streak'],
+                                     color=_colors32, edgecolor='#1c2128', linewidth=0.7)
+                for _bar32, _row32 in zip(_bars32, _d32.itertuples()):
+                    _ax32.text(_bar32.get_width() + _mx_s32 * 0.01,
+                               _bar32.get_y() + _bar32.get_height() / 2,
+                               f'{_row32.streak}д  ({_row32.days} активных)',
+                               va='center', ha='left', fontsize=8, color='#e6edf3')
+                _ax32.set_xlim(0, _mx_s32 * 1.35)
+                _ax32.set_xlabel('Серия (дней подряд)')
+                _ax32.set_ylabel('')
+                _ax32.set_title(_t32, fontsize=12, color='#39d353')
+            plt.suptitle('32. Стрик-чемпионы (60д) — самые стойкие аноны  Top-20',
+                         fontsize=14, fontweight='bold', color='#39d353', y=1.01)
+            plt.tight_layout()
+            buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight'); buf.seek(0)
+            images.append(('32_streak_champions.png', buf)); plt.close()
+    except Exception as e:
+        print(f"Error Chart 32: {e}")
+
 
     return images
 
