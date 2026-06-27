@@ -211,6 +211,8 @@
             {% endif %}
             <span class="nav-sep">|</span>
             <a href="/{{ board_id }}/res/{{ op_post.id }}/gallery" target="_blank">[{{ request.state.t('nav_gallery') }}]</a>
+            <span class="nav-sep">|</span>
+            <a href="/{{ board_id }}/res/{{ op_post.id }}/export" download target="_blank">[Скачать HTML]</a>
         </nav>
     </header>
     <main data-op-author-id="{{ op_post.author_id }}">

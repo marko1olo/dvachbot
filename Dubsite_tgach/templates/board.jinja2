@@ -24,6 +24,7 @@
         <meta name="description" content="{{ board_info.description }}">
         <meta property="og:url" content="{{ request.url }}">
         <meta property="og:image" content="{{ meta_image }}">
+        <link rel="alternate" type="application/rss+xml" title="RSS ТГАЧ - {{ board_info.name }}" href="/{{ board_id }}/rss.xml">
         
         <meta name="twitter:card" content="summary">
         <meta name="twitter:title" content="/{{ board_id }}/ — {{ board_info.name }}">

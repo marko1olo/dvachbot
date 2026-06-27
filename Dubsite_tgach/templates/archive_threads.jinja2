@@ -58,6 +58,14 @@
             <p>{{ request.state.t('archived_text') }}</p>
         </div>
 
+        <div class="archive-search-container" style="margin: 15px 0 25px 0; display: flex; justify-content: center; width: 100%;">
+            <form action="/search" method="get" class="search-form" style="display: flex; gap: 8px; width: 100%; max-width: 500px; justify-content: center; align-items: center;">
+                <input type="text" name="query" placeholder="Поиск по архиву..." required style="padding: 10px; border-radius: 4px; border: 1px solid var(--border-primary); background: var(--bg-post); color: var(--text-primary); flex-grow: 1;">
+                <input type="hidden" name="archive" value="1">
+                <button type="submit" class="btn btn-primary" style="padding: 10px 20px; cursor: pointer;">Найти</button>
+            </form>
+        </div>
+
         <div class="thread-list">
             {% if posts %}
                 {% for post in posts %}

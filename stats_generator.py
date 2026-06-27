@@ -1595,74 +1595,81 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
     )
     
     width, height = 800, 450
-    img = Image.new('RGB', (width, height), color='#1d1f21')
+    img = Image.new('RGB', (width, height), color='#0d0f12')
     draw = ImageDraw.Draw(img)
     
     try:
         font_path = "font1.ttf" if os.path.exists("font1.ttf") else "arial.ttf"
-        font_title = ImageFont.truetype(font_path, 28)
-        font_subtitle = ImageFont.truetype(font_path, 20)
-        font_body = ImageFont.truetype(font_path, 18)
-        font_mono = ImageFont.truetype(font_path, 16)
+        font_title = ImageFont.truetype(font_path, 26)
+        font_subtitle = ImageFont.truetype(font_path, 15)
+        font_card_num = ImageFont.truetype(font_path, 22)
+        font_card_lbl = ImageFont.truetype(font_path, 12)
+        font_comment = ImageFont.truetype(font_path, 14)
     except Exception:
-        font_title = font_subtitle = font_body = font_mono = ImageFont.load_default()
+        font_title = font_subtitle = font_card_num = font_card_lbl = font_comment = ImageFont.load_default()
         
-    # Subtle background technical grid pattern
-    for gx in range(40, width-20, 60):
-        draw.line([gx, 110, gx, height-20], fill='#222426', width=1)
-    for gy in range(120, height-20, 45):
-        draw.line([20, gy, width-20, gy], fill='#222426', width=1)
+    # Header bar
+    draw.rectangle([0, 0, width, 95], fill='#13171f')
+    draw.line([0, 95, width, 95], fill='#252932', width=2)
+    
+    # Title & Info
+    draw.text((30, 22), schizo_name, fill='#ff9900', font=font_title)
+    status_text = f"ID: {user_id}  |  Раздел: /{board_id}/  |  Статус: {role_name} {f'({custom_prefix})' if custom_prefix else ''}"
+    draw.text((30, 60), status_text, fill='#8abeb7', font=font_subtitle)
+    
+    # Certified badge (top right)
+    draw.rounded_rectangle([610, 15, 770, 80], radius=6, fill='#1b1f28', outline='#ff9900', width=2)
+    draw.text((690, 33), "ТГАЧ CERTIFIED", fill='#ff9900', font=font_subtitle, anchor="mm")
+    sub_cert = "APPROVED BITYARD" if role != 'admin' else "ADMINISTRATOR"
+    draw.text((690, 58), sub_cert, fill='#00ffcc', font=ImageFont.truetype(font_path, 10) if os.path.exists(font_path) else font_subtitle, anchor="mm")
+    
+    # Helper to draw cards
+    def draw_card(x, y, w, h, val, label, color):
+        draw.rounded_rectangle([x, y, x+w, y+h], radius=6, fill='#13171f', outline='#252932', width=1)
+        draw.ellipse([x+15, y+16, x+23, y+24], fill=color)
+        draw.text((x+33, y+20), label, fill='#969896', font=font_card_lbl, anchor="lm")
+        draw.text((x+15, y+48), val, fill=color, font=font_card_num, anchor="lm")
 
-    # Glowing outer border
-    draw.rectangle([15, 15, width-15, height-15], outline='#859900', width=3)
-    draw.rectangle([20, 20, width-20, height-20], outline='#373b41', width=1)
-
-    # Top header bar background
-    draw.rectangle([21, 21, width-21, 110], fill='#282a2e')
-    draw.line([20, 110, width-20, 110], fill='#373b41', width=2)
-    
-    draw.text((40, 32), schizo_name, fill='#b58900', font=font_title)
-    
-    status_text = f"ID: {user_id}  |  Board: /{board_id}/  |  Role: {role.upper()}"
-    draw.text((40, 72), status_text, fill='#8abeb7', font=font_subtitle)
-    
-    stats = [
-        ("Посты (Posts):", str(posts_count), '#c5c8c6'),
-        ("Ранг (Board Rank):", f"#{rank} / {len(all_users)}", '#f0c674'),
-        ("Получено реакций:", f"+{rx_received}", '#b58900'),
-        ("Поставлено реакций:", str(rx_given), '#859900'),
-        ("Баланс (Balance):", f"{int(balance)} RUB", '#8abeb7'),
-        ("Количество мутов:", str(mutes_count), '#cc6666'),
-        ("Кринж-эффект (Lie):", f"{lie_media}%", '#b294bb')
+    # Cards grid
+    cards = [
+        (30, 115, 175, 80, str(posts_count), "Написано постов", "#00ffcc"),
+        (220, 115, 175, 80, f"#{rank} / {len(all_users)}", "Ранг на борде", "#ffcc00"),
+        (410, 115, 175, 80, f"{int(balance)} RUB", "Баланс коинов", "#00ff66"),
+        
+        (30, 210, 175, 80, f"+{rx_received}", "Получено реакций", "#ff3399"),
+        (220, 210, 175, 80, str(rx_given), "Поставлено реакций", "#859900"),
+        (410, 210, 175, 80, f"{lie_media}%", "Кринж-фактор", "#cc00ff"),
     ]
     
-    y = 135
-    for label, val, val_color in stats:
-        draw.text((60, y), label, fill='#969896', font=font_body)
-        draw.text((320, y), val, fill=val_color, font=font_body)
-        y += 38
+    for x, y, w, h, val, label, color in cards:
+        draw_card(x, y, w, h, val, label, color)
         
-    draw.line([500, 110, 500, height-20], fill='#373b41', width=2)
+    # Mutes Card (top right block)
+    draw.rounded_rectangle([600, 115, 770, 175], radius=6, fill='#1d1315', outline='#ff3333', width=1)
+    draw.ellipse([600+15, 115+16, 600+23, 115+24], fill="#ff3333")
+    draw.text((600+33, 115+20), "Схвачено мутов", fill='#969896', font=font_card_lbl, anchor="lm")
+    draw.text((600+15, 115+48), f"{mutes_count} шт", fill="#ff3339", font=font_card_num, anchor="lm")
     
-    # Glowing certified badge
-    avatar_box = [540, 140, 740, 310]
-    draw.rectangle(avatar_box, fill='#1b1d1f', outline='#f0c674', width=3)
-    draw.rectangle([545, 145, 735, 305], outline='#373b41', width=1)
+    # Activity Level Card (below mutes)
+    draw.rounded_rectangle([600, 210, 770, 290], radius=6, fill='#13171f', outline='#252932', width=1)
+    draw.text((615, 230), "Уровень деградации", fill='#969896', font=font_card_lbl)
+    activity_pct = min(1.0, posts_count / 500.0)
+    draw.rounded_rectangle([615, 255, 755, 267], radius=3, fill='#1b1f28')
+    draw.rounded_rectangle([615, 255, 615 + int(140 * activity_pct), 267], radius=3, fill='#ff9900')
+    draw.text((755, 230), f"{int(activity_pct*100)}%", fill='#ff9900', font=font_card_lbl, anchor="ra")
     
-    draw.text((640, 175), "BOARD", fill='#859900', font=font_subtitle, anchor="mm")
-    draw.text((640, 205), "CERTIFIED", fill='#b58900', font=font_subtitle, anchor="mm")
-    draw.text((640, 255), role.upper(), fill='#cc6666', font=font_title, anchor="mm")
+    # Bottom Summary Box
+    draw.rounded_rectangle([30, 310, 770, 420], radius=8, fill='#1b1f28', outline='#252932', width=1)
+    draw.text((50, 335), "РЕЗЮМЕ ДЕГРАДАЦИИ:", fill='#ff9900', font=font_card_lbl)
     
-    draw.line([520, 335, width-60, 335], fill='#373b41', width=1)
-    
-    # Wrapped slang comment
+    # Wrap comment safely
     import textwrap
-    wrapped_lines = textwrap.wrap(slang_comment, width=28)
-    y_comment = 350
-    for line in wrapped_lines:
-        draw.text((520, y_comment), line, fill='#969896', font=font_mono)
-        y_comment += 22
-    
+    wrapped_lines = textwrap.wrap(f'"{slang_comment}"', width=90)
+    y_comm = 360
+    for line in wrapped_lines[:2]:
+        draw.text((50, y_comm), line, fill='#e6edf3', font=font_comment)
+        y_comm += 20
+        
     buf = io.BytesIO()
     img.save(buf, format='png')
     buf.seek(0)

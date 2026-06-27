@@ -2926,7 +2926,7 @@ def _process_search_row(row: aiosqlite.Row) -> Optional[Dict[str, Any]]:
         return post_dict
     except Exception:
         return None
-async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 50, observer_id: Optional[int] = None) -> list[dict]:
+async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 50, observer_id: Optional[int] = None, only_archived: bool = False) -> list[dict]:
     """
     Выполняет полнотекстовый поиск.
     """
@@ -2941,13 +2941,24 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
 
             viewer_id = observer_id if observer_id is not None else -1
             
-            sql_query = f"""
-                SELECT p.* FROM Posts p
-                JOIN PostsFTS fts ON p.post_num = fts.rowid
-                WHERE fts.content MATCH ? 
-                  AND p.thread_id IS NOT NULL 
-                  AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
-            """
+            if only_archived:
+                sql_query = f"""
+                    SELECT p.* FROM Posts p
+                    JOIN PostsFTS fts ON p.post_num = fts.rowid
+                    JOIN Threads t ON p.thread_id = t.thread_id
+                    WHERE fts.content MATCH ? 
+                      AND p.thread_id IS NOT NULL 
+                      AND t.is_archived = 1
+                      AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
+                """
+            else:
+                sql_query = f"""
+                    SELECT p.* FROM Posts p
+                    JOIN PostsFTS fts ON p.post_num = fts.rowid
+                    WHERE fts.content MATCH ? 
+                      AND p.thread_id IS NOT NULL 
+                      AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
+                """
             params = [final_query]
             if board_id:
                 sql_query += " AND p.board_id = ?"

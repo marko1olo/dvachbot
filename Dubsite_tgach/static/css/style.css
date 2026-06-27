@@ -9778,3 +9778,20 @@ html[class*="theme-"] body {
     width: 24px !important;
     height: 24px !important;
 }
+
+/* Мобильная адаптация архива */
+@media (max-width: 480px) {
+    .mode-card {
+        padding: 15px;
+        gap: 12px;
+    }
+    .mode-card-icon {
+        font-size: 2.2em;
+    }
+    .mode-card-title {
+        font-size: 1.4em;
+    }
+    .archive-search-container {
+        padding: 0 15px;
+    }
+}

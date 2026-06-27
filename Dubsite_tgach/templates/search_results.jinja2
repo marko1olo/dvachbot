@@ -47,8 +47,12 @@
                     <span style="font-weight:normal; opacity:0.7; font-size: 0.8em;">/ {{ board_info.name }}</span>
                 {% endif %}
             </h1>
-            <form action="/search" method="get" class="search-form compact-search">
+            <form action="/search" method="get" class="search-form compact-search" style="display: flex; align-items: center; gap: 8px;">
                 <input type="text" name="query" placeholder="Поиск..." value="{{ query if query else '' }}">
+                <label style="font-size: 0.85em; display: flex; align-items: center; gap: 4px; color: var(--text-secondary); cursor: pointer; white-space: nowrap;">
+                    <input type="checkbox" name="archive" value="1" {% if archive %}checked{% endif %}>
+                    Только архив
+                </label>
                 <button type="submit">🔍</button> 
             </form>
         </div>

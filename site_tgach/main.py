@@ -2982,19 +2982,20 @@ async def auth_logout(request: Request):
     request.session.pop('user', None)
     return RedirectResponse(url="/")
 @app.get("/search")
-async def search_page(request: Request, query: str = "", user: dict | None = Depends(get_optional_user)):
+async def search_page(request: Request, query: str = "", archive: int = 0, user: dict | None = Depends(get_optional_user)):
     clean_query = query.strip()
     if clean_query:
         clean_query = clean_query.replace('"', '""')
     
     observer_id = user['id'] if user else getattr(request.state, 'guest_id', 0)
     
-    results = await search_posts(clean_query, observer_id=observer_id) if clean_query else []
+    results = await search_posts(clean_query, observer_id=observer_id, only_archived=bool(archive)) if clean_query else []
     results = _convert_and_enrich_posts(results)
     await enrich_extra_data(results)
     return templates.TemplateResponse(request=request, name="search_results.jinja2", context={
         "request": request, "query": query, "posts": results, "boards": BOARD_CONFIG,
-        "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
+        "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user},
+        "archive": archive
     })
 @app.get("/admin/serverConfig.json", include_in_schema=False)
 async def api_dummy_config():
@@ -4564,6 +4565,158 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
             await backend.set(cache_key, html_content, expire=300) 
 
     return HTMLResponse(content=html_content)
+@app.get("/{board_id}/res/{post_num}/export")
+async def export_thread_html(board_id: str, post_num: int):
+    board_id = board_id.lower()
+    if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
+    
+    real_thread_id = await get_thread_op_by_post_num(post_num)
+    if not real_thread_id:
+        raise HTTPException(status_code=404, detail="Thread not found")
+        
+    thread_data = await get_thread_by_op_post(real_thread_id)
+    if not thread_data: raise HTTPException(status_code=404, detail="Thread not found")
+    op_post, replies = thread_data
+    
+    op_post = _convert_and_enrich_posts([op_post])[0]
+    replies = _convert_and_enrich_posts(replies)
+    
+    import datetime
+    def format_ts(ts):
+        return datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+        
+    html = []
+    html.append("<!DOCTYPE html>")
+    html.append("<html lang='ru'>")
+    html.append("<head>")
+    html.append("<meta charset='UTF-8'>")
+    html.append("<meta name='viewport' content='width=device-width, initial-scale=1.0'>")
+    html.append(f"<title>Архив треда #{real_thread_id} - /{board_id}/</title>")
+    html.append("""
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #0d0f12;
+            color: #c9d1d9;
+            margin: 0;
+            padding: 20px;
+            line-height: 1.5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        header {
+            border-bottom: 1px dashed #21262d;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            margin: 0;
+            font-size: 1.8em;
+            color: #ff9900;
+        }
+        .post {
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .post.op-post {
+            border-color: #ff9900;
+        }
+        .post-header {
+            font-size: 0.85em;
+            color: #8b949e;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #21262d;
+            padding-bottom: 5px;
+        }
+        .post-header strong {
+            color: #ff9900;
+        }
+        .post-content {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .post-text {
+            word-break: break-word;
+        }
+        .post-files-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .file-thumb img, .file-thumb video {
+            max-width: 200px;
+            max-height: 200px;
+            border-radius: 4px;
+            border: 1px solid #30363d;
+        }
+        .reply-indicator {
+            font-size: 0.85em;
+            color: #58a6ff;
+            margin: 0 0 5px 0;
+        }
+    </style>
+    """)
+    html.append("</head>")
+    html.append("<body>")
+    html.append("<div class='container'>")
+    html.append("<header>")
+    html.append(f"<h1>Тред #{real_thread_id} (Раздел /{board_id}/)</h1>")
+    html.append(f"<p style='color:#8b949e;'>Сохранено из архива ТГАЧ. Всего постов: {len(replies) + 1}</p>")
+    html.append("</header>")
+    
+    # OP post
+    html.append("<div class='post op-post'>")
+    op_headers = f"<div class='post-header'>Анон #<strong>{op_post.get('id')}</strong> ({format_ts(op_post.get('timestamp', 0))})</div>"
+    html.append(op_headers)
+    html.append("<div class='post-content'>")
+    
+    if op_post.get('content', {}).get('files'):
+        html.append("<div class='post-files-container'>")
+        for f in op_post['content']['files']:
+            html.append(f"<a href='{f.get('original_url')}' class='file-thumb' target='_blank'>")
+            html.append(f"<img src='{f.get('thumbnail_url') or f.get('original_url')}' alt='file'>")
+            html.append("</a>")
+        html.append("</div>")
+        
+    html.append(f"<div class='post-text'>{op_post.get('content', {}).get('text', '')}</div>")
+    html.append("</div></div>")
+    
+    # Replies
+    for post in replies:
+        html.append("<div class='post'>")
+        rep_headers = f"<div class='post-header'>Анон #<strong>{post.get('id')}</strong> ({format_ts(post.get('timestamp', 0))})</div>"
+        html.append(rep_headers)
+        html.append("<div class='post-content'>")
+        
+        if post.get('reply_to_post_num'):
+            html.append(f"<p class='reply-indicator'>&gt;&gt;{post.get('reply_to_post_num')}</p>")
+            
+        if post.get('content', {}).get('files'):
+            html.append("<div class='post-files-container'>")
+            for f in post['content']['files']:
+                html.append(f"<a href='{f.get('original_url')}' class='file-thumb' target='_blank'>")
+                html.append(f"<img src='{f.get('thumbnail_url') or f.get('original_url')}' alt='file'>")
+                html.append("</a>")
+            html.append("</div>")
+            
+        html.append(f"<div class='post-text'>{post.get('content', {}).get('text', '')}</div>")
+        html.append("</div></div>")
+        
+    html.append("</div>")
+    html.append("</body>")
+    html.append("</html>")
+    
+    headers = {
+        "Content-Disposition": f"attachment; filename=thread-{board_id}-{real_thread_id}.html"
+    }
+    return Response(content="\n".join(html), media_type="text/html", headers=headers)
 @app.get("/{board_id}/res/{post_num}/gallery")
 async def thread_gallery_page(board_id: str, post_num: int, request: Request, user: dict | None = Depends(get_optional_user)):
     if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
