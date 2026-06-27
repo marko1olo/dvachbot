@@ -7411,6 +7411,38 @@ async def cb_support_prank(callback: types.CallbackQuery):
     except Exception:
         await callback.message.answer(SUPPORT_RESPONSES['text'], parse_mode="HTML")
     await callback.answer()
+@dp.message(Command("my_stats", "mystats", "statsme", "профиль"))
+async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    try: spawn_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
+    user_id = message.from_user.id
+    username = message.from_user.username or message.from_user.first_name or "Аноним"
+    
+    sent_msg = await message.answer("📊 Рисую твою личную карту деградации...")
+    
+    from stats_generator import generate_user_stats_card
+    from aiogram.types import BufferedInputFile
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+        photo_buf, text_report = await loop.run_in_executor(None, generate_user_stats_card, user_id, board_id, username)
+        if photo_buf:
+            photo = BufferedInputFile(photo_buf.getvalue(), filename='mystats.png')
+            await message.answer_photo(photo, caption=text_report, parse_mode="HTML")
+        else:
+            await message.answer(text_report, parse_mode="HTML")
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка генерации статистики: {e}")
+
+    try: await sent_msg.delete()
+    except Exception: pass
+    try: await message.delete()
+    except Exception: pass
+
+
 @dp.message(Command("passport", "me", "profile", "stats_me"))
 async def cmd_passport(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -18062,6 +18094,7 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="wallet", description="Баланс кошелька"),
         BotCommand(command="shop", description="Теневой Магазин"),
         BotCommand(command="passport", description="Паспорт и статистика"),
+        BotCommand(command="my_stats", description="Персональная карта статистики"),
         BotCommand(command="threads", description="Список тредов"),
         BotCommand(command="search", description="Поиск постов"),
         BotCommand(command="create", description="Создать новый тред"),
@@ -18323,9 +18356,9 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
         elif lang == 'jp': text = "<b>🛠 モデレーション:</b>\n<code>/admin</code> - 管理パネル\n<code>/ban &lt;id&gt;</code> - バン\n<code>/mute &lt;id&gt;</code> - ミュート\n<code>/wipe &lt;id&gt;</code> - メッセージ削除"
         else: text = "<b>🛠 Модерация:</b>\n<code>/admin</code> - Панель управления\n<code>/ban &lt;id&gt;</code> - Бан\n<code>/mute &lt;id&gt;</code> - Мут\n<code>/wipe &lt;id&gt;</code> - Очистка"
     elif cat == "fun":
-        if lang == 'en': text = "<b>🎲 Fun:</b>\n<code>/roll</code> - Roulette / fate\n<code>/fortune</code> - Fortune roll\n<code>/quote</code> - Random post\n<code>/wordcloud</code> - Word cloud\n<code>/passport</code> - Profile\n<code>/stats</code> - Activity charts"
+        if lang == 'en': text = "<b>🎲 Fun:</b>\n<code>/roll</code> - Roulette / fate\n<code>/fortune</code> - Fortune roll\n<code>/quote</code> - Random post\n<code>/wordcloud</code> - Word cloud\n<code>/passport</code> - Profile\n<code>/my_stats</code> - Personal stats card\n<code>/stats</code> - Activity charts"
         elif lang == 'jp': text = "<b>🎲 遊び:</b>\n<code>/roll</code> - ルーレット\n<code>/wordcloud</code> - ワードクラウド\n<code>/passport</code> - プロフ\n<code>/schizo</code> - 統合失調症モード"
-        else: text = "<b>🎲 Развлечения:</b>\n<code>/roll</code> — Рулетка судьбы\n<code>/fortune</code> — То же что roll (алиас)\n<code>/quote</code> — Случайный пост с борды\n<code>/wordcloud</code> — Облако слов\n<code>/passport</code> — Паспорт анона\n<code>/stats</code> — Тепловые карты активности"
+        else: text = "<b>🎲 Развлечения:</b>\n<code>/roll</code> — Рулетка судьбы\n<code>/fortune</code> — То же что roll (алиас)\n<code>/quote</code> — Случайный пост с борды\n<code>/wordcloud</code> — Облако слов\n<code>/passport</code> — Паспорт анона\n<code>/my_stats</code> — Персональная карта статистики\n<code>/stats</code> — Тепловые карты активности"
     elif cat == "settings":
         if lang == 'en': text = "<b>⚙️ Settings:</b>\n<code>/nsfw</code> - NSFW Spoilers\n<code>/hide</code> - Word filter\n<code>/togglegif</code> - Hide GIFs"
         elif lang == 'jp': text = "<b>⚙️ 設定:</b>\n<code>/nsfw</code> - NSFW スポイラー\n<code>/hide</code> - 単語フィルター\n<code>/togglegif</code> - GIF非表示"
