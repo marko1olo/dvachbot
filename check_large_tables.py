@@ -1,4 +1,5 @@
 import sqlite3
+import re
 
 def check_indexes():
     conn = sqlite3.connect('dvach_bot.db')
@@ -9,6 +10,8 @@ def check_indexes():
     tables = [row[0] for row in cursor.fetchall()]
     
     for table in tables:
+        if not re.match(r'^[a-zA-Z0-9_]+$', table):
+            continue
         cursor.execute("SELECT * FROM pragma_index_list(?)", (table,))
         indexes = cursor.fetchall()
         cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
