@@ -6734,9 +6734,9 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
         y = _smooth(dh[d], w=1)
         y_n = y / global_max
         color = day_colors[d]
-        ax2.fill_between(hrs, 0, y_n, color=color, alpha=0.42)
-        ax2.plot(hrs, y_n, color=color, linewidth=2, alpha=0.95)
-        ax2.set_xlim(-0.5, 23.5); ax2.set_ylim(0, 0.48)
+        ax2.fill_between(hrs, 0, y_n, color=color, alpha=0.42, clip_on=False)
+        ax2.plot(hrs, y_n, color=color, linewidth=2, alpha=0.95, clip_on=False)
+        ax2.set_xlim(-0.5, 23.5); ax2.set_ylim(0, 0.8)
         ax2.text(-0.5, 0.24, days_ru[d], ha='right', va='center',
                 color=color, fontsize=9, fontweight='bold',
                 transform=ax2.get_yaxis_transform())
@@ -6846,12 +6846,32 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     return bufs
 
 
+_stats_cooldown_tracker = {}
+
+
 @dp.message(Command("stats", "activity", "heatmap"))
 async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     global _stats_cache
 
     now = _time_module.time()
+    user_id = message.from_user.id
+    if not is_admin(user_id, board_id):
+        last_used = _stats_cooldown_tracker.get((user_id, board_id), 0)
+        if now - last_used < 3600:
+            remaining = int(3600 - (now - last_used))
+            min_left = remaining // 60
+            sec_left = remaining % 60
+            try:
+                sent = await message.answer(f"⏳ Команда /stats на кулдауне. Ты можешь вызвать её через {min_left} мин {sec_left} сек.")
+                spawn_task(delete_message_after_delay(sent, 10))
+            except Exception:
+                pass
+            try: await message.delete()
+            except Exception: pass
+            return
+        _stats_cooldown_tracker[(user_id, board_id)] = now
+
     cached = _stats_cache.get(board_id)
     if cached and now - cached['ts'] < _STATS_TTL:
         photos = cached['photos']

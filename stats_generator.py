@@ -1018,10 +1018,10 @@ def generate_all_charts():
                 y = _smooth(dh[d], w=1)
                 y_n = y / global_max
                 color = day_colors[d]
-                ax2.fill_between(hrs, 0, y_n, color=color, alpha=0.42)
-                ax2.plot(hrs, y_n, color=color, linewidth=2, alpha=0.95)
+                ax2.fill_between(hrs, 0, y_n, color=color, alpha=0.42, clip_on=False)
+                ax2.plot(hrs, y_n, color=color, linewidth=2, alpha=0.95, clip_on=False)
                 ax2.set_xlim(-0.5, 23.5)
-                ax2.set_ylim(0, 0.48)
+                ax2.set_ylim(0, 0.8)
                 ax2.text(-0.5, 0.24, days_ru[d], ha='right', va='center',
                         color=color, fontsize=9, fontweight='bold',
                         transform=ax2.get_yaxis_transform())
@@ -1266,15 +1266,24 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
     except Exception:
         font_title = font_subtitle = font_body = font_mono = ImageFont.load_default()
         
-    draw.rectangle([15, 15, width-15, height-15], outline='#373b41', width=3)
-    draw.rectangle([20, 20, width-20, height-20], outline='#282a2e', width=1)
+    # Subtle background technical grid pattern
+    for gx in range(40, width-20, 60):
+        draw.line([gx, 110, gx, height-20], fill='#222426', width=1)
+    for gy in range(120, height-20, 45):
+        draw.line([20, gy, width-20, gy], fill='#222426', width=1)
+
+    # Glowing outer border
+    draw.rectangle([15, 15, width-15, height-15], outline='#859900', width=3)
+    draw.rectangle([20, 20, width-20, height-20], outline='#373b41', width=1)
+
+    # Top header bar background
+    draw.rectangle([21, 21, width-21, 110], fill='#282a2e')
+    draw.line([20, 110, width-20, 110], fill='#373b41', width=2)
     
-    draw.text((40, 40), schizo_name, fill='#b58900', font=font_title)
+    draw.text((40, 32), schizo_name, fill='#b58900', font=font_title)
     
     status_text = f"ID: {user_id}  |  Board: /{board_id}/  |  Role: {role.upper()}"
-    draw.text((40, 80), status_text, fill='#8abeb7', font=font_subtitle)
-    
-    draw.line([40, 115, width-40, 115], fill='#373b41', width=2)
+    draw.text((40, 72), status_text, fill='#8abeb7', font=font_subtitle)
     
     stats = [
         ("Посты (Posts):", str(posts_count), '#c5c8c6'),
@@ -1290,19 +1299,28 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
     for label, val, val_color in stats:
         draw.text((60, y), label, fill='#969896', font=font_body)
         draw.text((320, y), val, fill=val_color, font=font_body)
-        y += 35
+        y += 38
         
-    draw.line([500, 135, 500, height-60], fill='#373b41', width=1)
+    draw.line([500, 110, 500, height-20], fill='#373b41', width=2)
     
-    avatar_box = [540, 140, 740, 320]
-    draw.rectangle(avatar_box, fill='#282a2e', outline='#373b41', width=2)
+    # Glowing certified badge
+    avatar_box = [540, 140, 740, 310]
+    draw.rectangle(avatar_box, fill='#1b1d1f', outline='#f0c674', width=3)
+    draw.rectangle([545, 145, 735, 305], outline='#373b41', width=1)
     
-    draw.text((560, 190), "BOARD", fill='#859900', font=font_subtitle)
-    draw.text((560, 220), "CERTIFIED", fill='#859900', font=font_subtitle)
-    draw.text((560, 250), role.upper(), fill='#cc6666', font=font_subtitle)
+    draw.text((640, 175), "BOARD", fill='#859900', font=font_subtitle, anchor="mm")
+    draw.text((640, 205), "CERTIFIED", fill='#b58900', font=font_subtitle, anchor="mm")
+    draw.text((640, 255), role.upper(), fill='#cc6666', font=font_title, anchor="mm")
     
-    draw.line([520, 345, width-60, 345], fill='#373b41', width=1)
-    draw.text((520, 360), f"\"{slang_comment}\"", fill='#969896', font=font_mono)
+    draw.line([520, 335, width-60, 335], fill='#373b41', width=1)
+    
+    # Wrapped slang comment
+    import textwrap
+    wrapped_lines = textwrap.wrap(slang_comment, width=28)
+    y_comment = 350
+    for line in wrapped_lines:
+        draw.text((520, y_comment), line, fill='#969896', font=font_mono)
+        y_comment += 22
     
     buf = io.BytesIO()
     img.save(buf, format='png')
