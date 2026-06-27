@@ -2918,6 +2918,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
     """
     Массовое удаление постов пользователя за период.
     Удаляет из БД (с защитой транзакции), RAM, ЛС и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
+    Правильно удаляет целые треды из БД/архивов, если удаляется ОП-пост.
     """
     from common.db_pool import get_pool, db_lock  # Локальный импорт
     try:
@@ -2926,6 +2927,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
         posts_to_delete_nums = []
         messages_to_delete_from_api = []
         channel_messages_to_delete = []
+        threads_to_delete = []
 
         # 1. Чтение данных и Удаление из БД в одной защищенной транзакции
         async with db_lock:
@@ -2934,16 +2936,38 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                     db = await get_pool()
                     await db.execute("BEGIN IMMEDIATE")
                     
-                    # Читаем посты для удаления
+                    # Читаем посты пользователя для удаления
                     query_posts = "SELECT post_num FROM Posts WHERE author_id = ? AND board_id = ? AND timestamp >= ?"
                     async with db.execute(query_posts, (user_id, board_id, time_threshold_ts)) as cursor:
                         rows = await cursor.fetchall()
-                    posts_to_delete_nums = [row[0] for row in rows]
+                    user_posts = [row[0] for row in rows]
                     
-                    if not posts_to_delete_nums:
+                    if not user_posts:
                         await db.execute("COMMIT")
                         return 0
                         
+                    posts_to_delete_set = set(user_posts)
+                    
+                    # Проверяем, какие из этих постов являются ОП-постами тредов
+                    for p_num in user_posts:
+                        p_str = str(p_num)
+                        async with db.execute("SELECT thread_id FROM Threads WHERE thread_id = ? OR thread_num = ?", (p_str, p_num)) as cursor:
+                            t_row = await cursor.fetchone()
+                            if t_row:
+                                threads_to_delete.append(t_row[0])
+                                
+                    # Если есть удаляемые треды, выбираем ВСЕ посты этих тредов, чтобы снести их тоже
+                    if threads_to_delete:
+                        for t_id in threads_to_delete:
+                            try: t_id_int = int(t_id)
+                            except ValueError: t_id_int = 0
+                            
+                            async with db.execute("SELECT post_num FROM Posts WHERE thread_id = ? OR thread_id = ?", (t_id, str(t_id_int))) as cursor:
+                                p_rows = await cursor.fetchall()
+                                for pr in p_rows:
+                                    posts_to_delete_set.add(pr[0])
+                                    
+                    posts_to_delete_nums = list(posts_to_delete_set)
                     placeholders = ','.join('?' for _ in posts_to_delete_nums)
                     
                     # Читаем копии для API
@@ -2956,9 +2980,22 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                     async with db.execute(query_channels, posts_to_delete_nums) as cursor:
                         channel_messages_to_delete = await cursor.fetchall()
                     
-                    # Удаляем
-                    query_delete = f"DELETE FROM Posts WHERE post_num IN ({placeholders})"
-                    await db.execute(query_delete, posts_to_delete_nums)
+                    # Удаляем из Posts
+                    await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                    
+                    # Удаляем из PostCopies
+                    await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                    
+                    # Удаляем из ChannelCopies
+                    await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                    
+                    # Удаляем из UserReplies
+                    await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders})", posts_to_delete_nums + posts_to_delete_nums)
+                    
+                    # Удаляем из Threads
+                    if threads_to_delete:
+                        t_placeholders = ','.join('?' for _ in threads_to_delete)
+                        await db.execute(f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})", threads_to_delete)
                     
                     await db.execute("COMMIT")
                     break # Успех
@@ -2983,10 +3020,11 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                         if thread_id:
                             b_data = board_data.get(board_id, {})
                             threads_data = b_data.get('threads_data', {})
-                            if thread_id in threads_data and 'posts' in threads_data[thread_id]:
+                            if thread_id in threads_data:
                                 try:
-                                    threads_data[thread_id]['posts'].remove(post_num)
-                                except ValueError:
+                                    if 'posts' in threads_data[thread_id]:
+                                        threads_data[thread_id]['posts'].remove(post_num)
+                                except (ValueError, KeyError):
                                     pass
                 message_copies_in_mem = post_to_messages.pop(post_num, {})
                 for uid, mid_or_list in message_copies_in_mem.items():
@@ -2996,7 +3034,20 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                     else:
                         message_to_post.pop((uid, mid_or_list), None)
 
-        # 3. Удаление из каналов
+        # 3. Чистка кэшей
+        from common.database import _THREAD_CACHE, _VIDEO_CACHE, _IMAGE_CACHE
+        for post_id_int in posts_to_delete_nums:
+            post_id_str = str(post_id_int)
+            for b in list(_THREAD_CACHE.keys()):
+                if post_id_str in _THREAD_CACHE[b]:
+                    try: _THREAD_CACHE[b].remove(post_id_str)
+                    except: pass
+            for b in list(_VIDEO_CACHE.keys()):
+                _VIDEO_CACHE[b] = [item for item in _VIDEO_CACHE[b] if item[0] != post_id_int]
+            for b in list(_IMAGE_CACHE.keys()):
+                _IMAGE_CACHE[b] = [item for item in _IMAGE_CACHE[b] if item[0] != post_id_int]
+
+        # 4. Удаление из каналов
         if channel_messages_to_delete:
             archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
             deleter = archive_bot if archive_bot else bot_instance
@@ -3006,7 +3057,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                 except Exception: 
                     pass
 
-        # 4. Удаление из ЛС пользователей (API)
+        # 5. Удаление из ЛС пользователей (API)
         async def _delete_one_message(uid: int, mid: int) -> bool:
             max_attempts = 6
             delay = 1.5
