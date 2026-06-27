@@ -5031,13 +5031,17 @@ def localize_boards(lang: str) -> dict:
     """
     localized = {}
     for board_id, data in BOARD_CONFIG.items():
-        board_copy = data.copy()
         desc = data.get('description')
         if isinstance(desc, dict):
-            board_copy['description'] = desc.get(lang) or desc.get('en') or desc.get('ru') or list(desc.values())[0]
+            board_copy = data.copy()
+            board_copy['description'] = desc.get(lang) or desc.get('en') or desc.get('ru') or next(iter(desc.values()))
+            localized[board_id] = board_copy
+        elif isinstance(desc, str):
+            localized[board_id] = data
         else:
+            board_copy = data.copy()
             board_copy['description'] = str(desc)
-        localized[board_id] = board_copy
+            localized[board_id] = board_copy
     return localized
 @app.post("/api/admin/cleanup_html")
 async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
