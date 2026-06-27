@@ -7025,10 +7025,17 @@ async def cmd_duel(message: types.Message, board_id: str | None, stream: str = '
         # Ищем дуэль в active_duels для любого challenger на этой борде
         now = time.time()
         found_ch = None
-        for ch_id, duel in list(_active_duels.items()):
-            if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                found_ch = ch_id
-                break
+        if message.reply_to_message:
+            reply_user_id = message.reply_to_message.from_user.id
+            if reply_user_id in _active_duels:
+                duel = _active_duels[reply_user_id]
+                if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                    found_ch = reply_user_id
+        if not found_ch:
+            for ch_id, duel in list(_active_duels.items()):
+                if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                    found_ch = ch_id
+                    break
         if not found_ch:
             await message.answer("⚔️ Нет активных вызовов на этой борде. Жди кого-нибудь смелого.")
             return
