@@ -17389,6 +17389,60 @@ async def periodic_thread_digest():
                     })
         except Exception as e:
             print(f"❌ Ошибка дайджеста: {e}")
+
+async def periodic_newspaper_broadcast():
+    while True:
+        await asyncio.sleep(86400) # 24 часа
+        try:
+            import datetime
+            yesterday = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+            url = f"{SITE_PUBLIC_BASE_URL}/newspaper/{yesterday}"
+            
+            newspaper_text = (
+                f"📰 <b>СВЕЖИЙ ВЫПУСК ГАЗЕТЫ «ВЕСТНИК ТГАЧ»</b>\n"
+                f"Выпуск от {yesterday}\n\n"
+                f"В номере:\n"
+                f"• Литературный вестник дня (самые длинные посты)\n"
+                f"• Топ обсуждаемых тем и тредов\n"
+                f"• Сводка происшествий и общая статистика скуфства\n\n"
+                f"👉 <b>Читать свежий номер:</b> <a href='{url}'>{url}</a>\n\n"
+                f"🚀 <i>Будьте в курсе последних событий деградации!</i>"
+            )
+            
+            target_boards = ['thread', 'b']
+            for board_id in target_boards:
+                if board_id not in board_data:
+                    continue
+                b_data = board_data[board_id]
+                recipients = b_data['users']['active'] - b_data['users']['banned']
+                if not recipients:
+                    continue
+                content = {
+                    'type': 'text',
+                    'text': newspaper_text,
+                    'is_system_message': True,
+                    'archive_allowed': True
+                }
+                pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
+                if pnum:
+                    header_base = await format_header(board_id, pnum)
+                    content['header'] = f"### NEWSPAPER ###\n{header_base}"
+                    await update_post_content(pnum, content)
+                    async with storage_lock:
+                        messages_storage[pnum] = {
+                            'author_id': 0, 
+                            'timestamp': datetime.datetime.now(datetime.timezone.utc), 
+                            'content': content, 
+                            'board_id': board_id
+                        }
+                    await enqueue_board_message(board_id, {
+                        "recipients": recipients,
+                        "content": content,
+                        "post_num": pnum,
+                        "board_id": board_id
+                    })
+        except Exception as e:
+            print(f"❌ Ошибка отправки газеты: {e}")
 SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
 
 def _site_public_url(raw_url: str | None) -> str | None:
@@ -17939,6 +17993,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "site_reaction_processor": lambda: site_reaction_processor(),
         "mode_auto_disabler": lambda: mode_auto_disabler(),
         "periodic_thread_digest": lambda: periodic_thread_digest(),
+        "periodic_newspaper_broadcast": lambda: periodic_newspaper_broadcast(),
         "admin_action_sync_worker": lambda: admin_action_sync_worker(),
     }
     tasks = [

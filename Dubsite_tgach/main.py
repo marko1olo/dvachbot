@@ -175,7 +175,8 @@ from common.database import (
     get_random_video_post, get_random_image_post, get_random_active_thread, refresh_random_indexes, add_post_to_random_cache,
     get_recent_posts_global, get_full_user_info, get_global_feed_posts, process_backlinks,
     get_mod_queue, resolve_mod_queue,
-    get_unread_replies_count, get_user_replies, mark_replies_read
+    get_unread_replies_count, get_user_replies, mark_replies_read,
+    get_newspaper_data
 )
 from site_tgach.backup import backup_loop
 from site_tgach.importer import process_import_queue
@@ -2407,6 +2408,26 @@ async def search_page(request: Request, query: str = "", archive: int = 0, user:
         "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user},
         "archive": archive
     })
+@app.get("/newspaper")
+async def newspaper_today():
+    import datetime
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    return RedirectResponse(url=f"/newspaper/{today}")
+
+@app.get("/newspaper/{year}-{month:int}-{day:int}")
+async def newspaper_page(request: Request, year: int, month: int, day: int, user: dict | None = Depends(get_optional_user)):
+    date_str = f"{year}-{month:02d}-{day:02d}"
+    data = await get_newspaper_data(date_str)
+    
+    if data and data.get("longest_posts"):
+        data["longest_posts"] = _convert_and_enrich_posts(data["longest_posts"])
+        await enrich_extra_data(data["longest_posts"])
+        
+    return templates.TemplateResponse("newspaper.jinja2", {
+        "request": request, "data": data, "boards": BOARD_CONFIG,
+        "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
+    })
+
 @app.get("/admin/serverConfig.json", include_in_schema=False)
 async def api_dummy_config():
     """Заглушка для подавления 404 ошибок в логах от админки."""

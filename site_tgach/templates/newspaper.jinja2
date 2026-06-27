@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Газета ТГАЧ Daily — Выпуск от {{ data.date }}</title>
+    <link rel="icon" href="/static/favicon.ico">
+    <style>
+        /* Базовые цвета и стили для создания эффекта винтажной газеты */
+        :root {
+            --bg-paper: #f4ecd8;
+            --text-ink: #1c1c1c;
+            --accent-red: #8b0000;
+            --border-ink: #2b2b2b;
+            --shadow-paper: 0 10px 30px rgba(0,0,0,0.15);
+        }
+
+        body.theme-dark {
+            --bg-paper: #1c1e22;
+            --text-ink: #e6edf3;
+            --accent-red: #ff4500;
+            --border-ink: #444c56;
+            --shadow-paper: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        body {
+            background-color: var(--bg-paper);
+            color: var(--text-ink);
+            font-family: 'Georgia', 'Playfair Display', serif;
+            margin: 0;
+            padding: 20px;
+            transition: background-color 0.3s, color 0.3s;
+        }
+
+        .newspaper-container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background-color: var(--bg-paper);
+            padding: 40px;
+            box-shadow: var(--shadow-paper);
+            border: 4px double var(--border-ink);
+            position: relative;
+        }
+
+        /* Заголовок газеты */
+        header {
+            text-align: center;
+            border-bottom: 5px double var(--border-ink);
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+        }
+
+        .header-meta {
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 2px solid var(--border-ink);
+            padding: 5px 10px;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            font-weight: bold;
+            letter-spacing: 1px;
+            margin-bottom: 15px;
+        }
+
+        .newspaper-title {
+            font-size: 4.5em;
+            font-weight: 900;
+            text-transform: uppercase;
+            margin: 0;
+            letter-spacing: -2px;
+            color: var(--text-ink);
+            font-family: 'Times New Roman', Times, serif;
+        }
+
+        .newspaper-subtitle {
+            font-size: 1.2em;
+            font-style: italic;
+            margin: 5px 0 15px 0;
+            opacity: 0.8;
+        }
+
+        /* Сетка колонок */
+        .columns-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 30px;
+        }
+
+        @media (max-width: 768px) {
+            .columns-grid {
+                grid-template-columns: 1fr;
+            }
+            .newspaper-title {
+                font-size: 3em;
+            }
+            .newspaper-container {
+                padding: 15px;
+            }
+        }
+
+        /* Стили статей */
+        .article {
+            margin-bottom: 30px;
+            border-bottom: 1px solid var(--border-ink);
+            padding-bottom: 20px;
+        }
+
+        .article:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .article-title {
+            font-size: 1.8em;
+            font-weight: bold;
+            margin: 0 0 10px 0;
+            color: var(--accent-red);
+            line-height: 1.2;
+        }
+
+        .article-meta {
+            font-size: 0.85em;
+            font-style: italic;
+            color: var(--text-ink);
+            opacity: 0.7;
+            margin-bottom: 10px;
+        }
+
+        .article-content {
+            font-size: 1.05em;
+            line-height: 1.6;
+            text-align: justify;
+            text-justify: inter-word;
+        }
+
+        /* Фотокарточки */
+        .photo-card {
+            background-color: var(--bg-paper);
+            border: 1px solid var(--border-ink);
+            padding: 10px;
+            margin: 15px 0;
+            text-align: center;
+        }
+
+        .photo-card img, .photo-card video {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid var(--border-ink);
+            filter: grayscale(100%);
+            transition: filter 0.3s;
+        }
+
+        .photo-card img:hover, .photo-card video:hover {
+            filter: none;
+        }
+
+        .photo-caption {
+            font-size: 0.85em;
+            font-style: italic;
+            margin-top: 8px;
+            color: var(--text-ink);
+            opacity: 0.8;
+        }
+
+        /* Сводка дня (sidebar) */
+        .sidebar-section {
+            border: 2px solid var(--border-ink);
+            padding: 20px;
+            background-color: rgba(0,0,0,0.03);
+            margin-bottom: 25px;
+        }
+
+        .sidebar-title {
+            font-size: 1.4em;
+            font-weight: bold;
+            text-transform: uppercase;
+            border-bottom: 2px solid var(--border-ink);
+            padding-bottom: 5px;
+            margin-top: 0;
+            margin-bottom: 15px;
+            color: var(--text-ink);
+            text-align: center;
+        }
+
+        .stats-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .stats-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px dashed var(--border-ink);
+            font-size: 0.95em;
+        }
+
+        .stats-item:last-child {
+            border-bottom: none;
+        }
+
+        .stats-val {
+            font-weight: bold;
+            color: var(--accent-red);
+        }
+
+        /* Кнопка смены темы */
+        .theme-toggle-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: none;
+            border: 1px solid var(--border-ink);
+            color: var(--text-ink);
+            padding: 5px 10px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-family: inherit;
+        }
+
+        .nav-links {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 15px;
+            border-top: 2px solid var(--border-ink);
+        }
+
+        .nav-links a {
+            color: var(--accent-red);
+            text-decoration: none;
+            font-weight: bold;
+            margin: 0 10px;
+        }
+
+        .nav-links a:hover {
+            text-decoration: underline;
+        }
+
+        .reply-link {
+            color: var(--accent-red);
+            text-decoration: none;
+        }
+        .reply-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body class="theme-dark">
+    <div class="newspaper-container">
+        <button onclick="toggleTheme()" class="theme-toggle-btn">🌓 Тема</button>
+
+        <header>
+            <h1 class="newspaper-title">ВЕСТНИК ТГАЧ</h1>
+            <div class="newspaper-subtitle">Ежедневный листок деградации, скуфства и базированных мыслей</div>
+            
+            <div class="header-meta">
+                <span>Выпуск №{{ data.date | replace('-', '') }}</span>
+                <span>{{ data.date }}</span>
+                <span>Цена: 1 Коин</span>
+            </div>
+        </header>
+
+        <div class="columns-grid">
+            <!-- Левая колонка: Основные статьи дня -->
+            <div class="main-column">
+                <h2 style="border-bottom: 2px solid var(--border-ink); padding-bottom: 5px; margin-top: 0; text-transform: uppercase;">Литературный вестник дня</h2>
+                
+                {% if data.longest_posts %}
+                    {% for post in data.longest_posts %}
+                        <div class="article">
+                            <h3 class="article-title">
+                                <a href="/{{ post.board_id }}/res/{{ post.thread_id or post.id }}.html#post-{{ post.id }}" class="reply-link" target="_blank">
+                                    Анон #{{ post.id }} из /{{ post.board_id }}/
+                                </a>
+                            </h3>
+                            <div class="article-meta">Написано в {{ post.timestamp | format_timestamp }}</div>
+                            <div class="article-content">
+                                {{ post.content.text | format_post_text | safe }}
+                            </div>
+
+                            {% if post.content.files %}
+                                <div class="photo-card">
+                                    {% for file in post.content.files %}
+                                        {% if file.type in ['image', 'photo'] %}
+                                            <img src="{{ file.original_url }}" alt="Иллюстрация события">
+                                        {% elif file.type in ['video', 'gif'] %}
+                                            <video src="{{ file.original_url }}" controls muted playsinline></video>
+                                        {% endif %}
+                                    {% endfor %}
+                                    <div class="photo-caption">Рис. {{ loop.index }} — Медиа-материалы к посту #{{ post.id }}</div>
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                {% else %}
+                    <p style="font-style: italic; opacity: 0.7;">За эти сутки выдающихся литературных шедевров обнаружено не было.</p>
+                {% endif %}
+            </div>
+
+            <!-- Правая колонка: Сводки, Реклама, Популярные темы -->
+            <div class="sidebar-column">
+                <!-- Сводка дня -->
+                <div class="sidebar-section">
+                    <h3 class="sidebar-title">Сводка событий</h3>
+                    <ul class="stats-list">
+                        <li class="stats-item">
+                            <span>Всего постов создано</span>
+                            <span class="stats-val">{{ data.total_posts }}</span>
+                        </li>
+                        <li class="stats-item">
+                            <span>Активных сычей</span>
+                            <span class="stats-val">{{ data.active_authors }}</span>
+                        </li>
+                        <li class="stats-item">
+                            <span>Новых тредов</span>
+                            <span class="stats-val">{{ data.new_threads_count }}</span>
+                        </li>
+                    </ul>
+                </div>
+
+                <!-- Сенсации (Топ тредов) -->
+                <div class="sidebar-section">
+                    <h3 class="sidebar-title">Самые обсуждаемые</h3>
+                    {% if data.top_threads %}
+                        <ol style="padding-left: 20px; margin: 0;">
+                            {% for thread in data.top_threads %}
+                                <li style="margin-bottom: 12px; font-size: 0.95em;">
+                                    <a href="/{{ thread.board_id }}/res/{% if thread.thread_id %}{{ thread.thread_id }}{% else %}{{ thread.id }}{% endif %}.html" class="reply-link" target="_blank" style="font-weight: bold;">
+                                        /{{ thread.board_id }}/ res/{{ thread.thread_id }}
+                                    </a>
+                                    <div style="font-style: italic; opacity: 0.8; margin-top: 3px;">
+                                        {{ thread.title | clean_title | truncate(60) }} (💬 {{ thread.posts_count }})
+                                    </div>
+                                </li>
+                            {% endfor %}
+                        </ol>
+                    {% else %}
+                        <p style="font-style: italic; opacity: 0.7; font-size: 0.9em; text-align: center;">Тишина в эфире...</p>
+                    {% endif %}
+                </div>
+
+                <!-- Рекламная вставка -->
+                <div class="sidebar-section" style="text-align: center; border-style: dashed; background: none;">
+                    <h4 style="margin: 0 0 5px 0; font-size: 0.8em; text-transform: uppercase; letter-spacing: 1px; opacity: 0.6;">Реклама</h4>
+                    <p style="font-size: 1.1em; font-weight: bold; margin: 5px 0;">💰 ХОЧЕШЬ ВДОХНУТЬ СВОБОДЫ?</p>
+                    <p style="font-size: 0.85em; margin: 5px 0; opacity: 0.8;">Крути рулетку <code>/roll</code> в нашем Telegram-боте! Выигрывай коины или отправляйся в дурку!</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="nav-links">
+            <a href="/">[Главная страница]</a>
+            <a href="/archive/">[Архив тредов]</a>
+        </div>
+    </div>
+
+    <script>
+        // Инициализация темы из localStorage
+        (function() {
+            var theme = localStorage.getItem('newspaper_theme') || 'dark';
+            document.body.className = 'theme-' + theme;
+        })();
+
+        function toggleTheme() {
+            var current = document.body.className;
+            var next = current === 'theme-light' ? 'theme-dark' : 'theme-light';
+            document.body.className = next;
+            localStorage.setItem('newspaper_theme', next.replace('theme-', ''));
+        }
+    </script>
+</body>
+</html>

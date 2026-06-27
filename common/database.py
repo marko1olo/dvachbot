@@ -6107,6 +6107,88 @@ async def get_activity_history(days: int = 7) -> dict:
     except Exception as e:
         print(f"Stats error: {e}")
         return {}
+async def get_newspaper_data(date_str: str) -> dict:
+    import datetime
+    from common.db_pool import get_pool
+    db = await get_pool()
+    db.row_factory = aiosqlite.Row
+    try:
+        dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+        start_ts = dt.timestamp()
+        end_ts = start_ts + 86400
+    except Exception:
+        return {}
+        
+    res = {
+        "date": date_str,
+        "total_posts": 0,
+        "active_authors": 0,
+        "new_threads_count": 0,
+        "top_threads": [],
+        "longest_posts": [],
+        "recent_media": []
+    }
+    
+    try:
+        # 1. Total posts
+        async with db.execute("SELECT COUNT(*) FROM Posts WHERE timestamp BETWEEN ? AND ? AND IFNULL(is_shadow, 0) = 0", (start_ts, end_ts)) as cursor:
+            row = await cursor.fetchone()
+            if row: res["total_posts"] = row[0]
+            
+        # 2. Active authors
+        async with db.execute("SELECT COUNT(DISTINCT author_id) FROM Posts WHERE timestamp BETWEEN ? AND ? AND author_id != 0 AND IFNULL(is_shadow, 0) = 0", (start_ts, end_ts)) as cursor:
+            row = await cursor.fetchone()
+            if row: res["active_authors"] = row[0]
+            
+        # 3. New threads count
+        async with db.execute("SELECT COUNT(*) FROM Threads WHERE created_at BETWEEN ? AND ?", (start_ts, end_ts)) as cursor:
+            row = await cursor.fetchone()
+            if row: res["new_threads_count"] = row[0]
+            
+        # 4. Top threads by posts in this day
+        query_threads = """
+            SELECT p.thread_id, p.board_id, t.title, COUNT(p.post_num) as cnt
+            FROM Posts p
+            JOIN Threads t ON p.thread_id = t.thread_id
+            WHERE p.timestamp BETWEEN ? AND ? AND p.thread_id IS NOT NULL AND IFNULL(p.is_shadow, 0) = 0
+            GROUP BY p.thread_id ORDER BY cnt DESC LIMIT 5
+        """
+        async with db.execute(query_threads, (start_ts, end_ts)) as cursor:
+            rows = await cursor.fetchall()
+            for r in rows:
+                res["top_threads"].append({
+                    "thread_id": r["thread_id"],
+                    "board_id": r["board_id"],
+                    "title": r["title"] or "Без названия",
+                    "posts_count": r["cnt"]
+                })
+                
+        # 5. Longest posts (slang columns)
+        query_longest = """
+            SELECT p.post_num, p.board_id, p.thread_id, p.content, p.author_id, p.timestamp
+            FROM Posts p
+            WHERE p.timestamp BETWEEN ? AND ? AND IFNULL(p.is_shadow, 0) = 0 AND length(p.content) > 30
+            ORDER BY length(p.content) DESC LIMIT 8
+        """
+        async with db.execute(query_longest, (start_ts, end_ts)) as cursor:
+            rows = await cursor.fetchall()
+            for r in rows:
+                res["longest_posts"].append({
+                    "post_num": r["post_num"],
+                    "board_id": r["board_id"],
+                    "thread_id": r["thread_id"],
+                    "content": r["content"],
+                    "author_id": r["author_id"],
+                    "timestamp": r["timestamp"]
+                })
+                
+        return res
+    except Exception as e:
+        print(f"Newspaper data error: {e}")
+        return res
+    finally:
+        db.row_factory = None
+
 async def get_top_active_threads(hours: int = 8, limit: int = 10):
     """Находит треды с наибольшим количеством новых постов за период. Скрывает активность shadow-постов."""
     db = await get_pool()

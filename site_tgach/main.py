@@ -222,7 +222,8 @@ from common.database import (
     get_recent_tags_summary,
     get_file_tags,
     search_files_by_tags,
-    get_posts_by_file_ids
+    get_posts_by_file_ids,
+    get_newspaper_data
 )
 from site_tgach.backup import backup_loop
 from site_tgach.importer import process_import_queue
@@ -2997,6 +2998,26 @@ async def search_page(request: Request, query: str = "", archive: int = 0, user:
         "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user},
         "archive": archive
     })
+@app.get("/newspaper")
+async def newspaper_today():
+    import datetime
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    return RedirectResponse(url=f"/newspaper/{today}")
+
+@app.get("/newspaper/{year}-{month:int}-{day:int}")
+async def newspaper_page(request: Request, year: int, month: int, day: int, user: dict | None = Depends(get_optional_user)):
+    date_str = f"{year}-{month:02d}-{day:02d}"
+    data = await get_newspaper_data(date_str)
+    
+    if data and data.get("longest_posts"):
+        data["longest_posts"] = _convert_and_enrich_posts(data["longest_posts"])
+        await enrich_extra_data(data["longest_posts"])
+        
+    return templates.TemplateResponse(request=request, name="newspaper.jinja2", context={
+        "request": request, "data": data, "boards": BOARD_CONFIG,
+        "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
+    })
+
 @app.get("/admin/serverConfig.json", include_in_schema=False)
 async def api_dummy_config():
     """Заглушка для подавления 404 ошибок в логах от админки."""
