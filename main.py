@@ -6631,7 +6631,7 @@ _stats_cache: dict = {}   # board_id -> {ts: float, photos: list[bytes]}
 _STATS_TTL = 3600         # seconds
 
 def _generate_stats_charts(board_id: str) -> list[bytes]:
-    """Generate 3 activity charts for board_id. Returns list of PNG bytes."""
+    """Generate 4 activity charts for board_id. Returns list of PNG bytes."""
     import io as _io
     import sqlite3 as _sqlite3
     import numpy as _np
@@ -6640,6 +6640,7 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     import matplotlib.pyplot as _plt
     from matplotlib.colors import LinearSegmentedColormap
     from collections import defaultdict
+    import datetime as _dt
 
     BG, FG, GRID = '#0d1117', '#e6edf3', '#21262d'
     _plt.rcParams.update({
@@ -6654,7 +6655,7 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     cur = con.cursor()
 
     since_90 = int(_time_module.time()) - 90 * 86400
-    since_60 = int(_time_module.time()) - 60 * 86400
+    since_180 = int(_time_module.time()) - 180 * 86400
     bufs = []
 
     # ── 1. Activity Clock (polar, last 90 days) ────────────────────────────
@@ -6754,13 +6755,47 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     _plt.close()
     bufs.append(buf2.getvalue())
 
-    # ── 3. Calendar heatmap (last 60 days) ────────────────────────────────
-    import datetime as _dt
+    # ── 3. Weekday x Hour Heatmap (180 days / all-time) ───────────────────
+    cur.execute("""
+        SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER) as dow,
+               CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
+               COUNT(*) as cnt
+        FROM Posts WHERE board_id=? AND timestamp > ?
+        GROUP BY dow, hr
+    """, (board_id, since_180))
+    grid = _np.zeros((7, 24))
+    for dow, hr, cnt in cur.fetchall():
+        grid[dow][hr] = cnt
+
+    days_ru_full = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота']
+    fig, ax3 = _plt.subplots(figsize=(10, 4.5), facecolor=BG)
+    ax3.set_facecolor(BG)
+    HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
+    im = ax3.imshow(grid, cmap=HEAT, aspect='auto', interpolation='nearest')
+
+    ax3.set_xticks(range(24))
+    ax3.set_xticklabels([f'{h:02d}:00' for h in range(24)], fontsize=7, rotation=45, ha='right')
+    ax3.set_yticks(range(7))
+    ax3.set_yticklabels(days_ru_full, fontsize=8)
+    ax3.set_title(f'/{board_id}/ — Тепловая карта час × день недели (180д)', fontsize=11, pad=10, color=FG, fontweight='bold')
+    ax3.set_xlabel('Час суток', color=FG, fontsize=8.5)
+
+    cb = fig.colorbar(im, ax=ax3, pad=0.01)
+    cb.ax.yaxis.set_tick_params(color=FG, labelsize=7)
+    cb.set_label('постов', color=FG, fontsize=7.5)
+
+    _plt.tight_layout()
+    buf3 = _io.BytesIO()
+    _plt.savefig(buf3, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
+    _plt.close()
+    bufs.append(buf3.getvalue())
+
+    # ── 4. Calendar heatmap (180 days / all-time) ─────────────────────────
     cur.execute("""
         SELECT date(timestamp,'unixepoch','localtime') as day, COUNT(*)
         FROM Posts WHERE board_id=? AND timestamp > ?
         GROUP BY day ORDER BY day
-    """, (board_id, since_60))
+    """, (board_id, since_180))
     day_data = {r[0]: r[1] for r in cur.fetchall()}
     con.close()
 
@@ -6779,12 +6814,11 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
                 cal[d][w] = day_data.get(cur_date.isoformat(), 0)
                 cur_date += _dt.timedelta(days=1)
 
-        HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
         vmax = _np.percentile(list(day_data.values()), 95) if day_data else 1
 
-        fig, ax3 = _plt.subplots(figsize=(max(10, weeks//3), 3), facecolor=BG)
-        ax3.set_facecolor(BG)
-        im = ax3.imshow(cal, cmap=HEAT, aspect='auto', interpolation='nearest', vmin=0, vmax=vmax)
+        fig, ax4 = _plt.subplots(figsize=(max(10, weeks//2), 3), facecolor=BG)
+        ax4.set_facecolor(BG)
+        im = ax4.imshow(cal, cmap=HEAT, aspect='auto', interpolation='nearest', vmin=0, vmax=vmax)
 
         # Month labels
         month_ticks, month_lbls = [], []
@@ -6795,19 +6829,19 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
             if ym not in seen:
                 month_ticks.append(w); month_lbls.append(cdate.strftime('%b\n%Y')); seen.add(ym)
             cdate += _dt.timedelta(days=7)
-        ax3.set_xticks(month_ticks); ax3.set_xticklabels(month_lbls, fontsize=8)
-        ax3.set_yticks(range(7))
-        ax3.set_yticklabels(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'], fontsize=8)
-        ax3.set_title(f'/{board_id}/ — Календарь активности (60д)', fontsize=11, pad=10,
+        ax4.set_xticks(month_ticks); ax4.set_xticklabels(month_lbls, fontsize=7.5)
+        ax4.set_yticks(range(7))
+        ax4.set_yticklabels(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'], fontsize=8)
+        ax4.set_title(f'/{board_id}/ — Календарь активности (180д)', fontsize=11, pad=10,
                       color=FG, fontweight='bold')
-        cb = fig.colorbar(im, ax=ax3, orientation='horizontal', pad=0.18, shrink=0.35)
+        cb = fig.colorbar(im, ax=ax4, orientation='horizontal', pad=0.18, shrink=0.35)
         cb.set_label('постов/день', color=FG, fontsize=7.5)
         cb.ax.xaxis.set_tick_params(color=FG, labelsize=7)
         _plt.tight_layout()
-        buf3 = _io.BytesIO()
-        _plt.savefig(buf3, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
+        buf4 = _io.BytesIO()
+        _plt.savefig(buf4, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
         _plt.close()
-        bufs.append(buf3.getvalue())
+        bufs.append(buf4.getvalue())
 
     return bufs
 
@@ -6843,7 +6877,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
                  for i, p in enumerate(photos)]
         media[0] = InputMediaPhoto(
             media=BufferedInputFile(photos[0], filename='stats_0.png'),
-            caption=f"📊 Статистика /{board_id}/ • данные за 90 дней • обновляется раз в час"
+            caption=f"📊 Статистика /{board_id}/ • детальные ритмы (90д) и тепловые карты (180д) • обновляется раз в час"
         )
         await message.answer_media_group(media)
 
