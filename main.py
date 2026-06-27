@@ -2970,13 +2970,23 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                     posts_to_delete_nums = list(posts_to_delete_set)
                     placeholders = ','.join('?' for _ in posts_to_delete_nums)
                     
-                    # Читаем копии для API
-                    query_copies = f"SELECT recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
+                    # Читаем копии для API с получением board_id
+                    query_copies = f"""
+                        SELECT pc.recipient_id, pc.message_id, p.board_id 
+                        FROM PostCopies pc
+                        JOIN Posts p ON pc.post_num = p.post_num
+                        WHERE pc.post_num IN ({placeholders})
+                    """
                     async with db.execute(query_copies, posts_to_delete_nums) as cursor:
                         messages_to_delete_from_api = await cursor.fetchall()
                         
-                    # Читаем копии каналов
-                    query_channels = f"SELECT channel_id, message_id FROM ChannelCopies WHERE post_num IN ({placeholders})"
+                    # Читаем копии каналов с получением board_id
+                    query_channels = f"""
+                        SELECT cc.channel_id, cc.message_id, p.board_id 
+                        FROM ChannelCopies cc
+                        JOIN Posts p ON cc.post_num = p.post_num
+                        WHERE cc.post_num IN ({placeholders})
+                    """
                     async with db.execute(query_channels, posts_to_delete_nums) as cursor:
                         channel_messages_to_delete = await cursor.fetchall()
                     
@@ -3050,22 +3060,38 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
         # 4. Удаление из каналов
         if channel_messages_to_delete:
             archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-            deleter = archive_bot if archive_bot else bot_instance
-            for chan_id, msg_id in channel_messages_to_delete:
+            for chan_id, msg_id, b_id in channel_messages_to_delete:
+                deleter = archive_bot if archive_bot else (GLOBAL_BOTS.get(b_id) or bot_instance)
                 try:
                     await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
                 except Exception: 
                     pass
 
         # 5. Удаление из ЛС пользователей (API)
-        async def _delete_one_message(uid: int, mid: int) -> bool:
+        async def _delete_one_message(uid: int, mid: int, b_id: str) -> bool:
+            deleter = GLOBAL_BOTS.get(b_id) or bot_instance
             max_attempts = 6
             delay = 1.5
             for attempt in range(max_attempts):
                 try:
-                    await bot_instance.delete_message(uid, mid)
+                    await deleter.delete_message(uid, mid)
                     return True
                 except (TelegramBadRequest, TelegramForbiddenError):
+                    # Если первый бот не имеет доступа, пробуем через bot_instance
+                    if deleter != bot_instance:
+                        try:
+                            await bot_instance.delete_message(uid, mid)
+                            return True
+                        except Exception:
+                            pass
+                    # Пробуем вообще всеми активными ботами по очереди
+                    for other_bid, other_bot in GLOBAL_BOTS.items():
+                        if other_bot != deleter and other_bot != bot_instance:
+                            try:
+                                await other_bot.delete_message(uid, mid)
+                                return True
+                            except Exception:
+                                pass
                     return False
                 except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
                     if attempt < max_attempts - 1:
@@ -3083,7 +3109,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
         
         for i in range(0, len(messages_to_delete_from_api), CHUNK_SIZE):
             chunk = messages_to_delete_from_api[i:i + CHUNK_SIZE]
-            tasks = [_delete_one_message(uid, mid) for uid, mid in chunk]
+            tasks = [_delete_one_message(uid, mid, b_id) for uid, mid, b_id in chunk]
             results = await asyncio.gather(*tasks)
             total_deleted_count += sum(1 for res in results if res is True)
             if i + CHUNK_SIZE < len(messages_to_delete_from_api):
@@ -3098,6 +3124,17 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
     """
     Удаляет один конкретный пост отовсюду: из БД, RAM, ЛС пользователей и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
     """
+    from common.db_pool import get_pool
+    board_id = None
+    try:
+        db = await get_pool()
+        async with db.execute("SELECT board_id FROM Posts WHERE post_num = ?", (post_num,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                board_id = row[0]
+    except Exception:
+        pass
+
     channel_copies = await get_all_channel_copies(post_num)
     messages_to_delete_info = await get_post_copies(post_num)
     deleted_from_db = await delete_post_by_num(post_num)
@@ -3106,7 +3143,8 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
     async with storage_lock:
         post_data = messages_storage.pop(post_num, None)
         if post_data:
-            board_id = post_data.get('board_id')
+            if not board_id:
+                board_id = post_data.get('board_id')
             if board_id and board_id in THREAD_BOARDS:
                 thread_id = post_data.get('thread_id')
                 if thread_id:
@@ -3127,7 +3165,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
                 message_to_post.pop((uid, mid_or_list), None)
     if channel_copies:
         archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-        deleter = archive_bot if archive_bot else bot_instance
+        deleter = archive_bot if archive_bot else (GLOBAL_BOTS.get(board_id) or bot_instance)
         for chan_id, msg_id in channel_copies:
             try:
                 await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
@@ -3135,15 +3173,29 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
                 pass
     if not messages_to_delete_info:
         return 0 if deleted_from_db else 0
+        
     async def _delete_one_message(uid: int, mid: int) -> bool:
-
+        deleter = GLOBAL_BOTS.get(board_id) or bot_instance
         max_attempts = 6
         delay = 1.5
         for attempt in range(max_attempts):
             try:
-                await bot_instance.delete_message(uid, mid)
-                return True # Успех
+                await deleter.delete_message(uid, mid)
+                return True
             except (TelegramBadRequest, TelegramForbiddenError):
+                if deleter != bot_instance:
+                    try:
+                        await bot_instance.delete_message(uid, mid)
+                        return True
+                    except Exception:
+                        pass
+                for other_bid, other_bot in GLOBAL_BOTS.items():
+                    if other_bot != deleter and other_bot != bot_instance:
+                        try:
+                            await other_bot.delete_message(uid, mid)
+                            return True
+                        except Exception:
+                            pass
                 return False
             except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
                 if attempt < max_attempts - 1:
@@ -3154,6 +3206,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
             except Exception:
                 return False
         return False
+
     tasks = [_delete_one_message(uid, mid) for uid, mid in messages_to_delete_info]
     results = await asyncio.gather(*tasks)
     deleted_count = sum(1 for res in results if res is True)
@@ -15447,6 +15500,8 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
         ]
     ])
     await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) за последние {minutes} минут?", parse_mode="HTML", reply_markup=kb)
+    try: await message.delete()
+    except Exception: pass
 
 async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: int, minutes: int):
     try: await message.edit_text("⏳ Сжигаю посты (процесс запущен, может занять несколько минут)...", parse_mode="HTML")
