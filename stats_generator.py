@@ -938,6 +938,234 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 20: {e}")
 
+    # ── 21. Тепловая карта час × день (180д) ──────────────────────────────
+    try:
+        import numpy as _np
+        from matplotlib.colors import LinearSegmentedColormap
+        since_180 = time.time() - 180 * 86400
+        c.execute('''
+            SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w, 
+                   cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h, 
+                   COUNT(*) as cnt 
+            FROM Posts 
+            WHERE timestamp > ? 
+            GROUP BY w, h
+        ''', (since_180,))
+        data = c.fetchall()
+        if data:
+            grid = _np.zeros((7, 24))
+            for row in data:
+                grid[row['w']][row['h']] = row['cnt']
+            
+            days_ru_full = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота']
+            fig, ax = plt.subplots(figsize=(10, 4.5))
+            HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
+            im = ax.imshow(grid, cmap=HEAT, aspect='auto', interpolation='nearest')
+
+            ax.set_xticks(range(24))
+            ax.set_xticklabels([f'{h:02d}:00' for h in range(24)], fontsize=7, rotation=45, ha='right')
+            ax.set_yticks(range(7))
+            ax.set_yticklabels(days_ru_full, fontsize=8)
+            plt.title('21. Тепловая карта час × день недели (180д)', fontsize=15, fontweight='bold', color="#ffffff")
+            plt.xlabel('Час суток')
+
+            cb = fig.colorbar(im, ax=ax, pad=0.01)
+            cb.ax.yaxis.set_tick_params(color='#ffffff', labelsize=7)
+            cb.set_label('постов', color='#ffffff', fontsize=7.5)
+
+            plt.tight_layout()
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            images.append(('21_heatmap_180.png', buf))
+            plt.close()
+    except Exception as e:
+        print(f"Error Chart 21: {e}")
+
+    # ── 22. Ритм активности по дням недели (90д) ───────────────────────────
+    try:
+        import numpy as _np
+        since_90 = time.time() - 90 * 86400
+        c.execute('''
+            SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w, 
+                   cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h, 
+                   COUNT(*) as cnt 
+            FROM Posts 
+            WHERE timestamp > ? 
+            GROUP BY w, h
+        ''', (since_90,))
+        data = c.fetchall()
+        if data:
+            from collections import defaultdict
+            dh = defaultdict(lambda: _np.zeros(24))
+            for row in data:
+                dh[row['w']][row['h']] = row['cnt']
+            
+            days_ru = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб']
+            day_colors = ['#f78166','#58a6ff','#79c0ff','#d2a8ff','#ffa657','#39d353','#e3b341']
+            hrs = _np.arange(24)
+            global_max = max((dh[d].max() for d in range(7)), default=1) or 1
+
+            def _smooth(y, w=1):
+                k = _np.ones(w*2+1)/(w*2+1)
+                return _np.convolve(y, k, mode='same')
+
+            fig, axes = plt.subplots(7, 1, figsize=(12, 7), sharex=True)
+            fig.subplots_adjust(hspace=-0.08)
+            for idx, d in enumerate(range(6, -1, -1)):
+                ax2 = axes[idx]
+                ax2.set_facecolor('#121212')
+                y = _smooth(dh[d], w=1)
+                y_n = y / global_max
+                color = day_colors[d]
+                ax2.fill_between(hrs, 0, y_n, color=color, alpha=0.42)
+                ax2.plot(hrs, y_n, color=color, linewidth=2, alpha=0.95)
+                ax2.set_xlim(-0.5, 23.5)
+                ax2.set_ylim(0, 0.48)
+                ax2.text(-0.5, 0.24, days_ru[d], ha='right', va='center',
+                        color=color, fontsize=9, fontweight='bold',
+                        transform=ax2.get_yaxis_transform())
+                total_d = int(dh[d].sum())
+                ax2.text(23.4, 0.40, f'{total_d//1000 if total_d>=1000 else total_d}{"k" if total_d>=1000 else ""}',
+                        ha='left', va='center', color=color, fontsize=7.5)
+                ax2.set_yticks([])
+                ax2.spines[:].set_visible(False)
+            axes[-1].set_xticks(hrs)
+            axes[-1].set_xticklabels([f'{h:02d}' for h in hrs], fontsize=7.5)
+            axes[-1].set_xlabel('Час суток')
+            fig.suptitle('22. Ритм по дням недели (90д)', fontsize=15, y=0.99, color='#ffffff', fontweight='bold')
+            plt.tight_layout(rect=[0.05, 0, 1, 0.98])
+            
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            images.append(('22_ridge_weekday.png', buf))
+            plt.close()
+    except Exception as e:
+        print(f"Error Chart 22: {e}")
+
+    # ── 23. Часовой циферблат активности (90д) ───────────────────────────
+    try:
+        import numpy as _np
+        since_90 = time.time() - 90 * 86400
+        c.execute('''
+            SELECT cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h, 
+                   COUNT(*) as cnt 
+            FROM Posts 
+            WHERE timestamp > ? 
+            GROUP BY h ORDER BY h
+        ''', (since_90,))
+        data = c.fetchall()
+        if data:
+            hd = {row['h']: row['cnt'] for row in data}
+            vals = _np.array([hd.get(h, 0) for h in range(24)], dtype=float)
+            vals_norm = vals / (vals.max() or 1)
+            total_posts = int(vals.sum())
+
+            fig = plt.figure(figsize=(7, 7))
+            ax = fig.add_subplot(111, polar=True)
+            ax.set_facecolor('#0a0f14')
+            N = 24
+            theta = _np.linspace(0, 2*_np.pi, N, endpoint=False) - _np.pi/2
+            width = 2*_np.pi / N * 0.82
+            cmap = matplotlib.colormaps['RdYlGn']
+            ax.bar(theta, vals_norm, width=width, bottom=0.12,
+                   color=[cmap(v) for v in vals_norm], alpha=0.92,
+                   edgecolor='#121212', linewidth=0.7)
+            for i in range(24):
+                ax.text(theta[i], 1.26, f'{i:02d}', ha='center', va='center',
+                        fontsize=8, color='#ffffff',
+                        fontweight='bold' if i in [0,6,12,18] else 'normal')
+            peak_hr = int(_np.argmax(vals))
+            ax.bar(theta[peak_hr], vals_norm[peak_hr], width=width, bottom=0.12,
+                   color='#80ffaa', alpha=0.95, edgecolor='#121212', linewidth=0.7)
+            quiet_hr = int(_np.argmin(vals))
+            ax.bar(theta[quiet_hr], vals_norm[quiet_hr], width=width, bottom=0.12,
+                   color='#f78166', alpha=0.95, edgecolor='#121212', linewidth=0.7)
+            ax.set_ylim(0, 1.42)
+            ax.set_yticks([])
+            ax.set_xticks([])
+            ax.spines['polar'].set_visible(False)
+            ax.grid(False)
+            ax.set_title(f'23. Часовой циферблат активности (90д)\n'
+                         f'Пик: {peak_hr:02d}:00  •  Тихо: {quiet_hr:02d}:00  •  {total_posts:,} постов',
+                         fontsize=11, pad=14, color='#ffffff', fontweight='bold', y=1.06)
+            ax.text(0, 0, f'{total_posts//1000}k', ha='center', va='center',
+                    fontsize=14, color='#ffffff', fontweight='bold', alpha=0.55)
+            plt.tight_layout()
+            
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            images.append(('23_activity_clock.png', buf))
+            plt.close()
+    except Exception as e:
+        print(f"Error Chart 23: {e}")
+
+    # ── 24. Календарь активности (180д) ──────────────────────────────────
+    try:
+        import numpy as _np
+        import datetime as _dt
+        from matplotlib.colors import LinearSegmentedColormap
+        since_180 = time.time() - 180 * 86400
+        c.execute('''
+            SELECT date(timestamp, 'unixepoch', 'localtime') as day, COUNT(*) as cnt 
+            FROM Posts 
+            WHERE timestamp > ? 
+            GROUP BY day ORDER BY day
+        ''', (since_180,))
+        data = c.fetchall()
+        if data:
+            day_data = {row['day']: row['cnt'] for row in data}
+            dates_sorted = sorted(day_data.keys())
+            start = _dt.date.fromisoformat(dates_sorted[0])
+            end = _dt.date.fromisoformat(dates_sorted[-1])
+            start_mon = start - _dt.timedelta(days=start.weekday())
+            end_sun = end + _dt.timedelta(days=6 - end.weekday())
+            total_days = (end_sun - start_mon).days + 1
+            weeks = total_days // 7
+            cal = _np.zeros((7, weeks))
+            cur_date = start_mon
+            for w in range(weeks):
+                for d in range(7):
+                    cal[d][w] = day_data.get(cur_date.isoformat(), 0)
+                    cur_date += _dt.timedelta(days=1)
+
+            HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
+            vmax = _np.percentile(list(day_data.values()), 95) if day_data else 1
+
+            fig, ax = plt.subplots(figsize=(max(10, weeks//2), 3))
+            im = ax.imshow(cal, cmap=HEAT, aspect='auto', interpolation='nearest', vmin=0, vmax=vmax)
+
+            # Month labels
+            month_ticks, month_lbls = [], []
+            cdate = start_mon
+            seen = set()
+            for w in range(weeks):
+                ym = cdate.strftime('%b %Y')
+                if ym not in seen:
+                    month_ticks.append(w)
+                    month_lbls.append(cdate.strftime('%b\n%Y'))
+                    seen.add(ym)
+                cdate += _dt.timedelta(days=7)
+            ax.set_xticks(month_ticks)
+            ax.set_xticklabels(month_lbls, fontsize=7.5)
+            ax.set_yticks(range(7))
+            ax.set_yticklabels(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'], fontsize=8)
+            plt.title('24. Календарь активности (180д)', fontsize=11, pad=10, color='#ffffff', fontweight='bold')
+            cb = fig.colorbar(im, ax=ax, orientation='horizontal', pad=0.18, shrink=0.35)
+            cb.set_label('постов/день', color='#ffffff', fontsize=7.5)
+            cb.ax.xaxis.set_tick_params(color='#ffffff', labelsize=7)
+            plt.tight_layout()
+            
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            images.append(('24_calendar_180.png', buf))
+            plt.close()
+    except Exception as e:
+        print(f"Error Chart 24: {e}")
+
     conn.close()
     return images
 

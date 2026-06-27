@@ -29,17 +29,24 @@ async def build_stats_media_groups():
         media_group = []
         if chunk_idx == 0:
             caption = (
-                "📊 <b>Статистика Борды (Часть 1/2)</b> 📊\n\n"
+                "📊 <b>Статистика Борды (Часть 1/3)</b> 📊\n\n"
                 "Классическая аналитика из глубин базы данных: "
                 "активность, уникальные шизы, байтеры и форматы общения.\n"
                 "Смотри графики в альбоме 👇"
             )
-        else:
+        elif chunk_idx == 1:
             caption = (
-                "🧠 <b>Продвинутая Аналитика (Часть 2/2)</b> 🧠\n\n"
+                "🧠 <b>Продвинутая Аналитика (Часть 2/3)</b> 🧠\n\n"
                 "Глубокий разбор: граф социального пузыря, хабы внимания, сессии, "
                 "циркадные ритмы шизофрении, сентимент и лексический запас.\n"
                 "Смотри продолжение 👇"
+            )
+        else:
+            caption = (
+                "🔥 <b>Ритмы и Тепловые Карты (Часть 3/3)</b> 🔥\n\n"
+                "Новые графики: усредненная тепловая карта час × день за полгода, недельный Ridge-ритм, "
+                "круговой циферблат активности и GitHub-style календарь за полгода.\n"
+                "Смотри финал 👇"
             )
             
         for i, (name, buf) in enumerate(chunk):
@@ -54,7 +61,7 @@ async def build_stats_media_groups():
 
 async def send_stats_to_user(bot: Bot, chat_id: int):
     """Generates and sends stats directly to a user/admin, and copies them to the archive."""
-    await bot.send_message(chat_id, "⏳ <i>Рисую 20 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
+    await bot.send_message(chat_id, "⏳ <i>Рисую 24 графика вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
     try:
         media_groups = await build_stats_media_groups()
         if media_groups:
