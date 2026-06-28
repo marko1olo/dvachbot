@@ -11227,83 +11227,33 @@ async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | No
             await callback.answer()
         except TelegramBadRequest:
             pass
-@dp.callback_query(F.data == "create_thread_confirm", ThreadCreateStates.waiting_for_confirmation)
-async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
-    """
-    Финальный шаг создания треда.
-    Исправлено: Защита от TelegramBadRequest и гарантия очистки состояния.
-    """
-    if not board_id: return
+async def _check_and_handle_thread_cooldown(callback: types.CallbackQuery, now_ts: float, last_creation_ts: float, lang: str) -> bool:
+    if now_ts - last_creation_ts >= THREAD_CREATE_COOLDOWN_USER:
+        return False
+
+    remaining = THREAD_CREATE_COOLDOWN_USER - (now_ts - last_creation_ts)
+    minutes_left = int(remaining / 60)
+    cooldown_phrases = thread_messages.get(lang, {}).get('create_cooldown', [])
+    if lang == 'en':
+        default_cooldown_text = f"You can create a new thread in {minutes_left} minutes."
+    elif lang == 'jp':
+        default_cooldown_text = f"次のスレッドは {minutes_left} 分後に作成できます。"
+    else:
+        default_cooldown_text = f"Вы сможете создать новый тред через {minutes_left} мин."
+
+    import random
+    cooldown_text = random.choice(cooldown_phrases).format(minutes=minutes_left, remaining=int(remaining)) if cooldown_phrases else default_cooldown_text
+
     try:
-        await callback.answer()
+        await callback.answer(cooldown_text, show_alert=True)
     except TelegramBadRequest:
-        pass # Игнорируем, если запрос устарел, продолжаем выполнение
-    if not isinstance(callback.message, types.Message):
-        return
-    user_id = callback.from_user.id
-    b_data = board_data[board_id]
-    lang = 'en' if board_id == 'int' else 'ru'
-    user_s = b_data['user_state'].setdefault(user_id, {})
-    now_ts = time.time()
-    last_creation_ts = user_s.get('last_thread_creation', 0)
-    if now_ts - last_creation_ts < THREAD_CREATE_COOLDOWN_USER:
-        remaining = THREAD_CREATE_COOLDOWN_USER - (now_ts - last_creation_ts)
-        minutes_left = int(remaining / 60)
-        cooldown_phrases = thread_messages.get(lang, {}).get('create_cooldown', [])
-        if lang == 'en':
-            default_cooldown_text = f"You can create a new thread in {minutes_left} minutes."
-        elif lang == 'jp':
-            default_cooldown_text = f"次のスレッドは {minutes_left} 分後に作成できます。"
-        else:
-            default_cooldown_text = f"Вы сможете создать новый тред через {minutes_left} мин."
-        cooldown_text = random.choice(cooldown_phrases).format(minutes=minutes_left, remaining=int(remaining)) if cooldown_phrases else default_cooldown_text
         try:
-            await callback.answer(cooldown_text, show_alert=True)
-        except TelegramBadRequest:
-            try:
-                await callback.message.answer(cooldown_text)
-            except Exception: pass
-        return
-    fsm_data = await state.get_data()
-    op_post_text = fsm_data.get('op_post_text')
-    await state.clear()
-    if not op_post_text:
-        try:
-            await callback.message.answer("Error: Post data not found. Please start over.")
-            await callback.message.delete()
-        except TelegramBadRequest:
-            pass
-        return
-    try:
-        await callback.message.delete()
-    except TelegramBadRequest:
-        pass
-    threads_data = b_data.get('threads_data', {})
-    thread_id = secrets.token_hex(4)
-    now_dt = datetime.now(UTC)
-    title = escape_html(clean_html_tags(op_post_text).split('\n')[0][:60])
-    success = await create_thread(
-        thread_id=thread_id,
-        board_id=board_id,
-        op_id=user_id,
-        title=title,
-        created_at=now_ts,
-        stream=stream
-    )
-    if not success:
-        error_text = "Database error: Could not create thread." if lang == 'en' else "Ошибка БД: не удалось создать тред."
-        try:
-            await callback.message.answer(error_text)
+            await callback.message.answer(cooldown_text)
         except Exception: pass
-        return
-    thread_info = {
-        'op_id': user_id, 'title': title, 'created_at': now_dt.isoformat(),
-        'last_activity_at': now_ts, 'posts': [], 'subscribers': {user_id},
-        'local_mutes': {}, 'local_shadow_mutes': {}, 'is_archived': False,
-        'announced_milestones': [], 'activity_notified': False, 'stream': stream
-    }
-    threads_data[thread_id] = thread_info
-    user_s['last_thread_creation'] = now_ts
+    return True
+
+async def _notify_new_thread_public(board_id: str, thread_id: str, title: str, now_dt, stream: str, lang: str, b_data: dict) -> None:
+    import random
     notification_phrases = thread_messages.get(lang, {}).get('new_thread_public_notification', [])
     if lang == 'en':
         default_notification_text = f"New thread created: «<b>{title}</b>»"
@@ -11312,14 +11262,18 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
     else:
         default_notification_text = f"Создан новый тред: «<b>{title}</b>»"
     notification_text = random.choice(notification_phrases).format(title=title) if notification_phrases else default_notification_text
+
     bot_username = BOARD_CONFIG[board_id]['username'].lstrip('@')
     deeplink_url = f"https://t.me/{bot_username}?start=thread_{thread_id}"
     if lang == 'en': button_text = "Enter Thread"
     elif lang == 'jp': button_text = "スレを見る"
     else: button_text = "Войти в тред"
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=button_text, url=deeplink_url)]
     ])
+
     content_notify = {'type': 'text', 'text': notification_text, 'is_system_message': True}
     pnum_notify = await create_post(
         board_id=board_id, author_id=0, content=content_notify,
@@ -11332,22 +11286,25 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
         async with storage_lock:
             messages_storage[pnum_notify] = {'author_id': 0, 'timestamp': now_dt, 'content': content_notify, 'board_id': board_id}
         await enqueue_board_message(board_id, {
-            'recipients': b_data['users']['active'], 'content': content_notify, 
+            'recipients': b_data['users']['active'], 'content': content_notify,
             'post_num': pnum_notify, 'board_id': board_id, 'keyboard': keyboard
         })
-    user_s['location'] = thread_id
-    user_s['last_location_switch'] = now_ts
+
+async def _process_op_post_and_enter(bot_instance, board_id: str, thread_id: str, title: str, user_id: int, op_post_text: str, stream: str, lang: str, thread_info: dict) -> None:
+    import random
     if lang == 'en':
         formatted_op_text = f"<b>OP-POST</b>\n_______________________________\n{op_post_text}"
     elif lang == 'jp':
         formatted_op_text = f"<b>>>1</b>\n_______________________________\n{op_post_text}"
     else:
         formatted_op_text = f"<b>ОП-ПОСТ</b>\n_______________________________\n{op_post_text}"
+
     op_post_content = {'type': 'text', 'text': formatted_op_text}
     await process_new_post(
-        bot_instance=callback.bot, board_id=board_id, user_id=user_id, content=op_post_content,
+        bot_instance=bot_instance, board_id=board_id, user_id=user_id, content=op_post_content,
         reply_to_post=None, is_shadow_muted=False, stream=stream
     )
+
     enter_phrases = thread_messages.get(lang, {}).get('enter_thread_prompt', [])
     if lang == 'en':
         default_enter_text = f"You have entered the thread: {title}"
@@ -11355,17 +11312,101 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
         default_enter_text = f"スレッドに入室しました: {title}"
     else:
         default_enter_text = f"Вы вошли в тред: {title}"
+
     enter_message = random.choice(enter_phrases).format(title=title) if enter_phrases else default_enter_text
     entry_keyboard = _get_thread_entry_keyboard(board_id, stream=stream)
+
     try:
-        await callback.bot.send_message(user_id, enter_message, reply_markup=entry_keyboard, parse_mode="HTML")
+        await bot_instance.send_message(user_id, enter_message, reply_markup=entry_keyboard, parse_mode="HTML")
     except (TelegramForbiddenError, TelegramBadRequest):
         pass
+
     spawn_task(post_thread_notification_to_channel(
         bots=GLOBAL_BOTS, board_id=board_id, thread_id=thread_id,
         thread_info=thread_info, event_type='new_thread'
     ))
-    await _send_op_commands_info(callback.bot, user_id, board_id)
+    await _send_op_commands_info(bot_instance, user_id, board_id)
+
+@dp.callback_query(F.data == "create_thread_confirm", ThreadCreateStates.waiting_for_confirmation)
+async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
+    """
+    Финальный шаг создания треда.
+    Исправлено: Защита от TelegramBadRequest и гарантия очистки состояния.
+    """
+    if not board_id: return
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass # Игнорируем, если запрос устарел, продолжаем выполнение
+
+    if not isinstance(callback.message, types.Message):
+        return
+
+    user_id = callback.from_user.id
+    b_data = board_data[board_id]
+    lang = 'en' if board_id == 'int' else 'ru'
+    user_s = b_data['user_state'].setdefault(user_id, {})
+    now_ts = time.time()
+    last_creation_ts = user_s.get('last_thread_creation', 0)
+
+    if await _check_and_handle_thread_cooldown(callback, now_ts, last_creation_ts, lang):
+        return
+
+    fsm_data = await state.get_data()
+    op_post_text = fsm_data.get('op_post_text')
+    await state.clear()
+
+    if not op_post_text:
+        try:
+            await callback.message.answer("Error: Post data not found. Please start over.")
+            await callback.message.delete()
+        except TelegramBadRequest:
+            pass
+        return
+
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+
+    threads_data = b_data.get('threads_data', {})
+    thread_id = secrets.token_hex(4)
+    now_dt = datetime.now(UTC)
+    title = escape_html(clean_html_tags(op_post_text).split('\n')[0][:60])
+
+    success = await create_thread(
+        thread_id=thread_id,
+        board_id=board_id,
+        op_id=user_id,
+        title=title,
+        created_at=now_ts,
+        stream=stream
+    )
+
+    if not success:
+        error_text = "Database error: Could not create thread." if lang == 'en' else "Ошибка БД: не удалось создать тред."
+        try:
+            await callback.message.answer(error_text)
+        except Exception: pass
+        return
+
+    thread_info = {
+        'op_id': user_id, 'title': title, 'created_at': now_dt.isoformat(),
+        'last_activity_at': now_ts, 'posts': [], 'subscribers': {user_id},
+        'local_mutes': {}, 'local_shadow_mutes': {}, 'is_archived': False,
+        'announced_milestones': [], 'activity_notified': False, 'stream': stream
+    }
+    threads_data[thread_id] = thread_info
+    user_s['last_thread_creation'] = now_ts
+
+    await _notify_new_thread_public(board_id, thread_id, title, now_dt, stream, lang, b_data)
+
+    user_s['location'] = thread_id
+    user_s['last_location_switch'] = now_ts
+
+    await _process_op_post_and_enter(
+        callback.bot, board_id, thread_id, title, user_id, op_post_text, stream, lang, thread_info
+    )
 @dp.message(Command("togglegif"))
 async def cmd_toggle_gif(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
