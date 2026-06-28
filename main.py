@@ -48,7 +48,6 @@ import sys
 import io
 import glob
 import time
-import witching_hour
 import periodic_publisher
 import textwrap
 import threading
