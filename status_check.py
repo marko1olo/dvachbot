@@ -28,7 +28,10 @@ def format_age(ts):
     if not ts or ts == 0:
         return "[dim]N/A[/dim]"
     
-    age_seconds = time.time() - ts
+    try:
+        age_seconds = time.time() - float(ts)
+    except (ValueError, TypeError):
+        return "[dim]N/A[/dim]"
     
     if age_seconds < 60:
         return f"[green]{int(age_seconds)}s ago[/green]"
