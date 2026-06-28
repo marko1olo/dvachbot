@@ -67,7 +67,7 @@ from typing import Tuple
 from dotenv import load_dotenv
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-from common.html_utils import escape_html
+from common.html_utils import escape_html, clean_html_tags
 from common.token_generator import generate_unique_token
 from common.database import (
     initialize_database, is_database_migrated, load_state_from_db, get_and_clear_reaction_queue, get_post_by_num, get_stream_active_users, 
@@ -260,7 +260,6 @@ ANIME_COMMAND_MAP = {
     "LOLICON": get_loli_image,
     "LOLIS": get_loli_image,
 }
-RE_HTML_TAGS = re.compile(r'<[^>]+>')
 RE_YOU_PATTERN = re.compile(r">>(\d+)")
 RE_SCRIPT_TAG = re.compile(r'<\s*script\b[^>]*>.*?<\s*/\s*script\s*>', flags=re.IGNORECASE | re.DOTALL)
 RE_SCRIPT_SINGLE = re.compile(r'<\s*script\b[^>]*>', flags=re.IGNORECASE)
@@ -989,10 +988,6 @@ aiohttp_log = logging.getLogger('aiohttp')
 aiohttp_log.setLevel(logging.CRITICAL) 
 aiogram_log = logging.getLogger('aiogram')
 aiogram_log.setLevel(logging.CRITICAL) # <--- ИЗМЕНЕНО НА CRITICAL, чтобы не видеть ошибки апдейтов
-def clean_html_tags(text: str) -> str:
-
-    if not text: return text
-    return RE_HTML_TAGS.sub('', text)
 def sanitize_html(text: str) -> str:
 
     if not text: return ""
