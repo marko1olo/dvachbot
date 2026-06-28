@@ -54,9 +54,12 @@ class StubClient:
         self.host = host
 
 class StubRequest:
-    def __init__(self, headers=None, client_host=None):
+    def __init__(self, headers=None, client_host=None, has_client=True):
         self.headers = headers or {}
-        self.client = StubClient(client_host)
+        if has_client:
+            self.client = StubClient(client_host)
+        else:
+            self.client = None
 
 class TestGetRealIp(unittest.TestCase):
     def test_x_real_ip_preferred(self):
@@ -90,6 +93,14 @@ class TestGetRealIp(unittest.TestCase):
             client_host="9.10.11.12"
         )
         self.assertEqual(get_real_ip(request), "9.10.11.12")
+
+    def test_client_none_fallback(self):
+        """Test that when client is None, it falls back to 127.0.0.1"""
+        request = StubRequest(
+            headers={},
+            has_client=False
+        )
+        self.assertEqual(get_real_ip(request), "127.0.0.1")
 
     def test_empty_headers_values(self):
         """Test that empty string header values correctly fall back to client.host."""
