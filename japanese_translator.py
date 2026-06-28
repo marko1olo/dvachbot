@@ -1834,7 +1834,7 @@ def _merge_negative_tags(*groups):
     return merged
 
 def _normalize_tag_token(value: str) -> str:
-    return str(value).strip().lower().replace(" ", "_")
+    return value.replace('_', ' ').replace('-', ' ').strip().lower()
 
 def _tag_token_is_blocked(token: str) -> bool:
     token = _normalize_tag_token(token).lstrip("-")
