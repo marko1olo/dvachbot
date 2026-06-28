@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 LOG_DIR = ROOT / "logs"
+LIVE_DATA_DIR = ROOT / "live_data"
 DB_PATH = ROOT / "dvach_bot.db"
 LOCK_PATH = ROOT / "bot.lock"
 STOP_PATH = ROOT / "bot.stop"
@@ -69,14 +70,10 @@ def _pid_exists(pid: int | None) -> bool:
 
 def _health() -> tuple[str, dict | str]:
     try:
-        with urllib.request.urlopen(HEALTH_URL, timeout=3) as response:
-            body = response.read(8192).decode("utf-8", errors="replace")
-            try:
-                return f"HTTP {getattr(response, 'status', 200)}", json.loads(body)
-            except json.JSONDecodeError:
-                return f"HTTP {getattr(response, 'status', 200)}", body[:300]
-    except Exception as exc:
-        return "ERROR", f"{type(exc).__name__}: {exc}"
+        db = _read_json(LIVE_DATA_DIR / "metrics_db.json")
+    except Exception as e:
+        return ("error", str(e))
+    return ("ok", db)
 
 
 def _read_tail(path: Path, max_bytes: int = 512 * 1024) -> str:
