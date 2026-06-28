@@ -1,4 +1,8 @@
-import unittest
+import sys
+with open("tests/test_site_importer.py", "r") as f:
+    content = f.read()
+
+new_content = """import unittest
 import asyncio
 import os
 import sys
@@ -104,3 +108,7 @@ class TestSiteImporterExtractPostsData(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+"""
+
+with open("tests/test_site_importer.py", "w") as f:
+    f.write(new_content)
