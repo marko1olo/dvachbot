@@ -758,6 +758,8 @@ async def process_import_queue(app_state_broadcast_queue):
                     await asyncio.sleep(5)
                     continue
                 
+                op_thread_ids_cache = {}
+
                 for row in rows:
                     q_id, task_id, board_id, orig_num, reply_to_orig, content_str, author_id, stream, is_op, title = row
                     try:
@@ -785,9 +787,16 @@ async def process_import_queue(app_state_broadcast_queue):
                         
                         final_thread_id_db = None
                         if not is_op:
-                            async with conn.execute("SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1", (task_id,)) as op_cur:
-                                op_row = await op_cur.fetchone()
-                                if op_row: final_thread_id_db = str(op_row[0])
+                            if task_id in op_thread_ids_cache:
+                                final_thread_id_db = op_thread_ids_cache[task_id]
+                            else:
+                                async with conn.execute("SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1", (task_id,)) as op_cur:
+                                    op_row = await op_cur.fetchone()
+                                    if op_row:
+                                        final_thread_id_db = str(op_row[0])
+                                        op_thread_ids_cache[task_id] = final_thread_id_db
+                                    else:
+                                        op_thread_ids_cache[task_id] = None
                         
                         post_mode = 'new_thread' if is_op else 'reply'
                         new_post_num = await create_post(
