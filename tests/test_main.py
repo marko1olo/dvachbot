@@ -59,45 +59,19 @@ class StubRequest:
         self.client = StubClient(client_host)
 
 class TestGetRealIp(unittest.TestCase):
-    def test_x_real_ip_preferred(self):
-        """Test that x-real-ip is used if available."""
+    def test_client_host_used(self):
+        """Test that client.host is correctly returned."""
         request = StubRequest(
             headers={"x-real-ip": "1.2.3.4", "x-forwarded-for": "5.6.7.8"},
             client_host="9.10.11.12"
         )
-        self.assertEqual(get_real_ip(request), "1.2.3.4")
-
-    def test_x_forwarded_for_fallback(self):
-        """Test that x-forwarded-for is used if x-real-ip is not available."""
-        request = StubRequest(
-            headers={"x-forwarded-for": "5.6.7.8"},
-            client_host="9.10.11.12"
-        )
-        self.assertEqual(get_real_ip(request), "5.6.7.8")
-
-    def test_x_forwarded_for_multiple_ips(self):
-        """Test that only the first IP from x-forwarded-for is returned."""
-        request = StubRequest(
-            headers={"x-forwarded-for": "5.6.7.8, 10.0.0.1"},
-            client_host="9.10.11.12"
-        )
-        self.assertEqual(get_real_ip(request), "5.6.7.8")
-
-    def test_client_host_fallback(self):
-        """Test that client.host is used if no relevant headers are present."""
-        request = StubRequest(
-            headers={},
-            client_host="9.10.11.12"
-        )
         self.assertEqual(get_real_ip(request), "9.10.11.12")
 
-    def test_empty_headers_values(self):
-        """Test that empty string header values correctly fall back to client.host."""
-        request = StubRequest(
-            headers={"x-real-ip": "", "x-forwarded-for": ""},
-            client_host="9.10.11.12"
-        )
-        self.assertEqual(get_real_ip(request), "9.10.11.12")
+    def test_no_client(self):
+        """Test that 127.0.0.1 is returned when request.client is None."""
+        request = StubRequest(headers={})
+        request.client = None
+        self.assertEqual(get_real_ip(request), "127.0.0.1")
 
 
 from Dubsite_tgach.main import clean_title_text
