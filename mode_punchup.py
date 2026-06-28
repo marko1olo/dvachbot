@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import re
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 
 
 ReplacementValue = str | Sequence[str]
@@ -26,11 +27,18 @@ def _match_case(source: str, replacement: str) -> str:
     return replacement
 
 
+@lru_cache(maxsize=128)
+def _compile_pattern(words_tuple: tuple[str, ...]) -> re.Pattern[str] | None:
+    if not words_tuple:
+        return None
+    words = sorted((re.escape(word) for word in words_tuple), key=len, reverse=True)
+    return re.compile(r"(?iu)(?<![\w])(" + "|".join(words) + r")(?![\w])")
+
+
 def _build_pattern(replacements: Mapping[str, ReplacementValue]) -> re.Pattern[str] | None:
     if not replacements:
         return None
-    words = sorted((re.escape(word) for word in replacements), key=len, reverse=True)
-    return re.compile(r"(?iu)(?<![\w])(" + "|".join(words) + r")(?![\w])")
+    return _compile_pattern(tuple(replacements.keys()))
 
 
 def _swap_words(text: str, profile: dict) -> str:
