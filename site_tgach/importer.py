@@ -777,6 +777,11 @@ async def process_import_queue(app_state_broadcast_queue):
                     await asyncio.sleep(5)
                     continue
                 
+                processed_q_ids = []
+                ref_maps_to_insert = []
+                local_ref_map = {}
+                local_op_map = {}
+
                 for row in rows:
                     q_id, task_id, board_id, orig_num, reply_to_orig, content_str, author_id, stream, is_op, title = row
                     try:
@@ -793,6 +798,12 @@ async def process_import_queue(app_state_broadcast_queue):
                             async with conn.execute(q_map, [task_id] + refs) as map_cur:
                                 async for m_row in map_cur:
                                     replacements[str(m_row[0])] = m_row[1]
+
+                            for ref in refs:
+                                if (task_id, ref) in local_ref_map:
+                                    replacements[str(ref)] = local_ref_map[(task_id, ref)]
+                                elif (task_id, int(ref)) in local_ref_map:
+                                    replacements[str(ref)] = local_ref_map[(task_id, int(ref))]
                         
                         if replacements:
                             def _sim_id_replacer(match):
@@ -801,7 +812,7 @@ async def process_import_queue(app_state_broadcast_queue):
                                     return f">>{replacements[oid]}"
                                 return match.group(0)
                             text = RE_LINK_REF.sub(_sim_id_replacer, text)
-                            
+
                         content['text'] = text
                         
                         if reply_to_orig and reply_to_orig in replacements:
@@ -809,9 +820,12 @@ async def process_import_queue(app_state_broadcast_queue):
                         
                         final_thread_id_db = None
                         if not is_op:
-                            async with conn.execute("SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1", (task_id,)) as op_cur:
-                                op_row = await op_cur.fetchone()
-                                if op_row: final_thread_id_db = str(op_row[0])
+                            if task_id in local_op_map:
+                                final_thread_id_db = str(local_op_map[task_id])
+                            else:
+                                async with conn.execute("SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1", (task_id,)) as op_cur:
+                                    op_row = await op_cur.fetchone()
+                                    if op_row: final_thread_id_db = str(op_row[0])
                         
                         post_mode = 'new_thread' if is_op else 'reply'
                         new_post_num = await create_post(
@@ -829,14 +843,14 @@ async def process_import_queue(app_state_broadcast_queue):
                         if new_post_num:
                             if is_op:
                                 await create_thread_entry(new_post_num, board_id, author_id, title or "Imported", time.time(), stream=stream)
+                                local_op_map[task_id] = new_post_num
                             elif final_thread_id_db:
                                 await update_thread_last_updated(int(final_thread_id_db), time.time())
                             await process_backlinks(new_post_num, content['text'], real_reply_to)
 
-                            async with db_lock:
-                                await conn.execute("INSERT INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)", (task_id, orig_num, new_post_num))
-                                await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
-                                await conn.commit()
+                            local_ref_map[(task_id, orig_num)] = new_post_num
+                            ref_maps_to_insert.append((task_id, orig_num, new_post_num))
+                            processed_q_ids.append(q_id)
                             
                             if app_state_broadcast_queue:
                                 bp = await get_post_for_broadcast(new_post_num)
@@ -848,16 +862,19 @@ async def process_import_queue(app_state_broadcast_queue):
                             
                         else:
                             logger.error(f"❌ [Sim] Failed to create post for queue item {q_id}")
-                            async with db_lock:
-                                await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
-                                await conn.commit()
+                            processed_q_ids.append(q_id)
                         
                     except Exception as e:
-                        try:
-                            async with db_lock:
-                                await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
-                                await conn.commit()
-                        except: pass
+                        processed_q_ids.append(q_id)
+
+                if processed_q_ids or ref_maps_to_insert:
+                    async with db_lock:
+                        if ref_maps_to_insert:
+                            await conn.executemany("INSERT INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)", ref_maps_to_insert)
+                        if processed_q_ids:
+                            placeholders = ','.join(['?'] * len(processed_q_ids))
+                            await conn.execute(f"DELETE FROM ImportQueue WHERE id IN ({placeholders})", processed_q_ids)
+                        await conn.commit()
 
         except Exception:
             await asyncio.sleep(10)
