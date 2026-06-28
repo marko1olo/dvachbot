@@ -5689,6 +5689,44 @@ async def remove_users_from_board_batch(user_ids: list[int], board_id: str):
                 try: await db.execute("ROLLBACK")
                 except: pass
                 break
+async def ban_hashes(hashes_info: list):
+    """
+    Банит список хешей.
+    hashes_info: list of tuples (hash_value, hash_type, reason)
+    """
+    from common.db_pool import get_pool, db_lock
+
+    if not hashes_info:
+        return
+
+    async with db_lock:
+        for attempt in range(10):
+            try:
+                db = await get_pool()
+                await db.execute("BEGIN IMMEDIATE")
+
+                await db.executemany(
+                    "INSERT OR REPLACE INTO BannedHashes (hash_value, hash_type, reason) VALUES (?, ?, ?)",
+                    hashes_info
+                )
+
+                await db.execute("COMMIT")
+                return
+            except sqlite3.OperationalError as e:
+                try: await db.execute("ROLLBACK")
+                except: pass
+
+                if "locked" in str(e).lower() or "busy" in str(e).lower():
+                    await asyncio.sleep(0.1 * (attempt + 1))
+                    continue
+                print(f"⛔ Ошибка при бане хешей: {e}")
+                break
+            except Exception as e:
+                try: await db.execute("ROLLBACK")
+                except: pass
+                print(f"⛔ Ошибка при бане хешей: {e}")
+                break
+
 async def ban_hash(value: str, type: str, reason: str):
     from common.db_pool import get_pool, db_lock
     # При сбросе кэша в глобальной области видимости может потребоваться импорт или доступ к переменной модуля
