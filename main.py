@@ -9448,63 +9448,14 @@ def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
         
     return prompt
 
-@dp.message(Command("summarize", "sum", "summary", "samamri", "sammary"))
-async def cmd_summarize(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id:
-        print("[summarize] Board ID not found")
-        await message.answer("Ошибка: не удалось определить доску.")
-        return
-    b_data = board_data[board_id]
-    user_id = message.from_user.id
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    now_ts = time.time()
-    async with storage_lock:
-        last_usage = b_data.get('last_summarize_time', 0)
-        if now_ts - last_usage < SUMMARIZE_COOLDOWN:
-            remaining = SUMMARIZE_COOLDOWN - (now_ts - last_usage)
-            if lang == 'en':
-                cooldown_text = f"⏳ Command is on cooldown. Please wait {int(remaining)} seconds."
-            elif lang == 'jp':
-                cooldown_text = f"⏳ コマンドはクールダウン中です。あと {int(remaining)} 秒お待ちください。"
-            else:
-                cooldown_text = f"⏳ Команда на кулдауне. Подождите еще {int(remaining)} сек."
-            try:
-                await message.answer(cooldown_text)
-                await message.delete()
-            except Exception:
-                pass
-            return
-        b_data['last_summarize_time'] = time.time()
-    thread_id = None
-    
-    board_name = escape_html(BOARD_CONFIG[board_id]['name'])
-    if lang == 'en':
-        context_name = f"board {board_name}"
-    elif lang == 'jp':
-        context_name = f"板 {board_name}"
-    else:
-        context_name = f"доски {board_name}"
-
-    if board_id in THREAD_BOARDS:
-        user_location = b_data.get('user_state', {}).get(user_id, {}).get('location', 'main')
-        if user_location != 'main':
-            thread_id = user_location
-            thread_info = b_data.get('threads_data', {}).get(thread_id, {})
-            thread_title = thread_info.get('title', '...')
-            if lang == 'en':
-                context_name = f"thread \"{thread_title}\""
-            elif lang == 'jp':
-                context_name = f"スレッド「{thread_title}」"
-            else:
-                context_name = f"треда «{thread_title}»"
-
-    # Parse length, paragraph count and model arguments from message text if available
+def _parse_summarize_args(text: str):
+    import re
     paragraph_count = None
     model_preference = 'groq' # Default to free/unlimited models (qwen, llama)
     chosen_tier = None
     
-    if message.text:
-        args = message.text.lower().split()
+    if text:
+        args = text.lower().split()
         if len(args) > 1:
             for arg in args[1:]:
                 # Check if it's an exact number of paragraphs
@@ -9537,7 +9488,10 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
                     model_preference = 'qwen'
                 elif arg in ['groq', 'грок', 'free', 'шара']:
                     model_preference = 'groq'
+    return paragraph_count, model_preference, chosen_tier
 
+def _determine_paragraph_count_and_length(paragraph_count, chosen_tier):
+    import random
     # If neither paragraph_count nor chosen_tier is specified, pick a random tier
     if paragraph_count is None and chosen_tier is None:
         chosen_tier = random.choice(['short', 'medium', 'long', 'extra_long', 'huge'])
@@ -9563,22 +9517,30 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     else:
         length_choice = 'long'
 
+    return paragraph_count, length_choice
+
+async def _get_summarize_prompt_and_chunk(board_id, thread_id, thread_info, lang):
+    import random
     if thread_id:
         if lang == 'en':
             prompt = random.choice([
                 # Short style
                 f"You are a toxic 4chan anon. Give an ultra-short, cynical roast (1-2 sentences) of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Highlight only the biggest fail or topic. Use board slang. Output ONLY plain text or basic HTML. DO NOT use Markdown.",
                 # Long style
-                f"You are a paranoid 4chan archivist. Write a crazy long, extremely detailed, and structured chronicle of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Write a massive text, analyzing every single discussion topic in detail. Highlight specific participants by their IDs (e.g. Anon #1234, Anon #5678) and lay out the chronology of their arguments with mock quotes and savage analysis. Your report must be a structured long-read with bold subheadings (use <b>, <i>, <u>, <s> for formatting) consisting of at least 6-8 heavy, informative paragraphs. Use board slang and pure toxicity. Output ONLY plain text or basic HTML. DO NOT use Markdown.",
+                f"You are a crazy archivist of an imageboard. Write a massive, insanely detailed and deep report about the arguments in thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Write thoroughly, describe every topic discussed (even minor ones), identify participants by their IDs (e.g. Anon #1234, Anon #5678) and show a detailed chronology of their arguments with quotes and caustic analysis. Your report must be structured, with subheadings (use <b>, <i>, <u>, <s> for formatting) and consist of a huge longread (at least 6-8 heavy, informative paragraphs). Be arrogant, use chan slang and swear words. Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags.",
                 # Medium style
-                f"You are a toxic 4chan anon. Write a detailed and cynical summary of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Describe the main discussion topics, who took what stance, and who got roasted or seethed. Use board slang, profanity, be cynical and rude. Output a structured breakdown with funny headings. Output ONLY plain text or basic HTML. DO NOT use Markdown."
+                f"You are an Anon from an imageboard. Your task is to write a detailed, cynical and caustic breakdown of the thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Describe the main topics of the argument, who held what position, who burned out or failed the hardest. Write dirty, use slang, swearing, be a fun, toxic and cynical bastard. Format it as a structured breakdown with funny subheadings, revealing the essence in detail. Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags."
             ])
             info_text = "For the last 6 hours in the thread"
         elif lang == 'jp':
-            prompt = (
-                f"お前は2chねらーだ。スレ「{escape_html(thread_info.get('title', ''))}」（「|」で区切られた投稿）の流れを3行で解説しろ。"
-                "毒舌で, ネットスラング（草、ｗ、～だろ）を多用しろ。丁寧語禁止。煽り全開で。"
-            )
+            prompt = random.choice([
+                # Short
+                f"あなたは毒舌な2ちゃんねらーです。スレッド「{escape_html(thread_info.get('title', ''))}」の直近6時間のやり取り（投稿は'|'で区切り）を、極めて短く（1〜2文で）シニカルに煽ってください。一番のアホな出来事や話題だけを取り上げ、ネットスラングを使ってください。プレーンテキストか基本HTMLのみ出力してください。Markdownは使用不可。",
+                # Long
+                f"あなたは狂気の板の記録者です。スレッド「{escape_html(thread_info.get('title', ''))}」の論争（投稿は'|'で区切り）について、異常なまでに長く、詳細で深いレポートを作成してください。細部まで徹底的に書き、議論されたすべてのトピック（些細なものも含め）を説明し、参加者をID（例：名無し #1234）で特定し、彼らの論争の詳細な時系列を引用と辛辣な分析を交えて示してください。レポートは構造化され、小見出し（<b>, <i>などをフォーマットに使用）を持ち、巨大な長文（少なくとも6〜8段落の濃密な内容）である必要があります。傲慢な態度で、ネットスラングや汚い言葉を使ってください。プレーンテキストか基本HTML (<b>, <i>, <u>, <s>, <code>, <pre>) のみ出力してください。Markdownは使用不可。閉じていないHTMLタグは使用不可。",
+                # Medium
+                f"あなたは匿名掲示板の名無しです。タスク：スレッド「{escape_html(thread_info.get('title', ''))}」の直近6時間（投稿は'|'で区切り）について、詳細でシニカルかつ辛辣な分析を書いてください。論争の主要なトピック、誰がどんな主張をしたか、誰が一番顔真っ赤になったか、あるいは大失敗したかを詳細に記述してください。汚い言葉やスラング、罵倒語を使い、面白く、毒のあるシニカルなクソ野郎になってください。面白い小見出しを使った構造化された分析にし、本質を詳しく暴いてください。プレーンテキストか基本HTML (<b>, <i>, <u>, <s>, <code>, <pre>) のみ出力してください。Markdownは使用不可。閉じていないHTMLタグは使用不可。"
+            ])
             info_text = "スレッドでの過去6時間の間に"
         else:
             prompt = random.choice([
@@ -9605,30 +9567,18 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             info_text = "За последние 6 часов на доске"
         chunk = await get_board_chunk(board_id, hours=6, lang=lang)
 
-    # Dynamically inject exact paragraph count constraint into the selected prompt
-    prompt = adjust_prompt_paragraphs(prompt, paragraph_count, lang=lang)
+    return prompt, chunk, info_text
 
-    hf_token = os.getenv("HF_TOKEN")
-    if not chunk or len(chunk) < 100:
-        print(f"[summarize] Мало сообщений для summarize (len={len(chunk)})")
-        if lang == 'en':
-            err_msg = f"{info_text} there were too few messages to summarize."
-        elif lang == 'jp':
-            err_msg = f"{info_text} サマリーを作成するのに十分なメッセージがありませんでした。"
-        else:
-            err_msg = f"{info_text} было мало сообщений для саммари."
-        await message.answer(err_msg)
-        return
-
+def _get_summarize_status_text(paragraph_count, length_choice, lang):
     if lang == 'en':
         if length_choice == 'short':
-            status_text = f"⏳ Generating a quick summary ({paragraph_count} paragraph{'s' if paragraph_count > 1 else ''})..."
+            return f"⏳ Generating a quick summary ({paragraph_count} paragraph{'s' if paragraph_count > 1 else ''})..."
         elif paragraph_count >= 6:
-            status_text = f"⏳ Preparing a detailed long-read for Telegraph ({paragraph_count} paragraphs)..."
+            return f"⏳ Preparing a detailed long-read for Telegraph ({paragraph_count} paragraphs)..."
         else:
-            status_text = f"⏳ Generating summary, please wait ~30 seconds ({paragraph_count} paragraphs)..."
+            return f"⏳ Generating summary, please wait ~30 seconds ({paragraph_count} paragraphs)..."
     elif lang == 'jp':
-        status_text = f"⏳ サマリーを生成中 ({paragraph_count}段落)、30秒ほどお待ちください..."
+        return f"⏳ サマリーを生成中 ({paragraph_count}段落)、30秒ほどお待ちください..."
     else:
         # Russian plural endings: 1 абзац, 2-4 абзаца, 5+ абзацев
         if paragraph_count % 10 == 1 and paragraph_count % 100 != 11:
@@ -9639,39 +9589,14 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             p_word = "абзацев"
             
         if length_choice == 'short':
-            status_text = f"⏳ Генерирую быстрое саммари ({paragraph_count} {p_word})..."
+            return f"⏳ Генерирую быстрое саммари ({paragraph_count} {p_word})..."
         elif paragraph_count >= 6:
-            status_text = f"⏳ Готовлю ебануто длинный лонгрид для Telegraph ({paragraph_count} {p_word})..."
+            return f"⏳ Готовлю ебануто длинный лонгрид для Telegraph ({paragraph_count} {p_word})..."
         else:
-            status_text = f"⏳ Генерирую среднее саммари ({paragraph_count} {p_word})..."
-            
-    await message.answer(status_text)
+            return f"⏳ Генерирую среднее саммари ({paragraph_count} {p_word})..."
 
-    try:
-        summary = await summarize_text_with_hf(prompt, chunk, hf_token, model_preference=model_preference)
-        summary = clean_html_for_tg(summary)
-    except Exception as e:
-        print(f"[summarize] Error during HF summarize: {e}")
-        if lang == 'en':
-            err_msg = "Error generating summary."
-        elif lang == 'jp':
-            err_msg = "サマリーの生成中にエラーが発生しました。"
-        else:
-            err_msg = "Ошибка при генерации саммари."
-        await message.answer(err_msg)
-        return
-
-    if not summary:
-        print("[summarize] Summary empty or failed")
-        if lang == 'en':
-            err_msg = "Could not generate summary. Try again later."
-        elif lang == 'jp':
-            err_msg = "サマリーを作成できませんでした。後ほどもう一度お試しください。"
-        else:
-            err_msg = "Не удалось сделать саммари. Попробуй позже."
-        await message.answer(err_msg)
-        return
-
+async def _format_summary_with_telegraph(summary, paragraph_count, context_name, lang):
+    from datetime import datetime
     should_use_telegraph = (paragraph_count >= 6 or len(summary) >= 1200)
     telegraph_url = None
 
@@ -9699,7 +9624,10 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     else:
         summary = summary[:4000]
 
-    print(f"[summarize] Final summary length: {len(summary)}")
+    return summary, should_use_telegraph, telegraph_url
+
+async def _distribute_summarize_post(summary, should_use_telegraph, telegraph_url, board_id, thread_id, lang, context_name, stream, b_data):
+    from datetime import datetime, UTC
     now_dt = datetime.now(UTC)
 
     if should_use_telegraph and telegraph_url:
@@ -9728,7 +9656,8 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     )
     if not pnum:
         print(f"⛔ [{board_id}] КРИТИЧЕСКАЯ ОШИБКА: не удалось создать пост в БД для /summarize.")
-        return
+        return False, None
+
     header_text = await format_header(board_id, pnum)
     content['header'] = header_text
     await update_post_content(pnum, content)
@@ -9739,6 +9668,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             recipients = thread_info.get('subscribers', set())
     else:
         recipients = b_data['users']['active']
+
     if recipients:
         async with storage_lock:
             messages_storage[pnum] = {
@@ -9749,8 +9679,125 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             "recipients": recipients, "content": content, "post_num": pnum, 
             "board_id": board_id, "thread_id": thread_id
         })
+        return True, pnum
     else:
         await delete_post_by_num(pnum)
+        return False, pnum
+
+@dp.message(Command("summarize", "sum", "summary", "samamri", "sammary"))
+async def cmd_summarize(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id:
+        print("[summarize] Board ID not found")
+        await message.answer("Ошибка: не удалось определить доску.")
+        return
+    b_data = board_data[board_id]
+    user_id = message.from_user.id
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    now_ts = time.time()
+    async with storage_lock:
+        last_usage = b_data.get('last_summarize_time', 0)
+        if now_ts - last_usage < SUMMARIZE_COOLDOWN:
+            remaining = SUMMARIZE_COOLDOWN - (now_ts - last_usage)
+            if lang == 'en':
+                cooldown_text = f"⏳ Command is on cooldown. Please wait {int(remaining)} seconds."
+            elif lang == 'jp':
+                cooldown_text = f"⏳ コマンドはクールダウン中です。あと {int(remaining)} 秒お待ちください。"
+            else:
+                cooldown_text = f"⏳ Команда на кулдауне. Подождите еще {int(remaining)} сек."
+            try:
+                await message.answer(cooldown_text)
+                await message.delete()
+            except Exception:
+                pass
+            return
+        b_data['last_summarize_time'] = time.time()
+    thread_id = None
+
+    board_name = escape_html(BOARD_CONFIG[board_id]['name'])
+    if lang == 'en':
+        context_name = f"board {board_name}"
+    elif lang == 'jp':
+        context_name = f"板 {board_name}"
+    else:
+        context_name = f"доски {board_name}"
+
+    if board_id in THREAD_BOARDS:
+        user_location = b_data.get('user_state', {}).get(user_id, {}).get('location', 'main')
+        if user_location != 'main':
+            thread_id = user_location
+            thread_info = b_data.get('threads_data', {}).get(thread_id, {})
+            thread_title = thread_info.get('title', '...')
+            if lang == 'en':
+                context_name = f"thread \"{thread_title}\""
+            elif lang == 'jp':
+                context_name = f"スレッド「{thread_title}」"
+            else:
+                context_name = f"треда «{thread_title}»"
+
+    # 1. Parse args
+    paragraph_count, model_preference, chosen_tier = _parse_summarize_args(message.text)
+
+    # 2. Determine paragraphs and length_choice
+    paragraph_count, length_choice = _determine_paragraph_count_and_length(paragraph_count, chosen_tier)
+
+    # 3. Get prompt and chunks
+    thread_info = b_data.get('threads_data', {}).get(thread_id, {}) if thread_id else {}
+    prompt, chunk, info_text = await _get_summarize_prompt_and_chunk(board_id, thread_id, thread_info, lang)
+
+    # Dynamically inject exact paragraph count constraint into the selected prompt
+    prompt = adjust_prompt_paragraphs(prompt, paragraph_count, lang=lang)
+
+    hf_token = os.getenv("HF_TOKEN")
+    if not chunk or len(chunk) < 100:
+        print(f"[summarize] Мало сообщений для summarize (len={len(chunk)})")
+        if lang == 'en':
+            err_msg = f"{info_text} there were too few messages to summarize."
+        elif lang == 'jp':
+            err_msg = f"{info_text} サマリーを作成するのに十分なメッセージがありませんでした。"
+        else:
+            err_msg = f"{info_text} было мало сообщений для саммари."
+        await message.answer(err_msg)
+        return
+
+    # 4. Status text
+    status_text = _get_summarize_status_text(paragraph_count, length_choice, lang)
+    await message.answer(status_text)
+
+    try:
+        summary = await summarize_text_with_hf(prompt, chunk, hf_token, model_preference=model_preference)
+        summary = clean_html_for_tg(summary)
+    except Exception as e:
+        print(f"[summarize] Error during HF summarize: {e}")
+        if lang == 'en':
+            err_msg = "Error generating summary."
+        elif lang == 'jp':
+            err_msg = "サマリーの生成中にエラーが発生しました。"
+        else:
+            err_msg = "Ошибка при генерации саммари."
+        await message.answer(err_msg)
+        return
+
+    if not summary:
+        print("[summarize] Summary empty or failed")
+        if lang == 'en':
+            err_msg = "Could not generate summary. Try again later."
+        elif lang == 'jp':
+            err_msg = "サマリーを作成できませんでした。後ほどもう一度お試しください。"
+        else:
+            err_msg = "Не удалось сделать саммари. Попробуй позже."
+        await message.answer(err_msg)
+        return
+
+    # 5. Format Telegraph
+    summary, should_use_telegraph, telegraph_url = await _format_summary_with_telegraph(summary, paragraph_count, context_name, lang)
+    print(f"[summarize] Final summary length: {len(summary)}")
+
+    # 6. Distribute
+    success, pnum = await _distribute_summarize_post(
+        summary, should_use_telegraph, telegraph_url, board_id, thread_id, lang, context_name, stream, b_data
+    )
+
+    if not success and pnum is not None:
         if lang == 'en':
             err_msg = "Failed to send summary, thread is no longer active."
         elif lang == 'jp':
@@ -9759,8 +9806,8 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             err_msg = "Не удалось отправить саммари, тред больше не активен."
         await message.answer(err_msg)
         return
-    print(f"[summarize] Саммари успешно отправлено ({context_name}, post_num={pnum})")
-
+    elif success:
+        print(f"[summarize] Саммари успешно отправлено ({context_name}, post_num={pnum})")
 @dp.message(Command("bot_stats"))
 async def cmd_bot_stats(message: types.Message):
     if not is_admin(message.from_user.id, 'b'): # check if admin on at least board b
