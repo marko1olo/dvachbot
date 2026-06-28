@@ -125,13 +125,9 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 faulthandler.enable()
 def get_real_ip(request: Request) -> str:
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host
+    if request.client is not None:
+        return request.client.host
+    return "127.0.0.1"
 GEOIP_READER = None
 
 _geoip_init_lock = asyncio.Lock()

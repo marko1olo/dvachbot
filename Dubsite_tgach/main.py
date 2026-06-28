@@ -88,13 +88,9 @@ from fastapi_cache.decorator import cache
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 def get_real_ip(request: Request) -> str:
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host
+    if request.client is not None:
+        return request.client.host
+    return "127.0.0.1"
 GEOIP_READER = None
 
 @alru_cache(maxsize=10000, ttl=3600)
