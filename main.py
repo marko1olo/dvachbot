@@ -2949,23 +2949,38 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                     posts_to_delete_set = set(user_posts)
                     
                     # Проверяем, какие из этих постов являются ОП-постами тредов
-                    for p_num in user_posts:
-                        p_str = str(p_num)
-                        async with db.execute("SELECT thread_id FROM Threads WHERE thread_id = ? OR thread_num = ?", (p_str, p_num)) as cursor:
-                            t_row = await cursor.fetchone()
-                            if t_row:
-                                threads_to_delete.append(t_row[0])
+                    if user_posts:
+                        chunk_size = 400
+                        for i in range(0, len(user_posts), chunk_size):
+                            chunk = user_posts[i:i + chunk_size]
+                            placeholders = ','.join('?' for _ in chunk)
+                            params = [str(p) for p in chunk] + chunk
+
+                            query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders}) OR thread_num IN ({placeholders})"
+                            async with db.execute(query, tuple(params)) as cursor:
+                                rows = await cursor.fetchall()
+                                for row in rows:
+                                    threads_to_delete.append(row[0])
                                 
                     # Если есть удаляемые треды, выбираем ВСЕ посты этих тредов, чтобы снести их тоже
                     if threads_to_delete:
-                        for t_id in threads_to_delete:
-                            try: t_id_int = int(t_id)
-                            except ValueError: t_id_int = 0
-                            
-                            async with db.execute("SELECT post_num FROM Posts WHERE thread_id = ? OR thread_id = ?", (t_id, str(t_id_int))) as cursor:
-                                p_rows = await cursor.fetchall()
-                                for pr in p_rows:
-                                    posts_to_delete_set.add(pr[0])
+                        chunk_size = 400
+                        for i in range(0, len(threads_to_delete), chunk_size):
+                            chunk = threads_to_delete[i:i + chunk_size]
+                            placeholders = ','.join('?' for _ in chunk)
+                            params = []
+                            for t_id in chunk:
+                                params.append(t_id)
+                            for t_id in chunk:
+                                try: t_id_int = int(t_id)
+                                except ValueError: t_id_int = 0
+                                params.append(str(t_id_int))
+
+                            query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders}) OR thread_id IN ({placeholders})"
+                            async with db.execute(query, tuple(params)) as cursor:
+                                rows = await cursor.fetchall()
+                                for row in rows:
+                                    posts_to_delete_set.add(row[0])
                                     
                     posts_to_delete_nums = list(posts_to_delete_set)
                     placeholders = ','.join('?' for _ in posts_to_delete_nums)
