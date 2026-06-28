@@ -5246,8 +5246,6 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
             return {"status": "ok", "message": "База чиста, исправлять нечего."}
 
         # 2. Проходимся и чистим
-        await conn.execute("BEGIN IMMEDIATE")
-        
         updates = []
         for row in rows:
             post_num, raw_content = row
@@ -5271,6 +5269,8 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
             except Exception:
                 continue
         
+        await conn.execute("BEGIN IMMEDIATE")
+
         if updates:
             await conn.executemany(
                 "UPDATE Posts SET content = ? WHERE post_num = ?",
