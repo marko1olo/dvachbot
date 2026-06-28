@@ -7132,7 +7132,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                     curr_time = time.time()
 
                     # FIX: Если thread_id is None, используем ID родительского поста
-                    effective_thread_id = str(thread_id) if thread_id else str(source_post_num)
+                    effective_thread_id = str(thread_id) if thread_id is not None else str(source_post_num)
 
                     await db.execute(
                         """INSERT INTO NotificationQueue 
