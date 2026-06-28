@@ -2,6 +2,7 @@ import sys
 import os
 import asyncio
 from common.task_manager import spawn_task
+from common.token_generator import generate_negative_id
 import json
 import time
 import re
@@ -740,10 +741,6 @@ async def notify_admins(bot: Bot, text: str):
             logger.error(f"⚠️ Ошибка доставки админу {admin_id}: {e}")
 limiter = Limiter(key_func=get_user_id_from_session)
 signer = TimestampSigner(SECRET_KEY)
-def generate_negative_id(token: str) -> int:
-    hash_val = hashlib.sha256(token.encode()).hexdigest()
-    val = int(hash_val[:8], 16)
-    return -(val % 2147483647) - 1
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, set[WebSocket]] = defaultdict(set)

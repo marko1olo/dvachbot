@@ -2,6 +2,7 @@
 # выполняет генерацию уникальных токенов для API и других нужд
 import random
 import secrets
+import hashlib
 
 # --- Списки слов, сгруппированные по грамматическому роду ---
 
@@ -60,3 +61,8 @@ async def generate_unique_token(db_check_func) -> str:
             return token
             
     return f"{token}-{secrets.token_hex(2)}"
+
+def generate_negative_id(token: str) -> int:
+    hash_val = hashlib.sha256(token.encode()).hexdigest()
+    val = int(hash_val[:8], 16)
+    return -(val % 2147483647) - 1
