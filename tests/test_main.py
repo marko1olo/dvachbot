@@ -211,3 +211,27 @@ class TestCleanHtmlForTg(unittest.TestCase):
     def test_invalid_tags(self):
         self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script>world&lt;/script>")
         self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown>world")
+
+from Dubsite_tgach.main import generate_negative_id
+
+class TestGenerateNegativeId(unittest.TestCase):
+    def test_deterministic(self):
+        """Test that the same input always produces the same output."""
+        self.assertEqual(generate_negative_id("token1"), generate_negative_id("token1"))
+        self.assertEqual(generate_negative_id("some_random_string"), generate_negative_id("some_random_string"))
+
+    def test_different_strings(self):
+        """Test that different inputs produce different outputs."""
+        self.assertNotEqual(generate_negative_id("token1"), generate_negative_id("token2"))
+
+    def test_always_negative(self):
+        """Test that the return value is always negative."""
+        self.assertTrue(generate_negative_id("token1") < 0)
+        self.assertTrue(generate_negative_id("token2") < 0)
+        self.assertTrue(generate_negative_id("") < 0)
+
+    def test_empty_string(self):
+        """Test that it works with empty strings."""
+        val = generate_negative_id("")
+        self.assertTrue(isinstance(val, int))
+        self.assertTrue(val < 0)
