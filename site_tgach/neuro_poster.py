@@ -207,7 +207,8 @@ class NeuroManager:
                         async with AsyncOpenAI(
                             api_key=api_key, 
                             base_url=AI_CONFIG["base_url"],
-                            http_client=http_client
+                            http_client=http_client,
+                            max_retries=0
                         ) as client:
                             completion = await _execute_completion(client, target_model, messages, max_tokens, temperature)
                             content = completion.choices[0].message.content

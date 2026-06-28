@@ -211,7 +211,7 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
             try:
                 transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
                 async with httpx.AsyncClient(proxy=strategy["proxy"], transport=transport, verify=False, timeout=GROQ_TIMEOUT) as http_client:
-                    client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client)
+                    client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client, max_retries=0)
                     resp = await _execute_tagging(
                         client,
                         model=GROQ_MODEL,
