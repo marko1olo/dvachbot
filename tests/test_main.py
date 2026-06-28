@@ -211,3 +211,24 @@ class TestCleanHtmlForTg(unittest.TestCase):
     def test_invalid_tags(self):
         self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script>world&lt;/script>")
         self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown>world")
+
+
+from Dubsite_tgach.main import vibe_to_icon
+class TestVibeToIcon(unittest.TestCase):
+    def test_exact_matches(self):
+        self.assertEqual(vibe_to_icon("toxic"), "🔥 (Токсично)")
+        self.assertEqual(vibe_to_icon("anime"), "🌸 (Аниме)")
+        self.assertEqual(vibe_to_icon("schizo"), "🤡 (Шиза)")
+
+    def test_case_and_whitespace(self):
+        self.assertEqual(vibe_to_icon("  TOXIC  "), "🔥 (Токсично)")
+        self.assertEqual(vibe_to_icon("\tAnImE\n"), "🌸 (Аниме)")
+
+    def test_substring_match(self):
+        self.assertEqual(vibe_to_icon("this is a very toxic vibe"), "🔥 (Токсично)")
+        self.assertEqual(vibe_to_icon("some tech news"), "💾 (Техно)")
+
+    def test_fallback(self):
+        self.assertEqual(vibe_to_icon("unknown"), "❓ (Неясно)")
+        self.assertEqual(vibe_to_icon(""), "❓ (Неясно)")
+        self.assertEqual(vibe_to_icon("something totally unrelated"), "❓ (Неясно)")
