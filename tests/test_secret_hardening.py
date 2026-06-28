@@ -642,8 +642,11 @@ class SecurityReportWorkflowTests(unittest.TestCase):
             root = Path(tmp)
             (root / "worker.py").write_text(
                 "import time\n"
-                "async def run():\n"
-                "    time.sleep(1)\n",
+                "import asyncio\n"
+                "async def bad_run():\n"
+                "    time.sleep(1)\n"
+                "async def good_run():\n"
+                "    await asyncio.sleep(1)\n",
                 encoding="utf-8",
             )
 
