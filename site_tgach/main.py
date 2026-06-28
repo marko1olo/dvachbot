@@ -4867,14 +4867,23 @@ async def api_get_meta(url: str):
                 title = soup.find("meta", property="og:title")
                 image = soup.find("meta", property="og:image")
                 desc = soup.find("meta", property="og:description")
+
+                title_content = title.get("content") if title else soup.title.string if soup.title else url
+                image_content = image.get("content") if image else None
+                desc_content = desc.get("content") if desc else None
+
                 return {
-                    "title": title["content"] if title else soup.title.string if soup.title else url,
-                    "image": image["content"] if image else None,
-                    "description": desc["content"][:100] + "..." if desc else None,
+                    "title": title_content,
+                    "image": image_content,
+                    "description": desc_content[:100] + "..." if desc_content else None,
                     "url": url
                 }
-        except Exception:
+        except httpx.RequestError as e:
+            logger.warning(f"Request failed for {url} with strategy {strategy['name']}: {e}")
             continue # Пробуем следующий метод
+        except Exception as e:
+            logger.error(f"Unexpected error in api_get_meta for {url}: {e}")
+            break # Прерываем попытки при не-сетевых ошибках
             
     return {}
 
