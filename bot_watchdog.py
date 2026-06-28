@@ -10,7 +10,6 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent
 LOG_DIR = ROOT / "logs"
 STDOUT_LOG = LOG_DIR / "bot_stdout_utf8.log"
@@ -304,6 +303,114 @@ def _close_child_log(process: subprocess.Popen) -> None:
             pass
 
 
+def _monitor_child(child: subprocess.Popen, start_time: float) -> bool:
+    health_failures = 0
+    last_heartbeat_notice = 0.0
+    try:
+        while True:
+            return_code = child.poll()
+            if return_code is not None:
+                log(f"Bot child exited pid={child.pid} code={return_code}")
+                _close_child_log(child)
+                if _stop_requested():
+                    log("Stop request detected after child exit; supervisor exits")
+                    return True
+                live_pid = _locked_live_bot_pid()
+                if return_code == 0 and live_pid:
+                    log(
+                        f"Child exited normally while bot.lock is owned by live pid={live_pid}; "
+                        "supervisor exits instead of restart-looping"
+                    )
+                    return True
+                if return_code == 0:
+                    log(
+                        "Bot child exited normally without stop request; supervisor exits"
+                    )
+                    return True
+                return False
+
+            uptime = time.time() - start_time
+            stdout_age = _file_age_sec(STDOUT_LOG)
+            runtime_age = _file_age_sec(LOG_DIR / "bot_runtime.log")
+
+            if uptime >= WARMUP_SEC:
+                heartbeat = _read_heartbeat()
+                if _heartbeat_is_fresh(heartbeat):
+                    if health_failures:
+                        heartbeat_age = _heartbeat_age_sec(heartbeat)
+                        heartbeat_queue_total = _heartbeat_queue_total(heartbeat)
+                        log(
+                            "Heartbeat restored watchdog confidence after "
+                            f"{health_failures} HTTP failures; "
+                            f"heartbeat_age={heartbeat_age:.1f}s; "
+                            f"heartbeat_queue_total={heartbeat_queue_total}"
+                        )
+                    health_failures = 0
+                    time.sleep(POLL_SEC)
+                    continue
+
+                healthy, details = _health_probe()
+                heartbeat_age = _heartbeat_age_sec(heartbeat)
+                heartbeat_queue_total = _heartbeat_queue_total(heartbeat)
+                heartbeat_fresh = _heartbeat_is_fresh(heartbeat)
+                if healthy:
+                    if health_failures:
+                        log(
+                            f"Health restored after {health_failures} failures: {details}"
+                        )
+                    health_failures = 0
+                elif heartbeat_fresh:
+                    now = time.time()
+                    if now - last_heartbeat_notice >= 60:
+                        last_heartbeat_notice = now
+                        log(
+                            "HTTP health failed, but event-loop heartbeat is fresh; "
+                            f"heartbeat_age={heartbeat_age:.1f}s; "
+                            f"heartbeat_queue_total={heartbeat_queue_total}; details={details}"
+                        )
+                    health_failures = 0
+                else:
+                    health_failures += 1
+                    log(
+                        "Health failure "
+                        f"{health_failures}/{HEALTH_FAIL_LIMIT}: {details}; "
+                        f"stdout_age={stdout_age}; runtime_age={runtime_age}"
+                    )
+                    logs_stale = (
+                        stdout_age is None or stdout_age >= LOG_STALE_SEC
+                    ) and (runtime_age is None or runtime_age >= LOG_STALE_SEC)
+                    stale_status = (
+                        "status=stale" in details or "http_error=503" in details
+                    )
+                    queue_total = _extract_latest_queue_total()
+                    queue_safe = (
+                        queue_total is None or queue_total <= SAFE_RESTART_QUEUE_LIMIT
+                    )
+                    force_restart = health_failures >= FORCE_FAIL_LIMIT and queue_safe
+                    if health_failures >= FORCE_FAIL_LIMIT and not queue_safe:
+                        log(
+                            "Health still failing, but restart deferred because "
+                            f"latest_queue_total={queue_total} > {SAFE_RESTART_QUEUE_LIMIT}"
+                        )
+                    if health_failures >= HEALTH_FAIL_LIMIT and (
+                        logs_stale or stale_status or force_restart
+                    ):
+                        _kill_tree(child, details)
+                        _close_child_log(child)
+                        return False
+
+            time.sleep(POLL_SEC)
+    except KeyboardInterrupt:
+        _kill_tree(child, "supervisor_keyboard_interrupt")
+        _close_child_log(child)
+        raise
+    except Exception as exc:
+        log(f"Supervisor loop error: {type(exc).__name__}: {exc}")
+        _kill_tree(child, "supervisor_exception")
+        _close_child_log(child)
+        return False
+
+
 def main() -> int:
     LOG_DIR.mkdir(exist_ok=True)
     log("Supervisor started")
@@ -329,113 +436,10 @@ def main() -> int:
             return 0
         child = _start_child()
         start_time = time.time()
-        health_failures = 0
-        last_heartbeat_notice = 0.0
-        try:
-            while True:
-                return_code = child.poll()
-                if return_code is not None:
-                    log(f"Bot child exited pid={child.pid} code={return_code}")
-                    _close_child_log(child)
-                    if _stop_requested():
-                        log("Stop request detected after child exit; supervisor exits")
-                        return 0
-                    live_pid = _locked_live_bot_pid()
-                    if return_code == 0 and live_pid:
-                        log(
-                            f"Child exited normally while bot.lock is owned by live pid={live_pid}; "
-                            "supervisor exits instead of restart-looping"
-                        )
-                        return 0
-                    if return_code == 0:
-                        log(
-                            "Bot child exited normally without stop request; supervisor exits"
-                        )
-                        return 0
-                    break
 
-                uptime = time.time() - start_time
-                stdout_age = _file_age_sec(STDOUT_LOG)
-                runtime_age = _file_age_sec(LOG_DIR / "bot_runtime.log")
-
-                if uptime >= WARMUP_SEC:
-                    heartbeat = _read_heartbeat()
-                    if _heartbeat_is_fresh(heartbeat):
-                        if health_failures:
-                            heartbeat_age = _heartbeat_age_sec(heartbeat)
-                            heartbeat_queue_total = _heartbeat_queue_total(heartbeat)
-                            log(
-                                "Heartbeat restored watchdog confidence after "
-                                f"{health_failures} HTTP failures; "
-                                f"heartbeat_age={heartbeat_age:.1f}s; "
-                                f"heartbeat_queue_total={heartbeat_queue_total}"
-                            )
-                        health_failures = 0
-                        time.sleep(POLL_SEC)
-                        continue
-
-                    healthy, details = _health_probe()
-                    heartbeat_age = _heartbeat_age_sec(heartbeat)
-                    heartbeat_queue_total = _heartbeat_queue_total(heartbeat)
-                    heartbeat_fresh = _heartbeat_is_fresh(heartbeat)
-                    if healthy:
-                        if health_failures:
-                            log(
-                                f"Health restored after {health_failures} failures: {details}"
-                            )
-                        health_failures = 0
-                    elif heartbeat_fresh:
-                        now = time.time()
-                        if now - last_heartbeat_notice >= 60:
-                            last_heartbeat_notice = now
-                            log(
-                                "HTTP health failed, but event-loop heartbeat is fresh; "
-                                f"heartbeat_age={heartbeat_age:.1f}s; "
-                                f"heartbeat_queue_total={heartbeat_queue_total}; details={details}"
-                            )
-                        health_failures = 0
-                    else:
-                        health_failures += 1
-                        log(
-                            "Health failure "
-                            f"{health_failures}/{HEALTH_FAIL_LIMIT}: {details}; "
-                            f"stdout_age={stdout_age}; runtime_age={runtime_age}"
-                        )
-                        logs_stale = (
-                            stdout_age is None or stdout_age >= LOG_STALE_SEC
-                        ) and (runtime_age is None or runtime_age >= LOG_STALE_SEC)
-                        stale_status = (
-                            "status=stale" in details or "http_error=503" in details
-                        )
-                        queue_total = _extract_latest_queue_total()
-                        queue_safe = (
-                            queue_total is None
-                            or queue_total <= SAFE_RESTART_QUEUE_LIMIT
-                        )
-                        force_restart = (
-                            health_failures >= FORCE_FAIL_LIMIT and queue_safe
-                        )
-                        if health_failures >= FORCE_FAIL_LIMIT and not queue_safe:
-                            log(
-                                "Health still failing, but restart deferred because "
-                                f"latest_queue_total={queue_total} > {SAFE_RESTART_QUEUE_LIMIT}"
-                            )
-                        if health_failures >= HEALTH_FAIL_LIMIT and (
-                            logs_stale or stale_status or force_restart
-                        ):
-                            _kill_tree(child, details)
-                            _close_child_log(child)
-                            break
-
-                time.sleep(POLL_SEC)
-        except KeyboardInterrupt:
-            _kill_tree(child, "supervisor_keyboard_interrupt")
-            _close_child_log(child)
-            raise
-        except Exception as exc:
-            log(f"Supervisor loop error: {type(exc).__name__}: {exc}")
-            _kill_tree(child, "supervisor_exception")
-            _close_child_log(child)
+        should_exit = _monitor_child(child, start_time)
+        if should_exit:
+            return 0
 
         if _stop_requested():
             log("Stop request detected before restart; supervisor exits")
