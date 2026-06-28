@@ -1970,6 +1970,103 @@ def _format_runtime_snapshot(snapshot: dict) -> str:
         f"cooldowns/spam/img: <code>roll={board_maps.get('last_roll_time')} info={board_maps.get('last_info_command_time')} spam={board_maps.get('spam_tracker_items')} img={board_maps.get('image_spam_items')}</code>\n"
         f"tracemalloc: <code>{snapshot.get('tracemalloc', {}).get('enabled')} current={snapshot.get('tracemalloc', {}).get('current_mb')}MB peak={snapshot.get('tracemalloc', {}).get('peak_mb')}MB</code>"
     )
+async def _handle_forbidden_error(update) -> None:
+    user_id, telegram_object = None, None
+    if update and update.message:
+        user_id, telegram_object = update.message.from_user.id, update.message
+    elif update and update.callback_query:
+        user_id, telegram_object = update.callback_query.from_user.id, update.callback_query
+    if user_id and telegram_object:
+        board_id = get_board_id(telegram_object)
+        if board_id:
+            async with storage_lock:
+                b_data = board_data[board_id]
+                b_data['users']['active'].discard(user_id)
+                for store in [b_data['last_activity'], b_data['last_texts'], b_data['last_stickers'],
+                              b_data['last_animations'], b_data['last_audios'], b_data['spam_violations'],
+                              b_data['spam_tracker'], b_data['last_user_msgs'],
+                              b_data['message_counter'], b_data['user_state'],
+                              b_data.get('user_streams', {})]:
+                    store.pop(user_id, None)
+            async with author_reaction_notify_lock:
+                author_reaction_notify_tracker.pop(user_id, None)
+
+            user_spam_locks.pop(user_id, None)
+            generate_locks.pop(user_id, None)
+            unknown_command_tracker.pop(user_id, None)
+            await remove_user_from_board(user_id, board_id)
+            print(f"🚫 [{board_id}] Юзер {user_id} блокнул бота. Данные удалены (RAM почистится автоматически).")
+
+async def _handle_bad_request(exception, update) -> None:
+    err_msg = str(exception).lower()
+    print(f"⚠️ TelegramBadRequest: {exception}")
+
+    # Try to notify the user with a safe plain-text fallback
+    chat_obj = None
+    if update and update.message:
+        chat_obj = update.message
+    elif update and update.callback_query and update.callback_query.message:
+        chat_obj = update.callback_query.message
+
+    if chat_obj:
+        try:
+            if "parse entities" in err_msg or "can't parse" in err_msg:
+                await chat_obj.answer("⚠️ Ошибка форматирования ответа. Попробуй ещё раз.", parse_mode=None)
+            elif "message is too long" in err_msg:
+                await chat_obj.answer("⚠️ Ответ слишком длинный. Попробуй более узкий запрос.", parse_mode=None)
+            elif "query is too old" in err_msg or "query_id_invalid" in err_msg:
+                pass  # Callback expired, nothing to do
+            elif "message is not modified" in err_msg:
+                pass  # Harmless, user already sees the correct text
+            else:
+                await chat_obj.answer("⚠️ Телега послала нахуй твой запрос. Пробуй снова.", parse_mode=None)
+        except Exception:
+            pass
+
+    # Always clear locks if a command aborted due to BadRequest
+    user_id = chat_obj.from_user.id if chat_obj else None
+    if user_id:
+        user_spam_locks.pop(user_id, None)
+        generate_locks.pop(user_id, None)
+
+async def _handle_unexpected_error(exception, update) -> None:
+    import traceback
+    print("⛔⛔⛔ НЕПРЕДВИДЕННАЯ КРИТИЧЕСКАЯ ОШИБКА ⛔⛔⛔")
+    print(f"Exception: {type(exception).__name__}: {exception}")
+    traceback.print_exc()
+    if update:
+        try:
+            update_json = update.model_dump_json(exclude_none=True, indent=2)
+            print(f"--- Update Context ---\n{update_json}\n--- End Update Context ---")
+        except Exception as json_e:
+            print(f"Не удалось сериализовать update: {json_e}")
+
+        # Send fallback message to user (try HTML first, then plain text)
+        chat_obj = None
+        if hasattr(update, "message") and update.message:
+            chat_obj = update.message
+        elif hasattr(update, "callback_query") and update.callback_query:
+            chat_obj = update.callback_query.message
+            # Also answer the callback to remove the loading spinner
+            try:
+                await update.callback_query.answer("Ошибка. Попробуй ещё раз.", show_alert=True)
+            except Exception:
+                pass
+
+        if chat_obj:
+            try:
+                await chat_obj.answer("⚠️ Произошла ошибка при выполнении команды.\nРазработчик уже уведомлен.", parse_mode=None)
+            except Exception:
+                pass
+
+        # Always clear locks if a command crashed!
+        user_id = chat_obj.from_user.id if chat_obj else None
+        if not user_id and hasattr(update, "callback_query") and update.callback_query:
+            user_id = update.callback_query.from_user.id
+        if user_id:
+            user_spam_locks.pop(user_id, None)
+            generate_locks.pop(user_id, None)
+
 @dp.errors()
 async def global_error_handler(event: types.ErrorEvent) -> bool:
     """
@@ -1990,31 +2087,7 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
         print(f"🌐 Перехвачена штатная сетевая ошибка/флуд-контроль: {type(exception).__name__}: {exception}. Выполнение не блокируется.")
         return True
     if isinstance(exception, TelegramForbiddenError):
-        user_id, telegram_object = None, None
-        if update and update.message:
-            user_id, telegram_object = update.message.from_user.id, update.message
-        elif update and update.callback_query:
-            user_id, telegram_object = update.callback_query.from_user.id, update.callback_query
-        if user_id and telegram_object:
-            board_id = get_board_id(telegram_object)
-            if board_id:
-                async with storage_lock:
-                    b_data = board_data[board_id]
-                    b_data['users']['active'].discard(user_id)
-                    for store in [b_data['last_activity'], b_data['last_texts'], b_data['last_stickers'],
-                                  b_data['last_animations'], b_data['last_audios'], b_data['spam_violations'], 
-                                  b_data['spam_tracker'], b_data['last_user_msgs'], 
-                                  b_data['message_counter'], b_data['user_state'],
-                                  b_data.get('user_streams', {})]:
-                        store.pop(user_id, None)
-                async with author_reaction_notify_lock:
-                    author_reaction_notify_tracker.pop(user_id, None)
-                
-                user_spam_locks.pop(user_id, None)
-                generate_locks.pop(user_id, None)
-                unknown_command_tracker.pop(user_id, None)
-                await remove_user_from_board(user_id, board_id)
-                print(f"🚫 [{board_id}] Юзер {user_id} блокнул бота. Данные удалены (RAM почистится автоматически).")
+        await _handle_forbidden_error(update)
         return True
     if isinstance(exception, TelegramConflictError):
         print(f"🌐 Конфликт: {exception}. Возможно, запущен другой экземпляр бота.")
@@ -2022,78 +2095,12 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
         return True
     # --- TelegramBadRequest: HTML parse errors, message too long, etc. ---
     if isinstance(exception, TelegramBadRequest):
-        err_msg = str(exception).lower()
-        print(f"⚠️ TelegramBadRequest: {exception}")
-        
-        # Try to notify the user with a safe plain-text fallback
-        chat_obj = None
-        if update and update.message:
-            chat_obj = update.message
-        elif update and update.callback_query and update.callback_query.message:
-            chat_obj = update.callback_query.message
-        
-        if chat_obj:
-            try:
-                if "parse entities" in err_msg or "can't parse" in err_msg:
-                    await chat_obj.answer("⚠️ Ошибка форматирования ответа. Попробуй ещё раз.", parse_mode=None)
-                elif "message is too long" in err_msg:
-                    await chat_obj.answer("⚠️ Ответ слишком длинный. Попробуй более узкий запрос.", parse_mode=None)
-                elif "query is too old" in err_msg or "query_id_invalid" in err_msg:
-                    pass  # Callback expired, nothing to do
-                elif "message is not modified" in err_msg:
-                    pass  # Harmless, user already sees the correct text
-                else:
-                    await chat_obj.answer("⚠️ Телега послала нахуй твой запрос. Пробуй снова.", parse_mode=None)
-            except Exception:
-                pass
-                
-        # Always clear locks if a command aborted due to BadRequest
-        user_id = chat_obj.from_user.id if chat_obj else None
-        if user_id:
-            user_spam_locks.pop(user_id, None)
-            generate_locks.pop(user_id, None)
-            
+        await _handle_bad_request(exception, update)
         return True
     
     # --- Any other unhandled exception ---
     else:
-        import traceback
-        print("⛔⛔⛔ НЕПРЕДВИДЕННАЯ КРИТИЧЕСКАЯ ОШИБКА ⛔⛔⛔")
-        print(f"Exception: {type(exception).__name__}: {exception}")
-        traceback.print_exc()
-        if update:
-            try:
-                update_json = update.model_dump_json(exclude_none=True, indent=2)
-                print(f"--- Update Context ---\n{update_json}\n--- End Update Context ---")
-            except Exception as json_e:
-                print(f"Не удалось сериализовать update: {json_e}")
-            
-            # Send fallback message to user (try HTML first, then plain text)
-            chat_obj = None
-            if hasattr(update, "message") and update.message:
-                chat_obj = update.message
-            elif hasattr(update, "callback_query") and update.callback_query:
-                chat_obj = update.callback_query.message
-                # Also answer the callback to remove the loading spinner
-                try:
-                    await update.callback_query.answer("Ошибка. Попробуй ещё раз.", show_alert=True)
-                except Exception:
-                    pass
-            
-            if chat_obj:
-                try:
-                    await chat_obj.answer("⚠️ Произошла ошибка при выполнении команды.\nРазработчик уже уведомлен.", parse_mode=None)
-                except Exception:
-                    pass
-            
-            # Always clear locks if a command crashed!
-            user_id = chat_obj.from_user.id if chat_obj else None
-            if not user_id and hasattr(update, "callback_query") and update.callback_query:
-                user_id = update.callback_query.from_user.id
-            if user_id:
-                user_spam_locks.pop(user_id, None)
-                generate_locks.pop(user_id, None)
-
+        await _handle_unexpected_error(exception, update)
         return True
 def is_admin(uid: int, board_id: str) -> bool:
 
