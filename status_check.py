@@ -77,18 +77,34 @@ async def get_activity(conn):
     now = time.time()
     periods = {"1h": now - 3600, "24h": now - 86400}
     activity = {}
-    for name, ts in periods.items():
-        try:
-            p_cursor, t_cursor, u_cursor = await asyncio.gather(
-                conn.execute("SELECT COUNT(*) FROM Posts WHERE timestamp > ?", (ts,)),
-                conn.execute("SELECT COUNT(*) FROM Threads WHERE created_at > ?", (ts,)),
-                conn.execute("SELECT COUNT(DISTINCT user_id) FROM Users WHERE created_at > ?", (ts,))
-            )
-            activity[f'posts_{name}'] = (await p_cursor.fetchone())[0]
-            activity[f'threads_{name}'] = (await t_cursor.fetchone())[0]
-            activity[f'users_{name}'] = (await u_cursor.fetchone())[0]
-        except aiosqlite.OperationalError:
+
+    period_names = list(periods.keys())
+    period_values = [periods[name] for name in period_names]
+    min_ts = min(period_values) if period_values else 0
+
+    post_cases = ", ".join(["COUNT(CASE WHEN timestamp > ? THEN 1 END)"] * len(periods))
+    thread_cases = ", ".join(["COUNT(CASE WHEN created_at > ? THEN 1 END)"] * len(periods))
+    user_cases = ", ".join(["COUNT(DISTINCT CASE WHEN created_at > ? THEN user_id END)"] * len(periods))
+
+    try:
+        p_cursor, t_cursor, u_cursor = await asyncio.gather(
+            conn.execute(f"SELECT {post_cases} FROM Posts WHERE timestamp > ?", (*period_values, min_ts)),
+            conn.execute(f"SELECT {thread_cases} FROM Threads WHERE created_at > ?", (*period_values, min_ts)),
+            conn.execute(f"SELECT {user_cases} FROM Users WHERE created_at > ?", (*period_values, min_ts))
+        )
+        p_res = await p_cursor.fetchone()
+        t_res = await t_cursor.fetchone()
+        u_res = await u_cursor.fetchone()
+
+        for i, name in enumerate(period_names):
+            activity[f'posts_{name}'] = p_res[i] if p_res else 0
+            activity[f'threads_{name}'] = t_res[i] if t_res else 0
+            activity[f'users_{name}'] = u_res[i] if u_res else 0
+
+    except aiosqlite.OperationalError:
+        for name in period_names:
             activity[f'posts_{name}'] = activity[f'threads_{name}'] = activity[f'users_{name}'] = "N/A"
+
     return activity
 
 async def get_media_stats(conn):
