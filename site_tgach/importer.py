@@ -777,6 +777,10 @@ async def process_import_queue(app_state_broadcast_queue):
                     await asyncio.sleep(5)
                     continue
                 
+                refs_to_insert = []
+                q_ids_to_delete = []
+                posts_to_simulate = []
+
                 for row in rows:
                     q_id, task_id, board_id, orig_num, reply_to_orig, content_str, author_id, stream, is_op, title = row
                     try:
@@ -833,31 +837,35 @@ async def process_import_queue(app_state_broadcast_queue):
                                 await update_thread_last_updated(int(final_thread_id_db), time.time())
                             await process_backlinks(new_post_num, content['text'], real_reply_to)
 
-                            async with db_lock:
-                                await conn.execute("INSERT INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)", (task_id, orig_num, new_post_num))
-                                await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
-                                await conn.commit()
-                            
-                            if app_state_broadcast_queue:
-                                bp = await get_post_for_broadcast(new_post_num)
-                                if bp: await app_state_broadcast_queue.put(bp)
-                                
-                            logger.info(f"🎭 [Sim] Published #{new_post_num} (was {orig_num}) on /{board_id}/")
-                            
-                            await asyncio.sleep(random.uniform(0.5, 2.5)) 
+                            refs_to_insert.append((task_id, orig_num, new_post_num))
+                            q_ids_to_delete.append((q_id,))
+                            posts_to_simulate.append((new_post_num, orig_num, board_id))
                             
                         else:
                             logger.error(f"❌ [Sim] Failed to create post for queue item {q_id}")
-                            async with db_lock:
-                                await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
-                                await conn.commit()
+                            q_ids_to_delete.append((q_id,))
                         
                     except Exception as e:
-                        try:
-                            async with db_lock:
-                                await conn.execute("DELETE FROM ImportQueue WHERE id = ?", (q_id,))
-                                await conn.commit()
-                        except: pass
+                        q_ids_to_delete.append((q_id,))
+
+                if refs_to_insert or q_ids_to_delete:
+                    try:
+                        async with db_lock:
+                            if refs_to_insert:
+                                await conn.executemany("INSERT OR IGNORE INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)", refs_to_insert)
+                            if q_ids_to_delete:
+                                await conn.executemany("DELETE FROM ImportQueue WHERE id = ?", q_ids_to_delete)
+                            await conn.commit()
+
+                        if posts_to_simulate:
+                            for (n_num, o_num, b_id) in posts_to_simulate:
+                                if app_state_broadcast_queue:
+                                    bp = await get_post_for_broadcast(n_num)
+                                    if bp: await app_state_broadcast_queue.put(bp)
+                                logger.info(f"🎭 [Sim] Published #{n_num} (was {o_num}) on /{b_id}/")
+                                await asyncio.sleep(random.uniform(0.5, 2.5))
+                    except Exception as e:
+                        logger.error(f"❌ [Sim] Failed to execute batched DB queries: {e}")
 
         except Exception:
             await asyncio.sleep(10)
