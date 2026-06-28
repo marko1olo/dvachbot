@@ -1,5 +1,4 @@
 from __future__ import annotations
-from dataclasses import dataclass
 """
 This module contains the main functionality for a Telegram bot that interacts with a specific board system.
 It includes various middleware classes for handling user streams, deduplication of messages, and board identification.
