@@ -1,9 +1,14 @@
 import sys
 import os
 import unittest
+import asyncio
 
 # Setup required env var
 os.environ["SECRET_KEY"] = "test-secret-key-12345"
+
+# Initialize event loop for testing async dependencies during import
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
