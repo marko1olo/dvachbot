@@ -974,6 +974,24 @@ _ideological_keys = sorted(IDEOLOGICAL_REPLACEMENTS.keys(), key=len, reverse=Tru
 _ideological_pattern = r'\b(' + '|'.join(re.escape(key) for key in _ideological_keys) + r')\b'
 _ideological_regex = re.compile(_ideological_pattern, flags=re.IGNORECASE)
 
+_ENGLISH_WORD_REGEX = re.compile(r'\b[a-zA-Z]{2,}\b')
+_LONG_RUSSIAN_WORD_REGEX = re.compile(r'\b[а-яА-ЯёЁ]{6,}\b')
+
+_kancelarit_map_raw = [
+    (r'\bя (сделал|сделала)\b', 'мною был реализован комплекс мер'),
+    (r'\bмы (решили|подумали)\b', 'в ходе межведомственного согласования было принято решение'),
+    (r'\b(хочу|хотим)\b', 'выражаем крайнюю озабоченность и заинтересованность'),
+    (r'\b(будет|будут)\b', 'планируется к реализации в рамках импортозамещения'),
+    (r'\bпроблем(а|ы|у)\b', 'определенные геополитические вызовы'),
+    (r'\bошибка\b', 'отрицательный результат'),
+    (r'\b(упал|упало|упали)\b', 'продемонстрировал отрицательный рост'),
+    (r'\b(купил|купили)\b', 'произвел импортозамещение'),
+]
+_KANCELARIT_MAP_COMPILED = [
+    (re.compile(pattern, flags=re.IGNORECASE), repl)
+    for pattern, repl in _kancelarit_map_raw
+]
+
 # 2. Создаем функцию-заменитель, которая будет вызываться для каждого совпадения
 def _zaputin_ideological_replacer(match: re.Match) -> str:
     """
@@ -1014,21 +1032,11 @@ def _apply_kancelarit(text: str) -> str:
         return f'{prefix} «{word}»'
 
     # Регулярка ищет любые слова из латинских букв (длиной от 2 символов)
-    text = re.sub(r'\b[a-zA-Z]{2,}\b', _quote_english, text)
+    text = _ENGLISH_WORD_REGEX.sub(_quote_english, text)
     
     # 2. Сухой канцелярит: превращаем обычные слова в бюрократический ад чиновника
-    kancelarit_map =[
-        (r'\bя (сделал|сделала)\b', 'мною был реализован комплекс мер'),
-        (r'\bмы (решили|подумали)\b', 'в ходе межведомственного согласования было принято решение'),
-        (r'\b(хочу|хотим)\b', 'выражаем крайнюю озабоченность и заинтересованность'),
-        (r'\b(будет|будут)\b', 'планируется к реализации в рамках импортозамещения'),
-        (r'\bпроблем(а|ы|у)\b', 'определенные геополитические вызовы'),
-        (r'\bошибка\b', 'отрицательный результат'),
-        (r'\b(упал|упало|упали)\b', 'продемонстрировал отрицательный рост'),
-        (r'\b(купил|купили)\b', 'произвел импортозамещение'),
-    ]
-    for pattern, repl in kancelarit_map:
-        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+    for regex, repl in _KANCELARIT_MAP_COMPILED:
+        text = regex.sub(repl, text)
     
     # 3. Интонационная КАПСЛОКОВИЗАЦИЯ ВАЖНЫХ слов (стиль Соловьёва)
     def _caps_important(m):
@@ -1036,7 +1044,7 @@ def _apply_kancelarit(text: str) -> str:
         # Капсим с шансом 15% длинные русские слова (от 6 букв)
         return word.upper() if random.random() < 0.15 else word
         
-    text = re.sub(r'\b[а-яА-ЯёЁ]{6,}\b', _caps_important, text)
+    text = _LONG_RUSSIAN_WORD_REGEX.sub(_caps_important, text)
     
     return text
     
