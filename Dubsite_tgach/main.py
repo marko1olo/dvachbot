@@ -6195,6 +6195,11 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     
     user_country = request.cookies.get("user_country", "XX")
     is_ru = (user_country == "RU")
+    client_ip = get_real_ip(request)
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if 'ru' in accept_lang or not accept_lang:
+            is_ru = True
 
     tg_url = None
     info = await get_cached_file_path(file_id)

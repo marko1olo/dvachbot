@@ -7558,6 +7558,10 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     client_ip = get_real_ip(request)
     user_country = await get_country_by_ip(client_ip)
     is_ru = (user_country == "RU")
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if 'ru' in accept_lang or not accept_lang:
+            is_ru = True
 
     # Заголовки против кэширования редиректов
     no_cache_headers = {
