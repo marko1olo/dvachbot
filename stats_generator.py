@@ -1511,7 +1511,6 @@ def generate_all_charts():
     return images
 
 def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
-    import sys
     import os
     from PIL import Image, ImageDraw, ImageFont
     
