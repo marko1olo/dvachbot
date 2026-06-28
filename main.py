@@ -168,7 +168,7 @@ from aiogram.exceptions import (
     TelegramNetworkError,
     TelegramRetryAfter,
 )
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile, InputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.fsm.state import State, StatesGroup
