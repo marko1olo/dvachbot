@@ -5050,11 +5050,11 @@ async def api_create_post(
                     ftype = f.get('type', 'file')
                     if t_type == 'media': 
                         valid_file_attached = True
-                    elif t_type == 'image' and ftype in ['image', 'photo', 'sticker']:
+                    elif t_type == 'image' and ftype in {'image', 'photo', 'sticker'}:
                         valid_file_attached = True
-                    elif t_type == 'video' and ftype in ['video', 'animation', 'video_note', 'gif']:
+                    elif t_type == 'video' and ftype in {'video', 'animation', 'video_note', 'gif'}:
                         valid_file_attached = True
-                    elif t_type == 'audio' and ftype in ['audio', 'voice']:
+                    elif t_type == 'audio' and ftype in {'audio', 'voice'}:
                         valid_file_attached = True
             if valid_file_attached:
                 if not is_unlocked:
