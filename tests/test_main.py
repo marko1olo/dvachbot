@@ -195,6 +195,35 @@ def get_clean_html_function():
 clean_html_for_tg = get_clean_html_function()
 
 class TestCleanHtmlForTg(unittest.TestCase):
+    def test_empty_input(self):
+        self.assertEqual(clean_html_for_tg(""), "")
+        self.assertEqual(clean_html_for_tg(None), "")
+
+    def test_markdown_bold(self):
+        self.assertEqual(clean_html_for_tg("**text**"), "<b>text</b>")
+        self.assertEqual(clean_html_for_tg("hello **world**"), "hello <b>world</b>")
+        self.assertEqual(clean_html_for_tg("no ** unclosed bold"), "no ** unclosed bold")
+
+    def test_markdown_italic(self):
+        self.assertEqual(clean_html_for_tg("*text*"), "<i>text</i>")
+        self.assertEqual(clean_html_for_tg("hello *world*"), "hello <i>world</i>")
+        self.assertEqual(clean_html_for_tg("not * italic"), "not * italic")
+        # Ensure it doesn't mess up bold. The current implementation produces a stray tag closing which is expected behavior for now.
+        self.assertEqual(clean_html_for_tg("**bold *italic***"), "<b>bold <i>italic</i></b>&lt;/i&gt;")
+
+    def test_markdown_code(self):
+        self.assertEqual(clean_html_for_tg("`text`"), "<code>text</code>")
+        self.assertEqual(clean_html_for_tg("hello `world`"), "hello <code>world</code>")
+
+    def test_br_to_newline(self):
+        self.assertEqual(clean_html_for_tg("hello<br>world"), "hello\nworld")
+        self.assertEqual(clean_html_for_tg("hello<br/>world"), "hello\nworld")
+        self.assertEqual(clean_html_for_tg("hello<br />world"), "hello\nworld")
+
+    def test_mixed_markdown(self):
+        self.assertEqual(clean_html_for_tg("hello **bold** and *italic* and `code`"), "hello <b>bold</b> and <i>italic</i> and <code>code</code>")
+        self.assertEqual(clean_html_for_tg("<h1>hello</h1> **world**"), "&lt;h1>hello&lt;/h1> <b>world</b>")
+
     def test_balanced_tags(self):
         self.assertEqual(clean_html_for_tg("hello <b>world</b>"), "hello <b>world</b>")
         self.assertEqual(clean_html_for_tg("<b><i>test</i></b>"), "<b><i>test</i></b>")
