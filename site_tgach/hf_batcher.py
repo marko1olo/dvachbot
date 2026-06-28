@@ -178,17 +178,21 @@ async def process_queue_batch():
 
                     try:
                         finfo = await bot.get_file(fid)
-                        fresh_file_id = finfo.file_id
+                        fresh_file_id = getattr(finfo, "file_id", fid) if finfo else fid
                         
-                        if not final_filename:
-                            ext = os.path.splitext(finfo.file_path)[1]
-                            if not ext: ext = ".jpg"
-                            final_filename = f"{fid}{ext}"
-                            
-                        lpath = os.path.abspath(os.path.join(fdir, final_filename))
+                        fpath = getattr(finfo, "file_path", None) if finfo else None
+                        if fpath:
+                            if not final_filename:
+                                ext = os.path.splitext(fpath)[1]
+                                if not ext: ext = ".jpg"
+                                final_filename = f"{fid}{ext}"
 
-                        if await _download_http_safe(f"https://api.telegram.org/file/bot{bot.token}/{finfo.file_path}", lpath):
-                            return (fid, final_filename, sub)
+                            lpath = os.path.abspath(os.path.join(fdir, final_filename))
+
+                            if await _download_http_safe(f"https://api.telegram.org/file/bot{bot.token}/{fpath}", lpath):
+                                return (fid, final_filename, sub)
+                        else:
+                            raise Exception(f"No file_path returned for {fid}")
                             
                     except Exception as e:
                         err_str = str(e).lower()
