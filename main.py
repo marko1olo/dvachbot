@@ -3686,26 +3686,9 @@ async def process_new_post(
         import traceback
         print(f"🔥🔥🔥 ФАТАЛЬНАЯ ОШИБКА в process_new_post для user {user_id}: {e}\n{traceback.format_exc()}")
         return None
-async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, post_num: int, content: dict, is_shadow_muted: bool, stream: str = 'ru'):
-    if is_shadow_muted:
-        return
-    from common.database import get_post_by_num, register_file_owner, update_post_content, add_file_mirror
-    check_post = await get_post_by_num(post_num)
-    if not check_post:
-        return
-    archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-    sender_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else archive_bot
-    if not sender_bot:
-        return
-    sender_bot_id = getattr(sender_bot, 'id', 0)
-    lang = 'en' if board_id == 'int' else 'ru'
-    
-    # --- НАЧАЛО ИЗМЕНЕНИЙ (Умный парсинг заголовка для Архивача) ---
-    board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
+def _build_archive_header(board_id: str, post_num: int, content: dict, lang: str) -> str:
     raw_header = content.get('header', f"Пост №{post_num}")
-    
     header_text = ""
-    # Пытаемся отделить эмодзи/роль от самого номера поста
     match = re.search(r'(.*?)(Пост №\d+.*|Post No\.\d+.*|レス番 \d+.*)', raw_header, re.DOTALL | re.IGNORECASE)
     
     if match:
@@ -3719,22 +3702,119 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
             reply_suffix = f" (reply to №{reply_to_num})" if lang == 'en' else f" (ответ на №{reply_to_num})"
             
         if prefix and has_letters:
-            # Если есть текст (например "Абу -"), делаем красивый абзац
             if prefix.endswith('-'):
                 prefix = prefix[:-1].strip()
             header_text = f"<b>/{board_id}/</b> | {post_part}{reply_suffix}\n\n<b>{prefix} :</b>"
         else:
-            # Если это просто эмодзи (например 🌑), ставим его в начало
             prefix_with_space = f"{prefix} " if prefix else ""
             header_text = f"{prefix_with_space}<b>/{board_id}/</b> | {post_part}{reply_suffix}"
     else:
-        # Фолбэк, если регулярка не сработала
         reply_to_num = content.get('reply_to_post')
         reply_suffix = ""
         if reply_to_num:
             reply_suffix = f" (reply to №{reply_to_num})" if lang == 'en' else f" (ответ на №{reply_to_num})"
         header_text = f"<b>/{board_id}/</b> | {raw_header}{reply_suffix}"
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+    return header_text
+
+async def _send_archive_media(sender_bot, channel_id: int, content: dict, content_type: str, text_to_send: str, header_text: str):
+    from common.database import add_file_mirror
+    for attempt in range(3):
+        try:
+            sent_message = None
+            new_files_data = []
+            if text_to_send:
+                sent_message = await sender_bot.send_message(
+                    chat_id=channel_id,
+                    text=text_to_send,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+            elif content_type == 'media_group':
+                from aiogram.utils.media_group import MediaGroupBuilder
+                builder = MediaGroupBuilder()
+                raw_cap = content.get('caption', '')
+                converted_cap = convert_site_tags_to_telegram(raw_cap)
+                full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
+                if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
+                media_list = content.get('media',[])
+                if not media_list: break
+                for i, media_item in enumerate(media_list):
+                    file_id = media_item.get('file_id') or media_item.get('media')
+                    m_type = media_item['type']
+                    caption = full_caption if i == 0 else None
+                    if m_type == 'photo': builder.add_photo(media=file_id, caption=caption, parse_mode="HTML")
+                    elif m_type == 'video': builder.add_video(media=file_id, caption=caption, parse_mode="HTML")
+                    elif m_type == 'document': builder.add_document(media=file_id, caption=caption, parse_mode="HTML")
+                    elif m_type == 'audio': builder.add_audio(media=file_id, caption=caption, parse_mode="HTML")
+                sent_msgs = await sender_bot.send_media_group(channel_id, media=builder.build())
+                if sent_msgs:
+                    sent_message = sent_msgs[0]
+                    for idx, sm in enumerate(sent_msgs):
+                        fid = None
+                        if sm.photo: fid = sm.photo[-1].file_id
+                        elif sm.video: fid = sm.video.file_id
+                        elif sm.document: fid = sm.document.file_id
+                        elif sm.audio: fid = sm.audio.file_id
+                        if fid:
+                            new_files_data.append({'type': sm.content_type, 'file_id': fid})
+                            orig_fid = media_list[idx].get('file_id') or media_list[idx].get('media')
+                            if orig_fid: await add_file_mirror(orig_fid, 'tg_shadow', fid)
+            else:
+                orig_fid = content.get('file_id')
+                if orig_fid:
+                    raw_cap = content.get('caption', '')
+                    converted_cap = convert_site_tags_to_telegram(raw_cap)
+                    caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
+                    if len(caption) > 1024: caption = caption[:1021] + "..."
+                    ct_str = str(content_type).split('.')[-1].lower()
+                    common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
+                    if ct_str == 'photo': sent_message = await sender_bot.send_photo(photo=orig_fid, **common_args)
+                    elif ct_str == 'video': sent_message = await sender_bot.send_video(video=orig_fid, **common_args)
+                    elif ct_str == 'animation': sent_message = await sender_bot.send_animation(animation=orig_fid, **common_args)
+                    elif ct_str == 'document': sent_message = await sender_bot.send_document(document=orig_fid, **common_args)
+                    elif ct_str == 'audio': sent_message = await sender_bot.send_audio(audio=orig_fid, **common_args)
+                    elif ct_str == 'voice': sent_message = await sender_bot.send_voice(voice=orig_fid, **common_args)
+                    elif ct_str == 'sticker':
+                        await sender_bot.send_sticker(channel_id, sticker=orig_fid)
+                        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+                    elif ct_str == 'video_note':
+                        await sender_bot.send_video_note(channel_id, video_note=orig_fid)
+                        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+                    if sent_message:
+                        fid = None
+                        if sent_message.photo: fid = sent_message.photo[-1].file_id
+                        elif sent_message.video: fid = sent_message.video.file_id
+                        elif sent_message.animation: fid = sent_message.animation.file_id
+                        elif sent_message.document: fid = sent_message.document.file_id
+                        elif sent_message.audio: fid = sent_message.audio.file_id
+                        elif sent_message.voice: fid = sent_message.voice.file_id
+                        if fid:
+                            new_files_data.append(fid)
+                            await add_file_mirror(orig_fid, 'tg_shadow', fid)
+            return sent_message, new_files_data
+        except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
+            if attempt < 2: await asyncio.sleep(2)
+        except TelegramRetryAfter as e:
+            await asyncio.sleep(e.retry_after + 1)
+        except Exception:
+            break
+    return None, []
+
+async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, post_num: int, content: dict, is_shadow_muted: bool, stream: str = 'ru'):
+    if is_shadow_muted:
+        return
+    from common.database import get_post_by_num, register_file_owner, update_post_content, add_file_mirror
+    check_post = await get_post_by_num(post_num)
+    if not check_post:
+        return
+    archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
+    sender_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else archive_bot
+    if not sender_bot:
+        return
+    sender_bot_id = getattr(sender_bot, 'id', 0)
+    lang = 'en' if board_id == 'int' else 'ru'
+
+    header_text = _build_archive_header(board_id, post_num, content, lang)
     
     content_type = content.get("type", "text")
     text_to_send = None
@@ -3752,99 +3832,23 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
     for channel_id in MIRROR_CHANNELS:
         if not channel_id or channel_id == 0:
             continue
-        for attempt in range(3):
+        sent_message, new_files_data = await _send_archive_media(sender_bot, channel_id, content, content_type, text_to_send, header_text)
+        if sent_message:
             try:
-                sent_message = None
-                new_files_data =[]
-                if text_to_send:
-                    sent_message = await sender_bot.send_message(
-                        chat_id=channel_id, 
-                        text=text_to_send, 
-                        parse_mode="HTML",
-                        disable_web_page_preview=True
-                    )
-                elif content_type == 'media_group':
-                    builder = MediaGroupBuilder()
-                    raw_cap = content.get('caption', '')
-                    converted_cap = convert_site_tags_to_telegram(raw_cap)
-                    full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
-                    if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
-                    media_list = content.get('media',[])
-                    if not media_list: break
-                    for i, media_item in enumerate(media_list):
-                        file_id = media_item.get('file_id') or media_item.get('media')
-                        m_type = media_item['type']
-                        caption = full_caption if i == 0 else None
-                        if m_type == 'photo': builder.add_photo(media=file_id, caption=caption, parse_mode="HTML")
-                        elif m_type == 'video': builder.add_video(media=file_id, caption=caption, parse_mode="HTML")
-                        elif m_type == 'document': builder.add_document(media=file_id, caption=caption, parse_mode="HTML")
-                        elif m_type == 'audio': builder.add_audio(media=file_id, caption=caption, parse_mode="HTML")
-                    sent_msgs = await sender_bot.send_media_group(channel_id, media=builder.build())
-                    if sent_msgs:
-                        sent_message = sent_msgs[0]
-                        for idx, sm in enumerate(sent_msgs):
-                            fid = None
-                            if sm.photo: fid = sm.photo[-1].file_id
-                            elif sm.video: fid = sm.video.file_id
-                            elif sm.document: fid = sm.document.file_id
-                            elif sm.audio: fid = sm.audio.file_id
-                            if fid:
-                                new_files_data.append({'type': sm.content_type, 'file_id': fid})
-                                orig_fid = media_list[idx].get('file_id') or media_list[idx].get('media')
-                                if orig_fid: await add_file_mirror(orig_fid, 'tg_shadow', fid)
-                else:
-                    orig_fid = content.get('file_id')
-                    if orig_fid:
-                        raw_cap = content.get('caption', '')
-                        converted_cap = convert_site_tags_to_telegram(raw_cap)
-                        caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
-                        if len(caption) > 1024: caption = caption[:1021] + "..."
-                        ct_str = str(content_type).split('.')[-1].lower()
-                        common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
-                        if ct_str == 'photo': sent_message = await sender_bot.send_photo(photo=orig_fid, **common_args)
-                        elif ct_str == 'video': sent_message = await sender_bot.send_video(video=orig_fid, **common_args)
-                        elif ct_str == 'animation': sent_message = await sender_bot.send_animation(animation=orig_fid, **common_args)
-                        elif ct_str == 'document': sent_message = await sender_bot.send_document(document=orig_fid, **common_args)
-                        elif ct_str == 'audio': sent_message = await sender_bot.send_audio(audio=orig_fid, **common_args)
-                        elif ct_str == 'voice': sent_message = await sender_bot.send_voice(voice=orig_fid, **common_args)
-                        elif ct_str == 'sticker':
-                            await sender_bot.send_sticker(channel_id, sticker=orig_fid)
-                            sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
-                        elif ct_str == 'video_note':
-                            await sender_bot.send_video_note(channel_id, video_note=orig_fid)
-                            sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
-                        if sent_message:
-                            fid = None
-                            if sent_message.photo: fid = sent_message.photo[-1].file_id
-                            elif sent_message.video: fid = sent_message.video.file_id
-                            elif sent_message.animation: fid = sent_message.animation.file_id
-                            elif sent_message.document: fid = sent_message.document.file_id
-                            elif sent_message.audio: fid = sent_message.audio.file_id
-                            elif sent_message.voice: fid = sent_message.voice.file_id
-                            if fid: 
-                                new_files_data.append(fid)
-                                await add_file_mirror(orig_fid, 'tg_shadow', fid)
-
-                if sent_message:
-                    await add_channel_copy(post_num, channel_id, sent_message.message_id)
-                    if not db_updated and new_files_data:
-                        new_content = content.copy()
-                        if content_type == 'media_group':
-                            new_content['media'] = new_files_data
-                            for f_info in new_files_data:
-                                await register_file_owner(f_info['file_id'], sender_bot_id)
-                        else:
-                            new_content['file_id'] = new_files_data[0]
-                            await register_file_owner(new_files_data[0], sender_bot_id)
-                        await update_post_content(post_num, new_content)
-                        db_updated = True
-                break
-            except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
-                if attempt < 2: await asyncio.sleep(2)
-            except TelegramRetryAfter as e:
-                await asyncio.sleep(e.retry_after + 1)
+                await add_channel_copy(post_num, channel_id, sent_message.message_id)
+                if not db_updated and new_files_data:
+                    new_content = content.copy()
+                    if content_type == 'media_group':
+                        new_content['media'] = new_files_data
+                        for f_info in new_files_data:
+                            await register_file_owner(f_info['file_id'], sender_bot_id)
+                    else:
+                        new_content['file_id'] = new_files_data[0]
+                        await register_file_owner(new_files_data[0], sender_bot_id)
+                    await update_post_content(post_num, new_content)
+                    db_updated = True
             except Exception:
-                break
+                pass
 async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
     """
     (ИСПРАВЛЕННАЯ ВЕРСИЯ 5.0)
