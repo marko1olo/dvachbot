@@ -94,7 +94,7 @@ def get_real_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    return request.client.host
+    return request.client.host if request.client else "127.0.0.1"
 GEOIP_READER = None
 
 @alru_cache(maxsize=10000, ttl=3600)
