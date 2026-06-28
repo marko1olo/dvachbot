@@ -8,13 +8,25 @@ def check_indexes():
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = [row[0] for row in cursor.fetchall()]
     
+    if not tables:
+        return
+
+    large_tables = {}
+    chunk_size = 500
+    for i in range(0, len(tables), chunk_size):
+        chunk = tables[i:i + chunk_size]
+        query = " UNION ALL ".join([f"SELECT ?, COUNT(*) FROM \"{t}\"" for t in chunk])
+        cursor.execute(query, chunk)
+        for t, c in cursor.fetchall():
+            if c > 10000:
+                large_tables[t] = c
+
     for table in tables:
-        cursor.execute("SELECT * FROM pragma_index_list(?)", (table,))
-        indexes = cursor.fetchall()
-        cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
-        count = cursor.fetchone()[0]
-        if count > 10000:
+        if table in large_tables:
+            count = large_tables[table]
             print(f"Table {table}: {count} rows")
+            cursor.execute("SELECT * FROM pragma_index_list(?)", (table,))
+            indexes = cursor.fetchall()
             for idx in indexes:
                 cursor.execute("SELECT * FROM pragma_index_info(?)", (idx[1],))
                 cols = [row[2] for row in cursor.fetchall()]
