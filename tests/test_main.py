@@ -129,6 +129,24 @@ class TestCleanTitleText(unittest.TestCase):
             "Title with link and"
         )
 
+    def test_only_tags_and_brackets(self):
+        self.assertEqual(clean_title_text("<p></p>"), "")
+        self.assertEqual(clean_title_text("[tag]"), "")
+        self.assertEqual(clean_title_text("<p>[tag]</p>"), "")
+        self.assertEqual(clean_title_text("  <br> [hidden]  "), "")
+
+    def test_unclosed_tags_and_brackets(self):
+        # A tag that doesn't have a closing '>' will not be removed
+        self.assertEqual(clean_title_text("<p text"), "<p text")
+        self.assertEqual(clean_title_text("[tag text"), "[tag text")
+        # Valid closed tags are removed even if they don't make sense logically
+        self.assertEqual(clean_title_text("text</p>"), "text")
+        self.assertEqual(clean_title_text("text]"), "text]")
+
+    def test_non_ascii_and_emojis(self):
+        self.assertEqual(clean_title_text("<h1>Привет мир! 🌍</h1>"), "Привет мир! 🌍")
+        self.assertEqual(clean_title_text("[Спойлер] Секрет 🤫"), "Секрет 🤫")
+
 if __name__ == "__main__":
     unittest.main()
 
