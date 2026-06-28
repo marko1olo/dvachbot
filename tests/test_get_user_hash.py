@@ -13,14 +13,14 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # We need to mock os.getenv to avoid the ValueError when SECRET_KEY is missing
 with mock.patch.dict(os.environ, {"SECRET_KEY": "test_secret"}):
-    from Dubsite_tgach.main import get_user_hash
+    from common.posts import get_user_hash
 
 
 class GetUserHashTests(unittest.TestCase):
     def setUp(self):
         self.secret = "test_secret"
-        import Dubsite_tgach.main
-        Dubsite_tgach.main.SECRET_KEY = self.secret
+        import common.posts
+        common.posts.SECRET_KEY = self.secret
 
     def test_get_user_hash_with_integer(self):
         user_id = 12345
