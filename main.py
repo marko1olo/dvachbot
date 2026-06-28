@@ -14444,6 +14444,13 @@ async def _process_stacked_anime_command(
         if working_msg:
             try: await working_msg.delete()
             except TelegramBadRequest: pass
+async def _safe_delete_user_message(message: types.Message):
+    try:
+        if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
+            await message.delete()
+    except TelegramBadRequest:
+        pass
+
 @dp.message(Command("deanon"))
 async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -14457,22 +14464,14 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
                     sent_msg = await message.answer(cooldown_msg)
                     spawn_task(delete_message_after_delay(sent_msg, 5))
                 except Exception: pass
-                try:
-                    if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-                        await message.delete()
-                except TelegramBadRequest:
-                    pass
+                await _safe_delete_user_message(message)
                 return
             b_data['last_deanon_time'] = current_time
     lang = 'en' if board_id == 'int' else 'ru'
     if not message.reply_to_message:
         reply_text = "👀 Reply to a message to de-anonymize!" if lang == 'en' else "⚠️ Ответьте на анонимное сообщение юзера, чтобы попытаться узнать автора: <code>/deanon</code>"
         await message.answer(reply_text, parse_mode="HTML")
-        try:
-            if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-                await message.delete()
-        except TelegramBadRequest:
-            pass
+        await _safe_delete_user_message(message)
         return
     user_id = message.from_user.id
     b_data = board_data[board_id] # Переопределение b_data для ясности
@@ -14489,20 +14488,12 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
     if not original_author_id:
         reply_text = "🚫 Could not find the post to de-anonymize..." if lang == 'en' else "🚫 Не удалось найти пост для деанона..."
         await message.answer(reply_text)
-        try:
-            if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-                await message.delete()
-        except TelegramBadRequest:
-            pass
+        await _safe_delete_user_message(message)
         return
     if original_author_id == 0:
         reply_text = "⚠️ System messages cannot be de-anonymized." if lang == 'en' else "⚠️ Системные сообщения нельзя деанонить."
         await message.answer(reply_text)
-        try:
-            if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-                await message.delete()
-        except TelegramBadRequest:
-            pass
+        await _safe_delete_user_message(message)
         return
     deanon_text = generate_deanon_info(lang=lang)
     header_text_prefix = "### DEANON ###" if lang == 'en' else "### ДЕАНОН ###"
@@ -14551,11 +14542,7 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
              await create_and_send_deanon_post()
     else:
         await create_and_send_deanon_post()
-    try:
-        if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-            await message.delete()
-    except TelegramBadRequest:
-        pass
+    await _safe_delete_user_message(message)
 async def delete_message_after_delay(message: types.Message, delay: int):
 
     try:
@@ -14942,11 +14929,7 @@ async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 
         [InlineKeyboardButton(text="💾 Сохранить Бэкап", callback_data="save_all")],
     ])
     await message.answer(final_text, reply_markup=keyboard, parse_mode="HTML")
-    try:
-        if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-            await message.delete()
-    except TelegramBadRequest:
-        pass
+    await _safe_delete_user_message(message)
 @dp.message(Command("lockdown"))
 async def cmd_bot_lockdown(message: Message, board_id: str | None):
     if not board_id or not is_admin(message.from_user.id, board_id):
