@@ -234,7 +234,7 @@
                                     {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
                                                 {% if file.type == 'image' or file.type == 'photo' %}
                                                     <a href="{{ file.original_url }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
-                                                        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                        <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                             class="post-image lazy-load" alt="img" referrerpolicy="no-referrer">
                                                     </a>
@@ -249,7 +249,7 @@
                                                                        style="max-height: 150px; width: auto; background: transparent; display: block;">
                                                                 </video>
                                                             {% else %}
-                                                                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                                <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                     data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                                     class="post-sticker lazy-load" 
                                                                     onclick="event.stopPropagation();" 

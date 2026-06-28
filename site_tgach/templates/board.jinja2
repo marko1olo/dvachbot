@@ -329,6 +329,7 @@
                                                         {% endif %}
                                                         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                            loading="lazy"
                                                             class="post-image lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ post.id }}] {{ post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                     </a>
@@ -342,6 +343,7 @@
                                                             <a href="{{ file.original_url }}" class="gallery-trigger" data-type="image" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
                                                                 <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                     data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                                    loading="lazy"
                                                                     class="post-sticker lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" 
                                                                     referrerpolicy="no-referrer">
                                                             </a>
@@ -475,6 +477,7 @@
                                                             {% endif %}
                                                             <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                 data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                                loading="lazy"
                                                                 class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                         </a>
@@ -488,6 +491,7 @@
                                                                 <a href="{{ file.original_url }}" class="gallery-trigger" data-type="image" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
                                                                     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                         data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                                        loading="lazy"
                                                                         class="post-sticker lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" 
                                                                         referrerpolicy="no-referrer">
                                                                 </a>
@@ -497,6 +501,7 @@
                                                         <div class="lazy-media-wrapper is-note" data-src="{{ file.original_url }}" data-filename="{{ file.filename }}" data-type="note">
                                                             <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                 data-src="{{ file.thumbnail_url or '/static/img/vid.png' }}" 
+                                                                loading="lazy"
                                                                 class="post-video video-note lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" 
                                                                 style="border-radius: 50%;" referrerpolicy="no-referrer">
                                                         </div>

@@ -85,7 +85,7 @@
                                 {% for file in post.content.files %}
                                     <a href="{{ file.original_url }}" class="file-thumb">
                                         {% if file.type in ['image', 'photo'] %}
-                                            <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                            <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                 data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                 class="post-image lazy-load" alt="img" referrerpolicy="no-referrer">
                                         {% elif file.type in ['video', 'gif', 'animation', 'video_note'] %}

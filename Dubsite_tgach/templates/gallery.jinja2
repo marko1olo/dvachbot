@@ -129,7 +129,7 @@
                             
                             <div class="gallery-thumb">
                                 {% if file.type in ['image', 'photo', 'sticker', 'gif'] and file.thumbnail_url %}
-                                    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                    <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                          data-src="{{ file.thumbnail_url }}" 
                                          class="lazy-load" alt="{{ file.filename }}" referrerpolicy="no-referrer">
                                 

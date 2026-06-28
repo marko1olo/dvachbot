@@ -110,7 +110,7 @@
                                                style="width: 100%; height: 100%; object-fit: cover; background: #000;">
                                         </video>
                                     {% else %}
-                                        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                        <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                              data-src="{{ file.thumbnail_url or file.original_url }}" 
                                              class="post-image lazy-load" 
                                              alt="img" 
@@ -151,7 +151,7 @@
                                                     {% if file.filename.endswith('.webm') %}
                                                         <video class="post-sticker" src="{{ file.original_url }}" autoplay loop muted playsinline webkit-playsinline referrerpolicy="no-referrer" style="max-height: 150px;"></video>
                                                     {% else %}
-                                                        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="{{ file.thumbnail_url or file.original_url }}" class="post-sticker lazy-load" referrerpolicy="no-referrer" style="max-height: 150px;">
+                                                        <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="{{ file.thumbnail_url or file.original_url }}" class="post-sticker lazy-load" referrerpolicy="no-referrer" style="max-height: 150px;">
                                                     {% endif %}
                                                 </a>
                                             </div>
@@ -160,7 +160,7 @@
                                                 {% if file.blurhash %}
                                                     <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
                                                 {% endif %}
-                                                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="{{ file.thumbnail_url or file.original_url }}" class="post-image lazy-load" alt="img" referrerpolicy="no-referrer">
+                                                <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="{{ file.thumbnail_url or file.original_url }}" class="post-image lazy-load" alt="img" referrerpolicy="no-referrer">
                                                 {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                             </a>
                                         {% endif %}

@@ -85,7 +85,7 @@
                             {% for file in post.content.files %}
                                 {% if file.type in ['image', 'photo'] %}
                                     <a href="{{ file.original_url }}" class="file-thumb">
-                                        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                        <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                              data-src="{{ file.thumbnail_url or file.original_url }}" 
                                              class="post-image lazy-load" referrerpolicy="no-referrer">
                                     </a>
@@ -115,7 +115,7 @@
                                                    style="max-height: 150px; width: auto; background: transparent;">
                                             </video>
                                         {% else %}
-                                            <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                            <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                  data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                  class="post-sticker lazy-load" 
                                                  referrerpolicy="no-referrer">

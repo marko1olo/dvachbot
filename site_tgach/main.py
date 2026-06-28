@@ -1617,10 +1617,10 @@ async def security_headers_middleware(request: Request, call_next):
         "media-src 'self' https: blob:; "
         "connect-src 'self' https: wss:; "
         "frame-src 'self' https://www.youtube.com;"
-        "upgrade-insecure-requests;"
     )
     return response
-# app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5) # Отключено, так как сжимает Nginx
+
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 site_root = os.path.dirname(os.path.abspath(__file__))
 class CachedStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
