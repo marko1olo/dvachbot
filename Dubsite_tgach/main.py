@@ -1320,7 +1320,8 @@ async def sitemap_xml(request: Request):
         f"{base_url}/archive/threads/",
         f"{base_url}/archive/chat/"
     ]
-    for board_id in BOARD_CONFIG:
+    valid_boards = set(BOARD_CONFIG.keys())
+    for board_id in valid_boards:
         urls.append(f"{base_url}/{board_id}/")
         urls.append(f"{base_url}/{board_id}/catalog/")
     db = await get_pool()
@@ -1329,8 +1330,8 @@ async def sitemap_xml(request: Request):
         async with db.execute(query) as cursor:
             async for row in cursor:
                 bid, tid, ts = row
-                date_str = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
-                urls.append(f"{base_url}/{bid}/res/{tid}.html")
+                if bid in valid_boards:
+                    urls.append(f"{base_url}/{bid}/res/{tid}.html")
     except Exception as e:
         print(f"Sitemap error: {e}")
         
