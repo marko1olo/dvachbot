@@ -121,10 +121,14 @@ def find_logical_garbage(cur, tables):
     }
     
     orphan_tables = []
+
+    ALLOWED_TABLES = {"PostCopies", "BroadcastQueue", "NotificationQueue", "Reports"}
+    ALLOWED_COLS = {"post_num", "source_post_num"}
+
     for table, col in tables_to_check.items():
         if table in tables:
-            if not re.match(r'^[a-zA-Z0-9_]+$', table):
-                print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: недопустимое имя{Colors.ENDC}")
+            if table not in ALLOWED_TABLES or col not in ALLOWED_COLS:
+                print(f"{Colors.FAIL}⚠️  Пропущена таблица {table} или колонка {col}: недопустимое имя{Colors.ENDC}")
                 continue
             cur.execute(f"""
                 SELECT COUNT(*) FROM "{table}" t
