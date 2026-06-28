@@ -758,6 +758,21 @@ async def process_import_queue(app_state_broadcast_queue):
                     await asyncio.sleep(5)
                     continue
                 
+                task_ids = list(set(r[1] for r in rows))
+                task_op_map = {}
+                ref_map = {}
+                if task_ids:
+                    placeholders = ','.join(['?'] * len(task_ids))
+                    query_op = f"SELECT task_id, real_post_num FROM ImportRefMap WHERE rowid IN (SELECT MIN(rowid) FROM ImportRefMap WHERE task_id IN ({placeholders}) GROUP BY task_id)"
+                    async with conn.execute(query_op, task_ids) as op_cur:
+                        async for tr in op_cur:
+                            task_op_map[tr[0]] = str(tr[1])
+
+                    query_refs = f"SELECT task_id, original_post_num, real_post_num FROM ImportRefMap WHERE task_id IN ({placeholders})"
+                    async with conn.execute(query_refs, task_ids) as ref_cur:
+                        async for rr in ref_cur:
+                            ref_map[(rr[0], rr[1])] = rr[2]
+
                 for row in rows:
                     q_id, task_id, board_id, orig_num, reply_to_orig, content_str, author_id, stream, is_op, title = row
                     try:
@@ -769,11 +784,19 @@ async def process_import_queue(app_state_broadcast_queue):
                         real_reply_to = None
                         
                         if refs:
-                            placeholders = ','.join(['?'] * len(refs))
-                            q_map = f"SELECT original_post_num, real_post_num FROM ImportRefMap WHERE task_id = ? AND original_post_num IN ({placeholders})"
-                            async with conn.execute(q_map, [task_id] + refs) as map_cur:
-                                async for m_row in map_cur:
-                                    replacements[m_row[0]] = m_row[1]
+                            for ref_str in refs:
+                                try:
+                                    ref_int = int(ref_str)
+                                except ValueError:
+                                    continue
+                                if (task_id, ref_int) in ref_map:
+                                    replacements[ref_int] = ref_map[(task_id, ref_int)]
+                                else:
+                                    async with conn.execute("SELECT real_post_num FROM ImportRefMap WHERE task_id = ? AND original_post_num = ?", (task_id, ref_int)) as fallback_cur:
+                                        f_row = await fallback_cur.fetchone()
+                                        if f_row:
+                                            replacements[ref_int] = f_row[0]
+                                            ref_map[(task_id, ref_int)] = f_row[0]
                         
                         for old_ref, new_ref in replacements.items():
                             text = text.replace(f">>{old_ref}", f">>{new_ref}")
@@ -785,9 +808,13 @@ async def process_import_queue(app_state_broadcast_queue):
                         
                         final_thread_id_db = None
                         if not is_op:
-                            async with conn.execute("SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1", (task_id,)) as op_cur:
-                                op_row = await op_cur.fetchone()
-                                if op_row: final_thread_id_db = str(op_row[0])
+                            final_thread_id_db = task_op_map.get(task_id)
+                            if final_thread_id_db is None:
+                                async with conn.execute("SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1", (task_id,)) as op_cur:
+                                    op_row = await op_cur.fetchone()
+                                    if op_row:
+                                        final_thread_id_db = str(op_row[0])
+                                        task_op_map[task_id] = final_thread_id_db
                         
                         post_mode = 'new_thread' if is_op else 'reply'
                         new_post_num = await create_post(
@@ -805,9 +832,12 @@ async def process_import_queue(app_state_broadcast_queue):
                         if new_post_num:
                             if is_op:
                                 await create_thread_entry(new_post_num, board_id, author_id, title or "Imported", time.time(), stream=stream)
+                                task_op_map[task_id] = str(new_post_num)
                             elif final_thread_id_db:
                                 await update_thread_last_updated(int(final_thread_id_db), time.time())
                             await process_backlinks(new_post_num, content['text'], real_reply_to)
+
+                            ref_map[(task_id, orig_num)] = new_post_num
 
                             async with db_lock:
                                 await conn.execute("INSERT INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)", (task_id, orig_num, new_post_num))
