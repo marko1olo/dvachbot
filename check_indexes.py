@@ -2,14 +2,12 @@ import sqlite3
 import os
 
 db_path = "dvach_bot.db"
-if not os.path.exists(db_path):
-    print("No DB found")
-    exit()
 
-conn = sqlite3.connect(db_path)
-cur = conn.cursor()
 
-def print_indexes(table):
+def print_indexes(cur, table):
+    # Using the table-valued PRAGMA function allows us to use standard
+    # parameterized queries, preventing SQL injection vulnerabilities
+    # that occur with string interpolation.
     cur.execute("SELECT * FROM pragma_index_list(?)", (table,))
     indexes = cur.fetchall()
     if not indexes:
@@ -22,8 +20,28 @@ def print_indexes(table):
         columns = [c[2] for c in cur.fetchall()]
         print(f"  - {idx_name}: {columns}")
 
-print_indexes("Posts")
-print_indexes("PostCopies")
-print_indexes("ChannelCopies")
-print_indexes("FileMirrors")
-print_indexes("ImportRefMap")
+
+def main():
+    if not os.path.exists(db_path):
+        print("No DB found")
+        return
+
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    tables_to_check = [
+        "Posts",
+        "PostCopies",
+        "ChannelCopies",
+        "FileMirrors",
+        "ImportRefMap"
+    ]
+
+    for table in tables_to_check:
+        print_indexes(cur, table)
+
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()
