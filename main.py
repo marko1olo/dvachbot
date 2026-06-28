@@ -6734,35 +6734,23 @@ import time as _time_module
 _stats_cache: dict = {}   # board_id -> {ts: float, photos: list[bytes]}
 _STATS_TTL = 3600         # seconds
 
-def _generate_stats_charts(board_id: str) -> list[bytes]:
-    """Generate 4 activity charts for board_id. Returns list of PNG bytes."""
-    import io as _io
-    import sqlite3 as _sqlite3
-    import numpy as _np
-    import matplotlib as _mpl
-    _mpl.use('Agg')
-    import matplotlib.pyplot as _plt
-    from matplotlib.colors import LinearSegmentedColormap
-    from collections import defaultdict
-    import datetime as _dt
-
-    BG, FG, GRID = '#0d1117', '#e6edf3', '#21262d'
-    _plt.rcParams.update({
-        'figure.facecolor': BG, 'axes.facecolor': BG, 'axes.edgecolor': GRID,
-        'axes.labelcolor': FG, 'xtick.color': FG, 'ytick.color': FG,
-        'text.color': FG, 'grid.color': GRID, 'font.family': 'DejaVu Sans', 'font.size': 9,
+def _setup_mpl_params(plt, bg, fg, grid):
+    plt.rcParams.update({
+        'figure.facecolor': bg, 'axes.facecolor': bg, 'axes.edgecolor': grid,
+        'axes.labelcolor': fg, 'xtick.color': fg, 'ytick.color': fg,
+        'text.color': fg, 'grid.color': grid, 'font.family': 'DejaVu Sans', 'font.size': 9,
     })
 
-    import os
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvach_bot.db')
-    con = _sqlite3.connect(db_path)
-    cur = con.cursor()
+def _get_heat_cmap():
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
 
-    since_90 = int(_time_module.time()) - 90 * 86400
-    since_180 = int(_time_module.time()) - 180 * 86400
-    bufs = []
+def _generate_activity_clock(cur, board_id: str, since_90: int, bg, fg) -> bytes | None:
+    import io
+    import numpy as np
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
 
-    # ── 1. Activity Clock (polar, last 90 days) ────────────────────────────
     cur.execute("""
         SELECT CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
                COUNT(*) as cnt
@@ -6771,46 +6759,51 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     """, (board_id, since_90))
     hd = {r[0]: r[1] for r in cur.fetchall()}
     if not hd:
-        con.close()
-        return []
-    vals = _np.array([hd.get(h, 0) for h in range(24)], dtype=float)
+        return None
+
+    vals = np.array([hd.get(h, 0) for h in range(24)], dtype=float)
     vals_norm = vals / (vals.max() or 1)
     total_posts = int(vals.sum())
 
-    fig = _plt.figure(figsize=(7, 7), facecolor=BG)
+    fig = plt.figure(figsize=(7, 7), facecolor=bg)
     ax  = fig.add_subplot(111, polar=True)
     ax.set_facecolor('#0a0f14')
     N     = 24
-    theta = _np.linspace(0, 2*_np.pi, N, endpoint=False) - _np.pi/2
-    width = 2*_np.pi / N * 0.82
-    cmap  = _mpl.colormaps['RdYlGn']
+    theta = np.linspace(0, 2*np.pi, N, endpoint=False) - np.pi/2
+    width = 2*np.pi / N * 0.82
+    cmap  = mpl.colormaps['RdYlGn']
     ax.bar(theta, vals_norm, width=width, bottom=0.12,
            color=[cmap(v) for v in vals_norm], alpha=0.92,
-           edgecolor=BG, linewidth=0.7)
+           edgecolor=bg, linewidth=0.7)
     for i in range(24):
         ax.text(theta[i], 1.26, f'{i:02d}', ha='center', va='center',
-                fontsize=8, color=FG,
+                fontsize=8, color=fg,
                 fontweight='bold' if i in [0,6,12,18] else 'normal')
-    peak_hr = int(_np.argmax(vals))
+    peak_hr = int(np.argmax(vals))
     ax.bar(theta[peak_hr], vals_norm[peak_hr], width=width, bottom=0.12,
-           color='#80ffaa', alpha=0.95, edgecolor=BG, linewidth=0.7)
-    quiet_hr = int(_np.argmin(vals))
+           color='#80ffaa', alpha=0.95, edgecolor=bg, linewidth=0.7)
+    quiet_hr = int(np.argmin(vals))
     ax.bar(theta[quiet_hr], vals_norm[quiet_hr], width=width, bottom=0.12,
-           color='#f78166', alpha=0.95, edgecolor=BG, linewidth=0.7)
+           color='#f78166', alpha=0.95, edgecolor=bg, linewidth=0.7)
     ax.set_ylim(0, 1.42); ax.set_yticks([]); ax.set_xticks([])
     ax.spines['polar'].set_visible(False); ax.grid(False)
     ax.set_title(f'/{board_id}/ — Часы активности (90д)\n'
                  f'Пик: {peak_hr:02d}:00  •  Тихо: {quiet_hr:02d}:00  •  {total_posts:,} постов',
-                 fontsize=11, pad=14, color=FG, fontweight='bold', y=1.06)
+                 fontsize=11, pad=14, color=fg, fontweight='bold', y=1.06)
     ax.text(0, 0, f'{total_posts//1000}k', ha='center', va='center',
-            fontsize=14, color=FG, fontweight='bold', alpha=0.55)
-    _plt.tight_layout()
-    buf = _io.BytesIO()
-    _plt.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
-    _plt.close()
-    bufs.append(buf.getvalue())
+            fontsize=14, color=fg, fontweight='bold', alpha=0.55)
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor=bg)
+    plt.close(fig)
+    return buf.getvalue()
 
-    # ── 2. Ridge plot by weekday (last 90 days) ────────────────────────────
+def _generate_ridge_plot(cur, board_id: str, since_90: int, bg, fg) -> bytes:
+    import io
+    from collections import defaultdict
+    import numpy as np
+    import matplotlib.pyplot as plt
+
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER),
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER),
@@ -6818,23 +6811,23 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
         FROM Posts WHERE board_id=? AND timestamp > ?
         GROUP BY 1, 2
     """, (board_id, since_90))
-    dh = defaultdict(lambda: _np.zeros(24))
+    dh = defaultdict(lambda: np.zeros(24))
     for dow, hr, cnt in cur.fetchall():
         dh[dow][hr] = cnt
     days_ru = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб']
     day_colors = ['#f78166','#58a6ff','#79c0ff','#d2a8ff','#ffa657','#39d353','#e3b341']
-    hrs = _np.arange(24)
+    hrs = np.arange(24)
     global_max = max((dh[d].max() for d in range(7)), default=1) or 1
 
     def _smooth(y, w=1):
-        k = _np.ones(w*2+1)/(w*2+1)
-        return _np.convolve(y, k, mode='same')
+        k = np.ones(w*2+1)/(w*2+1)
+        return np.convolve(y, k, mode='same')
 
-    fig, axes = _plt.subplots(7, 1, figsize=(13, 7), facecolor=BG, sharex=True)
+    fig, axes = plt.subplots(7, 1, figsize=(13, 7), facecolor=bg, sharex=True)
     fig.subplots_adjust(hspace=-0.08)
     for idx, d in enumerate(range(6, -1, -1)):
         ax2 = axes[idx]
-        ax2.set_facecolor(BG)
+        ax2.set_facecolor(bg)
         y = _smooth(dh[d], w=1)
         y_n = y / global_max
         color = day_colors[d]
@@ -6850,16 +6843,20 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
         ax2.set_yticks([]); ax2.spines[:].set_visible(False)
     axes[-1].set_xticks(hrs)
     axes[-1].set_xticklabels([f'{h:02d}' for h in hrs], fontsize=7.5)
-    axes[-1].set_xlabel('Час суток', color=FG, fontsize=9)
+    axes[-1].set_xlabel('Час суток', color=fg, fontsize=9)
     fig.suptitle(f'/{board_id}/ — Ритм по дням недели (90д)', fontsize=12, y=0.99,
-                 color=FG, fontweight='bold')
-    _plt.tight_layout(rect=[0.05, 0, 1, 0.98])
-    buf2 = _io.BytesIO()
-    _plt.savefig(buf2, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
-    _plt.close()
-    bufs.append(buf2.getvalue())
+                 color=fg, fontweight='bold')
+    plt.tight_layout(rect=[0.05, 0, 1, 0.98])
+    buf2 = io.BytesIO()
+    plt.savefig(buf2, format='png', dpi=130, bbox_inches='tight', facecolor=bg)
+    plt.close(fig)
+    return buf2.getvalue()
 
-    # ── 3. Weekday x Hour Heatmap (180 days / all-time) ───────────────────
+def _generate_heatmap(cur, board_id: str, since_180: int, bg, fg) -> bytes:
+    import io
+    import numpy as np
+    import matplotlib.pyplot as plt
+
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER) as dow,
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
@@ -6867,87 +6864,133 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
         FROM Posts WHERE board_id=? AND timestamp > ?
         GROUP BY dow, hr
     """, (board_id, since_180))
-    grid = _np.zeros((7, 24))
+    grid = np.zeros((7, 24))
     for dow, hr, cnt in cur.fetchall():
         grid[dow][hr] = cnt
 
     days_ru_full = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота']
-    fig, ax3 = _plt.subplots(figsize=(10, 4.5), facecolor=BG)
-    ax3.set_facecolor(BG)
-    HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
+    fig, ax3 = plt.subplots(figsize=(10, 4.5), facecolor=bg)
+    ax3.set_facecolor(bg)
+    HEAT = _get_heat_cmap()
     im = ax3.imshow(grid, cmap=HEAT, aspect='auto', interpolation='nearest')
 
     ax3.set_xticks(range(24))
     ax3.set_xticklabels([f'{h:02d}:00' for h in range(24)], fontsize=7, rotation=45, ha='right')
     ax3.set_yticks(range(7))
     ax3.set_yticklabels(days_ru_full, fontsize=8)
-    ax3.set_title(f'/{board_id}/ — Тепловая карта час × день недели (180д)', fontsize=11, pad=10, color=FG, fontweight='bold')
-    ax3.set_xlabel('Час суток', color=FG, fontsize=8.5)
+    ax3.set_title(f'/{board_id}/ — Тепловая карта час × день недели (180д)', fontsize=11, pad=10, color=fg, fontweight='bold')
+    ax3.set_xlabel('Час суток', color=fg, fontsize=8.5)
 
     cb = fig.colorbar(im, ax=ax3, pad=0.01)
-    cb.ax.yaxis.set_tick_params(color=FG, labelsize=7)
-    cb.set_label('постов', color=FG, fontsize=7.5)
+    cb.ax.yaxis.set_tick_params(color=fg, labelsize=7)
+    cb.set_label('постов', color=fg, fontsize=7.5)
 
-    _plt.tight_layout()
-    buf3 = _io.BytesIO()
-    _plt.savefig(buf3, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
-    _plt.close()
-    bufs.append(buf3.getvalue())
+    plt.tight_layout()
+    buf3 = io.BytesIO()
+    plt.savefig(buf3, format='png', dpi=130, bbox_inches='tight', facecolor=bg)
+    plt.close(fig)
+    return buf3.getvalue()
 
-    # ── 4. Calendar heatmap (180 days / all-time) ─────────────────────────
+def _generate_calendar_heatmap(cur, board_id: str, since_180: int, bg, fg) -> bytes | None:
+    import io
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import datetime as dt
+
     cur.execute("""
         SELECT date(timestamp,'unixepoch','localtime') as day, COUNT(*)
         FROM Posts WHERE board_id=? AND timestamp > ?
         GROUP BY day ORDER BY day
     """, (board_id, since_180))
     day_data = {r[0]: r[1] for r in cur.fetchall()}
-    con.close()
 
-    if day_data:
-        dates_sorted = sorted(day_data.keys())
-        start = _dt.date.fromisoformat(dates_sorted[0])
-        end   = _dt.date.fromisoformat(dates_sorted[-1])
-        start_mon = start - _dt.timedelta(days=start.weekday())
-        end_sun   = end   + _dt.timedelta(days=6 - end.weekday())
-        total_days = (end_sun - start_mon).days + 1
-        weeks = total_days // 7
-        cal = _np.zeros((7, weeks))
-        cur_date = start_mon
-        for w in range(weeks):
-            for d in range(7):
-                cal[d][w] = day_data.get(cur_date.isoformat(), 0)
-                cur_date += _dt.timedelta(days=1)
+    if not day_data:
+        return None
 
-        vmax = _np.percentile(list(day_data.values()), 95) if day_data else 1
+    dates_sorted = sorted(day_data.keys())
+    start = dt.date.fromisoformat(dates_sorted[0])
+    end   = dt.date.fromisoformat(dates_sorted[-1])
+    start_mon = start - dt.timedelta(days=start.weekday())
+    end_sun   = end   + dt.timedelta(days=6 - end.weekday())
+    total_days = (end_sun - start_mon).days + 1
+    weeks = total_days // 7
+    cal = np.zeros((7, weeks))
+    cur_date = start_mon
+    for w in range(weeks):
+        for d in range(7):
+            cal[d][w] = day_data.get(cur_date.isoformat(), 0)
+            cur_date += dt.timedelta(days=1)
 
-        fig, ax4 = _plt.subplots(figsize=(max(10, weeks//2), 3), facecolor=BG)
-        ax4.set_facecolor(BG)
-        im = ax4.imshow(cal, cmap=HEAT, aspect='auto', interpolation='nearest', vmin=0, vmax=vmax)
+    vmax = np.percentile(list(day_data.values()), 95) if day_data else 1
 
-        # Month labels
-        month_ticks, month_lbls = [], []
-        cdate = start_mon
-        seen = set()
-        for w in range(weeks):
-            ym = cdate.strftime('%b %Y')
-            if ym not in seen:
-                month_ticks.append(w); month_lbls.append(cdate.strftime('%b\n%Y')); seen.add(ym)
-            cdate += _dt.timedelta(days=7)
-        ax4.set_xticks(month_ticks); ax4.set_xticklabels(month_lbls, fontsize=7.5)
-        ax4.set_yticks(range(7))
-        ax4.set_yticklabels(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'], fontsize=8)
-        ax4.set_title(f'/{board_id}/ — Календарь активности (180д)', fontsize=11, pad=10,
-                      color=FG, fontweight='bold')
-        cb = fig.colorbar(im, ax=ax4, orientation='horizontal', pad=0.18, shrink=0.35)
-        cb.set_label('постов/день', color=FG, fontsize=7.5)
-        cb.ax.xaxis.set_tick_params(color=FG, labelsize=7)
-        _plt.tight_layout()
-        buf4 = _io.BytesIO()
-        _plt.savefig(buf4, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
-        _plt.close()
-        bufs.append(buf4.getvalue())
+    fig, ax4 = plt.subplots(figsize=(max(10, weeks//2), 3), facecolor=bg)
+    ax4.set_facecolor(bg)
+    HEAT = _get_heat_cmap()
+    im = ax4.imshow(cal, cmap=HEAT, aspect='auto', interpolation='nearest', vmin=0, vmax=vmax)
 
-    return bufs
+    # Month labels
+    month_ticks, month_lbls = [], []
+    cdate = start_mon
+    seen = set()
+    for w in range(weeks):
+        ym = cdate.strftime('%b %Y')
+        if ym not in seen:
+            month_ticks.append(w); month_lbls.append(cdate.strftime('%b\n%Y')); seen.add(ym)
+        cdate += dt.timedelta(days=7)
+    ax4.set_xticks(month_ticks); ax4.set_xticklabels(month_lbls, fontsize=7.5)
+    ax4.set_yticks(range(7))
+    ax4.set_yticklabels(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'], fontsize=8)
+    ax4.set_title(f'/{board_id}/ — Календарь активности (180д)', fontsize=11, pad=10,
+                  color=fg, fontweight='bold')
+    cb = fig.colorbar(im, ax=ax4, orientation='horizontal', pad=0.18, shrink=0.35)
+    cb.set_label('постов/день', color=fg, fontsize=7.5)
+    cb.ax.xaxis.set_tick_params(color=fg, labelsize=7)
+    plt.tight_layout()
+    buf4 = io.BytesIO()
+    plt.savefig(buf4, format='png', dpi=130, bbox_inches='tight', facecolor=bg)
+    plt.close(fig)
+    return buf4.getvalue()
+
+def _generate_stats_charts(board_id: str) -> list[bytes]:
+    """Generate 4 activity charts for board_id. Returns list of PNG bytes."""
+    import sqlite3 as _sqlite3
+    import matplotlib as _mpl
+    _mpl.use('Agg')
+    import matplotlib.pyplot as _plt
+    import os
+
+    BG, FG, GRID = '#0d1117', '#e6edf3', '#21262d'
+    _setup_mpl_params(_plt, BG, FG, GRID)
+
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvach_bot.db')
+    con = _sqlite3.connect(db_path)
+    try:
+        cur = con.cursor()
+
+        since_90 = int(_time_module.time()) - 90 * 86400
+        since_180 = int(_time_module.time()) - 180 * 86400
+        bufs = []
+
+        # ── 1. Activity Clock (polar, last 90 days) ────────────────────────────
+        buf1 = _generate_activity_clock(cur, board_id, since_90, BG, FG)
+        if not buf1:
+            return []
+        bufs.append(buf1)
+
+        # ── 2. Ridge plot by weekday (last 90 days) ────────────────────────────
+        bufs.append(_generate_ridge_plot(cur, board_id, since_90, BG, FG))
+
+        # ── 3. Weekday x Hour Heatmap (180 days / all-time) ───────────────────
+        bufs.append(_generate_heatmap(cur, board_id, since_180, BG, FG))
+
+        # ── 4. Calendar heatmap (180 days / all-time) ─────────────────────────
+        buf4 = _generate_calendar_heatmap(cur, board_id, since_180, BG, FG)
+        if buf4:
+            bufs.append(buf4)
+
+        return bufs
+    finally:
+        con.close()
 
 
 _stats_cooldown_tracker = {}
