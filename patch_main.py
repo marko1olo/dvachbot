@@ -32,7 +32,7 @@ def clean_html_for_tg(text: str) -> str:
     
     # Very rudimentary unclosed tag fix:
     # Just rely on the prompt instructing the LLM, and escape any raw < that is not part of a known tag
-    text = re.sub(r'<(?!/?(b|i|u|s|code|pre|a\\b)[>\\s])', '&lt;', text)
+    text = re.sub(r'<(?!/?(?:b|i|u|s|code|pre|a)(?:\b[^<>]*>|>))', '&lt;', text)
 
     # Balance tags
     allowed_tags = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
