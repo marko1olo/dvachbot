@@ -700,9 +700,6 @@ class ThreadImporter:
                     await asyncio.sleep(0.05)
                 
                 await conn.execute("BEGIN")
-                unique_authors = set(p["author_id"] for p in prepared_posts)
-                # for uid in unique_authors:
-                #     await conn.execute("INSERT OR IGNORE INTO Users (user_id, board_id, stream) VALUES (?, ?, ?)", (uid, target_board, stream))
                 
                 from common.config import STORAGE_CHANNELS
                 current_channel = STORAGE_CHANNELS.get(stream, STORAGE_CHANNELS['ru'])
