@@ -81,7 +81,6 @@ from common.database import (
     get_random_video_post, get_random_image_post
 )
 from site_tgach.admin_config import ADMIN_IDS
-from backup_manager import create_gzipped_dump
 from common.db_pool import create_pool, close_pool, get_pool
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from text_assets import (
