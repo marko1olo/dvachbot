@@ -300,21 +300,18 @@ async def process_and_upload_image(
                     if not is_too_heavy_for_photo:
                         try:
                             sent_original = await _send_with_retry("send_photo", input_file, chat_id=channel_id, photo=input_file)
-                            if sent_original.photo:
+                            if sent_original and sent_original.photo:
                                 result_file_id = get_fid(sent_original.photo[-1])
+                                thumb_id = get_fid(sent_original.photo[0])
                         except ValueError: 
                             is_too_heavy_for_photo = True
                     
                     if is_too_heavy_for_photo or not result_file_id:
                         sent_original = await _send_with_retry("send_document", input_file, chat_id=channel_id, document=input_file)
-                        result_file_id = get_fid(sent_original.document)
-                    
-                    if thumbnail_bytes:
-                        try:
-                            thumb_file = BufferedInputFile(thumbnail_bytes, filename="thumb.jpg")
-                            sent_thumb = await current_bot.send_photo(channel_id, thumb_file)
-                            thumb_id = get_fid(sent_thumb.photo[-1])
-                        except: pass
+                        if sent_original and sent_original.document:
+                            result_file_id = get_fid(sent_original.document)
+                            if sent_original.document.thumbnail:
+                                thumb_id = get_fid(sent_original.document.thumbnail)
                         
                 except Exception as e:
                     logger.error(f"Image sub-upload failed: {e}")
