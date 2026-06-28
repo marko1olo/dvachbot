@@ -19,21 +19,18 @@ def mock_module(name):
 
 # Mock heavy/missing dependencies to allow import
 mocked_deps = [
-    'site_tgach', 'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
+    'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
     'site_tgach.security', 'site_tgach.image_processing', 'site_tgach.catbox',
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
     'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
     'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
-    'fastapi', 'fastapi.responses', 'fastapi.middleware', 'fastapi.middleware.cors',
-    'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip',
-    'fastapi.staticfiles', 'fastapi.templating', 'fastapi.exceptions',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
     'aiogram.client.default', 'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
     'aiogram.filters', 'aiogram.fsm', 'aiogram.fsm.context', 'aiogram.fsm.state', 'aiogram.fsm.storage', 'aiogram.fsm.storage.memory',
-    'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'orjson', 'pydantic',
+    'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'orjson',
     'aiogram.utils', 'aiogram.utils.media_group', 'aiogram.utils.keyboard',
     'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types'
 ]
@@ -53,10 +50,15 @@ class StubClient:
     def __init__(self, host):
         self.host = host
 
+class StubURL:
+    def __init__(self, path):
+        self.path = path
+
 class StubRequest:
-    def __init__(self, headers=None, client_host=None):
+    def __init__(self, headers=None, client_host=None, url_path=""):
         self.headers = headers or {}
         self.client = StubClient(client_host)
+        self.url = StubURL(url_path)
 
 class TestGetRealIp(unittest.TestCase):
     def test_x_real_ip_preferred(self):
@@ -211,3 +213,49 @@ class TestCleanHtmlForTg(unittest.TestCase):
     def test_invalid_tags(self):
         self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script>world&lt;/script>")
         self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown>world")
+
+from site_tgach.main import is_bot_by_headers
+
+class TestIsBotByHeaders(unittest.TestCase):
+    def test_known_bot_user_agent(self):
+        # Should return True for known bot libraries
+        request = StubRequest(headers={"user-agent": "python-requests/2.25.1", "accept-language": "en-US"}, url_path="/")
+        self.assertTrue(is_bot_by_headers(request))
+
+        request = StubRequest(headers={"user-agent": "curl/7.68.0", "accept-language": "en-US"}, url_path="/")
+        self.assertTrue(is_bot_by_headers(request))
+
+    def test_api_missing_referer(self):
+        # Should return True if accessing /api/ without a referer
+        request = StubRequest(headers={"user-agent": "Mozilla/5.0", "accept-language": "en-US"}, url_path="/api/something")
+        self.assertTrue(is_bot_by_headers(request))
+
+    def test_api_with_referer(self):
+        # Should return False if accessing /api/ with a referer and valid language
+        request = StubRequest(headers={"user-agent": "Mozilla/5.0", "accept-language": "en-US", "referer": "https://example.com/"}, url_path="/api/something")
+        self.assertFalse(is_bot_by_headers(request))
+
+    def test_missing_accept_language(self):
+        # Should return True if no accept-language, unless it's static/favicon
+        request = StubRequest(headers={"user-agent": "Mozilla/5.0"}, url_path="/")
+        self.assertTrue(is_bot_by_headers(request))
+
+    def test_static_missing_accept_language(self):
+        # Should return False (allow) for static files or favicon even without accept-language
+        request = StubRequest(headers={"user-agent": "Mozilla/5.0"}, url_path="/static/css/style.css")
+        self.assertFalse(is_bot_by_headers(request))
+
+        request = StubRequest(headers={"user-agent": "Mozilla/5.0"}, url_path="/favicon.ico")
+        self.assertFalse(is_bot_by_headers(request))
+
+    def test_valid_human_request(self):
+        # Should return False for a normal browser request
+        request = StubRequest(
+            headers={
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "accept-language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+                "referer": "https://example.com/some/path"
+            },
+            url_path="/"
+        )
+        self.assertFalse(is_bot_by_headers(request))
