@@ -75,7 +75,9 @@ TELEGRAM_DOCUMENT_LIMIT = 50 * 1024 * 1024 # 50 MB
 def clean_tags_string(text: str | None) -> str | None:
     if not text: return None
     cleaned = " ".join(text.split())
-    cleaned = cleaned.replace(", ,", ",").replace(",,", ",")
+    if not cleaned: return None
+    while ",," in cleaned or ", ," in cleaned:
+        cleaned = cleaned.replace(", ,", ",").replace(",,", ",")
     return cleaned
 def apply_srgb_to_linear(value):
     v = value / 255.0
