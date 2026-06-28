@@ -8310,7 +8310,7 @@ def format_timestamp(ts: float) -> str:
 
     try:
         return datetime.fromtimestamp(ts, tz=UTC).strftime('%d.%m.%y %H:%M')
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError, OSError):
         return ""
 async def dvach_thread_poster():
     """
