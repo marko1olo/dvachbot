@@ -2958,11 +2958,21 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                                 
                     # Если есть удаляемые треды, выбираем ВСЕ посты этих тредов, чтобы снести их тоже
                     if threads_to_delete:
+                        t_ids = []
                         for t_id in threads_to_delete:
-                            try: t_id_int = int(t_id)
-                            except ValueError: t_id_int = 0
-                            
-                            async with db.execute("SELECT post_num FROM Posts WHERE thread_id = ? OR thread_id = ?", (t_id, str(t_id_int))) as cursor:
+                            t_ids.append(t_id)
+                            try:
+                                t_ids.append(str(int(t_id)))
+                            except ValueError:
+                                t_ids.append("0")
+
+                        t_ids = list(set(t_ids))
+                        chunk_size = 900
+                        for i in range(0, len(t_ids), chunk_size):
+                            chunk = t_ids[i:i + chunk_size]
+                            placeholders = ','.join('?' for _ in chunk)
+                            query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders})"
+                            async with db.execute(query, chunk) as cursor:
                                 p_rows = await cursor.fetchall()
                                 for pr in p_rows:
                                     posts_to_delete_set.add(pr[0])
