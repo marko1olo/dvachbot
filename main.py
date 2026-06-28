@@ -682,10 +682,10 @@ def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
     if max_posts < 0 or len(post_to_messages) <= max_posts:
         return 0, 0
     if max_posts == 0:
-        stale_posts = list(post_to_messages.keys())
+        stale_posts = list(post_to_messages)
     else:
         keep_posts = set(sorted(post_to_messages.keys(), reverse=True)[:max_posts])
-        stale_posts = [post_num for post_num in list(post_to_messages.keys()) if post_num not in keep_posts]
+        stale_posts = [post_num for post_num in post_to_messages if post_num not in keep_posts]
     removed_reverse = 0
     for post_num in stale_posts:
         removed_reverse += _drop_post_copy_maps_unlocked(post_num)
