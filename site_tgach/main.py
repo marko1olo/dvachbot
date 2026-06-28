@@ -4863,6 +4863,10 @@ async def api_get_meta(url: str):
                 
                 # Если скачали успешно, парсим и возвращаем
                 loop = asyncio.get_running_loop()
+
+                import html as html_lib
+                # FIX: Unescape first to let BeautifulSoup see tags properly
+                raw_html = html_lib.unescape(raw_html)
                 soup = await loop.run_in_executor(None, BeautifulSoup, raw_html, "html.parser")
                 title = soup.find("meta", property="og:title")
                 image = soup.find("meta", property="og:image")
@@ -6115,6 +6119,9 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
                 text = content.get('text', '')
                 
                 if '<img' in text or '<IMG' in text:
+                    import html as html_lib
+                    # FIX: Unescape first to let BeautifulSoup see tags properly
+                    text = html_lib.unescape(text)
                     soup = BeautifulSoup(text, "html.parser")
                     images = soup.find_all('img')
                     
