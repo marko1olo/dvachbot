@@ -4682,190 +4682,45 @@ async def _build_lie_media_content(content: dict, board_id: str) -> dict:
         lie_content['mime_type'] = replacement['mime_type']
     return lie_content
 
-async def send_message_to_users(
-    bot_instance: Bot,
-    board_id: str,
-    recipients: set[int],
-    content: dict,
-    reply_info: dict | None = None,
-    keyboard: InlineKeyboardMarkup | None = None,
-    verbose: bool = False,
-    queue_enqueued_at: float | None = None,
-    queue_wait_sec: float | None = None,
-    delivery_phase: str = "full",
-    delivery_original_recipients: int | None = None,
-    delivery_deferred_recipients: int = 0,
-) -> list:
-    """
-    Оптимизированная функция массовой рассылки.
-    Сложность снижена с O(N*M) до O(N + M) за счет выноса форматирования.
-    ВКЛЮЧЕНА ЗАЩИТА ОТ ДУБЛЕЙ (SMART RETRY) И ЛОГИРОВАНИЕ.
-    Рассылка с Smart Retry.
-    verbose=False -> тихий режим (для отправки автору).
-    verbose=True -> пишет отчет в консоль (для массовой).
-    """
-    if not recipients or not content or 'type' not in content:
-        return []
-    b_data = board_data[board_id]
-    active_recipients = {
-        uid for uid in recipients 
-        if uid > 0 and uid not in b_data['users']['banned']
-    }
-    if not active_recipients:
-        return[]
-    original_recipients_count = delivery_original_recipients or len(active_recipients)
-    ordered_recipients, priority_recipients_count, passive_recipients_count = _order_recipients_for_delivery(
-        board_id, active_recipients
-    )
-    start_time = time.time()
-    stats = {
-        'success': 0,
-        'ghosts': 0,  # Потенциальные дубли, которые мы предотвратили
-        'errors': 0,  # Ошибки API/Формата
-        'blocks': 0,  # Юзер заблокировал
-        'retries': 0,  # Количество повторов из-за флуда/сети
-        'timeouts': 0,  # Персональные таймауты отправки
-        'priority_recipients': priority_recipients_count,
-        'passive_recipients': passive_recipients_count,
-    }
-    final_keyboard = keyboard 
-    media_url_text_fallback = False
-    media_url_fallback_logged = False
-    html_plain_fallback_logged = False
-    if content.get('poll_data') and not final_keyboard:
-        poll_options = content.get('poll_data', {}).get('options',[])
-        post_num = content.get('post_num')
-        if poll_options and post_num:
-            buttons =[]
-            for i, option_text in enumerate(poll_options):
-                button_text = option_text[:60]
-                buttons.append(
-                    InlineKeyboardButton(
-                        text=button_text,
-                        callback_data=f"poll_vote_{post_num}_{i}"
-                    )
-                )
-            final_keyboard = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
-            
-    post_num = content.get('post_num')
-    post_data_copy = {}
-    reply_to_post_author_id = None
-    post_num_for_replies = None
-    
-    async with storage_lock:
-        if post_num:
-            post_data = messages_storage.get(post_num, {})
-            if post_data: 
-                post_data_copy = post_data.copy()
-        reply_to_post_num = content.get('reply_to_post')
-        if reply_to_post_num:
-            reply_p_data = messages_storage.get(reply_to_post_num, {})
-            reply_to_post_author_id = reply_p_data.get('author_id')
-            post_num_for_replies = reply_to_post_num
+class BroadcastContext:
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
 
-    # --- НАЧАЛО ИЗМЕНЕНИЙ (Восстановление старых реплаев из БД) ---
-    db_replies_map = {}
-    if post_num_for_replies:
-        # Восстанавливаем ID автора для маркера (You), если его нет в RAM
-        if not reply_to_post_author_id:
-            db_post = await get_post_by_num(post_num_for_replies)
-            if db_post:
-                reply_to_post_author_id = db_post.get('author_id')
-        
-        # Проверяем наличие message_id в памяти
-        in_ram = False
-        async with storage_lock:
-            if post_num_for_replies in post_to_messages:
-                in_ram = True
-        
-        # Если в памяти нет, достаем копии из БД
-        if not in_ram:
-            db_copies = await get_post_copies(post_num_for_replies)
-            for rec_id, msg_id in db_copies:
-                db_replies_map[rec_id] = msg_id
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
-    raw_text = content.get('text') or content.get('caption') or ''
-    content_for_common = content.copy()
-    common_formatted_body = await _format_message_body(
-        content=content_for_common, 
-        user_id_for_context=0, 
-        post_data=post_data_copy, 
-        reply_to_post_author_id=reply_to_post_author_id,
-        quote_info=content_for_common.get('quote_info')
-    )
-    base_header_text = content.get('header', '')
-    highlight_header_text = base_header_text
-    if "Пост" in highlight_header_text:
-        highlight_header_text = highlight_header_text.replace("Пост", "🔴 Пост", 1)
-    elif "Post" in highlight_header_text:
-        highlight_header_text = highlight_header_text.replace("Post", "🔴 Post", 1)
-    base_head_html = f"<i>{escape_html(base_header_text)}</i>"
-    highlight_head_html = f"<i>{escape_html(highlight_header_text)}</i>"
-    has_reply_markers = ">>" in raw_text
-    users_settings = b_data.get('user_settings', {})
-    all_results =[]
-    blocked_users = set()
-    mentioned_authors = {}
-    
-    if ">>" in raw_text:
-        mentions = RE_YOU_PATTERN.findall(raw_text)
-        if mentions:
-            missing_mentions =[]
-            async with storage_lock:
-                for m_num_str in mentions:
-                    try:
-                        m_num = int(m_num_str)
-                        if m_num in messages_storage:
-                            mentioned_authors[m_num] = messages_storage[m_num].get("author_id")
-                        else:
-                            missing_mentions.append(m_num)
-                    except ValueError:
-                        continue
-                        
-            # --- НАЧАЛО ИЗМЕНЕНИЙ (Восстановление маркеров (You) для старых постов) ---
-            if missing_mentions:
-                for m_num in missing_mentions:
-                    db_post = await get_post_by_num(m_num)
-                    if db_post:
-                        mentioned_authors[m_num] = db_post.get("author_id")
-            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
-    async def _send_one(uid: int, telegram_request_timeout_sec: int):
-        nonlocal stats, media_url_text_fallback, media_url_fallback_logged, html_plain_fallback_logged
+    async def _send_one(self, uid: int, telegram_request_timeout_sec: int):
         request_timeout = max(3, int(telegram_request_timeout_sec))
-        u_set = users_settings.get(uid, {'nsfw': False, 'hide': set()})
+        u_set = self.users_settings.get(uid, {'nsfw': False, 'hide': set()})
         if u_set['hide']:
-            check_text = (base_header_text + " " + raw_text).lower()
+            check_text = (self.base_header_text + " " + self.raw_text).lower()
             if any(word in check_text for word in u_set['hide']):
-                lang_local = 'en' if board_id == 'int' else 'ru'
+                lang_local = 'en' if self.board_id == 'int' else 'ru'
                 placeholder = "🛡 Message hidden" if lang_local == 'en' else "🛡 Сообщение скрыто"
                 try:
-                    res = await bot_instance.send_message(
+                    res = await self.bot_instance.send_message(
                         uid,
-                        f"{base_head_html}\n{placeholder}",
+                        f"{self.base_head_html}\n{placeholder}",
                         parse_mode="HTML",
                         request_timeout=request_timeout,
                     )
-                    stats['success'] += 1
+                    self.stats['success'] += 1
                     return res
                 except Exception:
-                    stats['errors'] += 1
+                    self.stats['errors'] += 1
                     return None
                     
-        head = highlight_head_html if uid == reply_to_post_author_id else base_head_html
-        body = common_formatted_body
-        is_direct_reply = (uid == reply_to_post_author_id)
-        send_content = content_for_common
+        head = self.highlight_head_html if uid == self.reply_to_post_author_id else self.base_head_html
+        body = self.common_formatted_body
+        is_direct_reply = (uid == self.reply_to_post_author_id)
+        send_content = self.content_for_common
         if u_set.get('lie_media'):
             try:
-                send_content = await _build_lie_media_content(content_for_common, board_id)
-                if send_content is not content_for_common:
+                send_content = await _build_lie_media_content(self.content_for_common, self.board_id)
+                if send_content is not self.content_for_common:
                     body = await _format_message_body(
                         content=send_content,
                         user_id_for_context=uid,
-                        post_data=post_data_copy,
-                        reply_to_post_author_id=reply_to_post_author_id,
+                        post_data=self.post_data_copy,
+                        reply_to_post_author_id=self.reply_to_post_author_id,
                         quote_info=send_content.get('quote_info')
                     )
             except Exception as exc:
@@ -4873,8 +4728,8 @@ async def send_message_to_users(
                     "lie_media_replacement_failed %s",
                     json.dumps(
                         {
-                            "board_id": board_id,
-                            "post_num": post_num,
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
                             "uid": uid,
                             "error": type(exc).__name__,
                         },
@@ -4882,47 +4737,47 @@ async def send_message_to_users(
                         separators=(",", ":"),
                     ),
                 )
-                send_content = content_for_common
+                send_content = self.content_for_common
         current_content = send_content
         
-        if mentioned_authors:
-            text_with_you = add_you_to_my_posts_fast(raw_text, uid, mentioned_authors)
-            if text_with_you != raw_text:
+        if self.mentioned_authors:
+            text_with_you = add_you_to_my_posts_fast(self.raw_text, uid, self.mentioned_authors)
+            if text_with_you != self.raw_text:
                 current_content = send_content.copy()
                 target_field = 'text' if 'text' in current_content else 'caption'
                 current_content[target_field] = text_with_you
                 body = await _format_message_body(
                     content=current_content,
                     user_id_for_context=uid, 
-                    post_data=post_data_copy,
-                    reply_to_post_author_id=reply_to_post_author_id,
+                    post_data=self.post_data_copy,
+                    reply_to_post_author_id=self.reply_to_post_author_id,
                     quote_info=current_content.get('quote_info')
                 )
         elif is_direct_reply:
              body = await _format_message_body(
                 content=current_content,
                 user_id_for_context=uid, 
-                post_data=post_data_copy,
-                reply_to_post_author_id=reply_to_post_author_id,
+                post_data=self.post_data_copy,
+                reply_to_post_author_id=self.reply_to_post_author_id,
                 quote_info=current_content.get('quote_info')
             )
         
         full_text = f"{head}\n\n{body}" if body else head
         reply_to_mid = None
-        if reply_info:
-            raw = reply_info.get(uid)
+        if self.reply_info:
+            raw = self.reply_info.get(uid)
             if raw: reply_to_mid = raw[0] if isinstance(raw, list) else raw
             
-        if reply_to_mid is None and post_num_for_replies:
-            async with storage_lock:
-                replies_map = post_to_messages.get(post_num_for_replies)
+        if reply_to_mid is None and self.post_num_for_replies:
+            async with self.storage_lock:
+                replies_map = self.post_to_messages.get(self.post_num_for_replies)
                 if replies_map:
                     raw = replies_map.get(uid)
                     if raw: reply_to_mid = raw[0] if isinstance(raw, list) else raw
 
         # --- НАЧАЛО ИЗМЕНЕНИЙ (Фоллбэк на кэш из базы данных) ---
-        if reply_to_mid is None and post_num_for_replies:
-            reply_to_mid = db_replies_map.get(uid)
+        if reply_to_mid is None and self.post_num_for_replies:
+            reply_to_mid = self.db_replies_map.get(uid)
         # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
         is_sage = send_content.get('is_sage', False)
@@ -4931,19 +4786,18 @@ async def send_message_to_users(
         attempt_delay = 1.5
 
         async def _send_text_fallback(reason: str):
-            nonlocal media_url_fallback_logged
             fallback_text = full_text
             media_url = current_content.get("image_url")
             if media_url and str(media_url) not in fallback_text:
                 fallback_text = f"{fallback_text}\n\n{escape_html(str(media_url))}"
-            if not media_url_fallback_logged:
+            if not self.media_url_fallback_logged:
                 runtime_logger.warning(
                     "delivery_media_url_text_fallback %s",
                     json.dumps(
                         {
-                            "board_id": board_id,
-                            "post_num": post_num,
-                            "phase": delivery_phase,
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
+                            "phase": self.delivery_phase,
                             "type": str(current_content.get("type")),
                             "reason": reason,
                         },
@@ -4951,22 +4805,22 @@ async def send_message_to_users(
                         separators=(",", ":"),
                     ),
                 )
-                media_url_fallback_logged = True
+                self.media_url_fallback_logged = True
             sent_msgs = []
             parts = split_text(fallback_text, 4096)
             for i, part in enumerate(parts):
-                m = await bot_instance.send_message(
+                m = await self.bot_instance.send_message(
                     chat_id=uid,
                     text=part,
                     parse_mode="HTML",
                     reply_to_message_id=reply_to_mid if i == 0 else None,
-                    reply_markup=final_keyboard if i == len(parts) - 1 else None,
+                    reply_markup=self.final_keyboard if i == len(parts) - 1 else None,
                     disable_notification=is_sage,
                     disable_web_page_preview=True,
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
-            stats['success'] += 1
+            self.stats['success'] += 1
             return sent_msgs
 
         def _telegram_parse_error(err_low: str) -> bool:
@@ -4988,16 +4842,15 @@ async def send_message_to_users(
             return text.strip() or "."
 
         def _log_plain_fallback(reason: str) -> None:
-            nonlocal html_plain_fallback_logged
-            if html_plain_fallback_logged:
+            if self.html_plain_fallback_logged:
                 return
             runtime_logger.warning(
                 "delivery_html_plain_fallback %s",
                 json.dumps(
                     {
-                        "board_id": board_id,
-                        "post_num": post_num,
-                        "phase": delivery_phase,
+                        "board_id": self.board_id,
+                        "post_num": self.post_num,
+                        "phase": self.delivery_phase,
                         "type": str(current_content.get("type")),
                         "reason": reason,
                     },
@@ -5005,7 +4858,7 @@ async def send_message_to_users(
                     separators=(",", ":"),
                 ),
             )
-            html_plain_fallback_logged = True
+            self.html_plain_fallback_logged = True
 
         async def _send_plain_text_parts(
             reason: str,
@@ -5019,17 +4872,17 @@ async def send_message_to_users(
             parts = split_text(fallback_text, 4096)
             target_reply_id = reply_to_id if reply_to_id is not None else reply_to_mid
             for i, part in enumerate(parts):
-                m = await bot_instance.send_message(
+                m = await self.bot_instance.send_message(
                     chat_id=uid,
                     text=part,
                     reply_to_message_id=target_reply_id if i == 0 else None,
-                    reply_markup=final_keyboard if include_keyboard and i == len(parts) - 1 else None,
+                    reply_markup=self.final_keyboard if include_keyboard and i == len(parts) - 1 else None,
                     disable_notification=is_sage,
                     disable_web_page_preview=True,
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
-            stats['success'] += 1
+            self.stats['success'] += 1
             return sent_msgs
 
         def _plain_media_source(media_type: str):
@@ -5059,13 +4912,13 @@ async def send_message_to_users(
                 common_plain_kwargs = {
                     'chat_id': uid,
                     'reply_to_message_id': reply_to_mid,
-                    'reply_markup': final_keyboard,
+                    'reply_markup': self.final_keyboard,
                     'disable_notification': is_sage,
                     'request_timeout': request_timeout,
                 }
                 if has_spoiler and ct in ['photo', 'video', 'animation']:
                     common_plain_kwargs['has_spoiler'] = True
-                send_method = getattr(bot_instance, f"send_{ct}")
+                send_method = getattr(self.bot_instance, f"send_{ct}")
                 if len(plain_text) > 1024:
                     common_plain_kwargs[ct] = file_source
                     media_msg = await send_method(**common_plain_kwargs)
@@ -5080,7 +4933,7 @@ async def send_message_to_users(
                 common_plain_kwargs[ct] = file_source
                 res = await send_method(**common_plain_kwargs)
                 _log_plain_fallback(reason)
-                stats['success'] += 1
+                self.stats['success'] += 1
                 return res
             if ct == "media_group":
                 media_group_build = []
@@ -5102,7 +4955,7 @@ async def send_message_to_users(
                         media_group_build.append(InputMediaAudio(media=media_src, caption=cap))
                 if not media_group_build:
                     return await _send_plain_text_parts(reason, plain_text)
-                res = await bot_instance.send_media_group(
+                res = await self.bot_instance.send_media_group(
                     chat_id=uid,
                     media=media_group_build,
                     reply_to_message_id=reply_to_mid,
@@ -5115,19 +4968,19 @@ async def send_message_to_users(
                     anchor_id = getattr(anchor_msg, "message_id", None)
                     await _send_plain_text_parts(reason, plain_text, reply_to_id=anchor_id, include_keyboard=True)
                     return res
-                stats['success'] += 1
+                self.stats['success'] += 1
                 return res
             if ct in ['sticker', 'video_note', 'dice']:
                 text_result = await _send_plain_text_parts(reason, plain_text)
                 if ct == 'dice':
-                    await bot_instance.send_dice(
+                    await self.bot_instance.send_dice(
                         chat_id=uid,
                         emoji=current_content.get('dice_emoji', '\U0001F3B2'),
                         disable_notification=is_sage,
                         request_timeout=request_timeout,
                     )
                 elif current_content.get("file_id"):
-                    send_method = getattr(bot_instance, f"send_{ct}")
+                    send_method = getattr(self.bot_instance, f"send_{ct}")
                     await send_method(
                         chat_id=uid,
                         **{ct: current_content.get("file_id")},
@@ -5144,7 +4997,7 @@ async def send_message_to_users(
                 common_kwargs = {
                     'chat_id': uid, 
                     'reply_to_message_id': reply_to_mid,
-                    'reply_markup': final_keyboard, 
+                    'reply_markup': self.final_keyboard,
                     'disable_notification': is_sage,
                     'request_timeout': request_timeout,
                 }
@@ -5153,16 +5006,16 @@ async def send_message_to_users(
                     parts = split_text(full_text, 4096)
                     sent_msgs =[]
                     for i, part in enumerate(parts):
-                        m = await bot_instance.send_message(
+                        m = await self.bot_instance.send_message(
                             chat_id=uid, text=part, parse_mode="HTML",
                             reply_to_message_id=reply_to_mid if i == 0 else None,
-                            reply_markup=final_keyboard if i == len(parts)-1 else None,
+                            reply_markup=self.final_keyboard if i == len(parts)-1 else None,
                             disable_notification=is_sage,
                             disable_web_page_preview=True,
                             request_timeout=request_timeout,
                         )
                         sent_msgs.append(m)
-                    stats['success'] += 1
+                    self.stats['success'] += 1
                     return sent_msgs
                 elif ct in['photo', 'video', 'animation', 'document', 'audio', 'voice']:
                     file_source = None
@@ -5179,20 +5032,20 @@ async def send_message_to_users(
                     elif current_content.get("image_url"):
                         file_source = current_content["image_url"]
                     if not file_source:
-                        stats['errors'] += 1
+                        self.stats['errors'] += 1
                         return None
-                    if media_url_text_fallback and current_content.get("image_url"):
+                    if self.media_url_text_fallback and current_content.get("image_url"):
                         return await _send_text_fallback("cached_bad_media_url")
                     if has_spoiler and ct in['photo', 'video', 'animation']:
                         common_kwargs['has_spoiler'] = True
                     if len(full_text) > 1024:
                         common_kwargs[ct] = file_source
-                        send_method = getattr(bot_instance, f"send_{ct}")
+                        send_method = getattr(self.bot_instance, f"send_{ct}")
                         media_msg = await send_method(**common_kwargs)
                         text_parts = split_text(full_text, 4096)
                         try:
                             for part in text_parts:
-                                await bot_instance.send_message(
+                                await self.bot_instance.send_message(
                                     chat_id=uid, text=part, parse_mode="HTML",
                                     reply_to_message_id=media_msg.message_id,
                                     disable_notification=is_sage,
@@ -5209,19 +5062,19 @@ async def send_message_to_users(
                                 )
                                 return media_msg
                             raise
-                        stats['success'] += 1
+                        self.stats['success'] += 1
                         return media_msg
                     else:
                         common_kwargs['caption'] = full_text
                         common_kwargs['parse_mode'] = "HTML"
                         common_kwargs[ct] = file_source
-                        send_method = getattr(bot_instance, f"send_{ct}")
+                        send_method = getattr(self.bot_instance, f"send_{ct}")
                         res = await send_method(**common_kwargs)
-                        stats['success'] += 1
+                        self.stats['success'] += 1
                         return res
                 elif ct == "media_group":
                     if not current_content.get('media'):
-                        stats['errors'] += 1
+                        self.stats['errors'] += 1
                         return None
                     
                     # Безопасная обработка длинных подписей для альбомов
@@ -5245,10 +5098,10 @@ async def send_message_to_users(
                             media_group_build.append(InputMediaAudio(media=media_src, caption=cap, parse_mode="HTML" if cap else None))
                     
                     if not media_group_build: 
-                        stats['errors'] += 1
+                        self.stats['errors'] += 1
                         return None
 
-                    res = await bot_instance.send_media_group(
+                    res = await self.bot_instance.send_media_group(
                         chat_id=uid, media=media_group_build, 
                         reply_to_message_id=reply_to_mid,
                         disable_notification=is_sage,
@@ -5261,7 +5114,7 @@ async def send_message_to_users(
                         text_parts = split_text(full_text, 4096)
                         try:
                             for part in text_parts:
-                                await bot_instance.send_message(
+                                await self.bot_instance.send_message(
                                     chat_id=uid, text=part, parse_mode="HTML",
                                     reply_to_message_id=anchor_msg.message_id,
                                     disable_notification=is_sage,
@@ -5279,11 +5132,11 @@ async def send_message_to_users(
                                 return res
                             raise
                     
-                    stats['success'] += 1
+                    self.stats['success'] += 1
                     return res
                 elif ct in['sticker', 'video_note', 'dice']:
                     if ct == 'dice':
-                        await bot_instance.send_message(
+                        await self.bot_instance.send_message(
                             uid,
                             full_text,
                             parse_mode="HTML",
@@ -5291,7 +5144,7 @@ async def send_message_to_users(
                             disable_notification=is_sage,
                             request_timeout=request_timeout,
                         )
-                        res = await bot_instance.send_dice(
+                        res = await self.bot_instance.send_dice(
                             chat_id=uid,
                             emoji=current_content.get('dice_emoji', '🎲'),
                             disable_notification=is_sage,
@@ -5299,9 +5152,9 @@ async def send_message_to_users(
                         )
                     else:
                         common_kwargs[ct] = current_content.get("file_id")
-                        send_method = getattr(bot_instance, f"send_{ct}")
+                        send_method = getattr(self.bot_instance, f"send_{ct}")
                         res = await send_method(**common_kwargs)
-                    stats['success'] += 1
+                    self.stats['success'] += 1
                     return res
             except TelegramBadRequest as e:
                 err_low = e.message.lower()
@@ -5319,7 +5172,7 @@ async def send_message_to_users(
                     return await _send_text_fallback("telegram_rejected_media_url")
                 if "too big" in err_low or "file of size" in err_low:
                     if current_content.get('type') == 'media_group' and current_content.get('media'):
-                        print(f"⚠️[Anti-Fat] Пост #{post_num}: Обнаружен жирный файл. Запуск фильтрации...")
+                        print(f"⚠️[Anti-Fat] Пост #{self.post_num}: Обнаружен жирный файл. Запуск фильтрации...")
                         clean_media_list =[]
                         async with aiohttp.ClientSession() as head_session:
                             for item in current_content['media']:
@@ -5346,7 +5199,7 @@ async def send_message_to_users(
                                         pass 
                                 clean_media_list.append(item)
                         if not clean_media_list:
-                            stats['errors'] += 1
+                            self.stats['errors'] += 1
                             return None 
                         current_content['media'] = clean_media_list
                         await asyncio.sleep(0.5)
@@ -5360,11 +5213,11 @@ async def send_message_to_users(
                     wait_sec = int(re.search(r'\d+', e.message).group()) if re.search(r'\d+', e.message) else 15
                     raise TelegramRetryAfter(method=e.method, message=e.message, retry_after=wait_sec)
                 elif "voice_messages_forbidden" in err_low:
-                    stats['errors'] += 1
+                    self.stats['errors'] += 1
                     return None
                 else:
                     print(f"⚠️ BadRequest отправки user {uid}: {e}")
-                    stats['errors'] += 1
+                    self.stats['errors'] += 1
                     return None
             except TelegramForbiddenError:
                 raise 
@@ -5373,21 +5226,21 @@ async def send_message_to_users(
             except (aiohttp.ClientConnectorError, TelegramNetworkError, asyncio.TimeoutError):
                 raise TelegramRetryAfter(method="network", message="Network Error", retry_after=5)
             except (aiohttp.ServerDisconnectedError, aiohttp.ClientPayloadError) as e:
-                stats['ghosts'] += 1
+                self.stats['ghosts'] += 1
                 return None
             except Exception as e:
-                stats['errors'] += 1
+                self.stats['errors'] += 1
                 return None
         return None
 
-    async def _send_one_guarded(uid: int, timeout_sec: float):
+    async def _send_one_guarded(self, uid: int, timeout_sec: float):
         request_timeout_sec = min(
             DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC,
             max(3.0, timeout_sec - 1.0),
         )
         try:
             return await asyncio.wait_for(
-                _send_one(uid, int(request_timeout_sec)),
+                self._send_one(uid, int(request_timeout_sec)),
                 timeout=timeout_sec,
             )
         except asyncio.TimeoutError as exc:
@@ -5395,9 +5248,9 @@ async def send_message_to_users(
                 "delivery_recipient_timeout %s",
                 json.dumps(
                     {
-                        "board_id": board_id,
-                        "post_num": post_num,
-                        "phase": delivery_phase,
+                        "board_id": self.board_id,
+                        "post_num": self.post_num,
+                        "phase": self.delivery_phase,
                         "uid": uid,
                         "timeout_sec": timeout_sec,
                     },
@@ -5407,6 +5260,182 @@ async def send_message_to_users(
             )
             return exc
 
+async def send_message_to_users(
+    bot_instance: Bot,
+    board_id: str,
+    recipients: set[int],
+    content: dict,
+    reply_info: dict | None = None,
+    keyboard: InlineKeyboardMarkup | None = None,
+    verbose: bool = False,
+    queue_enqueued_at: float | None = None,
+    queue_wait_sec: float | None = None,
+    delivery_phase: str = "full",
+    delivery_original_recipients: int | None = None,
+    delivery_deferred_recipients: int = 0,
+) -> list:
+    """
+    Оптимизированная функция массовой рассылки.
+    Сложность снижена с O(N*M) до O(N + M) за счет выноса форматирования.
+    ВКЛЮЧЕНА ЗАЩИТА ОТ ДУБЛЕЙ (SMART RETRY) И ЛОГИРОВАНИЕ.
+    Рассылка с Smart Retry.
+    verbose=False -> тихий режим (для отправки автору).
+    verbose=True -> пишет отчет в консоль (для массовой).
+    """
+    if not recipients or not content or 'type' not in content:
+        return []
+    b_data = board_data[board_id]
+    active_recipients = {
+        uid for uid in recipients
+        if uid > 0 and uid not in b_data['users']['banned']
+    }
+    if not active_recipients:
+        return[]
+    original_recipients_count = delivery_original_recipients or len(active_recipients)
+    ordered_recipients, priority_recipients_count, passive_recipients_count = _order_recipients_for_delivery(
+        board_id, active_recipients
+    )
+    start_time = time.time()
+    stats = {
+        'success': 0,
+        'ghosts': 0,  # Потенциальные дубли, которые мы предотвратили
+        'errors': 0,  # Ошибки API/Формата
+        'blocks': 0,  # Юзер заблокировал
+        'retries': 0,  # Количество повторов из-за флуда/сети
+        'timeouts': 0,  # Персональные таймауты отправки
+        'priority_recipients': priority_recipients_count,
+        'passive_recipients': passive_recipients_count,
+    }
+    final_keyboard = keyboard
+    media_url_text_fallback = False
+    media_url_fallback_logged = False
+    html_plain_fallback_logged = False
+    if content.get('poll_data') and not final_keyboard:
+        poll_options = content.get('poll_data', {}).get('options',[])
+        post_num = content.get('post_num')
+        if poll_options and post_num:
+            buttons =[]
+            for i, option_text in enumerate(poll_options):
+                button_text = option_text[:60]
+                buttons.append(
+                    InlineKeyboardButton(
+                        text=button_text,
+                        callback_data=f"poll_vote_{post_num}_{i}"
+                    )
+                )
+            final_keyboard = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
+
+    post_num = content.get('post_num')
+    post_data_copy = {}
+    reply_to_post_author_id = None
+    post_num_for_replies = None
+
+    async with storage_lock:
+        if post_num:
+            post_data = messages_storage.get(post_num, {})
+            if post_data:
+                post_data_copy = post_data.copy()
+        reply_to_post_num = content.get('reply_to_post')
+        if reply_to_post_num:
+            reply_p_data = messages_storage.get(reply_to_post_num, {})
+            reply_to_post_author_id = reply_p_data.get('author_id')
+            post_num_for_replies = reply_to_post_num
+
+    # --- НАЧАЛО ИЗМЕНЕНИЙ (Восстановление старых реплаев из БД) ---
+    db_replies_map = {}
+    if post_num_for_replies:
+        # Восстанавливаем ID автора для маркера (You), если его нет в RAM
+        if not reply_to_post_author_id:
+            db_post = await get_post_by_num(post_num_for_replies)
+            if db_post:
+                reply_to_post_author_id = db_post.get('author_id')
+
+        # Проверяем наличие message_id в памяти
+        in_ram = False
+        async with storage_lock:
+            if post_num_for_replies in post_to_messages:
+                in_ram = True
+
+        # Если в памяти нет, достаем копии из БД
+        if not in_ram:
+            db_copies = await get_post_copies(post_num_for_replies)
+            for rec_id, msg_id in db_copies:
+                db_replies_map[rec_id] = msg_id
+    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+
+    raw_text = content.get('text') or content.get('caption') or ''
+    content_for_common = content.copy()
+    common_formatted_body = await _format_message_body(
+        content=content_for_common,
+        user_id_for_context=0,
+        post_data=post_data_copy,
+        reply_to_post_author_id=reply_to_post_author_id,
+        quote_info=content_for_common.get('quote_info')
+    )
+    base_header_text = content.get('header', '')
+    highlight_header_text = base_header_text
+    if "Пост" in highlight_header_text:
+        highlight_header_text = highlight_header_text.replace("Пост", "🔴 Пост", 1)
+    elif "Post" in highlight_header_text:
+        highlight_header_text = highlight_header_text.replace("Post", "🔴 Post", 1)
+    base_head_html = f"<i>{escape_html(base_header_text)}</i>"
+    highlight_head_html = f"<i>{escape_html(highlight_header_text)}</i>"
+    has_reply_markers = ">>" in raw_text
+    users_settings = b_data.get('user_settings', {})
+    all_results =[]
+    blocked_users = set()
+    mentioned_authors = {}
+
+    if ">>" in raw_text:
+        mentions = RE_YOU_PATTERN.findall(raw_text)
+        if mentions:
+            missing_mentions =[]
+            async with storage_lock:
+                for m_num_str in mentions:
+                    try:
+                        m_num = int(m_num_str)
+                        if m_num in messages_storage:
+                            mentioned_authors[m_num] = messages_storage[m_num].get("author_id")
+                        else:
+                            missing_mentions.append(m_num)
+                    except ValueError:
+                        continue
+
+            # --- НАЧАЛО ИЗМЕНЕНИЙ (Восстановление маркеров (You) для старых постов) ---
+            if missing_mentions:
+                for m_num in missing_mentions:
+                    db_post = await get_post_by_num(m_num)
+                    if db_post:
+                        mentioned_authors[m_num] = db_post.get("author_id")
+            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+
+    # --- INSTANTIATE CONTEXT ---
+    ctx = BroadcastContext(
+        bot_instance=bot_instance,
+        board_id=board_id,
+        content_for_common=content_for_common,
+        db_replies_map=db_replies_map,
+        delivery_phase=delivery_phase,
+        final_keyboard=final_keyboard,
+        highlight_head_html=highlight_head_html,
+        mentioned_authors=mentioned_authors,
+        post_data_copy=post_data_copy,
+        post_num=post_num,
+        post_num_for_replies=post_num_for_replies,
+        post_to_messages=post_to_messages,
+        raw_text=raw_text,
+        reply_info=reply_info,
+        reply_to_post_author_id=reply_to_post_author_id,
+        storage_lock=storage_lock,
+        users_settings=users_settings,
+        stats=stats,
+        media_url_text_fallback=media_url_text_fallback,
+        media_url_fallback_logged=media_url_fallback_logged,
+        html_plain_fallback_logged=html_plain_fallback_logged,
+        base_header_text=base_header_text,
+        base_head_html=base_head_html,
+        common_formatted_body=common_formatted_body,
+    )
     queue = deque(ordered_recipients)
     recipient_retry_counts = defaultdict(int)
     CHUNK_SIZE = DELIVERY_INITIAL_CHUNK_SIZE
@@ -5437,14 +5466,14 @@ async def send_message_to_users(
         chunk =[]
         for _ in range(min(len(queue), CHUNK_SIZE)):
             chunk.append(queue.popleft())
-        tasks = [_send_one_guarded(uid, send_timeout_sec) for uid in chunk]
+        tasks = [ctx._send_one_guarded(uid, send_timeout_sec) for uid in chunk]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         flood_wait_seconds = 0
         
         for uid, res in zip(chunk, results):
             if res == "FATAL_ERROR_STOP":
                 queue.clear()
-                stats['errors'] += len(chunk) + len(queue)
+                ctx.stats['errors'] += len(chunk) + len(queue)
                 break 
             if isinstance(res, Exception):
                 if isinstance(res, TelegramRetryAfter):
@@ -5453,9 +5482,9 @@ async def send_message_to_users(
                     if recipient_retry_counts[uid] <= DELIVERY_MAX_RECIPIENT_RETRIES:
                         flood_wait_seconds = max(flood_wait_seconds, wait)
                         queue.appendleft(uid)
-                        stats['retries'] += 1
+                        ctx.stats['retries'] += 1
                     else:
-                        stats['errors'] += 1
+                        ctx.stats['errors'] += 1
                         runtime_logger.warning(
                             "delivery_recipient_retry_exhausted %s",
                             json.dumps(
@@ -5473,16 +5502,16 @@ async def send_message_to_users(
                         )
                 elif isinstance(res, TelegramForbiddenError):
                     blocked_users.add(uid)
-                    stats['blocks'] += 1
+                    ctx.stats['blocks'] += 1
                 elif isinstance(res, (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError)):
                     if isinstance(res, asyncio.TimeoutError):
-                        stats['timeouts'] += 1
+                        ctx.stats['timeouts'] += 1
                     recipient_retry_counts[uid] += 1
                     if recipient_retry_counts[uid] <= DELIVERY_MAX_RECIPIENT_RETRIES:
                         queue.append(uid)
-                        stats['retries'] += 1
+                        ctx.stats['retries'] += 1
                     else:
-                        stats['errors'] += 1
+                        ctx.stats['errors'] += 1
                         runtime_logger.warning(
                             "delivery_recipient_retry_exhausted %s",
                             json.dumps(
@@ -5500,7 +5529,7 @@ async def send_message_to_users(
                         )
                 else:
                     print(f"❌ Ошибка отправки {uid}: {res}")
-                    stats['errors'] += 1
+                    ctx.stats['errors'] += 1
             elif res:
                 all_results.append((uid, res))
                 
@@ -5539,15 +5568,15 @@ async def send_message_to_users(
     if verbose:
         log_line = (
             f"📊 #{post_num} [{delivery_phase}] | "
-            f"✅ {stats['success']}/{len(active_recipients)} phase "
+            f"✅ {ctx.stats['success']}/{len(active_recipients)} phase "
             f"({len(active_recipients)}/{original_recipients_count}, def {delivery_deferred_recipients}) | "
-            f"🚫 {stats['blocks']} | "
-            f"❌ {stats['errors']} | "
-            f"👻 {stats['ghosts']} | "
-            f"🔄 {stats['retries']} | "
-            f"⏲ {stats['timeouts']} | "
+            f"🚫 {ctx.stats['blocks']} | "
+            f"❌ {ctx.stats['errors']} | "
+            f"👻 {ctx.stats['ghosts']} | "
+            f"🔄 {ctx.stats['retries']} | "
+            f"⏲ {ctx.stats['timeouts']} | "
             f"⏭ {len(remaining_recipients_for_later)} | "
-            f"prio {stats['priority_recipients']}/{len(active_recipients)} | "
+            f"prio {ctx.stats['priority_recipients']}/{len(active_recipients)} | "
             f"⏱ {time_taken:.1f}s"
         )
         print(log_line) 
@@ -5561,14 +5590,14 @@ async def send_message_to_users(
             "phase_recipients": len(active_recipients),
             "original_recipients": original_recipients_count,
             "deferred_recipients": delivery_deferred_recipients,
-            "priority_recipients": stats["priority_recipients"],
-            "passive_recipients": stats["passive_recipients"],
-            "success": stats["success"],
-            "blocks": stats["blocks"],
-            "errors": stats["errors"],
-            "ghosts": stats["ghosts"],
-            "retries": stats["retries"],
-            "timeouts": stats["timeouts"],
+            "priority_recipients": ctx.stats["priority_recipients"],
+            "passive_recipients": ctx.stats["passive_recipients"],
+            "success": ctx.stats["success"],
+            "blocks": ctx.stats["blocks"],
+            "errors": ctx.stats["errors"],
+            "ghosts": ctx.stats["ghosts"],
+            "retries": ctx.stats["retries"],
+            "timeouts": ctx.stats["timeouts"],
             "budget_deferred": len(remaining_recipients_for_later),
             "interrupted_reason": interrupted_reason,
             "phase_budget_sec": phase_budget_sec,
