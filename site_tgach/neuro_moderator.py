@@ -283,11 +283,16 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
         for pid in affected:
             await add_to_mod_queue(pid, file_id, f"AI Warning: {reason}", 0.8)
             
-            # Уведомляем фронтенд об изменении (чтобы картинка заблюрилась в реальном времени)
+        # Уведомляем фронтенд об изменении (чтобы картинка заблюрилась в реальном времени)
+        if affected:
             try:
                 db = await get_pool()
+                curr_ts = time.time()
                 async with db_lock:
-                    await db.execute("INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)", (pid, time.time()))
+                    await db.executemany(
+                        "INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)",
+                        [(pid, curr_ts) for pid in affected]
+                    )
                     await db.commit()
             except: pass
 
@@ -300,11 +305,17 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
         affected = await apply_auto_censure(file_id, action)
         for pid in affected:
             await add_to_mod_queue(pid, file_id, f"AI Check: {reason}", 0.4)
-            # Триггерим обновление через WS
+
+        # Триггерим обновление через WS
+        if affected:
             try:
                 db = await get_pool()
+                curr_ts = time.time()
                 async with db_lock:
-                    await db.execute("INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)", (pid, time.time()))
+                    await db.executemany(
+                        "INSERT OR IGNORE INTO BroadcastQueue (post_num, created_at) VALUES (?, ?)",
+                        [(pid, curr_ts) for pid in affected]
+                    )
                     await db.commit()
             except: pass
 
