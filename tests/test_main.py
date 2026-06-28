@@ -18,8 +18,8 @@ def mock_module(name):
     return mod
 
 # Mock heavy/missing dependencies to allow import
-mocked_deps = [
-    'site_tgach', 'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
+mocked_deps = ['fastapi.exception_handlers',
+    'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
     'site_tgach.security', 'site_tgach.image_processing', 'site_tgach.catbox',
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
@@ -211,3 +211,62 @@ class TestCleanHtmlForTg(unittest.TestCase):
     def test_invalid_tags(self):
         self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script>world&lt;/script>")
         self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown>world")
+
+
+from site_tgach.main import is_bot_by_headers
+
+class MockURL:
+    def __init__(self, path):
+        self.path = path
+
+class MockBotRequest:
+    def __init__(self, headers=None, path="/"):
+        self.headers = headers or {}
+        self.url = MockURL(path)
+
+class TestIsBotByHeaders(unittest.TestCase):
+    def test_known_bot_user_agents(self):
+        bot_uas = ["python-requests/2.25.1", "curl/7.68.0", "Wget/1.20.3", "aiohttp/3.7.4"]
+        for ua in bot_uas:
+            request = MockBotRequest(
+                headers={"user-agent": ua, "accept-language": "en-US"},
+                path="/"
+            )
+            self.assertTrue(is_bot_by_headers(request), f"Failed to detect bot UA: {ua}")
+
+    def test_api_missing_referer(self):
+        request = MockBotRequest(
+            headers={"user-agent": "Mozilla/5.0", "accept-language": "ru-RU"},
+            path="/api/get_something"
+        )
+        self.assertTrue(is_bot_by_headers(request))
+
+    def test_api_with_referer(self):
+        request = MockBotRequest(
+            headers={"user-agent": "Mozilla/5.0", "accept-language": "ru-RU", "referer": "https://example.com/"},
+            path="/api/get_something"
+        )
+        self.assertFalse(is_bot_by_headers(request))
+
+    def test_missing_accept_language_on_regular_path(self):
+        request = MockBotRequest(
+            headers={"user-agent": "Mozilla/5.0", "referer": "https://example.com/"},
+            path="/some/page"
+        )
+        self.assertTrue(is_bot_by_headers(request))
+
+    def test_missing_accept_language_on_static_path(self):
+        static_paths = ["/static/css/style.css", "/favicon.ico"]
+        for path in static_paths:
+            request = MockBotRequest(
+                headers={"user-agent": "Mozilla/5.0", "referer": "https://example.com/"},
+                path=path
+            )
+            self.assertFalse(is_bot_by_headers(request), f"Incorrectly flagged static path: {path}")
+
+    def test_normal_user_request(self):
+        request = MockBotRequest(
+            headers={"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "accept-language": "ru-RU,ru;q=0.9", "referer": "https://example.com/"},
+            path="/thread/12345"
+        )
+        self.assertFalse(is_bot_by_headers(request))
