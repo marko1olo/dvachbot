@@ -131,6 +131,8 @@ def get_real_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
+    if request.client is None:
+        return "127.0.0.1"
     return request.client.host
 GEOIP_READER = None
 

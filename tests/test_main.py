@@ -91,6 +91,15 @@ class TestGetRealIp(unittest.TestCase):
         )
         self.assertEqual(get_real_ip(request), "9.10.11.12")
 
+    def test_client_none(self):
+        """Test that missing client falls back to 127.0.0.1."""
+        request = StubRequest(
+            headers={},
+            client_host=None
+        )
+        request.client = None
+        self.assertEqual(get_real_ip(request), "127.0.0.1")
+
     def test_empty_headers_values(self):
         """Test that empty string header values correctly fall back to client.host."""
         request = StubRequest(
