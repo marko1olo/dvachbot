@@ -18,7 +18,6 @@ Logging:
 """
 import logging
 import asyncio
-from common.http_utils import api_retry
 from common.task_manager import spawn_task
 import httpx
 import json
@@ -167,7 +166,6 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
     import base64
     import time
     import asyncio
-    from common.http_utils import api_retry
 
     logger.info(f"🔍 [DeepCheck] Starting analysis for file_id: {file_id}")
 
