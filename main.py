@@ -36,6 +36,7 @@ import logging
 import os
 import tracemalloc
 import uuid
+
 import math
 import tempfile
 import random
@@ -10931,6 +10932,224 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
         await message.delete()
     except TelegramBadRequest:
         pass
+async def _handle_quick_menu_personal(callback, board_id, stream, user_id):
+    text, kb = get_personal_menu_keyboard(board_id, user_id, stream=stream)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except TelegramBadRequest:
+        await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+async def _handle_quick_menu_main(callback, board_id, stream):
+    menu_text = "👇 <b>Quick Menu / Быстрое меню:</b>"
+    try:
+        await callback.message.edit_text(menu_text, reply_markup=get_quick_menu_keyboard(board_id, stream=stream), parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
+
+async def _handle_quick_menu_profile(callback, board_id):
+    fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+    await cmd_passport(fake_msg, board_id)
+
+async def _handle_quick_menu_stats(callback, board_id):
+    fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+    await cmd_stats(fake_msg, board_id)
+
+async def _handle_quick_menu_token(callback, lang, user_id):
+    try:
+        token = await get_or_create_api_token(user_id, generate_unique_token)
+        if lang == 'en':
+            response_text = f"🔑 Your token: <code>{token}</code>\nDon't share it!"
+        else:
+            response_text = f"🔑 Ваш токен: <code>{token}</code>\nИспользуйте для входа на сайт."
+        await callback.message.answer(response_text, parse_mode="HTML")
+    except Exception:
+        await callback.message.answer("Error generating token.")
+
+async def _handle_quick_menu_roulette(callback, board_id, user_id, lang):
+    if not ROULETTE_EVENTS:
+         await callback.message.answer("Roulette data missing.")
+         return
+    async with roulette_lock:
+         async with storage_lock:
+             b_data = board_data[board_id]
+             last = b_data.get('last_roll_time', {}).get(user_id, 0)
+             if time.time() - last < 60:
+                 if lang == 'en':
+                     cooldown_msg = "⏳ Roulette is on cooldown!"
+                 elif lang == 'jp':
+                     cooldown_msg = "⏳ ルーレットはクールダウン中です！"
+                 else:
+                     cooldown_msg = "⏳ Кулдаун рулетки!"
+                 await callback.message.answer(cooldown_msg)
+                 return
+             b_data.setdefault('last_roll_time', {})[user_id] = time.time()
+    event = get_random_event(ROULETTE_EVENTS)
+    if event:
+        text_for_img = f"[{event.get('id')}]\n\n{event.get('description')}"
+        loop = asyncio.get_running_loop()
+        image_bytes = await loop.run_in_executor(None, generate_wipe_image, text_for_img)
+        caption = random.choice(ROULETTE_RESULT_PHRASES)
+        if image_bytes:
+             photo = types.BufferedInputFile(image_bytes, filename="roll.png")
+             await callback.message.answer_photo(photo, caption=caption)
+        else:
+             await callback.message.answer(text_for_img, parse_mode="HTML")
+
+async def _handle_quick_menu_wallet(callback, board_id, stream):
+    await cmd_wallet(callback.message, board_id, stream=stream)
+
+async def _handle_quick_menu_help(callback, board_id, lang):
+    b_data = board_data[board_id]
+    text_map = b_data.get('start_message_map', {})
+    start_text = text_map.get(lang, b_data.get('start_message_text', "Help info."))
+    await callback.message.answer(start_text, parse_mode="HTML", disable_web_page_preview=True)
+
+async def _handle_quick_menu_invite(callback, board_id, lang):
+    board_username = BOARD_CONFIG[board_id]['username']
+    if lang == 'en':
+        source_list = INVITE_TEXTS_EN
+    elif lang == 'jp':
+        source_list = INVITE_TEXTS_JP
+    else:
+        source_list = INVITE_TEXTS
+    txt_raw = random.choice(source_list)
+    txt = txt_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
+    await callback.message.answer(f"<code>{escape_html(txt)}</code>", parse_mode="HTML")
+
+async def _handle_quick_menu_admin(callback, lang):
+    contact_url = "https://t.me/voprosy?start=rba30"
+    if lang == 'en':
+        btn_text = "Contact Admin"
+        msg_text = "Click below:"
+    elif lang == 'jp':
+        btn_text = "管理人に連絡"
+        msg_text = "下のボタンをクリック:"
+    else:
+        btn_text = "Связаться с админом"
+        msg_text = "Нажмите кнопку ниже:"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn_text, url=contact_url)]])
+    await callback.message.answer(msg_text, reply_markup=kb)
+
+async def _handle_quick_menu_hent_loli(callback, board_id, user_id, action, lang):
+    count = random.randint(1, 2)
+    current_time = time.time()
+    if current_time - user_hourly_image_reset[user_id] > 3600:
+        user_hourly_image_count[user_id] = 0
+        user_hourly_image_reset[user_id] = current_time
+    if user_hourly_image_count[user_id] + count > HOURLY_IMAGE_LIMIT:
+        if lang == 'en': phrases = ANIME_HOURLY_LIMIT_PHRASES['en']
+        elif lang == 'jp': phrases = ANIME_HOURLY_LIMIT_PHRASES['jp']
+        else: phrases = ANIME_HOURLY_LIMIT_PHRASES['ru']
+
+        limit_msg = random.choice(phrases)
+        try:
+            await callback.answer(limit_msg, show_alert=True)
+        except Exception: pass
+        return
+    user_hourly_image_count[user_id] += count
+
+    fetcher_tasks = []
+    fetcher_func = ANIME_COMMAND_MAP["loli"] if action == "loli" else ANIME_COMMAND_MAP["fap"]
+    for _ in range(count):
+        fetcher_tasks.append(fetcher_func)
+
+    if board_id == 'b':
+        image_spam_tracker['b'] = [
+            t for t in image_spam_tracker['b']
+            if isinstance(t, (int, float)) and current_time - float(t) < IMAGE_SPAM_WINDOW
+        ]
+        if len(image_spam_tracker['b']) + count > IMAGE_SPAM_LIMIT:
+            msg = "🚫 Limit reached. Wait." if lang == 'en' else "🚫 Лимит превышен. Ждите."
+            await callback.message.answer(msg)
+            return
+        current_time = time.time()
+        for _ in range(count): image_spam_tracker['b'].append(current_time)
+
+    if lang == 'en':
+        search_phrases = ANIME_CMD_SEARCHING_PHRASES_EN
+    elif lang == 'jp':
+        search_phrases = ANIME_CMD_SEARCHING_PHRASES_JP
+    else:
+        search_phrases = ANIME_CMD_SEARCHING_PHRASES
+
+    search_msg = await callback.message.answer(random.choice(search_phrases))
+    gate_acquired = False
+    try:
+        gate_wait_started = time.time()
+        await anime_media_gate.acquire()
+        gate_acquired = True
+        gate_wait_sec = time.time() - gate_wait_started
+        if gate_wait_sec > 0.05:
+            runtime_logger.warning(
+                "anime_media_wait %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": board_id,
+                        "user_id": user_id,
+                        "wait_sec": round(gate_wait_sec, 3),
+                        "concurrency": ANIME_MEDIA_CONCURRENCY,
+                        "source": "quick_menu",
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        url_results = await _run_bounded_anime_url_fetches(fetcher_tasks, board_id, user_id, "quick_menu")
+        successful_urls = [res for res in url_results if isinstance(res, str) and res.startswith('http')]
+        if not successful_urls:
+             fail_txt = "Nothing found :(" if lang == 'en' else "Ничего не нашел :("
+             await search_msg.edit_text(fail_txt)
+             return
+        download_results = await _run_bounded_anime_downloads(successful_urls, board_id, user_id, "quick_menu")
+        successful_downloads = []
+        loop = asyncio.get_running_loop()
+        for orig_url, res in download_results:
+            if isinstance(res, tuple) and res[0]:
+                ctype = 'animation' if orig_url.lower().endswith('.gif') else 'photo'
+                processed = await loop.run_in_executor(None, _resize_image_if_needed, res[0])
+                successful_downloads.append((processed, ctype))
+        if not successful_downloads:
+            await search_msg.edit_text("Download error." if lang == 'en' else "Ошибка скачивания.")
+            return
+        content = {}
+        if lang == 'en': success_phrases = ANIME_CMD_SUCCESS_PHRASES_EN
+        elif lang == 'jp': success_phrases = ANIME_CMD_SUCCESS_PHRASES_JP
+        else: success_phrases = ANIME_CMD_SUCCESS_PHRASES
+        caption = f"<i>{random.choice(success_phrases)}</i>"
+        if len(successful_downloads) == 1:
+            ibytes, ctype = successful_downloads[0]
+            content = {'type': ctype, 'image_bytes': ibytes, 'caption': caption}
+        else:
+            media_items = []
+            from aiogram.types import BufferedInputFile
+            for ibytes, ctype in successful_downloads:
+                mtype = 'video' if ctype == 'animation' else 'photo'
+                f = BufferedInputFile(ibytes, filename=f"img.{'mp4' if mtype=='video' else 'jpg'}")
+                media_items.append({'type': mtype, 'media': f})
+            content = {'type': 'media_group', 'media': media_items, 'caption': caption}
+        b_data = board_data[board_id]
+        is_shadow = (user_id in b_data['shadow_mutes'] and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+        await process_new_post(
+            bot_instance=callback.bot,
+            board_id=board_id,
+            user_id=user_id,
+            content=content,
+            reply_to_post=None,
+            is_shadow_muted=is_shadow
+        )
+        await search_msg.delete()
+    except Exception as e:
+        print(f"Error in menu anime: {e}")
+        try:
+            await search_msg.edit_text("Error occurred.")
+        except TelegramBadRequest:
+            pass
+    finally:
+        if gate_acquired:
+            anime_media_gate.release()
+
+
 @dp.callback_query(F.data.startswith("menu_"))
 async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     await state.clear()
@@ -10943,231 +11162,28 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         await callback.answer(activation_text)
     except TelegramBadRequest:
         pass
-    class SafeMessageProxy:
-        def __init__(self, original_msg, user):
-            self._msg = original_msg
-            self.from_user = user
-            self.bot = original_msg.bot
-            self.chat = original_msg.chat
-            self.date = original_msg.date
-            self.message_id = original_msg.message_id
-            self.text = "/command" 
-        async def answer(self, *args, **kwargs):
-            return await self._msg.answer(*args, **kwargs)
-        async def reply(self, *args, **kwargs):
-            return await self._msg.answer(*args, **kwargs)
-        async def answer_photo(self, *args, **kwargs):
-            return await self._msg.answer_photo(*args, **kwargs)
-        async def delete(self):
-            pass 
-        def __getattr__(self, name):
-            return getattr(self._msg, name)
     if action == "personal":
-        text, kb = get_personal_menu_keyboard(board_id, user_id, stream=stream)
-        try:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-        except TelegramBadRequest:
-            await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+        await _handle_quick_menu_personal(callback, board_id, stream, user_id)
     elif action == "main":
-        menu_text = "👇 <b>Quick Menu / Быстрое меню:</b>"
-        try:
-            await callback.message.edit_text(menu_text, reply_markup=get_quick_menu_keyboard(board_id, stream=stream), parse_mode="HTML")
-        except TelegramBadRequest:
-            pass
+        await _handle_quick_menu_main(callback, board_id, stream)
     elif action == "profile":
-        fake_msg = SafeMessageProxy(callback.message, callback.from_user)
-        await cmd_passport(fake_msg, board_id)
+        await _handle_quick_menu_profile(callback, board_id)
     elif action == "stats":
-        fake_msg = SafeMessageProxy(callback.message, callback.from_user)
-        await cmd_stats(fake_msg, board_id)
+        await _handle_quick_menu_stats(callback, board_id)
     elif action == "token":
-        try:
-            token = await get_or_create_api_token(user_id, generate_unique_token)
-            if lang == 'en':
-                response_text = f"🔑 Your token: <code>{token}</code>\nDon't share it!"
-            else:
-                response_text = f"🔑 Ваш токен: <code>{token}</code>\nИспользуйте для входа на сайт."
-            await callback.message.answer(response_text, parse_mode="HTML")
-        except Exception:
-            await callback.message.answer("Error generating token.")
-    elif action == "ruletka" or action == "roll":
-        if not ROULETTE_EVENTS:
-             await callback.message.answer("Roulette data missing.")
-             return
-        async with roulette_lock:
-             async with storage_lock:
-                 b_data = board_data[board_id]
-                 last = b_data.get('last_roll_time', {}).get(user_id, 0)
-                 if time.time() - last < 60:
-                     if lang == 'en':
-                         cooldown_msg = "⏳ Roulette is on cooldown!"
-                     elif lang == 'jp':
-                         cooldown_msg = "⏳ ルーレットはクールダウン中です！"
-                     else:
-                         cooldown_msg = "⏳ Кулдаун рулетки!"
-                     await callback.message.answer(cooldown_msg)
-                     return
-                 b_data.setdefault('last_roll_time', {})[user_id] = time.time()
-        event = get_random_event(ROULETTE_EVENTS)
-        if event:
-            text_for_img = f"[{event.get('id')}]\n\n{event.get('description')}"
-            loop = asyncio.get_running_loop()
-            image_bytes = await loop.run_in_executor(None, generate_wipe_image, text_for_img)
-            caption = random.choice(ROULETTE_RESULT_PHRASES) 
-            if image_bytes:
-                 photo = types.BufferedInputFile(image_bytes, filename="roll.png")
-                 await callback.message.answer_photo(photo, caption=caption)
-            else:
-                 await callback.message.answer(text_for_img, parse_mode="HTML")
-    elif action == "wallet": await cmd_wallet(callback.message, board_id, stream=stream)
+        await _handle_quick_menu_token(callback, lang, user_id)
+    elif action in ["ruletka", "roll"]:
+        await _handle_quick_menu_roulette(callback, board_id, user_id, lang)
+    elif action == "wallet":
+        await _handle_quick_menu_wallet(callback, board_id, stream)
     elif action == "help":
-        b_data = board_data[board_id]
-        text_map = b_data.get('start_message_map', {})
-        start_text = text_map.get(lang, b_data.get('start_message_text', "Help info."))
-        await callback.message.answer(start_text, parse_mode="HTML", disable_web_page_preview=True)
+        await _handle_quick_menu_help(callback, board_id, lang)
     elif action == "invite":
-        board_username = BOARD_CONFIG[board_id]['username']
-        if lang == 'en':
-            source_list = INVITE_TEXTS_EN
-        elif lang == 'jp':
-            source_list = INVITE_TEXTS_JP
-        else:
-            source_list = INVITE_TEXTS
-        txt_raw = random.choice(source_list)
-        txt = txt_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
-        await callback.message.answer(f"<code>{escape_html(txt)}</code>", parse_mode="HTML")
+        await _handle_quick_menu_invite(callback, board_id, lang)
     elif action == "admin":
-        contact_url = "https://t.me/voprosy?start=rba30"
-        if lang == 'en':
-            btn_text = "Contact Admin"
-            msg_text = "Click below:"
-        elif lang == 'jp':
-            btn_text = "管理人に連絡"
-            msg_text = "下のボタンをクリック:"
-        else:
-            btn_text = "Связаться с админом"
-            msg_text = "Нажмите кнопку ниже:"
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn_text, url=contact_url)]])
-        await callback.message.answer(msg_text, reply_markup=kb)
+        await _handle_quick_menu_admin(callback, lang)
     elif action in ["hent", "loli"]:
-        user_id = callback.from_user.id
-        count = random.randint(1, 2)
-        current_time = time.time()
-        if current_time - user_hourly_image_reset[user_id] > 3600:
-            user_hourly_image_count[user_id] = 0
-            user_hourly_image_reset[user_id] = current_time
-        if user_hourly_image_count[user_id] + count > HOURLY_IMAGE_LIMIT:
-            if lang == 'en': phrases = ANIME_HOURLY_LIMIT_PHRASES['en']
-            elif lang == 'jp': phrases = ANIME_HOURLY_LIMIT_PHRASES['jp']
-            else: phrases = ANIME_HOURLY_LIMIT_PHRASES['ru']
-            
-            limit_msg = random.choice(phrases)
-            try:
-                await callback.answer(limit_msg, show_alert=True)
-            except Exception: pass
-            return
-        user_hourly_image_count[user_id] += count
-
-        fetcher_tasks = []
-        fetcher_func = ANIME_COMMAND_MAP["loli"] if action == "loli" else ANIME_COMMAND_MAP["fap"]
-        for _ in range(count):
-            fetcher_tasks.append(fetcher_func)
-            
-        if board_id == 'b':
-            image_spam_tracker['b'] = [
-                t for t in image_spam_tracker['b']
-                if isinstance(t, (int, float)) and current_time - float(t) < IMAGE_SPAM_WINDOW
-            ]
-            if len(image_spam_tracker['b']) + count > IMAGE_SPAM_LIMIT:
-                msg = "🚫 Limit reached. Wait." if lang == 'en' else "🚫 Лимит превышен. Ждите."
-                await callback.message.answer(msg)
-                return
-            current_time = time.time()
-            for _ in range(count): image_spam_tracker['b'].append(current_time)
-            
-        if lang == 'en':
-            search_phrases = ANIME_CMD_SEARCHING_PHRASES_EN
-        elif lang == 'jp':
-            search_phrases = ANIME_CMD_SEARCHING_PHRASES_JP
-        else:
-            search_phrases = ANIME_CMD_SEARCHING_PHRASES
-            
-        search_msg = await callback.message.answer(random.choice(search_phrases))
-        gate_acquired = False
-        try:
-            gate_wait_started = time.time()
-            await anime_media_gate.acquire()
-            gate_acquired = True
-            gate_wait_sec = time.time() - gate_wait_started
-            if gate_wait_sec > 0.05:
-                runtime_logger.warning(
-                    "anime_media_wait %s",
-                    json.dumps(
-                        {
-                            "ts": round(time.time(), 3),
-                            "board_id": board_id,
-                            "user_id": user_id,
-                            "wait_sec": round(gate_wait_sec, 3),
-                            "concurrency": ANIME_MEDIA_CONCURRENCY,
-                            "source": "quick_menu",
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                )
-            url_results = await _run_bounded_anime_url_fetches(fetcher_tasks, board_id, user_id, "quick_menu")
-            successful_urls = [res for res in url_results if isinstance(res, str) and res.startswith('http')]
-            if not successful_urls:
-                 fail_txt = "Nothing found :(" if lang == 'en' else "Ничего не нашел :("
-                 await search_msg.edit_text(fail_txt)
-                 return
-            download_results = await _run_bounded_anime_downloads(successful_urls, board_id, user_id, "quick_menu")
-            successful_downloads = []
-            loop = asyncio.get_running_loop()
-            for orig_url, res in download_results:
-                if isinstance(res, tuple) and res[0]:
-                    ctype = 'animation' if orig_url.lower().endswith('.gif') else 'photo'
-                    processed = await loop.run_in_executor(None, _resize_image_if_needed, res[0])
-                    successful_downloads.append((processed, ctype))
-            if not successful_downloads:
-                await search_msg.edit_text("Download error." if lang == 'en' else "Ошибка скачивания.")
-                return
-            content = {}
-            if lang == 'en': success_phrases = ANIME_CMD_SUCCESS_PHRASES_EN
-            elif lang == 'jp': success_phrases = ANIME_CMD_SUCCESS_PHRASES_JP
-            else: success_phrases = ANIME_CMD_SUCCESS_PHRASES
-            caption = f"<i>{random.choice(success_phrases)}</i>"
-            if len(successful_downloads) == 1:
-                ibytes, ctype = successful_downloads[0]
-                content = {'type': ctype, 'image_bytes': ibytes, 'caption': caption}
-            else:
-                media_items = []
-                from aiogram.types import BufferedInputFile
-                for ibytes, ctype in successful_downloads:
-                    mtype = 'video' if ctype == 'animation' else 'photo'
-                    f = BufferedInputFile(ibytes, filename=f"img.{'mp4' if mtype=='video' else 'jpg'}")
-                    media_items.append({'type': mtype, 'media': f})
-                content = {'type': 'media_group', 'media': media_items, 'caption': caption}
-            b_data = board_data[board_id]
-            is_shadow = (user_id in b_data['shadow_mutes'] and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
-            await process_new_post(
-                bot_instance=callback.bot,
-                board_id=board_id,
-                user_id=user_id,
-                content=content,
-                reply_to_post=None,
-                is_shadow_muted=is_shadow
-            )
-            await search_msg.delete()
-        except Exception as e:
-            print(f"Error in menu anime: {e}")
-            try:
-                await search_msg.edit_text("Error occurred.")
-            except TelegramBadRequest:
-                pass
-        finally:
-            if gate_acquired:
-                anime_media_gate.release()
+        await _handle_quick_menu_hent_loli(callback, board_id, user_id, action, lang)
 @dp.callback_query(F.data.startswith("pers_"))
 async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
 
@@ -18818,6 +18834,27 @@ except ImportError:
     import json
 import re
 import time
+
+
+class SafeMessageProxy:
+    def __init__(self, original_msg, user):
+        self._msg = original_msg
+        self.from_user = user
+        self.bot = original_msg.bot
+        self.chat = original_msg.chat
+        self.date = original_msg.date
+        self.message_id = original_msg.message_id
+        self.text = "/command"
+    async def answer(self, *args, **kwargs):
+        return await self._msg.answer(*args, **kwargs)
+    async def reply(self, *args, **kwargs):
+        return await self._msg.answer(*args, **kwargs)
+    async def answer_photo(self, *args, **kwargs):
+        return await self._msg.answer_photo(*args, **kwargs)
+    async def delete(self):
+        pass
+    def __getattr__(self, name):
+        return getattr(self._msg, name)
 try:
     from wordcloud import WordCloud
     HAS_WORDCLOUD = True
