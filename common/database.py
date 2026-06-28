@@ -2207,7 +2207,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                     async for row in cursor:
                         ref_post_num, recipient_id, thread_id = row
                         if recipient_id > 0 and recipient_id != author_id:
-                            # FIX: Если thread_id is None (чат), используем ID поста, на который отвечаем (ref_post_num)
+                            # Если thread_id is None (чат), используем ID поста, на который отвечаем (ref_post_num)
                             final_thread_id = thread_id if thread_id is not None else ref_post_num
                             notifications_to_insert.append((
                                 recipient_id, 
@@ -2225,7 +2225,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                         notifications_to_insert
                     )
                     site_notifs = [
-                        (r_id, board_id, str(t_id), src_num, rep_num, 0, current_time)
+                        (r_id, board_id, str(t_id) if t_id else str(rep_num), src_num, rep_num, 0, current_time)
                         for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert
                     ]
                     await db.executemany(
@@ -7131,7 +7131,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                 if original_author_id > 0 and original_author_id != reply_author_id:
                     curr_time = time.time()
 
-                    # FIX: Если thread_id is None, используем ID родительского поста
+                    # Если thread_id is None, используем ID родительского поста
                     effective_thread_id = str(thread_id) if thread_id else str(source_post_num)
 
                     await db.execute(
