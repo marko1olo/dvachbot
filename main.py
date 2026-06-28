@@ -2965,20 +2965,20 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                         await db.execute("COMMIT")
                         return 0
                         
-                    placeholders = ', '.join(['?'] * len(posts_to_delete_nums))
+                    placeholders = ','.join('?' for _ in posts_to_delete_nums)
                     
                     # Читаем копии для API
-                    query_copies = f"SELECT recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"  # nosec B608
+                    query_copies = f"SELECT recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
                     async with db.execute(query_copies, posts_to_delete_nums) as cursor:
                         messages_to_delete_from_api = await cursor.fetchall()
                         
                     # Читаем копии каналов
-                    query_channels = f"SELECT channel_id, message_id FROM ChannelCopies WHERE post_num IN ({placeholders})"  # nosec B608
+                    query_channels = f"SELECT channel_id, message_id FROM ChannelCopies WHERE post_num IN ({placeholders})"
                     async with db.execute(query_channels, posts_to_delete_nums) as cursor:
                         channel_messages_to_delete = await cursor.fetchall()
                     
                     # Удаляем
-                    query_delete = f"DELETE FROM Posts WHERE post_num IN ({placeholders})"  # nosec B608
+                    query_delete = f"DELETE FROM Posts WHERE post_num IN ({placeholders})"
                     await db.execute(query_delete, posts_to_delete_nums)
                     
                     await db.execute("COMMIT")
