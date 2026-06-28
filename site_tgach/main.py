@@ -4072,7 +4072,7 @@ async def api_random_image_next(request: Request, boards: Optional[str] = None):
     try:
         allowed_boards = None
         if boards:
-            allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
+            allowed_boards = [stripped for b in boards.split(',') if (stripped := b.strip())]
 
         deadline = time.monotonic() + RANDOM_API_DEADLINE_SEC
         for _ in range(8):
@@ -6496,7 +6496,7 @@ async def api_roulette_next(request: Request, boards: Optional[str] = None):
     # Парсим список досок из query string (?boards=b,a,gd)
     allowed_boards = None
     if boards:
-        allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
+        allowed_boards = [stripped for b in boards.split(',') if (stripped := b.strip())]
 
     deadline = time.monotonic() + RANDOM_API_DEADLINE_SEC
     for _ in range(8):

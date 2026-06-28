@@ -3291,7 +3291,7 @@ async def api_random_image_next(request: Request, boards: Optional[str] = None):
     try:
         allowed_boards = None
         if boards:
-            allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
+            allowed_boards = [stripped for b in boards.split(',') if (stripped := b.strip())]
 
         post_data = await get_random_image_post(allowed_boards=allowed_boards)
         
@@ -5427,7 +5427,7 @@ async def api_roulette_next(request: Request, boards: Optional[str] = None):
     # Парсим список досок из query string (?boards=b,a,gd)
     allowed_boards = None
     if boards:
-        allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
+        allowed_boards = [stripped for b in boards.split(',') if (stripped := b.strip())]
 
     try:
         raw_post = await get_random_video_post(allowed_boards=allowed_boards)
