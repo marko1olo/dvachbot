@@ -159,6 +159,23 @@ class TestFormatBayanLabel(unittest.TestCase):
         self.assertEqual(format_bayan_label(11), "♻️ Mocked_High (11)")
         self.assertEqual(format_bayan_label(100), "♻️ Mocked_High (100)")
 
+
+
+    @patch('Dubsite_tgach.main.random.choice')
+    @patch('Dubsite_tgach.main.TRANSLATIONS', new_callable=dict)
+    def test_bayan_empty_translations(self, mock_translations, mock_choice):
+        # Even if TRANSLATIONS is completely missing keys, the code falls back
+        # to ["Баян"] due to `phrases = tr.get(key, ["Баян"])`
+        mock_choice.side_effect = lambda x: x[0]
+        # Make the 'ru' key empty so TRANSLATIONS['ru'] exists but has no "bayan_low" etc.
+        mock_translations['ru'] = {}
+        res = format_bayan_label(5, lang='ru')
+        self.assertEqual(res, "♻️ Баян (5)")
+
+    def test_bayan_count_none(self):
+        # count=None should return empty string
+        self.assertEqual(format_bayan_label(None), "")
+
     def test_bayan_count_zero_or_one(self):
         # 0 or 1 should return empty string
         self.assertEqual(format_bayan_label(0), "")
