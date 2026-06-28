@@ -5654,12 +5654,8 @@ async def send_message_to_users(
         remaining_recipients=remaining_recipients_for_later,
         interrupted_reason=interrupted_reason,
     )
-async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
-    """
-    Находит все отправленные копии поста и редактирует их.
-    Основной источник данных - база данных.
-    Версия 2.2: Добавлена группировка сообщений по юзерам (защита от мульти-эдита альбомов).
-    """
+
+async def _get_user_messages_map_for_edit(post_num: int) -> dict:
     copies_info = await get_post_copies(post_num)
     user_messages_map = defaultdict(list)
     if copies_info:
@@ -5675,28 +5671,30 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             else:
                 if mid_or_list not in user_messages_map[uid]:
                     user_messages_map[uid].append(mid_or_list)
+    return user_messages_map
 
-    if not user_messages_map:
-        return
-
+async def _get_post_data_for_edit(post_num: int):
     post_data_copy = {}
     content_copy = {}
     reply_author_id = None
     board_id = None
     async with storage_lock:
         post_data = messages_storage.get(post_num)
-        if not post_data: return
+        if not post_data:
+            return None, None, None, None
         content_type = post_data.get('content', {}).get('type')
         can_be_edited = content_type in ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'media_group']
-        if not can_be_edited: return
+        if not can_be_edited:
+            return None, None, None, None
         post_data_copy = post_data.copy()
         content_copy = post_data.get('content', {}).copy()
         board_id = post_data.get('board_id')
         reply_to_post_num = content_copy.get('reply_to_post')
         if reply_to_post_num:
             reply_author_id = messages_storage.get(reply_to_post_num, {}).get('author_id')
-    if not board_id: return
-    
+    return post_data_copy, content_copy, reply_author_id, board_id
+
+def _build_edit_keyboard(content_copy: dict, post_num: int):
     final_keyboard = None
     if content_copy.get('poll_data'):
         poll_options = content_copy.get('poll_data', {}).get('options', [])
@@ -5711,7 +5709,9 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                     )
                 )
             final_keyboard = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
-            
+    return final_keyboard
+
+async def _build_user_specific_texts(user_messages_map: dict, content_copy: dict, post_data_copy: dict, board_id: str, reply_author_id: int):
     user_specific_texts = {}
     text_or_caption_base = content_copy.get('text') or content_copy.get('caption')
     text_with_you_links = text_or_caption_base
@@ -5764,6 +5764,24 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             )
             full_text = f"{head}\n\n{formatted_body}" if formatted_body else head
         user_specific_texts[user_id] = full_text
+    return user_specific_texts
+
+async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
+    """
+    Находит все отправленные копии поста и редактирует их.
+    Основной источник данных - база данных.
+    Версия 2.2: Добавлена группировка сообщений по юзерам (защита от мульти-эдита альбомов).
+    """
+    user_messages_map = await _get_user_messages_map_for_edit(post_num)
+    if not user_messages_map:
+        return
+
+    post_data_copy, content_copy, reply_author_id, board_id = await _get_post_data_for_edit(post_num)
+    if not board_id:
+        return
+
+    final_keyboard = _build_edit_keyboard(content_copy, post_num)
+    user_specific_texts = await _build_user_specific_texts(user_messages_map, content_copy, post_data_copy, board_id, reply_author_id)
 
     async def _edit_one(user_id: int, message_id: int):
         max_attempts = 6
@@ -5812,6 +5830,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             except Exception as e:
                 print(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
                 return
+
     tasks_to_run = []
     for uid, msgs in user_messages_map.items():
         if msgs:
