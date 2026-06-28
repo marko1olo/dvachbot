@@ -10,6 +10,7 @@ Key Components:ware: Determines the user's language stream and caches it.
 - Middleware Classes:.
     - MultiLangMiddleware: Determines the user's language stream and caches it.ned users.
     - DeduplicationMiddleware: Prevents duplicate messages from being processed.
+from common.html_utils import _safe_len
     - Constants for board settings, data directories, and thresholds for notifications and actions.
     - Database configurations and connection management.
 - Command Handling:
@@ -1117,12 +1118,6 @@ SYMBOLIC_REACTIONS = {'🏴‍☠️', '♂️'}
 INSULT_REACTIONS = {'🐓', '🐖'}
 MAT_WORDS = ["сука", "блядь", "пиздец", "ебать", "нах", "пизда", "хуйня", "ебал", "блять", "отъебись", "ебаный", "еблан", "ХУЙ", "ПИЗДА", "хуйло", "долбаёб", "пидорас"]
 MSK = timezone(timedelta(hours=3))
-def _safe_len(value) -> int:
-
-    try:
-        return len(value)
-    except Exception:
-        return -1
 def _file_size_mb(path) -> float:
 
     try:

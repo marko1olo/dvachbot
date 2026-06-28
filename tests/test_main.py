@@ -211,3 +211,17 @@ class TestCleanHtmlForTg(unittest.TestCase):
     def test_invalid_tags(self):
         self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script>world&lt;/script>")
         self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown>world")
+
+from common.html_utils import _safe_len
+
+class TestSafeLen(unittest.TestCase):
+    def test_valid_length(self):
+        self.assertEqual(_safe_len("hello"), 5)
+        self.assertEqual(_safe_len([1, 2, 3]), 3)
+        self.assertEqual(_safe_len({"a": 1, "b": 2}), 2)
+        self.assertEqual(_safe_len(set([1, 2])), 2)
+
+    def test_error_path(self):
+        self.assertEqual(_safe_len(123), -1)
+        self.assertEqual(_safe_len(None), -1)
+        self.assertEqual(_safe_len(123.45), -1)

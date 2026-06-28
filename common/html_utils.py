@@ -10,3 +10,9 @@ def escape_html(text: str) -> str:
         .replace(">", "&gt;")
         .replace('"', "&quot;")
     )
+
+def _safe_len(value) -> int:
+    try:
+        return len(value)
+    except Exception:
+        return -1
