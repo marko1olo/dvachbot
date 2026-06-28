@@ -3981,6 +3981,49 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
             modified_content[text_key] = await _maybe_punch_up_text(current_text, active_mode_key, board_id)
 
     return modified_content
+async def _try_direct_download_fallback(session, url: str) -> tuple[bytes, int] | None:
+    async with session.get(url, allow_redirects=True, proxy=None) as response:
+        if response.status == 200:
+            data = await response.read()
+            if len(data) > 0 and not (data.strip().startswith(b'<') and b'<html' in data[:200].lower()):
+                print(f"✅ [DEBUG_DL] Успех через DIRECT.")
+                return data, len(data)
+    return None
+
+def _is_valid_image_data(data: bytes, content_type: str) -> bool:
+    if 'text/html' in content_type or (len(data) > 0 and data.strip().startswith(b'<') and b'<html' in data[:500].lower()):
+        try:
+            error_text = data[:300].decode('utf-8', errors='ignore').replace('\n', ' ')
+        except Exception:
+            error_text = "Binary/Unknown"
+        print(f"⚠️ [DEBUG_DL] Ссылка вернула HTML заглушку. Содержимое: {error_text}")
+        return False
+    if len(data) > 49.5 * 1024 * 1024:
+        print(f"⚠️ [DEBUG_DL] Файл слишком велик ({len(data)} байт). Пропуск.")
+        return False
+    return True
+
+def _get_image_download_headers(domain: str, scheme: str) -> dict:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Sec-Fetch-Dest": "image",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Site": "cross-site",
+        "Pragma": "no-cache",
+        "Cache-Control": "no-cache",
+    }
+    if "gelbooru" in domain: headers["Referer"] = "https://gelbooru.com/"
+    elif "konachan" in domain: headers["Referer"] = "https://konachan.com/"
+    elif "yande.re" in domain: headers["Referer"] = "https://yande.re/"
+    elif "danbooru" in domain: headers["Referer"] = "https://danbooru.donmai.us/"
+    elif "aibooru" in domain: headers["Referer"] = "https://aibooru.online/"
+    else: headers["Referer"] = f"{scheme}://{domain}/"
+    return headers
+
 async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0) -> tuple[bytes, int] | None:
     if depth > 3: return None
     import socket
@@ -4006,35 +4049,7 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
         f"sha12={hashlib.sha256(url.encode('utf-8', 'ignore')).hexdigest()[:12]}"
     )
 
-    # Базовые заголовки, маскируемся под Chrome
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Sec-Fetch-Dest": "image",
-        "Sec-Fetch-Mode": "no-cors",
-        "Sec-Fetch-Site": "cross-site",
-        "Pragma": "no-cache",
-        "Cache-Control": "no-cache",
-    }
-
-    # ДОБАВЛЯЕМ REFERER (ГЛАВНОЕ ИСПРАВЛЕНИЕ)
-    # Имиджборды требуют, чтобы реферер совпадал с их сайтом
-    if "gelbooru" in domain:
-        headers["Referer"] = "https://gelbooru.com/"
-    elif "konachan" in domain:
-        headers["Referer"] = "https://konachan.com/"
-    elif "yande.re" in domain:
-        headers["Referer"] = "https://yande.re/"
-    elif "danbooru" in domain:
-        headers["Referer"] = "https://danbooru.donmai.us/"
-    elif "aibooru" in domain:
-        headers["Referer"] = "https://aibooru.online/"
-    else:
-        # Универсальный фоллбек
-        headers["Referer"] = f"{scheme}://{domain}/"
+    headers = _get_image_download_headers(domain, scheme)
 
     for attempt in range(2):
         ssl_context = ssl.create_default_context()
@@ -4061,20 +4076,7 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                             # Читаем данные
                             data = await response.read()
 
-                            # Проверка на HTML-заглушку (Cloudflare или 403)
-                            # Некоторые сайты отдают 200 OK, но внутри HTML с капчей
-                            if 'text/html' in content_type or (len(data) > 0 and data.strip().startswith(b'<') and b'<html' in data[:500].lower()):
-                                try:
-                                    # Пытаемся прочитать текст ошибки для диагностики
-                                    error_text = data[:300].decode('utf-8', errors='ignore').replace('\n', ' ')
-                                except Exception:
-                                    error_text = "Binary/Unknown"
-                                    
-                                print(f"⚠️ [DEBUG_DL] Ссылка вернула HTML заглушку. Содержимое: {error_text}")
-                                return None
-
-                            if len(data) > 49.5 * 1024 * 1024:
-                                print(f"⚠️ [DEBUG_DL] Файл слишком велик ({len(data)} байт). Пропуск.")
+                            if not _is_valid_image_data(data, content_type):
                                 return None
                                 
                             if len(data) > 0:
@@ -4086,13 +4088,9 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                 except (aiohttp.ClientConnectorError, asyncio.TimeoutError, OSError) as e:
                     if current_proxy:
                         print(f"⚠️ [DEBUG_DL] Сбой прокси ({e}). Пробую DIRECT...")
-                        # Попытка без прокси
-                        async with session.get(url, allow_redirects=True, proxy=None) as response:
-                            if response.status == 200:
-                                data = await response.read()
-                                if len(data) > 0 and not (data.strip().startswith(b'<') and b'<html' in data[:200].lower()):
-                                    print(f"✅ [DEBUG_DL] Успех через DIRECT.")
-                                    return data, len(data)
+                        result = await _try_direct_download_fallback(session, url)
+                        if result:
+                            return result
                     raise e
         except asyncio.TimeoutError:
             if attempt == 0:
