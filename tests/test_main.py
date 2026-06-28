@@ -129,6 +129,21 @@ class TestCleanTitleText(unittest.TestCase):
             "Title with link and"
         )
 
+    def test_unclosed_tags_and_brackets(self):
+        self.assertEqual(clean_title_text("Some <unclosed tag"), "Some <unclosed tag")
+        self.assertEqual(clean_title_text("Some [unclosed bracket"), "Some [unclosed bracket")
+
+    def test_nested_tags(self):
+        self.assertEqual(clean_title_text("<<nested>tag>"), "tag>")
+        self.assertEqual(clean_title_text("[[nested]bracket]"), "bracket]")
+
+    def test_only_tags_or_whitespace(self):
+        self.assertEqual(clean_title_text("   <p></p>   [tag]  "), "")
+
+    def test_unicode_and_special_chars(self):
+        self.assertEqual(clean_title_text("  Привет, <b>мир</b>! 🌍  "), "Привет, мир! 🌍")
+        self.assertEqual(clean_title_text("  [tag] こんにちは世界 🚀  "), "こんにちは世界 🚀")
+
 if __name__ == "__main__":
     unittest.main()
 
