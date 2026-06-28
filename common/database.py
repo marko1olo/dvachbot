@@ -5722,6 +5722,42 @@ async def ban_hash(value: str, type: str, reason: str):
                 print(f"⛔ Ошибка при бане хеша {value}: {e}")
                 break
 
+
+async def ban_hashes(hashes: list):
+    '''
+    hashes = [(value, type, reason), ...]
+    '''
+    if not hashes: return
+    from common.db_pool import get_pool, db_lock
+
+    async with db_lock:
+        for attempt in range(10):
+            try:
+                db = await get_pool()
+                await db.execute("BEGIN IMMEDIATE")
+
+                await db.executemany(
+                    "INSERT OR REPLACE INTO BannedHashes (hash_value, hash_type, reason) VALUES (?, ?, ?)",
+                    hashes
+                )
+
+                await db.execute("COMMIT")
+                return
+            except sqlite3.OperationalError as e:
+                try: await db.execute("ROLLBACK")
+                except: pass
+
+                if "locked" in str(e).lower() or "busy" in str(e).lower():
+                    await asyncio.sleep(0.1 * (attempt + 1))
+                    continue
+                print(f"⛔ Ошибка при бане хешей: {e}")
+                break
+            except Exception as e:
+                try: await db.execute("ROLLBACK")
+                except: pass
+                print(f"⛔ Ошибка при бане хешей: {e}")
+                break
+
 async def unban_hash(hash_value: str):
     from common.db_pool import get_pool, db_lock
     
