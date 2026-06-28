@@ -121,7 +121,7 @@ async def _process_single_task(task):
         fresh_file_id = file_id 
         download_success = False 
         
-        file_info = None # <--- FIX: Инициализация переменной
+        file_info = None
 
         try:
             file_info = await bot.get_file(file_id)
@@ -179,7 +179,7 @@ async def _process_single_task(task):
                     logger.warning(f"⚠️ MTProto failed for {file_id[:10]}. Trying HTTP Fallback...")
                     try:
                         # Получаем путь, если его нет (или если первый запрос упал)
-                        if not file_info or not getattr(file_info, "file_path", None): # <--- FIX: Безопасная проверка
+                        if not file_info or not getattr(file_info, "file_path", None):
                             file_info = await bot.get_file(fresh_file_id)
                         
                         file_path = getattr(file_info, "file_path", None) if file_info else None

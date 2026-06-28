@@ -10,6 +10,10 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 try:
+    import asyncio
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    asyncio.set_event_loop(asyncio.new_event_loop())
     import Dubsite_tgach.main
     Dubsite_tgach.main.ADMIN_IDS = [12345, 67890]
     from Dubsite_tgach.main import check_perm
