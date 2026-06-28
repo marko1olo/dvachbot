@@ -14334,6 +14334,62 @@ async def _collect_stacked_anime_downloads(
             print(f"[{board_id}] Добираю картинки: готово {len(successful_by_slot)}/{len(fetcher_tasks)}, осталось {len(retry_slots)}.")
 
     return [successful_by_slot[slot] for slot in sorted(successful_by_slot)]
+
+def _prepare_anime_content(successful_downloads: list, caption: str) -> dict:
+    from aiogram.types import BufferedInputFile
+    content = {}
+    if len(successful_downloads) == 1:
+        ibytes, mtype, ext = successful_downloads[0]
+        input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
+        content = {'type': mtype, 'media': input_file, 'caption': caption}
+        if mtype == 'video' or mtype == 'animation':
+             content = {'type': mtype, 'file_id': input_file, 'caption': caption}
+        else:
+             content = {'type': mtype, 'image_bytes': ibytes, 'caption': caption}
+    else:
+        media_items = []
+        for ibytes, mtype, ext in successful_downloads:
+            tg_type = 'video' if mtype in ['video', 'animation'] else 'photo'
+            input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
+            media_items.append({'type': tg_type, 'media': input_file})
+
+        content = {'type': 'media_group', 'media': media_items, 'caption': caption}
+    return content
+
+async def _publish_anime_post(message: types.Message, board_id: str, user_id: int, content: dict, stream: str, num_downloads: int):
+    b_data = board_data[board_id]
+    is_shadow_muted = (user_id in b_data['shadow_mutes'] and
+                       b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+
+    if is_shadow_muted:
+        await process_shadow_reject(ShadowRejectContext(
+            bot=message.bot,
+            board_id=board_id,
+            user_id=user_id,
+            content=content,
+            reply_to_post=None,
+            stream=stream
+        ))
+        post_num = 0
+    else:
+        post_num = await process_new_post(
+            bot_instance=message.bot,
+            board_id=board_id,
+            user_id=user_id,
+            content=content,
+            reply_to_post=None,
+            is_shadow_muted=False,
+            stream=stream
+        )
+
+    if post_num is not None:
+        success_phrase = random.choice(ANIME_CMD_SUCCESS_PHRASES)
+        sent_notification = await message.bot.send_message(
+            chat_id=message.chat.id,
+            text=f"{success_phrase} (+{num_downloads})"
+        )
+        spawn_task(delete_message_after_delay(sent_notification, 15))
+
 async def _process_stacked_anime_command(
     message: types.Message,
     board_id: str,
@@ -14383,56 +14439,10 @@ async def _process_stacked_anime_command(
         successful_downloads = await _collect_stacked_anime_downloads(fetcher_tasks, board_id, user_id, "command")
         if not successful_downloads:
             raise ValueError("Не удалось скачать ни одного изображения.")
-        content = {}
-        if len(successful_downloads) == 1:
-            ibytes, mtype, ext = successful_downloads[0]
-            from aiogram.types import BufferedInputFile
-            input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
-            content = {'type': mtype, 'media': input_file, 'caption': caption}
-            if mtype == 'video' or mtype == 'animation':
-                 content = {'type': mtype, 'file_id': input_file, 'caption': caption} 
-            else:
-                 content = {'type': mtype, 'image_bytes': ibytes, 'caption': caption}
-        else:
-            media_items = []
-            from aiogram.types import BufferedInputFile
-            for ibytes, mtype, ext in successful_downloads:
-                tg_type = 'video' if mtype in ['video', 'animation'] else 'photo'
-                input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
-                media_items.append({'type': tg_type, 'media': input_file})
-                
-            content = {'type': 'media_group', 'media': media_items, 'caption': caption}
-        is_shadow_muted = (user_id in b_data['shadow_mutes'] and
-                           b_data['shadow_mutes'][user_id] > datetime.now(UTC))
-                           
-        if is_shadow_muted:
-            await process_shadow_reject(ShadowRejectContext(
-                bot=message.bot,
-                board_id=board_id,
-                user_id=user_id,
-                content=content,
-                reply_to_post=None,
-                stream=stream
-            ))
-            post_num = 0 
-        else:
-            post_num = await process_new_post(
-                bot_instance=message.bot,
-                board_id=board_id,
-                user_id=user_id,
-                content=content,
-                reply_to_post=None,
-                is_shadow_muted=False,
-                stream=stream
-            )
             
-        if post_num is not None:
-            success_phrase = random.choice(ANIME_CMD_SUCCESS_PHRASES)
-            sent_notification = await message.bot.send_message(
-                chat_id=message.chat.id,
-                text=f"{success_phrase} (+{len(successful_downloads)})"
-            )
-            spawn_task(delete_message_after_delay(sent_notification, 15))
+        content = _prepare_anime_content(successful_downloads, caption)
+
+        await _publish_anime_post(message, board_id, user_id, content, stream, len(successful_downloads))
     except ValueError as e:
         print(f"[{board_id}] Не удалось обработать команду для user {user_id}: {e}")
         fail_text = "Не удалось получить контент. API недоступны или лимит исчерпан."
