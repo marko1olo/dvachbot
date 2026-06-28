@@ -204,8 +204,8 @@ from japanese_translator import (
 )
 from summarize import summarize_text_with_hf, create_telegraph_page_async
 from thread_texts import thread_messages
-from ukrainian_mode import UKRAINIAN_PHRASES, ukrainian_transform
-from zaputin_mode import PATRIOTIC_PHRASES, zaputin_transform
+from ukrainian_mode import ukrainian_transform
+from zaputin_mode import zaputin_transform
 from polish_mode import POLISH_PHRASES_START, POLISH_PHRASES_END, polish_transform
 from warhammer_mode import WH40K_PHRASES_START, WH40K_PHRASES_END, warhammer_transform
 from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial_transform
