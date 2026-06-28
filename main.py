@@ -3689,26 +3689,10 @@ async def process_new_post(
         import traceback
         print(f"🔥🔥🔥 ФАТАЛЬНАЯ ОШИБКА в process_new_post для user {user_id}: {e}\n{traceback.format_exc()}")
         return None
-async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, post_num: int, content: dict, is_shadow_muted: bool, stream: str = 'ru'):
-    if is_shadow_muted:
-        return
-    from common.database import get_post_by_num, register_file_owner, update_post_content, add_file_mirror
-    check_post = await get_post_by_num(post_num)
-    if not check_post:
-        return
-    archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-    sender_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else archive_bot
-    if not sender_bot:
-        return
-    sender_bot_id = getattr(sender_bot, 'id', 0)
-    lang = 'en' if board_id == 'int' else 'ru'
-    
-    # --- НАЧАЛО ИЗМЕНЕНИЙ (Умный парсинг заголовка для Архивача) ---
-    board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
+def _format_archive_header(board_id: str, post_num: int, content: dict, lang: str) -> str:
     raw_header = content.get('header', f"Пост №{post_num}")
     
     header_text = ""
-    # Пытаемся отделить эмодзи/роль от самого номера поста
     match = re.search(r'(.*?)(Пост №\d+.*|Post No\.\d+.*|レス番 \d+.*)', raw_header, re.DOTALL | re.IGNORECASE)
     
     if match:
@@ -3722,25 +3706,22 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
             reply_suffix = f" (reply to №{reply_to_num})" if lang == 'en' else f" (ответ на №{reply_to_num})"
             
         if prefix and has_letters:
-            # Если есть текст (например "Абу -"), делаем красивый абзац
             if prefix.endswith('-'):
                 prefix = prefix[:-1].strip()
             header_text = f"<b>/{board_id}/</b> | {post_part}{reply_suffix}\n\n<b>{prefix} :</b>"
         else:
-            # Если это просто эмодзи (например 🌑), ставим его в начало
             prefix_with_space = f"{prefix} " if prefix else ""
             header_text = f"{prefix_with_space}<b>/{board_id}/</b> | {post_part}{reply_suffix}"
     else:
-        # Фолбэк, если регулярка не сработала
         reply_to_num = content.get('reply_to_post')
         reply_suffix = ""
         if reply_to_num:
             reply_suffix = f" (reply to №{reply_to_num})" if lang == 'en' else f" (ответ на №{reply_to_num})"
         header_text = f"<b>/{board_id}/</b> | {raw_header}{reply_suffix}"
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-    
+    return header_text
+
+def _format_archive_text(content: dict, header_text: str) -> str | None:
     content_type = content.get("type", "text")
-    text_to_send = None
     if content_type == 'text':
         text_content = convert_site_tags_to_telegram(content.get('text', ''))
         if 'poll_data' in content:
@@ -3749,7 +3730,26 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
         final_text = f"{header_text}\n\n{text_content}"
         if len(final_text) > 4096: 
             final_text = final_text[:4093] + "..."
-        text_to_send = final_text
+        return final_text
+    return None
+
+async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, post_num: int, content: dict, is_shadow_muted: bool, stream: str = 'ru'):
+    if is_shadow_muted:
+        return
+    from common.database import get_post_by_num, register_file_owner, update_post_content, add_file_mirror
+    check_post = await get_post_by_num(post_num)
+    if not check_post:
+        return
+    archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
+    sender_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else archive_bot
+    if not sender_bot:
+        return
+    sender_bot_id = getattr(sender_bot, 'id', 0)
+    lang = 'en' if board_id == 'int' else 'ru'
+
+    header_text = _format_archive_header(board_id, post_num, content, lang)
+    content_type = content.get("type", "text")
+    text_to_send = _format_archive_text(content, header_text)
     
     db_updated = False
     for channel_id in MIRROR_CHANNELS:
