@@ -211,6 +211,12 @@ from warhammer_mode import WH40K_PHRASES_START, WH40K_PHRASES_END, warhammer_tra
 from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial_transform
 from gopnik_mode import GOPNIK_PHRASES_START, GOPNIK_PHRASES_END, gopnik_transform
 from shizo_mode import SCHIZO_PHRASES_START, SCHIZO_PHRASES_END, shizo_transform
+# from new_modes import (
+#     AMERICA_PHRASES_END, AMERICA_PHRASES_START, HOLIDAY_PHRASES_END, HOLIDAY_PHRASES_START,
+#     JEWISH_PHRASES_END, JEWISH_PHRASES_START, MATRIX_PHRASES_END, MATRIX_PHRASES_START,
+#     OLDWEB_PHRASES_END, OLDWEB_PHRASES_START,
+#     america_transform, holiday_transform, jewish_transform, matrix_transform, oldweb_transform,
+# )
 from mode_punchup import punch_up_mode_text
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
