@@ -3291,7 +3291,7 @@ async def api_random_image_next(request: Request, boards: Optional[str] = None):
     try:
         allowed_boards = None
         if boards:
-            allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
+            allowed_boards = [stripped for b in boards.split(',') if (stripped := b.strip())]
 
         post_data = await get_random_image_post(allowed_boards=allowed_boards)
         
@@ -5017,7 +5017,7 @@ async def api_create_post(
         content['sage'] = True
     is_shadow_final = is_shadow_muted or has_banned_content 
     if post_mode == 'poll':
-        raw_opts = [opt.strip() for opt in (poll_options or []) if opt and opt.strip()]
+        raw_opts = [stripped for opt in (poll_options or []) if opt and (stripped := opt.strip())]
         clean_opts = list(dict.fromkeys(raw_opts))
         if not poll_question or not poll_question.strip() or not (2 <= len(clean_opts) <= 5):
             raise HTTPException(status_code=400, detail="Invalid poll data (need 2-5 unique options)")
@@ -5427,7 +5427,7 @@ async def api_roulette_next(request: Request, boards: Optional[str] = None):
     # Парсим список досок из query string (?boards=b,a,gd)
     allowed_boards = None
     if boards:
-        allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
+        allowed_boards = [stripped for b in boards.split(',') if (stripped := b.strip())]
 
     try:
         raw_post = await get_random_video_post(allowed_boards=allowed_boards)
@@ -6474,7 +6474,7 @@ async def search_tags_page(request: Request, tags: str = "", page: int = 1, user
     """
     Страница результатов поиска по тегам.
     """
-    tag_list = [t.strip() for t in tags.split(',') if t.strip()]
+    tag_list = [stripped for t in tags.split(',') if (stripped := t.strip())]
     posts = []
     
     if tag_list:
