@@ -2269,7 +2269,7 @@ def optimize_thread_context(op_post: dict, replies: list, max_posts: int = 40) -
     return " | ".join(buffer)
 def pluralize_russian(count, one, few, many):
     try:
-        n = int(count)
+        n = abs(int(count))
         if n % 10 == 1 and n % 100 != 11:
             return one
         elif 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
