@@ -26,7 +26,6 @@ import asyncio
 from common.task_manager import spawn_task
 import faulthandler
 import gc
-import gzip
 import psutil
 try:
     import ujson as json
