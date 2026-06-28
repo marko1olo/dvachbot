@@ -11227,24 +11227,8 @@ async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | No
             await callback.answer()
         except TelegramBadRequest:
             pass
-@dp.callback_query(F.data == "create_thread_confirm", ThreadCreateStates.waiting_for_confirmation)
-async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
-    """
-    Финальный шаг создания треда.
-    Исправлено: Защита от TelegramBadRequest и гарантия очистки состояния.
-    """
-    if not board_id: return
-    try:
-        await callback.answer()
-    except TelegramBadRequest:
-        pass # Игнорируем, если запрос устарел, продолжаем выполнение
-    if not isinstance(callback.message, types.Message):
-        return
-    user_id = callback.from_user.id
-    b_data = board_data[board_id]
-    lang = 'en' if board_id == 'int' else 'ru'
-    user_s = b_data['user_state'].setdefault(user_id, {})
-    now_ts = time.time()
+async def _check_create_thread_cooldown(callback: types.CallbackQuery, user_s: dict, lang: str, now_ts: float) -> bool:
+    """Checks if the user is on cooldown for creating a thread."""
     last_creation_ts = user_s.get('last_thread_creation', 0)
     if now_ts - last_creation_ts < THREAD_CREATE_COOLDOWN_USER:
         remaining = THREAD_CREATE_COOLDOWN_USER - (now_ts - last_creation_ts)
@@ -11263,47 +11247,11 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
             try:
                 await callback.message.answer(cooldown_text)
             except Exception: pass
-        return
-    fsm_data = await state.get_data()
-    op_post_text = fsm_data.get('op_post_text')
-    await state.clear()
-    if not op_post_text:
-        try:
-            await callback.message.answer("Error: Post data not found. Please start over.")
-            await callback.message.delete()
-        except TelegramBadRequest:
-            pass
-        return
-    try:
-        await callback.message.delete()
-    except TelegramBadRequest:
-        pass
-    threads_data = b_data.get('threads_data', {})
-    thread_id = secrets.token_hex(4)
-    now_dt = datetime.now(UTC)
-    title = escape_html(clean_html_tags(op_post_text).split('\n')[0][:60])
-    success = await create_thread(
-        thread_id=thread_id,
-        board_id=board_id,
-        op_id=user_id,
-        title=title,
-        created_at=now_ts,
-        stream=stream
-    )
-    if not success:
-        error_text = "Database error: Could not create thread." if lang == 'en' else "Ошибка БД: не удалось создать тред."
-        try:
-            await callback.message.answer(error_text)
-        except Exception: pass
-        return
-    thread_info = {
-        'op_id': user_id, 'title': title, 'created_at': now_dt.isoformat(),
-        'last_activity_at': now_ts, 'posts': [], 'subscribers': {user_id},
-        'local_mutes': {}, 'local_shadow_mutes': {}, 'is_archived': False,
-        'announced_milestones': [], 'activity_notified': False, 'stream': stream
-    }
-    threads_data[thread_id] = thread_info
-    user_s['last_thread_creation'] = now_ts
+        return True
+    return False
+
+async def _notify_new_thread_public(board_id: str, b_data: dict, title: str, thread_id: str, lang: str, now_dt: datetime, stream: str) -> None:
+    """Notifies the board that a new thread has been created."""
     notification_phrases = thread_messages.get(lang, {}).get('new_thread_public_notification', [])
     if lang == 'en':
         default_notification_text = f"New thread created: «<b>{title}</b>»"
@@ -11335,8 +11283,9 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
             'recipients': b_data['users']['active'], 'content': content_notify, 
             'post_num': pnum_notify, 'board_id': board_id, 'keyboard': keyboard
         })
-    user_s['location'] = thread_id
-    user_s['last_location_switch'] = now_ts
+
+async def _process_op_post_and_enter(callback: types.CallbackQuery, user_id: int, board_id: str, op_post_text: str, title: str, thread_id: str, lang: str, stream: str, thread_info: dict) -> None:
+    """Processes the OP post content, enters the user into the thread, and handles notifications."""
     if lang == 'en':
         formatted_op_text = f"<b>OP-POST</b>\n_______________________________\n{op_post_text}"
     elif lang == 'jp':
@@ -11366,6 +11315,81 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
         thread_info=thread_info, event_type='new_thread'
     ))
     await _send_op_commands_info(callback.bot, user_id, board_id)
+
+@dp.callback_query(F.data == "create_thread_confirm", ThreadCreateStates.waiting_for_confirmation)
+async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
+    """
+    Финальный шаг создания треда.
+    Исправлено: Защита от TelegramBadRequest и гарантия очистки состояния.
+    """
+    if not board_id: return
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass # Игнорируем, если запрос устарел, продолжаем выполнение
+    if not isinstance(callback.message, types.Message):
+        return
+    user_id = callback.from_user.id
+    b_data = board_data[board_id]
+    lang = 'en' if board_id == 'int' else 'ru'
+    user_s = b_data['user_state'].setdefault(user_id, {})
+    now_ts = time.time()
+
+    if await _check_create_thread_cooldown(callback, user_s, lang, now_ts):
+        return
+
+    fsm_data = await state.get_data()
+    op_post_text = fsm_data.get('op_post_text')
+    await state.clear()
+
+    if not op_post_text:
+        try:
+            await callback.message.answer("Error: Post data not found. Please start over.")
+            await callback.message.delete()
+        except TelegramBadRequest:
+            pass
+        return
+
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+
+    threads_data = b_data.get('threads_data', {})
+    thread_id = secrets.token_hex(4)
+    now_dt = datetime.now(UTC)
+    title = escape_html(clean_html_tags(op_post_text).split('\n')[0][:60])
+
+    success = await create_thread(
+        thread_id=thread_id,
+        board_id=board_id,
+        op_id=user_id,
+        title=title,
+        created_at=now_ts,
+        stream=stream
+    )
+    if not success:
+        error_text = "Database error: Could not create thread." if lang == 'en' else "Ошибка БД: не удалось создать тред."
+        try:
+            await callback.message.answer(error_text)
+        except Exception: pass
+        return
+
+    thread_info = {
+        'op_id': user_id, 'title': title, 'created_at': now_dt.isoformat(),
+        'last_activity_at': now_ts, 'posts': [], 'subscribers': {user_id},
+        'local_mutes': {}, 'local_shadow_mutes': {}, 'is_archived': False,
+        'announced_milestones': [], 'activity_notified': False, 'stream': stream
+    }
+    threads_data[thread_id] = thread_info
+    user_s['last_thread_creation'] = now_ts
+
+    await _notify_new_thread_public(board_id, b_data, title, thread_id, lang, now_dt, stream)
+
+    user_s['location'] = thread_id
+    user_s['last_location_switch'] = now_ts
+
+    await _process_op_post_and_enter(callback, user_id, board_id, op_post_text, title, thread_id, lang, stream, thread_info)
 @dp.message(Command("togglegif"))
 async def cmd_toggle_gif(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
