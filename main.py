@@ -478,7 +478,7 @@ def clean_html_for_tg(text: str) -> str:
     text = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
     text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
     text = text.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
-    text = re.sub(r'<(?!/?(b|i|u|s|code|pre|a\b)[>\s])', '&lt;', text)
+    text = re.sub(r'<(?!/?(?:b|i|u|s|code|pre|a\b)(?:\s[^>]*)?>)', '&lt;', text)
 
     # Balance tags
     allowed_tags = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
