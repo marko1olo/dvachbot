@@ -120,6 +120,10 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
                 except Exception as e:
                     err_str = f"{type(e).__name__}: {e}"
                     logger.warning(f"⚠️ {provider} call failed ({model_name}) via {strategy['name']}: {err_str}")
+                    if provider == "groq" and ("401" in err_str or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower()):
+                        logger.error(f"❌ Groq key {api_key[:12]}... is unauthorized (401). Removing from rotation pool.")
+                        groq_pool.remove_token(api_key)
+                        break
                     if "413" in err_str or "too large" in err_str.lower() or "context_length_exceeded" in err_str.lower():
                         logger.warning(f"⚠️ {model_name}: request too large, skipping to next model.")
                         skip_model = True

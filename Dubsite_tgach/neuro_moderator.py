@@ -77,6 +77,10 @@ async def check_image_content(image_bytes: bytes, file_id: str):
                         "max_tokens": 300
                     }
                 )
+                if resp.status_code == 401:
+                    logger.error(f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool.")
+                    groq_pool.remove_token(token)
+                    continue
                 
                 if resp.status_code == 429: # Rate Limit
                     await asyncio.sleep(2)
@@ -95,6 +99,10 @@ async def check_image_content(image_bytes: bytes, file_id: str):
                 logger.error(f"Groq HTTP Error {resp.status_code}")
 
         except Exception as e:
+            err_str = str(e).lower()
+            if "401" in err_str or "unauthorized" in err_str or "invalid api key" in err_str:
+                logger.error(f"❌ Groq key {token[:12]}... is unauthorized (401 Exception). Removing from rotation pool.")
+                groq_pool.remove_token(token)
             logger.error(f"Groq Request Error: {e}")
             continue
 

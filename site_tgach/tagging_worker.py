@@ -223,6 +223,10 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
                         return content.strip().rstrip('.,')
             except Exception as e:
                 err_str = str(e).lower()
+                if "401" in err_str or "unauthorized" in err_str or "invalid api key" in err_str:
+                    logger.error(f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool.")
+                    groq_pool.remove_token(token)
+                    continue
                 if "413" in err_str:
                     logger.error("❌ 413 Payload Too Large (Even after resize!). Skipping tags.")
                     return "error_413" # Возвращаем спец-код, чтобы сохранить хеши, но без тегов
