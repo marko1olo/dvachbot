@@ -40,6 +40,10 @@ def format_age(ts):
     return f"[bold red]{int(age_seconds / 86400)}d ago[/bold red]"
 
 def format_queue_value(value):
+    if value is None:
+        return "N/A"
+    if isinstance(value, float):
+        value = round(value, 1)
     if isinstance(value, str): return f"[bold red]{value}[/bold red]"
     if value > 1000: return f"[bold red]{value:,}[/bold red]"
     if value > 100: return f"[bold yellow]{value:,}[/bold yellow]"
