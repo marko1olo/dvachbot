@@ -129,8 +129,6 @@ class TestCleanTitleText(unittest.TestCase):
             "Title with link and"
         )
 
-if __name__ == "__main__":
-    unittest.main()
 
 from Dubsite_tgach.main import format_bayan_label
 from unittest.mock import patch
@@ -211,3 +209,27 @@ class TestCleanHtmlForTg(unittest.TestCase):
     def test_invalid_tags(self):
         self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script>world&lt;/script>")
         self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown>world")
+
+from Dubsite_tgach.main import sanitize_html
+
+class TestSanitizeHtml(unittest.TestCase):
+    def test_empty_and_none(self):
+        self.assertEqual(sanitize_html(""), "")
+        self.assertEqual(sanitize_html(None), "")
+
+    def test_no_html(self):
+        self.assertEqual(sanitize_html("Hello World"), "Hello World")
+        self.assertEqual(sanitize_html("12345"), "12345")
+
+    def test_html_tags(self):
+        self.assertEqual(sanitize_html("<div>Hello</div>"), "&lt;div&gt;Hello&lt;/div&gt;")
+        self.assertEqual(sanitize_html("<script>alert(1)</script>"), "&lt;script&gt;alert(1)&lt;/script&gt;")
+
+    def test_ampersand(self):
+        self.assertEqual(sanitize_html("Me & You"), "Me &amp; You")
+
+    def test_quotes_preserved(self):
+        self.assertEqual(sanitize_html("\"Hello\""), "\"Hello\"")
+        self.assertEqual(sanitize_html("'World'"), "'World'")
+if __name__ == "__main__":
+    unittest.main()
