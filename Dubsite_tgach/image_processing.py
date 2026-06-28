@@ -223,14 +223,21 @@ async def process_and_upload_image(
 
     if is_image:
         try:
-            thumbnail_bytes = await create_thumbnail_in_memory(contents)
-            
             def _validate_and_phash():
-                img = Image.open(BytesIO(contents))
-                if img.format not in ['JPEG', 'PNG', 'WEBP']: return None
-                return str(imagehash.phash(img))
-            
-            phash_str = await asyncio.to_thread(_validate_and_phash)
+                with Image.open(BytesIO(contents)) as img:
+                    if img.format not in ['JPEG', 'PNG', 'WEBP']: return None
+                    if max(img.size) > 128:
+                        img.thumbnail((128, 128))
+                    return str(imagehash.phash(img))
+
+            thumbnail_bytes, phash_str = await asyncio.gather(
+                create_thumbnail_in_memory(contents),
+                asyncio.to_thread(_validate_and_phash),
+                return_exceptions=True
+            )
+            if isinstance(thumbnail_bytes, Exception): thumbnail_bytes = None
+            if isinstance(phash_str, Exception): phash_str = None
+
             if phash_str and await check_phash_ban(phash_str):
                 return {"banned": True, "reason": "Banned by pHash"}
                 
