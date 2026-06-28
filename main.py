@@ -5654,12 +5654,7 @@ async def send_message_to_users(
         remaining_recipients=remaining_recipients_for_later,
         interrupted_reason=interrupted_reason,
     )
-async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
-    """
-    Находит все отправленные копии поста и редактирует их.
-    Основной источник данных - база данных.
-    Версия 2.2: Добавлена группировка сообщений по юзерам (защита от мульти-эдита альбомов).
-    """
+async def _get_edit_post_copies_and_map(post_num: int) -> dict:
     copies_info = await get_post_copies(post_num)
     user_messages_map = defaultdict(list)
     if copies_info:
@@ -5675,29 +5670,25 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             else:
                 if mid_or_list not in user_messages_map[uid]:
                     user_messages_map[uid].append(mid_or_list)
+    return user_messages_map
 
-    if not user_messages_map:
-        return
-
-    post_data_copy = {}
-    content_copy = {}
-    reply_author_id = None
-    board_id = None
+async def _get_post_and_check_editability(post_num: int):
     async with storage_lock:
         post_data = messages_storage.get(post_num)
-        if not post_data: return
+        if not post_data: return None, None, None, None
         content_type = post_data.get('content', {}).get('type')
         can_be_edited = content_type in ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'media_group']
-        if not can_be_edited: return
+        if not can_be_edited: return None, None, None, None
         post_data_copy = post_data.copy()
         content_copy = post_data.get('content', {}).copy()
         board_id = post_data.get('board_id')
         reply_to_post_num = content_copy.get('reply_to_post')
+        reply_author_id = None
         if reply_to_post_num:
             reply_author_id = messages_storage.get(reply_to_post_num, {}).get('author_id')
-    if not board_id: return
-    
-    final_keyboard = None
+        return post_data_copy, content_copy, reply_author_id, board_id
+
+def _build_poll_keyboard_for_edit(content_copy: dict, post_num: int):
     if content_copy.get('poll_data'):
         poll_options = content_copy.get('poll_data', {}).get('options', [])
         if poll_options:
@@ -5710,35 +5701,38 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                         callback_data=f"poll_vote_{post_num}_{i}"
                     )
                 )
-            final_keyboard = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
-            
+            return InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
+    return None
+
+async def _resolve_you_links_for_edit(text_or_caption_base: str, post_data_copy: dict) -> str:
+    if not text_or_caption_base or ">>" not in text_or_caption_base:
+        return text_or_caption_base
+    mentioned_authors = {}
+    mentions = RE_YOU_PATTERN.findall(text_or_caption_base)
+    if mentions:
+        async with storage_lock:
+            for m_num_str in mentions:
+                try:
+                    m_num = int(m_num_str)
+                    if m_num in messages_storage:
+                        mentioned_authors[m_num] = messages_storage[m_num].get("author_id")
+                except ValueError:
+                    continue
+    return add_you_to_my_posts_fast(
+        text_or_caption_base,
+        post_data_copy.get('author_id'),
+        mentioned_authors
+    )
+
+async def _build_user_specific_texts_for_edit(user_messages_map: dict, content_copy: dict, board_id: str, reply_author_id: int, text_or_caption_base: str, post_data_copy: dict, text_with_you_links: str) -> dict:
     user_specific_texts = {}
-    text_or_caption_base = content_copy.get('text') or content_copy.get('caption')
-    text_with_you_links = text_or_caption_base
-    if text_or_caption_base and ">>" in text_or_caption_base:
-        mentioned_authors = {}
-        mentions = RE_YOU_PATTERN.findall(text_or_caption_base)
-        if mentions:
-            async with storage_lock:
-                for m_num_str in mentions:
-                    try:
-                        m_num = int(m_num_str)
-                        if m_num in messages_storage:
-                            mentioned_authors[m_num] = messages_storage[m_num].get("author_id")
-                    except ValueError:
-                        continue
-        text_with_you_links = add_you_to_my_posts_fast(
-            text_or_caption_base, 
-            post_data_copy.get('author_id'), 
-            mentioned_authors
-        )            
-    b_data = board_data[board_id]
+    b_data = board_data.get(board_id, {})
     users_settings = b_data.get('user_settings', {})
     for user_id in user_messages_map.keys():
         header_text = content_copy.get('header', '')
         u_set = users_settings.get(user_id, {'hide': set()})
         should_hide = False
-        if u_set['hide']:
+        if u_set.get('hide'):
             raw_content_text = content_copy.get('text') or content_copy.get('caption') or ""
             check_text = (header_text + " " + raw_content_text).lower()
             if any(word in check_text for word in u_set['hide']):
@@ -5764,6 +5758,27 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             )
             full_text = f"{head}\n\n{formatted_body}" if formatted_body else head
         user_specific_texts[user_id] = full_text
+    return user_specific_texts
+
+async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
+    """
+    Находит все отправленные копии поста и редактирует их.
+    Основной источник данных - база данных.
+    Версия 2.2: Добавлена группировка сообщений по юзерам (защита от мульти-эдита альбомов).
+    """
+    user_messages_map = await _get_edit_post_copies_and_map(post_num)
+    if not user_messages_map:
+        return
+
+    post_data_copy, content_copy, reply_author_id, board_id = await _get_post_and_check_editability(post_num)
+    if not board_id: return
+
+    final_keyboard = _build_poll_keyboard_for_edit(content_copy, post_num)
+    text_or_caption_base = content_copy.get('text') or content_copy.get('caption')
+    text_with_you_links = await _resolve_you_links_for_edit(text_or_caption_base, post_data_copy)
+    user_specific_texts = await _build_user_specific_texts_for_edit(
+        user_messages_map, content_copy, board_id, reply_author_id, text_or_caption_base, post_data_copy, text_with_you_links
+    )
 
     async def _edit_one(user_id: int, message_id: int):
         max_attempts = 6
