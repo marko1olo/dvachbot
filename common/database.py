@@ -3925,6 +3925,9 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                     await db.execute("COMMIT")
                     return []
 
+                shadow_updates = []
+                blur_updates = []
+
                 for row in rows:
                     post_num, content_str, is_shadow = row
                     needs_update = False
@@ -3936,7 +3939,7 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                     # Логика действий
                     if action == 'shadow':
                         if not is_shadow:
-                            await db.execute("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", (post_num,))
+                            shadow_updates.append((post_num,))
                             needs_update = True
                             
                     elif action == 'blur':
@@ -3944,11 +3947,17 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                         if not content.get('is_censored'):
                             content['is_censored'] = True
                             new_json = json.dumps(content, default=_json_serializer)
-                            await db.execute("UPDATE Posts SET content = ? WHERE post_num = ?", (new_json, post_num))
+                            blur_updates.append((new_json, post_num))
                             needs_update = True
                     
                     if needs_update:
                         affected_posts.append(post_num)
+
+                if shadow_updates:
+                    await db.executemany("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", shadow_updates)
+
+                if blur_updates:
+                    await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", blur_updates)
 
                 await db.execute("COMMIT")
                 return affected_posts
