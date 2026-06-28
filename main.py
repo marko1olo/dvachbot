@@ -2520,85 +2520,76 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
     context_name = f"thread {thread_id}" if thread_id else f"board {board_id}"
     print(f"[summarize] Chunk for {context_name} built, len={len(cleaned_chunk)}")
     return cleaned_chunk[:35000]
-async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
+def _extract_msg_content(msg: Message) -> tuple[str | None, str | None, str | None]:
+    """Helper to extract content and standardized type from a message for spam checking."""
+    msg_type = None
+    content = None
+    check_content = None
 
-    b_data = board_data[board_id]
-    if is_admin(user_id, board_id):
-        return True # Админу можно всё, спам-фильтр пропускает
-
-    # Extract content early for echodown tracking
     if msg.content_type == 'text':
         check_content = msg.text
-    elif msg.content_type == 'sticker':
-        check_content = msg.sticker.file_id
-    elif msg.content_type == 'animation':
-        check_content = msg.animation.file_id
-    elif msg.content_type == 'audio':
-        return True
-    elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
-        check_content = msg.caption
-    else:
-        check_content = None
-
-    if check_content:
-        now_ts = time.time()
-        user_cb = cross_board_spam_tracker[user_id]
-        if not user_cb or user_cb[-1][1] != board_id:
-            user_cb.append((now_ts, board_id, check_content))
-            
-            if len(user_cb) == 3:
-                boards = {b for t, b, c in user_cb}
-                # Check if it's 3 distinct boards within 30 seconds
-                if len(boards) == 3 and (user_cb[-1][0] - user_cb[0][0]) <= 30:
-                    # Check if contents are duplicates
-                    contents = [c for t, b, c in user_cb]
-                    is_duplicate = False
-                    if msg.content_type == 'text' or (msg.content_type in ['photo', 'video', 'document'] and msg.caption):
-                        import difflib
-                        r1 = difflib.SequenceMatcher(None, contents[0], contents[1]).ratio()
-                        r2 = difflib.SequenceMatcher(None, contents[1], contents[2]).ratio()
-                        if r1 > 0.85 and r2 > 0.85:
-                            is_duplicate = True
-                    else:
-                        if contents[0] == contents[1] == contents[2]:
-                            is_duplicate = True
-                            
-                    if is_duplicate:
-                        msg_str = f"🚨 [GLOBAL] ЭХОДАУН ОБНАРУЖЕН: user {user_id} спамит дубликатами в {boards}. Выдан перманентный SHADOWMUTE везде кроме /b/."
-                        print(msg_str)
-                        from common.database import update_shadow_mute, log_global_event
-                        spawn_task(log_global_event('bot', msg_str))
-                        expires_dt = datetime.now(UTC) + timedelta(days=365)
-                        for b in BOARD_CONFIG.keys():
-                            if b != 'b':
-                                board_data[b].setdefault('shadow_mutes', {})[user_id] = expires_dt
-                                spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
-                        user_cb.clear() # clear tracker after muting
-                        return False
-    if msg.content_type == 'text':
         msg_type = 'text'
         content = msg.text
     elif msg.content_type == 'sticker':
+        check_content = msg.sticker.file_id
         msg_type = 'sticker'
         content = msg.sticker.file_id
     elif msg.content_type == 'animation':
+        check_content = msg.animation.file_id
         msg_type = 'animation'
         content = msg.animation.file_id
     elif msg.content_type == 'audio':
-        return True # Handled above
+        msg_type = 'audio'
+        # check_content is intentionally None for audio echodown
     elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
+        check_content = msg.caption
         msg_type = 'text'
         content = msg.caption
-    else:
-        return True # Неизвестный тип для спам-фильтра
-    rules = SPAM_RULES.get(msg_type)
-    if not rules:
-        return True
-    now = datetime.now(UTC)
-    violations = b_data['spam_violations'].setdefault(user_id, {'level': 0, 'last_reset': now})
-    if (now - violations['last_reset']) > timedelta(hours=1):
-        violations['level'] = 0
-        violations['last_reset'] = now
+
+    return msg_type, content, check_content
+
+def _check_echodown(user_id: int, check_content: str, msg_type: str | None, board_id: str) -> bool:
+    """Helper to track and penalize cross-board duplicate spam (echodown). Returns False if penalized, True otherwise."""
+    now_ts = time.time()
+    user_cb = cross_board_spam_tracker[user_id]
+
+    # Only track if they changed boards from their last message
+    if not user_cb or user_cb[-1][1] != board_id:
+        user_cb.append((now_ts, board_id, check_content))
+
+        if len(user_cb) == 3:
+            boards = {b for t, b, c in user_cb}
+            # Check if it's 3 distinct boards within 30 seconds
+            if len(boards) == 3 and (user_cb[-1][0] - user_cb[0][0]) <= 30:
+                # Check if contents are duplicates
+                contents = [c for t, b, c in user_cb]
+                is_duplicate = False
+                if msg_type == 'text':
+                    import difflib
+                    r1 = difflib.SequenceMatcher(None, contents[0], contents[1]).ratio()
+                    r2 = difflib.SequenceMatcher(None, contents[1], contents[2]).ratio()
+                    if r1 > 0.85 and r2 > 0.85:
+                        is_duplicate = True
+                else:
+                    if contents[0] == contents[1] == contents[2]:
+                        is_duplicate = True
+
+                if is_duplicate:
+                    msg_str = f"🚨 [GLOBAL] ЭХОДАУН ОБНАРУЖЕН: user {user_id} спамит дубликатами в {boards}. Выдан перманентный SHADOWMUTE везде кроме /b/."
+                    print(msg_str)
+                    from common.database import update_shadow_mute, log_global_event
+                    spawn_task(log_global_event('bot', msg_str))
+                    expires_dt = datetime.now(UTC) + timedelta(days=365)
+                    for b in BOARD_CONFIG.keys():
+                        if b != 'b':
+                            board_data[b].setdefault('shadow_mutes', {})[user_id] = expires_dt
+                            spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
+                    user_cb.clear() # clear tracker after muting
+                    return False
+    return True
+
+def _check_board_spam(user_id: int, msg_type: str, content: str | None, rules: dict, violations: dict, b_data: dict) -> bool:
+    """Helper to check board-level frequency and repetition spam rules. Returns False if rules violated, True otherwise."""
     max_repeats = rules.get('max_repeats')
     if max_repeats and content:
         if msg_type == 'text':
@@ -2611,6 +2602,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
             last_items_deque = b_data['last_audios'][user_id]
         else:
             last_items_deque = None
+
         if last_items_deque is not None:
             last_items_deque.append(content)
             if len(last_items_deque) >= max_repeats:
@@ -2635,7 +2627,8 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
                         violations['level'] += 1
                         last_items_deque.clear() # Очищаем очередь
                         return False
-    window_start = now - timedelta(seconds=rules['window_sec'])
+
+    # Frequency check
     now_ts = time.time()
     b_data['spam_tracker'][user_id] = [t for t in b_data['spam_tracker'][user_id] if t > (now_ts - rules['window_sec'])]
     b_data['spam_tracker'][user_id].append(now_ts)
@@ -2643,7 +2636,39 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         violations['level'] += 1
         b_data['spam_tracker'][user_id] = [] 
         return False
+
     return True
+
+async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
+    if is_admin(user_id, board_id):
+        return True # Админу можно всё, спам-фильтр пропускает
+
+    msg_type, content, check_content = _extract_msg_content(msg)
+
+    if msg_type is None:
+        return True # Неизвестный тип для спам-фильтра
+
+    if msg_type == 'audio':
+        return True # Handled dynamically, audio is usually skipped in echodown
+
+    if check_content:
+        if not _check_echodown(user_id, check_content, msg_type, board_id):
+            return False
+
+    rules = SPAM_RULES.get(msg_type)
+    if not rules:
+        return True
+
+    b_data = board_data[board_id]
+    now = datetime.now(UTC)
+    violations = b_data['spam_violations'].setdefault(user_id, {'level': 0, 'last_reset': now})
+
+    # Reset violations if older than 1 hour
+    if (now - violations['last_reset']) > timedelta(hours=1):
+        violations['level'] = 0
+        violations['last_reset'] = now
+
+    return _check_board_spam(user_id, msg_type, content, rules, violations, b_data)
 async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id: str, stream: str = 'ru'):
 
     async with user_spam_locks[user_id]:  # Блокировка для конкретного пользователя
