@@ -124,11 +124,10 @@ async def cmd_roast(message: types.Message):
     # We can just iterate over the last 300 posts in the board.
     
     cutoff = time.time() - (3600 * 2) # last 2 hours max
-    for msg_id, p_info in messages_storage.items():
+    for msg_id, p_info in itertools.islice(reversed(messages_storage.items()), 300):
         if p_info.get('board_id') == board_id and p_info.get('timestamp', 0) > cutoff:
-            if not p_info.get('thread_id'): # exclude threads if we want infinite chat only, or include all
-                msgs.append(p_info)
-                
+            msgs.append(p_info)
+
     # Sort by timestamp
     msgs.sort(key=lambda x: x.get('timestamp', 0))
     # Take last 100
