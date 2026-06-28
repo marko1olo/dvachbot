@@ -9,12 +9,12 @@ def check_indexes():
     tables = [row[0] for row in cursor.fetchall()]
     
     for table in tables:
-        cursor.execute("SELECT * FROM pragma_index_list(?)", (table,))
-        indexes = cursor.fetchall()
         cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
         count = cursor.fetchone()[0]
         if count > 10000:
             print(f"Table {table}: {count} rows")
+            cursor.execute("SELECT * FROM pragma_index_list(?)", (table,))
+            indexes = cursor.fetchall()
             for idx in indexes:
                 cursor.execute("SELECT * FROM pragma_index_info(?)", (idx[1],))
                 cols = [row[2] for row in cursor.fetchall()]
