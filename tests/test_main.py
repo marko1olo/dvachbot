@@ -47,7 +47,7 @@ for mod_name in sys.modules:
         sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
 
 # Now we can safely import the function under test
-from Dubsite_tgach.main import get_real_ip
+from Dubsite_tgach.main import get_real_ip, sanitize_html
 
 class StubClient:
     def __init__(self, host):
@@ -240,3 +240,23 @@ class TestVibeToIcon(unittest.TestCase):
         self.assertEqual(vibe_to_icon("unknown"), "❓ (Неясно)")
         self.assertEqual(vibe_to_icon(""), "❓ (Неясно)")
         self.assertEqual(vibe_to_icon("something totally unrelated"), "❓ (Неясно)")
+
+class TestSanitizeHtml(unittest.TestCase):
+    def test_empty_input(self):
+        self.assertEqual(sanitize_html(""), "")
+        self.assertEqual(sanitize_html(None), "")
+
+    def test_basic_tags(self):
+        self.assertEqual(sanitize_html("<b>bold</b>"), "&lt;b&gt;bold&lt;/b&gt;")
+        self.assertEqual(sanitize_html("<script>alert(1)</script>"), "&lt;script&gt;alert(1)&lt;/script&gt;")
+        self.assertEqual(sanitize_html("<h1>heading</h1>"), "&lt;h1&gt;heading&lt;/h1&gt;")
+
+    def test_quotes_preserved(self):
+        self.assertEqual(sanitize_html('"double quotes"'), '"double quotes"')
+        self.assertEqual(sanitize_html("'single quotes'"), "'single quotes'")
+        self.assertEqual(sanitize_html("<div class=\"test\">text</div>"), "&lt;div class=\"test\"&gt;text&lt;/div&gt;")
+
+    def test_amps_and_other_entities(self):
+        self.assertEqual(sanitize_html("this & that"), "this &amp; that")
+        self.assertEqual(sanitize_html("less < greater >"), "less &lt; greater &gt;")
+        self.assertEqual(sanitize_html("a & b < c > d \" e ' f"), "a &amp; b &lt; c &gt; d \" e ' f")
