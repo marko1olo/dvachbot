@@ -2117,29 +2117,6 @@ def _sync_save_threads_data(board_id: str, data_to_save: dict):
     except Exception as e:
         print(f"⛔ [{board_id}] Ошибка в потоке сохранения _threads.json: {e}")
         return False
-def _sync_save_user_states(board_id: str, data_to_save: dict):
-
-    user_states_file = os.path.join(DATA_DIR, f"{board_id}_user_states.json")
-    try:
-        with open(user_states_file, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception as e:
-        print(f"⛔ [{board_id}] Ошибка в потоке сохранения _user_states.json: {e}")
-        return False
-async def save_user_states(board_id: str):
-
-    if board_id not in THREAD_BOARDS:
-        return
-    async with storage_lock:
-        data_to_save = board_data[board_id].get('user_state', {}).copy()
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        save_executor,
-        _sync_save_user_states,
-        board_id,
-        data_to_save
-    )
 async def load_state():
     """
     Загружает состояние бота.
