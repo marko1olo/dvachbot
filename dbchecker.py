@@ -55,10 +55,18 @@ def check_integrity(cur):
 
 def get_table_statistics(cur, tables):
     print(f"\n{Colors.BOLD}2. Статистика таблиц{Colors.ENDC}")
+
+    # Fetch valid table names from sqlite_master for whitelisting
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    valid_tables = {row[0] for row in cur.fetchall()}
+
     total_rows = 0
     print(f"{'Таблица':<25} | {'Строк':<10}")
     print("-" * 40)
     for table in tables:
+        if table not in valid_tables:
+            print(f"{table:<25} | {'NOT IN DB':<10}")
+            continue
         if not re.match(r'^[a-zA-Z0-9_]+$', table):
             print(f"{table:<25} | {'INVALID NAME':<10}")
             continue
@@ -127,9 +135,16 @@ def find_logical_garbage(cur, tables):
         "Reports": "post_num"
     }
     
+    # Fetch valid table names from sqlite_master for whitelisting
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    valid_tables = {row[0] for row in cur.fetchall()}
+
     orphan_tables = []
     for table, col in tables_to_check.items():
         if table in tables:
+            if table not in valid_tables:
+                print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: нет в базе{Colors.ENDC}")
+                continue
             if not re.match(r'^[a-zA-Z0-9_]+$', table):
                 print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: недопустимое имя{Colors.ENDC}")
                 continue
