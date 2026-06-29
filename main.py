@@ -688,16 +688,6 @@ def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
         removed_reverse += _drop_post_copy_maps_unlocked(post_num)
     return len(stale_posts), removed_reverse
 
-def _purge_orphan_message_to_post_unlocked() -> int:
-    valid_reverse_posts = set(messages_storage.keys()) | set(post_to_messages.keys())
-    orphan_reverse_keys = [
-        key for key, mapped_post_num in message_to_post.items()
-        if mapped_post_num not in valid_reverse_posts
-    ]
-    for key in orphan_reverse_keys:
-        message_to_post.pop(key, None)
-    return len(orphan_reverse_keys)
-
 def _media_group_state_key(chat_id: int | str, media_group_id: str) -> str:
     return f"{chat_id}:{media_group_id}"
 
