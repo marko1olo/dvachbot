@@ -3945,31 +3945,8 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
             modified_content[text_key] = await _maybe_punch_up_text(current_text, active_mode_key, board_id)
 
     return modified_content
-async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0) -> tuple[bytes, int] | None:
-    if depth > 3: return None
-    import socket
-    import ssl
-    import aiohttp
-    import asyncio
-    import hashlib
-    from urllib.parse import urlparse
 
-    current_proxy = get_dynamic_proxy_url()
-    
-    # Настраиваем таймауты
-    timeout_config = aiohttp.ClientTimeout(total=timeout, connect=30, sock_connect=30, sock_read=timeout)
-    
-    # Парсим домен для Referer
-    parsed_url = urlparse(url)
-    domain = parsed_url.netloc
-    scheme = parsed_url.scheme
-    _, url_ext = os.path.splitext(parsed_url.path)
-    url_log = (
-        f"host={domain or 'unknown'} "
-        f"ext={(url_ext.lower()[:12] or 'none')} "
-        f"sha12={hashlib.sha256(url.encode('utf-8', 'ignore')).hexdigest()[:12]}"
-    )
-
+def _get_image_download_headers(domain: str, scheme: str) -> dict:
     # Базовые заголовки, маскируемся под Chrome
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -3999,6 +3976,50 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
     else:
         # Универсальный фоллбек
         headers["Referer"] = f"{scheme}://{domain}/"
+    return headers
+
+def _check_image_response_data(data: bytes, content_type: str) -> tuple[bool, str | None]:
+    # Проверка на HTML-заглушку (Cloudflare или 403)
+    # Некоторые сайты отдают 200 OK, но внутри HTML с капчей
+    if 'text/html' in content_type or (len(data) > 0 and data.strip().startswith(b'<') and b'<html' in data[:500].lower()):
+        try:
+            # Пытаемся прочитать текст ошибки для диагностики
+            error_text = data[:300].decode('utf-8', errors='ignore').replace('\n', ' ')
+        except Exception:
+            error_text = "Binary/Unknown"
+        return False, f"Ссылка вернула HTML заглушку. Содержимое: {error_text}"
+
+    if len(data) > 49.5 * 1024 * 1024:
+        return False, f"Файл слишком велик ({len(data)} байт). Пропуск."
+
+    return True, None
+
+async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0) -> tuple[bytes, int] | None:
+    if depth > 3: return None
+    import socket
+    import ssl
+    import aiohttp
+    import asyncio
+    import hashlib
+    from urllib.parse import urlparse
+
+    current_proxy = get_dynamic_proxy_url()
+
+    # Настраиваем таймауты
+    timeout_config = aiohttp.ClientTimeout(total=timeout, connect=30, sock_connect=30, sock_read=timeout)
+
+    # Парсим домен для Referer
+    parsed_url = urlparse(url)
+    domain = parsed_url.netloc
+    scheme = parsed_url.scheme
+    _, url_ext = os.path.splitext(parsed_url.path)
+    url_log = (
+        f"host={domain or 'unknown'} "
+        f"ext={(url_ext.lower()[:12] or 'none')} "
+        f"sha12={hashlib.sha256(url.encode('utf-8', 'ignore')).hexdigest()[:12]}"
+    )
+
+    headers = _get_image_download_headers(domain, scheme)
 
     for attempt in range(2):
         ssl_context = ssl.create_default_context()
@@ -4021,24 +4042,11 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                     async with session.get(url, allow_redirects=True, proxy=current_proxy) as response:
                         if response.status == 200:
                             content_type = response.headers.get('Content-Type', '').lower()
-                            
-                            # Читаем данные
                             data = await response.read()
 
-                            # Проверка на HTML-заглушку (Cloudflare или 403)
-                            # Некоторые сайты отдают 200 OK, но внутри HTML с капчей
-                            if 'text/html' in content_type or (len(data) > 0 and data.strip().startswith(b'<') and b'<html' in data[:500].lower()):
-                                try:
-                                    # Пытаемся прочитать текст ошибки для диагностики
-                                    error_text = data[:300].decode('utf-8', errors='ignore').replace('\n', ' ')
-                                except Exception:
-                                    error_text = "Binary/Unknown"
-                                    
-                                print(f"⚠️ [DEBUG_DL] Ссылка вернула HTML заглушку. Содержимое: {error_text}")
-                                return None
-
-                            if len(data) > 49.5 * 1024 * 1024:
-                                print(f"⚠️ [DEBUG_DL] Файл слишком велик ({len(data)} байт). Пропуск.")
+                            is_valid, error_msg = _check_image_response_data(data, content_type)
+                            if not is_valid:
+                                print(f"⚠️ [DEBUG_DL] {error_msg}")
                                 return None
                                 
                             if len(data) > 0:
@@ -4054,7 +4062,8 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                         async with session.get(url, allow_redirects=True, proxy=None) as response:
                             if response.status == 200:
                                 data = await response.read()
-                                if len(data) > 0 and not (data.strip().startswith(b'<') and b'<html' in data[:200].lower()):
+                                is_valid, _ = _check_image_response_data(data, response.headers.get('Content-Type', '').lower())
+                                if is_valid and len(data) > 0:
                                     print(f"✅ [DEBUG_DL] Успех через DIRECT.")
                                     return data, len(data)
                     raise e
