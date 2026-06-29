@@ -5101,6 +5101,165 @@ async def send_message_to_users(
                 return text_result
             return await _send_plain_text_parts(reason, plain_text)
         
+        async def _attempt_send_text():
+            parts = split_text(full_text, 4096)
+            sent_msgs =[]
+            for i, part in enumerate(parts):
+                m = await bot_instance.send_message(
+                    chat_id=uid, text=part, parse_mode="HTML",
+                    reply_to_message_id=reply_to_mid if i == 0 else None,
+                    reply_markup=final_keyboard if i == len(parts)-1 else None,
+                    disable_notification=is_sage,
+                    disable_web_page_preview=True,
+                    request_timeout=request_timeout,
+                )
+                sent_msgs.append(m)
+            stats['success'] += 1
+            return sent_msgs
+
+        async def _attempt_send_media(ct: str, common_kwargs: dict):
+            file_source = None
+            if current_content.get("image_bytes"):
+                if ct == 'photo':
+                    filename = "file.jpg"
+                elif ct == 'animation':
+                    filename = "file.gif"
+                else:
+                    filename = "video.mp4"
+                file_source = BufferedInputFile(current_content["image_bytes"], filename=filename)
+            elif current_content.get("file_id"):
+                file_source = current_content["file_id"]
+            elif current_content.get("image_url"):
+                file_source = current_content["image_url"]
+
+            if not file_source:
+                stats['errors'] += 1
+                return None
+
+            if media_url_text_fallback and current_content.get("image_url"):
+                return await _send_text_fallback("cached_bad_media_url")
+
+            if has_spoiler and ct in ['photo', 'video', 'animation']:
+                common_kwargs['has_spoiler'] = True
+
+            if len(full_text) > 1024:
+                common_kwargs[ct] = file_source
+                send_method = getattr(bot_instance, f"send_{ct}")
+                media_msg = await send_method(**common_kwargs)
+                text_parts = split_text(full_text, 4096)
+                try:
+                    for part in text_parts:
+                        await bot_instance.send_message(
+                            chat_id=uid, text=part, parse_mode="HTML",
+                            reply_to_message_id=media_msg.message_id,
+                            disable_notification=is_sage,
+                            disable_web_page_preview=True,
+                            request_timeout=request_timeout,
+                        )
+                except TelegramBadRequest as e:
+                    if _telegram_parse_error(e.message.lower()):
+                        await _send_plain_text_parts(
+                            "telegram_rejected_html_after_media",
+                            _plain_delivery_text(),
+                            reply_to_id=media_msg.message_id,
+                            include_keyboard=False,
+                        )
+                        return media_msg
+                    raise
+                stats['success'] += 1
+                return media_msg
+            else:
+                common_kwargs['caption'] = full_text
+                common_kwargs['parse_mode'] = "HTML"
+                common_kwargs[ct] = file_source
+                send_method = getattr(bot_instance, f"send_{ct}")
+                res = await send_method(**common_kwargs)
+                stats['success'] += 1
+                return res
+
+        async def _attempt_send_media_group():
+            if not current_content.get('media'):
+                stats['errors'] += 1
+                return None
+
+            can_fit_caption = len(full_text) <= 1024
+            caption_for_group = full_text if can_fit_caption else None
+
+            media_group_build = []
+            for idx, item in enumerate(current_content['media']):
+                media_src = item.get('media') or item.get('file_id')
+                if not media_src: continue
+                m_type = item['type']
+                cap = caption_for_group if idx == 0 else None
+
+                if m_type == 'photo':
+                    media_group_build.append(InputMediaPhoto(media=media_src, caption=cap, parse_mode="HTML" if cap else None, has_spoiler=has_spoiler))
+                elif m_type == 'video':
+                    media_group_build.append(InputMediaVideo(media=media_src, caption=cap, parse_mode="HTML" if cap else None, has_spoiler=has_spoiler))
+                elif m_type == 'document':
+                    media_group_build.append(InputMediaDocument(media=media_src, caption=cap, parse_mode="HTML" if cap else None))
+                elif m_type == 'audio':
+                    media_group_build.append(InputMediaAudio(media=media_src, caption=cap, parse_mode="HTML" if cap else None))
+
+            if not media_group_build:
+                stats['errors'] += 1
+                return None
+
+            res = await bot_instance.send_media_group(
+                chat_id=uid, media=media_group_build,
+                reply_to_message_id=reply_to_mid,
+                disable_notification=is_sage,
+                request_timeout=request_timeout,
+            )
+
+            if not can_fit_caption:
+                anchor_msg = res[0] if isinstance(res, list) else res
+                text_parts = split_text(full_text, 4096)
+                try:
+                    for part in text_parts:
+                        await bot_instance.send_message(
+                            chat_id=uid, text=part, parse_mode="HTML",
+                            reply_to_message_id=anchor_msg.message_id,
+                            disable_notification=is_sage,
+                            disable_web_page_preview=True,
+                            request_timeout=request_timeout,
+                        )
+                except TelegramBadRequest as e:
+                    if _telegram_parse_error(e.message.lower()):
+                        await _send_plain_text_parts(
+                            "telegram_rejected_html_after_media_group",
+                            _plain_delivery_text(),
+                            reply_to_id=anchor_msg.message_id,
+                            include_keyboard=True,
+                        )
+                        return res
+                    raise
+
+            stats['success'] += 1
+            return res
+
+        async def _attempt_send_special(ct: str, common_kwargs: dict):
+            if ct == 'dice':
+                await bot_instance.send_message(
+                    uid,
+                    full_text,
+                    parse_mode="HTML",
+                    reply_to_message_id=reply_to_mid,
+                    disable_notification=is_sage,
+                    request_timeout=request_timeout,
+                )
+                res = await bot_instance.send_dice(
+                    chat_id=uid,
+                    emoji=current_content.get('dice_emoji', '🎲'),
+                    disable_notification=is_sage,
+                    request_timeout=request_timeout,
+                )
+            else:
+                common_kwargs[ct] = current_content.get("file_id")
+                send_method = getattr(bot_instance, f"send_{ct}")
+                res = await send_method(**common_kwargs)
+            stats['success'] += 1
+            return res
         for attempt in range(max_attempts):
             try:
                 ct_raw = current_content["type"]
@@ -5114,159 +5273,13 @@ async def send_message_to_users(
                 }
                 result_msg = None
                 if ct == 'text':
-                    parts = split_text(full_text, 4096)
-                    sent_msgs =[]
-                    for i, part in enumerate(parts):
-                        m = await bot_instance.send_message(
-                            chat_id=uid, text=part, parse_mode="HTML",
-                            reply_to_message_id=reply_to_mid if i == 0 else None,
-                            reply_markup=final_keyboard if i == len(parts)-1 else None,
-                            disable_notification=is_sage,
-                            disable_web_page_preview=True,
-                            request_timeout=request_timeout,
-                        )
-                        sent_msgs.append(m)
-                    stats['success'] += 1
-                    return sent_msgs
-                elif ct in['photo', 'video', 'animation', 'document', 'audio', 'voice']:
-                    file_source = None
-                    if current_content.get("image_bytes"):
-                        if ct == 'photo': 
-                            filename = "file.jpg"
-                        elif ct == 'animation':
-                            filename = "file.gif" 
-                        else:
-                            filename = "video.mp4"
-                        file_source = BufferedInputFile(current_content["image_bytes"], filename=filename)
-                    elif current_content.get("file_id"):
-                        file_source = current_content["file_id"]
-                    elif current_content.get("image_url"):
-                        file_source = current_content["image_url"]
-                    if not file_source:
-                        stats['errors'] += 1
-                        return None
-                    if media_url_text_fallback and current_content.get("image_url"):
-                        return await _send_text_fallback("cached_bad_media_url")
-                    if has_spoiler and ct in['photo', 'video', 'animation']:
-                        common_kwargs['has_spoiler'] = True
-                    if len(full_text) > 1024:
-                        common_kwargs[ct] = file_source
-                        send_method = getattr(bot_instance, f"send_{ct}")
-                        media_msg = await send_method(**common_kwargs)
-                        text_parts = split_text(full_text, 4096)
-                        try:
-                            for part in text_parts:
-                                await bot_instance.send_message(
-                                    chat_id=uid, text=part, parse_mode="HTML",
-                                    reply_to_message_id=media_msg.message_id,
-                                    disable_notification=is_sage,
-                                    disable_web_page_preview=True,
-                                    request_timeout=request_timeout,
-                                )
-                        except TelegramBadRequest as e:
-                            if _telegram_parse_error(e.message.lower()):
-                                await _send_plain_text_parts(
-                                    "telegram_rejected_html_after_media",
-                                    _plain_delivery_text(),
-                                    reply_to_id=media_msg.message_id,
-                                    include_keyboard=False,
-                                )
-                                return media_msg
-                            raise
-                        stats['success'] += 1
-                        return media_msg
-                    else:
-                        common_kwargs['caption'] = full_text
-                        common_kwargs['parse_mode'] = "HTML"
-                        common_kwargs[ct] = file_source
-                        send_method = getattr(bot_instance, f"send_{ct}")
-                        res = await send_method(**common_kwargs)
-                        stats['success'] += 1
-                        return res
+                    return await _attempt_send_text()
+                elif ct in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
+                    return await _attempt_send_media(ct, common_kwargs)
                 elif ct == "media_group":
-                    if not current_content.get('media'):
-                        stats['errors'] += 1
-                        return None
-                    
-                    # Безопасная обработка длинных подписей для альбомов
-                    can_fit_caption = len(full_text) <= 1024
-                    caption_for_group = full_text if can_fit_caption else None
-                    
-                    media_group_build = []
-                    for idx, item in enumerate(current_content['media']):
-                        media_src = item.get('media') or item.get('file_id')
-                        if not media_src: continue
-                        m_type = item['type']
-                        cap = caption_for_group if idx == 0 else None
-                        
-                        if m_type == 'photo':
-                            media_group_build.append(InputMediaPhoto(media=media_src, caption=cap, parse_mode="HTML" if cap else None, has_spoiler=has_spoiler))
-                        elif m_type == 'video':
-                            media_group_build.append(InputMediaVideo(media=media_src, caption=cap, parse_mode="HTML" if cap else None, has_spoiler=has_spoiler))
-                        elif m_type == 'document':
-                            media_group_build.append(InputMediaDocument(media=media_src, caption=cap, parse_mode="HTML" if cap else None))
-                        elif m_type == 'audio':
-                            media_group_build.append(InputMediaAudio(media=media_src, caption=cap, parse_mode="HTML" if cap else None))
-                    
-                    if not media_group_build: 
-                        stats['errors'] += 1
-                        return None
-
-                    res = await bot_instance.send_media_group(
-                        chat_id=uid, media=media_group_build, 
-                        reply_to_message_id=reply_to_mid,
-                        disable_notification=is_sage,
-                        request_timeout=request_timeout,
-                    )
-                    
-                    # Если текст не поместился в подпись, шлем его отдельным ответом на этот же альбом
-                    if not can_fit_caption:
-                        anchor_msg = res[0] if isinstance(res, list) else res
-                        text_parts = split_text(full_text, 4096)
-                        try:
-                            for part in text_parts:
-                                await bot_instance.send_message(
-                                    chat_id=uid, text=part, parse_mode="HTML",
-                                    reply_to_message_id=anchor_msg.message_id,
-                                    disable_notification=is_sage,
-                                    disable_web_page_preview=True,
-                                    request_timeout=request_timeout,
-                                )
-                        except TelegramBadRequest as e:
-                            if _telegram_parse_error(e.message.lower()):
-                                await _send_plain_text_parts(
-                                    "telegram_rejected_html_after_media_group",
-                                    _plain_delivery_text(),
-                                    reply_to_id=anchor_msg.message_id,
-                                    include_keyboard=True,
-                                )
-                                return res
-                            raise
-                    
-                    stats['success'] += 1
-                    return res
-                elif ct in['sticker', 'video_note', 'dice']:
-                    if ct == 'dice':
-                        await bot_instance.send_message(
-                            uid,
-                            full_text,
-                            parse_mode="HTML",
-                            reply_to_message_id=reply_to_mid,
-                            disable_notification=is_sage,
-                            request_timeout=request_timeout,
-                        )
-                        res = await bot_instance.send_dice(
-                            chat_id=uid,
-                            emoji=current_content.get('dice_emoji', '🎲'),
-                            disable_notification=is_sage,
-                            request_timeout=request_timeout,
-                        )
-                    else:
-                        common_kwargs[ct] = current_content.get("file_id")
-                        send_method = getattr(bot_instance, f"send_{ct}")
-                        res = await send_method(**common_kwargs)
-                    stats['success'] += 1
-                    return res
+                    return await _attempt_send_media_group()
+                elif ct in ['sticker', 'video_note', 'dice']:
+                    return await _attempt_send_special(ct, common_kwargs)
             except TelegramBadRequest as e:
                 err_low = e.message.lower()
                 if _telegram_parse_error(err_low):
