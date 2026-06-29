@@ -2912,6 +2912,66 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
                 pass
             print(f"⚠️ Ошибка верификации для {user_id}: {e}")
 
+
+async def _get_user_posts_to_delete(db, user_id: int, board_id: str, time_threshold_ts: float) -> list[int]:
+    query_posts = "SELECT post_num FROM Posts WHERE author_id = ? AND board_id = ? AND timestamp >= ?"
+    async with db.execute(query_posts, (user_id, board_id, time_threshold_ts)) as cursor:
+        rows = await cursor.fetchall()
+    return [row[0] for row in rows]
+
+async def _get_threads_and_all_posts_to_delete(db, user_posts: list[int]) -> tuple[list[int], list[str]]:
+    posts_to_delete_set = set(user_posts)
+    threads_to_delete = []
+
+    for p_num in user_posts:
+        p_str = str(p_num)
+        async with db.execute("SELECT thread_id FROM Threads WHERE thread_id = ? OR thread_num = ?", (p_str, p_num)) as cursor:
+            t_row = await cursor.fetchone()
+            if t_row:
+                threads_to_delete.append(t_row[0])
+
+    if threads_to_delete:
+        for t_id in threads_to_delete:
+            try: t_id_int = int(t_id)
+            except ValueError: t_id_int = 0
+            async with db.execute("SELECT post_num FROM Posts WHERE thread_id = ? OR thread_id = ?", (t_id, str(t_id_int))) as cursor:
+                p_rows = await cursor.fetchall()
+                for pr in p_rows:
+                    posts_to_delete_set.add(pr[0])
+
+    return list(posts_to_delete_set), threads_to_delete
+
+async def _get_post_copies_to_delete(db, posts_to_delete_nums: list[int], placeholders: str) -> tuple[list, list]:
+    query_copies = f"""
+        SELECT pc.recipient_id, pc.message_id, p.board_id
+        FROM PostCopies pc
+        JOIN Posts p ON pc.post_num = p.post_num
+        WHERE pc.post_num IN ({placeholders})
+    """
+    async with db.execute(query_copies, posts_to_delete_nums) as cursor:
+        messages_to_delete_from_api = await cursor.fetchall()
+
+    query_channels = f"""
+        SELECT cc.channel_id, cc.message_id, p.board_id
+        FROM ChannelCopies cc
+        JOIN Posts p ON cc.post_num = p.post_num
+        WHERE cc.post_num IN ({placeholders})
+    """
+    async with db.execute(query_channels, posts_to_delete_nums) as cursor:
+        channel_messages_to_delete = await cursor.fetchall()
+
+    return messages_to_delete_from_api, channel_messages_to_delete
+
+async def _execute_post_deletion_queries(db, posts_to_delete_nums: list[int], threads_to_delete: list[str], placeholders: str):
+    await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+    await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+    await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+    await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders})", posts_to_delete_nums + posts_to_delete_nums)
+
+    if threads_to_delete:
+        t_placeholders = ','.join('?' for _ in threads_to_delete)
+        await db.execute(f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})", threads_to_delete)
+
 async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str) -> tuple[list[int], list, list]:
     from common.db_pool import get_pool, db_lock
     async with db_lock:
@@ -2920,63 +2980,17 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
 
-                query_posts = "SELECT post_num FROM Posts WHERE author_id = ? AND board_id = ? AND timestamp >= ?"
-                async with db.execute(query_posts, (user_id, board_id, time_threshold_ts)) as cursor:
-                    rows = await cursor.fetchall()
-                user_posts = [row[0] for row in rows]
-
+                user_posts = await _get_user_posts_to_delete(db, user_id, board_id, time_threshold_ts)
                 if not user_posts:
                     await db.execute("COMMIT")
                     return [], [], []
-                    
-                posts_to_delete_set = set(user_posts)
-                threads_to_delete = []
 
-                for p_num in user_posts:
-                    p_str = str(p_num)
-                    async with db.execute("SELECT thread_id FROM Threads WHERE thread_id = ? OR thread_num = ?", (p_str, p_num)) as cursor:
-                        t_row = await cursor.fetchone()
-                        if t_row:
-                            threads_to_delete.append(t_row[0])
-
-                if threads_to_delete:
-                    for t_id in threads_to_delete:
-                        try: t_id_int = int(t_id)
-                        except ValueError: t_id_int = 0
-                        async with db.execute("SELECT post_num FROM Posts WHERE thread_id = ? OR thread_id = ?", (t_id, str(t_id_int))) as cursor:
-                            p_rows = await cursor.fetchall()
-                            for pr in p_rows:
-                                posts_to_delete_set.add(pr[0])
-
-                posts_to_delete_nums = list(posts_to_delete_set)
+                posts_to_delete_nums, threads_to_delete = await _get_threads_and_all_posts_to_delete(db, user_posts)
                 placeholders = ','.join('?' for _ in posts_to_delete_nums)
 
-                query_copies = f"""
-                    SELECT pc.recipient_id, pc.message_id, p.board_id
-                    FROM PostCopies pc
-                    JOIN Posts p ON pc.post_num = p.post_num
-                    WHERE pc.post_num IN ({placeholders})
-                """
-                async with db.execute(query_copies, posts_to_delete_nums) as cursor:
-                    messages_to_delete_from_api = await cursor.fetchall()
-                    
-                query_channels = f"""
-                    SELECT cc.channel_id, cc.message_id, p.board_id
-                    FROM ChannelCopies cc
-                    JOIN Posts p ON cc.post_num = p.post_num
-                    WHERE cc.post_num IN ({placeholders})
-                """
-                async with db.execute(query_channels, posts_to_delete_nums) as cursor:
-                    channel_messages_to_delete = await cursor.fetchall()
+                messages_to_delete_from_api, channel_messages_to_delete = await _get_post_copies_to_delete(db, posts_to_delete_nums, placeholders)
 
-                await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", posts_to_delete_nums)
-                await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
-                await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
-                await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders})", posts_to_delete_nums + posts_to_delete_nums)
-
-                if threads_to_delete:
-                    t_placeholders = ','.join('?' for _ in threads_to_delete)
-                    await db.execute(f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})", threads_to_delete)
+                await _execute_post_deletion_queries(db, posts_to_delete_nums, threads_to_delete, placeholders)
 
                 await db.execute("COMMIT")
                 return posts_to_delete_nums, messages_to_delete_from_api, channel_messages_to_delete
