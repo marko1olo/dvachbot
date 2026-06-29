@@ -3812,110 +3812,42 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
                     db_updated = True
             except Exception:
                 pass
-async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
-    """
-    (ИСПРАВЛЕННАЯ ВЕРСИЯ 5.0)
-    Унифицированный диспетчер трансформаций. 
-    Гарантирует Enterprise-логику: визуальные шаблоны только для текстовых постов.
-    """
-    b_data = board_data[board_id]
-    modified_content = content.copy()
-    
-    # 1. Проверка активности любого из режимов трансформации
-    is_transform_mode_active = (
-        b_data['anime_mode'] or b_data['slavaukraine_mode'] or
-        b_data['zaputin_mode'] or b_data['suka_blyat_mode'] or
-        b_data['polish_mode'] or b_data['warhammer_mode'] or b_data['imperial_mode'] or
-        b_data['gopnik_mode'] or b_data.get('schizo_mode')
-        # or b_data.get('matrix_mode') or b_data.get('america_mode') or
-        # b_data.get('holiday_mode') or b_data.get('oldweb_mode') or b_data.get('jewish_mode')
-    )
-    if not is_transform_mode_active:
-        return modified_content
-    active_mode_key = next((mode for mode in MODE_FLAGS if b_data.get(mode)), None)
-
-    # 2. Определяем ключ текста (text для постов, caption для медиа)
-    text_key = 'text' if 'text' in modified_content and modified_content['text'] else \
-               'caption' if 'caption' in modified_content and modified_content['caption'] else None
-    
-    if not text_key:
-        return modified_content
-
-    plain_text = clean_html_tags(modified_content.get(text_key, ''))
-    header = modified_content.get('header')
-    
-    # 3. Флаг: разрешена ли генерация картинки-шаблона?
-    # Enterprise-правило: только если исходный пост — ТЕКСТ и он не слишком длинный.
-    allow_visual = (modified_content.get('type') == 'text') and (len(plain_text) < 180)
-    
-    transform_result = None
+async def _execute_primary_transformation(b_data: dict, plain_text: str, header: str):
     loop = asyncio.get_running_loop()
-
-    # 4. Выбор и запуск функции трансформации
     if b_data.get('schizo_mode'):
-        transform_result = await loop.run_in_executor(None, shizo_transform, plain_text, header)
-    # elif b_data.get('matrix_mode'):
-    #     transform_result = await loop.run_in_executor(None, matrix_transform, plain_text, header)
-    # elif b_data.get('america_mode'):
-    #     transform_result = await loop.run_in_executor(None, america_transform, plain_text, header)
-    # elif b_data.get('holiday_mode'):
-    #     transform_result = await loop.run_in_executor(None, holiday_transform, plain_text, header)
-    # elif b_data.get('oldweb_mode'):
-    #     transform_result = await loop.run_in_executor(None, oldweb_transform, plain_text, header)
-    # elif b_data.get('jewish_mode'):
-    #     transform_result = await loop.run_in_executor(None, jewish_transform, plain_text, header)
-    elif b_data['gopnik_mode']:
-        transform_result = await loop.run_in_executor(None, gopnik_transform, plain_text)
-    elif b_data['imperial_mode']:
-        transform_result = await loop.run_in_executor(None, imperial_transform, plain_text, header)
-    elif b_data['warhammer_mode']:
-        transform_result = await loop.run_in_executor(None, warhammer_transform, plain_text, header)
-    elif b_data['polish_mode']:
-        transform_result = await loop.run_in_executor(None, polish_transform, plain_text, header)
-    elif b_data['slavaukraine_mode']:
-        transform_result = await loop.run_in_executor(None, ukrainian_transform, plain_text, header)
-    
-    # 5. Обработка результата (кортеж или текст)
-    if transform_result and isinstance(transform_result, tuple):
-        res_type, res_data = transform_result
-        
-        # Если пришла картинка И нам разрешено её использовать
-        if res_type == 'image' and allow_visual:
-            modified_content['type'] = 'photo'
-            modified_content['image_bytes'] = res_data
-            if 'text' in modified_content: modified_content['text'] = ''
-            if 'caption' in modified_content: modified_content['caption'] = ''
-            return modified_content
-        
-        # Если пришел текст (или картинка запрещена — берем текст из кортежа)
-        elif res_type == 'text' or (res_type == 'image' and not allow_visual):
-            # В случае 'image', если visual запрещен, некоторые функции могут не вернуть текст. 
-            # Но наши новые функции (shizo, polish, ukr) всегда возвращают текст вторым элементом при неудаче.
-            transformed_text = res_data if isinstance(res_data, str) else plain_text
-            modified_content[text_key] = transformed_text
-            plain_text = transformed_text
+        return await loop.run_in_executor(None, shizo_transform, plain_text, header)
+    elif b_data.get('gopnik_mode'):
+        return await loop.run_in_executor(None, gopnik_transform, plain_text)
+    elif b_data.get('imperial_mode'):
+        return await loop.run_in_executor(None, imperial_transform, plain_text, header)
+    elif b_data.get('warhammer_mode'):
+        return await loop.run_in_executor(None, warhammer_transform, plain_text, header)
+    elif b_data.get('polish_mode'):
+        return await loop.run_in_executor(None, polish_transform, plain_text, header)
+    elif b_data.get('slavaukraine_mode'):
+        return await loop.run_in_executor(None, ukrainian_transform, plain_text, header)
+    return None
 
-    # 6. Остаточные трансформации для режимов без визуального движка (Zaputin, Suka_Blyat)
-    if not transform_result:
-        transformed_text = plain_text
-        if b_data['zaputin_mode']:
-            transformed_text = await loop.run_in_executor(None, zaputin_transform, transformed_text)
-        elif b_data['suka_blyat_mode']:
-            words = transformed_text.split()
-            for i in range(len(words)):
-                if random.random() < 0.3: words[i] = random.choice(MAT_WORDS)
-            transformed_text = ' '.join(words)
-        
-        modified_content[text_key] = transformed_text
-        plain_text = transformed_text
+async def _apply_residual_transformations(b_data: dict, plain_text: str) -> str:
+    loop = asyncio.get_running_loop()
+    transformed_text = plain_text
+    if b_data.get('zaputin_mode'):
+        transformed_text = await loop.run_in_executor(None, zaputin_transform, transformed_text)
+    elif b_data.get('suka_blyat_mode'):
+        words = transformed_text.split()
+        for i in range(len(words)):
+            if random.random() < 0.3: words[i] = random.choice(MAT_WORDS)
+        transformed_text = ' '.join(words)
+    return transformed_text
 
-    # 7. Специфическая логика для Аниме (остается без изменений, так как аниме-режим не трогали)
-    if b_data['anime_mode']:
+async def _apply_anime_transformations(modified_content: dict, text_key: str, board_id: str, b_data: dict, active_mode_key: str | None) -> None:
+    if b_data.get('anime_mode'):
+        loop = asyncio.get_running_loop()
         current_text = modified_content.get(text_key, '')
         transformed_plain_text = await loop.run_in_executor(None, anime_transform, current_text)
         transformed_plain_text = await _maybe_punch_up_text(transformed_plain_text, 'anime_mode', board_id)
         modified_content[text_key] = escape_html(transformed_plain_text)
-        
+
         if modified_content.get('type') == 'text' and random.random() < 0.33:
             from japanese_translator import get_random_anime_image, get_monogatari_image
             image_fetcher = get_monogatari_image if random.random() < 0.33 else get_random_anime_image
@@ -3943,6 +3875,71 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
         current_text = modified_content.get(text_key, '')
         if current_text:
             modified_content[text_key] = await _maybe_punch_up_text(current_text, active_mode_key, board_id)
+
+async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
+    """
+    (ИСПРАВЛЕННАЯ ВЕРСИЯ 5.0)
+    Унифицированный диспетчер трансформаций. 
+    Гарантирует Enterprise-логику: визуальные шаблоны только для текстовых постов.
+    """
+    b_data = board_data[board_id]
+    modified_content = content.copy()
+    
+    # 1. Проверка активности любого из режимов трансформации
+    is_transform_mode_active = (
+        b_data.get('anime_mode') or b_data.get('slavaukraine_mode') or
+        b_data.get('zaputin_mode') or b_data.get('suka_blyat_mode') or
+        b_data.get('polish_mode') or b_data.get('warhammer_mode') or b_data.get('imperial_mode') or
+        b_data.get('gopnik_mode') or b_data.get('schizo_mode')
+    )
+    if not is_transform_mode_active:
+        return modified_content
+    active_mode_key = next((mode for mode in MODE_FLAGS if b_data.get(mode)), None)
+
+    # 2. Определяем ключ текста (text для постов, caption для медиа)
+    text_key = 'text' if 'text' in modified_content and modified_content['text'] else \
+               'caption' if 'caption' in modified_content and modified_content['caption'] else None
+    
+    if not text_key:
+        return modified_content
+
+    plain_text = clean_html_tags(modified_content.get(text_key, ''))
+    header = modified_content.get('header')
+    
+    # 3. Флаг: разрешена ли генерация картинки-шаблона?
+    # Enterprise-правило: только если исходный пост — ТЕКСТ и он не слишком длинный.
+    allow_visual = (modified_content.get('type') == 'text') and (len(plain_text) < 180)
+    
+    # 4. Выбор и запуск функции трансформации
+    transform_result = await _execute_primary_transformation(b_data, plain_text, header)
+    
+    # 5. Обработка результата (кортеж или текст)
+    if transform_result and isinstance(transform_result, tuple):
+        res_type, res_data = transform_result
+        
+        # Если пришла картинка И нам разрешено её использовать
+        if res_type == 'image' and allow_visual:
+            modified_content['type'] = 'photo'
+            modified_content['image_bytes'] = res_data
+            if 'text' in modified_content: modified_content['text'] = ''
+            if 'caption' in modified_content: modified_content['caption'] = ''
+            return modified_content
+        
+        # Если пришел текст (или картинка запрещена — берем текст из кортежа)
+        elif res_type == 'text' or (res_type == 'image' and not allow_visual):
+            # В случае 'image', если visual запрещен, некоторые функции могут не вернуть текст. 
+            # Но наши новые функции (shizo, polish, ukr) всегда возвращают текст вторым элементом при неудаче.
+            transformed_text = res_data if isinstance(res_data, str) else plain_text
+            modified_content[text_key] = transformed_text
+            plain_text = transformed_text
+
+    # 6. Остаточные трансформации для режимов без визуального движка (Zaputin, Suka_Blyat)
+    if not transform_result:
+        plain_text = await _apply_residual_transformations(b_data, plain_text)
+        modified_content[text_key] = plain_text
+
+    # 7. Специфическая логика для Аниме
+    await _apply_anime_transformations(modified_content, text_key, board_id, b_data, active_mode_key)
 
     return modified_content
 async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0) -> tuple[bytes, int] | None:
