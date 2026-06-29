@@ -208,12 +208,6 @@ from warhammer_mode import WH40K_PHRASES_START, WH40K_PHRASES_END, warhammer_tra
 from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial_transform
 from gopnik_mode import GOPNIK_PHRASES_START, GOPNIK_PHRASES_END, gopnik_transform
 from shizo_mode import SCHIZO_PHRASES_START, SCHIZO_PHRASES_END, shizo_transform
-# from new_modes import (
-#     AMERICA_PHRASES_END, AMERICA_PHRASES_START, HOLIDAY_PHRASES_END, HOLIDAY_PHRASES_START,
-#     JEWISH_PHRASES_END, JEWISH_PHRASES_START, MATRIX_PHRASES_END, MATRIX_PHRASES_START,
-#     OLDWEB_PHRASES_END, OLDWEB_PHRASES_START,
-#     america_transform, holiday_transform, jewish_transform, matrix_transform, oldweb_transform,
-# )
 from mode_punchup import punch_up_mode_text
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
@@ -3827,8 +3821,6 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
         b_data['zaputin_mode'] or b_data['suka_blyat_mode'] or
         b_data['polish_mode'] or b_data['warhammer_mode'] or b_data['imperial_mode'] or
         b_data['gopnik_mode'] or b_data.get('schizo_mode')
-        # or b_data.get('matrix_mode') or b_data.get('america_mode') or
-        # b_data.get('holiday_mode') or b_data.get('oldweb_mode') or b_data.get('jewish_mode')
     )
     if not is_transform_mode_active:
         return modified_content
@@ -3854,16 +3846,6 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
     # 4. Выбор и запуск функции трансформации
     if b_data.get('schizo_mode'):
         transform_result = await loop.run_in_executor(None, shizo_transform, plain_text, header)
-    # elif b_data.get('matrix_mode'):
-    #     transform_result = await loop.run_in_executor(None, matrix_transform, plain_text, header)
-    # elif b_data.get('america_mode'):
-    #     transform_result = await loop.run_in_executor(None, america_transform, plain_text, header)
-    # elif b_data.get('holiday_mode'):
-    #     transform_result = await loop.run_in_executor(None, holiday_transform, plain_text, header)
-    # elif b_data.get('oldweb_mode'):
-    #     transform_result = await loop.run_in_executor(None, oldweb_transform, plain_text, header)
-    # elif b_data.get('jewish_mode'):
-    #     transform_result = await loop.run_in_executor(None, jewish_transform, plain_text, header)
     elif b_data['gopnik_mode']:
         transform_result = await loop.run_in_executor(None, gopnik_transform, plain_text)
     elif b_data['imperial_mode']:
@@ -10369,11 +10351,6 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
         'imperial_mode': IMPERIAL_PHRASES_END,
         'gopnik_mode': GOPNIK_PHRASES_END,
         'schizo_mode': SCHIZO_PHRASES_END,
-        # 'matrix_mode': MATRIX_PHRASES_END,
-        # 'america_mode': AMERICA_PHRASES_END,
-        # 'holiday_mode': HOLIDAY_PHRASES_END,
-        # 'oldweb_mode': OLDWEB_PHRASES_END,
-        # 'jewish_mode': JEWISH_PHRASES_END,
     }
     phrases = end_phrases_map.get(mode_to_disable, ["Режим отключен."])
     end_text = random.choice(phrases) if isinstance(phrases, list) else "Режим отключен."
