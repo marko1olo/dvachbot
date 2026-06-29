@@ -3679,8 +3679,81 @@ def _build_archive_header(board_id: str, post_num: int, content: dict, lang: str
         header_text = f"<b>/{board_id}/</b> | {raw_header}{reply_suffix}"
     return header_text
 
-async def _send_archive_media(sender_bot, channel_id: int, content: dict, content_type: str, text_to_send: str, header_text: str):
+async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, header_text: str):
+    from aiogram.utils.media_group import MediaGroupBuilder
     from common.database import add_file_mirror
+    builder = MediaGroupBuilder()
+    raw_cap = content.get('caption', '')
+    converted_cap = convert_site_tags_to_telegram(raw_cap)
+    full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
+    if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
+    media_list = content.get('media', [])
+    if not media_list:
+        return None, []
+    for i, media_item in enumerate(media_list):
+        file_id = media_item.get('file_id') or media_item.get('media')
+        m_type = media_item['type']
+        caption = full_caption if i == 0 else None
+        if m_type == 'photo': builder.add_photo(media=file_id, caption=caption, parse_mode="HTML")
+        elif m_type == 'video': builder.add_video(media=file_id, caption=caption, parse_mode="HTML")
+        elif m_type == 'document': builder.add_document(media=file_id, caption=caption, parse_mode="HTML")
+        elif m_type == 'audio': builder.add_audio(media=file_id, caption=caption, parse_mode="HTML")
+    sent_msgs = await sender_bot.send_media_group(channel_id, media=builder.build())
+    sent_message = None
+    new_files_data = []
+    if sent_msgs:
+        sent_message = sent_msgs[0]
+        for idx, sm in enumerate(sent_msgs):
+            fid = None
+            if sm.photo: fid = sm.photo[-1].file_id
+            elif sm.video: fid = sm.video.file_id
+            elif sm.document: fid = sm.document.file_id
+            elif sm.audio: fid = sm.audio.file_id
+            if fid:
+                new_files_data.append({'type': sm.content_type, 'file_id': fid})
+                orig_fid = media_list[idx].get('file_id') or media_list[idx].get('media')
+                if orig_fid: await add_file_mirror(orig_fid, 'tg_shadow', fid)
+    return sent_message, new_files_data
+
+async def _send_archive_single_media(sender_bot, channel_id: int, content: dict, content_type: str, header_text: str):
+    from common.database import add_file_mirror
+    orig_fid = content.get('file_id')
+    if not orig_fid:
+        return None, []
+    raw_cap = content.get('caption', '')
+    converted_cap = convert_site_tags_to_telegram(raw_cap)
+    caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
+    if len(caption) > 1024: caption = caption[:1021] + "..."
+    ct_str = str(content_type).split('.')[-1].lower()
+    common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
+    sent_message = None
+    if ct_str == 'photo': sent_message = await sender_bot.send_photo(photo=orig_fid, **common_args)
+    elif ct_str == 'video': sent_message = await sender_bot.send_video(video=orig_fid, **common_args)
+    elif ct_str == 'animation': sent_message = await sender_bot.send_animation(animation=orig_fid, **common_args)
+    elif ct_str == 'document': sent_message = await sender_bot.send_document(document=orig_fid, **common_args)
+    elif ct_str == 'audio': sent_message = await sender_bot.send_audio(audio=orig_fid, **common_args)
+    elif ct_str == 'voice': sent_message = await sender_bot.send_voice(voice=orig_fid, **common_args)
+    elif ct_str == 'sticker':
+        await sender_bot.send_sticker(channel_id, sticker=orig_fid)
+        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+    elif ct_str == 'video_note':
+        await sender_bot.send_video_note(channel_id, video_note=orig_fid)
+        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+    new_files_data = []
+    if sent_message:
+        fid = None
+        if sent_message.photo: fid = sent_message.photo[-1].file_id
+        elif sent_message.video: fid = sent_message.video.file_id
+        elif sent_message.animation: fid = sent_message.animation.file_id
+        elif sent_message.document: fid = sent_message.document.file_id
+        elif sent_message.audio: fid = sent_message.audio.file_id
+        elif sent_message.voice: fid = sent_message.voice.file_id
+        if fid:
+            new_files_data.append(fid)
+            await add_file_mirror(orig_fid, 'tg_shadow', fid)
+    return sent_message, new_files_data
+
+async def _send_archive_media(sender_bot, channel_id: int, content: dict, content_type: str, text_to_send: str, header_text: str):
     for attempt in range(3):
         try:
             sent_message = None
@@ -3693,67 +3766,11 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
                     disable_web_page_preview=True
                 )
             elif content_type == 'media_group':
-                from aiogram.utils.media_group import MediaGroupBuilder
-                builder = MediaGroupBuilder()
-                raw_cap = content.get('caption', '')
-                converted_cap = convert_site_tags_to_telegram(raw_cap)
-                full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
-                if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
-                media_list = content.get('media',[])
-                if not media_list: break
-                for i, media_item in enumerate(media_list):
-                    file_id = media_item.get('file_id') or media_item.get('media')
-                    m_type = media_item['type']
-                    caption = full_caption if i == 0 else None
-                    if m_type == 'photo': builder.add_photo(media=file_id, caption=caption, parse_mode="HTML")
-                    elif m_type == 'video': builder.add_video(media=file_id, caption=caption, parse_mode="HTML")
-                    elif m_type == 'document': builder.add_document(media=file_id, caption=caption, parse_mode="HTML")
-                    elif m_type == 'audio': builder.add_audio(media=file_id, caption=caption, parse_mode="HTML")
-                sent_msgs = await sender_bot.send_media_group(channel_id, media=builder.build())
-                if sent_msgs:
-                    sent_message = sent_msgs[0]
-                    for idx, sm in enumerate(sent_msgs):
-                        fid = None
-                        if sm.photo: fid = sm.photo[-1].file_id
-                        elif sm.video: fid = sm.video.file_id
-                        elif sm.document: fid = sm.document.file_id
-                        elif sm.audio: fid = sm.audio.file_id
-                        if fid:
-                            new_files_data.append({'type': sm.content_type, 'file_id': fid})
-                            orig_fid = media_list[idx].get('file_id') or media_list[idx].get('media')
-                            if orig_fid: await add_file_mirror(orig_fid, 'tg_shadow', fid)
+                sent_message, new_files_data = await _send_archive_media_group(sender_bot, channel_id, content, header_text)
+                if sent_message is None and not new_files_data:
+                    break
             else:
-                orig_fid = content.get('file_id')
-                if orig_fid:
-                    raw_cap = content.get('caption', '')
-                    converted_cap = convert_site_tags_to_telegram(raw_cap)
-                    caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
-                    if len(caption) > 1024: caption = caption[:1021] + "..."
-                    ct_str = str(content_type).split('.')[-1].lower()
-                    common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
-                    if ct_str == 'photo': sent_message = await sender_bot.send_photo(photo=orig_fid, **common_args)
-                    elif ct_str == 'video': sent_message = await sender_bot.send_video(video=orig_fid, **common_args)
-                    elif ct_str == 'animation': sent_message = await sender_bot.send_animation(animation=orig_fid, **common_args)
-                    elif ct_str == 'document': sent_message = await sender_bot.send_document(document=orig_fid, **common_args)
-                    elif ct_str == 'audio': sent_message = await sender_bot.send_audio(audio=orig_fid, **common_args)
-                    elif ct_str == 'voice': sent_message = await sender_bot.send_voice(voice=orig_fid, **common_args)
-                    elif ct_str == 'sticker':
-                        await sender_bot.send_sticker(channel_id, sticker=orig_fid)
-                        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
-                    elif ct_str == 'video_note':
-                        await sender_bot.send_video_note(channel_id, video_note=orig_fid)
-                        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
-                    if sent_message:
-                        fid = None
-                        if sent_message.photo: fid = sent_message.photo[-1].file_id
-                        elif sent_message.video: fid = sent_message.video.file_id
-                        elif sent_message.animation: fid = sent_message.animation.file_id
-                        elif sent_message.document: fid = sent_message.document.file_id
-                        elif sent_message.audio: fid = sent_message.audio.file_id
-                        elif sent_message.voice: fid = sent_message.voice.file_id
-                        if fid:
-                            new_files_data.append(fid)
-                            await add_file_mirror(orig_fid, 'tg_shadow', fid)
+                sent_message, new_files_data = await _send_archive_single_media(sender_bot, channel_id, content, content_type, header_text)
             return sent_message, new_files_data
         except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
             if attempt < 2: await asyncio.sleep(2)
