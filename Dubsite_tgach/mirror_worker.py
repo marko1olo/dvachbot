@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import os
+import httpx
+import tempfile
 from common.database import (
     get_pending_mirror_tasks, reschedule_mirror_task, remove_mirror_task, 
     add_file_mirror, get_file_owner_id, get_file_mirrors 
@@ -101,17 +103,46 @@ async def _process_single_task(task):
                 else:
                     c_id, m_id = None, None
                 
-                # Пробуем скачать через MTProto
+                # 1. MTProto
                 if await download_file_mtproto(bot.token, fresh_file_id, lpath, chat_id=c_id, message_id=m_id):
                     download_success = True
+                else:
+                    # 2. HTTP Fallback (если MTProto не справился)
+                    logger.warning(f"⚠️ MTProto failed for {file_id[:10]}. Trying HTTP Fallback...")
+                    try:
+                        # Получаем путь, если его нет (или если первый запрос упал)
+                        if not file_info or not getattr(file_info, "file_path", None):
+                            file_info = await bot.get_file(fresh_file_id)
+
+                        file_path = getattr(file_info, "file_path", None) if file_info else None
+                        if file_path:
+                            dl_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
+
+                            transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
+                            async with httpx.AsyncClient(timeout=60.0, verify=False, transport=transport) as client:
+                                async with client.stream("GET", dl_url) as r:
+                                    if r.status_code == 200:
+                                        from common.http_utils import write_async_iter_bytes_to_file
+                                        await write_async_iter_bytes_to_file(r.aiter_bytes(), lpath)
+                                        download_success = True
+                                        logger.info(f"📥 HTTP Download success for {file_id[:10]}")
+                                    else:
+                                        logger.error(f"❌ HTTP Download failed: {r.status_code}")
+                        else:
+                             logger.error("❌ HTTP Fallback failed: Could not get file_path")
+
+                    except Exception as e:
+                        logger.error(f"❌ HTTP Fallback crashed: {e}")
+
+                # 3. Загрузка (если скачали)
+                if download_success:
                     if mirror_type == 'catbox':
                         success_link = await upload_file_to_catbox(lpath)
                 else:
-                    # Если MTProto не смог скачать (вернул False), считаем файл битым/недоступным
-                    logger.warning(f"⚠️ MTProto download failed for {file_id[:10]}. Removing task to prevent loop.")
-                    await remove_mirror_task(task_id)
-                    return # ВЫХОД, чтобы не планировать повтор
-                    
+                    logger.warning(f"⛔ All download methods failed for {file_id[:10]}. Rescheduling.")
+                    await reschedule_mirror_task(task_id, attempt)
+                    return
+
         finally:
             if os.path.exists(lpath):
                 try: os.remove(lpath)

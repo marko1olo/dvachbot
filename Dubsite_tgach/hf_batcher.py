@@ -142,17 +142,19 @@ async def process_queue_batch():
                         finfo = await bot.get_file(fid)
                         fresh_file_id = finfo.file_id
                         
-                        # Если имени нет в БД (это превью), берем расширение из ТГ
-                        if not final_filename:
-                            ext = os.path.splitext(finfo.file_path)[1]
-                            if not ext: ext = ".jpg" # Фолбек для фото
-                            final_filename = f"{fid}{ext}"
-                            
-                        lpath = os.path.abspath(os.path.join(fdir, final_filename))
+                        file_path = getattr(finfo, "file_path", None)
+                        if file_path:
+                            # Если имени нет в БД (это превью), берем расширение из ТГ
+                            if not final_filename:
+                                ext = os.path.splitext(file_path)[1]
+                                if not ext: ext = ".jpg" # Фолбек для фото
+                                final_filename = f"{fid}{ext}"
 
-                        # 2. Пробуем скачать обычным HTTP
-                        if await _download_http_safe(f"https://api.telegram.org/file/bot{bot.token}/{finfo.file_path}", lpath):
-                            return (fid, final_filename, sub)
+                            lpath = os.path.abspath(os.path.join(fdir, final_filename))
+
+                            # 2. Пробуем скачать обычным HTTP
+                            if await _download_http_safe(f"https://api.telegram.org/file/bot{bot.token}/{file_path}", lpath):
+                                return (fid, final_filename, sub)
                             
                     except Exception as e:
                         err_str = str(e).lower()
