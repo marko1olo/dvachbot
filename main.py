@@ -3763,6 +3763,33 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
             break
     return None, []
 
+def _format_archive_text_content(content: dict, header_text: str) -> str | None:
+    content_type = content.get("type", "text")
+    if content_type != 'text':
+        return None
+
+    text_content = convert_site_tags_to_telegram(content.get('text', ''))
+    if 'poll_data' in content:
+        poll_text = generate_poll_text_display(content['poll_data'])
+        text_content = f"{text_content}\n\n{poll_text}".strip()
+
+    final_text = f"{header_text}\n\n{text_content}"
+    if len(final_text) > 4096:
+        final_text = final_text[:4093] + "..."
+    return final_text
+
+async def _update_archive_post_content(post_num: int, content: dict, content_type: str, new_files_data: list, sender_bot_id: int):
+    from common.database import register_file_owner, update_post_content
+    new_content = content.copy()
+    if content_type == 'media_group':
+        new_content['media'] = new_files_data
+        for f_info in new_files_data:
+            await register_file_owner(f_info['file_id'], sender_bot_id)
+    else:
+        new_content['file_id'] = new_files_data[0]
+        await register_file_owner(new_files_data[0], sender_bot_id)
+    await update_post_content(post_num, new_content)
+
 async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, post_num: int, content: dict, is_shadow_muted: bool, stream: str = 'ru'):
     if is_shadow_muted:
         return
@@ -3780,16 +3807,7 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
     header_text = _build_archive_header(board_id, post_num, content, lang)
     
     content_type = content.get("type", "text")
-    text_to_send = None
-    if content_type == 'text':
-        text_content = convert_site_tags_to_telegram(content.get('text', ''))
-        if 'poll_data' in content:
-            poll_text = generate_poll_text_display(content['poll_data'])
-            text_content = f"{text_content}\n\n{poll_text}".strip()
-        final_text = f"{header_text}\n\n{text_content}"
-        if len(final_text) > 4096: 
-            final_text = final_text[:4093] + "..."
-        text_to_send = final_text
+    text_to_send = _format_archive_text_content(content, header_text)
     
     db_updated = False
     for channel_id in MIRROR_CHANNELS:
@@ -3800,15 +3818,7 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
             try:
                 await add_channel_copy(post_num, channel_id, sent_message.message_id)
                 if not db_updated and new_files_data:
-                    new_content = content.copy()
-                    if content_type == 'media_group':
-                        new_content['media'] = new_files_data
-                        for f_info in new_files_data:
-                            await register_file_owner(f_info['file_id'], sender_bot_id)
-                    else:
-                        new_content['file_id'] = new_files_data[0]
-                        await register_file_owner(new_files_data[0], sender_bot_id)
-                    await update_post_content(post_num, new_content)
+                    await _update_archive_post_content(post_num, content, content_type, new_files_data, sender_bot_id)
                     db_updated = True
             except Exception:
                 pass
