@@ -1967,6 +1967,12 @@ def _format_runtime_snapshot(snapshot: dict) -> str:
         f"cooldowns/spam/img: <code>roll={board_maps.get('last_roll_time')} info={board_maps.get('last_info_command_time')} spam={board_maps.get('spam_tracker_items')} img={board_maps.get('image_spam_items')}</code>\n"
         f"tracemalloc: <code>{snapshot.get('tracemalloc', {}).get('enabled')} current={snapshot.get('tracemalloc', {}).get('current_mb')}MB peak={snapshot.get('tracemalloc', {}).get('peak_mb')}MB</code>"
     )
+def clear_user_locks(user_id: int | None):
+    """Safely clears spam and generation locks for a given user ID."""
+    if user_id:
+        user_spam_locks.pop(user_id, None)
+        generate_locks.pop(user_id, None)
+
 @dp.errors()
 async def global_error_handler(event: types.ErrorEvent) -> bool:
     """
@@ -2007,8 +2013,7 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
                 async with author_reaction_notify_lock:
                     author_reaction_notify_tracker.pop(user_id, None)
                 
-                user_spam_locks.pop(user_id, None)
-                generate_locks.pop(user_id, None)
+                clear_user_locks(user_id)
                 unknown_command_tracker.pop(user_id, None)
                 await remove_user_from_board(user_id, board_id)
                 print(f"🚫 [{board_id}] Юзер {user_id} блокнул бота. Данные удалены (RAM почистится автоматически).")
@@ -2046,9 +2051,7 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
                 
         # Always clear locks if a command aborted due to BadRequest
         user_id = chat_obj.from_user.id if chat_obj else None
-        if user_id:
-            user_spam_locks.pop(user_id, None)
-            generate_locks.pop(user_id, None)
+        clear_user_locks(user_id)
             
         return True
     
@@ -2087,9 +2090,7 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
             user_id = chat_obj.from_user.id if chat_obj else None
             if not user_id and hasattr(update, "callback_query") and update.callback_query:
                 user_id = update.callback_query.from_user.id
-            if user_id:
-                user_spam_locks.pop(user_id, None)
-                generate_locks.pop(user_id, None)
+            clear_user_locks(user_id)
 
         return True
 def is_admin(uid: int, board_id: str) -> bool:
