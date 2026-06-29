@@ -3384,6 +3384,203 @@ def apply_shadow_autoreplace(content: dict) -> dict:
                 
     return modified
 
+
+async def _determine_post_recipients(
+    bot_instance, board_id: str, user_id: int, is_shadow_muted: bool, stream: str
+) -> tuple[set, str | None, bool, bool]:
+    import time
+    import random
+    b_data = board_data[board_id]
+    user_location = b_data.get('user_state', {}).get(user_id, {}).get('location', 'main')
+    recipients = set()
+    thread_id = None
+
+    if board_id in THREAD_BOARDS and user_location != 'main':
+        thread_id = user_location
+        thread_info = b_data.get('threads_data', {}).get(thread_id)
+        if not thread_info or thread_info.get('is_archived'):
+            b_data['user_state'].setdefault(user_id, {})['location'] = 'main'
+            lang = 'en' if board_id == 'int' else 'ru'
+            await bot_instance.send_message(user_id, random.choice(thread_messages[lang]['thread_not_found']))
+            return set(), None, is_shadow_muted, True
+        if user_id in thread_info.get('local_mutes', {}) and time.time() < thread_info['local_mutes'][user_id]:
+            return set(), None, is_shadow_muted, True
+        if user_id in thread_info.get('local_shadow_mutes', {}) and time.time() < thread_info['local_shadow_mutes'][user_id]:
+            is_shadow_muted = True
+        recipients = thread_info.get('subscribers', set()) - {user_id}
+    else:
+        if board_id == 'int' or not ENABLE_MULTILANG:
+            recipients = b_data['users']['active'] - {user_id}
+        else:
+            stream_users = await get_stream_active_users(board_id, stream)
+            active_stream_users = stream_users.intersection(b_data['users']['active'])
+            recipients = active_stream_users - {user_id}
+
+    return recipients, thread_id, is_shadow_muted, False
+
+async def _apply_user_curses(user_id: int, author_content: dict) -> None:
+    if user_id > 0:
+        from common.db_pool import get_pool
+        import time
+        db = await get_pool()
+        async with db.execute("SELECT cursed_until FROM Users WHERE user_id = ?", (user_id,)) as c:
+            row = await c.fetchone()
+            if row and row[0] and int(time.time()) < row[0]:
+                if 'text' in author_content and author_content['text']:
+                    author_content['text'] += "\n\n<i>[Я ХУЕСОС 🤮]</i>"
+
+async def _send_author_post_with_rescue(
+    bot_instance,
+    board_id: str,
+    user_id: int,
+    current_post_num: int,
+    final_content: dict,
+    author_content: dict,
+    reply_info_for_author: dict,
+    fallback_fetchers: list
+):
+    import random
+    import asyncio
+    author_results = None
+    try:
+        author_results = await send_message_to_users(
+            bot_instance=bot_instance,
+            board_id=board_id,
+            recipients={user_id},
+            content=author_content,
+            reply_info=reply_info_for_author,
+            verbose=False
+        )
+    except TelegramBadRequest as e:
+        if 'image_url' in final_content:
+            print(f"ℹ️ Ошибка отправки поста #{current_post_num} по URL. Запускаю 'Спасательный Цикл'...")
+            loop = asyncio.get_running_loop()
+            fallback_succeeded = False
+            initial_url = final_content.get('image_url')
+            async def initial_fetcher(): return initial_url
+            all_fetchers = [initial_fetcher] + fallback_fetchers
+            random.shuffle(all_fetchers)
+            for i, fetcher in enumerate(all_fetchers):
+                print(f"  -> Попытка спасения #{i + 1}/{len(all_fetchers)}...")
+                try:
+                    url_to_try = await fetcher()
+                    if not url_to_try:
+                        print("    -> Получен пустой URL, пропускаю.")
+                        continue
+                    download_result = await _download_image_with_proxy(url_to_try)
+                    if not download_result:
+                        print("    -> Скачивание не удалось.")
+                        continue
+                    processed_bytes = await loop.run_in_executor(None, _resize_image_if_needed, download_result[0])
+                    fallback_content = author_content.copy()
+                    fallback_content.pop('image_url', None)
+                    fallback_content['image_bytes'] = processed_bytes
+                    author_results = await send_message_to_users(
+                        bot_instance=bot_instance, board_id=board_id, recipients={user_id},
+                        content=fallback_content, reply_info=reply_info_for_author
+                    )
+                    if author_results:
+                        final_content.pop('image_url', None)
+                        final_content['image_bytes'] = processed_bytes
+                        fallback_succeeded = True
+                        print(f"✅ 'Спасательный Цикл' для поста #{current_post_num} успешен.")
+                        break
+                    else:
+                        print("    -> Отправка байтов также не удалась. Пробую следующий источник.")
+                except Exception as ex:
+                    print(f"    -> Ошибка в цикле спасения: {type(ex).__name__}: {ex}")
+                    continue
+            if not fallback_succeeded:
+                print(f"⚠️ 'Спасательный цикл' не помог для поста #{current_post_num}. Ошибка: {e}. Пост будет обработан без message_id автора.")
+        else:
+            print(f"⚠️ Не удалось отправить текстовый пост #{current_post_num} автору из-за ошибки: {e}. Пост будет обработан без message_id автора.")
+    except Exception as e:
+        print(f"⚠️ Не удалось отправить пост #{current_post_num} автору из-за сетевой/другой ошибки: {e}. Пост будет обработан без message_id автора.")
+
+    return author_results
+
+async def _update_post_memory_storage(
+    board_id: str,
+    user_id: int,
+    current_post_num: int,
+    thread_id: str | None,
+    final_content: dict,
+    author_results,
+    now_dt,
+    stream: str
+):
+    import time
+    b_data = board_data[board_id]
+    async with storage_lock:
+        state['post_counter'] = max(state.get('post_counter', 0), current_post_num)
+        if thread_id:
+            thread_info_safe = b_data.get('threads_data', {}).get(thread_id)
+            if thread_info_safe:
+                thread_info_safe['posts'].append(current_post_num)
+                thread_info_safe['last_activity_at'] = time.time()
+        content_for_ram = final_content.copy()
+        content_for_ram.pop('image_bytes', None)
+
+        # --- SHITSTORM DETECTOR (chain_depth) ---
+        chain_depth = 0
+        reply_to = final_content.get('reply_to_post')
+        if reply_to:
+            parent_data = messages_storage.get(reply_to)
+            if parent_data:
+                chain_depth = parent_data.get('chain_depth', 0) + 1
+
+        messages_storage[current_post_num] = {
+            'author_id': user_id, 'timestamp': now_dt,
+            'content': content_for_ram,
+            'author_message_id': None, 'board_id': board_id, 'thread_id': thread_id,
+            'chain_depth': chain_depth
+        }
+
+        if chain_depth > 0 and chain_depth % 15 == 0:
+            # Trigger schizo roast in the background
+            try:
+                bot_instance = get_bot_for_board(board_id)
+                stream_to_pass = stream if stream else 'ru'
+                spawn_task(execute_auto_roast(board_id, stream_to_pass, bot_instance))
+            except Exception as e:
+                print(f"Error triggering auto_roast: {e}")
+        if author_results and author_results[0] and author_results[0][1]:
+            sent_messages = author_results[0][1]
+            messages_to_process = sent_messages if isinstance(sent_messages, list) else [sent_messages]
+            if final_content.get('type') == 'media_group' and messages_to_process:
+                new_media_items = []
+                for msg in messages_to_process:
+                    item = {}
+                    if msg.photo: item = {'type': 'photo', 'file_id': msg.photo[-1].file_id}
+                    elif msg.video: item = {'type': 'video', 'file_id': msg.video.file_id}
+                    elif msg.document: item = {'type': 'document', 'file_id': msg.document.file_id}
+                    elif msg.audio: item = {'type': 'audio', 'file_id': msg.audio.file_id}
+                    if item: new_media_items.append(item)
+                if new_media_items:
+                    final_content['media'] = new_media_items
+                    final_content.pop('image_url', None)
+                    final_content.pop('image_bytes', None)
+            elif messages_to_process:
+                msg = messages_to_process[0]
+                file_id_to_persist = None
+                if msg.photo: file_id_to_persist = msg.photo[-1].file_id
+                elif msg.video: file_id_to_persist = msg.video.file_id
+                elif msg.animation: file_id_to_persist = msg.animation.file_id
+                if file_id_to_persist:
+                    final_content['file_id'] = file_id_to_persist
+                    final_content.pop('image_url', None)
+                    final_content.pop('image_bytes', None)
+            await update_post_content(current_post_num, final_content)
+            author_message_ids_to_archive = [m.message_id for m in (sent_messages if isinstance(sent_messages, list) else [sent_messages])]
+            messages_to_save = sent_messages if isinstance(sent_messages, list) else [sent_messages]
+            messages_storage[current_post_num]['author_message_id'] = author_message_ids_to_archive
+            messages_storage[current_post_num]['content'] = final_content
+            post_to_messages.setdefault(current_post_num, {})[user_id] = (
+                author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
+            )
+            for m in messages_to_save:
+                message_to_post[(user_id, m.message_id)] = current_post_num
+
 async def process_new_post(
     bot_instance: Bot,
     board_id: str,
@@ -3402,41 +3599,18 @@ async def process_new_post(
     thread_id = None
     try:
         fallback_fetchers = content.pop('__fallback_fetcher_tasks', [])
-        user_location = b_data.get('user_state', {}).get(user_id, {}).get('location', 'main')
-        recipients = set()
+
+        recipients, thread_id, is_shadow_muted, should_return = await _determine_post_recipients(
+            bot_instance, board_id, user_id, is_shadow_muted, stream
+        )
+        if should_return:
+            return None
+
         reply_info_for_author = {}
-        if board_id in THREAD_BOARDS and user_location != 'main':
-            thread_id = user_location
-            thread_info = b_data.get('threads_data', {}).get(thread_id)
-            if not thread_info or thread_info.get('is_archived'):
-                b_data['user_state'].setdefault(user_id, {})['location'] = 'main'
-                lang = 'en' if board_id == 'int' else 'ru'
-                await bot_instance.send_message(user_id, random.choice(thread_messages[lang]['thread_not_found']))
-                return None
-            if user_id in thread_info.get('local_mutes', {}) and time.time() < thread_info['local_mutes'][user_id]: 
-                return None
-            if user_id in thread_info.get('local_shadow_mutes', {}) and time.time() < thread_info['local_shadow_mutes'][user_id]: 
-                is_shadow_muted = True
-            recipients = thread_info.get('subscribers', set()) - {user_id}
-        else:
-            if board_id == 'int' or not ENABLE_MULTILANG:
-                recipients = b_data['users']['active'] - {user_id}
-            else:
-                stream_users = await get_stream_active_users(board_id, stream)
-                active_stream_users = stream_users.intersection(b_data['users']['active'])
-                recipients = active_stream_users - {user_id}
         now_dt = datetime.now(UTC)
         author_content = await _apply_mode_transformations(content, board_id)
         
-        if user_id > 0:
-            from common.db_pool import get_pool
-            import time
-            db = await get_pool()
-            async with db.execute("SELECT cursed_until FROM Users WHERE user_id = ?", (user_id,)) as c:
-                row = await c.fetchone()
-                if row and row[0] and int(time.time()) < row[0]:
-                    if 'text' in author_content and author_content['text']:
-                        author_content['text'] += "\n\n<i>[Я ХУЕСОС 🤮]</i>"
+        await _apply_user_curses(user_id, author_content)
                         
         final_content = apply_shadow_autoreplace(author_content)
         
@@ -3491,130 +3665,16 @@ async def process_new_post(
         if author_image_bytes:
             author_content['image_bytes'] = author_image_bytes
             
-        author_results = None
-        try:
-            author_results = await send_message_to_users(
-                bot_instance=bot_instance,
-                board_id=board_id,
-                recipients={user_id},
-                content=author_content,
-                reply_info=reply_info_for_author,
-                verbose=False
-            )
-        except TelegramBadRequest as e:
-            if 'image_url' in final_content:
-                print(f"ℹ️ Ошибка отправки поста #{current_post_num} по URL. Запускаю 'Спасательный Цикл'...")
-                loop = asyncio.get_running_loop()
-                fallback_succeeded = False
-                initial_url = final_content.get('image_url')
-                async def initial_fetcher(): return initial_url
-                all_fetchers = [initial_fetcher] + fallback_fetchers
-                random.shuffle(all_fetchers)
-                for i, fetcher in enumerate(all_fetchers):
-                    print(f"  -> Попытка спасения #{i + 1}/{len(all_fetchers)}...")
-                    try:
-                        url_to_try = await fetcher()
-                        if not url_to_try:
-                            print("    -> Получен пустой URL, пропускаю.")
-                            continue
-                        download_result = await _download_image_with_proxy(url_to_try)
-                        if not download_result:
-                            print("    -> Скачивание не удалось.")
-                            continue
-                        processed_bytes = await loop.run_in_executor(None, _resize_image_if_needed, download_result[0])
-                        fallback_content = author_content.copy()
-                        fallback_content.pop('image_url', None)
-                        fallback_content['image_bytes'] = processed_bytes
-                        author_results = await send_message_to_users(
-                            bot_instance=bot_instance, board_id=board_id, recipients={user_id},
-                            content=fallback_content, reply_info=reply_info_for_author
-                        )
-                        if author_results:
-                            final_content.pop('image_url', None)
-                            final_content['image_bytes'] = processed_bytes
-                            fallback_succeeded = True
-                            print(f"✅ 'Спасательный Цикл' для поста #{current_post_num} успешен.")
-                            break
-                        else:
-                            print("    -> Отправка байтов также не удалась. Пробую следующий источник.")
-                    except Exception as ex:
-                        print(f"    -> Ошибка в цикле спасения: {type(ex).__name__}: {ex}")
-                        continue
-                if not fallback_succeeded:
-                    print(f"⚠️ 'Спасательный цикл' не помог для поста #{current_post_num}. Ошибка: {e}. Пост будет обработан без message_id автора.")
-            else:
-                print(f"⚠️ Не удалось отправить текстовый пост #{current_post_num} автору из-за ошибки: {e}. Пост будет обработан без message_id автора.")
-        except Exception as e:
-            print(f"⚠️ Не удалось отправить пост #{current_post_num} автору из-за сетевой/другой ошибки: {e}. Пост будет обработан без message_id автора.")
-        async with storage_lock:
-            state['post_counter'] = max(state.get('post_counter', 0), current_post_num)
-            if thread_id:
-                thread_info_safe = b_data.get('threads_data', {}).get(thread_id)
-                if thread_info_safe:
-                    thread_info_safe['posts'].append(current_post_num)
-                    thread_info_safe['last_activity_at'] = time.time()
-            content_for_ram = final_content.copy()
-            content_for_ram.pop('image_bytes', None)
-            
-            # --- SHITSTORM DETECTOR (chain_depth) ---
-            chain_depth = 0
-            reply_to = final_content.get('reply_to_post')
-            if reply_to:
-                parent_data = messages_storage.get(reply_to)
-                if parent_data:
-                    chain_depth = parent_data.get('chain_depth', 0) + 1
-                    
-            messages_storage[current_post_num] = {
-                'author_id': user_id, 'timestamp': now_dt, 
-                'content': content_for_ram,
-                'author_message_id': None, 'board_id': board_id, 'thread_id': thread_id,
-                'chain_depth': chain_depth
-            }
-            
-            if chain_depth > 0 and chain_depth % 15 == 0:
-                # Trigger schizo roast in the background
-                try:
-                    bot_instance = get_bot_for_board(board_id)
-                    stream_to_pass = stream if stream else 'ru'
-                    spawn_task(execute_auto_roast(board_id, stream_to_pass, bot_instance))
-                except Exception as e:
-                    print(f"Error triggering auto_roast: {e}")
-            if author_results and author_results[0] and author_results[0][1]:
-                sent_messages = author_results[0][1]
-                messages_to_process = sent_messages if isinstance(sent_messages, list) else [sent_messages]
-                if final_content.get('type') == 'media_group' and messages_to_process:
-                    new_media_items = []
-                    for msg in messages_to_process:
-                        item = {}
-                        if msg.photo: item = {'type': 'photo', 'file_id': msg.photo[-1].file_id}
-                        elif msg.video: item = {'type': 'video', 'file_id': msg.video.file_id}
-                        elif msg.document: item = {'type': 'document', 'file_id': msg.document.file_id}
-                        elif msg.audio: item = {'type': 'audio', 'file_id': msg.audio.file_id}
-                        if item: new_media_items.append(item)
-                    if new_media_items: 
-                        final_content['media'] = new_media_items 
-                        final_content.pop('image_url', None)
-                        final_content.pop('image_bytes', None) 
-                elif messages_to_process:
-                    msg = messages_to_process[0]
-                    file_id_to_persist = None
-                    if msg.photo: file_id_to_persist = msg.photo[-1].file_id
-                    elif msg.video: file_id_to_persist = msg.video.file_id
-                    elif msg.animation: file_id_to_persist = msg.animation.file_id
-                    if file_id_to_persist:
-                        final_content['file_id'] = file_id_to_persist
-                        final_content.pop('image_url', None)
-                        final_content.pop('image_bytes', None)
-                await update_post_content(current_post_num, final_content)
-                author_message_ids_to_archive = [m.message_id for m in (sent_messages if isinstance(sent_messages, list) else [sent_messages])]
-                messages_to_save = sent_messages if isinstance(sent_messages, list) else [sent_messages]
-                messages_storage[current_post_num]['author_message_id'] = author_message_ids_to_archive
-                messages_storage[current_post_num]['content'] = final_content
-                post_to_messages.setdefault(current_post_num, {})[user_id] = (
-                    author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
-                )
-                for m in messages_to_save:
-                    message_to_post[(user_id, m.message_id)] = current_post_num
+        author_results = await _send_author_post_with_rescue(
+            bot_instance, board_id, user_id, current_post_num,
+            final_content, author_content, reply_info_for_author, fallback_fetchers
+        )
+
+        await _update_post_memory_storage(
+            board_id, user_id, current_post_num, thread_id,
+            final_content, author_results, now_dt, stream
+        )
+
         if not is_shadow_muted and recipients:
             await enqueue_board_message(board_id, {
                 'recipients': recipients, 'content': final_content, 'post_num': current_post_num,
