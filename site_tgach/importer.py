@@ -59,6 +59,7 @@ from common.database import (
     process_backlinks,
 )
 from common.db_pool import db_lock
+from common.config import BIND_IPV4
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -232,7 +233,7 @@ class ThreadImporter:
                     timeout=90.0,
                     cookies=req_cookies,
                     transport=httpx.AsyncHTTPTransport(
-                        local_address="0.0.0.0", retries=2, proxy=PROXY_URL
+                        local_address=BIND_IPV4, retries=2, proxy=PROXY_URL
                     ),
                 ) as media_client:
                     resp = await media_client.get(url, headers=req_headers)
@@ -585,7 +586,7 @@ class ThreadImporter:
 
         # Configured Transport from New Version
         transport = httpx.AsyncHTTPTransport(
-            local_address="0.0.0.0",  # Принудительный IPv4 (Fix для OpenVPN)
+            local_address=BIND_IPV4,  # Принудительный IPv4 (Fix для OpenVPN)
             retries=3,
             verify=False,
             http2=False,  # Строго HTTP/1.1
