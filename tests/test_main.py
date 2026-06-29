@@ -29,13 +29,13 @@ mocked_deps = [
     'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip',
     'fastapi.staticfiles', 'fastapi.templating', 'fastapi.exceptions',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
-    'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiosqlite', 'aiogram',
+    'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiosqlite', 'aiogram', 'httpx',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
     'aiogram.client.default', 'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
     'aiogram.filters', 'aiogram.fsm', 'aiogram.fsm.context', 'aiogram.fsm.state', 'aiogram.fsm.storage', 'aiogram.fsm.storage.memory',
     'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'orjson', 'pydantic',
     'aiogram.utils', 'aiogram.utils.media_group', 'aiogram.utils.keyboard',
-    'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types'
+    'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types', 'dotenv', 'python-dotenv', 'bs4', 'beautifulsoup4', 'aiohttp', 'starlette', 'starlette.middleware', 'starlette.middleware.sessions', 'starlette.requests', 'starlette.responses', 'starlette.exceptions', 'starlette.routing', 'starlette.background', 'itsdangerous', 'PIL', 'Pillow', 'starlette.types', 'starlette.datastructures'
 ]
 
 for dep in mocked_deps:
@@ -240,3 +240,88 @@ class TestVibeToIcon(unittest.TestCase):
         self.assertEqual(vibe_to_icon("unknown"), "❓ (Неясно)")
         self.assertEqual(vibe_to_icon(""), "❓ (Неясно)")
         self.assertEqual(vibe_to_icon("something totally unrelated"), "❓ (Неясно)")
+
+class TestToMakabaPost(unittest.TestCase):
+    def test_to_makaba_post_basic(self):
+        from Dubsite_tgach.main import to_makaba_post
+        post_data = {
+            'id': 12345,
+            'thread_id': 100,
+            'timestamp': 1718880000,
+            'content': {
+                'text': 'Hello world',
+                'files': [
+                    {
+                        'filename': 'image.jpg',
+                        'original_url': 'http://example.com/image.jpg',
+                        'thumbnail_url': 'http://example.com/thumb.jpg',
+                        'type': 'image'
+                    }
+                ]
+            },
+            'sage': False,
+            'is_op_post': True,
+            'is_archived': False,
+            'is_pinned': True,
+            'is_endless': True
+        }
+
+        result = to_makaba_post(post_data, 'b')
+
+        self.assertEqual(result['num'], 12345)
+        self.assertEqual(result['parent'], 100)
+        self.assertEqual(result['lasthit'], 1718880000)
+        self.assertEqual(result['comment'], 'Hello world')
+        self.assertEqual(result['op'], 1)
+        self.assertEqual(result['email'], '')
+        self.assertEqual(result['closed'], 0)
+        self.assertEqual(result['sticky'], 1)
+        self.assertEqual(result['endless'], 1)
+
+        # files
+        self.assertEqual(len(result['files']), 1)
+        self.assertEqual(result['files'][0]['name'], 'image.jpg')
+        self.assertEqual(result['files'][0]['path'], 'http://example.com/image.jpg')
+        self.assertEqual(result['files'][0]['type'], 1)
+
+    def test_to_makaba_post_no_files_sage(self):
+        from Dubsite_tgach.main import to_makaba_post
+        post_data = {
+            'id': '6789',
+            'timestamp': 1718880000,
+            'content': {
+                'text': 'No files here'
+            },
+            'sage': True
+        }
+
+        result = to_makaba_post(post_data, 'b')
+
+        self.assertEqual(result['num'], 6789)
+        self.assertEqual(result['parent'], 0)
+        self.assertEqual(len(result['files']), 0)
+        self.assertEqual(result['email'], 'sage')
+        self.assertEqual(result['op'], 0)
+        self.assertEqual(result['closed'], 0)
+        self.assertEqual(result['sticky'], 0)
+        self.assertEqual(result['endless'], 0)
+
+    def test_to_makaba_post_file_defaults(self):
+        from Dubsite_tgach.main import to_makaba_post
+        post_data = {
+            'id': 111,
+            'timestamp': 1718880000,
+            'content': {
+                'text': 'Files with no data',
+                'files': [{}]
+            }
+        }
+
+        result = to_makaba_post(post_data, 'b')
+        self.assertEqual(len(result['files']), 1)
+        self.assertEqual(result['files'][0]['name'], 'file.ext')
+        self.assertEqual(result['files'][0]['displayname'], 'file.ext')
+        self.assertEqual(result['files'][0]['fullname'], 'file.ext')
+        self.assertEqual(result['files'][0]['path'], '')
+        self.assertEqual(result['files'][0]['thumbnail'], '')
+        self.assertEqual(result['files'][0]['type'], 6)
