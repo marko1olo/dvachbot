@@ -78,3 +78,8 @@ CIS_COUNTRY_CODES = {'RU', 'UA', 'BY', 'KZ', 'KG', 'TJ', 'UZ', 'AM', 'AZ', 'MD',
 # Превращаем строку "123,456" в множество {123, 456}
 admin_env = os.getenv("ADMINS", "")
 ADMIN_IDS = {int(x.strip()) for x in admin_env.split(",") if x.strip().isdigit()}
+
+
+
+# Network Settings
+HTTP_LOCAL_ADDRESS = os.getenv("HTTP_LOCAL_ADDRESS", "0.0.0.0")

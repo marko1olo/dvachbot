@@ -39,6 +39,7 @@ from common.database import (
     process_backlinks,
 )
 from common.db_pool import db_lock
+from common.config import HTTP_LOCAL_ADDRESS
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -209,7 +210,7 @@ class ThreadImporter:
                         timeout=180.0,
                         proxy=PROXY_URL,
                         transport=httpx.AsyncHTTPTransport(
-                            local_address="0.0.0.0", retries=3
+                            local_address=HTTP_LOCAL_ADDRESS, retries=3
                         ),
                     ) as clean_client:
                         resp = await clean_client.get(url, headers=clean_headers)
@@ -557,7 +558,7 @@ class ThreadImporter:
 
         # Configured Transport from New Version
         transport = httpx.AsyncHTTPTransport(
-            local_address="0.0.0.0",  # Принудительный IPv4 (Fix для OpenVPN)
+            local_address=HTTP_LOCAL_ADDRESS,  # Принудительный IPv4 (Fix для OpenVPN)
             retries=3,
             verify=False,
             http2=False,  # Строго HTTP/1.1
