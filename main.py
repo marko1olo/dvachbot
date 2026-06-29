@@ -5618,12 +5618,7 @@ async def send_message_to_users(
         remaining_recipients=remaining_recipients_for_later,
         interrupted_reason=interrupted_reason,
     )
-async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
-    """
-    Находит все отправленные копии поста и редактирует их.
-    Основной источник данных - база данных.
-    Версия 2.2: Добавлена группировка сообщений по юзерам (защита от мульти-эдита альбомов).
-    """
+async def _get_user_messages_map(post_num: int) -> dict:
     copies_info = await get_post_copies(post_num)
     user_messages_map = defaultdict(list)
     if copies_info:
@@ -5639,48 +5634,47 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             else:
                 if mid_or_list not in user_messages_map[uid]:
                     user_messages_map[uid].append(mid_or_list)
+    return user_messages_map
 
-    if not user_messages_map:
-        return
-
-    post_data_copy = {}
-    content_copy = {}
-    reply_author_id = None
-    board_id = None
+async def _get_post_edit_data(post_num: int):
     async with storage_lock:
         post_data = messages_storage.get(post_num)
-        if not post_data: return
+        if not post_data:
+            return None
         content_type = post_data.get('content', {}).get('type')
         can_be_edited = content_type in ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'media_group']
-        if not can_be_edited: return
+        if not can_be_edited:
+            return None
         post_data_copy = post_data.copy()
         content_copy = post_data.get('content', {}).copy()
         board_id = post_data.get('board_id')
         reply_to_post_num = content_copy.get('reply_to_post')
+        reply_author_id = None
         if reply_to_post_num:
             reply_author_id = messages_storage.get(reply_to_post_num, {}).get('author_id')
-    if not board_id: return
-    
-    final_keyboard = None
-    if content_copy.get('poll_data'):
-        poll_options = content_copy.get('poll_data', {}).get('options', [])
-        if poll_options:
-            buttons = []
-            for i, option_text in enumerate(poll_options):
-                button_text = option_text[:60]
-                buttons.append(
-                    InlineKeyboardButton(
-                        text=button_text,
-                        callback_data=f"poll_vote_{post_num}_{i}"
-                    )
-                )
-            final_keyboard = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
-            
-    user_specific_texts = {}
-    text_or_caption_base = content_copy.get('text') or content_copy.get('caption')
+    return post_data_copy, content_copy, board_id, reply_author_id
+
+def _build_poll_keyboard(post_num: int, content_copy: dict):
+    if not content_copy.get('poll_data'):
+        return None
+    poll_options = content_copy.get('poll_data', {}).get('options', [])
+    if not poll_options:
+        return None
+    buttons = []
+    for i, option_text in enumerate(poll_options):
+        button_text = option_text[:60]
+        buttons.append(
+            InlineKeyboardButton(
+                text=button_text,
+                callback_data=f"poll_vote_{post_num}_{i}"
+            )
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
+
+async def _process_you_links(text_or_caption_base: str, post_data_copy: dict) -> tuple[str, dict]:
     text_with_you_links = text_or_caption_base
+    mentioned_authors = {}
     if text_or_caption_base and ">>" in text_or_caption_base:
-        mentioned_authors = {}
         mentions = RE_YOU_PATTERN.findall(text_or_caption_base)
         if mentions:
             async with storage_lock:
@@ -5696,13 +5690,17 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             post_data_copy.get('author_id'), 
             mentioned_authors
         )            
-    b_data = board_data[board_id]
+    return text_with_you_links, mentioned_authors
+
+async def _build_user_specific_texts(user_messages_map: dict, content_copy: dict, board_id: str, reply_author_id: int | None, text_or_caption_base: str, text_with_you_links: str, post_data_copy: dict, mentioned_authors: dict) -> dict:
+    user_specific_texts = {}
+    b_data = board_data.get(board_id, {})
     users_settings = b_data.get('user_settings', {})
     for user_id in user_messages_map.keys():
         header_text = content_copy.get('header', '')
         u_set = users_settings.get(user_id, {'hide': set()})
         should_hide = False
-        if u_set['hide']:
+        if u_set.get('hide'):
             raw_content_text = content_copy.get('text') or content_copy.get('caption') or ""
             check_text = (header_text + " " + raw_content_text).lower()
             if any(word in check_text for word in u_set['hide']):
@@ -5728,59 +5726,88 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             )
             full_text = f"{head}\n\n{formatted_body}" if formatted_body else head
         user_specific_texts[user_id] = full_text
+    return user_specific_texts
 
-    async def _edit_one(user_id: int, message_id: int):
-        max_attempts = 6
-        delay = 1.5
-        for attempt in range(max_attempts):
-            try:
-                full_text = user_specific_texts.get(user_id, "")
-                content_type = content_copy.get('type')
-                if content_type == 'text':
-                    if len(full_text) > 4096: full_text = full_text[:4093] + "..."
-                    await bot_instance.edit_message_text(text=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard)
-                else:
-                    if len(full_text) > 1024: full_text = full_text[:1021] + "..."
-                    await bot_instance.edit_message_caption(caption=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard)
+async def _edit_single_post_copy(user_id: int, message_id: int, bot_instance: Bot, user_specific_texts: dict, content_copy: dict, final_keyboard):
+    max_attempts = 6
+    delay = 1.5
+    for attempt in range(max_attempts):
+        try:
+            full_text = user_specific_texts.get(user_id, "")
+            content_type = content_copy.get('type')
+            if content_type == 'text':
+                if len(full_text) > 4096: full_text = full_text[:4093] + "..."
+                await bot_instance.edit_message_text(text=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard)
+            else:
+                if len(full_text) > 1024: full_text = full_text[:1021] + "..."
+                await bot_instance.edit_message_caption(caption=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard)
+            return
+        except TelegramRetryAfter as e:
+            wait_sec = e.retry_after + 1
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(wait_sec)
+                continue
+            else:
                 return 
-            except TelegramRetryAfter as e:
-                wait_sec = e.retry_after + 1
+        except TelegramBadRequest as e:
+            error_message_lower = e.message.lower()
+            ignored_errors = ("message is not modified", "message to edit not found", "chat not found")
+            if any(err in error_message_lower for err in ignored_errors):
+                return
+            if "flood control" in error_message_lower or "retry after" in error_message_lower:
+                wait_sec = 3
+                match = re.search(r'retry after (\d+)', error_message_lower)
+                if match:
+                    wait_sec = int(match.group(1)) + 1
                 if attempt < max_attempts - 1:
                     await asyncio.sleep(wait_sec)
                     continue
                 else:
-                    return 
-            except TelegramBadRequest as e:
-                error_message_lower = e.message.lower()
-                ignored_errors = ("message is not modified", "message to edit not found", "chat not found")
-                if any(err in error_message_lower for err in ignored_errors):
                     return
-                if "flood control" in error_message_lower or "retry after" in error_message_lower:
-                    wait_sec = 3
-                    match = re.search(r'retry after (\d+)', error_message_lower)
-                    if match:
-                        wait_sec = int(match.group(1)) + 1
-                    if attempt < max_attempts - 1:
-                        await asyncio.sleep(wait_sec)
-                        continue
-                    else:
-                        return
-                return 
-            except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError) as e:
-                if attempt < max_attempts - 1:
-                    await asyncio.sleep(delay)
-                    delay = min(delay * 2, 10) 
-                    continue
-                else:
-                    return
-            except Exception as e:
-                print(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
+            return
+        except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError) as e:
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 10)
+                continue
+            else:
                 return
+        except Exception as e:
+            print(f"⚠️ Непредвиденная ошибка в _edit_single_post_copy: {e}")
+            return
+
+async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
+    """
+    Находит все отправленные копии поста и редактирует их.
+    Основной источник данных - база данных.
+    Версия 2.2: Добавлена группировка сообщений по юзерам (защита от мульти-эдита альбомов).
+    """
+    user_messages_map = await _get_user_messages_map(post_num)
+    if not user_messages_map:
+        return
+
+    edit_data = await _get_post_edit_data(post_num)
+    if not edit_data:
+        return
+    post_data_copy, content_copy, board_id, reply_author_id = edit_data
+    if not board_id:
+        return
+
+    final_keyboard = _build_poll_keyboard(post_num, content_copy)
+
+    text_or_caption_base = content_copy.get('text') or content_copy.get('caption')
+    text_with_you_links, mentioned_authors = await _process_you_links(text_or_caption_base, post_data_copy)
+
+    user_specific_texts = await _build_user_specific_texts(
+        user_messages_map, content_copy, board_id, reply_author_id,
+        text_or_caption_base, text_with_you_links, post_data_copy, mentioned_authors
+    )
+
     tasks_to_run = []
     for uid, msgs in user_messages_map.items():
         if msgs:
             target_mid = sorted(msgs)[0]
-            task = spawn_task(_edit_one(uid, target_mid))
+            task = spawn_task(_edit_single_post_copy(uid, target_mid, bot_instance, user_specific_texts, content_copy, final_keyboard))
             tasks_to_run.append(task)
 
     CHUNK_SIZE = 30 
