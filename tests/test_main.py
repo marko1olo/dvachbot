@@ -35,7 +35,8 @@ mocked_deps = [
     'aiogram.filters', 'aiogram.fsm', 'aiogram.fsm.context', 'aiogram.fsm.state', 'aiogram.fsm.storage', 'aiogram.fsm.storage.memory',
     'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'orjson', 'pydantic',
     'aiogram.utils', 'aiogram.utils.media_group', 'aiogram.utils.keyboard',
-    'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types'
+    'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types',
+    'httpx'
 ]
 
 for dep in mocked_deps:
@@ -47,7 +48,8 @@ for mod_name in sys.modules:
         sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
 
 # Now we can safely import the function under test
-from Dubsite_tgach.main import get_real_ip
+from Dubsite_tgach.main import get_real_ip, is_request_from_ru
+from unittest.mock import AsyncMock, patch
 
 class StubClient:
     def __init__(self, host):
@@ -106,6 +108,47 @@ class TestGetRealIp(unittest.TestCase):
             client_host="9.10.11.12"
         )
         self.assertEqual(get_real_ip(request), "9.10.11.12")
+
+
+class TestIsRequestFromRu(unittest.IsolatedAsyncioTestCase):
+    @patch('Dubsite_tgach.main.get_real_ip', return_value='1.2.3.4')
+    @patch('Dubsite_tgach.main.get_country_by_ip', new_callable=AsyncMock)
+    async def test_is_ru_country(self, mock_get_country, mock_get_real_ip):
+        """Test that it returns True when country is RU."""
+        mock_get_country.return_value = "RU"
+        request = StubRequest(client_host="1.2.3.4")
+
+        result = await is_request_from_ru(request)
+
+        self.assertTrue(result)
+        mock_get_real_ip.assert_called_once_with(request)
+        mock_get_country.assert_called_once_with('1.2.3.4')
+
+    @patch('Dubsite_tgach.main.get_real_ip', return_value='5.6.7.8')
+    @patch('Dubsite_tgach.main.get_country_by_ip', new_callable=AsyncMock)
+    async def test_is_not_ru_country(self, mock_get_country, mock_get_real_ip):
+        """Test that it returns False when country is not RU."""
+        mock_get_country.return_value = "US"
+        request = StubRequest(client_host="5.6.7.8")
+
+        result = await is_request_from_ru(request)
+
+        self.assertFalse(result)
+        mock_get_real_ip.assert_called_once_with(request)
+        mock_get_country.assert_called_once_with('5.6.7.8')
+
+    @patch('Dubsite_tgach.main.get_real_ip', return_value='127.0.0.1')
+    @patch('Dubsite_tgach.main.get_country_by_ip', new_callable=AsyncMock)
+    async def test_unknown_country(self, mock_get_country, mock_get_real_ip):
+        """Test that it returns False when country is unknown/XX."""
+        mock_get_country.return_value = "XX"
+        request = StubRequest(client_host="127.0.0.1")
+
+        result = await is_request_from_ru(request)
+
+        self.assertFalse(result)
+        mock_get_real_ip.assert_called_once_with(request)
+        mock_get_country.assert_called_once_with('127.0.0.1')
 
 
 from Dubsite_tgach.main import clean_title_text
