@@ -633,7 +633,6 @@ user_hourly_image_count = defaultdict(int)
 user_hourly_image_reset = defaultdict(float)
 HOURLY_IMAGE_LIMIT = 110
 MODE_COOLDOWN = 3600  # 1 час в секундах
-MAX_ACTIVE_USERS_IN_MEMORY = 5000 # Лимит на юзера в памяти для get_user_msgs_deque
 ANIME_CMD_COOLDOWN = 25 # 25 секунд
 anime_cmd_lock = asyncio.Lock()
 info_cmd_lock = asyncio.Lock() # Кулдаун для команд /stats, /active
@@ -1033,10 +1032,6 @@ def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, in
     return text
 gc.set_threshold(
     600, 6, 6)  # Оптимальные настройки для баланса памяти/производительности
-def get_user_msgs_deque(user_id: int, board_id: str):
-
-    last_user_msgs_for_board = board_data[board_id]['last_user_msgs']
-    return last_user_msgs_for_board.setdefault(user_id, deque(maxlen=10))
 SPAM_LIMIT = 14
 SPAM_WINDOW = 15
 STICKER_WINDOW = 10  # секунд
