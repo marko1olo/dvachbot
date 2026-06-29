@@ -7639,23 +7639,70 @@ async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str
     except Exception: pass
 
 
-@dp.message(Command("passport", "me", "profile", "stats_me"))
-async def cmd_passport(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    """
-    Генерирует 'Паспорт Анона'. Полная локализация.
-    Адаптировано под безопасную работу с БД (db_lock).
-    """
-    if not board_id: return
+_PASSPORT_DATA = {
+    'ru': {
+        'mental': ["Вялотекущая шизофрения", "Педераст", "Газонюх", "Терминальная стадия двачевания", "ПТСР после /po/", "Синдром Туретта", "Одержимость трапами", "Асексуал (насильно)", "Зумер с деменцией", "Свидетель Вайпа", "Жертва психиатрии", "Пиздабол", "Мамкин анархист", "Солевой", "Овощ", "Гигачад (нет)"],
+        'inv': ["Справка из дурки", "Трусы с чиркашом", "Банка 'Ягуара'", "Диск с ЦП", "Онахол", "Дакимакура", "Вентилятор", "Флешка с ЦП", "Диплом шараги", "Усы Сталина", "Резиновая вагина (б/у)", "Пакет с пакетами", "Мать (продана)", "Шприц", "Носок (стоячий)", "Тетрадь смерти", "ЕОТ (в мечтах)", "Биткоин (нарисованный)", "15 рублей", "Вейп", "Повестка"],
+        'sec': ["Дрочит на фурри", "Любитель лоликона", "Стучит товарищу майору", "Любит унижения", "Мечтает стать модером", "Смотрит цп", "Не мылся год", "Не девственник (врет)", "Боится женщин", "Ест кал", "Хочет в Польшу", "Верит в плоскую землю", "Украл у мамки деньги", "Плачет после секса"]
+    },
+    'en': {
+        'mental': ["Chronic Schizophrenia", "Terminal 4chan addiction", "PTSD after /pol/", "Tourette's", "Trap obsession", "Incel (forced)", "Dementia Zoomer", "Wipe Witness", "Psych ward victim", "Pathological liar", "Basement anarchist", "Meth head", "Vegetable", "Gigachad (not)"],
+        'inv': ["Autism certificate", "Stained underwear", "Monster Energy", "Fan (for shit)", "CP Flash drive (fake)", "College debt", "Hitler's moustache", "Used waifu pillow", "Bag of bags", "Sold mom", "Syringe", "Cum sock (stiff)", "Death Note", "GF (imaginary)", "Bitcoin (drawn)", "0.01$", "Vape", "Draft notice"],
+        'sec': ["Jerks to furries", "Snitch for FBI", "Loves humiliation", "Wants to be janny", "Watches loli", "Hasn't showered in 2024", "Fake virgin", "Scared of women", "Eats bugs", "Wants to go to Brazil", "Flat earther", "Stole mom's credit card", "Cries while pooping"]
+    },
+    'jp': {
+        'mental': ["統合失調症", "2ch中毒末期", "政治厨PTSD", "トゥレット症候群", "男の娘中毒", "非モテ（強制）", "認知症ズーマー", "祭り目撃者", "精神科の犠牲者", "虚言癖", "ママのアナキスト", "ヤク中", "植物人間", "ギガチャド（嘘）"],
+        'inv': ["障害者手帳", "シミ付きパンツ", "ストロングゼロ", "扇風機（クソ用）", "ロリ画像USB", "Fラン大学の学位", "スターリンの髭", "中古オナホ", "レジ袋の山", "売られた母", "注射器", "カチカチの靴下", "デスノート", "脳内彼女", "ビットコイン（絵）", "15ルーブル", "Vape", "赤紙"],
+        'sec': ["ケモナー", "警察の犬", "ドM", "削除人になりたい", "ロリコン", "1年風呂入ってない", "童貞（嘘）", "女性恐怖症", "食糞", "異世界に行きたい", "地球平面説信者", "親の金盗んだ", "うんこ中に泣く"]
+    }
+}
 
-    try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+def _get_passport_rank_and_role(lang: str, post_count: int) -> tuple[str, str]:
+    if lang == 'en':
+        if post_count == 0: return "👻 Read-only", "Random Guy"
+        elif post_count < 10: return "💩 Newfag", "Normie"
+        elif post_count < 50: return "🤡 Attention Whore", "Shitposter"
+        elif post_count < 150: return "👺 Troll", "+15 cents"
+        elif post_count < 300: return "🐸 Average /b/tard", "Wojak"
+        elif post_count < 666: return "☣️ Toxic", "Copypasta Gen"
+        elif post_count < 1000: return "🧙‍♂️ Wizard (30 y.o. virgin)", "Incel"
+        elif post_count < 2000: return "🦍 Boomer", "Sofa Warrior"
+        elif post_count < 5000: return "🔥 Living Legend", "Oldfag"
+        elif post_count < 8000: return "🔥 Insane", "Schizo"
+        elif post_count < 10000: return "🔥 Holy Anon", "Elite"
+        else: return "👁️ Son of Abu", "God of Shit"
+    elif lang == 'jp':
+        if post_count == 0: return "👻 ROM専", "名無しさん"
+        elif post_count < 10: return "💩 新参", "一般人"
+        elif post_count < 50: return "🤡 かまってちゃん", "厨房"
+        elif post_count < 150: return "👺 荒らし", "工作員"
+        elif post_count < 300: return "🐸 暇人", "自宅警備員"
+        elif post_count < 666: return "☣️ 毒男", "コピペ職人"
+        elif post_count < 1000: return "🧙‍♂️ 魔法使い (童貞30歳)", "喪男"
+        elif post_count < 2000: return "🦍 老害", "ネット弁慶"
+        elif post_count < 5000: return "🔥 生ける伝説", "古参"
+        elif post_count < 8000: return "🔥 狂人", "糖質"
+        elif post_count < 10000: return "🔥 神コテ", "エリート"
+        else: return "👁️ 管理人の息子", "クソの神"
+    else: # ru
+        if post_count == 0: return "👻 Ридонли", "Хуй с горы - Обезьяна на бревне"
+        elif post_count < 10: return "💩 Рачье", "Ньюфажина"
+        elif post_count < 50: return "🤡 Вниманиеблядь", "Поехавший"
+        elif post_count < 150: return "👺 Лахтадырка","Педофил"
+        elif post_count < 200: return "🐸 Битард обыкновенный", "Анон"
+        elif post_count < 400: return "☣️ Проткнутый пидоран", "Транссексуал"
+        elif post_count < 600: return "🧙‍♂️ Волшебник (30 лет без секса)", "Девственник"
+        elif post_count < 800: return "🦍 Скуф", "Проткнутый"
+        elif post_count < 1000: return "🔥 Живое воплощение Йобы", "Легенда"
+        elif post_count < 1500: return "🔥 Сумасшедший", "Сбежавший из дурки"
+        elif post_count < 1800: return "🔥 Легенда двача", "Старожил"
+        elif post_count < 2000: return "🔥 Живая легенда", "Старожил"
+        elif post_count < 2500: return "🔥 Говноед", "Психически больной"
+        elif post_count < 3000: return "🔥 Пресвятой Анон", "Легендарный Анонимус"
+        else: return "👁️ Сын Абу", "Бог говна"
 
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    user_id = message.from_user.id
-    
-    # Импортируем пул и лок
+async def _get_passport_stats(user_id: int) -> tuple[int, float, int] | None:
     from common.db_pool import get_pool, db_lock
-    
     post_count = 0
     balance = 0
     is_verified = 0
@@ -7676,69 +7723,13 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
                 if row: post_count = row[0]
     except Exception as e:
         print(f"Ошибка получения статистики: {e}")
-        return
-    rank = ""
-    role = ""
-    if lang == 'en':
-        if post_count == 0: rank, role = "👻 Read-only", "Random Guy"
-        elif post_count < 10: rank, role = "💩 Newfag", "Normie"
-        elif post_count < 50: rank, role = "🤡 Attention Whore", "Shitposter"
-        elif post_count < 150: rank, role = "👺 Troll", "+15 cents"
-        elif post_count < 300: rank, role = "🐸 Average /b/tard", "Wojak"
-        elif post_count < 666: rank, role = "☣️ Toxic", "Copypasta Gen"
-        elif post_count < 1000: rank, role = "🧙‍♂️ Wizard (30 y.o. virgin)", "Incel"
-        elif post_count < 2000: rank, role = "🦍 Boomer", "Sofa Warrior"
-        elif post_count < 5000: rank, role = "🔥 Living Legend", "Oldfag"
-        elif post_count < 8000: rank, role = "🔥 Insane", "Schizo"
-        elif post_count < 10000: rank, role = "🔥 Holy Anon", "Elite"
-        else: rank, role = "👁️ Son of Abu", "God of Shit"
-    elif lang == 'jp':
-        if post_count == 0: rank, role = "👻 ROM専", "名無しさん"
-        elif post_count < 10: rank, role = "💩 新参", "一般人"
-        elif post_count < 50: rank, role = "🤡 かまってちゃん", "厨房"
-        elif post_count < 150: rank, role = "👺 荒らし", "工作員"
-        elif post_count < 300: rank, role = "🐸 暇人", "自宅警備員"
-        elif post_count < 666: rank, role = "☣️ 毒男", "コピペ職人"
-        elif post_count < 1000: rank, role = "🧙‍♂️ 魔法使い (童貞30歳)", "喪男"
-        elif post_count < 2000: rank, role = "🦍 老害", "ネット弁慶"
-        elif post_count < 5000: rank, role = "🔥 生ける伝説", "古参"
-        elif post_count < 8000: rank, role = "🔥 狂人", "糖質"
-        elif post_count < 10000: rank, role = "🔥 神コテ", "エリート"
-        else: rank, role = "👁️ 管理人の息子", "クソの神"
-    else: # ru
-        if post_count == 0: rank, role = "👻 Ридонли", "Хуй с горы - Обезьяна на бревне"
-        elif post_count < 10: rank, role = "💩 Рачье", "Ньюфажина"
-        elif post_count < 50: rank, role = "🤡 Вниманиеблядь", "Поехавший"
-        elif post_count < 150: rank, role = "👺 Лахтадырка","Педофил"
-        elif post_count < 200: rank, role = "🐸 Битард обыкновенный", "Анон"
-        elif post_count < 400: rank, role = "☣️ Проткнутый пидоран", "Транссексуал"
-        elif post_count < 600: rank, role = "🧙‍♂️ Волшебник (30 лет без секса)", "Девственник"
-        elif post_count < 800: rank, role = "🦍 Скуф", "Проткнутый"
-        elif post_count < 1000: rank, role = "🔥 Живое воплощение Йобы", "Легенда"
-        elif post_count < 1500: rank, role = "🔥 Сумасшедший", "Сбежавший из дурки"
-        elif post_count < 1800: rank, role = "🔥 Легенда двача", "Старожил"
-        elif post_count < 2000: rank, role = "🔥 Живая легенда", "Старожил"
-        elif post_count < 2500: rank, role = "🔥 Говноед", "Психически больной"
-        elif post_count < 3000: rank, role = "🔥 Пресвятой Анон", "Легендарный Анонимус"
-        else: rank, role = "👁️ Сын Абу", "Бог говна"
-    data_ru = {
-        'mental': ["Вялотекущая шизофрения", "Педераст", "Газонюх", "Терминальная стадия двачевания", "ПТСР после /po/", "Синдром Туретта", "Одержимость трапами", "Асексуал (насильно)", "Зумер с деменцией", "Свидетель Вайпа", "Жертва психиатрии", "Пиздабол", "Мамкин анархист", "Солевой", "Овощ", "Гигачад (нет)"],
-        'inv': ["Справка из дурки", "Трусы с чиркашом", "Банка 'Ягуара'", "Диск с ЦП", "Онахол", "Дакимакура", "Вентилятор", "Флешка с ЦП", "Диплом шараги", "Усы Сталина", "Резиновая вагина (б/у)", "Пакет с пакетами", "Мать (продана)", "Шприц", "Носок (стоячий)", "Тетрадь смерти", "ЕОТ (в мечтах)", "Биткоин (нарисованный)", "15 рублей", "Вейп", "Повестка"],
-        'sec': ["Дрочит на фурри", "Любитель лоликона", "Стучит товарищу майору", "Любит унижения", "Мечтает стать модером", "Смотрит цп", "Не мылся год", "Не девственник (врет)", "Боится женщин", "Ест кал", "Хочет в Польшу", "Верит в плоскую землю", "Украл у мамки деньги", "Плачет после секса"]
-    }
-    data_en = {
-        'mental': ["Chronic Schizophrenia", "Terminal 4chan addiction", "PTSD after /pol/", "Tourette's", "Trap obsession", "Incel (forced)", "Dementia Zoomer", "Wipe Witness", "Psych ward victim", "Pathological liar", "Basement anarchist", "Meth head", "Vegetable", "Gigachad (not)"],
-        'inv': ["Autism certificate", "Stained underwear", "Monster Energy", "Fan (for shit)", "CP Flash drive (fake)", "College debt", "Hitler's moustache", "Used waifu pillow", "Bag of bags", "Sold mom", "Syringe", "Cum sock (stiff)", "Death Note", "GF (imaginary)", "Bitcoin (drawn)", "0.01$", "Vape", "Draft notice"],
-        'sec': ["Jerks to furries", "Snitch for FBI", "Loves humiliation", "Wants to be janny", "Watches loli", "Hasn't showered in 2024", "Fake virgin", "Scared of women", "Eats bugs", "Wants to go to Brazil", "Flat earther", "Stole mom's credit card", "Cries while pooping"]
-    }
-    data_jp = {
-        'mental': ["統合失調症", "2ch中毒末期", "政治厨PTSD", "トゥレット症候群", "男の娘中毒", "非モテ（強制）", "認知症ズーマー", "祭り目撃者", "精神科の犠牲者", "虚言癖", "ママのアナキスト", "ヤク中", "植物人間", "ギガチャド（嘘）"],
-        'inv': ["障害者手帳", "シミ付きパンツ", "ストロングゼロ", "扇風機（クソ用）", "ロリ画像USB", "Fラン大学の学位", "スターリンの髭", "中古オナホ", "レジ袋の山", "売られた母", "注射器", "カチカチの靴下", "デスノート", "脳内彼女", "ビットコイン（絵）", "15ルーブル", "Vape", "赤紙"],
-        'sec': ["ケモナー", "警察の犬", "ドM", "削除人になりたい", "ロリコン", "1年風呂入ってない", "童貞（嘘）", "女性恐怖症", "食糞", "異世界に行きたい", "地球平面説信者", "親の金盗んだ", "うんこ中に泣く"]
-    }
-    if lang == 'en': current_data = data_en
-    elif lang == 'jp': current_data = data_jp
-    else: current_data = data_ru
+        return None
+    return post_count, balance, is_verified
+
+def _generate_passport_text(user_id: int, lang: str, board_id: str, post_count: int, balance: float, is_verified: int, rank: str, role: str) -> str:
+    import random
+    from datetime import datetime, UTC
+    current_data = _PASSPORT_DATA.get(lang, _PASSPORT_DATA['ru'])
     seed_val = f"{user_id}_{datetime.now(UTC).date()}"
     rng = random.Random(seed_val)
     social_credit = rng.randint(-1488, 1337)
@@ -7761,7 +7752,7 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     else:
         labels = ["ПАСПОРТ ТГАЧЕРА", "ID", "Ранг", "Роль", "Постов", "Диагноз", "Инвентарь", "Компромат", "Соц. рейтинг"]
         anon_tag = f"Анон-{user_id % 10000:04d}"
-    passport_text = (
+    return (
         f"🪪 <b>{labels[0]} {flag}</b>\n"
         f"<code>{'—'*22}</code>\n"
         f"🆔 <b>{labels[1]}:</b> <code>{anon_tag}</code>\n"
@@ -7776,6 +7767,29 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
         f"{sc_emoji} <b>{labels[8]}:</b> {social_credit}\n"
         f"<code>{'—'*22}</code>\n"
     )
+
+@dp.message(Command("passport", "me", "profile", "stats_me"))
+async def cmd_passport(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Генерирует 'Паспорт Анона'. Полная локализация.
+    Адаптировано под безопасную работу с БД (db_lock).
+    """
+    if not board_id: return
+
+    try: spawn_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    user_id = message.from_user.id
+
+    stats = await _get_passport_stats(user_id)
+    if stats is None:
+        return
+    post_count, balance, is_verified = stats
+
+    rank, role = _get_passport_rank_and_role(lang, post_count)
+    passport_text = _generate_passport_text(user_id, lang, board_id, post_count, balance, is_verified, rank, role)
+
     try:
         await message.reply(passport_text, parse_mode="HTML")
     except Exception:
