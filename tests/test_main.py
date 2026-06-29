@@ -240,3 +240,125 @@ class TestVibeToIcon(unittest.TestCase):
         self.assertEqual(vibe_to_icon("unknown"), "❓ (Неясно)")
         self.assertEqual(vibe_to_icon(""), "❓ (Неясно)")
         self.assertEqual(vibe_to_icon("something totally unrelated"), "❓ (Неясно)")
+
+
+from Dubsite_tgach.main import to_makaba_post as dt_to_makaba_post
+from parameterized import parameterized
+from unittest.mock import patch
+import datetime
+
+class TestToMakabaPost(unittest.TestCase):
+
+    @patch("Dubsite_tgach.main.datetime")
+    def test_minimal_post(self, mock_dt_dt):
+        func = dt_to_makaba_post
+        mock_dt = datetime.datetime(2023, 1, 1, 12, 0, 0)
+        mock_dt_dt.fromtimestamp.return_value = mock_dt
+
+        post_data = {
+            "id": "123",
+            "timestamp": 1672574400.0,
+        }
+
+        result = func(post_data, "b")
+
+        self.assertEqual(result["num"], 123)
+        self.assertEqual(result["parent"], 0)
+        self.assertEqual(result["lasthit"], int(1672574400.0))
+        self.assertEqual(result["comment"], "")
+        self.assertEqual(result["files"], [])
+        self.assertEqual(result["name"], "Аноним")
+        self.assertEqual(result["email"], "")
+        self.assertEqual(result["op"], 0)
+        self.assertEqual(result["trip"], "")
+        self.assertEqual(result["banned"], 0)
+        self.assertEqual(result["closed"], 0)
+        self.assertEqual(result["sticky"], 0)
+        self.assertEqual(result["endless"], 0)
+        # Checking string datetime representation format based on standard execution
+        self.assertEqual(result["date"], mock_dt.strftime("%d/%m/%y %a %H:%M:%S"))
+
+    @patch("Dubsite_tgach.main.datetime")
+    def test_full_post(self, mock_dt_dt):
+        func = dt_to_makaba_post
+        mock_dt = datetime.datetime(2023, 1, 1, 12, 0, 0)
+        mock_dt_dt.fromtimestamp.return_value = mock_dt
+
+        post_data = {
+            "id": 456,
+            "thread_id": 123,
+            "timestamp": 1672574400.0,
+            "sage": True,
+            "is_op_post": True,
+            "is_archived": True,
+            "is_pinned": True,
+            "is_endless": True,
+            "content": {
+                "text": "Hello world",
+                "files": [
+                    {
+                        "filename": "image.png",
+                        "original_url": "http://example.com/image.png",
+                        "thumbnail_url": "http://example.com/thumb.png",
+                        "type": "image"
+                    },
+                    {
+                        "filename": "video.mp4",
+                        "original_url": "http://example.com/video.mp4",
+                        "thumbnail_url": "",
+                        "type": "video"
+                    }
+                ]
+            }
+        }
+
+        result = func(post_data, "b")
+
+        self.assertEqual(result["num"], 456)
+        self.assertEqual(result["parent"], 123)
+        self.assertEqual(result["comment"], "Hello world")
+        self.assertEqual(result["email"], "sage")
+        self.assertEqual(result["op"], 1)
+        self.assertEqual(result["closed"], 1)
+        self.assertEqual(result["sticky"], 1)
+        self.assertEqual(result["endless"], 1)
+
+        self.assertEqual(len(result["files"]), 2)
+
+        f1 = result["files"][0]
+        self.assertEqual(f1["displayname"], "image.png")
+        self.assertEqual(f1["path"], "http://example.com/image.png")
+        self.assertEqual(f1["thumbnail"], "http://example.com/thumb.png")
+        self.assertEqual(f1["type"], 1) # image or photo
+
+        f2 = result["files"][1]
+        self.assertEqual(f2["displayname"], "video.mp4")
+        self.assertEqual(f2["path"], "http://example.com/video.mp4")
+        self.assertEqual(f2["type"], 6) # other
+
+    @patch("Dubsite_tgach.main.datetime")
+    def test_missing_file_keys(self, mock_dt_dt):
+        func = dt_to_makaba_post
+        mock_dt = datetime.datetime(2023, 1, 1, 12, 0, 0)
+        mock_dt_dt.fromtimestamp.return_value = mock_dt
+
+        post_data = {
+            "id": 789,
+            "timestamp": 1672574400.0,
+            "content": {
+                "files": [
+                    {} # Empty dict to trigger defaults
+                ]
+            }
+        }
+
+        result = func(post_data, "b")
+
+        self.assertEqual(len(result["files"]), 1)
+        f1 = result["files"][0]
+        self.assertEqual(f1["displayname"], "file.ext")
+        self.assertEqual(f1["fullname"], "file.ext")
+        self.assertEqual(f1["name"], "file.ext")
+        self.assertEqual(f1["path"], "")
+        self.assertEqual(f1["thumbnail"], "")
+        self.assertEqual(f1["type"], 6) # defaults to 6 if no type provided
