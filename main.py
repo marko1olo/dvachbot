@@ -6577,83 +6577,57 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     except:
         pass
 
-@dp.message(Command("shoot"))
-async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
-    user_id = message.from_user.id
-    if not message.reply_to_message:
-        await message.answer("⚠️ Сделай Reply на пост жертвы с командой /shoot!")
-        return
-    from common.db_pool import get_pool, db_lock
-    import json
-    import time
-    db = await get_pool()
+import json
+import time
+
+async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
         row = await c.fetchone()
         active_items_str = row[0] if row and row[0] else "{}"
     try:
-        active_items = json.loads(active_items_str)
+        return json.loads(active_items_str)
     except:
-        active_items = {}
-    if not active_items.get("mute_gun"):
-        await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
-        return
-    target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0:
-        await message.answer("🚫 Не удалось найти автора поста...")
-        return
-    if target_id == user_id:
-        await message.answer("Ты пытаешься выстрелить в самого себя? Идиот.")
-        return
-    # Проверяем Зеркальный Щит у цели
-    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
-        t_row = await c.fetchone()
-        t_str = t_row[0] if t_row and t_row[0] else "{}"
+        return {}
+
+async def _handle_shoot_bounce(message: types.Message, db, db_lock, board_id: str, user_id: int, target_id: int, active_items: dict, t_items: dict):
+    t_items["reflect_shield_until"] = 0
+    active_items["mute_gun"] = False
+    async with db_lock:
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(t_items), target_id, board_id))
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(active_items), user_id, board_id))
+        await db.commit()
+    async with storage_lock:
+        board_data[board_id]['mutes'][user_id] = datetime.now(UTC) + timedelta(seconds=3600)
+    await apply_regular_mute(user_id, board_id, 3600)
+    bounce = (
+        f"🛡️ <b>ЗЕРКАЛЬНЫЙ ЩИТ!</b>\n\n"
+        f"Анон попытался выстрелить из Мут-Гана в <code>{target_id}</code>, "
+        f"но у цели сработал Зеркальный Щит!\n"
+        f"Выстрел срикошетил. Стрелок <code>{user_id}</code> улетает в мут на 1 час 🤡\n"
+        f"<i>(Щит цели израсходован.)</i>"
+    )
+    await message.bot.send_message(
+        message.chat.id, bounce,
+        reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML"
+    )
     try:
-        t_items = json.loads(t_str)
-    except:
-        t_items = {}
-    current_time = int(time.time())
-    if t_items.get("reflect_shield_until", 0) > current_time:
-        # Рикошет!
-        t_items["reflect_shield_until"] = 0
-        active_items["mute_gun"] = False
-        async with db_lock:
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(t_items), target_id, board_id))
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(active_items), user_id, board_id))
-            await db.commit()
-        async with storage_lock:
-            board_data[board_id]['mutes'][user_id] = datetime.now(UTC) + timedelta(seconds=3600)
-        await apply_regular_mute(user_id, board_id, 3600)
-        bounce = (
-            f"🛡️ <b>ЗЕРКАЛЬНЫЙ ЩИТ!</b>\n\n"
-            f"Анон попытался выстрелить из Мут-Гана в <code>{target_id}</code>, "
-            f"но у цели сработал Зеркальный Щит!\n"
-            f"Выстрел срикошетил. Стрелок <code>{user_id}</code> улетает в мут на 1 час 🤡\n"
-            f"<i>(Щит цели израсходован.)</i>"
-        )
         await message.bot.send_message(
-            message.chat.id, bounce,
-            reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML"
+            user_id,
+            "💥 <b>Твой выстрел срикошетил!</b>\n"
+            "Ты попытался выстрелить в анона с Зеркальным Щитом — выстрел отразился обратно. "
+            "Ты в муте на 1 час.",
+            parse_mode="HTML"
         )
-        try:
-            await message.bot.send_message(
-                user_id,
-                "💥 <b>Твой выстрел срикошетил!</b>\n"
-                "Ты попытался выстрелить в анона с Зеркальным Щитом — выстрел отразился обратно. "
-                "Ты в муте на 1 час.",
-                parse_mode="HTML"
-            )
-        except:
-            pass
-        try:
-            await message.delete()
-        except:
-            pass
-        return
-    # Обычный мут цели
+    except:
+        pass
+    try:
+        await message.delete()
+    except:
+        pass
+
+async def _handle_shoot_success(message: types.Message, db, db_lock, board_id: str, user_id: int, target_id: int, active_items: dict):
     async with storage_lock:
         board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=3600)
     await apply_regular_mute(target_id, board_id, 3600)
@@ -6686,6 +6660,44 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         await message.delete()
     except:
         pass
+
+
+@dp.message(Command("shoot"))
+async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ Сделай Reply на пост жертвы с командой /shoot!")
+        return
+
+    from common.db_pool import get_pool, db_lock
+    import time
+    db = await get_pool()
+
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("mute_gun"):
+        await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
+        return
+
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0:
+        await message.answer("🚫 Не удалось найти автора поста...")
+        return
+    if target_id == user_id:
+        await message.answer("Ты пытаешься выстрелить в самого себя? Идиот.")
+        return
+
+    # Проверяем Зеркальный Щит у цели
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    current_time = int(time.time())
+
+    if t_items.get("reflect_shield_until", 0) > current_time:
+        # Рикошет!
+        await _handle_shoot_bounce(message, db, db_lock, board_id, user_id, target_id, active_items, t_items)
+        return
+
+    # Обычный мут цели
+    await _handle_shoot_success(message, db, db_lock, board_id, user_id, target_id, active_items)
 
 @dp.message(Command("curse", "vomit"))
 async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
