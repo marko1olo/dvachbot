@@ -144,9 +144,6 @@ async def process_and_upload_image(
     bot: Bot, 
     channel_id: int
 ) -> dict:
-    import os
-    import hashlib
-    from common.bot_pool import global_bot_pool
     
     content_type = file.content_type
     original_filename = file.filename or "file"
@@ -451,7 +448,7 @@ def _create_thumbnail_sync_in_memory(image_bytes: bytes) -> bytes | None:
     except Image.DecompressionBombError:
         logger.warning("💣 Detected Decompression Bomb attempt!")
         return None
-    except Exception as e:
+    except Exception:
         return None
 async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filename: str, related_id: str = None):
     # 1. Теневой канал (Shadow)

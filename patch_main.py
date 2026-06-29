@@ -1,17 +1,14 @@
 import re
 import sys
 
-def patch_main():
-    with open('main.py', 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    # 1. Add ROAST imports
+def patch_roast_imports(content: str) -> str:
     import_str_old = "    SUMMARIZE_PROMPTS_BOARD, SUMMARIZE_PROMPTS_BOARD_EN, SUMMARIZE_PROMPTS_BOARD_JP,"
     import_str_new = import_str_old + "\n    ROAST_PROMPTS, ROAST_PROMPTS_EN, ROAST_PROMPTS_JP,"
     if "ROAST_PROMPTS," not in content:
         content = content.replace(import_str_old, import_str_new)
+    return content
 
-    # 2. Add ROAST_COOLDOWN and clean_html_for_tg
+def patch_cooldown_and_html_cleaner(content: str) -> str:
     cooldown_old = "SUMMARIZE_COOLDOWN = 60 * 30"
     cooldown_new = """SUMMARIZE_COOLDOWN = 60 * 30
 ROAST_COOLDOWN = 60 * 5  # 5 minutes
@@ -32,7 +29,7 @@ def clean_html_for_tg(text: str) -> str:
     
     # Very rudimentary unclosed tag fix:
     # Just rely on the prompt instructing the LLM, and escape any raw < that is not part of a known tag
-    text = re.sub(r'<(?!/?(b|i|u|s|code|pre|a\\b)[>\\s])', '&lt;', text)
+    text = re.sub(r'<(?!/?(?:b|i|u|s|code|pre|a)(?:\b[^<>]*>|>))', '&lt;', text)
 
     # Balance tags
     allowed_tags = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
@@ -76,19 +73,17 @@ def clean_html_for_tg(text: str) -> str:
 
     return "".join(out)
 """
-    content = content.replace(cooldown_old, cooldown_new)
+    return content.replace(cooldown_old, cooldown_new)
 
-    # 3. Patch cmd_summarize to use clean_html_for_tg
+def patch_cmd_summarize(content: str) -> str:
     summarize_success_old = "summary = await summarize_text_with_hf(prompt, chunk, hf_token)"
     summarize_success_new = "summary = await summarize_text_with_hf(prompt, chunk, hf_token)\n        summary = clean_html_for_tg(summary)"
     if "summary = clean_html_for_tg(summary)" not in content.split("def cmd_roast(")[0]:
         # only replace if not already patched in cmd_summarize
         content = content.replace(summarize_success_old, summarize_success_new)
+    return content
 
-    # 4. Add cmd_roast
-    # I'll insert it right after cmd_summarize
-    
-    # Let's find the end of cmd_summarize
+def patch_cmd_roast(content: str) -> str:
     end_summarize = "dp.message.register(cmd_summarize, Command(commands=['summarize', 'summary', 'sum']))"
     
     roast_code = """
@@ -184,6 +179,16 @@ async def cmd_roast(message: types.Message):
 """
     if "async def cmd_roast(" not in content:
         content = content.replace(end_summarize, end_summarize + "\n\n" + roast_code)
+    return content
+
+def patch_main():
+    with open('main.py', 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    content = patch_roast_imports(content)
+    content = patch_cooldown_and_html_cleaner(content)
+    content = patch_cmd_summarize(content)
+    content = patch_cmd_roast(content)
 
     with open('main.py', 'w', encoding='utf-8') as f:
         f.write(content)

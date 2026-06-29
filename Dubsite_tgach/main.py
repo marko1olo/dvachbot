@@ -94,7 +94,7 @@ def get_real_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    return request.client.host
+    return request.client.host if request.client else "127.0.0.1"
 GEOIP_READER = None
 
 @alru_cache(maxsize=10000, ttl=3600)
@@ -1320,7 +1320,8 @@ async def sitemap_xml(request: Request):
         f"{base_url}/archive/threads/",
         f"{base_url}/archive/chat/"
     ]
-    for board_id in BOARD_CONFIG:
+    valid_boards = set(BOARD_CONFIG.keys())
+    for board_id in valid_boards:
         urls.append(f"{base_url}/{board_id}/")
         urls.append(f"{base_url}/{board_id}/catalog/")
     db = await get_pool()
@@ -1329,8 +1330,8 @@ async def sitemap_xml(request: Request):
         async with db.execute(query) as cursor:
             async for row in cursor:
                 bid, tid, ts = row
-                date_str = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
-                urls.append(f"{base_url}/{bid}/res/{tid}.html")
+                if bid in valid_boards:
+                    urls.append(f"{base_url}/{bid}/res/{tid}.html")
     except Exception as e:
         print(f"Sitemap error: {e}")
         
@@ -1712,7 +1713,7 @@ def optimize_thread_context(op_post: dict, replies: list, max_posts: int = 40) -
     return " | ".join(buffer)
 def pluralize_russian(count, one, few, many):
     try:
-        n = int(count)
+        n = abs(int(count))
         if n % 10 == 1 and n % 100 != 11:
             return one
         elif 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
@@ -2242,10 +2243,11 @@ async def enrich_heavy_data(posts: List[dict]):
             try:
                 db = await get_pool()
                 placeholders = ','.join('?' for _ in ids)
-                q = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
-                res = defaultdict(list)
+                q = f"SELECT target_post_num, json_group_array(source_post_num) FROM Backlinks WHERE target_post_num IN ({placeholders}) GROUP BY target_post_num"
+                res = {}
                 async with db.execute(q, ids) as cursor:
-                    async for row in cursor: res[row[0]].append(row[1])
+                    async for row in cursor:
+                        res[row[0]] = json.loads(row[1])
                 return res
             except: return {}
         tasks.append(fetch_backlinks_task(all_post_ids))
@@ -3291,7 +3293,7 @@ async def api_random_image_next(request: Request, boards: Optional[str] = None):
     try:
         allowed_boards = None
         if boards:
-            allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
+            allowed_boards = [stripped for b in boards.split(',') if (stripped := b.strip())]
 
         post_data = await get_random_image_post(allowed_boards=allowed_boards)
         
@@ -5017,7 +5019,7 @@ async def api_create_post(
         content['sage'] = True
     is_shadow_final = is_shadow_muted or has_banned_content 
     if post_mode == 'poll':
-        raw_opts = [opt.strip() for opt in (poll_options or []) if opt and opt.strip()]
+        raw_opts = [stripped for opt in (poll_options or []) if opt and (stripped := opt.strip())]
         clean_opts = list(dict.fromkeys(raw_opts))
         if not poll_question or not poll_question.strip() or not (2 <= len(clean_opts) <= 5):
             raise HTTPException(status_code=400, detail="Invalid poll data (need 2-5 unique options)")
@@ -5050,11 +5052,11 @@ async def api_create_post(
                     ftype = f.get('type', 'file')
                     if t_type == 'media': 
                         valid_file_attached = True
-                    elif t_type == 'image' and ftype in ['image', 'photo', 'sticker']:
+                    elif t_type == 'image' and ftype in {'image', 'photo', 'sticker'}:
                         valid_file_attached = True
-                    elif t_type == 'video' and ftype in ['video', 'animation', 'video_note', 'gif']:
+                    elif t_type == 'video' and ftype in {'video', 'animation', 'video_note', 'gif'}:
                         valid_file_attached = True
-                    elif t_type == 'audio' and ftype in ['audio', 'voice']:
+                    elif t_type == 'audio' and ftype in {'audio', 'voice'}:
                         valid_file_attached = True
             if valid_file_attached:
                 if not is_unlocked:
@@ -5245,8 +5247,6 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
             return {"status": "ok", "message": "База чиста, исправлять нечего."}
 
         # 2. Проходимся и чистим
-        await conn.execute("BEGIN IMMEDIATE")
-        
         updates = []
         for row in rows:
             post_num, raw_content = row
@@ -5270,6 +5270,8 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
             except Exception:
                 continue
         
+        await conn.execute("BEGIN IMMEDIATE")
+
         if updates:
             await conn.executemany(
                 "UPDATE Posts SET content = ? WHERE post_num = ?",
@@ -5427,7 +5429,7 @@ async def api_roulette_next(request: Request, boards: Optional[str] = None):
     # Парсим список досок из query string (?boards=b,a,gd)
     allowed_boards = None
     if boards:
-        allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
+        allowed_boards = [stripped for b in boards.split(',') if (stripped := b.strip())]
 
     try:
         raw_post = await get_random_video_post(allowed_boards=allowed_boards)
@@ -6474,7 +6476,7 @@ async def search_tags_page(request: Request, tags: str = "", page: int = 1, user
     """
     Страница результатов поиска по тегам.
     """
-    tag_list = [t.strip() for t in tags.split(',') if t.strip()]
+    tag_list = [stripped for t in tags.split(',') if (stripped := t.strip())]
     posts = []
     
     if tag_list:

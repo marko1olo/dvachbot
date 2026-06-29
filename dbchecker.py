@@ -33,6 +33,12 @@ def format_size(size_bytes):
     return f"{size_bytes:.2f} TB"
 
 
+def quote_identifier(s):
+    """Safely escapes SQLite identifiers."""
+    escaped_s = s.replace('"', '""')
+    return f'"{escaped_s}"'
+
+
 def check_integrity(cur):
     print(f"\n{Colors.BOLD}1. Проверка физической целостности (integrity_check)...{Colors.ENDC}")
     start_time = time.time()
@@ -57,7 +63,8 @@ def get_table_statistics(cur, tables):
             print(f"{table:<25} | {'INVALID NAME':<10}")
             continue
         try:
-            cur.execute(f'SELECT COUNT(*) FROM "{table}"')
+            safe_table = quote_identifier(table)
+            cur.execute(f'SELECT COUNT(*) FROM {safe_table}')
             count = cur.fetchone()[0]
             print(f"{table:<25} | {count:<10}")
             total_rows += count
@@ -126,9 +133,11 @@ def find_logical_garbage(cur, tables):
             if not re.match(r'^[a-zA-Z0-9_]+$', table):
                 print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: недопустимое имя{Colors.ENDC}")
                 continue
+            safe_table = quote_identifier(table)
+            safe_col = quote_identifier(col)
             cur.execute(f"""
-                SELECT COUNT(*) FROM "{table}" t
-                LEFT JOIN Posts p ON t.{col} = p.post_num
+                SELECT COUNT(*) FROM {safe_table} t
+                LEFT JOIN Posts p ON t.{safe_col} = p.post_num
                 WHERE p.post_num IS NULL
             """)
             orphans = cur.fetchone()[0]

@@ -8,7 +8,6 @@ from common.database import (
     get_pending_mirror_tasks, reschedule_mirror_task, remove_mirror_task, 
     add_file_mirror, get_file_owner_id, get_file_mirrors 
 )
-from common.db_pool import get_pool
 from site_tgach.catbox import upload_url_to_catbox, upload_file_to_catbox
 from common.bot_pool import global_bot_pool
 from common.board_config import BOARD_CONFIG
@@ -121,22 +120,23 @@ async def _process_single_task(task):
         fresh_file_id = file_id 
         download_success = False 
         
-        file_info = None # <--- FIX: Инициализация переменной
+        file_info = None
 
         try:
             file_info = await bot.get_file(file_id)
             fresh_file_id = file_info.file_id 
             
-            if getattr(file_info, "file_path", None):
-                _, ext = os.path.splitext(file_info.file_path)
+            file_path = getattr(file_info, "file_path", None)
+            if file_path:
+                _, ext = os.path.splitext(file_path)
                 if ext: file_ext = ext
 
-            if public_safe_bot:
-                tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
-                if mirror_type == 'catbox':
-                    success_link = await upload_url_to_catbox(tg_url)
-                elif mirror_type == '0x0':
-                    success_link = await upload_url_to_0x0(tg_url)
+                if public_safe_bot:
+                    tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
+                    if mirror_type == 'catbox':
+                        success_link = await upload_url_to_catbox(tg_url)
+                    elif mirror_type == '0x0':
+                        success_link = await upload_url_to_0x0(tg_url)
         except Exception as e:
             err_str = str(e).lower()
             if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
@@ -179,7 +179,7 @@ async def _process_single_task(task):
                     logger.warning(f"⚠️ MTProto failed for {file_id[:10]}. Trying HTTP Fallback...")
                     try:
                         # Получаем путь, если его нет (или если первый запрос упал)
-                        if not file_info or not getattr(file_info, "file_path", None): # <--- FIX: Безопасная проверка
+                        if not file_info or not getattr(file_info, "file_path", None):
                             file_info = await bot.get_file(fresh_file_id)
                         
                         file_path = getattr(file_info, "file_path", None) if file_info else None
