@@ -2523,25 +2523,28 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
     if is_admin(user_id, board_id):
         return True # Админу можно всё, спам-фильтр пропускает
 
-    # Extract content early for echodown tracking
     if msg.content_type == 'text':
-        check_content = msg.text
+        msg_type = 'text'
+        content = msg.text
     elif msg.content_type == 'sticker':
-        check_content = msg.sticker.file_id
+        msg_type = 'sticker'
+        content = msg.sticker.file_id
     elif msg.content_type == 'animation':
-        check_content = msg.animation.file_id
+        msg_type = 'animation'
+        content = msg.animation.file_id
     elif msg.content_type == 'audio':
         return True
     elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
-        check_content = msg.caption
+        msg_type = 'text'
+        content = msg.caption
     else:
-        check_content = None
+        return True # Неизвестный тип для спам-фильтра
 
-    if check_content:
+    if content:
         now_ts = time.time()
         user_cb = cross_board_spam_tracker[user_id]
         if not user_cb or user_cb[-1][1] != board_id:
-            user_cb.append((now_ts, board_id, check_content))
+            user_cb.append((now_ts, board_id, content))
             
             if len(user_cb) == 3:
                 boards = {b for t, b, c in user_cb}
@@ -2550,7 +2553,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
                     # Check if contents are duplicates
                     contents = [c for t, b, c in user_cb]
                     is_duplicate = False
-                    if msg.content_type == 'text' or (msg.content_type in ['photo', 'video', 'document'] and msg.caption):
+                    if msg_type == 'text':
                         import difflib
                         r1 = difflib.SequenceMatcher(None, contents[0], contents[1]).ratio()
                         r2 = difflib.SequenceMatcher(None, contents[1], contents[2]).ratio()
@@ -2572,22 +2575,6 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
                                 spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
                         user_cb.clear() # clear tracker after muting
                         return False
-    if msg.content_type == 'text':
-        msg_type = 'text'
-        content = msg.text
-    elif msg.content_type == 'sticker':
-        msg_type = 'sticker'
-        content = msg.sticker.file_id
-    elif msg.content_type == 'animation':
-        msg_type = 'animation'
-        content = msg.animation.file_id
-    elif msg.content_type == 'audio':
-        return True # Handled above
-    elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
-        msg_type = 'text'
-        content = msg.caption
-    else:
-        return True # Неизвестный тип для спам-фильтра
     rules = SPAM_RULES.get(msg_type)
     if not rules:
         return True
