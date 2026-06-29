@@ -6540,20 +6540,9 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         prefixes = [
             "[Скуф]", "[Опущенный]", "[Калоед]", "[Подпивас]", "[Шитпостер]",
             "[Гой]", "[Мамкин Трейдер]", "[Инцел]", "[Анимешник]", "[Чмо]",
-            "[Опущенный]", "[Гигачад]", "[Бог Борды]", "[VIP Анон]", "[Владелец]"
+            "[Вумен ☕️]", "[Гигачад]", "[Бог Борды]", "[VIP Анон]", "[Владелец]"
         ]
-        # fix: redefine list cleanly
-        prefixes = [
-            "[Скуф]", "[Опущенный]",
-            "[Калоед]", "[Подпивас]",
-            "[Шитпостер]", "[Гой]",
-            "[Мамкин Трейдер]",
-            "[Инцел]", "[Анимешник]",
-            "[Чмо]", "[Вумен ☕️]",
-            "[Гигачад]", "[Бог Борды]",
-            "[VIP Анон]", "[Владелец]"
-        ]
-        chosen = random.choice(prefixes[:10]) if random.random() < 0.9 else random.choice(prefixes[10:])
+        chosen = random.choice(prefixes[:11]) if random.random() < 0.9 else random.choice(prefixes[11:])
         expires = int(time.time()) + 86400
         async with db_lock:
             await db.execute("UPDATE Users SET custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ?", (chosen, expires, user_id))
