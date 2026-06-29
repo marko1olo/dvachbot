@@ -2,7 +2,7 @@ import subprocess
 
 def run_cmd(cmd, check=True):
     try:
-        return subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode('utf-8').strip()
+        return subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT).decode('utf-8').strip()
     except subprocess.CalledProcessError as e:
         if check:
             raise
@@ -56,7 +56,7 @@ def main():
         print(f"Attempting merge for: {branch} ...")
         
         # Start merge
-        merge_cmd = ["git", "merge", "--no-edit", "-m", f"Merge {branch}", branch]
+        merge_cmd = ["git", "merge", "--no-edit", "-m", f"Merge {branch}", "--", branch]
         try:
             res = run_cmd(merge_cmd, check=False)
             
