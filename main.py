@@ -470,57 +470,78 @@ def generate_anon_name(user_id: int) -> str:
     suffix = rng.choice(NICK_SUFFIXES)
     return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
 
-def clean_html_for_tg(text: str) -> str:
+from html.parser import HTMLParser
+import html
 
+class TelegramHTMLCleaner(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.allowed_tags = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
+        self.allowed_attrs = {'a': ['href']}
+        self.result = []
+        self.stack = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.allowed_tags:
+            attr_str = ""
+            for k, v in attrs:
+                if tag in self.allowed_attrs and k in self.allowed_attrs[tag]:
+                    if v is None:
+                        attr_str += f' {k}'
+                    else:
+                        attr_str += f' {k}="{html.escape(v)}"'
+            self.result.append(f"<{tag}{attr_str}>")
+            self.stack.append(tag)
+        else:
+            attr_str = ""
+            for k, v in attrs:
+                if v is None:
+                    attr_str += f' {k}'
+                else:
+                    attr_str += f' {k}="{html.escape(v)}"'
+            self.result.append(f"&lt;{tag}{attr_str}&gt;")
+
+    def handle_endtag(self, tag):
+        if tag in self.allowed_tags:
+            if tag in self.stack:
+                while self.stack:
+                    popped = self.stack.pop()
+                    self.result.append(f"</{popped}>")
+                    if popped == tag:
+                        break
+        else:
+            self.result.append(f"&lt;/{tag}&gt;")
+
+    def handle_data(self, data):
+        self.result.append(html.escape(data))
+
+    def handle_entityref(self, name):
+        self.result.append(f"&{name};")
+
+    def handle_charref(self, name):
+        self.result.append(f"&#{name};")
+
+    def get_result(self):
+        while self.stack:
+            self.result.append(f"</{self.stack.pop()}>")
+        return "".join(self.result)
+
+
+def clean_html_for_tg(text: str) -> str:
     import re
     if not text: return ''
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     text = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
     text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
     text = text.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
-    text = re.sub(r'<(?!/?(?:b|i|u|s|code|pre|a)(?:\b[^<>]*>|>))', '&lt;', text)
 
-    # Balance tags
-    allowed_tags = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
-    parts = re.split(r'(</?[a-zA-Z]+\b[^>]*>)', text)
-    stack = []
-    out = []
-
-    for part in parts:
-        if part.startswith('<') and part.endswith('>'):
-            m = re.match(r'<(/)?([a-zA-Z]+)\b([^>]*)>', part)
-            if m:
-                is_closing = bool(m.group(1))
-                tag_name = m.group(2).lower()
-                attrs = m.group(3)
-
-                if tag_name in allowed_tags:
-                    if not is_closing:
-                        stack.append(tag_name)
-                        out.append(part)
-                    else:
-                        if stack and stack[-1] == tag_name:
-                            stack.pop()
-                            out.append(part)
-                        else:
-                            if tag_name in stack:
-                                while stack and stack[-1] != tag_name:
-                                    out.append(f'</{stack.pop()}>')
-                                stack.pop()
-                                out.append(part)
-                            else:
-                                out.append(f'&lt;/{tag_name}{attrs}&gt;')
-                else:
-                    out.append(part)
-            else:
-                out.append(part)
-        else:
-            out.append(part)
-
-    while stack:
-        out.append(f'</{stack.pop()}>')
-
-    return "".join(out)
+    parser = TelegramHTMLCleaner()
+    try:
+        parser.feed(text)
+        return parser.get_result()
+    except Exception:
+        # fallback
+        return text
 
 DB_POST_LIMIT = CONFIG_DB_POST_LIMIT  # Максимальное количество постов, которое будет храниться в БД
 DB_CLEANUP_INTERVAL = timedelta(hours=2) # Как часто проводить очистку БД
