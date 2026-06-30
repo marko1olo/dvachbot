@@ -5618,130 +5618,142 @@ async def send_message_to_users(
         remaining_recipients=remaining_recipients_for_later,
         interrupted_reason=interrupted_reason,
     )
-async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
+class PostEditor:
     """
     Находит все отправленные копии поста и редактирует их.
     Основной источник данных - база данных.
     Версия 2.2: Добавлена группировка сообщений по юзерам (защита от мульти-эдита альбомов).
     """
-    copies_info = await get_post_copies(post_num)
-    user_messages_map = defaultdict(list)
-    if copies_info:
-        for uid, mid in copies_info:
-            user_messages_map[uid].append(mid)
-    async with storage_lock:
-        ram_copies = post_to_messages.get(post_num, {})
-        for uid, mid_or_list in ram_copies.items():
-            if isinstance(mid_or_list, list):
-                for m in mid_or_list:
-                    if m not in user_messages_map[uid]:
-                        user_messages_map[uid].append(m)
-            else:
-                if mid_or_list not in user_messages_map[uid]:
-                    user_messages_map[uid].append(mid_or_list)
+    def __init__(self, post_num: int, bot_instance: Bot):
+        self.post_num = post_num
+        self.bot_instance = bot_instance
 
-    if not user_messages_map:
-        return
+        self.user_messages_map = defaultdict(list)
+        self.post_data_copy = {}
+        self.content_copy = {}
+        self.reply_author_id = None
+        self.board_id = None
+        self.final_keyboard = None
+        self.user_specific_texts = {}
+        self.text_or_caption_base = ""
+        self.text_with_you_links = ""
 
-    post_data_copy = {}
-    content_copy = {}
-    reply_author_id = None
-    board_id = None
-    async with storage_lock:
-        post_data = messages_storage.get(post_num)
-        if not post_data: return
-        content_type = post_data.get('content', {}).get('type')
-        can_be_edited = content_type in ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'media_group']
-        if not can_be_edited: return
-        post_data_copy = post_data.copy()
-        content_copy = post_data.get('content', {}).copy()
-        board_id = post_data.get('board_id')
-        reply_to_post_num = content_copy.get('reply_to_post')
-        if reply_to_post_num:
-            reply_author_id = messages_storage.get(reply_to_post_num, {}).get('author_id')
-    if not board_id: return
-    
-    final_keyboard = None
-    if content_copy.get('poll_data'):
-        poll_options = content_copy.get('poll_data', {}).get('options', [])
-        if poll_options:
-            buttons = []
-            for i, option_text in enumerate(poll_options):
-                button_text = option_text[:60]
-                buttons.append(
-                    InlineKeyboardButton(
-                        text=button_text,
-                        callback_data=f"poll_vote_{post_num}_{i}"
+    async def _fetch_messages(self):
+        copies_info = await get_post_copies(self.post_num)
+        if copies_info:
+            for uid, mid in copies_info:
+                self.user_messages_map[uid].append(mid)
+        async with storage_lock:
+            ram_copies = post_to_messages.get(self.post_num, {})
+            for uid, mid_or_list in ram_copies.items():
+                if isinstance(mid_or_list, list):
+                    for m in mid_or_list:
+                        if m not in self.user_messages_map[uid]:
+                            self.user_messages_map[uid].append(m)
+                else:
+                    if mid_or_list not in self.user_messages_map[uid]:
+                        self.user_messages_map[uid].append(mid_or_list)
+        return bool(self.user_messages_map)
+
+    async def _prepare_post_data(self):
+        async with storage_lock:
+            post_data = messages_storage.get(self.post_num)
+            if not post_data: return False
+            content_type = post_data.get('content', {}).get('type')
+            can_be_edited = content_type in ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'media_group']
+            if not can_be_edited: return False
+            self.post_data_copy = post_data.copy()
+            self.content_copy = post_data.get('content', {}).copy()
+            self.board_id = post_data.get('board_id')
+            reply_to_post_num = self.content_copy.get('reply_to_post')
+            if reply_to_post_num:
+                self.reply_author_id = messages_storage.get(reply_to_post_num, {}).get('author_id')
+        if not self.board_id: return False
+        return True
+
+    def _prepare_keyboard(self):
+        if self.content_copy.get('poll_data'):
+            poll_options = self.content_copy.get('poll_data', {}).get('options', [])
+            if poll_options:
+                buttons = []
+                for i, option_text in enumerate(poll_options):
+                    button_text = option_text[:60]
+                    buttons.append(
+                        InlineKeyboardButton(
+                            text=button_text,
+                            callback_data=f"poll_vote_{self.post_num}_{i}"
+                        )
                     )
-                )
-            final_keyboard = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
-            
-    user_specific_texts = {}
-    text_or_caption_base = content_copy.get('text') or content_copy.get('caption')
-    text_with_you_links = text_or_caption_base
-    if text_or_caption_base and ">>" in text_or_caption_base:
-        mentioned_authors = {}
-        mentions = RE_YOU_PATTERN.findall(text_or_caption_base)
-        if mentions:
-            async with storage_lock:
-                for m_num_str in mentions:
-                    try:
-                        m_num = int(m_num_str)
-                        if m_num in messages_storage:
-                            mentioned_authors[m_num] = messages_storage[m_num].get("author_id")
-                    except ValueError:
-                        continue
-        text_with_you_links = add_you_to_my_posts_fast(
-            text_or_caption_base, 
-            post_data_copy.get('author_id'), 
-            mentioned_authors
-        )            
-    b_data = board_data[board_id]
-    users_settings = b_data.get('user_settings', {})
-    for user_id in user_messages_map.keys():
-        header_text = content_copy.get('header', '')
-        u_set = users_settings.get(user_id, {'hide': set()})
-        should_hide = False
-        if u_set['hide']:
-            raw_content_text = content_copy.get('text') or content_copy.get('caption') or ""
-            check_text = (header_text + " " + raw_content_text).lower()
-            if any(word in check_text for word in u_set['hide']):
-                should_hide = True
-        head = f"<i>{escape_html(header_text)}</i>"
-        if user_id == reply_author_id:
-            head = head.replace("Пост", "🔴 Пост").replace("Post", "🔴 Post")
-        if should_hide:
-            lang_local = 'en' if board_id == 'int' else 'ru'
-            placeholder = "🛡 Message hidden" if lang_local == 'en' else "🛡 Сообщение скрыто"
-            full_text = f"{head}\n{placeholder}"
-        else:
-            current_text_or_caption = text_or_caption_base
-            if user_id == post_data_copy.get('author_id'):
-                current_text_or_caption = text_with_you_links
-            content_for_user = content_copy.copy()
-            if 'text' in content_for_user: content_for_user['text'] = current_text_or_caption
-            elif 'caption' in content_for_user: content_for_user['caption'] = current_text_or_caption
-            formatted_body = await _format_message_body(
-                content=content_for_user, user_id_for_context=user_id,
-                post_data=post_data_copy, reply_to_post_author_id=reply_author_id,
-                quote_info=content_for_user.get('quote_info')
-            )
-            full_text = f"{head}\n\n{formatted_body}" if formatted_body else head
-        user_specific_texts[user_id] = full_text
+                self.final_keyboard = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
 
-    async def _edit_one(user_id: int, message_id: int):
+    async def _prepare_text_with_links(self):
+        self.text_or_caption_base = self.content_copy.get('text') or self.content_copy.get('caption')
+        self.text_with_you_links = self.text_or_caption_base
+        if self.text_or_caption_base and ">>" in self.text_or_caption_base:
+            mentioned_authors = {}
+            mentions = RE_YOU_PATTERN.findall(self.text_or_caption_base)
+            if mentions:
+                async with storage_lock:
+                    for m_num_str in mentions:
+                        try:
+                            m_num = int(m_num_str)
+                            if m_num in messages_storage:
+                                mentioned_authors[m_num] = messages_storage[m_num].get("author_id")
+                        except ValueError:
+                            continue
+            self.text_with_you_links = add_you_to_my_posts_fast(
+                self.text_or_caption_base,
+                self.post_data_copy.get('author_id'),
+                mentioned_authors
+            )
+
+    async def _prepare_user_specific_texts(self):
+        b_data = board_data[self.board_id]
+        users_settings = b_data.get('user_settings', {})
+        for user_id in self.user_messages_map.keys():
+            header_text = self.content_copy.get('header', '')
+            u_set = users_settings.get(user_id, {'hide': set()})
+            should_hide = False
+            if u_set['hide']:
+                raw_content_text = self.content_copy.get('text') or self.content_copy.get('caption') or ""
+                check_text = (header_text + " " + raw_content_text).lower()
+                if any(word in check_text for word in u_set['hide']):
+                    should_hide = True
+            head = f"<i>{escape_html(header_text)}</i>"
+            if user_id == self.reply_author_id:
+                head = head.replace("Пост", "🔴 Пост").replace("Post", "🔴 Post")
+            if should_hide:
+                lang_local = 'en' if self.board_id == 'int' else 'ru'
+                placeholder = "🛡 Message hidden" if lang_local == 'en' else "🛡 Сообщение скрыто"
+                full_text = f"{head}\n{placeholder}"
+            else:
+                current_text_or_caption = self.text_or_caption_base
+                if user_id == self.post_data_copy.get('author_id'):
+                    current_text_or_caption = self.text_with_you_links
+                content_for_user = self.content_copy.copy()
+                if 'text' in content_for_user: content_for_user['text'] = current_text_or_caption
+                elif 'caption' in content_for_user: content_for_user['caption'] = current_text_or_caption
+                formatted_body = await _format_message_body(
+                    content=content_for_user, user_id_for_context=user_id,
+                    post_data=self.post_data_copy, reply_to_post_author_id=self.reply_author_id,
+                    quote_info=content_for_user.get('quote_info')
+                )
+                full_text = f"{head}\n\n{formatted_body}" if formatted_body else head
+            self.user_specific_texts[user_id] = full_text
+
+    async def _edit_one(self, user_id: int, message_id: int):
         max_attempts = 6
         delay = 1.5
         for attempt in range(max_attempts):
             try:
-                full_text = user_specific_texts.get(user_id, "")
-                content_type = content_copy.get('type')
+                full_text = self.user_specific_texts.get(user_id, "")
+                content_type = self.content_copy.get('type')
                 if content_type == 'text':
                     if len(full_text) > 4096: full_text = full_text[:4093] + "..."
-                    await bot_instance.edit_message_text(text=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard)
+                    await self.bot_instance.edit_message_text(text=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=self.final_keyboard)
                 else:
                     if len(full_text) > 1024: full_text = full_text[:1021] + "..."
-                    await bot_instance.edit_message_caption(caption=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard)
+                    await self.bot_instance.edit_message_caption(caption=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=self.final_keyboard)
                 return 
             except TelegramRetryAfter as e:
                 wait_sec = e.retry_after + 1
@@ -5776,20 +5788,41 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             except Exception as e:
                 print(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
                 return
-    tasks_to_run = []
-    for uid, msgs in user_messages_map.items():
-        if msgs:
-            target_mid = sorted(msgs)[0]
-            task = spawn_task(_edit_one(uid, target_mid))
-            tasks_to_run.append(task)
 
-    CHUNK_SIZE = 30 
-    DELAY_BETWEEN_CHUNKS = 0.3
-    for i in range(0, len(tasks_to_run), CHUNK_SIZE):
-        chunk_tasks = tasks_to_run[i:i + CHUNK_SIZE]
-        await asyncio.gather(*chunk_tasks, return_exceptions=True)
-        if i + CHUNK_SIZE < len(tasks_to_run):
-            await asyncio.sleep(DELAY_BETWEEN_CHUNKS)
+    async def _execute_edits(self):
+        tasks_to_run = []
+        for uid, msgs in self.user_messages_map.items():
+            if msgs:
+                target_mid = sorted(msgs)[0]
+                task = spawn_task(self._edit_one(uid, target_mid))
+                tasks_to_run.append(task)
+
+        CHUNK_SIZE = 30
+        DELAY_BETWEEN_CHUNKS = 0.3
+        for i in range(0, len(tasks_to_run), CHUNK_SIZE):
+            chunk_tasks = tasks_to_run[i:i + CHUNK_SIZE]
+            await asyncio.gather(*chunk_tasks, return_exceptions=True)
+            if i + CHUNK_SIZE < len(tasks_to_run):
+                await asyncio.sleep(DELAY_BETWEEN_CHUNKS)
+
+    async def execute(self):
+        if not await self._fetch_messages():
+            return
+        if not await self._prepare_post_data():
+            return
+        self._prepare_keyboard()
+        await self._prepare_text_with_links()
+        await self._prepare_user_specific_texts()
+        await self._execute_edits()
+
+
+async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
+    """
+    Находит все отправленные копии поста и редактирует их.
+    Основной источник данных - база данных.
+    Версия 2.2: Добавлена группировка сообщений по юзерам (защита от мульти-эдита альбомов).
+    """
+    await PostEditor(post_num, bot_instance).execute()
 async def execute_delayed_edit(
     post_num: int,
     bot_instance: Bot,
