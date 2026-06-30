@@ -371,7 +371,10 @@ def main() -> int:
                                 f"heartbeat_queue_total={heartbeat_queue_total}"
                             )
                         health_failures = 0
-                        time.sleep(POLL_SEC)
+                        try:
+                            child.wait(timeout=POLL_SEC)
+                        except subprocess.TimeoutExpired:
+                            pass
                         continue
 
                     healthy, details = _health_probe()
@@ -427,7 +430,10 @@ def main() -> int:
                             _close_child_log(child)
                             break
 
-                time.sleep(POLL_SEC)
+                try:
+                    child.wait(timeout=POLL_SEC)
+                except subprocess.TimeoutExpired:
+                    pass
         except KeyboardInterrupt:
             _kill_tree(child, "supervisor_keyboard_interrupt")
             _close_child_log(child)
