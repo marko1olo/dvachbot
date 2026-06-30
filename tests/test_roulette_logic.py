@@ -37,3 +37,16 @@ def test_get_random_event_success():
     # random.choice will be called, we can just assert it returns one of them
     result = get_random_event(events)
     assert result in events
+
+def test_get_random_event_calls_random_choice():
+    events = [{"id": 1}, {"id": 2}]
+    with patch("roulette_logic.random.choice") as mock_choice:
+        mock_choice.return_value = events[1]
+        result = get_random_event(events)
+        mock_choice.assert_called_once_with(events)
+        assert result == events[1]
+
+def test_get_random_event_single_item():
+    events = [{"id": 1}]
+    result = get_random_event(events)
+    assert result == events[0]
