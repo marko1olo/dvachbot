@@ -8883,115 +8883,155 @@ async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str,
                 pass
     print(f"[THREAD DELETE] [{board_id}] Тред {thread_id} удалён. Пользователей переведено: {len(users_in_thread)}. Инициатор: {initiator_id}")
 @dp.message(F.text.regexp(rf"^/({'|'.join(ANIME_COMMAND_MAP.keys())})"))
-async def handle_stacked_anime_commands(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    """
-    Универсальный обработчик для всех аниме-команд.
-    Исправлена ошибка NameError: b_data теперь гарантированно определяется.
-    """
-    if not board_id:
-        return
-    
-    # ЯВНОЕ ОПРЕДЕЛЕНИЕ b_data (Исправление ошибки)
-    b_data = board_data[board_id]
-    
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    MAX_IMAGES = 10
-    max_images_for_board = B_MAX_STACKED_ANIME_IMAGES if board_id == 'b' else MAX_IMAGES
-    command_keys = '|'.join(ANIME_COMMAND_MAP.keys())
-    pattern = re.compile(rf"/({command_keys})(?:(\d+)|(?:\s+(\d+)))?", re.IGNORECASE)
-    matches = pattern.findall(message.text or "")
-    if not matches: return
-    
-    user_id = message.from_user.id
-    current_time = time.time()
-    
-    if current_time - user_hourly_image_reset[user_id] > 3600:
-        user_hourly_image_count[user_id] = 0
-        user_hourly_image_reset[user_id] = current_time
-    
-    raw_requested_count = 0
-    for _, num_no_space, num_with_space in matches:
-        count = 1
-        number_str = num_no_space or num_with_space
-        if number_str and number_str.strip().isdigit():
-            count = int(number_str.strip())
-        raw_requested_count += count
-    requested_count = min(raw_requested_count, max_images_for_board)
-    if raw_requested_count > max_images_for_board:
-        runtime_logger.warning(
-            "anime_request_capped %s",
-            json.dumps(
-                {
-                    "ts": round(time.time(), 3),
-                    "board_id": board_id,
-                    "user_id": user_id,
-                    "requested": raw_requested_count,
-                    "accepted": requested_count,
-                    "cap": max_images_for_board,
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
+class StackedAnimeHandler:
+    def __init__(self, message: types.Message, board_id: str, stream: str):
+        self.message = message
+        self.board_id = board_id
+        self.stream = stream
+        self.user_id = message.from_user.id
+        self.current_time = time.time()
+        self.b_data = board_data[board_id]
+        self.lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+        self.max_images_for_board = B_MAX_STACKED_ANIME_IMAGES if board_id == 'b' else 10
+        self.command_keys = '|'.join(ANIME_COMMAND_MAP.keys())
+        self.pattern = re.compile(rf"/({self.command_keys})(?:(\d+)|(?:\s+(\d+)))?", re.IGNORECASE)
+        self.matches = self.pattern.findall(message.text or "")
+
+    async def process(self):
+        if not self.matches:
+            return
+
+        self._reset_hourly_counters()
+        
+        raw_requested_count = self._calculate_requested_count()
+        requested_count = min(raw_requested_count, self.max_images_for_board)
+
+        self._log_if_capped(raw_requested_count, requested_count)
+
+        if await self._check_strict_daily_limit(requested_count):
+            return
+
+        if await self._check_hourly_limit(requested_count):
+            return
+
+        self._increment_hourly_count(requested_count)
+
+        if self.board_id == 'b' and await self._check_board_spam_limit():
+            return
+
+        fetcher_tasks, command_counts = self._build_fetcher_tasks()
+        if not fetcher_tasks:
+            return
+
+        if self.board_id == 'b':
+            self._update_board_spam_tracker(len(fetcher_tasks))
+
+        final_caption = self._generate_caption(command_counts)
+
+        await _process_stacked_anime_command(
+            message=self.message,
+            board_id=self.board_id,
+            fetcher_tasks=fetcher_tasks,
+            caption=final_caption,
+            stream=self.stream
         )
 
-    # Проверка жесткого лимита (10 картинок в 24ч) для особых спамеров
-    if user_id in b_data.get('anime_strict_limits', set()):
-        tracker = b_data['anime_daily_tracker'][user_id]
-        if current_time > tracker['reset_at']:
-            tracker['count'] = 0
-            tracker['reset_at'] = current_time + 86400
-        
-        if tracker['count'] + requested_count > 10:
-            if lang == 'en':
-                msg = "🛑 Strict limit! You are allowed only 10 images per 24h. Contact admin."
-            elif lang == 'jp':
-                msg = "🛑 制限中！24時間に10枚までです。管理人に連絡してください。"
-            else:
-                msg = "🛑 У вас жесткое ограничение: 10 картинок в сутки. Заебал спамить! По всем вопросам к админу."
-            try:
-                sent = await message.answer(msg)
-                spawn_task(delete_message_after_delay(sent, 15))
-                await message.delete()
-            except Exception: pass
-            return
-        tracker['count'] += requested_count
+    def _reset_hourly_counters(self):
+        if self.current_time - user_hourly_image_reset[self.user_id] > 3600:
+            user_hourly_image_count[self.user_id] = 0
+            user_hourly_image_reset[self.user_id] = self.current_time
 
-    if user_hourly_image_count[user_id] + requested_count > HOURLY_IMAGE_LIMIT:
-        if lang == 'en': phrases = ANIME_HOURLY_LIMIT_PHRASES['en']
-        elif lang == 'jp': phrases = ANIME_HOURLY_LIMIT_PHRASES['jp']
-        else: phrases = ANIME_HOURLY_LIMIT_PHRASES['ru']
-        
-        limit_msg = random.choice(phrases)
-        try:
-            sent = await message.answer(limit_msg)
-            spawn_task(delete_message_after_delay(sent, 15))
-            await message.delete()
-        except Exception: pass
-        return
-    
-    user_hourly_image_count[user_id] += requested_count
-    
-    if board_id == 'b':
-        image_spam_tracker[board_id] = [t for t in image_spam_tracker[board_id] if current_time - t < IMAGE_SPAM_WINDOW]
-        total_requested_images = 0
-        for _, num_no_space, num_with_space in matches:
+    def _calculate_requested_count(self) -> int:
+        raw_requested_count = 0
+        for _, num_no_space, num_with_space in self.matches:
             count = 1
             number_str = num_no_space or num_with_space
             if number_str and number_str.strip().isdigit():
                 count = int(number_str.strip())
-            total_requested_images += count
-        total_requested_images = min(total_requested_images, max_images_for_board)
+            raw_requested_count += count
+        return raw_requested_count
+
+    def _log_if_capped(self, raw_requested_count: int, requested_count: int):
+        if raw_requested_count > self.max_images_for_board:
+            import json
+            runtime_logger.warning(
+                "anime_request_capped %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": self.board_id,
+                        "user_id": self.user_id,
+                        "requested": raw_requested_count,
+                        "accepted": requested_count,
+                        "cap": self.max_images_for_board,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+
+    async def _check_strict_daily_limit(self, requested_count: int) -> bool:
+        if self.user_id in self.b_data.get('anime_strict_limits', set()):
+            tracker = self.b_data['anime_daily_tracker'][self.user_id]
+            if self.current_time > tracker['reset_at']:
+                tracker['count'] = 0
+                tracker['reset_at'] = self.current_time + 86400
+
+            if tracker['count'] + requested_count > 10:
+                if self.lang == 'en':
+                    msg = "🛑 Strict limit! You are allowed only 10 images per 24h. Contact admin."
+                elif self.lang == 'jp':
+                    msg = "🛑 制限中！24時間に10枚までです。管理人に連絡してください。"
+                else:
+                    msg = "🛑 У вас жесткое ограничение: 10 картинок в сутки. Заебал спамить! По всем вопросам к админу."
+                try:
+                    sent = await self.message.answer(msg)
+                    spawn_task(delete_message_after_delay(sent, 15))
+                    await self.message.delete()
+                except Exception:
+                    pass
+                return True
+            tracker['count'] += requested_count
+        return False
+
+    async def _check_hourly_limit(self, requested_count: int) -> bool:
+        if user_hourly_image_count[self.user_id] + requested_count > HOURLY_IMAGE_LIMIT:
+            if self.lang == 'en': phrases = ANIME_HOURLY_LIMIT_PHRASES['en']
+            elif self.lang == 'jp': phrases = ANIME_HOURLY_LIMIT_PHRASES['jp']
+            else: phrases = ANIME_HOURLY_LIMIT_PHRASES['ru']
+
+            import random
+            limit_msg = random.choice(phrases)
+            try:
+                sent = await self.message.answer(limit_msg)
+                spawn_task(delete_message_after_delay(sent, 15))
+                await self.message.delete()
+            except Exception:
+                pass
+            return True
+        return False
+
+    def _increment_hourly_count(self, requested_count: int):
+        user_hourly_image_count[self.user_id] += requested_count
+
+    async def _check_board_spam_limit(self) -> bool:
+        image_spam_tracker[self.board_id] = [t for t in image_spam_tracker[self.board_id] if self.current_time - t < IMAGE_SPAM_WINDOW]
+        total_requested_images = self._calculate_requested_count()
+        total_requested_images = min(total_requested_images, self.max_images_for_board)
         
-        if len(image_spam_tracker[board_id]) + total_requested_images > IMAGE_SPAM_LIMIT:
-            if lang == 'en':
+        if len(image_spam_tracker[self.board_id]) + total_requested_images > IMAGE_SPAM_LIMIT:
+            if self.lang == 'en':
                 phrases_cd = ANIME_CMD_COOLDOWN_PHRASES_EN
                 phrases_spam = IMAGE_SPAM_COOLDOWN_PHRASES_EN
-            elif lang == 'jp':
+            elif self.lang == 'jp':
                 phrases_cd = ANIME_CMD_COOLDOWN_PHRASES_JP
                 phrases_spam = IMAGE_SPAM_COOLDOWN_PHRASES_JP
             else:
                 phrases_cd = ANIME_CMD_COOLDOWN_PHRASES
                 phrases_spam = IMAGE_SPAM_COOLDOWN_PHRASES
+
+            import random
+            from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
             part1 = random.choice(phrases_cd)
             part2 = random.choice(phrases_spam).format(
                 limit=IMAGE_SPAM_LIMIT, 
@@ -8999,83 +9039,93 @@ async def handle_stacked_anime_commands(message: types.Message, board_id: str | 
             )
             cooldown_msg = f"{part1}\n\n{part2}"
             try:
-                sent_msg = await message.answer(cooldown_msg)
+                sent_msg = await self.message.answer(cooldown_msg)
                 spawn_task(delete_message_after_delay(sent_msg, 10))
-                await message.delete()
-            except (TelegramBadRequest, TelegramForbiddenError): pass
-            return
+                await self.message.delete()
+            except (TelegramBadRequest, TelegramForbiddenError):
+                pass
+            return True
+        return False
 
-    fetcher_tasks = []
-    command_counts = defaultdict(int)
-    
-    canonical_map = {
-        **{k: 'fap' for k in ["fap", "hent", "hentai", "hentay", "nsfw", "FAP", "HENT", "HENTAI", "HENTAY", "NSFW"]},
-        **{k: 'gatari' for k in ["gatari", "monogatari", "GATARI"]},
-        **{k: 'loli' for k in ["loli", "lolicon", "lolis", "LOLI", "LOLICON", "LOLIS"]},
-    }
-
-    for command, num_no_space, num_with_space in matches:
-        count = 1
-        number_str = num_no_space or num_with_space
-        if number_str and number_str.strip().isdigit():
-            count = int(number_str.strip())
+    def _build_fetcher_tasks(self):
+        from collections import defaultdict
+        fetcher_tasks = []
+        command_counts = defaultdict(int)
         
-        command_lower = command.lower()
-        cmd_func = ANIME_COMMAND_MAP.get(command_lower)
-        if not cmd_func: continue
+        canonical_map = {
+            **{k: 'fap' for k in ["fap", "hent", "hentai", "hentay", "nsfw", "FAP", "HENT", "HENTAI", "HENTAY", "NSFW"]},
+            **{k: 'gatari' for k in ["gatari", "monogatari", "GATARI"]},
+            **{k: 'loli' for k in ["loli", "lolicon", "lolis", "LOLI", "LOLICON", "LOLIS"]},
+        }
 
-        for _ in range(count):
-            if len(fetcher_tasks) < max_images_for_board:
-                fetcher_tasks.append(cmd_func)
-                canonical_name = canonical_map.get(command_lower.split('@')[0])
-                if canonical_name:
-                    command_counts[canonical_name] += 1
-            else:
+        for command, num_no_space, num_with_space in self.matches:
+            count = 1
+            number_str = num_no_space or num_with_space
+            if number_str and number_str.strip().isdigit():
+                count = int(number_str.strip())
+
+            command_lower = command.lower()
+            cmd_func = ANIME_COMMAND_MAP.get(command_lower)
+            if not cmd_func: continue
+
+            for _ in range(count):
+                if len(fetcher_tasks) < self.max_images_for_board:
+                    fetcher_tasks.append(cmd_func)
+                    canonical_name = canonical_map.get(command_lower.split('@')[0])
+                    if canonical_name:
+                        command_counts[canonical_name] += 1
+                else:
+                    break
+            if len(fetcher_tasks) >= self.max_images_for_board:
                 break
-        if len(fetcher_tasks) >= max_images_for_board:
-            break
-    
-    if not fetcher_tasks:
+
+        return fetcher_tasks, command_counts
+
+    def _update_board_spam_tracker(self, task_count: int):
+        for _ in range(task_count):
+            image_spam_tracker[self.board_id].append(self.current_time)
+
+    def _generate_caption(self, command_counts: dict) -> str:
+        final_caption = self.pattern.sub('', self.message.text or "").strip()
+        
+        import random
+        if not final_caption and random.random() < 0.30 and command_counts:
+            population = list(command_counts.keys())
+            weights = list(command_counts.values())
+            chosen_category = random.choices(population, weights=weights, k=1)[0]
+            
+            phrase_list = []
+            if chosen_category == 'fap':
+                if self.lang == 'en': phrase_list = FAP_SUCCESS_PHRASES_EN
+                elif self.lang == 'jp': phrase_list = FAP_SUCCESS_PHRASES_JP
+                else: phrase_list = FAP_SUCCESS_PHRASES
+            elif chosen_category == 'gatari':
+                if self.lang == 'en': phrase_list = GATARI_SUCCESS_PHRASES_EN
+                elif self.lang == 'jp': phrase_list = GATARI_SUCCESS_PHRASES_JP
+                else: phrase_list = GATARI_SUCCESS_PHRASES
+            elif chosen_category == 'loli':
+                if self.lang == 'en': phrase_list = LOLI_SUCCESS_PHRASES_EN
+                elif self.lang == 'jp': phrase_list = LOLI_SUCCESS_PHRASES_JP
+                else: phrase_list = LOLI_SUCCESS_PHRASES
+
+            if phrase_list:
+                random_phrase = random.choice(phrase_list)
+                final_caption = f"<i>{escape_html(random_phrase)}</i>"
+
+        return final_caption
+
+
+async def handle_stacked_anime_commands(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Универсальный обработчик для всех аниме-команд.
+    Исправлена ошибка NameError: b_data теперь гарантированно определяется.
+    """
+    if not board_id:
         return
 
-    if board_id == 'b':
-        current_time = time.time()
-        for _ in range(len(fetcher_tasks)):
-            image_spam_tracker[board_id].append(current_time)
+    handler = StackedAnimeHandler(message, board_id, stream)
+    await handler.process()
 
-    final_caption = pattern.sub('', message.text or "").strip()
-    
-    if not final_caption and random.random() < 0.30 and command_counts:
-        population = list(command_counts.keys())
-        weights = list(command_counts.values())
-        chosen_category = random.choices(population, weights=weights, k=1)[0]
-        
-        # Выбор фраз с учетом языка
-        phrase_list = []
-        if chosen_category == 'fap':
-            if lang == 'en': phrase_list = FAP_SUCCESS_PHRASES_EN
-            elif lang == 'jp': phrase_list = FAP_SUCCESS_PHRASES_JP
-            else: phrase_list = FAP_SUCCESS_PHRASES
-        elif chosen_category == 'gatari':
-            if lang == 'en': phrase_list = GATARI_SUCCESS_PHRASES_EN
-            elif lang == 'jp': phrase_list = GATARI_SUCCESS_PHRASES_JP
-            else: phrase_list = GATARI_SUCCESS_PHRASES
-        elif chosen_category == 'loli':
-            if lang == 'en': phrase_list = LOLI_SUCCESS_PHRASES_EN
-            elif lang == 'jp': phrase_list = LOLI_SUCCESS_PHRASES_JP
-            else: phrase_list = LOLI_SUCCESS_PHRASES
-            
-        if phrase_list:
-            random_phrase = random.choice(phrase_list)
-            final_caption = f"<i>{escape_html(random_phrase)}</i>"
-
-    await _process_stacked_anime_command(
-        message=message,
-        board_id=board_id,
-        fetcher_tasks=fetcher_tasks,
-        caption=final_caption,
-        stream=stream
-    )
 @dp.message(Command("debug_memory"))
 async def cmd_debug_memory(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id):
