@@ -6710,35 +6710,7 @@ import time as _time_module
 _stats_cache: dict = {}   # board_id -> {ts: float, photos: list[bytes]}
 _STATS_TTL = 3600         # seconds
 
-def _generate_stats_charts(board_id: str) -> list[bytes]:
-    """Generate 4 activity charts for board_id. Returns list of PNG bytes."""
-    import io as _io
-    import sqlite3 as _sqlite3
-    import numpy as _np
-    import matplotlib as _mpl
-    _mpl.use('Agg')
-    import matplotlib.pyplot as _plt
-    from matplotlib.colors import LinearSegmentedColormap
-    from collections import defaultdict
-    import datetime as _dt
-
-    BG, FG, GRID = '#0d1117', '#e6edf3', '#21262d'
-    _plt.rcParams.update({
-        'figure.facecolor': BG, 'axes.facecolor': BG, 'axes.edgecolor': GRID,
-        'axes.labelcolor': FG, 'xtick.color': FG, 'ytick.color': FG,
-        'text.color': FG, 'grid.color': GRID, 'font.family': 'DejaVu Sans', 'font.size': 9,
-    })
-
-    import os
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvach_bot.db')
-    con = _sqlite3.connect(db_path)
-    cur = con.cursor()
-
-    since_90 = int(_time_module.time()) - 90 * 86400
-    since_180 = int(_time_module.time()) - 180 * 86400
-    bufs = []
-
-    # ── 1. Activity Clock (polar, last 90 days) ────────────────────────────
+def _generate_activity_clock(cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl):
     cur.execute("""
         SELECT CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
                COUNT(*) as cnt
@@ -6747,8 +6719,7 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     """, (board_id, since_90))
     hd = {r[0]: r[1] for r in cur.fetchall()}
     if not hd:
-        con.close()
-        return []
+        return None
     vals = _np.array([hd.get(h, 0) for h in range(24)], dtype=float)
     vals_norm = vals / (vals.max() or 1)
     total_posts = int(vals.sum())
@@ -6784,9 +6755,9 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     buf = _io.BytesIO()
     _plt.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
     _plt.close()
-    bufs.append(buf.getvalue())
+    return buf.getvalue()
 
-    # ── 2. Ridge plot by weekday (last 90 days) ────────────────────────────
+def _generate_ridge_plot(cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict):
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER),
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER),
@@ -6833,9 +6804,9 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     buf2 = _io.BytesIO()
     _plt.savefig(buf2, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
     _plt.close()
-    bufs.append(buf2.getvalue())
+    return buf2.getvalue()
 
-    # ── 3. Weekday x Hour Heatmap (180 days / all-time) ───────────────────
+def _generate_weekday_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io):
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER) as dow,
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
@@ -6850,7 +6821,6 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     days_ru_full = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота']
     fig, ax3 = _plt.subplots(figsize=(10, 4.5), facecolor=BG)
     ax3.set_facecolor(BG)
-    HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
     im = ax3.imshow(grid, cmap=HEAT, aspect='auto', interpolation='nearest')
 
     ax3.set_xticks(range(24))
@@ -6868,61 +6838,112 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     buf3 = _io.BytesIO()
     _plt.savefig(buf3, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
     _plt.close()
-    bufs.append(buf3.getvalue())
+    return buf3.getvalue()
 
-    # ── 4. Calendar heatmap (180 days / all-time) ─────────────────────────
+def _generate_calendar_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt):
     cur.execute("""
         SELECT date(timestamp,'unixepoch','localtime') as day, COUNT(*)
         FROM Posts WHERE board_id=? AND timestamp > ?
         GROUP BY day ORDER BY day
     """, (board_id, since_180))
     day_data = {r[0]: r[1] for r in cur.fetchall()}
+
+    if not day_data:
+        return None
+
+    dates_sorted = sorted(day_data.keys())
+    start = _dt.date.fromisoformat(dates_sorted[0])
+    end   = _dt.date.fromisoformat(dates_sorted[-1])
+    start_mon = start - _dt.timedelta(days=start.weekday())
+    end_sun   = end   + _dt.timedelta(days=6 - end.weekday())
+    total_days = (end_sun - start_mon).days + 1
+    weeks = total_days // 7
+    cal = _np.zeros((7, weeks))
+    cur_date = start_mon
+    for w in range(weeks):
+        for d in range(7):
+            cal[d][w] = day_data.get(cur_date.isoformat(), 0)
+            cur_date += _dt.timedelta(days=1)
+
+    vmax = _np.percentile(list(day_data.values()), 95) if day_data else 1
+
+    fig, ax4 = _plt.subplots(figsize=(max(10, weeks//2), 3), facecolor=BG)
+    ax4.set_facecolor(BG)
+    im = ax4.imshow(cal, cmap=HEAT, aspect='auto', interpolation='nearest', vmin=0, vmax=vmax)
+
+    # Month labels
+    month_ticks, month_lbls = [], []
+    cdate = start_mon
+    seen = set()
+    for w in range(weeks):
+        ym = cdate.strftime('%b %Y')
+        if ym not in seen:
+            month_ticks.append(w); month_lbls.append(cdate.strftime('%b\n%Y')); seen.add(ym)
+        cdate += _dt.timedelta(days=7)
+    ax4.set_xticks(month_ticks); ax4.set_xticklabels(month_lbls, fontsize=7.5)
+    ax4.set_yticks(range(7))
+    ax4.set_yticklabels(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'], fontsize=8)
+    ax4.set_title(f'/{board_id}/ — Календарь активности (180д)', fontsize=11, pad=10,
+                  color=FG, fontweight='bold')
+    cb = fig.colorbar(im, ax=ax4, orientation='horizontal', pad=0.18, shrink=0.35)
+    cb.set_label('постов/день', color=FG, fontsize=7.5)
+    cb.ax.xaxis.set_tick_params(color=FG, labelsize=7)
+    _plt.tight_layout()
+    buf4 = _io.BytesIO()
+    _plt.savefig(buf4, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
+    _plt.close()
+    return buf4.getvalue()
+
+def _generate_stats_charts(board_id: str) -> list[bytes]:
+    """Generate 4 activity charts for board_id. Returns list of PNG bytes."""
+    import io as _io
+    import sqlite3 as _sqlite3
+    import numpy as _np
+    import matplotlib as _mpl
+    _mpl.use('Agg')
+    import matplotlib.pyplot as _plt
+    from matplotlib.colors import LinearSegmentedColormap
+    from collections import defaultdict
+    import datetime as _dt
+
+    BG, FG, GRID = '#0d1117', '#e6edf3', '#21262d'
+    _plt.rcParams.update({
+        'figure.facecolor': BG, 'axes.facecolor': BG, 'axes.edgecolor': GRID,
+        'axes.labelcolor': FG, 'xtick.color': FG, 'ytick.color': FG,
+        'text.color': FG, 'grid.color': GRID, 'font.family': 'DejaVu Sans', 'font.size': 9,
+    })
+
+    import os
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvach_bot.db')
+    con = _sqlite3.connect(db_path)
+    cur = con.cursor()
+
+    import time as _time_module
+    since_90 = int(_time_module.time()) - 90 * 86400
+    since_180 = int(_time_module.time()) - 180 * 86400
+    bufs = []
+
+    HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
+
+    activity_clock = _generate_activity_clock(cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl)
+    if not activity_clock:
+        con.close()
+        return []
+    bufs.append(activity_clock)
+
+    ridge_plot = _generate_ridge_plot(cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict)
+    if ridge_plot:
+        bufs.append(ridge_plot)
+
+    heatmap = _generate_weekday_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io)
+    if heatmap:
+        bufs.append(heatmap)
+
+    calendar = _generate_calendar_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt)
+    if calendar:
+        bufs.append(calendar)
+
     con.close()
-
-    if day_data:
-        dates_sorted = sorted(day_data.keys())
-        start = _dt.date.fromisoformat(dates_sorted[0])
-        end   = _dt.date.fromisoformat(dates_sorted[-1])
-        start_mon = start - _dt.timedelta(days=start.weekday())
-        end_sun   = end   + _dt.timedelta(days=6 - end.weekday())
-        total_days = (end_sun - start_mon).days + 1
-        weeks = total_days // 7
-        cal = _np.zeros((7, weeks))
-        cur_date = start_mon
-        for w in range(weeks):
-            for d in range(7):
-                cal[d][w] = day_data.get(cur_date.isoformat(), 0)
-                cur_date += _dt.timedelta(days=1)
-
-        vmax = _np.percentile(list(day_data.values()), 95) if day_data else 1
-
-        fig, ax4 = _plt.subplots(figsize=(max(10, weeks//2), 3), facecolor=BG)
-        ax4.set_facecolor(BG)
-        im = ax4.imshow(cal, cmap=HEAT, aspect='auto', interpolation='nearest', vmin=0, vmax=vmax)
-
-        # Month labels
-        month_ticks, month_lbls = [], []
-        cdate = start_mon
-        seen = set()
-        for w in range(weeks):
-            ym = cdate.strftime('%b %Y')
-            if ym not in seen:
-                month_ticks.append(w); month_lbls.append(cdate.strftime('%b\n%Y')); seen.add(ym)
-            cdate += _dt.timedelta(days=7)
-        ax4.set_xticks(month_ticks); ax4.set_xticklabels(month_lbls, fontsize=7.5)
-        ax4.set_yticks(range(7))
-        ax4.set_yticklabels(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'], fontsize=8)
-        ax4.set_title(f'/{board_id}/ — Календарь активности (180д)', fontsize=11, pad=10,
-                      color=FG, fontweight='bold')
-        cb = fig.colorbar(im, ax=ax4, orientation='horizontal', pad=0.18, shrink=0.35)
-        cb.set_label('постов/день', color=FG, fontsize=7.5)
-        cb.ax.xaxis.set_tick_params(color=FG, labelsize=7)
-        _plt.tight_layout()
-        buf4 = _io.BytesIO()
-        _plt.savefig(buf4, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
-        _plt.close()
-        bufs.append(buf4.getvalue())
-
     return bufs
 
 
