@@ -8064,116 +8064,130 @@ async def cmd_global_unpin(message: types.Message, board_id: str | None, stream:
         elif lang == 'jp': final = f"✅ 投稿 #{target_post_num} をピン留め設定から削除しました。"
         else: final = f"✅ Пост #{target_post_num} удален из настроек закрепа."
         await status_msg.edit_text(final)
-async def motivation_broadcaster():
+async def _send_motivation_message(board_id: str, stream: str, recipients: set):
+    """
+    Sends a motivational message or site promo to active users.
+    """
+    # 35% шанс на рекламу сайта (с новыми текстами), 65% на рекламу бота
+    is_site_promo = random.random() < 0.35
 
-    await asyncio.sleep(15)  # Начальная задержка
-    async def board_motivation_worker(board_id: str):
+    if is_site_promo:
+        site_url = f"https://tgach.top/{board_id}/"
+        # ИСПОЛЬЗУЕМ НОВЫЕ ФРАЗЫ ИЗ text_assets.py
+        if stream == 'en':
+            text_body = random.choice(SITE_PROMO_PHRASES_EN)
+            btn_text = "🔗 Open Website"
+        elif stream == 'jp':
+            text_body = random.choice(SITE_PROMO_PHRASES_JP)
+            btn_text = "🔗 サイトを開く"
+        else:
+            text_body = random.choice(SITE_PROMO_PHRASES)
+            btn_text = "🔗 Перейти на сайт"
 
-        while True:
-            try:
-                delay = random.randint(6000, 18000)
-                await asyncio.sleep(delay)
-                activity = await get_board_activity_last_hours(board_id, hours=2)
-                if activity < 20:
-                    continue
-                b_data = board_data[board_id]
-                streams_to_process = ['ru'] # По дефолту
+        # Формируем сообщение с кнопкой
+        message_text = f"{text_body}\n\n👉 <a href='{site_url}'>{site_url}</a>"
+
+        # Для сайта можно добавить Inline кнопку
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=btn_text, url=site_url)]
+        ])
+    else:
+        # Старая логика (реклама бота/инвайта)
+        if stream == 'en':
+            motivation = random.choice(MOTIVATIONAL_MESSAGES_EN)
+            invite_text = random.choice(INVITE_TEXTS_EN)
+            copy_lbl = "Copy and send to anons:"
+        elif stream == 'jp':
+            motivation = random.choice(MOTIVATIONAL_MESSAGES_JP)
+            invite_text = random.choice(INVITE_TEXTS_JP)
+            copy_lbl = "コピーしてアノンに送信:"
+        else:
+            motivation = random.choice(MOTIVATIONAL_MESSAGES)
+            invite_text = random.choice(INVITE_TEXTS)
+            copy_lbl = "Скопируй и отправь анончикам:"
+
+        message_text = (
+            f"💭 {motivation}\n\n"
+            f"{copy_lbl}\n"
+            f"<code>{escape_html(invite_text)}</code>"
+        )
+        keyboard = None
+
+    now_dt = datetime.now(UTC)
+    content = {'type': 'text', 'text': message_text, 'is_system_message': True}
+
+    post_num = await create_post(
+        board_id=board_id, author_id=0, content=content,
+        timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
+    )
+
+    if not post_num: return
+
+    header = await format_header(board_id, post_num)
+    if board_id != 'int': header = f"### АДМИН ###\n{header}"
+    content['header'] = header
+
+    await update_post_content(post_num, content)
+    async with storage_lock:
+        messages_storage[post_num] = {
+            'author_id': 0, 'timestamp': now_dt,
+            'content': content, 'board_id': board_id
+        }
+
+    # Передаем keyboard в очередь
+    await enqueue_board_message(board_id, {
+        'recipients': recipients,
+        'content': content,
+        'post_num': post_num,
+        'board_id': board_id,
+        'keyboard': keyboard
+    })
+
+
+async def _board_motivation_worker(board_id: str):
+    """
+    Worker loop to check activity and periodically trigger motivation messages.
+    """
+    while True:
+        try:
+            delay = random.randint(6000, 18000)
+            await asyncio.sleep(delay)
+            activity = await get_board_activity_last_hours(board_id, hours=2)
+            if activity < 20:
+                continue
+            b_data = board_data[board_id]
+            streams_to_process = ['ru'] # По дефолту
+            if board_id == 'int':
+                streams_to_process = ['en']
+            elif ENABLE_MULTILANG:
+                streams_to_process = ['ru', 'en', 'jp']
+            for stream in streams_to_process:
                 if board_id == 'int':
-                    streams_to_process = ['en']
-                elif ENABLE_MULTILANG:
-                    streams_to_process = ['ru', 'en', 'jp']
-                for stream in streams_to_process:
-                    if board_id == 'int':
+                    recipients = b_data['users']['active'] - b_data['users']['banned']
+                else:
+                    if ENABLE_MULTILANG:
+                        stream_users = await get_stream_active_users(board_id, stream)
+                        recipients = stream_users.intersection(b_data['users']['active']) - b_data['users']['banned']
+                    else:
                         recipients = b_data['users']['active'] - b_data['users']['banned']
-                    else:
-                        if ENABLE_MULTILANG:
-                            stream_users = await get_stream_active_users(board_id, stream)
-                            recipients = stream_users.intersection(b_data['users']['active']) - b_data['users']['banned']
-                        else:
-                            recipients = b_data['users']['active'] - b_data['users']['banned']
-                    if not recipients:
-                        continue
+                if not recipients:
+                    continue
 
-                    # 35% шанс на рекламу сайта (с новыми текстами), 65% на рекламу бота
-                    is_site_promo = random.random() < 0.35
-                    
-                    if is_site_promo:
-                        site_url = f"https://tgach.top/{board_id}/"
-                        # ИСПОЛЬЗУЕМ НОВЫЕ ФРАЗЫ ИЗ text_assets.py
-                        if stream == 'en':
-                            text_body = random.choice(SITE_PROMO_PHRASES_EN)
-                            btn_text = "🔗 Open Website"
-                        elif stream == 'jp':
-                            text_body = random.choice(SITE_PROMO_PHRASES_JP)
-                            btn_text = "🔗 サイトを開く"
-                        else:
-                            text_body = random.choice(SITE_PROMO_PHRASES)
-                            btn_text = "🔗 Перетий на сайт"
-                        
-                        # Формируем сообщение с кнопкой
-                        message_text = f"{text_body}\n\n👉 <a href='{site_url}'>{site_url}</a>"
-                        
-                        # Для сайта можно добавить Inline кнопку
-                        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(text=btn_text, url=site_url)]
-                        ])
-                    else:
-                        # Старая логика (реклама бота/инвайта)
-                        if stream == 'en':
-                            motivation = random.choice(MOTIVATIONAL_MESSAGES_EN)
-                            invite_text = random.choice(INVITE_TEXTS_EN)
-                            copy_lbl = "Copy and send to anons:"
-                        elif stream == 'jp':
-                            motivation = random.choice(MOTIVATIONAL_MESSAGES_JP)
-                            invite_text = random.choice(INVITE_TEXTS_JP)
-                            copy_lbl = "コピーしてアノンに送信:"
-                        else:
-                            motivation = random.choice(MOTIVATIONAL_MESSAGES)
-                            invite_text = random.choice(INVITE_TEXTS)
-                            copy_lbl = "Скопируй и отправь анончикам:"
-                        
-                        message_text = (
-                            f"💭 {motivation}\n\n"
-                            f"{copy_lbl}\n"
-                            f"<code>{escape_html(invite_text)}</code>"
-                        )
-                        keyboard = None
+                await _send_motivation_message(board_id, stream, recipients)
 
-                    now_dt = datetime.now(UTC)
-                    content = {'type': 'text', 'text': message_text, 'is_system_message': True}
-                    
-                    post_num = await create_post(
-                        board_id=board_id, author_id=0, content=content,
-                        timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
-                    )
-                    
-                    if not post_num: continue
-                    
-                    header = await format_header(board_id, post_num)
-                    if board_id != 'int': header = f"### АДМИН ###\n{header}"
-                    content['header'] = header
-                    
-                    await update_post_content(post_num, content)
-                    async with storage_lock:
-                        messages_storage[post_num] = {
-                            'author_id': 0, 'timestamp': now_dt,
-                            'content': content, 'board_id': board_id
-                        }
-                    
-                    # Передаем keyboard в очередь
-                    await enqueue_board_message(board_id, {
-                        'recipients': recipients, 
-                        'content': content,
-                        'post_num': post_num, 
-                        'board_id': board_id,
-                        'keyboard': keyboard 
-                    })
+        except Exception as e:
+            print(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}")
+            await asyncio.sleep(120)
 
-            except Exception as e:
-                print(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}")
-                await asyncio.sleep(120)
-    tasks = [spawn_task(board_motivation_worker(bid)) for bid in BOARDS if bid != 'test']
+
+async def motivation_broadcaster():
+    """
+    Main entry point to start motivation workers for all boards.
+    """
+    await asyncio.sleep(15)  # Начальная задержка
+    tasks = [spawn_task(_board_motivation_worker(bid)) for bid in BOARDS if bid != 'test']
     await asyncio.gather(*tasks)
+
 async def validate_message_format(msg_data: dict) -> bool:
 
     if not isinstance(msg_data, dict):
