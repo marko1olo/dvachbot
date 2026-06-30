@@ -5231,14 +5231,16 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     count = 0
-    from bs4 import BeautifulSoup
-    import json
+    import re
+
+    img_regex = re.compile(r'<img[^>]*>', re.IGNORECASE)
     
     # Используем отдельное соединение для тяжелой задачи
     async with get_db_connection() as conn:
         # 1. Находим посты, где в тексте есть тег <img
         # LIKE '%<img%' работает быстро
-        query = "SELECT post_num, content FROM Posts WHERE content LIKE '%<img%'"
+        # Оптимизация: Используем json_extract для избегания парсинга JSON в Python
+        query = "SELECT post_num, json_extract(content, '$.text') FROM Posts WHERE json_extract(content, '$.text') LIKE '%<img%'"
         
         async with conn.execute(query) as cursor:
             rows = await cursor.fetchall()
@@ -5249,23 +5251,12 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
         # 2. Проходимся и чистим
         updates = []
         for row in rows:
-            post_num, raw_content = row
+            post_num, text = row
             try:
-                content = json.loads(raw_content)
-                text = content.get('text', '')
-                
-                if '<img' in text or '<IMG' in text:
-                    soup = BeautifulSoup(text, "html.parser")
-                    images = soup.find_all('img')
-                    
-                    if images:
-                        for img in images:
-                            img.decompose()
-                    
-                        content['text'] = str(soup)
-                        new_json = json.dumps(content)
-                        
-                        updates.append((new_json, post_num))
+                if text:
+                    new_text, num_subs = img_regex.subn('', text)
+                    if num_subs > 0:
+                        updates.append((new_text, post_num))
                         count += 1
             except Exception:
                 continue
@@ -5274,7 +5265,7 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
 
         if updates:
             await conn.executemany(
-                "UPDATE Posts SET content = ? WHERE post_num = ?",
+                "UPDATE Posts SET content = json_set(content, '$.text', ?) WHERE post_num = ?",
                 updates
             )
 
