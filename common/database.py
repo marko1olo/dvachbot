@@ -3925,9 +3925,11 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                     await db.execute("COMMIT")
                     return []
 
+                updates_shadow = []
+                updates_blur = []
+
                 for row in rows:
                     post_num, content_str, is_shadow = row
-                    needs_update = False
                     try:
                         content = json.loads(content_str)
                     except:
@@ -3936,19 +3938,22 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                     # Логика действий
                     if action == 'shadow':
                         if not is_shadow:
-                            await db.execute("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", (post_num,))
-                            needs_update = True
+                            updates_shadow.append((post_num,))
+                            affected_posts.append(post_num)
                             
                     elif action == 'blur':
                         # Ставим флаг цензуры в JSON, если его нет
                         if not content.get('is_censored'):
                             content['is_censored'] = True
                             new_json = json.dumps(content, default=_json_serializer)
-                            await db.execute("UPDATE Posts SET content = ? WHERE post_num = ?", (new_json, post_num))
-                            needs_update = True
-                    
-                    if needs_update:
-                        affected_posts.append(post_num)
+                            updates_blur.append((new_json, post_num))
+                            affected_posts.append(post_num)
+
+                if updates_shadow:
+                    await db.executemany("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", updates_shadow)
+
+                if updates_blur:
+                    await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", updates_blur)
 
                 await db.execute("COMMIT")
                 return affected_posts
@@ -3959,21 +3964,19 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await asyncio.sleep(0.2 * (attempt + 1))
                     continue
-                print(f"⚠️ Auto-Censure DB Error: {e}")
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                print(f"⚠️ Auto-Censure DB Error: {e}")
+                print(f"Error applying auto censure: {e}")
                 break
-                
     return []
 async def get_recent_tags_summary(limit_files: int = 2000, top_n: int = 100) -> list[tuple[str, int]]:
     """
     Собирает статистику по тегам из последних limit_files файлов.
     Нужно для SEO-облака тегов. Не грузит всю БД.
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool
     from collections import Counter
     
     # Кэшируем результат на уровне базы или приложения, чтобы не дергать часто
@@ -6762,7 +6765,7 @@ async def remove_from_hf_queue(file_ids: list[str]):
             except Exception:
                 try: await db.execute("ROLLBACK")
                 except: pass
-                logging.error(f"❌ HF Queue critical delete error.")
+                logging.error("❌ HF Queue critical delete error.")
                 break
 async def add_to_mirror_queue(file_id: str, mirror_type: str):
     """
@@ -7314,7 +7317,7 @@ async def search_files_by_tags(tags: list[str], limit: int = 50, offset: int = 0
     unique_terms = list(set(search_terms))
     fts_query = " OR ".join(unique_terms)
     
-    query = f"""
+    query = """
         SELECT file_id, bm25(FileTagsFTS) as score, tags
         FROM FileTagsFTS
         WHERE FileTagsFTS MATCH ?
@@ -7539,40 +7542,65 @@ async def get_posts_batch(post_nums: List[int]) -> List[dict]:
             if 'db' in locals() and db:
                 db.row_factory = None
 
-async def toggle_post_censorship(post_num: int) -> bool:
+async def toggle_post_censorship(post_nums: int | list[int]) -> bool | dict:
     """
     Переключает флаг цензуры (блюра) для поста.
+    Поддерживает как один post_num (int), так и список post_nums (list).
     """
     from common.db_pool import get_pool, db_lock
+    import json
     
+    if isinstance(post_nums, int):
+        post_nums_list = [post_nums]
+        single_mode = True
+    else:
+        post_nums_list = post_nums
+        single_mode = False
+
+    if not post_nums_list:
+        return False if single_mode else {}
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                async with db.execute("SELECT content FROM Posts WHERE post_num = ?", (post_num,)) as cursor:
-                    row = await cursor.fetchone()
+                placeholders = ','.join('?' for _ in post_nums_list)
+                async with db.execute(f"SELECT post_num, content FROM Posts WHERE post_num IN ({placeholders})", post_nums_list) as cursor:
+                    rows = await cursor.fetchall()
                 
-                if not row:
+                if not rows:
                     await db.execute("COMMIT")
-                    return False
+                    return False if single_mode else {}
                 
-                try:
-                    content = json.loads(row[0])
-                except:
-                    content = {"text": "", "type": "text"}
+                updates = []
+                results = {}
                 
-                # Переключение флага
-                current_state = content.get('is_censored', False)
-                new_state = not current_state
-                content['is_censored'] = new_state
+                for row in rows:
+                    p_num, content_str = row
+                    try:
+                        content = json.loads(content_str)
+                    except:
+                        content = {"text": "", "type": "text"}
+
+                    # Переключение флага
+                    current_state = content.get('is_censored', False)
+                    new_state = not current_state
+                    content['is_censored'] = new_state
+
+                    new_json = json.dumps(content, default=_json_serializer)
+                    updates.append((new_json, p_num))
+                    results[p_num] = new_state
                 
-                new_json = json.dumps(content, default=_json_serializer)
+                if updates:
+                    await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", updates)
                 
-                await db.execute("UPDATE Posts SET content = ? WHERE post_num = ?", (new_json, post_num))
                 await db.execute("COMMIT")
-                return new_state
+
+                if single_mode:
+                    return results.get(post_nums, False)
+                return results
                 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
@@ -7587,7 +7615,7 @@ async def toggle_post_censorship(post_num: int) -> bool:
                 except: pass
                 print(f"Error toggling censorship: {e}")
                 break
-    return False
+    return False if single_mode else {}
 
 def get_db_connection():
     """
