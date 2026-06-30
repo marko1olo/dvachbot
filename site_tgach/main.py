@@ -956,72 +956,55 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
         return image_bytes
 
 
-async def _download_image_with_proxy(
-    url: str, timeout: int = 90, depth: int = 0
-) -> tuple[bytes, int] | None:
-    if depth > 3:
-        return None
+def _get_download_headers() -> dict:
+    return {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+    }
+
+async def _fetch_image_data(session, url: str, proxy: str | None) -> tuple[bytes, int] | None:
+    async with session.get(url, allow_redirects=True, proxy=proxy) as response:
+        if response.status == 200:
+            content_type = response.headers.get('Content-Type', '').lower()
+            if 'text/html' in content_type or 'application/json' in content_type:
+                return None
+            data = await response.read()
+            if data.strip().startswith(b'<') and b'<html' in data[:200].lower():
+                return None
+            if len(data) > 49.5 * 1024 * 1024:
+                return None
+            if len(data) > 0:
+                return data, len(data)
+    return None
+
+async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0) -> tuple[bytes, int] | None:
+    if depth > 3: return None
     import socket
     import ssl
     import aiohttp
-
+    import asyncio
     current_proxy = None
     try:
         from japanese_translator import get_dynamic_proxy_url
-
         current_proxy = get_dynamic_proxy_url()
     except ImportError:
         pass
-    timeout_config = aiohttp.ClientTimeout(
-        total=timeout, connect=30, sock_connect=30, sock_read=timeout
-    )
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-    }
+    timeout_config = aiohttp.ClientTimeout(total=timeout, connect=30, sock_connect=30, sock_read=timeout)
+    headers = _get_download_headers()
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
     connector = aiohttp.TCPConnector(family=socket.AF_INET, ssl=ssl_context)
     for attempt in range(2):
         try:
-            async with aiohttp.ClientSession(
-                timeout=timeout_config,
-                headers=headers,
-                connector=connector,
-                trust_env=False,
-            ) as session:
+            async with aiohttp.ClientSession(timeout=timeout_config, headers=headers, connector=connector, trust_env=False) as session:
                 try:
-                    async with session.get(
-                        url, allow_redirects=True, proxy=current_proxy
-                    ) as response:
-                        if response.status == 200:
-                            content_type = response.headers.get(
-                                "Content-Type", ""
-                            ).lower()
-                            if (
-                                "text/html" in content_type
-                                or "application/json" in content_type
-                            ):
-                                return None
-                            data = await response.read()
-                            if (
-                                data.strip().startswith(b"<")
-                                and b"<html" in data[:200].lower()
-                            ):
-                                return None
-                            if len(data) > 49.5 * 1024 * 1024:
-                                return None
-                            if len(data) > 0:
-                                return data, len(data)
+                    result = await _fetch_image_data(session, url, current_proxy)
+                    if result: return result
                 except (aiohttp.ClientConnectorError, asyncio.TimeoutError, OSError):
                     if current_proxy:
-                        async with session.get(
-                            url, allow_redirects=True, proxy=None
-                        ) as response:
-                            if response.status == 200:
-                                data = await response.read()
-                                return data, len(data)
+                        result = await _fetch_image_data(session, url, None)
+                        if result: return result
         except:
             continue
     return None
