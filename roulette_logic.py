@@ -57,9 +57,21 @@ def load_roulette_data(file_path: str) -> List[Dict[str, Any]]:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             
+        if not isinstance(data, dict):
+            return []
+
         for roulette in data.get("roulettes", []):
+            if not isinstance(roulette, dict):
+                continue
             roulette_name = roulette.get("name", "Неизвестная рулетка")
-            for event in roulette.get("events", []):
+
+            events = roulette.get("events", [])
+            if not isinstance(events, list):
+                continue
+
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
                 # Добавляем название рулетки к каждому событию для контекста
                 event_copy = event.copy()
                 event_copy['source_roulette'] = roulette_name
