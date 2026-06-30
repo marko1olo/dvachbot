@@ -7178,29 +7178,23 @@ async def get_and_clear_notification_queue() -> list[dict]:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                # 1. Забираем ID и данные уведомлений
-                async with db.execute("SELECT id, recipient_id, source_post_num, reply_post_num, board_id, thread_id FROM NotificationQueue") as cursor:
+                # 1. Забираем и удаляем данные уведомлений
+                async with db.execute("DELETE FROM NotificationQueue RETURNING recipient_id, source_post_num, reply_post_num, board_id, thread_id") as cursor:
                     rows = await cursor.fetchall()
                 
+                await db.execute("COMMIT")
+
                 if not rows:
-                    await db.execute("COMMIT")
                     return []
                 
-                # 2. Удаляем обработанные записи
-                ids_to_delete = [row[0] for row in rows]
-                placeholders = ','.join('?' for _ in ids_to_delete)
-                await db.execute(f"DELETE FROM NotificationQueue WHERE id IN ({placeholders})", ids_to_delete)
-                
-                await db.execute("COMMIT")
-                
-                # 3. Возвращаем результат
+                # 2. Возвращаем результат
                 return [
                     {
-                        "recipient_id": r[1],
-                        "source_post_num": r[2],
-                        "reply_post_num": r[3],
-                        "board_id": r[4],
-                        "thread_id": r[5]
+                        "recipient_id": r[0],
+                        "source_post_num": r[1],
+                        "reply_post_num": r[2],
+                        "board_id": r[3],
+                        "thread_id": r[4]
                     } for r in rows
                 ]
                 
