@@ -2998,6 +2998,9 @@ def cleanup_old_posts_from_db(limit: int = 50000):
     EPHEMERAL_LIMIT = 500
     
     def delete_in_chunks(con, table, where_clause, params, chunk_size=100):
+        if not re.match(r'^[a-zA-Z0-9_]+$', table):
+            raise ValueError("Invalid table name")
+
         total_deleted = 0
         con.execute("PRAGMA busy_timeout = 5000;")
         
@@ -3005,7 +3008,7 @@ def cleanup_old_posts_from_db(limit: int = 50000):
             # Используем IMMEDIATE транзакцию даже в синхронном коде
             try:
                 con.execute("BEGIN IMMEDIATE")
-                query = f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {where_clause} LIMIT {chunk_size})"
+                query = f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {where_clause} LIMIT {chunk_size})"  # nosec B608
                 cur = con.execute(query, params)
                 count = cur.rowcount
                 con.execute("COMMIT")
