@@ -1,6 +1,7 @@
 import sqlite3
 import time
 import json
+from dataclasses import dataclass
 import io
 import random
 import re
@@ -1618,7 +1619,7 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         f"💬 <i>\"{slang_comment}\"</i>"
     )
     
-    buf = draw_user_stats_card(
+    card_data = UserStatsCardData(
         user_id=user_id,
         board_id=board_id,
         schizo_name=schizo_name,
@@ -1635,12 +1636,30 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         total_users=total_users,
         slang_comment=slang_comment
     )
+    buf = draw_user_stats_card(card_data)
     return buf, text_report
 
+
+@dataclass
+class UserStatsCardData:
+    user_id: int
+    board_id: str
+    schizo_name: str
+    role_name: str
+    custom_prefix: str
+    role: str
+    posts_count: int
+    rx_received: int
+    rx_given: int
+    mutes_count: int
+    balance: float
+    lie_media: float
+    rank: int
+    total_users: int
+    slang_comment: str
+
 def draw_user_stats_card(
-    user_id: int, board_id: str, schizo_name: str, role_name: str, custom_prefix: str,
-    role: str, posts_count: int, rx_received: int, rx_given: int, mutes_count: int,
-    balance: float, lie_media: float, rank: int, total_users: int, slang_comment: str
+    data: UserStatsCardData
 ) -> io.BytesIO:
     import os
     from PIL import Image, ImageDraw, ImageFont
@@ -1664,14 +1683,14 @@ def draw_user_stats_card(
     draw.line([0, 95, width, 95], fill='#252932', width=2)
     
     # Title & Info
-    draw.text((30, 22), schizo_name, fill='#ff9900', font=font_title)
-    status_text = f"ID: {user_id}  |  Раздел: /{board_id}/  |  Статус: {role_name} {f'({custom_prefix})' if custom_prefix else ''}"
+    draw.text((30, 22), data.schizo_name, fill='#ff9900', font=font_title)
+    status_text = f"ID: {data.user_id}  |  Раздел: /{data.board_id}/  |  Статус: {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}"
     draw.text((30, 60), status_text, fill='#8abeb7', font=font_subtitle)
     
     # Certified badge (top right)
     draw.rounded_rectangle([610, 15, 770, 80], radius=6, fill='#1b1f28', outline='#ff9900', width=2)
     draw.text((690, 33), "ТГАЧ CERTIFIED", fill='#ff9900', font=font_subtitle, anchor="mm")
-    sub_cert = "APPROVED BITYARD" if role != 'admin' else "ADMINISTRATOR"
+    sub_cert = "APPROVED BITYARD" if data.role != 'admin' else "ADMINISTRATOR"
     draw.text((690, 58), sub_cert, fill='#00ffcc', font=ImageFont.truetype(font_path, 10) if os.path.exists(font_path) else font_subtitle, anchor="mm")
     
     # Helper to draw cards
@@ -1683,13 +1702,13 @@ def draw_user_stats_card(
 
     # Cards grid
     cards = [
-        (30, 115, 175, 80, str(posts_count), "Написано постов", "#00ffcc"),
-        (220, 115, 175, 80, f"#{rank} / {total_users}", "Ранг на борде", "#ffcc00"),
-        (410, 115, 175, 80, f"{int(balance)} RUB", "Баланс коинов", "#00ff66"),
+        (30, 115, 175, 80, str(data.posts_count), "Написано постов", "#00ffcc"),
+        (220, 115, 175, 80, f"#{data.rank} / {data.total_users}", "Ранг на борде", "#ffcc00"),
+        (410, 115, 175, 80, f"{int(data.balance)} RUB", "Баланс коинов", "#00ff66"),
         
-        (30, 210, 175, 80, f"+{rx_received}", "Получено реакций", "#ff3399"),
-        (220, 210, 175, 80, str(rx_given), "Поставлено реакций", "#859900"),
-        (410, 210, 175, 80, f"{lie_media}%", "Кринж-фактор", "#cc00ff"),
+        (30, 210, 175, 80, f"+{data.rx_received}", "Получено реакций", "#ff3399"),
+        (220, 210, 175, 80, str(data.rx_given), "Поставлено реакций", "#859900"),
+        (410, 210, 175, 80, f"{data.lie_media}%", "Кринж-фактор", "#cc00ff"),
     ]
     
     for x, y, w, h, val, label, color in cards:
@@ -1699,12 +1718,12 @@ def draw_user_stats_card(
     draw.rounded_rectangle([600, 115, 770, 175], radius=6, fill='#1d1315', outline='#ff3333', width=1)
     draw.ellipse([600+15, 115+16, 600+23, 115+24], fill="#ff3333")
     draw.text((600+33, 115+20), "Схвачено мутов", fill='#969896', font=font_card_lbl, anchor="lm")
-    draw.text((600+15, 115+48), f"{mutes_count} шт", fill="#ff3339", font=font_card_num, anchor="lm")
+    draw.text((600+15, 115+48), f"{data.mutes_count} шт", fill="#ff3339", font=font_card_num, anchor="lm")
     
     # Activity Level Card (below mutes)
     draw.rounded_rectangle([600, 210, 770, 290], radius=6, fill='#13171f', outline='#252932', width=1)
     draw.text((615, 230), "Уровень деградации", fill='#969896', font=font_card_lbl)
-    activity_pct = min(1.0, posts_count / 500.0)
+    activity_pct = min(1.0, data.posts_count / 500.0)
     draw.rounded_rectangle([615, 255, 755, 267], radius=3, fill='#1b1f28')
     draw.rounded_rectangle([615, 255, 615 + int(140 * activity_pct), 267], radius=3, fill='#ff9900')
     draw.text((755, 230), f"{int(activity_pct*100)}%", fill='#ff9900', font=font_card_lbl, anchor="ra")
@@ -1715,7 +1734,7 @@ def draw_user_stats_card(
     
     # Wrap comment safely
     import textwrap
-    wrapped_lines = textwrap.wrap(f'"{slang_comment}"', width=90)
+    wrapped_lines = textwrap.wrap(f'"{data.slang_comment}"', width=90)
     y_comm = 360
     for line in wrapped_lines[:2]:
         draw.text((50, y_comm), line, fill='#e6edf3', font=font_comment)
