@@ -6,6 +6,29 @@ from stats_generator import fetch_user_stats_data, generate_user_stats_card, dra
 
 class TestStatsGenerator(unittest.TestCase):
 
+
+    def test_dict_factory(self):
+        from stats_generator import dict_factory
+        mock_cursor = MagicMock()
+        mock_cursor.description = (('id', None, None, None, None, None, None), ('name', None, None, None, None, None, None), ('value', None, None, None, None, None, None))
+        row = (1, 'test', 42.0)
+
+        result = dict_factory(mock_cursor, row)
+
+        expected = {'id': 1, 'name': 'test', 'value': 42.0}
+        self.assertEqual(result, expected)
+
+    def test_dict_factory_empty(self):
+        from stats_generator import dict_factory
+        mock_cursor = MagicMock()
+        mock_cursor.description = ()
+        row = ()
+
+        result = dict_factory(mock_cursor, row)
+
+        expected = {}
+        self.assertEqual(result, expected)
+
     @patch('stats_generator.sqlite3.connect')
     def test_fetch_user_stats_data(self, mock_connect):
         mock_conn = MagicMock()
