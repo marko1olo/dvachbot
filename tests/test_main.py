@@ -189,15 +189,22 @@ def get_clean_html_function():
     with open("main.py", "r", encoding="utf-8") as f:
         source = f.read()
 
-    # Extract the function dynamically to avoid importing main.py's side effects
+    # Extract the function and classes dynamically to avoid importing main.py's side effects
     module = ast.parse(source)
+
+    nodes_to_compile = []
     for node in module.body:
+        if isinstance(node, ast.ClassDef) and node.name == 'TelegramHTMLCleaner':
+            nodes_to_compile.append(node)
         if isinstance(node, ast.FunctionDef) and node.name == 'clean_html_for_tg':
-            # compile and eval
-            code = compile(ast.Module(body=[node], type_ignores=[]), filename="<ast>", mode="exec")
-            namespace = {'re': __import__('re')}
-            exec(code, namespace)
-            return namespace['clean_html_for_tg']
+            nodes_to_compile.append(node)
+
+    if nodes_to_compile:
+        code = compile(ast.Module(body=nodes_to_compile, type_ignores=[]), filename="<ast>", mode="exec")
+        namespace = {'re': __import__('re'), 'HTMLParser': __import__('html.parser').parser.HTMLParser, 'html': __import__('html')}
+        exec(code, namespace)
+        return namespace['clean_html_for_tg']
+
     return None
 
 clean_html_for_tg = get_clean_html_function()
@@ -206,19 +213,20 @@ class TestCleanHtmlForTg(unittest.TestCase):
     def test_balanced_tags(self):
         self.assertEqual(clean_html_for_tg("hello <b>world</b>"), "hello <b>world</b>")
         self.assertEqual(clean_html_for_tg("<b><i>test</i></b>"), "<b><i>test</i></b>")
-        self.assertEqual(clean_html_for_tg("<a href='test'>link</a>"), "<a href='test'>link</a>")
+        self.assertEqual(clean_html_for_tg("<a href='test'>link</a>"), '<a href="test">link</a>')
 
     def test_unclosed_tags(self):
         self.assertEqual(clean_html_for_tg("hello <b>world"), "hello <b>world</b>")
         self.assertEqual(clean_html_for_tg("hello <b><i>world</b>"), "hello <b><i>world</i></b>")
 
     def test_stray_closing_tags(self):
-        self.assertEqual(clean_html_for_tg("hello <b>world</i>"), "hello <b>world&lt;/i&gt;</b>")
-        self.assertEqual(clean_html_for_tg("hello </b>world"), "hello &lt;/b&gt;world")
+        # We completely discard stray closing valid tags instead of escaping them, as HTMLParser pops them or ignores them.
+        self.assertEqual(clean_html_for_tg("hello <b>world</i>"), "hello <b>world</b>")
+        self.assertEqual(clean_html_for_tg("hello </b>world"), "hello world")
 
     def test_invalid_tags(self):
-        self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script>world&lt;/script>")
-        self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown>world")
+        self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script&gt;world&lt;/script&gt;")
+        self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown&gt;world")
 
 
 from Dubsite_tgach.main import vibe_to_icon
