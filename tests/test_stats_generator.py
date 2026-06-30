@@ -96,5 +96,62 @@ class TestStatsGenerator(unittest.TestCase):
             slang_comment='ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц.'
         )
 
+
+    def test_generate_all_charts_basic(self):
+        import time
+        import os
+        import tempfile
+        import sqlite3
+
+        original_connect = sqlite3.connect
+
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+            db_path = f.name
+
+        conn = original_connect(db_path)
+        c = conn.cursor()
+        c.execute("CREATE TABLE Posts (timestamp integer, author_id integer, board_id text, post_num integer, reply_to_post_num integer, content text)")
+        c.execute("CREATE TABLE Users (user_id integer, board_id text, balance real, role text, created_at integer, lie_media integer, custom_prefix text)")
+        c.execute("CREATE TABLE Mutes (user_id integer, board_id text)")
+        c.execute("CREATE TABLE ReactionQueue (post_num integer, user_id integer, board_id text)")
+
+        t = int(time.time()) - 1000
+        c.execute("INSERT INTO Posts VALUES (?, ?, ?, ?, ?, ?)", (t, 1, 'b', 1, None, '{"type": "text", "text": "test post"}'))
+        c.execute("INSERT INTO Posts VALUES (?, ?, ?, ?, ?, ?)", (t + 12*3600, 2, 'b', 2, 1, '{"type": "photo", "caption": "test media"}'))
+        c.execute("INSERT INTO Posts VALUES (?, ?, ?, ?, ?, ?)", (t + 24*3600, 1, 'b', 3, 2, '{"text": "база"}'))
+        c.execute("INSERT INTO Posts VALUES (?, ?, ?, ?, ?, ?)", (t + 36*3600, 3, 'b', 4, 3, '{"text": "мат"}')) # adding some "toxicity"
+
+        c.execute("INSERT INTO Users VALUES (1, 'b', 100, 'user', ?, 0, '')", (t,))
+
+        conn.commit()
+        conn.close()
+
+        def mock_connect_side_effect(*args, **kwargs):
+            return original_connect(db_path)
+
+        with patch('stats_generator.sqlite3.connect', side_effect=mock_connect_side_effect):
+            # Also need to mock matplotlib pie to avoid value error if no wedges
+            with patch('matplotlib.axes.Axes.pie') as mock_pie:
+                mock_pie.return_value = ([], [], [])
+
+                from stats_generator import generate_all_charts
+
+                # Since some queries hit empty result sets if data isn't robust enough,
+                # we just test that the function completes without errors and yields some charts
+                images = generate_all_charts()
+
+                self.assertIsInstance(images, list)
+
+                # Should have generated at least a few charts
+                self.assertGreater(len(images), 0)
+
+                # verify return structure
+                for img_name, img_buf in images:
+                    self.assertIsInstance(img_name, str)
+                    self.assertTrue(img_name.endswith('.png'))
+                    self.assertIsNotNone(img_buf)
+
+        os.remove(db_path)
+
 if __name__ == '__main__':
     unittest.main()
