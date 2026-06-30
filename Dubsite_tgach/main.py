@@ -5231,7 +5231,7 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     count = 0
-    from bs4 import BeautifulSoup
+    import re
     import json
     
     # Используем отдельное соединение для тяжелой задачи
@@ -5255,14 +5255,10 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
                 text = content.get('text', '')
                 
                 if '<img' in text or '<IMG' in text:
-                    soup = BeautifulSoup(text, "html.parser")
-                    images = soup.find_all('img')
+                    new_text = re.sub(r'<img[^>]*>', '', text, flags=re.IGNORECASE)
                     
-                    if images:
-                        for img in images:
-                            img.decompose()
-                    
-                        content['text'] = str(soup)
+                    if new_text != text:
+                        content['text'] = new_text
                         new_json = json.dumps(content)
                         
                         updates.append((new_json, post_num))
