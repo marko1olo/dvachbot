@@ -7112,7 +7112,7 @@ _duel_cooldowns: dict = {} # user_id -> timestamp
 _DUEL_TIMEOUT = 120       # секунд на принятие
 
 async def accept_duel_logic(message: types.Message, challenger_id: int, board_id: str):
-    import time
+    import time, json
     from common.db_pool import get_pool, db_lock
     db = await get_pool()
     user_id = message.from_user.id
@@ -7226,44 +7226,38 @@ async def cmd_decline_shortcut(message: Message, board_id: str | None):
     if found_ch:
         await decline_duel_logic(message, found_ch)
 
-@dp.message(Command("duel"))
-async def cmd_duel(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
+async def _handle_duel_accept(message: types.Message, board_id: str):
+    import time
+    now = time.time()
+    found_ch = None
+
+    # Сначала пробуем найти строго по реплаю на сообщение-вызов
+    if message.reply_to_message:
+        reply_msg_id = message.reply_to_message.message_id
+        for ch_id, duel in list(_active_duels.items()):
+            if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                found_ch = ch_id
+                break
+
+    # Если по реплаю не нашли (или это обычный /duel accept), берем любой активный вызов на борде
+    if not found_ch:
+        for ch_id, duel in list(_active_duels.items()):
+            if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                found_ch = ch_id
+                break
+
+    if not found_ch:
+        await message.answer("⚔️ Нет активных вызовов на этой борде. Жди кого-нибудь смелого.")
+        return
+
+    await accept_duel_logic(message, found_ch, board_id)
+
+async def _handle_duel_create(message: types.Message, board_id: str, args: list, stream: str = 'ru'):
     user_id  = message.from_user.id
     import time, json
     from common.db_pool import get_pool, db_lock
+    db = await get_pool()
 
-    args = message.text.split()[1:]  # /duel 200  or  /duel accept
-    db   = await get_pool()
-
-    # ── /duel accept ── отвечает тот, кто видит active вызов
-    if args and args[0].lower() in ("accept", "принять", "+"):
-        now = time.time()
-        found_ch = None
-        
-        # Сначала пробуем найти строго по реплаю на сообщение-вызов
-        if message.reply_to_message:
-            reply_msg_id = message.reply_to_message.message_id
-            for ch_id, duel in list(_active_duels.items()):
-                if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                    found_ch = ch_id
-                    break
-        
-        # Если по реплаю не нашли (или это обычный /duel accept), берем любой активный вызов на борде
-        if not found_ch:
-            for ch_id, duel in list(_active_duels.items()):
-                if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                    found_ch = ch_id
-                    break
-                    
-        if not found_ch:
-            await message.answer("⚔️ Нет активных вызовов на этой борде. Жди кого-нибудь смелого.")
-            return
-            
-        await accept_duel_logic(message, found_ch, board_id)
-        return
-
-    # ── /duel <сумма> ── создать вызов
     try:
         amount = int(args[0]) if args else 0
     except:
@@ -7325,6 +7319,15 @@ async def cmd_duel(message: types.Message, board_id: str | None, stream: str = '
     try: await message.delete()
     except: pass
 
+@dp.message(Command("duel"))
+async def cmd_duel(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    args = message.text.split()[1:]
+
+    if args and args[0].lower() in ("accept", "принять", "+"):
+        await _handle_duel_accept(message, board_id)
+    else:
+        await _handle_duel_create(message, board_id, args, stream)
 
 @dp.message(Command("wallet", "balance", "money"))
 async def cmd_wallet(message: types.Message, board_id: str | None, stream: str = 'ru'):
