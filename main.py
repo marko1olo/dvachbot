@@ -3945,32 +3945,7 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
             modified_content[text_key] = await _maybe_punch_up_text(current_text, active_mode_key, board_id)
 
     return modified_content
-async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0) -> tuple[bytes, int] | None:
-    if depth > 3: return None
-    import socket
-    import ssl
-    import aiohttp
-    import asyncio
-    import hashlib
-    from urllib.parse import urlparse
-
-    current_proxy = get_dynamic_proxy_url()
-    
-    # Настраиваем таймауты
-    timeout_config = aiohttp.ClientTimeout(total=timeout, connect=30, sock_connect=30, sock_read=timeout)
-    
-    # Парсим домен для Referer
-    parsed_url = urlparse(url)
-    domain = parsed_url.netloc
-    scheme = parsed_url.scheme
-    _, url_ext = os.path.splitext(parsed_url.path)
-    url_log = (
-        f"host={domain or 'unknown'} "
-        f"ext={(url_ext.lower()[:12] or 'none')} "
-        f"sha12={hashlib.sha256(url.encode('utf-8', 'ignore')).hexdigest()[:12]}"
-    )
-
-    # Базовые заголовки, маскируемся под Chrome
+def _get_download_headers(domain: str, scheme: str) -> dict:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
@@ -3984,8 +3959,6 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
         "Cache-Control": "no-cache",
     }
 
-    # ДОБАВЛЯЕМ REFERER (ГЛАВНОЕ ИСПРАВЛЕНИЕ)
-    # Имиджборды требуют, чтобы реферер совпадал с их сайтом
     if "gelbooru" in domain:
         headers["Referer"] = "https://gelbooru.com/"
     elif "konachan" in domain:
@@ -3997,8 +3970,67 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
     elif "aibooru" in domain:
         headers["Referer"] = "https://aibooru.online/"
     else:
-        # Универсальный фоллбек
         headers["Referer"] = f"{scheme}://{domain}/"
+
+    return headers
+
+async def _fetch_image_data(session, url: str, proxy: str | None, is_fallback: bool = False, url_log: str = "") -> tuple[bytes, int] | None:
+    try:
+        async with session.get(url, allow_redirects=True, proxy=proxy) as response:
+            if response.status == 200:
+                content_type = response.headers.get('Content-Type', '').lower()
+                data = await response.read()
+
+                if 'text/html' in content_type or (len(data) > 0 and data.strip().startswith(b'<') and b'<html' in data[:500].lower()):
+                    try:
+                        error_text = data[:300].decode('utf-8', errors='ignore').replace('\n', ' ')
+                    except Exception:
+                        error_text = "Binary/Unknown"
+
+                    print(f"⚠️ [DEBUG_DL] Ссылка вернула HTML заглушку. Содержимое: {error_text}")
+                    return None
+
+                if len(data) > 49.5 * 1024 * 1024:
+                    print(f"⚠️ [DEBUG_DL] Файл слишком велик ({len(data)} байт). Пропуск.")
+                    return None
+
+                if len(data) > 0:
+                    print(f"✅ [DEBUG_DL] Скачано {len(data)} байт.{' Успех через DIRECT.' if is_fallback else ''}")
+                    return data, len(data)
+            else:
+                if not is_fallback:
+                    print(f"⚠️ [DEBUG_DL] Статус ответа: {response.status} для {url_log}")
+    except Exception as e:
+        if not is_fallback:
+            raise e
+
+    return None
+
+async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0) -> tuple[bytes, int] | None:
+    if depth > 3: return None
+    import socket
+    import ssl
+    import aiohttp
+    import asyncio
+    import hashlib
+    import os
+    from urllib.parse import urlparse
+
+    current_proxy = get_dynamic_proxy_url()
+
+    timeout_config = aiohttp.ClientTimeout(total=timeout, connect=30, sock_connect=30, sock_read=timeout)
+
+    parsed_url = urlparse(url)
+    domain = parsed_url.netloc
+    scheme = parsed_url.scheme
+    _, url_ext = os.path.splitext(parsed_url.path)
+    url_log = (
+        f"host={domain or 'unknown'} "
+        f"ext={(url_ext.lower()[:12] or 'none')} "
+        f"sha12={hashlib.sha256(url.encode('utf-8', 'ignore')).hexdigest()[:12]}"
+    )
+
+    headers = _get_download_headers(domain, scheme)
 
     for attempt in range(2):
         ssl_context = ssl.create_default_context()
@@ -4018,45 +4050,15 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                 trust_env=False 
             ) as session:
                 try:
-                    async with session.get(url, allow_redirects=True, proxy=current_proxy) as response:
-                        if response.status == 200:
-                            content_type = response.headers.get('Content-Type', '').lower()
-                            
-                            # Читаем данные
-                            data = await response.read()
-
-                            # Проверка на HTML-заглушку (Cloudflare или 403)
-                            # Некоторые сайты отдают 200 OK, но внутри HTML с капчей
-                            if 'text/html' in content_type or (len(data) > 0 and data.strip().startswith(b'<') and b'<html' in data[:500].lower()):
-                                try:
-                                    # Пытаемся прочитать текст ошибки для диагностики
-                                    error_text = data[:300].decode('utf-8', errors='ignore').replace('\n', ' ')
-                                except Exception:
-                                    error_text = "Binary/Unknown"
-                                    
-                                print(f"⚠️ [DEBUG_DL] Ссылка вернула HTML заглушку. Содержимое: {error_text}")
-                                return None
-
-                            if len(data) > 49.5 * 1024 * 1024:
-                                print(f"⚠️ [DEBUG_DL] Файл слишком велик ({len(data)} байт). Пропуск.")
-                                return None
-                                
-                            if len(data) > 0:
-                                print(f"✅ [DEBUG_DL] Скачано {len(data)} байт.")
-                                return data, len(data)
-                        else:
-                            print(f"⚠️ [DEBUG_DL] Статус ответа: {response.status} для {url_log}")
-
+                    result = await _fetch_image_data(session, url, current_proxy, url_log=url_log)
+                    if result:
+                        return result
                 except (aiohttp.ClientConnectorError, asyncio.TimeoutError, OSError) as e:
                     if current_proxy:
                         print(f"⚠️ [DEBUG_DL] Сбой прокси ({e}). Пробую DIRECT...")
-                        # Попытка без прокси
-                        async with session.get(url, allow_redirects=True, proxy=None) as response:
-                            if response.status == 200:
-                                data = await response.read()
-                                if len(data) > 0 and not (data.strip().startswith(b'<') and b'<html' in data[:200].lower()):
-                                    print(f"✅ [DEBUG_DL] Успех через DIRECT.")
-                                    return data, len(data)
+                        result = await _fetch_image_data(session, url, None, is_fallback=True, url_log=url_log)
+                        if result:
+                            return result
                     raise e
         except asyncio.TimeoutError:
             if attempt == 0:
