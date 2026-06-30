@@ -79,7 +79,7 @@ def create_gzipped_dump(db_path: str, output_dir: str) -> str | None:
                 pass
         return None
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     # Этот блок остается для возможности ручного тестирования скрипта.
     print("Запуск менеджера бэкапов напрямую для теста...")
     if not os.path.exists(DB_NAME):
