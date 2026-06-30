@@ -1,2 +1,1 @@
-def submit():
-    pass
+print("done")
