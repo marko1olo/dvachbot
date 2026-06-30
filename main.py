@@ -36,7 +36,6 @@ import os
 import tracemalloc
 import uuid
 import math
-import tempfile
 import random
 import re
 import secrets
@@ -45,40 +44,31 @@ import signal
 import sys
 import io
 import time
-import witching_hour
 import periodic_publisher
-import textwrap
 import threading
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from asyncio import Semaphore
 from collections import deque, defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, UTC
 from enum import Enum
 from logging.handlers import RotatingFileHandler
-from typing import Tuple
-from dotenv import load_dotenv
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from common.html_utils import escape_html
 from common.token_generator import generate_unique_token
 from common.database import (
     initialize_database, is_database_migrated, load_state_from_db, get_and_clear_reaction_queue, get_post_by_num, get_stream_active_users, 
-    update_board_settings, add_or_activate_user, update_user_status, get_and_clear_broadcast_queue, mark_broadcast_posts_sent, get_channel_message_id,
-    create_post, update_shadow_mute, create_thread, update_user_location, get_op_posts_for_board, get_thread_by_op_post, add_channel_copy, get_all_channel_copies,
+    update_board_settings, add_or_activate_user, update_user_status, get_and_clear_broadcast_queue, mark_broadcast_posts_sent, create_post, update_shadow_mute, create_thread, update_user_location, get_op_posts_for_board, get_thread_by_op_post, add_channel_copy, get_all_channel_copies,
     add_post_copies, get_post_author_by_copy, get_post_copies, get_post_info_by_copy, update_user_settings_db, get_all_active_subscribers, log_global_event,
     upsert_delivery_queue_item, delete_delivery_queue_item, get_pending_delivery_queue_items,
-    get_posts_from_broadcast_queue, cleanup_broadcast_queue, get_or_create_api_token, get_user_by_token, remove_regular_mute, apply_regular_mute,
-    get_and_clear_notification_queue, search_posts, update_post_content, remove_user_from_board, cleanup_old_posts_from_db, find_post_by_file_id,
-    load_all_spam_words, add_spam_word, remove_spam_word, delete_post_by_num, add_reaction_ban, remove_reaction_ban, load_all_reaction_bans, set_channel_message_id, get_max_post_num, get_weekly_active_users, get_reply_coverage_stats,
+    get_or_create_api_token, remove_regular_mute, apply_regular_mute,
+    get_and_clear_notification_queue, search_posts, update_post_content, remove_user_from_board, load_all_spam_words, add_spam_word, remove_spam_word, delete_post_by_num, add_reaction_ban, remove_reaction_ban, load_all_reaction_bans, get_max_post_num, get_weekly_active_users, get_reply_coverage_stats,
     get_random_video_post, get_random_image_post
 )
 from site_tgach.admin_config import ADMIN_IDS
-from backup_manager import create_gzipped_dump
 from common.db_pool import create_pool, close_pool, get_pool
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from text_assets import (
@@ -91,8 +81,7 @@ from text_assets import (
     FAP_SUCCESS_PHRASES, FAP_SUCCESS_PHRASES_EN, FAP_SUCCESS_PHRASES_JP,
     GATARI_SUCCESS_PHRASES, GATARI_SUCCESS_PHRASES_EN, GATARI_SUCCESS_PHRASES_JP,
     LOLI_SUCCESS_PHRASES, LOLI_SUCCESS_PHRASES_EN, LOLI_SUCCESS_PHRASES_JP,
-    DEANON_COOLDOWN_PHRASES, DEANON_COOLDOWN_PHRASES_EN, DEANON_COOLDOWN_PHRASES_JP,
-    MOTIVATIONAL_MESSAGES, MOTIVATIONAL_MESSAGES_EN, MOTIVATIONAL_MESSAGES_JP,
+    DEANON_COOLDOWN_PHRASES, MOTIVATIONAL_MESSAGES, MOTIVATIONAL_MESSAGES_EN, MOTIVATIONAL_MESSAGES_JP,
     INVITE_TEXTS, INVITE_TEXTS_EN, INVITE_TEXTS_JP,
     POLL_CREATION_SUCCESS_PHRASES, POLL_CREATION_SUCCESS_PHRASES_EN, POLL_CREATION_SUCCESS_PHRASES_JP,
     POLL_VOTE_SUCCESS_PHRASES, POLL_VOTE_SUCCESS_PHRASES_EN, POLL_VOTE_SUCCESS_PHRASES_JP,
@@ -101,11 +90,11 @@ from text_assets import (
     SUMMARIZE_PROMPTS_BOARD_SHORT_EN, SUMMARIZE_PROMPTS_BOARD_LONG_EN,
     ROAST_PROMPTS, ROAST_PROMPTS_EN, ROAST_PROMPTS_JP,
     CONTEXTUAL_REPLIES, CONTEXTUAL_REPLIES_EN, CONTEXTUAL_REPLIES_JP,
-    REACTION_NOTIFY_PHRASES, REACTION_NOTIFY_PHRASES_JP, ALBUM_EDUCATION_PHRASES, ANIME_HOURLY_LIMIT_PHRASES,
+    REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES, ANIME_HOURLY_LIMIT_PHRASES,
     SITE_PROMO_PHRASES, SITE_PROMO_PHRASES_EN, SITE_PROMO_PHRASES_JP, EARNING_NOTIFICATIONS,
     WITHDRAWAL_SCENARIOS, SCAM_PROCESSING_STATUSES, PROGRESS_BARS, PUBLIC_SHAME_MESSAGES,
     SUPPORT_RESPONSES, FAKE_CRYPTO_RATES, METHOD_LABELS, REFERRAL_BONUS_MESSAGES, 
-    VERIFICATION_SUCCESS_MESSAGES, VERIFICATION_REQUIRED_MESSAGES
+    VERIFICATION_SUCCESS_MESSAGES
 )
 from contextual_flavor import install_contextual_reply_extensions
 from common.config import DB_POST_LIMIT as CONFIG_DB_POST_LIMIT
@@ -165,9 +154,8 @@ from aiogram.exceptions import (
     TelegramNetworkError,
     TelegramRetryAfter,
 )
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile, InputFile
-from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 # Определяем состояния для машины состояний
@@ -182,7 +170,6 @@ except ImportError:
     sys.exit(1)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 time.sleep(2)
-import deanonymizer
 from deanonymizer import (
     generate_deanon_info,
 )
@@ -196,13 +183,12 @@ from help_text import (
 )
 from japanese_translator import (
     anime_transform, get_random_anime_image, get_monogatari_image, 
-    get_nsfw_anime_image, get_loli_image, get_dynamic_proxy_url,
-    _get_proxy_usage_strategy, _update_proxy_state_on_failure
+    get_nsfw_anime_image, get_loli_image, get_dynamic_proxy_url
 )
 from summarize import summarize_text_with_hf, create_telegraph_page_async
 from thread_texts import thread_messages
-from ukrainian_mode import UKRAINIAN_PHRASES, ukrainian_transform
-from zaputin_mode import PATRIOTIC_PHRASES, zaputin_transform
+from ukrainian_mode import ukrainian_transform
+from zaputin_mode import zaputin_transform
 from polish_mode import POLISH_PHRASES_START, POLISH_PHRASES_END, polish_transform
 from warhammer_mode import WH40K_PHRASES_START, WH40K_PHRASES_END, warhammer_transform
 from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial_transform
@@ -458,7 +444,6 @@ LOCATION_SWITCH_COOLDOWN = 5 # 5 секунд на смену локации (в
 SUMMARIZE_COOLDOWN = 600
 ROAST_COOLDOWN = 300
 
-import random
 
 NICK_PREFIXES = ["Базированный", "Всратый", "Мамкин", "Поехавший", "Соевый", "Диванный", "Опущенный", "Гойский", "Толстый", "Порватый", "Латентный", "Просветленный", "Элитный", "Подпивасный", "Двачевский", "Педальный", "Токсичный", "Кринжовый", "Аутичный", "Думерский", "Рядовой", "Школьный", "Отбитый", "Метаироничный", "Скрытый", "Сигма", "Альфа", "Омега", "Сажный", "Вайбовый", "Копиумный", "Попущенный", "Лютый", "Абсолютный", "Печальный", "Нищуковский", "Душный", "Шизоидный", "Паленый", "Забивной", "Плюшевый", "Астральный", "Комнатный"]
 NICK_SUFFIXES = ["Битард", "Скуф", "Шиз", "Анон", "Ньюфаг", "Олдфаг", "Омеган", "Шитпостер", "Сыч", "Двачер", "Чухан", "Куколд", "Нормис", "Гигачад", "Подпивас", "Зумер", "Бумер", "Сояк", "Инцел", "Думер", "Говноед", "Симп", "Чмоня", "Байтер", "Ноулайфер", "Тролль", "Моралфаг", "Альтушка", "Масик", "Школьник", "Дед", "Хиккан", "Скуфидон", "Терпила", "Вахтер", "Тентакль", "Мыслитель", "Философ", "Дворник", "Эрудит", "Чел"]
@@ -1766,17 +1751,7 @@ def _collect_board_map_totals() -> dict:
     for timestamps in image_spam_tracker.values():
         totals["image_spam_items"] += _safe_len(timestamps)
     return totals
-def _collect_runtime_snapshot() -> dict:
-
-    queue_sizes = {board: message_queues[board].qsize() for board in BOARDS if board in message_queues}
-    top_queues = sorted(queue_sizes.items(), key=lambda item: item[1], reverse=True)[:5]
-    queue_age_summary = _summarize_live_queue_ages(queue_sizes)
-    priority_counts = {board: _safe_len(weekly_active_users.get(board, set())) for board in BOARDS}
-    pending_done = 0
-    try:
-        pending_done = sum(1 for task in pending_edit_tasks.values() if task.done())
-    except Exception:
-        pending_done = -1
+def _get_board_totals_snapshot() -> dict:
     board_totals = {
         "active_users": 0,
         "shadow_mutes": 0,
@@ -1798,126 +1773,165 @@ def _collect_runtime_snapshot() -> dict:
         reaction_queue = b_data.get("reaction_queue", {})
         if isinstance(reaction_queue, dict):
             board_totals["reaction_queue_items"] += sum(_safe_len(q) for q in reaction_queue.values())
-    board_map_totals = _collect_board_map_totals()
-    recipient_counts = _recipient_counts_snapshot()
+    return board_totals
+
+def _get_maps_snapshot() -> dict:
+    pending_done = 0
     try:
-        all_tasks = asyncio.all_tasks()
-        task_stats = {
-            "total": len(all_tasks),
-            "done": sum(1 for task in all_tasks if task.done()),
-        }
-    except RuntimeError:
-        task_stats = {"total": 0, "done": 0}
+        pending_done = sum(1 for task in pending_edit_tasks.values() if task.done())
+    except Exception:
+        pending_done = -1
     return {
-        "utc": datetime.now(UTC).isoformat(),
-        "post_counter": state.get("post_counter", 0),
-        "memory": _get_process_memory_snapshot(),
-        "db_files": _get_db_file_snapshot(),
-        "controlled_stop": _controlled_stop_snapshot(),
-        "queues": {
-            "total": sum(queue_sizes.values()),
-            "by_board": queue_sizes,
-            "top": top_queues,
-            "age_by_board": queue_age_summary["by_board"],
-            "oldest": queue_age_summary["oldest"],
-            "in_flight": queue_age_summary["in_flight"],
-        },
-        "delivery_priority": {
-            "enabled": PRIORITY_DELIVERY_ENABLED,
-            "split_fanout": PRIORITY_SPLIT_FANOUT_ENABLED,
-            "split_min_passive": PRIORITY_SPLIT_MIN_PASSIVE,
-            "passive_slice_size": PRIORITY_PASSIVE_SLICE_SIZE,
-            "passive_media_slice_size": PRIORITY_PASSIVE_MEDIA_SLICE_SIZE,
-            "pressure_slice_age_sec": PRIORITY_PRESSURE_SLICE_AGE_SEC,
-            "pressure_passive_slice_size": PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
-            "pressure_passive_media_slice_size": PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
-            "passive_max_preemptions": PASSIVE_MAX_PREEMPTIONS,
-            "priority_phase_budget_sec": PRIORITY_PHASE_BUDGET_SEC,
-            "passive_phase_budget_sec": PASSIVE_PHASE_BUDGET_SEC,
+        "messages_storage": _safe_len(messages_storage),
+        "post_to_messages": _safe_len(post_to_messages),
+        "message_to_post": _safe_len(message_to_post),
+        "shadow_fake_post_counters": _safe_len(shadow_fake_post_counters),
+        "pending_edit_tasks": _safe_len(pending_edit_tasks),
+        "pending_edit_done": pending_done,
+        "current_media_groups": _safe_len(current_media_groups),
+        "media_group_timers": _safe_len(media_group_timers),
+        "posts_pending_deletion": _safe_len(posts_pending_deletion),
+        "unknown_command_tracker": _safe_len(unknown_command_tracker),
+        "contextual_reply_tracker": _safe_len(contextual_reply_tracker),
+        "user_spam_locks": _safe_len(user_spam_locks),
+        "generate_locks": _safe_len(generate_locks),
+        "user_last_thread_action": _safe_len(user_last_thread_action),
+        "reaction_ratelimit": _safe_len(reaction_ratelimit),
+        "last_poll_creation_time": _safe_len(last_poll_creation_time),
+        "last_poll_vote_time": _safe_len(last_poll_vote_time),
+        "user_hourly_image_count": _safe_len(user_hourly_image_count),
+        "user_hourly_image_reset": _safe_len(user_hourly_image_reset),
+        "author_reaction_notify_tracker": _safe_len(author_reaction_notify_tracker),
+        "network_retry_state": _safe_len(network_retry_state),
+        "image_spam_tracker": _safe_len(image_spam_tracker),
+        "stream_cache": _safe_len(stream_cache),
+        "graph_stats": _safe_len(graph_stats),
+        "roulette_events": _safe_len(ROULETTE_EVENTS),
+    }
+
+def _get_delivery_priority_snapshot() -> dict:
+    priority_counts = {board: _safe_len(weekly_active_users.get(board, set())) for board in BOARDS}
+    return {
+        "enabled": PRIORITY_DELIVERY_ENABLED,
+        "split_fanout": PRIORITY_SPLIT_FANOUT_ENABLED,
+        "split_min_passive": PRIORITY_SPLIT_MIN_PASSIVE,
+        "passive_slice_size": PRIORITY_PASSIVE_SLICE_SIZE,
+        "passive_media_slice_size": PRIORITY_PASSIVE_MEDIA_SLICE_SIZE,
+        "pressure_slice_age_sec": PRIORITY_PRESSURE_SLICE_AGE_SEC,
+        "pressure_passive_slice_size": PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
+        "pressure_passive_media_slice_size": PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
+        "passive_max_preemptions": PASSIVE_MAX_PREEMPTIONS,
+        "priority_phase_budget_sec": PRIORITY_PHASE_BUDGET_SEC,
+        "passive_phase_budget_sec": PASSIVE_PHASE_BUDGET_SEC,
         "delivery_initial_chunk_size": DELIVERY_INITIAL_CHUNK_SIZE,
         "delivery_min_chunk_size": DELIVERY_MIN_CHUNK_SIZE,
         "delivery_per_recipient_timeout_sec": DELIVERY_PER_RECIPIENT_TIMEOUT_SEC,
         "delivery_telegram_request_timeout_sec": DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC,
         "delivery_max_recipient_retries": DELIVERY_MAX_RECIPIENT_RETRIES,
         "delivery_phase_guard_sec": DELIVERY_PHASE_GUARD_SEC,
-            "days": WEEKLY_ACTIVE_DAYS,
-            "refresh_sec": WEEKLY_ACTIVE_REFRESH_SECONDS,
-            "total_weekly_active": sum(priority_counts.values()),
-            "by_board": priority_counts,
-            "updated_at": weekly_active_updated_at.copy(),
-        },
-        "recipients": recipient_counts,
-        "durable_delivery": {
-            "enabled": DURABLE_DELIVERY_QUEUE_ENABLED,
-            **durable_delivery_stats,
-        },
-        "anime_media": {
-            "concurrency": ANIME_MEDIA_CONCURRENCY,
-            "b_max_stacked_images": B_MAX_STACKED_ANIME_IMAGES,
-            "url_timeout_sec": ANIME_URL_FETCH_TIMEOUT_SEC,
-            "url_total_sec": ANIME_URL_FETCH_TOTAL_SEC,
-            "url_parallel": ANIME_URL_FETCH_PARALLEL,
-            "download_timeout_sec": ANIME_DOWNLOAD_TIMEOUT_SEC,
-            "download_total_sec": ANIME_DOWNLOAD_TOTAL_SEC,
-            "download_parallel": ANIME_DOWNLOAD_PARALLEL,
-            "refill_rounds": ANIME_REFILL_ROUNDS,
-        },
-        "mode_punchup": {
-            "enabled": MODE_PUNCHUP_ENABLED,
-            "runtime_enabled": mode_punchup_runtime_enabled,
-            "queue_shed_sec": MODE_PUNCHUP_QUEUE_SHED_SEC,
-            "slow_log_us": MODE_PUNCHUP_SLOW_LOG_US,
-            "stats": _summarize_mode_punchup_stats(),
-        },
-        "contextual_replies": {
-            "enabled": CONTEXTUAL_REPLIES_ENABLED,
-            "cooldown_sec": CONTEXTUAL_REPLY_COOLDOWN_SEC,
-            "daily_limit": CONTEXTUAL_REPLY_DAILY_LIMIT,
-            "groups_ru": _safe_len(CONTEXTUAL_REPLIES),
-            "tracked_users": _safe_len(contextual_reply_tracker),
-            "stats": dict(contextual_reply_stats),
-        },
-        "reply_coverage": {
-            "updated_at": reply_coverage_updated_at,
-            **reply_coverage_stats,
-        },
+        "days": WEEKLY_ACTIVE_DAYS,
+        "refresh_sec": WEEKLY_ACTIVE_REFRESH_SECONDS,
+        "total_weekly_active": sum(priority_counts.values()),
+        "by_board": priority_counts,
+        "updated_at": weekly_active_updated_at.copy(),
+    }
+
+def _get_anime_media_snapshot() -> dict:
+    return {
+        "concurrency": ANIME_MEDIA_CONCURRENCY,
+        "b_max_stacked_images": B_MAX_STACKED_ANIME_IMAGES,
+        "url_timeout_sec": ANIME_URL_FETCH_TIMEOUT_SEC,
+        "url_total_sec": ANIME_URL_FETCH_TOTAL_SEC,
+        "url_parallel": ANIME_URL_FETCH_PARALLEL,
+        "download_timeout_sec": ANIME_DOWNLOAD_TIMEOUT_SEC,
+        "download_total_sec": ANIME_DOWNLOAD_TOTAL_SEC,
+        "download_parallel": ANIME_DOWNLOAD_PARALLEL,
+        "refill_rounds": ANIME_REFILL_ROUNDS,
+    }
+
+def _get_queues_snapshot() -> dict:
+    queue_sizes = {board: message_queues[board].qsize() for board in BOARDS if board in message_queues}
+    top_queues = sorted(queue_sizes.items(), key=lambda item: item[1], reverse=True)[:5]
+    queue_age_summary = _summarize_live_queue_ages(queue_sizes)
+    return {
+        "total": sum(queue_sizes.values()),
+        "by_board": queue_sizes,
+        "top": top_queues,
+        "age_by_board": queue_age_summary["by_board"],
+        "oldest": queue_age_summary["oldest"],
+        "in_flight": queue_age_summary["in_flight"],
+    }
+
+def _get_asyncio_tasks_snapshot() -> dict:
+    try:
+        all_tasks = asyncio.all_tasks()
+        return {
+            "total": len(all_tasks),
+            "done": sum(1 for task in all_tasks if task.done()),
+        }
+    except RuntimeError:
+        return {"total": 0, "done": 0}
+
+def _get_tracemalloc_snapshot() -> dict:
+    return {
+        "enabled": tracemalloc.is_tracing(),
+        "current_mb": round(tracemalloc.get_traced_memory()[0] / 1024 / 1024, 2) if tracemalloc.is_tracing() else 0.0,
+        "peak_mb": round(tracemalloc.get_traced_memory()[1] / 1024 / 1024, 2) if tracemalloc.is_tracing() else 0.0,
+    }
+
+def _get_mode_punchup_snapshot() -> dict:
+    return {
+        "enabled": MODE_PUNCHUP_ENABLED,
+        "runtime_enabled": mode_punchup_runtime_enabled,
+        "queue_shed_sec": MODE_PUNCHUP_QUEUE_SHED_SEC,
+        "slow_log_us": MODE_PUNCHUP_SLOW_LOG_US,
+        "stats": _summarize_mode_punchup_stats(),
+    }
+
+def _get_contextual_replies_snapshot() -> dict:
+    return {
+        "enabled": CONTEXTUAL_REPLIES_ENABLED,
+        "cooldown_sec": CONTEXTUAL_REPLY_COOLDOWN_SEC,
+        "daily_limit": CONTEXTUAL_REPLY_DAILY_LIMIT,
+        "groups_ru": _safe_len(CONTEXTUAL_REPLIES),
+        "tracked_users": _safe_len(contextual_reply_tracker),
+        "stats": dict(contextual_reply_stats),
+    }
+
+def _get_reply_coverage_snapshot() -> dict:
+    return {
+        "updated_at": reply_coverage_updated_at,
+        **reply_coverage_stats,
+    }
+
+def _get_durable_delivery_snapshot() -> dict:
+    return {
+        "enabled": DURABLE_DELIVERY_QUEUE_ENABLED,
+        **durable_delivery_stats,
+    }
+
+def _collect_runtime_snapshot() -> dict:
+    return {
+        "utc": datetime.now(UTC).isoformat(),
+        "post_counter": state.get("post_counter", 0),
+        "memory": _get_process_memory_snapshot(),
+        "db_files": _get_db_file_snapshot(),
+        "controlled_stop": _controlled_stop_snapshot(),
+        "queues": _get_queues_snapshot(),
+        "delivery_priority": _get_delivery_priority_snapshot(),
+        "recipients": _recipient_counts_snapshot(),
+        "durable_delivery": _get_durable_delivery_snapshot(),
+        "anime_media": _get_anime_media_snapshot(),
+        "mode_punchup": _get_mode_punchup_snapshot(),
+        "contextual_replies": _get_contextual_replies_snapshot(),
+        "reply_coverage": _get_reply_coverage_snapshot(),
         "delivery": _summarize_delivery_metrics(),
-        "maps": {
-            "messages_storage": _safe_len(messages_storage),
-            "post_to_messages": _safe_len(post_to_messages),
-            "message_to_post": _safe_len(message_to_post),
-            "shadow_fake_post_counters": _safe_len(shadow_fake_post_counters),
-            "pending_edit_tasks": _safe_len(pending_edit_tasks),
-            "pending_edit_done": pending_done,
-            "current_media_groups": _safe_len(current_media_groups),
-            "media_group_timers": _safe_len(media_group_timers),
-            "posts_pending_deletion": _safe_len(posts_pending_deletion),
-            "unknown_command_tracker": _safe_len(unknown_command_tracker),
-            "contextual_reply_tracker": _safe_len(contextual_reply_tracker),
-            "user_spam_locks": _safe_len(user_spam_locks),
-            "generate_locks": _safe_len(generate_locks),
-            "user_last_thread_action": _safe_len(user_last_thread_action),
-            "reaction_ratelimit": _safe_len(reaction_ratelimit),
-            "last_poll_creation_time": _safe_len(last_poll_creation_time),
-            "last_poll_vote_time": _safe_len(last_poll_vote_time),
-            "user_hourly_image_count": _safe_len(user_hourly_image_count),
-            "user_hourly_image_reset": _safe_len(user_hourly_image_reset),
-            "author_reaction_notify_tracker": _safe_len(author_reaction_notify_tracker),
-            "network_retry_state": _safe_len(network_retry_state),
-            "image_spam_tracker": _safe_len(image_spam_tracker),
-            "stream_cache": _safe_len(stream_cache),
-            "graph_stats": _safe_len(graph_stats),
-            "roulette_events": _safe_len(ROULETTE_EVENTS),
-        },
-        "board_maps": board_map_totals,
-        "board_totals": board_totals,
-        "asyncio_tasks": task_stats,
+        "maps": _get_maps_snapshot(),
+        "board_maps": _collect_board_map_totals(),
+        "board_totals": _get_board_totals_snapshot(),
+        "asyncio_tasks": _get_asyncio_tasks_snapshot(),
         "gc_count": gc.get_count(),
-        "tracemalloc": {
-            "enabled": tracemalloc.is_tracing(),
-            "current_mb": round(tracemalloc.get_traced_memory()[0] / 1024 / 1024, 2) if tracemalloc.is_tracing() else 0.0,
-            "peak_mb": round(tracemalloc.get_traced_memory()[1] / 1024 / 1024, 2) if tracemalloc.is_tracing() else 0.0,
-        },
+        "tracemalloc": _get_tracemalloc_snapshot(),
     }
 def _format_runtime_snapshot(snapshot: dict) -> str:
 
@@ -2193,7 +2207,7 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
     is_shutting_down = True
     
     # Импортируем лок для безопасного доступа к БД
-    from common.db_pool import get_pool, db_lock, close_pool
+    from common.db_pool import get_pool, db_lock
     
     reason = "АВАРИЙНЫЙ (OOM)" if emergency else "ШТАТНЫЙ"
     print(f"🛑 [{reason}] Начинаем процедуру остановки...")
@@ -2244,9 +2258,7 @@ async def log_memory_summary():
         log_memory_summary.previous_stats = {}
     previous_stats = log_memory_summary.previous_stats
     current_stats = {}
-    import sys
     import gc
-    from collections import Counter
     print(f"\n--- 📝 Запуск анализа памяти в {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')} ---")
     gc_count = gc.collect()
     print(f"GC.collect() завершён, удалено объектов: {gc_count}")
@@ -3181,51 +3193,51 @@ async def send_moderation_notice(user_id: int, action: str, board_id: str, durat
     if action == "ban":
         if lang == 'en':
             ban_phrases = [
-                f"🚨 A faggot has been banned for spam. RIP.",
-                f"☠️ Another spammer bites the dust. Good riddance.",
-                f"🔨 The ban hammer has spoken. A degenerate was removed.",
-                f"✈️ Sent a spammer on a one-way trip to hell."
+                "🚨 A faggot has been banned for spam. RIP.",
+                "☠️ Another spammer bites the dust. Good riddance.",
+                "🔨 The ban hammer has spoken. A degenerate was removed.",
+                "✈️ Sent a spammer on a one-way trip to hell."
             ]
         elif lang == 'jp':
             ban_phrases = [
-                f"🚨 ホモ野郎がスパムでBANされたぞ。ナムアミダブツ。",
-                f"☠️ またスパム野郎が塵になった。せいせいするぜ。",
-                f"🔨 BANハンマーが下された。変質者が一人消えたな。",
-                f"✈️ スパム野郎を地獄への片道旅行に送り出したぞ。"
+                "🚨 ホモ野郎がスパムでBANされたぞ。ナムアミダブツ。",
+                "☠️ またスパム野郎が塵になった。せいせいするぜ。",
+                "🔨 BANハンマーが下された。変質者が一人消えたな。",
+                "✈️ スパム野郎を地獄への片道旅行に送り出したぞ。"
             ]
         else:
             ban_phrases = [
-                f"🚨 Хуесос был забанен за спам. Помянем.",
-                f"☠️ Мир стал чище, еще один спамер отлетел в бан.",
-                f"🔨 Банхаммер опустился на голову очередного дегенерата.",
-                f"✈️ Отправили спамера в увлекательное путешествие нахуй!",
+                "🚨 Хуесос был забанен за спам. Помянем.",
+                "☠️ Мир стал чище, еще один спамер отлетел в бан.",
+                "🔨 Банхаммер опустился на голову очередного дегенерата.",
+                "✈️ Отправили спамера в увлекательное путешествие нахуй!",
             ]
         text = random.choice(ban_phrases)
         spawn_task(log_global_event('bot', f"🔨 {board_id.upper()}: {text} (User: {user_id})"))
     elif action == "mute":
         if lang == 'en':
             mute_phrases = [
-                f"🔇 A loudmouth has been muted for a while.",
-                f"🤫 Someone's got a timeout. Let's enjoy the silence.",
-                f"🤐 Put a sock in it! A user has been temporarily silenced.",
-                f"⌛️ A faggot is in the penalty box for a bit."
+                "🔇 A loudmouth has been muted for a while.",
+                "🤫 Someone's got a timeout. Let's enjoy the silence.",
+                "🤐 Put a sock in it! A user has been temporarily silenced.",
+                "⌛️ A faggot is in the penalty box for a bit."
             ]
         elif lang == 'jp':
             mute_phrases = [
-                f"🔇 クソうるさい奴をしばらく黙らせたぞ。",
-                f"🤫 タイムアウトだ。静寂を楽しもうぜ。",
-                f"🤐 靴下でも詰めとけ！ユーザーが一時的にミュートされた。",
-                f"⌛️ ホモ野郎はお仕置き部屋行きだ。"
+                "🔇 クソうるさい奴をしばらく黙らせたぞ。",
+                "🤫 タイムアウトだ。静寂を楽しもうぜ。",
+                "🤐 靴下でも詰めとけ！ユーザーが一時的にミュートされた。",
+                "⌛️ ホモ野郎はお仕置き部屋行きだ。"
             ]
         else:
             mute_phrases = [
-                f"🔇 Пидораса замутили ненадолго.",
-                f"🤫 Наслаждаемся тишиной, хуеглот временно не может писать.",
-                f"Молчание - золото. Пидор будет тихим.",
-                f"🤐 Анон отправлен в угол подумать о своем поведении.",
-                f"⌛️ Пидору выписали временный запрет на открытие рта.",
-                f"🕒 Пидор будет молчать до лучших времен.",
-                f"На время он будет тихим, как мышь. Ожидаем его возвращения."
+                "🔇 Пидораса замутили ненадолго.",
+                "🤫 Наслаждаемся тишиной, хуеглот временно не может писать.",
+                "Молчание - золото. Пидор будет тихим.",
+                "🤐 Анон отправлен в угол подумать о своем поведении.",
+                "⌛️ Пидору выписали временный запрет на открытие рта.",
+                "🕒 Пидор будет молчать до лучших времен.",
+                "На время он будет тихим, как мышь. Ожидаем его возвращения."
             ]
         text = random.choice(mute_phrases)
     else:
@@ -3766,7 +3778,7 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
 async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, post_num: int, content: dict, is_shadow_muted: bool, stream: str = 'ru'):
     if is_shadow_muted:
         return
-    from common.database import get_post_by_num, register_file_owner, update_post_content, add_file_mirror
+    from common.database import get_post_by_num, register_file_owner, update_post_content
     check_post = await get_post_by_num(post_num)
     if not check_post:
         return
@@ -4055,7 +4067,7 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                             if response.status == 200:
                                 data = await response.read()
                                 if len(data) > 0 and not (data.strip().startswith(b'<') and b'<html' in data[:200].lower()):
-                                    print(f"✅ [DEBUG_DL] Успех через DIRECT.")
+                                    print("✅ [DEBUG_DL] Успех через DIRECT.")
                                     return data, len(data)
                     raise e
         except asyncio.TimeoutError:
@@ -4063,7 +4075,7 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                 await asyncio.sleep(1)
                 continue
             else:
-                print(f"⛔ [DEBUG_DL] Таймаут соединения.")
+                print("⛔ [DEBUG_DL] Таймаут соединения.")
         except Exception as e:
             print(f"⛔ [DEBUG_DL] Исключение: {type(e).__name__}: {e}")
             break
@@ -5336,10 +5348,10 @@ async def send_message_to_users(
                 raise 
             except (aiohttp.ClientConnectorError, TelegramNetworkError, asyncio.TimeoutError):
                 raise TelegramRetryAfter(method="network", message="Network Error", retry_after=5)
-            except (aiohttp.ServerDisconnectedError, aiohttp.ClientPayloadError) as e:
+            except (aiohttp.ServerDisconnectedError, aiohttp.ClientPayloadError):
                 stats['ghosts'] += 1
                 return None
-            except Exception as e:
+            except Exception:
                 stats['errors'] += 1
                 return None
         return None
@@ -5766,7 +5778,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                     else:
                         return
                 return 
-            except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError) as e:
+            except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
                 if attempt < max_attempts - 1:
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 10) 
@@ -6520,10 +6532,10 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
             return
         active_items["mute_gun"] = True
         msg = (
-            f"🔫 Ты купил Мут-Ган!\n"
-            f"Как использовать: найди пост жертвы, нажми Reply и отправь /shoot.\n"
-            f"Эффект: жертва получает мут на 1 час.\n"
-            f"⚠️ Осторожно: если у цели активен Зеркальный Щит, выстрел отразится обратно в тебя!"
+            "🔫 Ты купил Мут-Ган!\n"
+            "Как использовать: найди пост жертвы, нажми Reply и отправь /shoot.\n"
+            "Эффект: жертва получает мут на 1 час.\n"
+            "⚠️ Осторожно: если у цели активен Зеркальный Щит, выстрел отразится обратно в тебя!"
         )
     # 2. Reflect Shield
     elif item == "shield":
@@ -6531,9 +6543,9 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         base_time = max(current_time, active_items.get("reflect_shield_until", 0))
         active_items["reflect_shield_until"] = base_time + 24 * 3600
         msg = (
-            f"🛡️ Ты купил Зеркальный Щит на 24 часа!\n"
-            f"Щит работает пассивно: при первой попытке выстрелить в тебя из Мут-Гана\n"
-            f"выстрел автоматически отразится в стрелка (мут 1 час), а щит израсходуется."
+            "🛡️ Ты купил Зеркальный Щит на 24 часа!\n"
+            "Щит работает пассивно: при первой попытке выстрелить в тебя из Мут-Гана\n"
+            "выстрел автоматически отразится в стрелка (мут 1 час), а щит израсходуется."
         )
     # 3. Prefix
     elif item == "prefix":
@@ -6992,7 +7004,8 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
 async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
-    import time, json
+    import time
+    import json
     from common.db_pool import get_pool, db_lock
 
     db = await get_pool()
@@ -7097,7 +7110,7 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
         you = " ← ты" if uid == caller_id else ""
         lines.append(f"{medal} {anon_tag}{pfx} — <code>{int(bal)} RUB</code>{you}")
 
-    lines.append(f"\n<i>Имена не раскрываются. Заработай в реакциях или /shop.</i>")
+    lines.append("\n<i>Имена не раскрываются. Заработай в реакциях или /shop.</i>")
     await message.answer("\n".join(lines), parse_mode="HTML")
     try: await message.delete()
     except: pass
@@ -7230,7 +7243,7 @@ async def cmd_decline_shortcut(message: Message, board_id: str | None):
 async def cmd_duel(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id  = message.from_user.id
-    import time, json
+    import time
     from common.db_pool import get_pool, db_lock
 
     args = message.text.split()[1:]  # /duel 200  or  /duel accept
@@ -7390,8 +7403,8 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
         # КРАСНАЯ ИСТОРИЯ: Используем зафиксированную в БД сумму или небольшой рандом, если еще не выводили
         failed_sum = int(last_failed) if last_failed > 0 else random.randint(20, 70)
         history_body += f"🔴 -{failed_sum}.00 ₽ (Gateway Reject: 115-FZ)\n"
-        history_body += f"🔴 -15.00 ₽ (Maintenance Fee)\n"
-        history_body += f"⚪️ 0.00 ₽ (Account Liquidated)\n"
+        history_body += "🔴 -15.00 ₽ (Maintenance Fee)\n"
+        history_body += "⚪️ 0.00 ₽ (Account Liquidated)\n"
 
     text += history_body
 
@@ -7399,9 +7412,9 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
     ref_link = f"https://t.me/{bot_user.username}?start=ref_{user_id}"
 
     if lang == 'en':
-        btns = ["💸 Withdraw", f"🤝 Invite Friend (+50₽)", "📊 Rates", "📜 History"]
+        btns = ["💸 Withdraw", "🤝 Invite Friend (+50₽)", "📊 Rates", "📜 History"]
     else:
-        btns = ["💸 Вывести средства", f"🤝 Пригласить друга (+50₽)", "📊 Курс валют", "📜 История"]
+        btns = ["💸 Вывести средства", "🤝 Пригласить друга (+50₽)", "📊 Курс валют", "📜 История"]
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=btns[0], callback_data="start_withdrawal")],
@@ -7573,7 +7586,7 @@ async def process_withdrawal_data(message: types.Message, state: FSMContext, boa
     data = await state.get_data()
     method = data.get('wd_method', 'sber')
     
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool
     db = await get_pool()
     
     async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
@@ -8453,7 +8466,7 @@ def load_graph_stats():
         try:
             with open("graph.json", 'r', encoding='utf-8') as f:
                 graph_stats = json.load(f)
-            print(f"✅ Статистика для графика (graph.json) загружена.")
+            print("✅ Статистика для графика (graph.json) загружена.")
         except (json.JSONDecodeError, OSError) as e:
             print(f"⚠️ Не удалось загрузить graph.json: {e}. Файл будет создан заново.")
             graph_stats = {}
@@ -9408,7 +9421,7 @@ def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
         prompt = re.sub(r'строго 6-8 крупных абзацев', f'строго {count} {p_word_adj}', prompt)
         prompt = re.sub(r'не менее 6-8 крупных, содержательных абзацев с подробностями', f'ровно {count} {p_word_adj} с подробностями', prompt)
         prompt = re.sub(r'1-2 предложения', f'ровно {count} {p_word}', prompt)
-        prompt = re.sub(r'ультра-короткую, циничную прожарку', f'циничную прожарку', prompt)
+        prompt = re.sub(r'ультра-короткую, циничную прожарку', 'циничную прожарку', prompt)
         
         prompt += f"\n\nВАЖНО: Твой отчет должен быть структурированным и состоять СТРОГО из {count} абзацев (не больше и не меньше!). Каждый абзац должен быть содержательным, плотным и отделен от других пустой строкой. Не используй Markdown-разметку (только HTML, например <b>, <i>)."
     elif lang == 'en':
@@ -11637,7 +11650,7 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
         archive_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
         
         if not archive_bot:
-            print(f"⛔ Ошибка: бот для постинга архивов не найден.")
+            print("⛔ Ошибка: бот для постинга архивов не найден.")
             return
 
         config = SPECIAL_NUMERALS_CONFIG[level]
@@ -12115,7 +12128,7 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
                 current_size = output_buffer.tell()
                 
             return output_buffer.getvalue()
-    except Exception as e:
+    except Exception:
         return image_bytes
 def _contextual_reply_allowed(user_id: int, board_id: str) -> tuple[bool, str | None]:
     if not CONTEXTUAL_REPLIES_ENABLED:
@@ -16378,7 +16391,7 @@ async def cmd_roll(message: types.Message, board_id: str | None, stream: str = '
             caption_header = random.choice(ROULETTE_RESULT_PHRASES) # Пока оставим общие
             await message.answer_photo(photo, caption=caption_header)
         else:
-            print(f"⚠️ [cmd_roll] Image generation failed. Sending text.")
+            print("⚠️ [cmd_roll] Image generation failed. Sending text.")
             result_header = random.choice(ROULETTE_RESULT_PHRASES)
             event_desc_html = escape_html(event_desc_plain)
             result_text = f"{result_header}\n\n<b>[{event_id}]</b> {event_desc_html}"
@@ -18786,7 +18799,6 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
         pass
     await callback.answer()
 
-import io
 try:
     import ujson as json
 except ImportError:
