@@ -216,5 +216,71 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual(mock_remove.call_count, 1)
 
 
+
+    def test_integration_create_gzipped_dump(self):
+        """Integration test using a temporary directory and actual file operations."""
+        import tempfile
+        import gzip
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "test.db")
+            output_dir = os.path.join(temp_dir, "backups")
+
+            # Create a real sqlite DB
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+                cursor.execute("INSERT INTO users (name) VALUES ('Alice')")
+                cursor.execute("INSERT INTO users (name) VALUES ('Bob')")
+                conn.commit()
+
+            # Call the function
+            result_path = create_gzipped_dump(db_path, output_dir)
+
+            # Verify result path
+            self.assertIsNotNone(result_path)
+            self.assertTrue(os.path.exists(result_path))
+            self.assertTrue(result_path.endswith(".sql.gz"))
+            self.assertTrue(result_path.startswith(output_dir))
+
+            # Read back the gzip file and verify contents
+            with gzip.open(result_path, "rt", encoding="utf-8") as f:
+                dump_contents = f.read()
+
+            self.assertIn("CREATE TABLE users", dump_contents)
+            self.assertIn("INSERT INTO \"users\" VALUES(1,'Alice');", dump_contents)
+            self.assertIn("INSERT INTO \"users\" VALUES(2,'Bob');", dump_contents)
+
+    @patch("backup_manager.os.remove")
+    @patch("backup_manager.sqlite3.connect")
+    @patch("backup_manager.datetime")
+    @patch("backup_manager.os.makedirs")
+    @patch("backup_manager.os.path.exists")
+    def test_exception_during_dump_creation_with_cleanup_error(
+        self, mock_exists, mock_makedirs, mock_datetime, mock_connect, mock_remove
+    ):
+        """Test exception handling during dump creation, where the cleanup also fails with an OSError."""
+
+        def exists_side_effect(path):
+            return True
+
+        mock_exists.side_effect = exists_side_effect
+        mock_datetime.now.return_value.strftime.return_value = "2023-01-01_12-00"
+
+        # Simulate an error during dump creation
+        mock_connect.side_effect = sqlite3.Error("Test DB Error")
+
+        # Simulate OSError during cleanup
+        mock_remove.side_effect = OSError("Cleanup failed")
+
+        result = create_gzipped_dump("test.db", "out_dir")
+
+        self.assertIsNone(result)
+
+        # Should have tried to clean up the partial dump file, and caught the OSError
+        expected_path = os.path.join("out_dir", "db_backup_2023-01-01_12-00.sql.gz")
+        mock_remove.assert_called_once_with(expected_path)
+
+
 if __name__ == "__main__":
     unittest.main()
