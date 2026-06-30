@@ -7086,36 +7086,54 @@ async def api_admin_toggle_blur(
     if not check_perm(user, "mod"):
         raise HTTPException(status_code=403, detail="Нужен ранг Moderator")
 
-    new_state = await toggle_post_censorship(data.post_num)
+    new_states = await toggle_post_censorship(data.post_num)
 
-    # Сброс кэша для этого поста, чтобы пользователи сразу увидели изменения
     from fastapi_cache import FastAPICache
 
-    await FastAPICache.clear(namespace="main", key=f"api_get_post:{data.post_num}")
+    # Normalize to list for processing cache clearing
+    post_nums = data.post_num if isinstance(data.post_num, list) else [data.post_num]
+    new_states_dict = new_states if isinstance(data.post_num, list) else {data.post_num: new_states}
 
-    # Если это ОП-пост, сбрасываем кэш треда
-    post_data = await get_post_by_num(data.post_num)
-    if post_data:
-        board_id = post_data.get("board_id")
-        thread_id = post_data.get("thread_id")
-        if board_id and thread_id:
-            for stream in ["ru", "en", "jp"]:
-                # Сброс кэша HTML страницы треда
-                await FastAPICache.clear(
-                    namespace="main", key=f"thread_html:{board_id}:{thread_id}:{stream}"
-                )
-                # Сброс кэша JSON API треда (версия в ключе меняется временем, но для надежности можно и так)
-                # Однако версии досок обновляются в queue_listener, который сработает ниже через broadcast
+    affected_threads = set()
 
-    # Отправляем обновление через вебсокеты (это также обновит версии досок/тредов в queue_listener)
-    updated_post = await get_post_for_broadcast(data.post_num)
-    if updated_post:
-        await request.app.state.broadcast_queue.put(updated_post)
+    for pnum in post_nums:
+        # Сброс кэша для этого поста, чтобы пользователи сразу увидели изменения
+        await FastAPICache.clear(namespace="main", key=f"api_get_post:{pnum}")
 
-    log_system_event(
-        f"🌫️ CENSOR: Post #{data.post_num} censorship set to {new_state} by {user['id']}"
-    )
-    return {"status": "ok", "is_censored": new_state}
+        # Проверяем к какому треду/доске относится пост
+        post_data = await get_post_by_num(pnum)
+        if post_data:
+            board_id = post_data.get("board_id")
+            thread_id = post_data.get("thread_id")
+            if board_id and thread_id:
+                affected_threads.add((board_id, thread_id))
+
+        # Отправляем обновление через вебсокеты (это также обновит версии досок/тредов в queue_listener)
+        updated_post = await get_post_for_broadcast(pnum)
+        if updated_post:
+            await request.app.state.broadcast_queue.put(updated_post)
+
+        state = new_states_dict.get(pnum, False)
+        log_system_event(
+            f"🌫️ CENSOR: Post #{pnum} censorship set to {state} by {user['id']}"
+        )
+
+    # Сбрасываем кэш тредов для всех затронутых
+    for board_id, thread_id in affected_threads:
+        for stream in ["ru", "en", "jp"]:
+            # Сброс кэша HTML страницы треда
+            await FastAPICache.clear(
+                namespace="main", key=f"thread_html:{board_id}:{thread_id}:{stream}"
+            )
+            # Сброс кэша JSON API треда
+            await FastAPICache.clear(
+                namespace="main", key=f"api_get_thread:{board_id}:{thread_id}"
+            )
+
+    # If single return single for compatibility, else dict
+    if not isinstance(data.post_num, list):
+        return {"status": "ok", "is_censored": new_states_dict.get(data.post_num, False)}
+    return {"status": "ok", "is_censored_states": new_states_dict}
 
 
 @app.post("/api/admin/set_banner")
