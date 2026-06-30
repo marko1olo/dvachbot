@@ -59,6 +59,12 @@ def generate_schizo_name(user_id: int) -> str:
     suffix = rng.choice(NICK_SUFFIXES)
     return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
 
+def generate_provocateur_name(user_id: int) -> str:
+    if not user_id: return "Анонимус"
+    rng = random.Random(user_id + 999) # different seed to vary names
+    titles = ["Байтер", "Жертва Буллинга", "Провокатор", "Корм для Троллей", "Клоун"]
+    return f"{rng.choice(titles)} (#{str(user_id)[-4:]})"
+
 def generate_all_charts():
     """Generates exactly 10 toxic charts and returns a list of io.BytesIO objects"""
     conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)

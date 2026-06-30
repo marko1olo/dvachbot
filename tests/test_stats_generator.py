@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import io
 
-from stats_generator import fetch_user_stats_data, generate_user_stats_card, draw_user_stats_card
+from stats_generator import fetch_user_stats_data, generate_user_stats_card, draw_user_stats_card, generate_provocateur_name
 
 class TestStatsGenerator(unittest.TestCase):
 
@@ -95,6 +95,28 @@ class TestStatsGenerator(unittest.TestCase):
             total_users=3,
             slang_comment='ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц.'
         )
+
+
+    def test_generate_provocateur_name(self):
+        # Test missing / zero user_id
+        self.assertEqual(generate_provocateur_name(0), "Анонимус")
+        self.assertEqual(generate_provocateur_name(None), "Анонимус")
+
+        # Test valid user_id
+        # Let's test determinism and format
+        name1 = generate_provocateur_name(12345)
+        name2 = generate_provocateur_name(12345)
+        self.assertEqual(name1, name2)
+
+        self.assertTrue(name1.endswith("(#2345)"))
+
+        titles = ["Байтер", "Жертва Буллинга", "Провокатор", "Корм для Троллей", "Клоун"]
+        title_part = name1.split(" (")[0]
+        self.assertIn(title_part, titles)
+
+        # Test different user_id can give different or same but definitely ends with different id
+        name3 = generate_provocateur_name(67890)
+        self.assertTrue(name3.endswith("(#7890)"))
 
 if __name__ == '__main__':
     unittest.main()
