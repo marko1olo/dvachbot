@@ -7539,40 +7539,54 @@ async def get_posts_batch(post_nums: List[int]) -> List[dict]:
             if 'db' in locals() and db:
                 db.row_factory = None
 
-async def toggle_post_censorship(post_num: int) -> bool:
+async def toggle_post_censorship(post_nums: list[int]) -> dict[int, bool]:
     """
-    Переключает флаг цензуры (блюра) для поста.
+    Переключает флаг цензуры (блюра) для списка постов.
     """
     from common.db_pool import get_pool, db_lock
     
+    if not post_nums:
+        return {}
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                async with db.execute("SELECT content FROM Posts WHERE post_num = ?", (post_num,)) as cursor:
-                    row = await cursor.fetchone()
+                placeholders = ','.join('?' for _ in post_nums)
+                query = f"SELECT post_num, content FROM Posts WHERE post_num IN ({placeholders})"
                 
-                if not row:
+                async with db.execute(query, post_nums) as cursor:
+                    rows = await cursor.fetchall()
+                
+                if not rows:
                     await db.execute("COMMIT")
-                    return False
+                    return {}
                 
-                try:
-                    content = json.loads(row[0])
-                except:
-                    content = {"text": "", "type": "text"}
+                updates = []
+                results = {}
+                for row in rows:
+                    p_num, content_str = row[0], row[1]
+                    try:
+                        content_dict = json.loads(content_str)
+                    except:
+                        content_dict = {"text": "", "type": "text"}
+
+                    # Переключение флага
+                    current_state = content_dict.get('is_censored', False)
+                    new_state = not current_state
+                    content_dict['is_censored'] = new_state
+
+                    new_json = json.dumps(content_dict, default=_json_serializer)
+                    updates.append((new_json, p_num))
+                    results[p_num] = new_state
                 
-                # Переключение флага
-                current_state = content.get('is_censored', False)
-                new_state = not current_state
-                content['is_censored'] = new_state
+                if updates:
+                    await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", updates)
                 
-                new_json = json.dumps(content, default=_json_serializer)
-                
-                await db.execute("UPDATE Posts SET content = ? WHERE post_num = ?", (new_json, post_num))
                 await db.execute("COMMIT")
-                return new_state
+                return results
                 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
@@ -7587,7 +7601,7 @@ async def toggle_post_censorship(post_num: int) -> bool:
                 except: pass
                 print(f"Error toggling censorship: {e}")
                 break
-    return False
+    return {}
 
 def get_db_connection():
     """

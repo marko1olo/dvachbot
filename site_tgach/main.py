@@ -7086,7 +7086,8 @@ async def api_admin_toggle_blur(
     if not check_perm(user, "mod"):
         raise HTTPException(status_code=403, detail="Нужен ранг Moderator")
 
-    new_state = await toggle_post_censorship(data.post_num)
+    results = await toggle_post_censorship([data.post_num])
+    new_state = results.get(data.post_num, False)
 
     # Сброс кэша для этого поста, чтобы пользователи сразу увидели изменения
     from fastapi_cache import FastAPICache
