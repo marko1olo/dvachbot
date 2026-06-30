@@ -2,6 +2,8 @@ import random
 import io
 import os
 import glob
+from typing import Any
+from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 TEMPLATE_CONFIG = {
@@ -117,12 +119,20 @@ def _find_best_font_size(draw, text, font_path, max_width, max_height, max_font_
             return font, wrapped_text
     return font, wrapped_text
 
-def _draw_text_with_shadow(draw, position, text, font, fill, align, anchor, stroke_width=0):
+@dataclass
+class TextDrawConfig:
+    font: Any
+    fill: tuple
+    align: str
+    anchor: str
+    stroke_width: int = 0
+
+def _draw_text_with_shadow(draw, position, text, config: TextDrawConfig):
     x, y = position
     shadow_color = (0, 0, 0, 180)
     for off_x, off_y in [(-2,-2), (2,-2), (-2,2), (2,2), (0,3)]:
-        draw.multiline_text((x+off_x, y+off_y), text, font=font, fill=shadow_color, align=align, anchor=anchor)
-    draw.multiline_text(position, text, font=font, fill=fill, align=align, anchor=anchor, stroke_width=stroke_width, stroke_fill=(0,0,0))
+        draw.multiline_text((x+off_x, y+off_y), text, font=config.font, fill=shadow_color, align=config.align, anchor=config.anchor)
+    draw.multiline_text(position, text, font=config.font, fill=config.fill, align=config.align, anchor=config.anchor, stroke_width=config.stroke_width, stroke_fill=(0,0,0))
 
 def create_visual_post(mode, text, header=None):
     try:
@@ -176,7 +186,8 @@ def create_visual_post(mode, text, header=None):
                 h_x1, h_y1, h_x2, h_y2 = config['header_area']
                 clean_h = header.replace("<i>","").replace("</i>","").replace("###","").strip()
                 h_font, h_text = _find_best_font_size(draw, clean_h, config['font_path'], h_x2-h_x1, h_y2-h_y1, 40, 'center')
-                _draw_text_with_shadow(draw, (h_x1 + (h_x2-h_x1)/2, h_y1), h_text, h_font, (255,220,50), 'center', 'ma', 2)
+                h_text_config = TextDrawConfig(font=h_font, fill=(255,220,50), align='center', anchor='ma', stroke_width=2)
+                _draw_text_with_shadow(draw, (h_x1 + (h_x2-h_x1)/2, h_y1), h_text, h_text_config)
 
             x1, y1, x2, y2 = config['text_area']
             display_text = text
@@ -185,7 +196,8 @@ def create_visual_post(mode, text, header=None):
                 display_text = f"{clean_h}\n\n{text}"
             
             font, w_text = _find_best_font_size(draw, display_text, config['font_path'], x2-x1, y2-y1, config['max_font_size'], 'center')
-            _draw_text_with_shadow(draw, (x1 + (x2-x1)/2, y1), w_text, font, (255,255,255), 'center', 'ma', 2)
+            text_config = TextDrawConfig(font=font, fill=(255,255,255), align='center', anchor='ma', stroke_width=2)
+            _draw_text_with_shadow(draw, (x1 + (x2-x1)/2, y1), w_text, text_config)
 
         else:
             x1, y1, x2, y2 = config['text_area']
@@ -193,8 +205,10 @@ def create_visual_post(mode, text, header=None):
             font, w_text = _find_best_font_size(draw, full_text, config['font_path'], x2-x1, y2-y1, config['max_font_size'], config['text_align'])
             pos_x = x1 if config['text_align'] == 'left' else x2 if config['text_align'] == 'right' else x1 + (x2-x1)/2
             anchor = {"left": "la", "center": "ma", "right": "ra"}[config['text_align']]
-            draw.multiline_text((pos_x, y1), w_text, font=font, fill=config['text_color'], align=config['text_align'], anchor=anchor, 
-                                stroke_width=config.get('text_stroke', {}).get('width', 0) if config.get('text_stroke') else 0,
+            stroke_width = config.get('text_stroke', {}).get('width', 0) if config.get('text_stroke') else 0
+            text_config = TextDrawConfig(font=font, fill=config['text_color'], align=config['text_align'], anchor=anchor, stroke_width=stroke_width)
+            draw.multiline_text((pos_x, y1), w_text, font=text_config.font, fill=text_config.fill, align=text_config.align, anchor=text_config.anchor,
+                                stroke_width=text_config.stroke_width,
                                 stroke_fill=config.get('text_stroke', {}).get('fill') if config.get('text_stroke') else None)
 
         buf = io.BytesIO()
