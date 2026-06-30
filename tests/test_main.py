@@ -35,7 +35,7 @@ mocked_deps = [
     'aiogram.filters', 'aiogram.fsm', 'aiogram.fsm.context', 'aiogram.fsm.state', 'aiogram.fsm.storage', 'aiogram.fsm.storage.memory',
     'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'orjson', 'pydantic',
     'aiogram.utils', 'aiogram.utils.media_group', 'aiogram.utils.keyboard',
-    'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types'
+    'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types', 'httpx', 'bs4', 'python-multipart', 'jinja2', 'itsdangerous', 'aiohttp', 'mutagen', 'mutagen.mp3', 'PIL', 'starlette', 'starlette.middleware', 'starlette.types', 'starlette.middleware.sessions', 'starlette.websockets', 'starlette.requests', 'starlette.responses', 'starlette.datastructures', 'apscheduler', 'apscheduler.schedulers', 'apscheduler.schedulers.asyncio', 'psutil'
 ]
 
 for dep in mocked_deps:
@@ -260,3 +260,24 @@ class TestSanitizeHtml(unittest.TestCase):
         self.assertEqual(sanitize_html("this & that"), "this &amp; that")
         self.assertEqual(sanitize_html("less < greater >"), "less &lt; greater &gt;")
         self.assertEqual(sanitize_html("a & b < c > d \" e ' f"), "a &amp; b &lt; c &gt; d \" e ' f")
+
+from Dubsite_tgach.main import generate_negative_id
+
+class TestGenerateNegativeId(unittest.TestCase):
+    def test_deterministic_output(self):
+        self.assertEqual(generate_negative_id("test_token"), -1275787636)
+
+    def test_return_type(self):
+        result = generate_negative_id("token")
+        self.assertIsInstance(result, int)
+
+    def test_range_check(self):
+        result = generate_negative_id("another_token")
+        self.assertLessEqual(result, -1)
+        self.assertGreaterEqual(result, -2147483648)
+
+    def test_different_inputs(self):
+        self.assertNotEqual(generate_negative_id("token1"), generate_negative_id("token2"))
+
+    def test_empty_string(self):
+        self.assertEqual(generate_negative_id(""), -1672528964)
