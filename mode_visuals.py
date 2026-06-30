@@ -2,7 +2,16 @@ import random
 import io
 import os
 import glob
+from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+@dataclass
+class FontFitConfig:
+    font_path: str
+    max_width: int
+    max_height: int
+    max_font_size: int
+    text_align: str
 
 TEMPLATE_CONFIG = {
     'gopnik': [
@@ -103,17 +112,17 @@ def _wrap_text_by_pixel(draw, text, font, max_width):
         wrapped_lines.append(current_line)
     return "\n".join(wrapped_lines)
 
-def _find_best_font_size(draw, text, font_path, max_width, max_height, max_font_size, text_align):
+def _find_best_font_size(draw, text, fit_config: FontFitConfig):
     font = None
     wrapped_text = ""
-    for size in range(max_font_size, 12, -2):
+    for size in range(fit_config.max_font_size, 12, -2):
         try:
-            font = ImageFont.truetype(font_path, size)
+            font = ImageFont.truetype(fit_config.font_path, size)
         except:
             font = ImageFont.load_default()
-        wrapped_text = _wrap_text_by_pixel(draw, text, font, max_width)
-        bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, align=text_align)
-        if (bbox[3] - bbox[1]) <= max_height:
+        wrapped_text = _wrap_text_by_pixel(draw, text, font, fit_config.max_width)
+        bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, align=fit_config.text_align)
+        if (bbox[3] - bbox[1]) <= fit_config.max_height:
             return font, wrapped_text
     return font, wrapped_text
 
@@ -175,7 +184,14 @@ def create_visual_post(mode, text, header=None):
             if config['layout'] == 'split' and header:
                 h_x1, h_y1, h_x2, h_y2 = config['header_area']
                 clean_h = header.replace("<i>","").replace("</i>","").replace("###","").strip()
-                h_font, h_text = _find_best_font_size(draw, clean_h, config['font_path'], h_x2-h_x1, h_y2-h_y1, 40, 'center')
+                h_fit_config = FontFitConfig(
+                    font_path=config['font_path'],
+                    max_width=h_x2-h_x1,
+                    max_height=h_y2-h_y1,
+                    max_font_size=40,
+                    text_align='center'
+                )
+                h_font, h_text = _find_best_font_size(draw, clean_h, h_fit_config)
                 _draw_text_with_shadow(draw, (h_x1 + (h_x2-h_x1)/2, h_y1), h_text, h_font, (255,220,50), 'center', 'ma', 2)
 
             x1, y1, x2, y2 = config['text_area']
@@ -184,13 +200,27 @@ def create_visual_post(mode, text, header=None):
                 clean_h = header.replace("<i>","").replace("</i>","").replace("###","").strip()
                 display_text = f"{clean_h}\n\n{text}"
             
-            font, w_text = _find_best_font_size(draw, display_text, config['font_path'], x2-x1, y2-y1, config['max_font_size'], 'center')
+            fit_config = FontFitConfig(
+                font_path=config['font_path'],
+                max_width=x2-x1,
+                max_height=y2-y1,
+                max_font_size=config['max_font_size'],
+                text_align='center'
+            )
+            font, w_text = _find_best_font_size(draw, display_text, fit_config)
             _draw_text_with_shadow(draw, (x1 + (x2-x1)/2, y1), w_text, font, (255,255,255), 'center', 'ma', 2)
 
         else:
             x1, y1, x2, y2 = config['text_area']
             full_text = f"{header.replace('<i>','').replace('</i>','')}\n\n{text}" if header else text
-            font, w_text = _find_best_font_size(draw, full_text, config['font_path'], x2-x1, y2-y1, config['max_font_size'], config['text_align'])
+            fit_config = FontFitConfig(
+                font_path=config['font_path'],
+                max_width=x2-x1,
+                max_height=y2-y1,
+                max_font_size=config['max_font_size'],
+                text_align=config['text_align']
+            )
+            font, w_text = _find_best_font_size(draw, full_text, fit_config)
             pos_x = x1 if config['text_align'] == 'left' else x2 if config['text_align'] == 'right' else x1 + (x2-x1)/2
             anchor = {"left": "la", "center": "ma", "right": "ra"}[config['text_align']]
             draw.multiline_text((pos_x, y1), w_text, font=font, fill=config['text_color'], align=config['text_align'], anchor=anchor, 
