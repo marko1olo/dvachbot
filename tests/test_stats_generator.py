@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import io
 
-from stats_generator import fetch_user_stats_data, generate_user_stats_card, draw_user_stats_card
+from stats_generator import fetch_user_stats_data, generate_user_stats_card, draw_user_stats_card, UserStatsCardData
 
 class TestStatsGenerator(unittest.TestCase):
 
@@ -78,7 +78,7 @@ class TestStatsGenerator(unittest.TestCase):
         self.assertIn("Баланс:</b> 150 RUB", text_report)
         self.assertIn("Ранг борды:</b> #2 из 3", text_report)
 
-        mock_draw_user_stats_card.assert_called_once_with(
+        expected_data = UserStatsCardData(
             user_id=123,
             board_id='test',
             schizo_name='Базированный-Анон',
@@ -95,6 +95,7 @@ class TestStatsGenerator(unittest.TestCase):
             total_users=3,
             slang_comment='ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц.'
         )
+        mock_draw_user_stats_card.assert_called_once_with(expected_data)
 
 if __name__ == '__main__':
     unittest.main()
