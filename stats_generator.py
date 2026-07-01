@@ -1570,42 +1570,29 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
         'total_users': len(all_users)
     }
 
-def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
-    stats_data = fetch_user_stats_data(user_id, board_id)
 
-    balance = stats_data['balance']
-    role = stats_data['role']
-    lie_media = stats_data['lie_media']
-    custom_prefix = stats_data['custom_prefix']
-    posts_count = stats_data['posts_count']
-    rx_received = stats_data['rx_received']
-    rx_given = stats_data['rx_given']
-    mutes_count = stats_data['mutes_count']
-    rank = stats_data['rank']
-    total_users = stats_data['total_users']
-    
-    schizo_name = generate_schizo_name(user_id)
-    
-    role_name = {
+def _get_role_name(role: str) -> str:
+    return {
         'admin': 'Админ',
         'mod': 'Модератор',
         'janitor': 'Дворник',
         'user': 'Анон'
     }.get(role, 'Анон')
-    
-    # Slang comment based on rank and posts
+
+def _get_slang_comment(posts_count: int, rank: int, balance: float) -> str:
     if posts_count == 0:
-        slang_comment = "Ньюфаг детектед. Иди читай правила борды, анон."
+        return "Ньюфаг детектед. Иди читай правила борды, анон."
     elif rank <= 3:
-        slang_comment = "ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц."
+        return "ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц."
     elif posts_count > 300:
-        slang_comment = "Почетный Скуф борды. Запах подпиваса и базированных мыслей за версту."
+        return "Почетный Скуф борды. Запах подпиваса и базированных мыслей за версту."
     elif balance < 10:
-        slang_comment = "Нищук детектед. Проиграл все коины в рулетку или забанен за сажу."
+        return "Нищук детектед. Проиграл все коины в рулетку или забанен за сажу."
     else:
-        slang_comment = "Обычный сыч. Бамп в тред, сажу в комменты."
-        
-    text_report = (
+        return "Обычный сыч. Бамп в тред, сажу в комменты."
+
+def _format_text_report(schizo_name: str, board_id: str, role_name: str, custom_prefix: str, rank: int, total_users: int, posts_count: int, rx_received: int, rx_given: int, balance: float, mutes_count: int, lie_media: float, slang_comment: str) -> str:
+    return (
         f"☘️ <b>Статистика пользователя {schizo_name}</b> (/${board_id}/)\n\n"
         f"👤 <b>Статус:</b> {role_name} {f'({custom_prefix})' if custom_prefix else ''}\n"
         f"🏅 <b>Ранг борды:</b> #{rank} из {total_users}\n"
@@ -1617,22 +1604,45 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         f"🌀 <b>Кринж-фактор:</b> {lie_media}%\n\n"
         f"💬 <i>\"{slang_comment}\"</i>"
     )
+
+def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
+    stats_data = fetch_user_stats_data(user_id, board_id)
+
+    schizo_name = generate_schizo_name(user_id)
+    role_name = _get_role_name(stats_data['role'])
+    slang_comment = _get_slang_comment(stats_data['posts_count'], stats_data['rank'], stats_data['balance'])
+
+    text_report = _format_text_report(
+        schizo_name=schizo_name,
+        board_id=board_id,
+        role_name=role_name,
+        custom_prefix=stats_data['custom_prefix'],
+        rank=stats_data['rank'],
+        total_users=stats_data['total_users'],
+        posts_count=stats_data['posts_count'],
+        rx_received=stats_data['rx_received'],
+        rx_given=stats_data['rx_given'],
+        balance=stats_data['balance'],
+        mutes_count=stats_data['mutes_count'],
+        lie_media=stats_data['lie_media'],
+        slang_comment=slang_comment
+    )
     
     buf = draw_user_stats_card(
         user_id=user_id,
         board_id=board_id,
         schizo_name=schizo_name,
         role_name=role_name,
-        custom_prefix=custom_prefix,
-        role=role,
-        posts_count=posts_count,
-        rx_received=rx_received,
-        rx_given=rx_given,
-        mutes_count=mutes_count,
-        balance=balance,
-        lie_media=lie_media,
-        rank=rank,
-        total_users=total_users,
+        custom_prefix=stats_data['custom_prefix'],
+        role=stats_data['role'],
+        posts_count=stats_data['posts_count'],
+        rx_received=stats_data['rx_received'],
+        rx_given=stats_data['rx_given'],
+        mutes_count=stats_data['mutes_count'],
+        balance=stats_data['balance'],
+        lie_media=stats_data['lie_media'],
+        rank=stats_data['rank'],
+        total_users=stats_data['total_users'],
         slang_comment=slang_comment
     )
     return buf, text_report
