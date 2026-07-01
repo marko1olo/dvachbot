@@ -1766,17 +1766,13 @@ def _collect_board_map_totals() -> dict:
     for timestamps in image_spam_tracker.values():
         totals["image_spam_items"] += _safe_len(timestamps)
     return totals
-def _collect_runtime_snapshot() -> dict:
-
-    queue_sizes = {board: message_queues[board].qsize() for board in BOARDS if board in message_queues}
-    top_queues = sorted(queue_sizes.items(), key=lambda item: item[1], reverse=True)[:5]
-    queue_age_summary = _summarize_live_queue_ages(queue_sizes)
-    priority_counts = {board: _safe_len(weekly_active_users.get(board, set())) for board in BOARDS}
-    pending_done = 0
+def _get_pending_edit_done_count() -> int:
     try:
-        pending_done = sum(1 for task in pending_edit_tasks.values() if task.done())
+        return sum(1 for task in pending_edit_tasks.values() if task.done())
     except Exception:
-        pending_done = -1
+        return -1
+
+def _collect_board_totals() -> dict:
     board_totals = {
         "active_users": 0,
         "shadow_mutes": 0,
@@ -1798,70 +1794,118 @@ def _collect_runtime_snapshot() -> dict:
         reaction_queue = b_data.get("reaction_queue", {})
         if isinstance(reaction_queue, dict):
             board_totals["reaction_queue_items"] += sum(_safe_len(q) for q in reaction_queue.values())
-    board_map_totals = _collect_board_map_totals()
-    recipient_counts = _recipient_counts_snapshot()
+    return board_totals
+
+def _collect_task_stats() -> dict:
     try:
         all_tasks = asyncio.all_tasks()
-        task_stats = {
+        return {
             "total": len(all_tasks),
             "done": sum(1 for task in all_tasks if task.done()),
         }
     except RuntimeError:
-        task_stats = {"total": 0, "done": 0}
+        return {"total": 0, "done": 0}
+
+def _build_queues_snapshot(queue_sizes: dict, top_queues: list, queue_age_summary: dict) -> dict:
     return {
-        "utc": datetime.now(UTC).isoformat(),
-        "post_counter": state.get("post_counter", 0),
-        "memory": _get_process_memory_snapshot(),
-        "db_files": _get_db_file_snapshot(),
-        "controlled_stop": _controlled_stop_snapshot(),
-        "queues": {
-            "total": sum(queue_sizes.values()),
-            "by_board": queue_sizes,
-            "top": top_queues,
-            "age_by_board": queue_age_summary["by_board"],
-            "oldest": queue_age_summary["oldest"],
-            "in_flight": queue_age_summary["in_flight"],
-        },
-        "delivery_priority": {
-            "enabled": PRIORITY_DELIVERY_ENABLED,
-            "split_fanout": PRIORITY_SPLIT_FANOUT_ENABLED,
-            "split_min_passive": PRIORITY_SPLIT_MIN_PASSIVE,
-            "passive_slice_size": PRIORITY_PASSIVE_SLICE_SIZE,
-            "passive_media_slice_size": PRIORITY_PASSIVE_MEDIA_SLICE_SIZE,
-            "pressure_slice_age_sec": PRIORITY_PRESSURE_SLICE_AGE_SEC,
-            "pressure_passive_slice_size": PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
-            "pressure_passive_media_slice_size": PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
-            "passive_max_preemptions": PASSIVE_MAX_PREEMPTIONS,
-            "priority_phase_budget_sec": PRIORITY_PHASE_BUDGET_SEC,
-            "passive_phase_budget_sec": PASSIVE_PHASE_BUDGET_SEC,
+        "total": sum(queue_sizes.values()),
+        "by_board": queue_sizes,
+        "top": top_queues,
+        "age_by_board": queue_age_summary["by_board"],
+        "oldest": queue_age_summary["oldest"],
+        "in_flight": queue_age_summary["in_flight"],
+    }
+
+def _build_delivery_priority_snapshot(priority_counts: dict) -> dict:
+    return {
+        "enabled": PRIORITY_DELIVERY_ENABLED,
+        "split_fanout": PRIORITY_SPLIT_FANOUT_ENABLED,
+        "split_min_passive": PRIORITY_SPLIT_MIN_PASSIVE,
+        "passive_slice_size": PRIORITY_PASSIVE_SLICE_SIZE,
+        "passive_media_slice_size": PRIORITY_PASSIVE_MEDIA_SLICE_SIZE,
+        "pressure_slice_age_sec": PRIORITY_PRESSURE_SLICE_AGE_SEC,
+        "pressure_passive_slice_size": PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
+        "pressure_passive_media_slice_size": PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
+        "passive_max_preemptions": PASSIVE_MAX_PREEMPTIONS,
+        "priority_phase_budget_sec": PRIORITY_PHASE_BUDGET_SEC,
+        "passive_phase_budget_sec": PASSIVE_PHASE_BUDGET_SEC,
         "delivery_initial_chunk_size": DELIVERY_INITIAL_CHUNK_SIZE,
         "delivery_min_chunk_size": DELIVERY_MIN_CHUNK_SIZE,
         "delivery_per_recipient_timeout_sec": DELIVERY_PER_RECIPIENT_TIMEOUT_SEC,
         "delivery_telegram_request_timeout_sec": DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC,
         "delivery_max_recipient_retries": DELIVERY_MAX_RECIPIENT_RETRIES,
         "delivery_phase_guard_sec": DELIVERY_PHASE_GUARD_SEC,
-            "days": WEEKLY_ACTIVE_DAYS,
-            "refresh_sec": WEEKLY_ACTIVE_REFRESH_SECONDS,
-            "total_weekly_active": sum(priority_counts.values()),
-            "by_board": priority_counts,
-            "updated_at": weekly_active_updated_at.copy(),
-        },
-        "recipients": recipient_counts,
+        "days": WEEKLY_ACTIVE_DAYS,
+        "refresh_sec": WEEKLY_ACTIVE_REFRESH_SECONDS,
+        "total_weekly_active": sum(priority_counts.values()),
+        "by_board": priority_counts,
+        "updated_at": weekly_active_updated_at.copy(),
+    }
+
+def _build_anime_media_snapshot() -> dict:
+    return {
+        "concurrency": ANIME_MEDIA_CONCURRENCY,
+        "b_max_stacked_images": B_MAX_STACKED_ANIME_IMAGES,
+        "url_timeout_sec": ANIME_URL_FETCH_TIMEOUT_SEC,
+        "url_total_sec": ANIME_URL_FETCH_TOTAL_SEC,
+        "url_parallel": ANIME_URL_FETCH_PARALLEL,
+        "download_timeout_sec": ANIME_DOWNLOAD_TIMEOUT_SEC,
+        "download_total_sec": ANIME_DOWNLOAD_TOTAL_SEC,
+        "download_parallel": ANIME_DOWNLOAD_PARALLEL,
+        "refill_rounds": ANIME_REFILL_ROUNDS,
+    }
+
+def _collect_global_maps_snapshot(pending_done: int) -> dict:
+    return {
+        "messages_storage": _safe_len(messages_storage),
+        "post_to_messages": _safe_len(post_to_messages),
+        "message_to_post": _safe_len(message_to_post),
+        "shadow_fake_post_counters": _safe_len(shadow_fake_post_counters),
+        "pending_edit_tasks": _safe_len(pending_edit_tasks),
+        "pending_edit_done": pending_done,
+        "current_media_groups": _safe_len(current_media_groups),
+        "media_group_timers": _safe_len(media_group_timers),
+        "posts_pending_deletion": _safe_len(posts_pending_deletion),
+        "unknown_command_tracker": _safe_len(unknown_command_tracker),
+        "contextual_reply_tracker": _safe_len(contextual_reply_tracker),
+        "user_spam_locks": _safe_len(user_spam_locks),
+        "generate_locks": _safe_len(generate_locks),
+        "user_last_thread_action": _safe_len(user_last_thread_action),
+        "reaction_ratelimit": _safe_len(reaction_ratelimit),
+        "last_poll_creation_time": _safe_len(last_poll_creation_time),
+        "last_poll_vote_time": _safe_len(last_poll_vote_time),
+        "user_hourly_image_count": _safe_len(user_hourly_image_count),
+        "user_hourly_image_reset": _safe_len(user_hourly_image_reset),
+        "author_reaction_notify_tracker": _safe_len(author_reaction_notify_tracker),
+        "network_retry_state": _safe_len(network_retry_state),
+        "image_spam_tracker": _safe_len(image_spam_tracker),
+        "stream_cache": _safe_len(stream_cache),
+        "graph_stats": _safe_len(graph_stats),
+        "roulette_events": _safe_len(ROULETTE_EVENTS),
+    }
+
+def _collect_runtime_snapshot() -> dict:
+
+    queue_sizes = {board: message_queues[board].qsize() for board in BOARDS if board in message_queues}
+    top_queues = sorted(queue_sizes.items(), key=lambda item: item[1], reverse=True)[:5]
+    queue_age_summary = _summarize_live_queue_ages(queue_sizes)
+    priority_counts = {board: _safe_len(weekly_active_users.get(board, set())) for board in BOARDS}
+    pending_done = _get_pending_edit_done_count()
+
+    return {
+        "utc": datetime.now(UTC).isoformat(),
+        "post_counter": state.get("post_counter", 0),
+        "memory": _get_process_memory_snapshot(),
+        "db_files": _get_db_file_snapshot(),
+        "controlled_stop": _controlled_stop_snapshot(),
+        "queues": _build_queues_snapshot(queue_sizes, top_queues, queue_age_summary),
+        "delivery_priority": _build_delivery_priority_snapshot(priority_counts),
+        "recipients": _recipient_counts_snapshot(),
         "durable_delivery": {
             "enabled": DURABLE_DELIVERY_QUEUE_ENABLED,
             **durable_delivery_stats,
         },
-        "anime_media": {
-            "concurrency": ANIME_MEDIA_CONCURRENCY,
-            "b_max_stacked_images": B_MAX_STACKED_ANIME_IMAGES,
-            "url_timeout_sec": ANIME_URL_FETCH_TIMEOUT_SEC,
-            "url_total_sec": ANIME_URL_FETCH_TOTAL_SEC,
-            "url_parallel": ANIME_URL_FETCH_PARALLEL,
-            "download_timeout_sec": ANIME_DOWNLOAD_TIMEOUT_SEC,
-            "download_total_sec": ANIME_DOWNLOAD_TOTAL_SEC,
-            "download_parallel": ANIME_DOWNLOAD_PARALLEL,
-            "refill_rounds": ANIME_REFILL_ROUNDS,
-        },
+        "anime_media": _build_anime_media_snapshot(),
         "mode_punchup": {
             "enabled": MODE_PUNCHUP_ENABLED,
             "runtime_enabled": mode_punchup_runtime_enabled,
@@ -1882,36 +1926,10 @@ def _collect_runtime_snapshot() -> dict:
             **reply_coverage_stats,
         },
         "delivery": _summarize_delivery_metrics(),
-        "maps": {
-            "messages_storage": _safe_len(messages_storage),
-            "post_to_messages": _safe_len(post_to_messages),
-            "message_to_post": _safe_len(message_to_post),
-            "shadow_fake_post_counters": _safe_len(shadow_fake_post_counters),
-            "pending_edit_tasks": _safe_len(pending_edit_tasks),
-            "pending_edit_done": pending_done,
-            "current_media_groups": _safe_len(current_media_groups),
-            "media_group_timers": _safe_len(media_group_timers),
-            "posts_pending_deletion": _safe_len(posts_pending_deletion),
-            "unknown_command_tracker": _safe_len(unknown_command_tracker),
-            "contextual_reply_tracker": _safe_len(contextual_reply_tracker),
-            "user_spam_locks": _safe_len(user_spam_locks),
-            "generate_locks": _safe_len(generate_locks),
-            "user_last_thread_action": _safe_len(user_last_thread_action),
-            "reaction_ratelimit": _safe_len(reaction_ratelimit),
-            "last_poll_creation_time": _safe_len(last_poll_creation_time),
-            "last_poll_vote_time": _safe_len(last_poll_vote_time),
-            "user_hourly_image_count": _safe_len(user_hourly_image_count),
-            "user_hourly_image_reset": _safe_len(user_hourly_image_reset),
-            "author_reaction_notify_tracker": _safe_len(author_reaction_notify_tracker),
-            "network_retry_state": _safe_len(network_retry_state),
-            "image_spam_tracker": _safe_len(image_spam_tracker),
-            "stream_cache": _safe_len(stream_cache),
-            "graph_stats": _safe_len(graph_stats),
-            "roulette_events": _safe_len(ROULETTE_EVENTS),
-        },
-        "board_maps": board_map_totals,
-        "board_totals": board_totals,
-        "asyncio_tasks": task_stats,
+        "maps": _collect_global_maps_snapshot(pending_done),
+        "board_maps": _collect_board_map_totals(),
+        "board_totals": _collect_board_totals(),
+        "asyncio_tasks": _collect_task_stats(),
         "gc_count": gc.get_count(),
         "tracemalloc": {
             "enabled": tracemalloc.is_tracing(),
