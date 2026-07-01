@@ -108,7 +108,8 @@ async def get_active_client(bot_token: str):
             api_hash=API_HASH,
             bot_token=bot_token,
             no_updates=True, 
-            in_memory=True
+            in_memory=True,
+            ipv6=False
         )
 
         try:
