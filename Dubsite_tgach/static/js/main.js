@@ -238,6 +238,14 @@ window.formatTextGlobal = (text, opId = null, boardId = null, threadId = null) =
         return line;
     }).join('<br>');
     
+
+    function closeUnclosedTags(html) {
+        const div = document.createElement('div');
+        div.innerHTML = html;
+        return div.innerHTML;
+    }
+    s = closeUnclosedTags(s);
+
     return s;
 };
 async function loadTranslations() {
