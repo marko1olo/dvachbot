@@ -10101,31 +10101,30 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     zeroxzero_link = mirrors.get("0x0")
     shadow_file_id = mirrors.get("tg_shadow")
 
-    # 1. HuggingFace — ПРИОРИТЕТ №1 (Для РФ и ИНО)
+    # 1. Telegram Direct — ПРИОРИТЕТ №1 (Если путь закеширован)
+    info = await get_cached_file_path(file_id, allow_protected_tokens=True)
+    if info:
+        path, token = info
+        return RedirectResponse(
+            url=f"https://api.telegram.org/file/bot{token}/{path}",
+            status_code=307,
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    # 2. HuggingFace — ПРИОРИТЕТ №2 (Для РФ и ИНО, если доступен)
     if is_hf_link_allowed(hf_link, VALID_HF_REPOS):
         return RedirectResponse(url=hf_link, status_code=307, headers=no_cache_headers)
 
-    # 2. Catbox — ПРИОРИТЕТ №2 для ИНО (В РФ пропускаем)
+    # 3. Catbox — ПРИОРИТЕТ №3 для ИНО (В РФ пропускаем)
     if catbox_link and not is_ru:
         return RedirectResponse(
             url=catbox_link, status_code=307, headers=no_cache_headers
         )
 
+    # 4. 0x0 — ПРИОРИТЕТ №4 для ИНО (В РФ пропускаем)
     if zeroxzero_link and not is_ru:
         return RedirectResponse(
             url=zeroxzero_link, status_code=307, headers=no_cache_headers
-        )
-
-    # 3. Telegram Direct — ПРИОРИТЕТ №2 для РФ / №3 для ИНО
-    info = await get_cached_file_path(file_id)
-    if info:
-        path, token = info
-        # Если это видео и мы в РФ, а HF еще нет — Telegram Direct может выдать 404,
-        # но это всё равно лучше, чем Catbox, который в РФ не работает.
-        return RedirectResponse(
-            url=f"https://api.telegram.org/file/bot{token}/{path}",
-            status_code=307,
-            headers={"Cache-Control": "public, max-age=3600"},
         )
 
     # 4. Shadow Telegram (Резервный прокси)
