@@ -7630,8 +7630,8 @@ async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str
             await message.answer_photo(photo, caption=text_report, parse_mode="HTML")
         else:
             await message.answer(text_report, parse_mode="HTML")
-    except Exception as e:
-        await message.answer(f"⚠️ Ошибка генерации статистики: {e}")
+    except Exception:
+        await message.answer("⚠️ Ошибка генерации статистики. Пожалуйста, попробуйте позже.")
 
     try: await sent_msg.delete()
     except Exception: pass
