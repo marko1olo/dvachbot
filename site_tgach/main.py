@@ -10127,9 +10127,9 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
             url=zeroxzero_link, status_code=307, headers=no_cache_headers
         )
 
-    # 4. Shadow Telegram (Резервный прокси)
+    # 4. Shadow Telegram (Прямой редирект для теневого файла с защищенными токенами)
     if shadow_file_id:
-        info_shadow = await get_cached_file_path(shadow_file_id)
+        info_shadow = await get_cached_file_path(shadow_file_id, allow_protected_tokens=True)
         if info_shadow:
             path, token = info_shadow
             return RedirectResponse(
@@ -10137,30 +10137,6 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
                 status_code=307,
                 headers={"Cache-Control": "public, max-age=3600"},
             )
-
-    # Protected archive/chat bots must never be exposed in browser redirects.
-    # Use them only as a server-side fallback and enqueue a public mirror.
-    protected_candidates = []
-    if shadow_file_id:
-        protected_candidates.append(shadow_file_id)
-    protected_candidates.append(file_id)
-    seen_protected = set()
-    for protected_file_id in protected_candidates:
-        if not protected_file_id or protected_file_id in seen_protected:
-            continue
-        seen_protected.add(protected_file_id)
-        protected_info = await get_cached_file_path(
-            protected_file_id, allow_protected_tokens=True
-        )
-        if protected_info:
-            path, token = protected_info
-            try:
-                return await _proxy_protected_telegram_file(
-                    protected_file_id, path, token, filename, request
-                )
-            except HTTPException:
-                _mark_random_dead_file(protected_file_id)
-                continue
 
     # 5. Catbox для РФ — ПОСЛЕДНИЙ ШАНС (Если HF и TG лежат)
     if catbox_link:
