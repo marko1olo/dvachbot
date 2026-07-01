@@ -550,11 +550,40 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
     except Exception as e:
         logger.error(f"Shadow task error: {e}")
 
-    # 2. Логика зеркал (Catbox + HF)
-    # Всегда добавляем превью в очередь HF, так как они маленькие
+    # 2. Логика зеркал (Catbox + HF + 0x0)
     hf_available = has_available_hf_repo()
-    if related_id and hf_available:
-        await add_to_hf_queue(related_id)
+    if related_id:
+        if hf_available:
+            await add_to_hf_queue(related_id)
+        
+        # Зеркалируем превью (миниатюру) на Catbox
+        catbox_thumb_link = None
+        if thumb_bytes:
+            try:
+                catbox_thumb_link = await upload_bytes_to_catbox(thumb_bytes, f"thumb_{related_id}.jpg")
+                if catbox_thumb_link:
+                    await add_file_mirror(related_id, 'catbox', catbox_thumb_link)
+            except Exception as ex:
+                logger.error(f"Error direct uploading thumb to catbox: {ex}")
+        
+        if not catbox_thumb_link:
+            from common.database import add_to_mirror_queue
+            await add_to_mirror_queue(related_id, 'catbox')
+
+        # Зеркалируем превью (миниатюру) на 0x0
+        zeroxzero_thumb_link = None
+        if is_0x0_available():
+            if thumb_bytes:
+                try:
+                    zeroxzero_thumb_link = await upload_bytes_to_0x0(thumb_bytes, f"thumb_{related_id}.jpg")
+                    if zeroxzero_thumb_link:
+                        await add_file_mirror(related_id, '0x0', zeroxzero_thumb_link)
+                except Exception as ex:
+                    logger.error(f"Error direct uploading thumb to 0x0: {ex}")
+            
+            if not zeroxzero_thumb_link:
+                from common.database import add_to_mirror_queue
+                await add_to_mirror_queue(related_id, '0x0')
 
     # Если файл > 19MB, Telegram не отдаст ссылку. Грузим байты напрямую.
     SIZE_LIMIT = 19 * 1024 * 1024
