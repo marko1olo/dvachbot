@@ -260,3 +260,63 @@ class TestSanitizeHtml(unittest.TestCase):
         self.assertEqual(sanitize_html("this & that"), "this &amp; that")
         self.assertEqual(sanitize_html("less < greater >"), "less &lt; greater &gt;")
         self.assertEqual(sanitize_html("a & b < c > d \" e ' f"), "a &amp; b &lt; c &gt; d \" e ' f")
+
+from Dubsite_tgach.main import format_poll_for_html
+
+class TestFormatPollForHtml(unittest.TestCase):
+    def test_empty_poll(self):
+        self.assertEqual(format_poll_for_html({}), "")
+        self.assertEqual(format_poll_for_html(None), "")
+
+    def test_missing_question(self):
+        self.assertEqual(format_poll_for_html({'options': ['A', 'B']}), "")
+
+    def test_zero_votes(self):
+        poll = {
+            'question': 'Test?',
+            'options': ['Yes', 'No'],
+            'votes': {}
+        }
+        html_out = format_poll_for_html(poll)
+        self.assertIn("📊 Test?", html_out)
+        self.assertIn("Yes (0)", html_out)
+        self.assertIn("No (0)", html_out)
+        self.assertIn("width: 0.0%", html_out)
+
+    def test_valid_votes(self):
+        poll = {
+            'question': 'Color?',
+            'options': ['Red', 'Blue', 'Green'],
+            'votes': {
+                '0': [1, 2],       # Red: 2 votes
+                '1': [3],          # Blue: 1 vote
+                '2': [4, 5, 6]     # Green: 3 votes
+            }
+        }
+        html_out = format_poll_for_html(poll)
+        self.assertIn("📊 Color?", html_out)
+        self.assertIn("Red (2)", html_out)
+        self.assertIn("Blue (1)", html_out)
+        self.assertIn("Green (3)", html_out)
+        # Total votes = 6
+        # Red = 2/6 = 33.333% -> 33.3%
+        self.assertIn("width: 33.3%", html_out)
+        # Blue = 1/6 = 16.666% -> 16.7%
+        self.assertIn("width: 16.7%", html_out)
+        # Green = 3/6 = 50% -> 50.0%
+        self.assertIn("width: 50.0%", html_out)
+
+    def test_html_escaping(self):
+        poll = {
+            'question': '<script>alert(1)</script>',
+            'options': ['<img src="x" onerror="alert(1)">', 'Normal'],
+            'votes': {'0': [1]}
+        }
+        html_out = format_poll_for_html(poll)
+        self.assertNotIn("<script>", html_out)
+        self.assertNotIn("<img", html_out)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html_out)
+        self.assertIn("&lt;img src=&quot;x&quot; onerror=&quot;alert(1)&quot;&gt;", html_out)
+
+if __name__ == '__main__':
+    unittest.main()
