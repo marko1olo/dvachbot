@@ -1,11 +1,18 @@
 import asyncio
 import os
+import sys
 
 import aiohttp
 from dotenv import load_dotenv
 
-from common.secret_redaction import redact_secrets
+# Allow importing from common when script is run directly
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
+try:
+    from common.secret_redaction import redact_secrets
+except ImportError:
+    def redact_secrets(value: object) -> str:
+        return str(value)
 
 load_dotenv()
 
