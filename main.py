@@ -2932,12 +2932,17 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                 threads_to_delete = []
 
                 if user_posts:
-                    placeholders = ','.join('?' for _ in user_posts)
-                    str_posts = [str(p) for p in user_posts]
-                    params = tuple(str_posts + list(user_posts))
-                    async with db.execute(f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders}) OR thread_num IN ({placeholders})", params) as cursor:
-                        rows = await cursor.fetchall()
-                        threads_to_delete.extend([r[0] for r in rows])
+                    chunk_size = 400
+                    for i in range(0, len(user_posts), chunk_size):
+                        chunk = user_posts[i:i + chunk_size]
+                        p_strs = [str(p) for p in chunk]
+                        placeholders_str = ','.join('?' for _ in p_strs)
+                        placeholders_num = ','.join('?' for _ in chunk)
+                        query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders_str}) OR thread_num IN ({placeholders_num})"
+                        async with db.execute(query, p_strs + chunk) as cursor:
+                            t_rows = await cursor.fetchall()
+                            for tr in t_rows:
+                                threads_to_delete.append(tr[0])
 
                 if threads_to_delete:
                     t_ids = []
