@@ -2,7 +2,7 @@ import subprocess
 
 def run_cmd(cmd, check=True):
     try:
-        return subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT).decode('utf-8').strip()
+        return subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT, timeout=30).decode('utf-8').strip()
     except subprocess.CalledProcessError as e:
         if check:
             raise

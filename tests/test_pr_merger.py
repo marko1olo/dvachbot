@@ -9,7 +9,7 @@ class TestPrMerger(unittest.TestCase):
         mock_check_output.return_value = b'test output\n'
         result = pr_merger.run_cmd(['git', 'fetch', '--all'])
         self.assertEqual(result, 'test output')
-        mock_check_output.assert_called_once_with(['git', 'fetch', '--all'], shell=False, stderr=subprocess.STDOUT)
+        mock_check_output.assert_called_once_with(['git', 'fetch', '--all'], shell=False, stderr=subprocess.STDOUT, timeout=30)
 
     @patch('subprocess.check_output')
     def test_run_cmd_failure_with_check(self, mock_check_output):
