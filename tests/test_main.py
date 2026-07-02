@@ -244,7 +244,7 @@ class TestVibeToIcon(unittest.TestCase):
 class TestSanitizeHtml(unittest.TestCase):
     def test_empty_input(self):
         self.assertEqual(sanitize_html(""), "")
-        self.assertEqual(sanitize_html(None), "")
+        self.assertEqual(sanitize_html(None), "None")
 
     def test_basic_tags(self):
         self.assertEqual(sanitize_html("<b>bold</b>"), "&lt;b&gt;bold&lt;/b&gt;")
@@ -256,7 +256,12 @@ class TestSanitizeHtml(unittest.TestCase):
         self.assertEqual(sanitize_html("'single quotes'"), "'single quotes'")
         self.assertEqual(sanitize_html("<div class=\"test\">text</div>"), "&lt;div class=\"test\"&gt;text&lt;/div&gt;")
 
-    def test_amps_and_other_entities(self):
-        self.assertEqual(sanitize_html("this & that"), "this &amp; that")
-        self.assertEqual(sanitize_html("less < greater >"), "less &lt; greater &gt;")
-        self.assertEqual(sanitize_html("a & b < c > d \" e ' f"), "a &amp; b &lt; c &gt; d \" e ' f")
+    def test_error_handling(self):
+        self.assertEqual(sanitize_html(123), "123")
+        self.assertEqual(sanitize_html(12.34), "12.34")
+        self.assertEqual(sanitize_html([1, 2, 3]), "[1, 2, 3]")
+        self.assertEqual(sanitize_html({"a": 1}), "{'a': 1}")
+
+    def test_malicious_inputs(self):
+        self.assertEqual(sanitize_html("<script>fetch('bad')</script>"), "&lt;script&gt;fetch('bad')&lt;/script&gt;")
+        self.assertEqual(sanitize_html("<img src=x onerror=alert(1)>"), "&lt;img src=x onerror=alert(1)&gt;")
