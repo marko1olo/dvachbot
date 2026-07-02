@@ -137,8 +137,7 @@ class TestCleanTitleText(unittest.TestCase):
             "Title with link and"
         )
 
-if __name__ == "__main__":
-    unittest.main()
+
 
 from Dubsite_tgach.main import format_bayan_label
 from unittest.mock import patch
@@ -260,3 +259,103 @@ class TestSanitizeHtml(unittest.TestCase):
         self.assertEqual(sanitize_html("this & that"), "this &amp; that")
         self.assertEqual(sanitize_html("less < greater >"), "less &lt; greater &gt;")
         self.assertEqual(sanitize_html("a & b < c > d \" e ' f"), "a &amp; b &lt; c &gt; d \" e ' f")
+
+
+from unittest.mock import AsyncMock
+import fastapi
+
+from Dubsite_tgach.main import check_post_cooldown
+
+
+
+
+
+
+
+
+
+class TestCheckPostCooldown(unittest.IsolatedAsyncioTestCase):
+    async def test_empty_cache_user(self):
+        request = StubRequest(headers={}, client_host="1.1.1.1")
+        user = {'id': '123', 'is_guest': False}
+
+        mock_backend = MagicMock()
+        mock_backend.get = AsyncMock(return_value=None)
+        mock_backend.set = AsyncMock()
+
+        with patch('Dubsite_tgach.main.FastAPICache.get_backend', return_value=mock_backend), \
+             patch('time.time', return_value=100.0):
+            await check_post_cooldown(request, user)
+
+            mock_backend.get.assert_called_once_with('cooldown_user_123')
+            mock_backend.set.assert_called_once_with('cooldown_user_123', '100.0', expire=5)
+
+    async def test_empty_cache_guest(self):
+        request = StubRequest(headers={}, client_host="1.1.1.1")
+        user = {'id': '456', 'is_guest': True}
+
+        mock_backend = MagicMock()
+        mock_backend.get = AsyncMock(return_value=None)
+        mock_backend.set = AsyncMock()
+
+        with patch('Dubsite_tgach.main.FastAPICache.get_backend', return_value=mock_backend), \
+             patch('time.time', return_value=100.0):
+            await check_post_cooldown(request, user)
+
+            mock_backend.get.assert_called_once_with('cooldown_guest_456')
+            mock_backend.set.assert_called_once_with('cooldown_guest_456', '100.0', expire=25)
+
+    async def test_recent_post_user_raises_429(self):
+        request = StubRequest(headers={}, client_host="1.1.1.1")
+        user = {'id': '123', 'is_guest': False}
+
+        mock_backend = MagicMock()
+        mock_backend.get = AsyncMock(return_value='98.0')
+        mock_backend.set = AsyncMock()
+
+        # FastAPI might be mocked earlier in the file. We can bypass this by importing Starlette's HTTPException
+        # since FastAPI's HTTPException is just a subclass of Starlette's
+        import starlette.exceptions
+        RealHTTPException = starlette.exceptions.HTTPException
+
+        with patch('Dubsite_tgach.main.FastAPICache.get_backend', return_value=mock_backend), \
+             patch('time.time', return_value=100.0), \
+             patch('Dubsite_tgach.main.HTTPException', RealHTTPException):
+
+            with self.assertRaises(RealHTTPException) as ctx:
+                await check_post_cooldown(request, user)
+
+            self.assertEqual(ctx.exception.status_code, 429)
+
+            mock_backend.set.assert_not_called()
+
+    async def test_older_post_user_allows(self):
+        request = StubRequest(headers={}, client_host="1.1.1.1")
+        user = {'id': '123', 'is_guest': False}
+
+        mock_backend = MagicMock()
+        mock_backend.get = AsyncMock(return_value='94.0')
+        mock_backend.set = AsyncMock()
+
+        with patch('Dubsite_tgach.main.FastAPICache.get_backend', return_value=mock_backend), \
+             patch('time.time', return_value=100.0):
+            await check_post_cooldown(request, user)
+
+            mock_backend.set.assert_called_once_with('cooldown_user_123', '100.0', expire=5)
+
+    async def test_invalid_cache_data(self):
+        request = StubRequest(headers={}, client_host="1.1.1.1")
+        user = {'id': '123', 'is_guest': False}
+
+        mock_backend = MagicMock()
+        mock_backend.get = AsyncMock(return_value='invalid_float')
+        mock_backend.set = AsyncMock()
+
+        with patch('Dubsite_tgach.main.FastAPICache.get_backend', return_value=mock_backend), \
+             patch('time.time', return_value=100.0):
+            await check_post_cooldown(request, user)
+
+            mock_backend.set.assert_called_once_with('cooldown_user_123', '100.0', expire=5)
+
+if __name__ == "__main__":
+    unittest.main()
