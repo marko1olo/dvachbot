@@ -1,9 +1,12 @@
 import asyncio
 import os
+import sys
 
 import aiohttp
 from dotenv import load_dotenv
 
+# Add the repository root directory to the Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from common.secret_redaction import redact_secrets
 
 
