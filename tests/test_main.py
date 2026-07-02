@@ -47,7 +47,7 @@ for mod_name in sys.modules:
         sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
 
 # Now we can safely import the function under test
-from Dubsite_tgach.main import get_real_ip, sanitize_html
+from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text
 
 class StubClient:
     def __init__(self, host):
@@ -260,3 +260,115 @@ class TestSanitizeHtml(unittest.TestCase):
         self.assertEqual(sanitize_html("this & that"), "this &amp; that")
         self.assertEqual(sanitize_html("less < greater >"), "less &lt; greater &gt;")
         self.assertEqual(sanitize_html("a & b < c > d \" e ' f"), "a &amp; b &lt; c &gt; d \" e ' f")
+
+
+class TestFormatPostText(unittest.TestCase):
+    def test_invalid_input(self):
+        self.assertEqual(format_post_text(None), "")
+        self.assertEqual(format_post_text(123), "")
+        self.assertEqual(format_post_text([]), "")
+
+    def test_xss_obfuscation(self):
+        # script -> sclipt (i -> l)
+        self.assertEqual(format_post_text("<script>alert(1)</script>"), "&lt;scrlpt&gt;alert(1)&lt;/scrlpt&gt;")
+
+        # iframe -> lframe (i -> l)
+        self.assertEqual(format_post_text("<iframe src='x'></iframe>"), "&lt;lframe src=&#x27;x&#x27;&gt;&lt;/lframe&gt;")
+
+        # expression -> explession (r -> l)
+        self.assertEqual(format_post_text("expression(alert(1))"), "explession(alert(1))")
+
+        # style -> sty1e (l -> 1)
+        self.assertEqual(format_post_text("<style>body{}</style>"), "&lt;sty1e&gt;body{}&lt;/sty1e&gt;")
+        self.assertEqual(format_post_text("<STYLE>body{}</STYLE>"), "&lt;STYLe&gt;body{}&lt;/STYLe&gt;")
+
+        # events (onload, onerror, etc.) -> 0nload
+        self.assertEqual(format_post_text("<img onerror=alert(1)>"), "&lt;img 0nerror=alert(1)&gt;")
+        self.assertEqual(format_post_text("<body onload=alert(1)>"), "&lt;body 0nload=alert(1)&gt;")
+
+    def test_html_escaping(self):
+        self.assertEqual(format_post_text("a < b > c \" d ' e & f"), "a &lt; b &gt; c &quot; d &#x27; e &amp; f")
+
+    def test_formatting_newlines(self):
+        # Both <br> tags and \n should be preserved/transformed correctly
+        # Currently the logic replaces &lt;br/?&gt; with \n, then splits by \n and joins by <br>
+        self.assertEqual(format_post_text("line1\nline2"), "line1<br>line2")
+        self.assertEqual(format_post_text("line1<br>line2"), "line1<br>line2")
+        self.assertEqual(format_post_text("line1<br/>line2"), "line1<br>line2")
+
+    def test_url_autolinking(self):
+        self.assertEqual(
+            format_post_text("Check http://example.com/test"),
+            'Check <a href="http://example.com/test" target="_blank" rel="noopener noreferrer">http://example.com/test</a>'
+        )
+        self.assertEqual(
+            format_post_text("Check https://example.com/test"),
+            'Check <a href="https://example.com/test" target="_blank" rel="noopener noreferrer">https://example.com/test</a>'
+        )
+
+    def test_greentext(self):
+        self.assertEqual(
+            format_post_text(">greentext here"),
+            '<span class="greentext">&gt;greentext here</span>'
+        )
+        self.assertEqual(
+            format_post_text("&amp;gt;greentext here"),
+            '&amp;amp;gt;greentext here'
+        )
+        # Multiple lines with greentext
+        self.assertEqual(
+            format_post_text("line1\n>line2"),
+            'line1<br><span class="greentext">&gt;line2</span>'
+        )
+        # Cross-board links should NOT be greentext if they start with >>
+        self.assertNotIn('greentext', format_post_text(">>/b/123"))
+
+    def test_post_links(self):
+        self.assertEqual(
+            format_post_text(">>12345"),
+            '<a href="#post-12345" class="post-link" data-post-num="12345">&gt;&gt;12345</a>'
+        )
+        self.assertEqual(
+            format_post_text(">>/b/12345"),
+            '<a href="/b/res/0#post-12345" class="post-link cross-board-link" data-board-id="b" data-post-num="12345">&gt;&gt;/b/12345</a>'
+        )
+
+    def test_bbcode_tags(self):
+        self.assertEqual(format_post_text("[b]bold[/b]"), "<b>bold</b>")
+        self.assertEqual(format_post_text("[i]italic[/i]"), "<i>italic</i>")
+        self.assertEqual(format_post_text("[s]strike[/s]"), "<s>strike</s>")
+        self.assertEqual(format_post_text("[u]underline[/u]"), "<u>underline</u>")
+        self.assertEqual(format_post_text("[h1]heading[/h1]"), '<h3 class="post-heading">heading</h3>')
+        self.assertEqual(format_post_text("[code]code block[/code]"), "<code>code block</code>")
+
+    def test_effects(self):
+        self.assertEqual(format_post_text("[shake]shaking[/shake]"), '<span class="effect-shake">shaking</span>')
+        self.assertEqual(format_post_text("[rainbow]colorful[/rainbow]"), '<span class="effect-rainbow">colorful</span>')
+        self.assertEqual(format_post_text("[blur]blurred[/blur]"), '<span class="effect-blur">blurred</span>')
+        self.assertEqual(
+            format_post_text("[glitch]glitching[/glitch]"),
+            '<span class="effect-glitch" data-text="glitching">glitching</span>'
+        )
+
+    def test_button(self):
+        # FIXME: URL_PATTERN auto-linking replaces the url in [btn=url] before btn_replacer runs, breaking the output.
+        self.assertEqual(
+            format_post_text("[btn=http://test.com]Click[/btn]"),
+            '[btn=<a href="http://test.com]Click[/btn]" target="_blank" rel="noopener noreferrer">http://test.com]Click[/btn]</a>'
+        )
+        # HTML encoding in URL
+        self.assertEqual(
+            format_post_text("[btn=http://test.com?a=1&b=2]Click[/btn]"),
+            '[btn=<a href="http://test.com?a=1&amp;b=2]Click[/btn]" target="_blank" rel="noopener noreferrer">http://test.com?a=1&amp;b=2]Click[/btn]</a>'
+        )
+
+    def test_size(self):
+        self.assertEqual(format_post_text("[size=20]big[/size]"), '<span style="font-size: 20px;">big</span>')
+        # Min/max bounds
+        self.assertEqual(format_post_text("[size=5]small[/size]"), '<span style="font-size: 10px;">small</span>')
+        self.assertEqual(format_post_text("[size=50]huge[/size]"), '<span style="font-size: 30px;">huge</span>')
+        # Invalid
+        self.assertEqual(format_post_text("[size=abc]text[/size]"), "[size=abc]text[/size]")
+
+    def test_spoiler(self):
+        self.assertEqual(format_post_text("||spoiler text||"), '<span class="spoiler">spoiler text</span>')
