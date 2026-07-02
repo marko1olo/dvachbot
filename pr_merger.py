@@ -25,11 +25,11 @@ def main():
             continue
             
         try:
-            log = run_cmd(["git", "--no-pager", "log", f"main..{branch}", "--oneline"])
+            log = run_cmd(["git", "--no-pager", "log", "--oneline", "--", f"main..{branch}"])
             if not log:
                 continue # No commits to merge
             
-            diffstat = run_cmd(["git", "--no-pager", "diff", "--shortstat", f"main...{branch}"])
+            diffstat = run_cmd(["git", "--no-pager", "diff", "--shortstat", "--", f"main...{branch}"])
             if not diffstat.strip():
                 continue # Empty diff, already merged or empty
                 
