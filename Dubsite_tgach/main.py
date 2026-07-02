@@ -109,14 +109,14 @@ async def get_country_by_ip(ip: str) -> str:
             db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
             if os.path.exists(db_full_path):
                 GEOIP_READER = geoip2.database.Reader(db_full_path)
-        except:
+        except Exception:
             pass
 
     if GEOIP_READER:
         try:
             response = GEOIP_READER.country(ip)
             return response.country.iso_code or "XX"
-        except:
+        except Exception:
             pass
 
     strategies = [
@@ -137,7 +137,7 @@ async def get_country_by_ip(ip: str) -> str:
                 resp = await client.get(f"http://ip-api.com/json/{ip}")
                 if resp.status_code == 200:
                     return resp.json().get('countryCode', 'XX')
-        except:
+        except Exception:
             continue
         
     return "XX"
@@ -431,6 +431,27 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
             return output_buffer.getvalue()
     except Exception:
         return image_bytes
+def _get_download_headers() -> dict:
+    return {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+    }
+
+async def _fetch_image_data(session, url: str, proxy: str | None) -> tuple[bytes, int] | None:
+    async with session.get(url, allow_redirects=True, proxy=proxy) as response:
+        if response.status == 200:
+            content_type = response.headers.get('Content-Type', '').lower()
+            if 'text/html' in content_type or 'application/json' in content_type:
+                return None
+            data = await response.read()
+            if data.strip().startswith(b'<') and b'<html' in data[:200].lower():
+                return None
+            if len(data) > 49.5 * 1024 * 1024:
+                return None
+            if len(data) > 0:
+                return data, len(data)
+    return None
+
 def _get_download_headers() -> dict:
     return {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -1691,10 +1712,9 @@ def format_post_text(text: str) -> str:
     
     return processed_text
 def sanitize_html(text: str) -> str:
-    if not text:
-        return ""
-    # quote=False оставляет кавычки как есть (читаемее), но убивает теги
-    return html.escape(text, quote=False)
+    if not isinstance(text, str): return str(text)
+    text = text.replace('<', '&lt;').replace('>', '&gt;')
+    return text
 def optimize_thread_context(op_post: dict, replies: list, max_posts: int = 40) -> str:
     """
     Превращает тред в компактную строку для нейронки.
@@ -1727,7 +1747,7 @@ def pluralize_russian(count, one, few, many):
             return few
         else:
             return many
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return many
 def format_bayan_label(count: int, lang: str = 'ru') -> str:
 
@@ -1786,20 +1806,14 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
     if is_video_or_doc:
         if 'huggingface' in mirrors:
             selected_original = mirrors['huggingface']
-        elif 'catbox' in mirrors and not is_ru:
-            selected_original = mirrors['catbox']
     else:
         options = ['telegram']
         if 'huggingface' in mirrors:
             options.append('huggingface')
-        if 'catbox' in mirrors and not is_ru:
-            options.append('catbox')
 
         choice = random.choice(options)
         if choice == 'huggingface':
             selected_original = mirrors['huggingface']
-        elif choice == 'catbox':
-            selected_original = mirrors['catbox']
     selected_thumbnail = base_thumbnail_url
 
     if 'huggingface' in thumb_mirrors:
@@ -2046,7 +2060,6 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                 valid_files.append(file_info)
             content['files'] = valid_files
         current_type = content.get('type')
-        has_text = bool(content.get('text', '').strip())
         has_files = bool(content.get('files'))
         if current_type != 'poll':
             if has_files:
@@ -6548,3 +6561,14 @@ if __name__ == "__main__":
         timeout_keep_alive=10,
         limit_concurrency=1000
     )
+
+@app.get("/api/is-ru")
+async def check_if_ru_dub(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}

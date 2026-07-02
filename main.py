@@ -61,7 +61,6 @@ from datetime import datetime, timedelta, timezone, UTC
 from enum import Enum
 from logging.handlers import RotatingFileHandler
 from typing import Tuple
-from dotenv import load_dotenv
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from common.html_utils import escape_html
@@ -1967,6 +1966,103 @@ def _format_runtime_snapshot(snapshot: dict) -> str:
         f"cooldowns/spam/img: <code>roll={board_maps.get('last_roll_time')} info={board_maps.get('last_info_command_time')} spam={board_maps.get('spam_tracker_items')} img={board_maps.get('image_spam_items')}</code>\n"
         f"tracemalloc: <code>{snapshot.get('tracemalloc', {}).get('enabled')} current={snapshot.get('tracemalloc', {}).get('current_mb')}MB peak={snapshot.get('tracemalloc', {}).get('peak_mb')}MB</code>"
     )
+async def _handle_telegram_forbidden_error(update) -> None:
+    user_id, telegram_object = None, None
+    if update and update.message:
+        user_id, telegram_object = update.message.from_user.id, update.message
+    elif update and update.callback_query:
+        user_id, telegram_object = update.callback_query.from_user.id, update.callback_query
+    if user_id and telegram_object:
+        board_id = get_board_id(telegram_object)
+        if board_id:
+            async with storage_lock:
+                b_data = board_data[board_id]
+                b_data['users']['active'].discard(user_id)
+                for store in [b_data['last_activity'], b_data['last_texts'], b_data['last_stickers'],
+                              b_data['last_animations'], b_data['last_audios'], b_data['spam_violations'],
+                              b_data['spam_tracker'], b_data['last_user_msgs'],
+                              b_data['message_counter'], b_data['user_state'],
+                              b_data.get('user_streams', {})]:
+                    store.pop(user_id, None)
+            async with author_reaction_notify_lock:
+                author_reaction_notify_tracker.pop(user_id, None)
+
+            user_spam_locks.pop(user_id, None)
+            generate_locks.pop(user_id, None)
+            unknown_command_tracker.pop(user_id, None)
+            await remove_user_from_board(user_id, board_id)
+            print(f"🚫 [{board_id}] Юзер {user_id} блокнул бота. Данные удалены (RAM почистится автоматически).")
+
+async def _handle_telegram_bad_request(exception: Exception, update) -> None:
+    err_msg = str(exception).lower()
+    print(f"⚠️ TelegramBadRequest: {exception}")
+
+    # Try to notify the user with a safe plain-text fallback
+    chat_obj = None
+    if update and update.message:
+        chat_obj = update.message
+    elif update and update.callback_query and update.callback_query.message:
+        chat_obj = update.callback_query.message
+
+    if chat_obj:
+        try:
+            if "parse entities" in err_msg or "can't parse" in err_msg:
+                await chat_obj.answer("⚠️ Ошибка форматирования ответа. Попробуй ещё раз.", parse_mode=None)
+            elif "message is too long" in err_msg:
+                await chat_obj.answer("⚠️ Ответ слишком длинный. Попробуй более узкий запрос.", parse_mode=None)
+            elif "query is too old" in err_msg or "query_id_invalid" in err_msg:
+                pass  # Callback expired, nothing to do
+            elif "message is not modified" in err_msg:
+                pass  # Harmless, user already sees the correct text
+            else:
+                await chat_obj.answer("⚠️ Телега послала нахуй твой запрос. Пробуй снова.", parse_mode=None)
+        except Exception:
+            pass
+
+    # Always clear locks if a command aborted due to BadRequest
+    user_id = chat_obj.from_user.id if chat_obj else None
+    if user_id:
+        user_spam_locks.pop(user_id, None)
+        generate_locks.pop(user_id, None)
+
+async def _handle_unhandled_exception(exception: Exception, update) -> None:
+    import traceback
+    print("⛔⛔⛔ НЕПРЕДВИДЕННАЯ КРИТИЧЕСКАЯ ОШИБКА ⛔⛔⛔")
+    print(f"Exception: {type(exception).__name__}: {exception}")
+    traceback.print_exc()
+    if update:
+        try:
+            update_json = update.model_dump_json(exclude_none=True, indent=2)
+            print(f"--- Update Context ---\n{update_json}\n--- End Update Context ---")
+        except Exception as json_e:
+            print(f"Не удалось сериализовать update: {json_e}")
+
+        # Send fallback message to user (try HTML first, then plain text)
+        chat_obj = None
+        if hasattr(update, "message") and update.message:
+            chat_obj = update.message
+        elif hasattr(update, "callback_query") and update.callback_query:
+            chat_obj = update.callback_query.message
+            # Also answer the callback to remove the loading spinner
+            try:
+                await update.callback_query.answer("Ошибка. Попробуй ещё раз.", show_alert=True)
+            except Exception:
+                pass
+
+        if chat_obj:
+            try:
+                await chat_obj.answer("⚠️ Произошла ошибка при выполнении команды.\nРазработчик уже уведомлен.", parse_mode=None)
+            except Exception:
+                pass
+
+        # Always clear locks if a command crashed!
+        user_id = chat_obj.from_user.id if chat_obj else None
+        if not user_id and hasattr(update, "callback_query") and update.callback_query:
+            user_id = update.callback_query.from_user.id
+        if user_id:
+            user_spam_locks.pop(user_id, None)
+            generate_locks.pop(user_id, None)
+
 @dp.errors()
 async def global_error_handler(event: types.ErrorEvent) -> bool:
     """
@@ -1983,114 +2079,28 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
         else:
             print("⚠️ Получено событие без исключения и без update")
         return True
+
     if isinstance(exception, (TelegramNetworkError, aiohttp.ClientConnectorError, asyncio.TimeoutError, TelegramRetryAfter)):
         print(f"🌐 Перехвачена штатная сетевая ошибка/флуд-контроль: {type(exception).__name__}: {exception}. Выполнение не блокируется.")
         return True
+
     if isinstance(exception, TelegramForbiddenError):
-        user_id, telegram_object = None, None
-        if update and update.message:
-            user_id, telegram_object = update.message.from_user.id, update.message
-        elif update and update.callback_query:
-            user_id, telegram_object = update.callback_query.from_user.id, update.callback_query
-        if user_id and telegram_object:
-            board_id = get_board_id(telegram_object)
-            if board_id:
-                async with storage_lock:
-                    b_data = board_data[board_id]
-                    b_data['users']['active'].discard(user_id)
-                    for store in [b_data['last_activity'], b_data['last_texts'], b_data['last_stickers'],
-                                  b_data['last_animations'], b_data['last_audios'], b_data['spam_violations'], 
-                                  b_data['spam_tracker'], b_data['last_user_msgs'], 
-                                  b_data['message_counter'], b_data['user_state'],
-                                  b_data.get('user_streams', {})]:
-                        store.pop(user_id, None)
-                async with author_reaction_notify_lock:
-                    author_reaction_notify_tracker.pop(user_id, None)
-                
-                user_spam_locks.pop(user_id, None)
-                generate_locks.pop(user_id, None)
-                unknown_command_tracker.pop(user_id, None)
-                await remove_user_from_board(user_id, board_id)
-                print(f"🚫 [{board_id}] Юзер {user_id} блокнул бота. Данные удалены (RAM почистится автоматически).")
+        await _handle_telegram_forbidden_error(update)
         return True
+
     if isinstance(exception, TelegramConflictError):
         print(f"🌐 Конфликт: {exception}. Возможно, запущен другой экземпляр бота.")
         await asyncio.sleep(10)
         return True
+
     # --- TelegramBadRequest: HTML parse errors, message too long, etc. ---
     if isinstance(exception, TelegramBadRequest):
-        err_msg = str(exception).lower()
-        print(f"⚠️ TelegramBadRequest: {exception}")
-        
-        # Try to notify the user with a safe plain-text fallback
-        chat_obj = None
-        if update and update.message:
-            chat_obj = update.message
-        elif update and update.callback_query and update.callback_query.message:
-            chat_obj = update.callback_query.message
-        
-        if chat_obj:
-            try:
-                if "parse entities" in err_msg or "can't parse" in err_msg:
-                    await chat_obj.answer("⚠️ Ошибка форматирования ответа. Попробуй ещё раз.", parse_mode=None)
-                elif "message is too long" in err_msg:
-                    await chat_obj.answer("⚠️ Ответ слишком длинный. Попробуй более узкий запрос.", parse_mode=None)
-                elif "query is too old" in err_msg or "query_id_invalid" in err_msg:
-                    pass  # Callback expired, nothing to do
-                elif "message is not modified" in err_msg:
-                    pass  # Harmless, user already sees the correct text
-                else:
-                    await chat_obj.answer("⚠️ Телега послала нахуй твой запрос. Пробуй снова.", parse_mode=None)
-            except Exception:
-                pass
-                
-        # Always clear locks if a command aborted due to BadRequest
-        user_id = chat_obj.from_user.id if chat_obj else None
-        if user_id:
-            user_spam_locks.pop(user_id, None)
-            generate_locks.pop(user_id, None)
-            
+        await _handle_telegram_bad_request(exception, update)
         return True
     
     # --- Any other unhandled exception ---
     else:
-        import traceback
-        print("⛔⛔⛔ НЕПРЕДВИДЕННАЯ КРИТИЧЕСКАЯ ОШИБКА ⛔⛔⛔")
-        print(f"Exception: {type(exception).__name__}: {exception}")
-        traceback.print_exc()
-        if update:
-            try:
-                update_json = update.model_dump_json(exclude_none=True, indent=2)
-                print(f"--- Update Context ---\n{update_json}\n--- End Update Context ---")
-            except Exception as json_e:
-                print(f"Не удалось сериализовать update: {json_e}")
-            
-            # Send fallback message to user (try HTML first, then plain text)
-            chat_obj = None
-            if hasattr(update, "message") and update.message:
-                chat_obj = update.message
-            elif hasattr(update, "callback_query") and update.callback_query:
-                chat_obj = update.callback_query.message
-                # Also answer the callback to remove the loading spinner
-                try:
-                    await update.callback_query.answer("Ошибка. Попробуй ещё раз.", show_alert=True)
-                except Exception:
-                    pass
-            
-            if chat_obj:
-                try:
-                    await chat_obj.answer("⚠️ Произошла ошибка при выполнении команды.\nРазработчик уже уведомлен.", parse_mode=None)
-                except Exception:
-                    pass
-            
-            # Always clear locks if a command crashed!
-            user_id = chat_obj.from_user.id if chat_obj else None
-            if not user_id and hasattr(update, "callback_query") and update.callback_query:
-                user_id = update.callback_query.from_user.id
-            if user_id:
-                user_spam_locks.pop(user_id, None)
-                generate_locks.pop(user_id, None)
-
+        await _handle_unhandled_exception(exception, update)
         return True
 def is_admin(uid: int, board_id: str) -> bool:
 
@@ -2517,129 +2527,146 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
     context_name = f"thread {thread_id}" if thread_id else f"board {board_id}"
     print(f"[summarize] Chunk for {context_name} built, len={len(cleaned_chunk)}")
     return cleaned_chunk[:35000]
-async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
+from typing import Tuple, Optional
 
-    b_data = board_data[board_id]
-    if is_admin(user_id, board_id):
-        return True # Админу можно всё, спам-фильтр пропускает
-
-    # Extract content early for echodown tracking
+def _get_msg_content_and_type(msg: Message) -> Tuple[Optional[str], Optional[str]]:
+    """Extract content and normalized message type for spam checking."""
     if msg.content_type == 'text':
-        check_content = msg.text
+        return msg.text, 'text'
     elif msg.content_type == 'sticker':
-        check_content = msg.sticker.file_id
+        return msg.sticker.file_id, 'sticker'
     elif msg.content_type == 'animation':
-        check_content = msg.animation.file_id
+        return msg.animation.file_id, 'animation'
     elif msg.content_type == 'audio':
-        return True
+        return None, 'audio'
     elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
-        check_content = msg.caption
-    else:
-        check_content = None
+        return msg.caption, 'text'
+    return None, None
 
-    if check_content:
-        now_ts = time.time()
-        user_cb = cross_board_spam_tracker[user_id]
-        if not user_cb or user_cb[-1][1] != board_id:
-            user_cb.append((now_ts, board_id, check_content))
-            
-            if len(user_cb) == 3:
-                boards = {b for t, b, c in user_cb}
-                # Check if it's 3 distinct boards within 30 seconds
-                if len(boards) == 3 and (user_cb[-1][0] - user_cb[0][0]) <= 30:
-                    # Check if contents are duplicates
-                    contents = [c for t, b, c in user_cb]
-                    is_duplicate = False
-                    if msg.content_type == 'text' or (msg.content_type in ['photo', 'video', 'document'] and msg.caption):
-                        import difflib
-                        r1 = difflib.SequenceMatcher(None, contents[0], contents[1]).ratio()
-                        r2 = difflib.SequenceMatcher(None, contents[1], contents[2]).ratio()
-                        if r1 > 0.85 and r2 > 0.85:
-                            is_duplicate = True
-                    else:
-                        if contents[0] == contents[1] == contents[2]:
-                            is_duplicate = True
-                            
-                    if is_duplicate:
-                        msg_str = f"🚨 [GLOBAL] ЭХОДАУН ОБНАРУЖЕН: user {user_id} спамит дубликатами в {boards}. Выдан перманентный SHADOWMUTE везде кроме /b/."
-                        print(msg_str)
-                        from common.database import update_shadow_mute, log_global_event
-                        spawn_task(log_global_event('bot', msg_str))
-                        expires_dt = datetime.now(UTC) + timedelta(days=365)
-                        for b in BOARD_CONFIG.keys():
-                            if b != 'b':
-                                board_data[b].setdefault('shadow_mutes', {})[user_id] = expires_dt
-                                spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
-                        user_cb.clear() # clear tracker after muting
-                        return False
-    if msg.content_type == 'text':
-        msg_type = 'text'
-        content = msg.text
-    elif msg.content_type == 'sticker':
-        msg_type = 'sticker'
-        content = msg.sticker.file_id
-    elif msg.content_type == 'animation':
-        msg_type = 'animation'
-        content = msg.animation.file_id
-    elif msg.content_type == 'audio':
-        return True # Handled above
-    elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
-        msg_type = 'text'
-        content = msg.caption
-    else:
-        return True # Неизвестный тип для спам-фильтра
-    rules = SPAM_RULES.get(msg_type)
-    if not rules:
-        return True
-    now = datetime.now(UTC)
-    violations = b_data['spam_violations'].setdefault(user_id, {'level': 0, 'last_reset': now})
-    if (now - violations['last_reset']) > timedelta(hours=1):
-        violations['level'] = 0
-        violations['last_reset'] = now
-    max_repeats = rules.get('max_repeats')
-    if max_repeats and content:
-        if msg_type == 'text':
-            last_items_deque = b_data['last_texts'][user_id]
-        elif msg_type == 'sticker':
-            last_items_deque = b_data['last_stickers'][user_id]
-        elif msg_type == 'animation':
-            last_items_deque = b_data['last_animations'][user_id]
-        elif msg_type == 'audio':
-            last_items_deque = b_data['last_audios'][user_id]
-        else:
-            last_items_deque = None
-        if last_items_deque is not None:
-            last_items_deque.append(content)
-            if len(last_items_deque) >= max_repeats:
-                if len(set(last_items_deque)) == 1:
-                    violations['level'] += 1
-                    last_items_deque.clear() # Очищаем очередь после нарушения
+def _check_cross_board_spam(user_id: int, board_id: str, content: str, msg_type: str, raw_content_type: str) -> bool:
+    """Check for cross-board spam (echodown detection) and apply shadowmutes."""
+    now_ts = time.time()
+    user_cb = cross_board_spam_tracker[user_id]
+    if not user_cb or user_cb[-1][1] != board_id:
+        user_cb.append((now_ts, board_id, content))
+
+        if len(user_cb) == 3:
+            boards = {b for t, b, c in user_cb}
+            if len(boards) == 3 and (user_cb[-1][0] - user_cb[0][0]) <= 30:
+                contents = [c for t, b, c in user_cb]
+                is_duplicate = False
+
+                if raw_content_type == 'text' or (raw_content_type in ['photo', 'video', 'document'] and msg_type == 'text'):
+                    import difflib
+                    r1 = difflib.SequenceMatcher(None, contents[0], contents[1]).ratio()
+                    r2 = difflib.SequenceMatcher(None, contents[1], contents[2]).ratio()
+                    if r1 > 0.85 and r2 > 0.85:
+                        is_duplicate = True
+                else:
+                    if contents[0] == contents[1] == contents[2]:
+                        is_duplicate = True
+
+                if is_duplicate:
+                    msg_str = f"🚨 [GLOBAL] ЭХОДАУН ОБНАРУЖЕН: user {user_id} спамит дубликатами в {boards}. Выдан перманентный SHADOWMUTE везде кроме /b/."
+                    print(msg_str)
+                    from common.database import update_shadow_mute, log_global_event
+                    spawn_task(log_global_event('bot', msg_str))
+                    expires_dt = datetime.now(UTC) + timedelta(days=365)
+                    for b in BOARD_CONFIG.keys():
+                        if b != 'b':
+                            board_data[b].setdefault('shadow_mutes', {})[user_id] = expires_dt
+                            spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
+                    user_cb.clear()
                     return False
-                elif msg_type == 'text':
-                    from difflib import SequenceMatcher
-                    contents = list(last_items_deque)
-                    similarities = [SequenceMatcher(None, contents[0], c).ratio() for c in contents[1:]]
-                    if all(sim > 0.85 for sim in similarities):
-                        violations['level'] += 1
-                        last_items_deque.clear()
-                        return False
-            if msg_type == 'text' and len(last_items_deque) == 4:
-                if len(set(last_items_deque)) == 2:
-                    contents = list(last_items_deque)
-                    p1 = [contents[0], contents[1]] * 2
-                    p2 = [contents[1], contents[0]] * 2
-                    if contents == p1 or contents == p2:
-                        violations['level'] += 1
-                        last_items_deque.clear() # Очищаем очередь
-                        return False
-    window_start = now - timedelta(seconds=rules['window_sec'])
+    return True
+
+def _check_repeats(user_id: int, b_data: dict, content: str, msg_type: str, rules: dict, violations: dict) -> bool:
+    """Check if the user is repeatedly sending the same or highly similar messages."""
+    max_repeats = rules.get('max_repeats')
+    if not max_repeats or not content:
+        return True
+
+    last_items_deque = None
+    if msg_type == 'text':
+        last_items_deque = b_data['last_texts'][user_id]
+    elif msg_type == 'sticker':
+        last_items_deque = b_data['last_stickers'][user_id]
+    elif msg_type == 'animation':
+        last_items_deque = b_data['last_animations'][user_id]
+    elif msg_type == 'audio':
+        last_items_deque = b_data['last_audios'][user_id]
+
+    if last_items_deque is not None:
+        last_items_deque.append(content)
+        if len(last_items_deque) >= max_repeats:
+            if len(set(last_items_deque)) == 1:
+                violations['level'] += 1
+                last_items_deque.clear()
+                return False
+            elif msg_type == 'text':
+                from difflib import SequenceMatcher
+                contents = list(last_items_deque)
+                similarities = [SequenceMatcher(None, contents[0], c).ratio() for c in contents[1:]]
+                if all(sim > 0.85 for sim in similarities):
+                    violations['level'] += 1
+                    last_items_deque.clear()
+                    return False
+
+        # Check alternating patterns (ABAB) for text
+        if msg_type == 'text' and len(last_items_deque) == 4:
+            if len(set(last_items_deque)) == 2:
+                contents = list(last_items_deque)
+                p1 = [contents[0], contents[1]] * 2
+                p2 = [contents[1], contents[0]] * 2
+                if contents == p1 or contents == p2:
+                    violations['level'] += 1
+                    last_items_deque.clear()
+                    return False
+    return True
+
+def _check_rate_limit(user_id: int, b_data: dict, rules: dict, violations: dict) -> bool:
+    """Check if the user is exceeding the maximum number of messages per time window."""
     now_ts = time.time()
     b_data['spam_tracker'][user_id] = [t for t in b_data['spam_tracker'][user_id] if t > (now_ts - rules['window_sec'])]
     b_data['spam_tracker'][user_id].append(now_ts)
     if len(b_data['spam_tracker'][user_id]) >= rules['max_per_window']:
         violations['level'] += 1
-        b_data['spam_tracker'][user_id] = [] 
+        b_data['spam_tracker'][user_id] = []
         return False
+    return True
+
+async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
+    if is_admin(user_id, board_id):
+        return True # Админу можно всё, спам-фильтр пропускает
+
+    content, msg_type = _get_msg_content_and_type(msg)
+
+    # Audio is always allowed in this stage, unknown types are ignored
+    if msg_type == 'audio' or (content is None and msg_type is None):
+        return True
+
+    if content:
+        if not _check_cross_board_spam(user_id, board_id, content, msg_type, msg.content_type):
+            return False
+
+    rules = SPAM_RULES.get(msg_type)
+    if not rules:
+        return True
+
+    b_data = board_data[board_id]
+    now = datetime.now(UTC)
+    violations = b_data['spam_violations'].setdefault(user_id, {'level': 0, 'last_reset': now})
+
+    if (now - violations['last_reset']) > timedelta(hours=1):
+        violations['level'] = 0
+        violations['last_reset'] = now
+
+    if not _check_repeats(user_id, b_data, content, msg_type, rules, violations):
+        return False
+
+    if not _check_rate_limit(user_id, b_data, rules, violations):
+        return False
+
     return True
 async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id: str, stream: str = 'ru'):
 
@@ -2932,18 +2959,35 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                 posts_to_delete_set = set(user_posts)
                 threads_to_delete = []
 
-                for p_num in user_posts:
-                    p_str = str(p_num)
-                    async with db.execute("SELECT thread_id FROM Threads WHERE thread_id = ? OR thread_num = ?", (p_str, p_num)) as cursor:
-                        t_row = await cursor.fetchone()
-                        if t_row:
-                            threads_to_delete.append(t_row[0])
+                if user_posts:
+                    chunk_size = 400
+                    for i in range(0, len(user_posts), chunk_size):
+                        chunk = user_posts[i:i + chunk_size]
+                        p_strs = [str(p) for p in chunk]
+                        placeholders_str = ','.join('?' for _ in p_strs)
+                        placeholders_num = ','.join('?' for _ in chunk)
+                        query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders_str}) OR thread_num IN ({placeholders_num})"
+                        async with db.execute(query, p_strs + chunk) as cursor:
+                            t_rows = await cursor.fetchall()
+                            for tr in t_rows:
+                                threads_to_delete.append(tr[0])
 
                 if threads_to_delete:
+                    t_ids = []
                     for t_id in threads_to_delete:
+                        t_ids.append(t_id)
                         try: t_id_int = int(t_id)
                         except ValueError: t_id_int = 0
-                        async with db.execute("SELECT post_num FROM Posts WHERE thread_id = ? OR thread_id = ?", (t_id, str(t_id_int))) as cursor:
+                        t_ids.append(str(t_id_int))
+
+                    t_ids = list(set(t_ids))
+                    chunk_size = 900
+
+                    for i in range(0, len(t_ids), chunk_size):
+                        chunk = t_ids[i:i+chunk_size]
+                        placeholders = ','.join(['?'] * len(chunk))
+                        query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders})"
+                        async with db.execute(query, chunk) as cursor:
                             p_rows = await cursor.fetchall()
                             for pr in p_rows:
                                 posts_to_delete_set.add(pr[0])
@@ -3342,7 +3386,16 @@ SHADOW_REPLACEMENTS = [
 ]
 
 SHADOW_WORDS_REGEX = re.compile(
-    r'(?i)(?<![а-яёa-z])(к\s*а\s*л(?:\s+о\s*в\s*ы\s*е\s+м\s*а\s*с\s*с\s*ы)?|k\s*a\s*l|б\s*а\s*я\s*н|б\s*о\s*я\s*н|b\s*a\s*y\s*a\s*n|b\s*o\s*y\s*a\s*n)(?![а-яёa-z])'
+    r'(?i)(?<![а-яёa-z])('
+    r'к\s*а\s*л\s*(?:о\s*в\s*(?:ы\s*й|а\s*я|о\s*е|ы\s*е|о\s*г\s*о|о\s*м\s*у|у\s*ю|о\s*й|ы\s*м\s*и|ы\s*х|о\s*м)(?:\s+м\s*а\s*с\s*с\s*(?:а|ы|у|о\s*й|а\s*м\s*и|а\s*м|а\s*х))?)?|'
+    r'к\s*л\s*а\s*о\s*в\s*(?:ы\s*й|а\s*я|о\s*е|ы\s*е|о\s*г\s*о|о\s*м\s*у|у\s*ю|о\s*й|ы\s*м\s*и|ы\s*х|о\s*м)(?:\s+м\s*а\s*с\s*с\s*(?:а|ы|у|о\s*й|а\s*м\s*и|а\s*м|а\s*х))?|'
+    r'к\s*а\s*л(?:[ауеы]|о\s*м|о\s*в|а\s*м|а\s*м\s*и|а\s*х)?|'
+    r'k\s*a\s*l|б\s*а\s*я\s*н|б\s*о\s*я\s*н|b\s*a\s*y\s*a\s*n|b\s*o\s*y\s*a\s*n'
+    r')(?![а-яёa-z])'
+)
+
+DIE_WORDS_REGEX = re.compile(
+    r'(?i)(?<![а-яёa-z])(с\s*д\s*о\s*х\s*н\s*и(\s*т\s*е)?|у\s*м\s*р\s*и(\s*т\s*е)?)(?![а-яёa-z])'
 )
 
 POLITICAL_REPLACEMENTS = [
@@ -3372,17 +3425,320 @@ def apply_shadow_autoreplace(content: dict) -> dict:
     def replacer(match):
         return random.choice(SHADOW_REPLACEMENTS)
         
+    def die_replacer(match):
+        matched_text = match.group(1).lower().replace(" ", "")
+        if "те" in matched_text:
+            return "обоссыте меня"
+        return "обоссы меня"
+
     for key in ('text', 'caption'):
         text_val = modified.get(key)
         if text_val:
             words = text_val.split()
             if len(words) <= 12:
                 text_val = SHADOW_WORDS_REGEX.sub(replacer, text_val)
+                text_val = DIE_WORDS_REGEX.sub(die_replacer, text_val)
                 for pattern, replacements in POLITICAL_REPLACEMENTS:
                     text_val = pattern.sub(lambda m, reps=replacements: random.choice(reps), text_val)
                 modified[key] = text_val
                 
     return modified
+
+
+class NewPostProcessor:
+    def __init__(self, bot_instance, board_id, user_id, content, reply_to_post, is_shadow_muted, stream='ru'):
+        self.bot_instance = bot_instance
+        self.board_id = board_id
+        self.user_id = user_id
+        self.content = content.copy()
+        self.reply_to_post = reply_to_post
+        self.is_shadow_muted = is_shadow_muted
+        self.stream = stream
+
+        self.b_data = board_data.get(self.board_id, {})
+        self.current_post_num = None
+        self.thread_id = None
+        self.recipients = set()
+        self.reply_info_for_author = {}
+        self.author_content = {}
+        self.final_content = {}
+        self.image_bytes_to_send = None
+        self.author_image_bytes = None
+        self.author_results = None
+        self.fallback_fetchers = self.content.pop('__fallback_fetcher_tasks', [])
+
+    async def _determine_recipients_and_thread(self):
+        user_location = self.b_data.get('user_state', {}).get(self.user_id, {}).get('location', 'main')
+        if self.board_id in THREAD_BOARDS and user_location != 'main':
+            self.thread_id = user_location
+            thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
+            if not thread_info or thread_info.get('is_archived'):
+                self.b_data.setdefault('user_state', {}).setdefault(self.user_id, {})['location'] = 'main'
+                lang = 'en' if self.board_id == 'int' else 'ru'
+                await self.bot_instance.send_message(self.user_id, random.choice(thread_messages[lang]['thread_not_found']))
+                return False
+            if self.user_id in thread_info.get('local_mutes', {}) and time.time() < thread_info['local_mutes'][self.user_id]:
+                return False
+            if self.user_id in thread_info.get('local_shadow_mutes', {}) and time.time() < thread_info['local_shadow_mutes'][self.user_id]:
+                self.is_shadow_muted = True
+            self.recipients = thread_info.get('subscribers', set()) - {self.user_id}
+        else:
+            if self.board_id == 'int' or not ENABLE_MULTILANG:
+                self.recipients = self.b_data.get('users', {}).get('active', set()) - {self.user_id}
+            else:
+                stream_users = await get_stream_active_users(self.board_id, self.stream)
+                active_stream_users = stream_users.intersection(self.b_data.get('users', {}).get('active', set()))
+                self.recipients = active_stream_users - {self.user_id}
+        return True
+
+    async def _apply_content_transformations(self):
+        self.author_content = await _apply_mode_transformations(self.content, self.board_id)
+        if self.user_id > 0:
+            from common.db_pool import get_pool
+            import time
+            db = await get_pool()
+            async with db.execute("SELECT cursed_until FROM Users WHERE user_id = ?", (self.user_id,)) as c:
+                row = await c.fetchone()
+                if row and row[0] and int(time.time()) < row[0]:
+                    if 'text' in self.author_content and self.author_content['text']:
+                        self.author_content['text'] += "\n\n<i>[Я ХУЕСОС 🤮]</i>"
+                        
+        self.final_content = apply_shadow_autoreplace(self.author_content)
+        self.final_content['reply_to_post'] = self.reply_to_post
+        self.author_content['reply_to_post'] = self.reply_to_post
+        
+        self.image_bytes_to_send = self.final_content.pop('image_bytes', None)
+        self.author_image_bytes = self.author_content.pop('image_bytes', None)
+
+    async def _create_post_record(self, now_dt):
+        self.current_post_num = await create_post(
+            board_id=self.board_id,
+            author_id=self.user_id,
+            content=self.final_content,
+            timestamp=now_dt.timestamp(),
+            reply_to=self.reply_to_post,
+            is_shadow_muted=self.is_shadow_muted,
+            is_from_site=False,
+            thread_id_from_bot=self.thread_id,
+            stream=self.stream
+        )
+        if self.current_post_num is not None and self.user_id > 0:
+            spawn_task(update_user_verification_stats(self.user_id, self.board_id, self.bot_instance, self.stream))
+
+        if self.current_post_num is None:
+            if self.reply_to_post:
+                try:
+                    lang = 'en' if self.board_id == 'int' else 'ru'
+                    error_text = "Error: The post you are replying to has been deleted." if lang == 'en' else "Ошибка: пост, на который вы отвечаете, был удален."
+                    await self.bot_instance.send_message(self.user_id, error_text)
+                except (TelegramForbiddenError, TelegramBadRequest):
+                    pass
+            return False
+
+        if not self.is_shadow_muted:
+            mark_weekly_active_delivery_user(self.board_id, self.user_id)
+        locally_created_posts.append(self.current_post_num)
+        self.final_content['post_num'] = self.current_post_num
+        self.author_content['post_num'] = self.current_post_num
+        return True
+
+    async def _format_and_update_headers(self):
+        if self.thread_id:
+            thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
+            local_post_num = len(thread_info.get('posts', [])) + 1
+            header_text = await format_thread_post_header(self.board_id, local_post_num, self.user_id, thread_info, stream=self.stream)
+        else:
+            header_text = await format_header(self.board_id, self.current_post_num, author_id=self.user_id, stream=self.stream)
+        self.final_content['header'] = header_text
+        self.author_content['header'] = header_text
+        await update_post_content(self.current_post_num, self.final_content)
+        if self.image_bytes_to_send:
+            self.final_content['image_bytes'] = self.image_bytes_to_send
+        if self.author_image_bytes:
+            self.author_content['image_bytes'] = self.author_image_bytes
+
+    async def _execute_fallback_rescue(self, e):
+        print(f"ℹ️ Ошибка отправки поста #{self.current_post_num} по URL. Запускаю 'Спасательный Цикл'...")
+        loop = asyncio.get_running_loop()
+        fallback_succeeded = False
+        initial_url = self.final_content.get('image_url')
+        async def initial_fetcher(): return initial_url
+        all_fetchers = [initial_fetcher] + self.fallback_fetchers
+        random.shuffle(all_fetchers)
+        for i, fetcher in enumerate(all_fetchers):
+            print(f"  -> Попытка спасения #{i + 1}/{len(all_fetchers)}...")
+            try:
+                url_to_try = await fetcher()
+                if not url_to_try:
+                    print("    -> Получен пустой URL, пропускаю.")
+                    continue
+                download_result = await _download_image_with_proxy(url_to_try)
+                if not download_result:
+                    print("    -> Скачивание не удалось.")
+                    continue
+                processed_bytes = await loop.run_in_executor(None, _resize_image_if_needed, download_result[0])
+                fallback_content = self.author_content.copy()
+                fallback_content.pop('image_url', None)
+                fallback_content['image_bytes'] = processed_bytes
+                self.author_results = await send_message_to_users(
+                    bot_instance=self.bot_instance, board_id=self.board_id, recipients={self.user_id},
+                    content=fallback_content, reply_info=self.reply_info_for_author
+                )
+                if self.author_results:
+                    self.final_content.pop('image_url', None)
+                    self.final_content['image_bytes'] = processed_bytes
+                    fallback_succeeded = True
+                    print(f"✅ 'Спасательный Цикл' для поста #{self.current_post_num} успешен.")
+                    break
+                else:
+                    print("    -> Отправка байтов также не удалась. Пробую следующий источник.")
+            except Exception as ex:
+                print(f"    -> Ошибка в цикле спасения: {type(ex).__name__}: {ex}")
+                continue
+        if not fallback_succeeded:
+            print(f"⚠️ 'Спасательный цикл' не помог для поста #{self.current_post_num}. Ошибка: {e}. Пост будет обработан без message_id автора.")
+
+    async def _send_to_author_with_fallback(self):
+        try:
+            self.author_results = await send_message_to_users(
+                bot_instance=self.bot_instance,
+                board_id=self.board_id,
+                recipients={self.user_id},
+                content=self.author_content,
+                reply_info=self.reply_info_for_author,
+                verbose=False
+            )
+        except TelegramBadRequest as e:
+            if 'image_url' in self.final_content:
+                await self._execute_fallback_rescue(e)
+            else:
+                print(f"⚠️ Не удалось отправить текстовый пост #{self.current_post_num} автору из-за ошибки: {e}. Пост будет обработан без message_id автора.")
+        except Exception as e:
+            print(f"⚠️ Не удалось отправить пост #{self.current_post_num} автору из-за сетевой/другой ошибки: {e}. Пост будет обработан без message_id автора.")
+
+    async def _save_to_memory(self, now_dt):
+        async with storage_lock:
+            state['post_counter'] = max(state.get('post_counter', 0), self.current_post_num)
+            if self.thread_id:
+                thread_info_safe = self.b_data.get('threads_data', {}).get(self.thread_id)
+                if thread_info_safe:
+                    thread_info_safe['posts'].append(self.current_post_num)
+                    thread_info_safe['last_activity_at'] = time.time()
+            content_for_ram = self.final_content.copy()
+            content_for_ram.pop('image_bytes', None)
+            
+            chain_depth = 0
+            reply_to = self.final_content.get('reply_to_post')
+            if reply_to:
+                parent_data = messages_storage.get(reply_to)
+                if parent_data:
+                    chain_depth = parent_data.get('chain_depth', 0) + 1
+                    
+            messages_storage[self.current_post_num] = {
+                'author_id': self.user_id, 'timestamp': now_dt,
+                'content': content_for_ram,
+                'author_message_id': None, 'board_id': self.board_id, 'thread_id': self.thread_id,
+                'chain_depth': chain_depth
+            }
+            
+            if chain_depth > 0 and chain_depth % 15 == 0:
+                try:
+                    bot_for_roast = get_bot_for_board(self.board_id)
+                    stream_to_pass = self.stream if self.stream else 'ru'
+                    spawn_task(execute_auto_roast(self.board_id, stream_to_pass, bot_for_roast))
+                except Exception as e:
+                    print(f"Error triggering auto_roast: {e}")
+
+            if self.author_results and self.author_results[0] and self.author_results[0][1]:
+                sent_messages = self.author_results[0][1]
+                messages_to_process = sent_messages if isinstance(sent_messages, list) else [sent_messages]
+                if self.final_content.get('type') == 'media_group' and messages_to_process:
+                    new_media_items = []
+                    for msg in messages_to_process:
+                        item = {}
+                        if msg.photo: item = {'type': 'photo', 'file_id': msg.photo[-1].file_id}
+                        elif msg.video: item = {'type': 'video', 'file_id': msg.video.file_id}
+                        elif msg.document: item = {'type': 'document', 'file_id': msg.document.file_id}
+                        elif msg.audio: item = {'type': 'audio', 'file_id': msg.audio.file_id}
+                        if item: new_media_items.append(item)
+                    if new_media_items: 
+                        self.final_content['media'] = new_media_items
+                        self.final_content.pop('image_url', None)
+                        self.final_content.pop('image_bytes', None)
+                elif messages_to_process:
+                    msg = messages_to_process[0]
+                    file_id_to_persist = None
+                    if msg.photo: file_id_to_persist = msg.photo[-1].file_id
+                    elif msg.video: file_id_to_persist = msg.video.file_id
+                    elif msg.animation: file_id_to_persist = msg.animation.file_id
+                    if file_id_to_persist:
+                        self.final_content['file_id'] = file_id_to_persist
+                        self.final_content.pop('image_url', None)
+                        self.final_content.pop('image_bytes', None)
+                await update_post_content(self.current_post_num, self.final_content)
+                author_message_ids_to_archive = [m.message_id for m in (sent_messages if isinstance(sent_messages, list) else [sent_messages])]
+                messages_to_save = sent_messages if isinstance(sent_messages, list) else [sent_messages]
+                messages_storage[self.current_post_num]['author_message_id'] = author_message_ids_to_archive
+                messages_storage[self.current_post_num]['content'] = self.final_content
+                post_to_messages.setdefault(self.current_post_num, {})[self.user_id] = (
+                    author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
+                )
+                for m in messages_to_save:
+                    message_to_post[(self.user_id, m.message_id)] = self.current_post_num
+
+    async def _enqueue_and_notify(self):
+        if not self.is_shadow_muted and self.recipients:
+            await enqueue_board_message(self.board_id, {
+                'recipients': self.recipients, 'content': self.final_content, 'post_num': self.current_post_num,
+                'board_id': self.board_id, 'thread_id': self.thread_id
+            })
+        if not self.final_content.get('is_system_message') or self.final_content.get('archive_allowed'):
+            spawn_task(_forward_post_to_realtime_archive(
+                bot_instance=self.bot_instance, board_id=self.board_id, post_num=self.current_post_num, content=self.final_content, is_shadow_muted=self.is_shadow_muted
+            ))
+        numeral_level = check_post_numerals(self.current_post_num)
+        if numeral_level:
+            spawn_task(post_special_num_to_channel(
+                bots=GLOBAL_BOTS, board_id=self.board_id, post_num=self.current_post_num,
+                level=numeral_level, content=self.final_content, author_id=self.user_id
+            ))
+        if self.thread_id:
+            thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
+            if thread_info:
+                posts_count = len(thread_info.get('posts', []))
+                milestones = [50, 150, 220]
+                if posts_count in milestones and posts_count not in thread_info.get('announced_milestones', []):
+                    thread_info.setdefault('announced_milestones', []).append(posts_count)
+                    spawn_task(post_thread_notification_to_channel(
+                        bots=GLOBAL_BOTS, board_id=self.board_id, thread_id=self.thread_id,
+                        thread_info=thread_info, event_type='milestone',
+                        details={'posts': posts_count}
+                    ))
+        if self.user_id in self.b_data.get('troll_targets', set()):
+            pass
+
+    async def execute(self):
+        try:
+            if not await self._determine_recipients_and_thread():
+                return None
+
+            now_dt = datetime.now(UTC)
+            await self._apply_content_transformations()
+
+            if not await self._create_post_record(now_dt):
+                return None
+
+            await self._format_and_update_headers()
+            await self._send_to_author_with_fallback()
+            await self._save_to_memory(now_dt)
+            await self._enqueue_and_notify()
+
+            return self.current_post_num
+        except Exception as e:
+            import traceback
+            print(f"🔥🔥🔥 ФАТАЛЬНАЯ ОШИБКА в process_new_post для user {self.user_id}: {e}\n{traceback.format_exc()}")
+            return None
+
 
 async def process_new_post(
     bot_instance: Bot,
@@ -3397,258 +3753,16 @@ async def process_new_post(
     Унифицированная функция для обработки, сохранения и постановки в очередь нового поста.
     Версия 8.0: Гарантирует регистрацию поста в памяти даже при сбое отправки. НИКАКИХ УДАЛЕНИЙ.
     """
-    b_data = board_data[board_id]
-    current_post_num = None
-    thread_id = None
-    try:
-        fallback_fetchers = content.pop('__fallback_fetcher_tasks', [])
-        user_location = b_data.get('user_state', {}).get(user_id, {}).get('location', 'main')
-        recipients = set()
-        reply_info_for_author = {}
-        if board_id in THREAD_BOARDS and user_location != 'main':
-            thread_id = user_location
-            thread_info = b_data.get('threads_data', {}).get(thread_id)
-            if not thread_info or thread_info.get('is_archived'):
-                b_data['user_state'].setdefault(user_id, {})['location'] = 'main'
-                lang = 'en' if board_id == 'int' else 'ru'
-                await bot_instance.send_message(user_id, random.choice(thread_messages[lang]['thread_not_found']))
-                return None
-            if user_id in thread_info.get('local_mutes', {}) and time.time() < thread_info['local_mutes'][user_id]: 
-                return None
-            if user_id in thread_info.get('local_shadow_mutes', {}) and time.time() < thread_info['local_shadow_mutes'][user_id]: 
-                is_shadow_muted = True
-            recipients = thread_info.get('subscribers', set()) - {user_id}
-        else:
-            if board_id == 'int' or not ENABLE_MULTILANG:
-                recipients = b_data['users']['active'] - {user_id}
-            else:
-                stream_users = await get_stream_active_users(board_id, stream)
-                active_stream_users = stream_users.intersection(b_data['users']['active'])
-                recipients = active_stream_users - {user_id}
-        now_dt = datetime.now(UTC)
-        author_content = await _apply_mode_transformations(content, board_id)
-        
-        if user_id > 0:
-            from common.db_pool import get_pool
-            import time
-            db = await get_pool()
-            async with db.execute("SELECT cursed_until FROM Users WHERE user_id = ?", (user_id,)) as c:
-                row = await c.fetchone()
-                if row and row[0] and int(time.time()) < row[0]:
-                    if 'text' in author_content and author_content['text']:
-                        author_content['text'] += "\n\n<i>[Я ХУЕСОС 🤮]</i>"
-                        
-        final_content = apply_shadow_autoreplace(author_content)
-        
-        final_content['reply_to_post'] = reply_to_post
-        author_content['reply_to_post'] = reply_to_post
-        
-        image_bytes_to_send = final_content.pop('image_bytes', None)
-        author_image_bytes = author_content.pop('image_bytes', None)
-        current_post_num = await create_post(
-            board_id=board_id,
-            author_id=user_id,
-            content=final_content,
-            timestamp=now_dt.timestamp(),
-            reply_to=reply_to_post,
-            is_shadow_muted=is_shadow_muted,
-            is_from_site=False,
-            thread_id_from_bot=thread_id,
-            stream=stream
-        )
-        
-        # --- НАЧАЛО ИЗМЕНЕНИЙ (Запуск системы верификации) ---
-        if current_post_num is not None and user_id > 0:
-            # Запускаем обновление статистики в фоне
-            spawn_task(update_user_verification_stats(user_id, board_id, bot_instance, stream))
-        # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
-        if current_post_num is None:
-            if reply_to_post:
-                try:
-                    lang = 'en' if board_id == 'int' else 'ru'
-                    error_text = "Error: The post you are replying to has been deleted." if lang == 'en' else "Ошибка: пост, на который вы отвечаете, был удален."
-                    await bot_instance.send_message(user_id, error_text)
-                except (TelegramForbiddenError, TelegramBadRequest):
-                    pass
-            return None
-        if not is_shadow_muted:
-            mark_weekly_active_delivery_user(board_id, user_id)
-        locally_created_posts.append(current_post_num)
-        final_content['post_num'] = current_post_num
-        author_content['post_num'] = current_post_num
-        if thread_id:
-            thread_info = b_data.get('threads_data', {}).get(thread_id)
-            local_post_num = len(thread_info.get('posts', [])) + 1
-            header_text = await format_thread_post_header(board_id, local_post_num, user_id, thread_info, stream=stream)
-        else:
-            header_text = await format_header(board_id, current_post_num, author_id=user_id, stream=stream)
-        final_content['header'] = header_text
-        author_content['header'] = header_text
-        await update_post_content(current_post_num, final_content)
-        if image_bytes_to_send:
-            final_content['image_bytes'] = image_bytes_to_send
-        if author_image_bytes:
-            author_content['image_bytes'] = author_image_bytes
-            
-        author_results = None
-        try:
-            author_results = await send_message_to_users(
-                bot_instance=bot_instance,
-                board_id=board_id,
-                recipients={user_id},
-                content=author_content,
-                reply_info=reply_info_for_author,
-                verbose=False
-            )
-        except TelegramBadRequest as e:
-            if 'image_url' in final_content:
-                print(f"ℹ️ Ошибка отправки поста #{current_post_num} по URL. Запускаю 'Спасательный Цикл'...")
-                loop = asyncio.get_running_loop()
-                fallback_succeeded = False
-                initial_url = final_content.get('image_url')
-                async def initial_fetcher(): return initial_url
-                all_fetchers = [initial_fetcher] + fallback_fetchers
-                random.shuffle(all_fetchers)
-                for i, fetcher in enumerate(all_fetchers):
-                    print(f"  -> Попытка спасения #{i + 1}/{len(all_fetchers)}...")
-                    try:
-                        url_to_try = await fetcher()
-                        if not url_to_try:
-                            print("    -> Получен пустой URL, пропускаю.")
-                            continue
-                        download_result = await _download_image_with_proxy(url_to_try)
-                        if not download_result:
-                            print("    -> Скачивание не удалось.")
-                            continue
-                        processed_bytes = await loop.run_in_executor(None, _resize_image_if_needed, download_result[0])
-                        fallback_content = author_content.copy()
-                        fallback_content.pop('image_url', None)
-                        fallback_content['image_bytes'] = processed_bytes
-                        author_results = await send_message_to_users(
-                            bot_instance=bot_instance, board_id=board_id, recipients={user_id},
-                            content=fallback_content, reply_info=reply_info_for_author
-                        )
-                        if author_results:
-                            final_content.pop('image_url', None)
-                            final_content['image_bytes'] = processed_bytes
-                            fallback_succeeded = True
-                            print(f"✅ 'Спасательный Цикл' для поста #{current_post_num} успешен.")
-                            break
-                        else:
-                            print("    -> Отправка байтов также не удалась. Пробую следующий источник.")
-                    except Exception as ex:
-                        print(f"    -> Ошибка в цикле спасения: {type(ex).__name__}: {ex}")
-                        continue
-                if not fallback_succeeded:
-                    print(f"⚠️ 'Спасательный цикл' не помог для поста #{current_post_num}. Ошибка: {e}. Пост будет обработан без message_id автора.")
-            else:
-                print(f"⚠️ Не удалось отправить текстовый пост #{current_post_num} автору из-за ошибки: {e}. Пост будет обработан без message_id автора.")
-        except Exception as e:
-            print(f"⚠️ Не удалось отправить пост #{current_post_num} автору из-за сетевой/другой ошибки: {e}. Пост будет обработан без message_id автора.")
-        async with storage_lock:
-            state['post_counter'] = max(state.get('post_counter', 0), current_post_num)
-            if thread_id:
-                thread_info_safe = b_data.get('threads_data', {}).get(thread_id)
-                if thread_info_safe:
-                    thread_info_safe['posts'].append(current_post_num)
-                    thread_info_safe['last_activity_at'] = time.time()
-            content_for_ram = final_content.copy()
-            content_for_ram.pop('image_bytes', None)
-            
-            # --- SHITSTORM DETECTOR (chain_depth) ---
-            chain_depth = 0
-            reply_to = final_content.get('reply_to_post')
-            if reply_to:
-                parent_data = messages_storage.get(reply_to)
-                if parent_data:
-                    chain_depth = parent_data.get('chain_depth', 0) + 1
-                    
-            messages_storage[current_post_num] = {
-                'author_id': user_id, 'timestamp': now_dt, 
-                'content': content_for_ram,
-                'author_message_id': None, 'board_id': board_id, 'thread_id': thread_id,
-                'chain_depth': chain_depth
-            }
-            
-            if chain_depth > 0 and chain_depth % 15 == 0:
-                # Trigger schizo roast in the background
-                try:
-                    bot_instance = get_bot_for_board(board_id)
-                    stream_to_pass = stream if stream else 'ru'
-                    spawn_task(execute_auto_roast(board_id, stream_to_pass, bot_instance))
-                except Exception as e:
-                    print(f"Error triggering auto_roast: {e}")
-            if author_results and author_results[0] and author_results[0][1]:
-                sent_messages = author_results[0][1]
-                messages_to_process = sent_messages if isinstance(sent_messages, list) else [sent_messages]
-                if final_content.get('type') == 'media_group' and messages_to_process:
-                    new_media_items = []
-                    for msg in messages_to_process:
-                        item = {}
-                        if msg.photo: item = {'type': 'photo', 'file_id': msg.photo[-1].file_id}
-                        elif msg.video: item = {'type': 'video', 'file_id': msg.video.file_id}
-                        elif msg.document: item = {'type': 'document', 'file_id': msg.document.file_id}
-                        elif msg.audio: item = {'type': 'audio', 'file_id': msg.audio.file_id}
-                        if item: new_media_items.append(item)
-                    if new_media_items: 
-                        final_content['media'] = new_media_items 
-                        final_content.pop('image_url', None)
-                        final_content.pop('image_bytes', None) 
-                elif messages_to_process:
-                    msg = messages_to_process[0]
-                    file_id_to_persist = None
-                    if msg.photo: file_id_to_persist = msg.photo[-1].file_id
-                    elif msg.video: file_id_to_persist = msg.video.file_id
-                    elif msg.animation: file_id_to_persist = msg.animation.file_id
-                    if file_id_to_persist:
-                        final_content['file_id'] = file_id_to_persist
-                        final_content.pop('image_url', None)
-                        final_content.pop('image_bytes', None)
-                await update_post_content(current_post_num, final_content)
-                author_message_ids_to_archive = [m.message_id for m in (sent_messages if isinstance(sent_messages, list) else [sent_messages])]
-                messages_to_save = sent_messages if isinstance(sent_messages, list) else [sent_messages]
-                messages_storage[current_post_num]['author_message_id'] = author_message_ids_to_archive
-                messages_storage[current_post_num]['content'] = final_content
-                post_to_messages.setdefault(current_post_num, {})[user_id] = (
-                    author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
-                )
-                for m in messages_to_save:
-                    message_to_post[(user_id, m.message_id)] = current_post_num
-        if not is_shadow_muted and recipients:
-            await enqueue_board_message(board_id, {
-                'recipients': recipients, 'content': final_content, 'post_num': current_post_num,
-                'board_id': board_id, 'thread_id': thread_id
-            })
-        if not final_content.get('is_system_message') or final_content.get('archive_allowed'):
-            spawn_task(_forward_post_to_realtime_archive(
-                bot_instance=bot_instance, board_id=board_id, post_num=current_post_num, content=final_content, is_shadow_muted=is_shadow_muted
-            ))
-        numeral_level = check_post_numerals(current_post_num)
-        if numeral_level:
-            spawn_task(post_special_num_to_channel(
-                bots=GLOBAL_BOTS, board_id=board_id, post_num=current_post_num,
-                level=numeral_level, content=final_content, author_id=user_id
-            ))
-        if thread_id:
-            thread_info = b_data.get('threads_data', {}).get(thread_id)
-            if thread_info:
-                posts_count = len(thread_info.get('posts', []))
-                milestones = [50, 150, 220]
-                if posts_count in milestones and posts_count not in thread_info.get('announced_milestones', []):
-                    thread_info.setdefault('announced_milestones', []).append(posts_count)
-                    spawn_task(post_thread_notification_to_channel(
-                        bots=GLOBAL_BOTS, board_id=board_id, thread_id=thread_id,
-                        thread_info=thread_info, event_type='milestone',
-                        details={'posts': posts_count}
-                    ))
-        if user_id in b_data.get('troll_targets', set()):
-            pass # feature migrated
-        return current_post_num
-    except Exception as e:
-        import traceback
-        print(f"🔥🔥🔥 ФАТАЛЬНАЯ ОШИБКА в process_new_post для user {user_id}: {e}\n{traceback.format_exc()}")
-        return None
+    processor = NewPostProcessor(
+        bot_instance=bot_instance,
+        board_id=board_id,
+        user_id=user_id,
+        content=content,
+        reply_to_post=reply_to_post,
+        is_shadow_muted=is_shadow_muted,
+        stream=stream
+    )
+    return await processor.execute()
 def _build_archive_header(board_id: str, post_num: int, content: dict, lang: str) -> str:
     raw_header = content.get('header', f"Пост №{post_num}")
     header_text = ""
@@ -3812,139 +3926,203 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
                     db_updated = True
             except Exception:
                 pass
-async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
-    """
-    (ИСПРАВЛЕННАЯ ВЕРСИЯ 5.0)
-    Унифицированный диспетчер трансформаций. 
-    Гарантирует Enterprise-логику: визуальные шаблоны только для текстовых постов.
-    """
-    b_data = board_data[board_id]
-    modified_content = content.copy()
-    
-    # 1. Проверка активности любого из режимов трансформации
-    is_transform_mode_active = (
-        b_data['anime_mode'] or b_data['slavaukraine_mode'] or
-        b_data['zaputin_mode'] or b_data['suka_blyat_mode'] or
-        b_data['polish_mode'] or b_data['warhammer_mode'] or b_data['imperial_mode'] or
-        b_data['gopnik_mode'] or b_data.get('schizo_mode')
-        # or b_data.get('matrix_mode') or b_data.get('america_mode') or
-        # b_data.get('holiday_mode') or b_data.get('oldweb_mode') or b_data.get('jewish_mode')
-    )
-    if not is_transform_mode_active:
-        return modified_content
-    active_mode_key = next((mode for mode in MODE_FLAGS if b_data.get(mode)), None)
+class ModeTransformer:
+    def __init__(self, content: dict, board_id: str):
+        self.content = content
+        self.board_id = board_id
+        self.b_data = board_data[board_id]
+        self.modified_content = content.copy()
+        self.active_mode_key = next((mode for mode in MODE_FLAGS if self.b_data.get(mode)), None)
+        self.text_key = None
+        self.plain_text = ""
+        self.allow_visual = False
+        self.header = self.modified_content.get('header')
 
-    # 2. Определяем ключ текста (text для постов, caption для медиа)
-    text_key = 'text' if 'text' in modified_content and modified_content['text'] else \
-               'caption' if 'caption' in modified_content and modified_content['caption'] else None
-    
-    if not text_key:
-        return modified_content
+    def _check_active_mode(self) -> bool:
+        return (
+            self.b_data.get('anime_mode') or self.b_data.get('slavaukraine_mode') or
+            self.b_data.get('zaputin_mode') or self.b_data.get('suka_blyat_mode') or
+            self.b_data.get('polish_mode') or self.b_data.get('warhammer_mode') or
+            self.b_data.get('imperial_mode') or self.b_data.get('gopnik_mode') or
+            self.b_data.get('schizo_mode')
+        )
 
-    plain_text = clean_html_tags(modified_content.get(text_key, ''))
-    header = modified_content.get('header')
-    
-    # 3. Флаг: разрешена ли генерация картинки-шаблона?
-    # Enterprise-правило: только если исходный пост — ТЕКСТ и он не слишком длинный.
-    allow_visual = (modified_content.get('type') == 'text') and (len(plain_text) < 180)
-    
-    transform_result = None
-    loop = asyncio.get_running_loop()
+    def _determine_text_key(self) -> bool:
+        self.text_key = 'text' if 'text' in self.modified_content and self.modified_content['text'] else \
+                   'caption' if 'caption' in self.modified_content and self.modified_content['caption'] else None
+        if not self.text_key:
+            return False
+        self.plain_text = clean_html_tags(self.modified_content.get(self.text_key, ''))
+        self.allow_visual = (self.modified_content.get('type') == 'text') and (len(self.plain_text) < 180)
+        return True
 
-    # 4. Выбор и запуск функции трансформации
-    if b_data.get('schizo_mode'):
-        transform_result = await loop.run_in_executor(None, shizo_transform, plain_text, header)
-    # elif b_data.get('matrix_mode'):
-    #     transform_result = await loop.run_in_executor(None, matrix_transform, plain_text, header)
-    # elif b_data.get('america_mode'):
-    #     transform_result = await loop.run_in_executor(None, america_transform, plain_text, header)
-    # elif b_data.get('holiday_mode'):
-    #     transform_result = await loop.run_in_executor(None, holiday_transform, plain_text, header)
-    # elif b_data.get('oldweb_mode'):
-    #     transform_result = await loop.run_in_executor(None, oldweb_transform, plain_text, header)
-    # elif b_data.get('jewish_mode'):
-    #     transform_result = await loop.run_in_executor(None, jewish_transform, plain_text, header)
-    elif b_data['gopnik_mode']:
-        transform_result = await loop.run_in_executor(None, gopnik_transform, plain_text)
-    elif b_data['imperial_mode']:
-        transform_result = await loop.run_in_executor(None, imperial_transform, plain_text, header)
-    elif b_data['warhammer_mode']:
-        transform_result = await loop.run_in_executor(None, warhammer_transform, plain_text, header)
-    elif b_data['polish_mode']:
-        transform_result = await loop.run_in_executor(None, polish_transform, plain_text, header)
-    elif b_data['slavaukraine_mode']:
-        transform_result = await loop.run_in_executor(None, ukrainian_transform, plain_text, header)
-    
-    # 5. Обработка результата (кортеж или текст)
-    if transform_result and isinstance(transform_result, tuple):
-        res_type, res_data = transform_result
-        
-        # Если пришла картинка И нам разрешено её использовать
-        if res_type == 'image' and allow_visual:
-            modified_content['type'] = 'photo'
-            modified_content['image_bytes'] = res_data
-            if 'text' in modified_content: modified_content['text'] = ''
-            if 'caption' in modified_content: modified_content['caption'] = ''
-            return modified_content
-        
-        # Если пришел текст (или картинка запрещена — берем текст из кортежа)
-        elif res_type == 'text' or (res_type == 'image' and not allow_visual):
-            # В случае 'image', если visual запрещен, некоторые функции могут не вернуть текст. 
-            # Но наши новые функции (shizo, polish, ukr) всегда возвращают текст вторым элементом при неудаче.
-            transformed_text = res_data if isinstance(res_data, str) else plain_text
-            modified_content[text_key] = transformed_text
-            plain_text = transformed_text
+    async def _run_transformation(self):
+        loop = asyncio.get_running_loop()
+        if self.b_data.get('schizo_mode'):
+            return await loop.run_in_executor(None, shizo_transform, self.plain_text, self.header)
+        elif self.b_data.get('gopnik_mode'):
+            return await loop.run_in_executor(None, gopnik_transform, self.plain_text)
+        elif self.b_data.get('imperial_mode'):
+            return await loop.run_in_executor(None, imperial_transform, self.plain_text, self.header)
+        elif self.b_data.get('warhammer_mode'):
+            return await loop.run_in_executor(None, warhammer_transform, self.plain_text, self.header)
+        elif self.b_data.get('polish_mode'):
+            return await loop.run_in_executor(None, polish_transform, self.plain_text, self.header)
+        elif self.b_data.get('slavaukraine_mode'):
+            return await loop.run_in_executor(None, ukrainian_transform, self.plain_text, self.header)
+        return None
 
-    # 6. Остаточные трансформации для режимов без визуального движка (Zaputin, Suka_Blyat)
-    if not transform_result:
-        transformed_text = plain_text
-        if b_data['zaputin_mode']:
+    def _handle_transform_result(self, transform_result):
+        if transform_result and isinstance(transform_result, tuple):
+            res_type, res_data = transform_result
+            if res_type == 'image' and self.allow_visual:
+                self.modified_content['type'] = 'photo'
+                self.modified_content['image_bytes'] = res_data
+                if 'text' in self.modified_content: self.modified_content['text'] = ''
+                if 'caption' in self.modified_content: self.modified_content['caption'] = ''
+                return True
+            elif res_type == 'text' or (res_type == 'image' and not self.allow_visual):
+                transformed_text = res_data if isinstance(res_data, str) else self.plain_text
+                self.modified_content[self.text_key] = transformed_text
+                self.plain_text = transformed_text
+        return False
+
+    async def _apply_residual_modes(self):
+        loop = asyncio.get_running_loop()
+        transformed_text = self.plain_text
+        if self.b_data.get('zaputin_mode'):
             transformed_text = await loop.run_in_executor(None, zaputin_transform, transformed_text)
-        elif b_data['suka_blyat_mode']:
+        elif self.b_data.get('suka_blyat_mode'):
             words = transformed_text.split()
             for i in range(len(words)):
                 if random.random() < 0.3: words[i] = random.choice(MAT_WORDS)
             transformed_text = ' '.join(words)
+        self.modified_content[self.text_key] = transformed_text
+        self.plain_text = transformed_text
+
+    async def _apply_anime_mode(self):
+        loop = asyncio.get_running_loop()
+        if self.b_data.get('anime_mode'):
+            current_text = self.modified_content.get(self.text_key, '')
+            transformed_plain_text = await loop.run_in_executor(None, anime_transform, current_text)
+            transformed_plain_text = await _maybe_punch_up_text(transformed_plain_text, 'anime_mode', self.board_id)
+            self.modified_content[self.text_key] = escape_html(transformed_plain_text)
+
+            if self.modified_content.get('type') == 'text' and random.random() < 0.33:
+                from japanese_translator import get_random_anime_image, get_monogatari_image
+                image_fetcher = get_monogatari_image if random.random() < 0.33 else get_random_anime_image
+                try:
+                    anime_img_url = await asyncio.wait_for(image_fetcher(), timeout=ANIME_URL_FETCH_TIMEOUT_SEC)
+                except asyncio.TimeoutError:
+                    runtime_logger.warning(
+                        "anime_mode_image_timeout %s",
+                        json.dumps(
+                            {
+                                "ts": round(time.time(), 3),
+                                "board_id": self.board_id,
+                                "timeout_sec": ANIME_URL_FETCH_TIMEOUT_SEC,
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    )
+                    anime_img_url = None
+                if anime_img_url:
+                    text_content = self.modified_content.pop('text', '')
+                    self.modified_content.update({'type': 'photo', 'caption': text_content, 'image_url': anime_img_url})
+        elif self.active_mode_key:
+            current_text = self.modified_content.get(self.text_key, '')
+            if current_text:
+                self.modified_content[self.text_key] = await _maybe_punch_up_text(current_text, self.active_mode_key, self.board_id)
+
+    async def apply(self) -> dict:
+        if not self._check_active_mode():
+            return self.modified_content
+        if not self._determine_text_key():
+            return self.modified_content
+
+        transform_result = await self._run_transformation()
+        is_visual_applied = self._handle_transform_result(transform_result)
+        if is_visual_applied:
+            return self.modified_content
+
+        if not transform_result:
+            await self._apply_residual_modes()
+
+        await self._apply_anime_mode()
         
-        modified_content[text_key] = transformed_text
-        plain_text = transformed_text
+        return self.modified_content
 
-    # 7. Специфическая логика для Аниме (остается без изменений, так как аниме-режим не трогали)
-    if b_data['anime_mode']:
-        current_text = modified_content.get(text_key, '')
-        transformed_plain_text = await loop.run_in_executor(None, anime_transform, current_text)
-        transformed_plain_text = await _maybe_punch_up_text(transformed_plain_text, 'anime_mode', board_id)
-        modified_content[text_key] = escape_html(transformed_plain_text)
-        
-        if modified_content.get('type') == 'text' and random.random() < 0.33:
-            from japanese_translator import get_random_anime_image, get_monogatari_image
-            image_fetcher = get_monogatari_image if random.random() < 0.33 else get_random_anime_image
-            try:
-                anime_img_url = await asyncio.wait_for(image_fetcher(), timeout=ANIME_URL_FETCH_TIMEOUT_SEC)
-            except asyncio.TimeoutError:
-                runtime_logger.warning(
-                    "anime_mode_image_timeout %s",
-                    json.dumps(
-                        {
-                            "ts": round(time.time(), 3),
-                            "board_id": board_id,
-                            "timeout_sec": ANIME_URL_FETCH_TIMEOUT_SEC,
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                )
-                anime_img_url = None
-            if anime_img_url:
-                text_content = modified_content.pop('text', '')
-                modified_content.update({'type': 'photo', 'caption': text_content, 'image_url': anime_img_url})
+async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
+    """
+    (ИСПРАВЛЕННАЯ ВЕРСИЯ 5.0)
+    Унифицированный диспетчер трансформаций.
+    Гарантирует Enterprise-логику: визуальные шаблоны только для текстовых постов.
+    """
+    transformer = ModeTransformer(content, board_id)
+    return await transformer.apply()
 
-    elif active_mode_key:
-        current_text = modified_content.get(text_key, '')
-        if current_text:
-            modified_content[text_key] = await _maybe_punch_up_text(current_text, active_mode_key, board_id)
+def _get_download_headers(domain: str, scheme: str) -> dict:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Sec-Fetch-Dest": "image",
+        "Sec-Fetch-Mode": "no-cors",
+        "Sec-Fetch-Site": "cross-site",
+        "Pragma": "no-cache",
+        "Cache-Control": "no-cache",
+    }
 
-    return modified_content
+    if "gelbooru" in domain:
+        headers["Referer"] = "https://gelbooru.com/"
+    elif "konachan" in domain:
+        headers["Referer"] = "https://konachan.com/"
+    elif "yande.re" in domain:
+        headers["Referer"] = "https://yande.re/"
+    elif "danbooru" in domain:
+        headers["Referer"] = "https://danbooru.donmai.us/"
+    elif "aibooru" in domain:
+        headers["Referer"] = "https://aibooru.online/"
+    else:
+        headers["Referer"] = f"{scheme}://{domain}/"
+
+    return headers
+
+async def _fetch_image_data(session, url: str, proxy: str | None, is_fallback: bool = False, url_log: str = "") -> tuple[bytes, int] | None:
+    try:
+        async with session.get(url, allow_redirects=True, proxy=proxy) as response:
+            if response.status == 200:
+                content_type = response.headers.get('Content-Type', '').lower()
+                data = await response.read()
+
+                if 'text/html' in content_type or (len(data) > 0 and data.strip().startswith(b'<') and b'<html' in data[:500].lower()):
+                    try:
+                        error_text = data[:300].decode('utf-8', errors='ignore').replace('\n', ' ')
+                    except Exception:
+                        error_text = "Binary/Unknown"
+
+                    print(f"⚠️ [DEBUG_DL] Ссылка вернула HTML заглушку. Содержимое: {error_text}")
+                    return None
+
+                if len(data) > 49.5 * 1024 * 1024:
+                    print(f"⚠️ [DEBUG_DL] Файл слишком велик ({len(data)} байт). Пропуск.")
+                    return None
+
+                if len(data) > 0:
+                    print(f"✅ [DEBUG_DL] Скачано {len(data)} байт.{' Успех через DIRECT.' if is_fallback else ''}")
+                    return data, len(data)
+            else:
+                if not is_fallback:
+                    print(f"⚠️ [DEBUG_DL] Статус ответа: {response.status} для {url_log}")
+    except Exception as e:
+        if not is_fallback:
+            raise e
+
+    return None
+
 def _get_download_headers(domain: str, scheme: str) -> dict:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -4648,190 +4826,483 @@ async def _build_lie_media_content(content: dict, board_id: str) -> dict:
         lie_content['mime_type'] = replacement['mime_type']
     return lie_content
 
-async def send_message_to_users(
-    bot_instance: Bot,
-    board_id: str,
-    recipients: set[int],
-    content: dict,
-    reply_info: dict | None = None,
-    keyboard: InlineKeyboardMarkup | None = None,
-    verbose: bool = False,
-    queue_enqueued_at: float | None = None,
-    queue_wait_sec: float | None = None,
-    delivery_phase: str = "full",
-    delivery_original_recipients: int | None = None,
-    delivery_deferred_recipients: int = 0,
-) -> list:
-    """
-    Оптимизированная функция массовой рассылки.
-    Сложность снижена с O(N*M) до O(N + M) за счет выноса форматирования.
-    ВКЛЮЧЕНА ЗАЩИТА ОТ ДУБЛЕЙ (SMART RETRY) И ЛОГИРОВАНИЕ.
-    Рассылка с Smart Retry.
-    verbose=False -> тихий режим (для отправки автору).
-    verbose=True -> пишет отчет в консоль (для массовой).
-    """
-    if not recipients or not content or 'type' not in content:
-        return []
-    b_data = board_data[board_id]
-    active_recipients = {
-        uid for uid in recipients 
-        if uid > 0 and uid not in b_data['users']['banned']
-    }
-    if not active_recipients:
-        return[]
-    original_recipients_count = delivery_original_recipients or len(active_recipients)
-    ordered_recipients, priority_recipients_count, passive_recipients_count = _order_recipients_for_delivery(
-        board_id, active_recipients
-    )
-    start_time = time.time()
-    stats = {
-        'success': 0,
-        'ghosts': 0,  # Потенциальные дубли, которые мы предотвратили
-        'errors': 0,  # Ошибки API/Формата
-        'blocks': 0,  # Юзер заблокировал
-        'retries': 0,  # Количество повторов из-за флуда/сети
-        'timeouts': 0,  # Персональные таймауты отправки
-        'priority_recipients': priority_recipients_count,
-        'passive_recipients': passive_recipients_count,
-    }
-    final_keyboard = keyboard 
-    media_url_text_fallback = False
-    media_url_fallback_logged = False
-    html_plain_fallback_logged = False
-    if content.get('poll_data') and not final_keyboard:
-        poll_options = content.get('poll_data', {}).get('options',[])
-        post_num = content.get('post_num')
-        if poll_options and post_num:
-            buttons =[]
-            for i, option_text in enumerate(poll_options):
-                button_text = option_text[:60]
-                buttons.append(
-                    InlineKeyboardButton(
-                        text=button_text,
-                        callback_data=f"poll_vote_{post_num}_{i}"
+
+class MessageBroadcaster:
+    def __init__(
+        self,
+        bot_instance,
+        board_id,
+        recipients,
+        content,
+        reply_info=None,
+        keyboard=None,
+        verbose=False,
+        queue_enqueued_at=None,
+        queue_wait_sec=None,
+        delivery_phase="full",
+        delivery_original_recipients=None,
+        delivery_deferred_recipients=0,
+    ):
+        self.bot_instance = bot_instance
+        self.board_id = board_id
+        self.recipients = recipients
+        self.content = content
+        self.reply_info = reply_info
+        self.keyboard = keyboard
+        self.verbose = verbose
+        self.queue_enqueued_at = queue_enqueued_at
+        self.queue_wait_sec = queue_wait_sec
+        self.delivery_phase = delivery_phase
+        self.delivery_original_recipients = delivery_original_recipients
+        self.delivery_deferred_recipients = delivery_deferred_recipients
+
+        # Instance state
+        self.b_data = board_data.get(self.board_id) if self.board_id else None
+        self.stats = {
+            'success': 0,
+            'ghosts': 0,
+            'errors': 0,
+            'blocks': 0,
+            'retries': 0,
+            'timeouts': 0,
+            'priority_recipients': 0,
+            'passive_recipients': 0,
+        }
+        self.media_url_text_fallback = False
+        self.media_url_fallback_logged = False
+        self.html_plain_fallback_logged = False
+        self.all_results = []
+        self.blocked_users = set()
+        self.mentioned_authors = {}
+        self.post_data_copy = {}
+        self.reply_to_post_author_id = None
+        self.post_num_for_replies = None
+        self.db_replies_map = {}
+        self.common_formatted_body = None
+        self.base_head_html = ""
+        self.highlight_head_html = ""
+        self.base_header_text = ""
+        self.final_keyboard = self.keyboard
+        self.post_num = self.content.get('post_num')
+        self.raw_text = self.content.get('text') or self.content.get('caption') or ''
+        self.content_for_common = self.content.copy()
+
+    async def broadcast(self) -> list:
+        if not self.recipients or not self.content or 'type' not in self.content:
+            return DeliveryResults([], remaining_recipients=set(), interrupted_reason=None)
+
+        if not self.b_data:
+            return DeliveryResults([], remaining_recipients=set(), interrupted_reason=None)
+
+        active_recipients = {
+            uid for uid in self.recipients
+            if uid > 0 and uid not in self.b_data['users']['banned']
+        }
+        if not active_recipients:
+            return DeliveryResults([], remaining_recipients=set(), interrupted_reason=None)
+
+        original_recipients_count = self.delivery_original_recipients or len(active_recipients)
+        ordered_recipients, priority_recipients_count, passive_recipients_count = _order_recipients_for_delivery(
+            self.board_id, active_recipients
+        )
+        self.stats['priority_recipients'] = priority_recipients_count
+        self.stats['passive_recipients'] = passive_recipients_count
+
+        start_time = time.time()
+
+        if self.content.get('poll_data') and not self.final_keyboard:
+            poll_options = self.content.get('poll_data', {}).get('options', [])
+            if poll_options and self.post_num:
+                buttons = []
+                for i, option_text in enumerate(poll_options):
+                    button_text = option_text[:60]
+                    buttons.append(
+                        InlineKeyboardButton(
+                            text=button_text,
+                            callback_data=f"poll_vote_{self.post_num}_{i}"
+                        )
                     )
-                )
-            final_keyboard = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
-            
-    post_num = content.get('post_num')
-    post_data_copy = {}
-    reply_to_post_author_id = None
-    post_num_for_replies = None
-    
-    async with storage_lock:
-        if post_num:
-            post_data = messages_storage.get(post_num, {})
-            if post_data: 
-                post_data_copy = post_data.copy()
-        reply_to_post_num = content.get('reply_to_post')
-        if reply_to_post_num:
-            reply_p_data = messages_storage.get(reply_to_post_num, {})
-            reply_to_post_author_id = reply_p_data.get('author_id')
-            post_num_for_replies = reply_to_post_num
+                self.final_keyboard = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
 
-    # --- НАЧАЛО ИЗМЕНЕНИЙ (Восстановление старых реплаев из БД) ---
-    db_replies_map = {}
-    if post_num_for_replies:
-        # Восстанавливаем ID автора для маркера (You), если его нет в RAM
-        if not reply_to_post_author_id:
-            db_post = await get_post_by_num(post_num_for_replies)
-            if db_post:
-                reply_to_post_author_id = db_post.get('author_id')
-        
-        # Проверяем наличие message_id в памяти
-        in_ram = False
         async with storage_lock:
-            if post_num_for_replies in post_to_messages:
-                in_ram = True
-        
-        # Если в памяти нет, достаем копии из БД
-        if not in_ram:
-            db_copies = await get_post_copies(post_num_for_replies)
-            for rec_id, msg_id in db_copies:
-                db_replies_map[rec_id] = msg_id
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+            if self.post_num:
+                post_data = messages_storage.get(self.post_num, {})
+                if post_data:
+                    self.post_data_copy = post_data.copy()
+            reply_to_post_num = self.content.get('reply_to_post')
+            if reply_to_post_num:
+                reply_p_data = messages_storage.get(reply_to_post_num, {})
+                self.reply_to_post_author_id = reply_p_data.get('author_id')
+                self.post_num_for_replies = reply_to_post_num
 
-    raw_text = content.get('text') or content.get('caption') or ''
-    content_for_common = content.copy()
-    common_formatted_body = await _format_message_body(
-        content=content_for_common, 
-        user_id_for_context=0, 
-        post_data=post_data_copy, 
-        reply_to_post_author_id=reply_to_post_author_id,
-        quote_info=content_for_common.get('quote_info')
-    )
-    base_header_text = content.get('header', '')
-    highlight_header_text = base_header_text
-    if "Пост" in highlight_header_text:
-        highlight_header_text = highlight_header_text.replace("Пост", "🔴 Пост", 1)
-    elif "Post" in highlight_header_text:
-        highlight_header_text = highlight_header_text.replace("Post", "🔴 Post", 1)
-    base_head_html = f"<i>{escape_html(base_header_text)}</i>"
-    highlight_head_html = f"<i>{escape_html(highlight_header_text)}</i>"
-    has_reply_markers = ">>" in raw_text
-    users_settings = b_data.get('user_settings', {})
-    all_results =[]
-    blocked_users = set()
-    mentioned_authors = {}
-    
-    if ">>" in raw_text:
-        mentions = RE_YOU_PATTERN.findall(raw_text)
-        if mentions:
-            missing_mentions =[]
+        if self.post_num_for_replies:
+            if not self.reply_to_post_author_id:
+                db_post = await get_post_by_num(self.post_num_for_replies)
+                if db_post:
+                    self.reply_to_post_author_id = db_post.get('author_id')
+
+            in_ram = False
             async with storage_lock:
-                for m_num_str in mentions:
-                    try:
-                        m_num = int(m_num_str)
-                        if m_num in messages_storage:
-                            mentioned_authors[m_num] = messages_storage[m_num].get("author_id")
-                        else:
-                            missing_mentions.append(m_num)
-                    except ValueError:
-                        continue
-                        
-            # --- НАЧАЛО ИЗМЕНЕНИЙ (Восстановление маркеров (You) для старых постов) ---
-            if missing_mentions:
-                for m_num in missing_mentions:
-                    db_post = await get_post_by_num(m_num)
-                    if db_post:
-                        mentioned_authors[m_num] = db_post.get("author_id")
-            # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+                if self.post_num_for_replies in post_to_messages:
+                    in_ram = True
 
-    async def _send_one(uid: int, telegram_request_timeout_sec: int):
-        nonlocal stats, media_url_text_fallback, media_url_fallback_logged, html_plain_fallback_logged
+            if not in_ram:
+                db_copies = await get_post_copies(self.post_num_for_replies)
+                for rec_id, msg_id in db_copies:
+                    self.db_replies_map[rec_id] = msg_id
+
+        self.common_formatted_body = await _format_message_body(
+            content=self.content_for_common,
+            user_id_for_context=0,
+            post_data=self.post_data_copy,
+            reply_to_post_author_id=self.reply_to_post_author_id,
+            quote_info=self.content_for_common.get('quote_info')
+        )
+
+        self.base_header_text = self.content.get('header', '')
+        highlight_header_text = self.base_header_text
+        if "Пост" in highlight_header_text:
+            highlight_header_text = highlight_header_text.replace("Пост", "🔴 Пост", 1)
+        elif "Post" in highlight_header_text:
+            highlight_header_text = highlight_header_text.replace("Post", "🔴 Post", 1)
+
+        self.base_head_html = f"<i>{escape_html(self.base_header_text)}</i>"
+        self.highlight_head_html = f"<i>{escape_html(highlight_header_text)}</i>"
+
+        has_reply_markers = ">>" in self.raw_text
+        self.users_settings = self.b_data.get('user_settings', {})
+
+        if has_reply_markers:
+            mentions = RE_YOU_PATTERN.findall(self.raw_text)
+            if mentions:
+                missing_mentions = []
+                async with storage_lock:
+                    for m_num_str in mentions:
+                        try:
+                            m_num = int(m_num_str)
+                            if m_num in messages_storage:
+                                self.mentioned_authors[m_num] = messages_storage[m_num].get("author_id")
+                            else:
+                                missing_mentions.append(m_num)
+                        except ValueError:
+                            continue
+
+                if missing_mentions:
+                    for m_num in missing_mentions:
+                        db_post = await get_post_by_num(m_num)
+                        if db_post:
+                            self.mentioned_authors[m_num] = db_post.get("author_id")
+
+        queue = deque(ordered_recipients)
+        recipient_retry_counts = defaultdict(int)
+        CHUNK_SIZE = DELIVERY_INITIAL_CHUNK_SIZE
+        current_delay = 0.1
+        phase_budget_sec = _phase_time_budget_sec(self.delivery_phase)
+        phase_deadline = start_time + phase_budget_sec if phase_budget_sec else None
+        remaining_recipients_for_later = set()
+        interrupted_reason = None
+
+        while queue:
+            send_timeout_sec = DELIVERY_PER_RECIPIENT_TIMEOUT_SEC
+            if phase_deadline is not None:
+                remaining_phase_sec = phase_deadline - time.time()
+                if remaining_phase_sec <= 0:
+                    remaining_recipients_for_later.update(queue)
+                    queue.clear()
+                    interrupted_reason = "phase_budget"
+                    break
+                if remaining_phase_sec <= DELIVERY_PHASE_GUARD_SEC:
+                    remaining_recipients_for_later.update(queue)
+                    queue.clear()
+                    interrupted_reason = "phase_budget_guard"
+                    break
+                send_timeout_sec = min(
+                    DELIVERY_PER_RECIPIENT_TIMEOUT_SEC,
+                    max(1.0, remaining_phase_sec - DELIVERY_PHASE_GUARD_SEC),
+                )
+            chunk = []
+            for _ in range(min(len(queue), CHUNK_SIZE)):
+                chunk.append(queue.popleft())
+
+            tasks = [self._send_one_guarded(uid, send_timeout_sec) for uid in chunk]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            flood_wait_seconds = 0
+
+            for uid, res in zip(chunk, results):
+                if res == "FATAL_ERROR_STOP":
+                    queue.clear()
+                    self.stats['errors'] += len(chunk) + len(queue)
+                    break
+                if isinstance(res, Exception):
+                    if isinstance(res, TelegramRetryAfter):
+                        wait = res.retry_after
+                        recipient_retry_counts[uid] += 1
+                        if recipient_retry_counts[uid] <= DELIVERY_MAX_RECIPIENT_RETRIES:
+                            flood_wait_seconds = max(flood_wait_seconds, wait)
+                            queue.appendleft(uid)
+                            self.stats['retries'] += 1
+                        else:
+                            self.stats['errors'] += 1
+                            runtime_logger.warning(
+                                "delivery_recipient_retry_exhausted %s",
+                                json.dumps(
+                                    {
+                                        "board_id": self.board_id,
+                                        "post_num": self.post_num,
+                                        "phase": self.delivery_phase,
+                                        "uid": uid,
+                                        "retries": recipient_retry_counts[uid],
+                                        "reason": "flood_wait",
+                                    },
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                ),
+                            )
+                    elif isinstance(res, TelegramForbiddenError):
+                        self.blocked_users.add(uid)
+                        self.stats['blocks'] += 1
+                    elif isinstance(res, (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError)):
+                        if isinstance(res, asyncio.TimeoutError):
+                            self.stats['timeouts'] += 1
+                        recipient_retry_counts[uid] += 1
+                        if recipient_retry_counts[uid] <= DELIVERY_MAX_RECIPIENT_RETRIES:
+                            queue.append(uid)
+                            self.stats['retries'] += 1
+                        else:
+                            self.stats['errors'] += 1
+                            runtime_logger.warning(
+                                "delivery_recipient_retry_exhausted %s",
+                                json.dumps(
+                                    {
+                                        "board_id": self.board_id,
+                                        "post_num": self.post_num,
+                                        "phase": self.delivery_phase,
+                                        "uid": uid,
+                                        "retries": recipient_retry_counts[uid],
+                                        "reason": type(res).__name__,
+                                    },
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                ),
+                            )
+                    else:
+                        print(f"❌ Ошибка отправки {uid}: {res}")
+                        self.stats['errors'] += 1
+                elif res:
+                    self.all_results.append((uid, res))
+
+            if flood_wait_seconds > 0:
+                wait_real = flood_wait_seconds + 1
+                if phase_deadline is not None and time.time() + wait_real + DELIVERY_PHASE_GUARD_SEC >= phase_deadline:
+                    remaining_recipients_for_later.update(queue)
+                    queue.clear()
+                    interrupted_reason = "phase_budget_before_floodwait"
+                    if self.verbose:
+                        print(f"⏳ FloodWait: пауза {wait_real} сек. (перенос бюджета) ...")
+                    await asyncio.sleep(wait_real)
+                    break
+                if self.verbose:
+                    print(f"⏳ FloodWait: пауза {wait_real} сек. В очереди: {len(queue)}...")
+                await asyncio.sleep(wait_real)
+                CHUNK_SIZE = max(DELIVERY_MIN_CHUNK_SIZE, CHUNK_SIZE - 5)
+            else:
+                await asyncio.sleep(current_delay)
+                if CHUNK_SIZE < DELIVERY_INITIAL_CHUNK_SIZE:
+                    CHUNK_SIZE += 1
+
+        time_taken = time.time() - start_time
+        post_created_at = self.post_data_copy.get("timestamp") if self.post_data_copy else None
+        post_age_sec = None
+        if isinstance(post_created_at, datetime):
+            post_age_sec = max(0.0, time.time() - post_created_at.timestamp())
+        elif isinstance(post_created_at, (int, float)):
+            post_age_sec = max(0.0, time.time() - float(post_created_at))
+        queue_total_sec = None
+        if self.queue_enqueued_at is not None:
+            try:
+                queue_total_sec = max(0.0, time.time() - float(self.queue_enqueued_at))
+            except (TypeError, ValueError):
+                queue_total_sec = None
+        if self.verbose:
+            log_line = (
+                f"📊 #{self.post_num} [{self.delivery_phase}] | "
+                f"✅ {self.stats['success']}/{len(active_recipients)} phase "
+                f"({len(active_recipients)}/{original_recipients_count}, def {self.delivery_deferred_recipients}) | "
+                f"🚫 {self.stats['blocks']} | "
+                f"❌ {self.stats['errors']} | "
+                f"👻 {self.stats['ghosts']} | "
+                f"🔄 {self.stats['retries']} | "
+                f"⏲ {self.stats['timeouts']} | "
+                f"⏭ {len(remaining_recipients_for_later)} | "
+                f"prio {self.stats['priority_recipients']}/{len(active_recipients)} | "
+                f"⏱ {time_taken:.1f}s"
+            )
+            print(log_line)
+            delivery_record = {
+                "ts": round(time.time(), 3),
+                "board_id": self.board_id,
+                "post_num": self.post_num,
+                "phase": self.delivery_phase,
+                "type": str(self.content.get("type")),
+                "recipients": len(active_recipients),
+                "phase_recipients": len(active_recipients),
+                "original_recipients": original_recipients_count,
+                "deferred_recipients": self.delivery_deferred_recipients,
+                "priority_recipients": self.stats["priority_recipients"],
+                "passive_recipients": self.stats["passive_recipients"],
+                "success": self.stats["success"],
+                "blocks": self.stats["blocks"],
+                "errors": self.stats["errors"],
+                "ghosts": self.stats["ghosts"],
+                "retries": self.stats["retries"],
+                "timeouts": self.stats["timeouts"],
+                "budget_deferred": len(remaining_recipients_for_later),
+                "interrupted_reason": interrupted_reason,
+                "phase_budget_sec": phase_budget_sec,
+                "seconds": round(time_taken, 3),
+                "post_age_sec": round(post_age_sec, 3) if post_age_sec is not None else None,
+                "queue_wait_sec": round(self.queue_wait_sec, 3) if self.queue_wait_sec is not None else None,
+                "queue_total_sec": round(queue_total_sec, 3) if queue_total_sec is not None else None,
+            }
+            delivery_metrics[self.board_id].append(delivery_record)
+            runtime_logger.info(
+                "delivery_result %s",
+                json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
+            )
+            if time_taken >= DELIVERY_SLOW_PHASE_SEC or (queue_total_sec is not None and queue_total_sec >= DELIVERY_SLOW_PHASE_SEC):
+                runtime_logger.warning(
+                    "delivery_slow %s",
+                    json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
+                )
+            if remaining_recipients_for_later:
+                runtime_logger.warning(
+                    "delivery_phase_budget_deferred %s",
+                    json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
+                )
+
+        if self.post_num and self.post_num not in posts_pending_deletion and not self.content.get('is_shadow_reject'):
+            copies_for_db = []
+            trimmed_copy_posts = 0
+            trimmed_copy_refs = 0
+            async with storage_lock:
+                keep_copy_maps_in_ram = self.post_num in messages_storage and MAX_COPY_MAP_POSTS_IN_MEMORY > 0
+                for uid, msg_obj_or_list in self.all_results:
+                    msgs = msg_obj_or_list if isinstance(msg_obj_or_list, list) else [msg_obj_or_list]
+                    if msgs:
+                        msg_ids = [m.message_id for m in msgs]
+                        for m in msgs:
+                            copies_for_db.append((uid, m.message_id))
+                        if keep_copy_maps_in_ram:
+                            post_to_messages.setdefault(self.post_num, {})[uid] = msg_ids[0] if len(msg_ids) == 1 else msg_ids
+                            for m in msgs:
+                                message_to_post[(uid, m.message_id)] = self.post_num
+                if keep_copy_maps_in_ram:
+                    trimmed_copy_posts, trimmed_copy_refs = _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
+            if trimmed_copy_posts:
+                runtime_logger.info(
+                    "copy_map_ram_trim %s",
+                    json.dumps(
+                        {
+                            "removed_posts": trimmed_copy_posts,
+                            "removed_reverse": trimmed_copy_refs,
+                            "limit": MAX_COPY_MAP_POSTS_IN_MEMORY,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+            if copies_for_db:
+                try:
+                    await add_post_copies(self.post_num, copies_for_db)
+                except Exception as e:
+                    if "FOREIGN KEY constraint failed" in str(e):
+                        pass
+                    else:
+                        print(f"⚠️ Ошибка сохранения копий для #{self.post_num}: {e}")
+                        
+        if self.blocked_users:
+            users_to_remove_db = []
+            for uid in self.blocked_users:
+                if uid in self.b_data['users']['active']:
+                    self.b_data['users']['active'].discard(uid)
+                    self.b_data.get('user_settings', {}).pop(uid, None)
+                    for cache in [self.b_data['last_activity'], self.b_data['spam_violations']]:
+                        cache.pop(uid, None)
+                    users_to_remove_db.append(uid)
+
+            if users_to_remove_db:
+                from common.database import remove_users_from_board_batch
+                await remove_users_from_board_batch(users_to_remove_db, self.board_id)
+
+            print(f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} пользователей (блокировка бота).")
+
+        return DeliveryResults(
+            self.all_results,
+            remaining_recipients=remaining_recipients_for_later,
+            interrupted_reason=interrupted_reason,
+        )
+
+    async def _send_one_guarded(self, uid: int, timeout_sec: float):
+        request_timeout_sec = min(
+            DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC,
+            max(3.0, timeout_sec - 1.0),
+        )
+        try:
+            return await asyncio.wait_for(
+                self._send_one(uid, int(request_timeout_sec)),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError as exc:
+            runtime_logger.warning(
+                "delivery_recipient_timeout %s",
+                json.dumps(
+                    {
+                        "board_id": self.board_id,
+                        "post_num": self.post_num,
+                        "phase": self.delivery_phase,
+                        "uid": uid,
+                        "timeout_sec": timeout_sec,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+            return exc
+
+    async def _send_one(self, uid: int, telegram_request_timeout_sec: int):
         request_timeout = max(3, int(telegram_request_timeout_sec))
-        u_set = users_settings.get(uid, {'nsfw': False, 'hide': set()})
+        u_set = self.users_settings.get(uid, {'nsfw': False, 'hide': set()})
         if u_set['hide']:
-            check_text = (base_header_text + " " + raw_text).lower()
+            check_text = (self.base_header_text + " " + self.raw_text).lower()
             if any(word in check_text for word in u_set['hide']):
-                lang_local = 'en' if board_id == 'int' else 'ru'
+                lang_local = 'en' if self.board_id == 'int' else 'ru'
                 placeholder = "🛡 Message hidden" if lang_local == 'en' else "🛡 Сообщение скрыто"
                 try:
-                    res = await bot_instance.send_message(
+                    res = await self.bot_instance.send_message(
                         uid,
-                        f"{base_head_html}\n{placeholder}",
+                        f"{self.base_head_html}\n{placeholder}",
                         parse_mode="HTML",
                         request_timeout=request_timeout,
                     )
-                    stats['success'] += 1
+                    self.stats['success'] += 1
                     return res
                 except Exception:
-                    stats['errors'] += 1
+                    self.stats['errors'] += 1
                     return None
                     
-        head = highlight_head_html if uid == reply_to_post_author_id else base_head_html
-        body = common_formatted_body
-        is_direct_reply = (uid == reply_to_post_author_id)
-        send_content = content_for_common
+        head = self.highlight_head_html if uid == self.reply_to_post_author_id else self.base_head_html
+        body = self.common_formatted_body
+        is_direct_reply = (uid == self.reply_to_post_author_id)
+        send_content = self.content_for_common
         if u_set.get('lie_media'):
             try:
-                send_content = await _build_lie_media_content(content_for_common, board_id)
-                if send_content is not content_for_common:
+                send_content = await _build_lie_media_content(self.content_for_common, self.board_id)
+                if send_content is not self.content_for_common:
                     body = await _format_message_body(
                         content=send_content,
                         user_id_for_context=uid,
-                        post_data=post_data_copy,
-                        reply_to_post_author_id=reply_to_post_author_id,
+                        post_data=self.post_data_copy,
+                        reply_to_post_author_id=self.reply_to_post_author_id,
                         quote_info=send_content.get('quote_info')
                     )
             except Exception as exc:
@@ -4839,8 +5310,8 @@ async def send_message_to_users(
                     "lie_media_replacement_failed %s",
                     json.dumps(
                         {
-                            "board_id": board_id,
-                            "post_num": post_num,
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
                             "uid": uid,
                             "error": type(exc).__name__,
                         },
@@ -4848,48 +5319,46 @@ async def send_message_to_users(
                         separators=(",", ":"),
                     ),
                 )
-                send_content = content_for_common
+                send_content = self.content_for_common
         current_content = send_content
         
-        if mentioned_authors:
-            text_with_you = add_you_to_my_posts_fast(raw_text, uid, mentioned_authors)
-            if text_with_you != raw_text:
+        if self.mentioned_authors:
+            text_with_you = add_you_to_my_posts_fast(self.raw_text, uid, self.mentioned_authors)
+            if text_with_you != self.raw_text:
                 current_content = send_content.copy()
                 target_field = 'text' if 'text' in current_content else 'caption'
                 current_content[target_field] = text_with_you
                 body = await _format_message_body(
                     content=current_content,
                     user_id_for_context=uid, 
-                    post_data=post_data_copy,
-                    reply_to_post_author_id=reply_to_post_author_id,
+                    post_data=self.post_data_copy,
+                    reply_to_post_author_id=self.reply_to_post_author_id,
                     quote_info=current_content.get('quote_info')
                 )
         elif is_direct_reply:
              body = await _format_message_body(
                 content=current_content,
                 user_id_for_context=uid, 
-                post_data=post_data_copy,
-                reply_to_post_author_id=reply_to_post_author_id,
+                post_data=self.post_data_copy,
+                reply_to_post_author_id=self.reply_to_post_author_id,
                 quote_info=current_content.get('quote_info')
             )
         
         full_text = f"{head}\n\n{body}" if body else head
         reply_to_mid = None
-        if reply_info:
-            raw = reply_info.get(uid)
+        if self.reply_info:
+            raw = self.reply_info.get(uid)
             if raw: reply_to_mid = raw[0] if isinstance(raw, list) else raw
             
-        if reply_to_mid is None and post_num_for_replies:
+        if reply_to_mid is None and self.post_num_for_replies:
             async with storage_lock:
-                replies_map = post_to_messages.get(post_num_for_replies)
+                replies_map = post_to_messages.get(self.post_num_for_replies)
                 if replies_map:
                     raw = replies_map.get(uid)
                     if raw: reply_to_mid = raw[0] if isinstance(raw, list) else raw
 
-        # --- НАЧАЛО ИЗМЕНЕНИЙ (Фоллбэк на кэш из базы данных) ---
-        if reply_to_mid is None and post_num_for_replies:
-            reply_to_mid = db_replies_map.get(uid)
-        # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+        if reply_to_mid is None and self.post_num_for_replies:
+            reply_to_mid = self.db_replies_map.get(uid)
 
         is_sage = send_content.get('is_sage', False)
         has_spoiler = u_set['nsfw']
@@ -4897,19 +5366,18 @@ async def send_message_to_users(
         attempt_delay = 1.5
 
         async def _send_text_fallback(reason: str):
-            nonlocal media_url_fallback_logged
             fallback_text = full_text
             media_url = current_content.get("image_url")
             if media_url and str(media_url) not in fallback_text:
                 fallback_text = f"{fallback_text}\n\n{escape_html(str(media_url))}"
-            if not media_url_fallback_logged:
+            if not self.media_url_fallback_logged:
                 runtime_logger.warning(
                     "delivery_media_url_text_fallback %s",
                     json.dumps(
                         {
-                            "board_id": board_id,
-                            "post_num": post_num,
-                            "phase": delivery_phase,
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
+                            "phase": self.delivery_phase,
                             "type": str(current_content.get("type")),
                             "reason": reason,
                         },
@@ -4917,22 +5385,22 @@ async def send_message_to_users(
                         separators=(",", ":"),
                     ),
                 )
-                media_url_fallback_logged = True
+                self.media_url_fallback_logged = True
             sent_msgs = []
             parts = split_text(fallback_text, 4096)
             for i, part in enumerate(parts):
-                m = await bot_instance.send_message(
+                m = await self.bot_instance.send_message(
                     chat_id=uid,
                     text=part,
                     parse_mode="HTML",
                     reply_to_message_id=reply_to_mid if i == 0 else None,
-                    reply_markup=final_keyboard if i == len(parts) - 1 else None,
+                    reply_markup=self.final_keyboard if i == len(parts) - 1 else None,
                     disable_notification=is_sage,
                     disable_web_page_preview=True,
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
-            stats['success'] += 1
+            self.stats['success'] += 1
             return sent_msgs
 
         def _telegram_parse_error(err_low: str) -> bool:
@@ -4954,16 +5422,15 @@ async def send_message_to_users(
             return text.strip() or "."
 
         def _log_plain_fallback(reason: str) -> None:
-            nonlocal html_plain_fallback_logged
-            if html_plain_fallback_logged:
+            if self.html_plain_fallback_logged:
                 return
             runtime_logger.warning(
                 "delivery_html_plain_fallback %s",
                 json.dumps(
                     {
-                        "board_id": board_id,
-                        "post_num": post_num,
-                        "phase": delivery_phase,
+                        "board_id": self.board_id,
+                        "post_num": self.post_num,
+                        "phase": self.delivery_phase,
                         "type": str(current_content.get("type")),
                         "reason": reason,
                     },
@@ -4971,7 +5438,7 @@ async def send_message_to_users(
                     separators=(",", ":"),
                 ),
             )
-            html_plain_fallback_logged = True
+            self.html_plain_fallback_logged = True
 
         async def _send_plain_text_parts(
             reason: str,
@@ -4985,17 +5452,17 @@ async def send_message_to_users(
             parts = split_text(fallback_text, 4096)
             target_reply_id = reply_to_id if reply_to_id is not None else reply_to_mid
             for i, part in enumerate(parts):
-                m = await bot_instance.send_message(
+                m = await self.bot_instance.send_message(
                     chat_id=uid,
                     text=part,
                     reply_to_message_id=target_reply_id if i == 0 else None,
-                    reply_markup=final_keyboard if include_keyboard and i == len(parts) - 1 else None,
+                    reply_markup=self.final_keyboard if include_keyboard and i == len(parts) - 1 else None,
                     disable_notification=is_sage,
                     disable_web_page_preview=True,
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
-            stats['success'] += 1
+            self.stats['success'] += 1
             return sent_msgs
 
         def _plain_media_source(media_type: str):
@@ -5025,13 +5492,13 @@ async def send_message_to_users(
                 common_plain_kwargs = {
                     'chat_id': uid,
                     'reply_to_message_id': reply_to_mid,
-                    'reply_markup': final_keyboard,
+                    'reply_markup': self.final_keyboard,
                     'disable_notification': is_sage,
                     'request_timeout': request_timeout,
                 }
                 if has_spoiler and ct in ['photo', 'video', 'animation']:
                     common_plain_kwargs['has_spoiler'] = True
-                send_method = getattr(bot_instance, f"send_{ct}")
+                send_method = getattr(self.bot_instance, f"send_{ct}")
                 if len(plain_text) > 1024:
                     common_plain_kwargs[ct] = file_source
                     media_msg = await send_method(**common_plain_kwargs)
@@ -5046,7 +5513,7 @@ async def send_message_to_users(
                 common_plain_kwargs[ct] = file_source
                 res = await send_method(**common_plain_kwargs)
                 _log_plain_fallback(reason)
-                stats['success'] += 1
+                self.stats['success'] += 1
                 return res
             if ct == "media_group":
                 media_group_build = []
@@ -5068,7 +5535,7 @@ async def send_message_to_users(
                         media_group_build.append(InputMediaAudio(media=media_src, caption=cap))
                 if not media_group_build:
                     return await _send_plain_text_parts(reason, plain_text)
-                res = await bot_instance.send_media_group(
+                res = await self.bot_instance.send_media_group(
                     chat_id=uid,
                     media=media_group_build,
                     reply_to_message_id=reply_to_mid,
@@ -5081,19 +5548,19 @@ async def send_message_to_users(
                     anchor_id = getattr(anchor_msg, "message_id", None)
                     await _send_plain_text_parts(reason, plain_text, reply_to_id=anchor_id, include_keyboard=True)
                     return res
-                stats['success'] += 1
+                self.stats['success'] += 1
                 return res
             if ct in ['sticker', 'video_note', 'dice']:
                 text_result = await _send_plain_text_parts(reason, plain_text)
                 if ct == 'dice':
-                    await bot_instance.send_dice(
+                    await self.bot_instance.send_dice(
                         chat_id=uid,
-                        emoji=current_content.get('dice_emoji', '\U0001F3B2'),
+                        emoji=current_content.get('dice_emoji', '🎲'),
                         disable_notification=is_sage,
                         request_timeout=request_timeout,
                     )
                 elif current_content.get("file_id"):
-                    send_method = getattr(bot_instance, f"send_{ct}")
+                    send_method = getattr(self.bot_instance, f"send_{ct}")
                     await send_method(
                         chat_id=uid,
                         **{ct: current_content.get("file_id")},
@@ -5110,27 +5577,27 @@ async def send_message_to_users(
                 common_kwargs = {
                     'chat_id': uid, 
                     'reply_to_message_id': reply_to_mid,
-                    'reply_markup': final_keyboard, 
+                    'reply_markup': self.final_keyboard,
                     'disable_notification': is_sage,
                     'request_timeout': request_timeout,
                 }
                 result_msg = None
                 if ct == 'text':
                     parts = split_text(full_text, 4096)
-                    sent_msgs =[]
+                    sent_msgs = []
                     for i, part in enumerate(parts):
-                        m = await bot_instance.send_message(
+                        m = await self.bot_instance.send_message(
                             chat_id=uid, text=part, parse_mode="HTML",
                             reply_to_message_id=reply_to_mid if i == 0 else None,
-                            reply_markup=final_keyboard if i == len(parts)-1 else None,
+                            reply_markup=self.final_keyboard if i == len(parts)-1 else None,
                             disable_notification=is_sage,
                             disable_web_page_preview=True,
                             request_timeout=request_timeout,
                         )
                         sent_msgs.append(m)
-                    stats['success'] += 1
+                    self.stats['success'] += 1
                     return sent_msgs
-                elif ct in['photo', 'video', 'animation', 'document', 'audio', 'voice']:
+                elif ct in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
                     file_source = None
                     if current_content.get("image_bytes"):
                         if ct == 'photo': 
@@ -5145,20 +5612,20 @@ async def send_message_to_users(
                     elif current_content.get("image_url"):
                         file_source = current_content["image_url"]
                     if not file_source:
-                        stats['errors'] += 1
+                        self.stats['errors'] += 1
                         return None
-                    if media_url_text_fallback and current_content.get("image_url"):
+                    if self.media_url_text_fallback and current_content.get("image_url"):
                         return await _send_text_fallback("cached_bad_media_url")
-                    if has_spoiler and ct in['photo', 'video', 'animation']:
+                    if has_spoiler and ct in ['photo', 'video', 'animation']:
                         common_kwargs['has_spoiler'] = True
                     if len(full_text) > 1024:
                         common_kwargs[ct] = file_source
-                        send_method = getattr(bot_instance, f"send_{ct}")
+                        send_method = getattr(self.bot_instance, f"send_{ct}")
                         media_msg = await send_method(**common_kwargs)
                         text_parts = split_text(full_text, 4096)
                         try:
                             for part in text_parts:
-                                await bot_instance.send_message(
+                                await self.bot_instance.send_message(
                                     chat_id=uid, text=part, parse_mode="HTML",
                                     reply_to_message_id=media_msg.message_id,
                                     disable_notification=is_sage,
@@ -5175,22 +5642,21 @@ async def send_message_to_users(
                                 )
                                 return media_msg
                             raise
-                        stats['success'] += 1
+                        self.stats['success'] += 1
                         return media_msg
                     else:
                         common_kwargs['caption'] = full_text
                         common_kwargs['parse_mode'] = "HTML"
                         common_kwargs[ct] = file_source
-                        send_method = getattr(bot_instance, f"send_{ct}")
+                        send_method = getattr(self.bot_instance, f"send_{ct}")
                         res = await send_method(**common_kwargs)
-                        stats['success'] += 1
+                        self.stats['success'] += 1
                         return res
                 elif ct == "media_group":
                     if not current_content.get('media'):
-                        stats['errors'] += 1
+                        self.stats['errors'] += 1
                         return None
                     
-                    # Безопасная обработка длинных подписей для альбомов
                     can_fit_caption = len(full_text) <= 1024
                     caption_for_group = full_text if can_fit_caption else None
                     
@@ -5211,23 +5677,22 @@ async def send_message_to_users(
                             media_group_build.append(InputMediaAudio(media=media_src, caption=cap, parse_mode="HTML" if cap else None))
                     
                     if not media_group_build: 
-                        stats['errors'] += 1
+                        self.stats['errors'] += 1
                         return None
 
-                    res = await bot_instance.send_media_group(
+                    res = await self.bot_instance.send_media_group(
                         chat_id=uid, media=media_group_build, 
                         reply_to_message_id=reply_to_mid,
                         disable_notification=is_sage,
                         request_timeout=request_timeout,
                     )
                     
-                    # Если текст не поместился в подпись, шлем его отдельным ответом на этот же альбом
                     if not can_fit_caption:
                         anchor_msg = res[0] if isinstance(res, list) else res
                         text_parts = split_text(full_text, 4096)
                         try:
                             for part in text_parts:
-                                await bot_instance.send_message(
+                                await self.bot_instance.send_message(
                                     chat_id=uid, text=part, parse_mode="HTML",
                                     reply_to_message_id=anchor_msg.message_id,
                                     disable_notification=is_sage,
@@ -5245,11 +5710,11 @@ async def send_message_to_users(
                                 return res
                             raise
                     
-                    stats['success'] += 1
+                    self.stats['success'] += 1
                     return res
-                elif ct in['sticker', 'video_note', 'dice']:
+                elif ct in ['sticker', 'video_note', 'dice']:
                     if ct == 'dice':
-                        await bot_instance.send_message(
+                        await self.bot_instance.send_message(
                             uid,
                             full_text,
                             parse_mode="HTML",
@@ -5257,7 +5722,7 @@ async def send_message_to_users(
                             disable_notification=is_sage,
                             request_timeout=request_timeout,
                         )
-                        res = await bot_instance.send_dice(
+                        res = await self.bot_instance.send_dice(
                             chat_id=uid,
                             emoji=current_content.get('dice_emoji', '🎲'),
                             disable_notification=is_sage,
@@ -5265,9 +5730,9 @@ async def send_message_to_users(
                         )
                     else:
                         common_kwargs[ct] = current_content.get("file_id")
-                        send_method = getattr(bot_instance, f"send_{ct}")
+                        send_method = getattr(self.bot_instance, f"send_{ct}")
                         res = await send_method(**common_kwargs)
-                    stats['success'] += 1
+                    self.stats['success'] += 1
                     return res
             except TelegramBadRequest as e:
                 err_low = e.message.lower()
@@ -5281,12 +5746,12 @@ async def send_message_to_users(
                         or "wrong file identifier/http url specified" in err_low
                     )
                 ):
-                    media_url_text_fallback = True
+                    self.media_url_text_fallback = True
                     return await _send_text_fallback("telegram_rejected_media_url")
                 if "too big" in err_low or "file of size" in err_low:
                     if current_content.get('type') == 'media_group' and current_content.get('media'):
-                        print(f"⚠️[Anti-Fat] Пост #{post_num}: Обнаружен жирный файл. Запуск фильтрации...")
-                        clean_media_list =[]
+                        print(f"⚠️[Anti-Fat] Пост #{self.post_num}: Обнаружен жирный файл. Запуск фильтрации...")
+                        clean_media_list = []
                         async with aiohttp.ClientSession() as head_session:
                             for item in current_content['media']:
                                 media_obj = item.get('media') or item.get('file_id')
@@ -5312,7 +5777,7 @@ async def send_message_to_users(
                                         pass 
                                 clean_media_list.append(item)
                         if not clean_media_list:
-                            stats['errors'] += 1
+                            self.stats['errors'] += 1
                             return None 
                         current_content['media'] = clean_media_list
                         await asyncio.sleep(0.5)
@@ -5326,11 +5791,11 @@ async def send_message_to_users(
                     wait_sec = int(re.search(r'\d+', e.message).group()) if re.search(r'\d+', e.message) else 15
                     raise TelegramRetryAfter(method=e.method, message=e.message, retry_after=wait_sec)
                 elif "voice_messages_forbidden" in err_low:
-                    stats['errors'] += 1
+                    self.stats['errors'] += 1
                     return None
                 else:
                     print(f"⚠️ BadRequest отправки user {uid}: {e}")
-                    stats['errors'] += 1
+                    self.stats['errors'] += 1
                     return None
             except TelegramForbiddenError:
                 raise 
@@ -5339,287 +5804,50 @@ async def send_message_to_users(
             except (aiohttp.ClientConnectorError, TelegramNetworkError, asyncio.TimeoutError):
                 raise TelegramRetryAfter(method="network", message="Network Error", retry_after=5)
             except (aiohttp.ServerDisconnectedError, aiohttp.ClientPayloadError) as e:
-                stats['ghosts'] += 1
+                self.stats['ghosts'] += 1
                 return None
             except Exception as e:
-                stats['errors'] += 1
+                self.stats['errors'] += 1
                 return None
         return None
 
-    async def _send_one_guarded(uid: int, timeout_sec: float):
-        request_timeout_sec = min(
-            DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC,
-            max(3.0, timeout_sec - 1.0),
-        )
-        try:
-            return await asyncio.wait_for(
-                _send_one(uid, int(request_timeout_sec)),
-                timeout=timeout_sec,
-            )
-        except asyncio.TimeoutError as exc:
-            runtime_logger.warning(
-                "delivery_recipient_timeout %s",
-                json.dumps(
-                    {
-                        "board_id": board_id,
-                        "post_num": post_num,
-                        "phase": delivery_phase,
-                        "uid": uid,
-                        "timeout_sec": timeout_sec,
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-            )
-            return exc
-
-    queue = deque(ordered_recipients)
-    recipient_retry_counts = defaultdict(int)
-    CHUNK_SIZE = DELIVERY_INITIAL_CHUNK_SIZE
-    current_delay = 0.1
-    phase_budget_sec = _phase_time_budget_sec(delivery_phase)
-    phase_deadline = start_time + phase_budget_sec if phase_budget_sec else None
-    remaining_recipients_for_later = set()
-    interrupted_reason = None
-    
-    while queue:
-        send_timeout_sec = DELIVERY_PER_RECIPIENT_TIMEOUT_SEC
-        if phase_deadline is not None:
-            remaining_phase_sec = phase_deadline - time.time()
-            if remaining_phase_sec <= 0:
-                remaining_recipients_for_later.update(queue)
-                queue.clear()
-                interrupted_reason = "phase_budget"
-                break
-            if remaining_phase_sec <= DELIVERY_PHASE_GUARD_SEC:
-                remaining_recipients_for_later.update(queue)
-                queue.clear()
-                interrupted_reason = "phase_budget_guard"
-                break
-            send_timeout_sec = min(
-                DELIVERY_PER_RECIPIENT_TIMEOUT_SEC,
-                max(1.0, remaining_phase_sec - DELIVERY_PHASE_GUARD_SEC),
-            )
-        chunk =[]
-        for _ in range(min(len(queue), CHUNK_SIZE)):
-            chunk.append(queue.popleft())
-        tasks = [_send_one_guarded(uid, send_timeout_sec) for uid in chunk]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        flood_wait_seconds = 0
-        
-        for uid, res in zip(chunk, results):
-            if res == "FATAL_ERROR_STOP":
-                queue.clear()
-                stats['errors'] += len(chunk) + len(queue)
-                break 
-            if isinstance(res, Exception):
-                if isinstance(res, TelegramRetryAfter):
-                    wait = res.retry_after
-                    recipient_retry_counts[uid] += 1
-                    if recipient_retry_counts[uid] <= DELIVERY_MAX_RECIPIENT_RETRIES:
-                        flood_wait_seconds = max(flood_wait_seconds, wait)
-                        queue.appendleft(uid)
-                        stats['retries'] += 1
-                    else:
-                        stats['errors'] += 1
-                        runtime_logger.warning(
-                            "delivery_recipient_retry_exhausted %s",
-                            json.dumps(
-                                {
-                                    "board_id": board_id,
-                                    "post_num": post_num,
-                                    "phase": delivery_phase,
-                                    "uid": uid,
-                                    "retries": recipient_retry_counts[uid],
-                                    "reason": "flood_wait",
-                                },
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                        )
-                elif isinstance(res, TelegramForbiddenError):
-                    blocked_users.add(uid)
-                    stats['blocks'] += 1
-                elif isinstance(res, (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError)):
-                    if isinstance(res, asyncio.TimeoutError):
-                        stats['timeouts'] += 1
-                    recipient_retry_counts[uid] += 1
-                    if recipient_retry_counts[uid] <= DELIVERY_MAX_RECIPIENT_RETRIES:
-                        queue.append(uid)
-                        stats['retries'] += 1
-                    else:
-                        stats['errors'] += 1
-                        runtime_logger.warning(
-                            "delivery_recipient_retry_exhausted %s",
-                            json.dumps(
-                                {
-                                    "board_id": board_id,
-                                    "post_num": post_num,
-                                    "phase": delivery_phase,
-                                    "uid": uid,
-                                    "retries": recipient_retry_counts[uid],
-                                    "reason": type(res).__name__,
-                                },
-                                ensure_ascii=False,
-                                separators=(",", ":"),
-                            ),
-                        )
-                else:
-                    print(f"❌ Ошибка отправки {uid}: {res}")
-                    stats['errors'] += 1
-            elif res:
-                all_results.append((uid, res))
-                
-        if flood_wait_seconds > 0:
-            wait_real = flood_wait_seconds + 1
-            if phase_deadline is not None and time.time() + wait_real + DELIVERY_PHASE_GUARD_SEC >= phase_deadline:
-                remaining_recipients_for_later.update(queue)
-                queue.clear()
-                interrupted_reason = "phase_budget_before_floodwait"
-                if verbose:
-                    print(f"⏳ FloodWait: пауза {wait_real} сек. (перенос бюджета) ...")
-                await asyncio.sleep(wait_real)
-                break
-            if verbose:
-                print(f"⏳ FloodWait: пауза {wait_real} сек. В очереди: {len(queue)}...")
-            await asyncio.sleep(wait_real)
-            CHUNK_SIZE = max(DELIVERY_MIN_CHUNK_SIZE, CHUNK_SIZE - 5)
-        else:
-            await asyncio.sleep(current_delay)
-            if CHUNK_SIZE < DELIVERY_INITIAL_CHUNK_SIZE:
-                CHUNK_SIZE += 1
-                
-    time_taken = time.time() - start_time
-    post_created_at = post_data_copy.get("timestamp") if post_data_copy else None
-    post_age_sec = None
-    if isinstance(post_created_at, datetime):
-        post_age_sec = max(0.0, time.time() - post_created_at.timestamp())
-    elif isinstance(post_created_at, (int, float)):
-        post_age_sec = max(0.0, time.time() - float(post_created_at))
-    queue_total_sec = None
-    if queue_enqueued_at is not None:
-        try:
-            queue_total_sec = max(0.0, time.time() - float(queue_enqueued_at))
-        except (TypeError, ValueError):
-            queue_total_sec = None
-    if verbose:
-        log_line = (
-            f"📊 #{post_num} [{delivery_phase}] | "
-            f"✅ {stats['success']}/{len(active_recipients)} phase "
-            f"({len(active_recipients)}/{original_recipients_count}, def {delivery_deferred_recipients}) | "
-            f"🚫 {stats['blocks']} | "
-            f"❌ {stats['errors']} | "
-            f"👻 {stats['ghosts']} | "
-            f"🔄 {stats['retries']} | "
-            f"⏲ {stats['timeouts']} | "
-            f"⏭ {len(remaining_recipients_for_later)} | "
-            f"prio {stats['priority_recipients']}/{len(active_recipients)} | "
-            f"⏱ {time_taken:.1f}s"
-        )
-        print(log_line) 
-        delivery_record = {
-            "ts": round(time.time(), 3),
-            "board_id": board_id,
-            "post_num": post_num,
-            "phase": delivery_phase,
-            "type": str(content.get("type")),
-            "recipients": len(active_recipients),
-            "phase_recipients": len(active_recipients),
-            "original_recipients": original_recipients_count,
-            "deferred_recipients": delivery_deferred_recipients,
-            "priority_recipients": stats["priority_recipients"],
-            "passive_recipients": stats["passive_recipients"],
-            "success": stats["success"],
-            "blocks": stats["blocks"],
-            "errors": stats["errors"],
-            "ghosts": stats["ghosts"],
-            "retries": stats["retries"],
-            "timeouts": stats["timeouts"],
-            "budget_deferred": len(remaining_recipients_for_later),
-            "interrupted_reason": interrupted_reason,
-            "phase_budget_sec": phase_budget_sec,
-            "seconds": round(time_taken, 3),
-            "post_age_sec": round(post_age_sec, 3) if post_age_sec is not None else None,
-            "queue_wait_sec": round(queue_wait_sec, 3) if queue_wait_sec is not None else None,
-            "queue_total_sec": round(queue_total_sec, 3) if queue_total_sec is not None else None,
-        }
-        delivery_metrics[board_id].append(delivery_record)
-        runtime_logger.info(
-            "delivery_result %s",
-            json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
-        )
-        if time_taken >= DELIVERY_SLOW_PHASE_SEC or (queue_total_sec is not None and queue_total_sec >= DELIVERY_SLOW_PHASE_SEC):
-            runtime_logger.warning(
-                "delivery_slow %s",
-                json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
-            )
-        if remaining_recipients_for_later:
-            runtime_logger.warning(
-                "delivery_phase_budget_deferred %s",
-                json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
-            )
-        
-    if post_num and post_num not in posts_pending_deletion and not content.get('is_shadow_reject'):
-        copies_for_db =[]
-        trimmed_copy_posts = 0
-        trimmed_copy_refs = 0
-        async with storage_lock:
-            keep_copy_maps_in_ram = post_num in messages_storage and MAX_COPY_MAP_POSTS_IN_MEMORY > 0
-            for uid, msg_obj_or_list in all_results:
-                msgs = msg_obj_or_list if isinstance(msg_obj_or_list, list) else [msg_obj_or_list]
-                if msgs:
-                    msg_ids = [m.message_id for m in msgs]
-                    for m in msgs:
-                        copies_for_db.append((uid, m.message_id))
-                    if keep_copy_maps_in_ram:
-                        post_to_messages.setdefault(post_num, {})[uid] = msg_ids[0] if len(msg_ids) == 1 else msg_ids
-                        for m in msgs:
-                            message_to_post[(uid, m.message_id)] = post_num
-            if keep_copy_maps_in_ram:
-                trimmed_copy_posts, trimmed_copy_refs = _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
-        if trimmed_copy_posts:
-            runtime_logger.info(
-                "copy_map_ram_trim %s",
-                json.dumps(
-                    {
-                        "removed_posts": trimmed_copy_posts,
-                        "removed_reverse": trimmed_copy_refs,
-                        "limit": MAX_COPY_MAP_POSTS_IN_MEMORY,
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-            )
-        if copies_for_db:
-            try:
-                await add_post_copies(post_num, copies_for_db)
-            except Exception as e:
-                if "FOREIGN KEY constraint failed" in str(e):
-                    pass
-                else:
-                    print(f"⚠️ Ошибка сохранения копий для #{post_num}: {e}")
-                    
-    if blocked_users:
-        users_to_remove_db =[]
-        for uid in blocked_users:
-            if uid in b_data['users']['active']:
-                b_data['users']['active'].discard(uid)
-                b_data.get('user_settings', {}).pop(uid, None)
-                for cache in [b_data['last_activity'], b_data['spam_violations']]:
-                    cache.pop(uid, None)
-                users_to_remove_db.append(uid)
-        
-        if users_to_remove_db:
-            from common.database import remove_users_from_board_batch
-            await remove_users_from_board_batch(users_to_remove_db, board_id)
-            
-        print(f"🚫 [{board_id}] Удалено {len(blocked_users)} пользователей (блокировка бота).")
-        
-    return DeliveryResults(
-        all_results,
-        remaining_recipients=remaining_recipients_for_later,
-        interrupted_reason=interrupted_reason,
+async def send_message_to_users(
+    bot_instance: Bot,
+    board_id: str,
+    recipients: set[int],
+    content: dict,
+    reply_info: dict | None = None,
+    keyboard: InlineKeyboardMarkup | None = None,
+    verbose: bool = False,
+    queue_enqueued_at: float | None = None,
+    queue_wait_sec: float | None = None,
+    delivery_phase: str = "full",
+    delivery_original_recipients: int | None = None,
+    delivery_deferred_recipients: int = 0,
+) -> list:
+    """
+    Оптимизированная функция массовой рассылки.
+    Сложность снижена с O(N*M) до O(N + M) за счет выноса форматирования.
+    ВКЛЮЧЕНА ЗАЩИТА ОТ ДУБЛЕЙ (SMART RETRY) И ЛОГИРОВАНИЕ.
+    Рассылка с Smart Retry.
+    verbose=False -> тихий режим (для отправки автору).
+    verbose=True -> пишет отчет в консоль (для массовой).
+    """
+    broadcaster = MessageBroadcaster(
+        bot_instance=bot_instance,
+        board_id=board_id,
+        recipients=recipients,
+        content=content,
+        reply_info=reply_info,
+        keyboard=keyboard,
+        verbose=verbose,
+        queue_enqueued_at=queue_enqueued_at,
+        queue_wait_sec=queue_wait_sec,
+        delivery_phase=delivery_phase,
+        delivery_original_recipients=delivery_original_recipients,
+        delivery_deferred_recipients=delivery_deferred_recipients,
     )
+    return await broadcaster.broadcast()
 async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
     """
     Находит все отправленные копии поста и редактирует их.
@@ -5831,240 +6059,296 @@ async def message_broadcaster(bots: dict[str, Bot]):
         for board_id, bot_instance in bots.items()
     ]
     await asyncio.gather(*tasks)
+
+class MessageDeliveryTask:
+    """
+    Класс для обработки доставки одного сообщения.
+    Инкапсулирует логику, ранее находившуюся в монолитной функции message_worker.
+    """
+    def __init__(self, worker_name, board_id, bot_instance, queue, msg_data):
+        self.worker_name = worker_name
+        self.board_id = board_id
+        self.bot_instance = bot_instance
+        self.queue = queue
+        self.msg_data = msg_data
+
+        self.b_data = board_data[self.board_id]
+
+    async def process(self):
+        """Основной метод оркестрации обработки сообщения."""
+        if not await validate_message_format(self.msg_data):
+            return
+
+        # Delayed initialization to ensure msg_data is valid
+        self.post_num = self.msg_data['post_num']
+        self.content = self.msg_data['content']
+        self.content['post_num'] = self.post_num
+        self.keyboard = self.msg_data.get('keyboard')
+        self.thread_id = self.msg_data.get('thread_id')
+        self.delivery_phase = self.msg_data.get("delivery_phase", "full")
+        self.initial_recipients = self.msg_data['recipients']
+
+        self.enqueued_at = self.msg_data.get("enqueued_at")
+        self.started_at = time.time()
+        self.queue_wait_sec = None
+        if self.enqueued_at is not None:
+            try:
+                self.queue_wait_sec = max(0.0, self.started_at - float(self.enqueued_at))
+            except (TypeError, ValueError):
+                pass
+
+        self.passive_slice_size = _passive_slice_size_for_content(self.content, self.board_id)
+
+        if self.post_num in posts_pending_deletion:
+            print(f"[{self.board_id}] Worker пропустил пост #{self.post_num}, т.к. он помечен на удаление.")
+            return
+
+        if self.msg_data.get("durable_delivery_id"):
+            self.initial_recipients = await _remove_already_delivered_recipients(self.post_num, self.initial_recipients)
+            self.msg_data["recipients"] = self.initial_recipients
+            if not self.initial_recipients:
+                await _delete_durable_delivery_item(self.msg_data, "already_delivered")
+                return
+
+        if await self._handle_preemption():
+            return
+
+        active_recipients = self._resolve_active_recipients()
+        if not active_recipients:
+            if self.msg_data.get("durable_delivery_id"):
+                await _delete_durable_delivery_item(self.msg_data, "no_active_recipients")
+            return
+
+        try:
+            original_recipients_for_post = int(self.msg_data.get("original_recipients") or len(active_recipients))
+        except (TypeError, ValueError):
+            original_recipients_for_post = len(active_recipients)
+
+        recipients_to_send, passive_recipients_for_later, delivery_phase_for_send, deferred_reason = self._determine_delivery_phases(active_recipients)
+
+        reply_info_copy = {}
+        async with storage_lock:
+            if self.post_num in post_to_messages:
+                reply_info_copy = post_to_messages[self.post_num].copy()
+
+        current_deliveries[self.board_id] = {
+            "post_num": self.post_num,
+            "started_at": self.started_at,
+            "enqueued_at": self.enqueued_at,
+            "queue_wait_sec": round(self.queue_wait_sec, 3) if self.queue_wait_sec is not None else None,
+            "recipients": len(recipients_to_send),
+            "original_recipients": original_recipients_for_post,
+            "passive_deferred": len(passive_recipients_for_later),
+            "passive_slice_size": self.passive_slice_size,
+            "phase": delivery_phase_for_send,
+            "thread_id": self.thread_id,
+        }
+
+        planned_passive_durable_id = None
+        planned_passive_item = None
+        if passive_recipients_for_later and not self.msg_data.get("durable_delivery_id"):
+            planned_passive_item = _build_passive_queue_item(
+                PassiveQueueItemParams(
+                    source_item=self.msg_data,
+                    recipients=passive_recipients_for_later,
+                    post_num=self.post_num,
+                    original_recipients=original_recipients_for_post,
+                    enqueued_at=self.enqueued_at,
+                    started_at=self.started_at,
+                )
+            )
+            planned_passive_durable_id = await _persist_durable_delivery_item(
+                self.board_id,
+                planned_passive_item,
+                "planned_before_send",
+            )
+
+        budget_deferred_count = 0
+        delivered_now_count = 0
+        try:
+            delivery_results = await send_message_to_users(
+                bot_instance=self.bot_instance,
+                board_id=self.board_id,
+                recipients=recipients_to_send,
+                content=self.content,
+                reply_info=reply_info_copy,
+                keyboard=self.keyboard,
+                verbose=True,
+                queue_enqueued_at=self.enqueued_at,
+                queue_wait_sec=self.queue_wait_sec,
+                delivery_phase=delivery_phase_for_send,
+                delivery_original_recipients=original_recipients_for_post,
+                delivery_deferred_recipients=len(passive_recipients_for_later),
+            )
+            delivered_now_count = len(delivery_results)
+            budget_deferred = getattr(delivery_results, "remaining_recipients", set())
+            if budget_deferred:
+                budget_deferred_count = len(budget_deferred)
+                passive_recipients_for_later.update(budget_deferred)
+                budget_reason = getattr(delivery_results, "interrupted_reason", None) or "phase_budget"
+                deferred_reason = f"{deferred_reason}+{budget_reason}" if deferred_reason else budget_reason
+        except Exception:
+            if planned_passive_durable_id and passive_recipients_for_later:
+                planned_passive_item["durable_delivery_id"] = planned_passive_durable_id
+                await self.queue.put(planned_passive_item)
+                runtime_logger.warning(
+                    "delivery_durable_requeued_after_send_error %s",
+                    json.dumps(
+                        {
+                            "ts": round(time.time(), 3),
+                            "id": planned_passive_durable_id,
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
+                            "deferred": len(passive_recipients_for_later),
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+            raise
+        finally:
+            current_delivery = current_deliveries.get(self.board_id)
+            if current_delivery and current_delivery.get("post_num") == self.post_num:
+                current_deliveries.pop(self.board_id, None)
+
+        if passive_recipients_for_later:
+            passive_item = _build_passive_queue_item(
+                PassiveQueueItemParams(
+                    source_item=self.msg_data,
+                    recipients=passive_recipients_for_later,
+                    post_num=self.post_num,
+                    original_recipients=original_recipients_for_post,
+                    enqueued_at=self.enqueued_at,
+                    started_at=self.started_at,
+                )
+            )
+            if planned_passive_durable_id:
+                passive_item["durable_delivery_id"] = planned_passive_durable_id
+            await _persist_durable_delivery_item(self.board_id, passive_item, "deferred_after_send")
+            await self.queue.put(passive_item)
+            runtime_logger.info(
+                "delivery_passive_deferred %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": self.board_id,
+                        "post_num": self.post_num,
+                        "phase": delivery_phase_for_send,
+                        "reason": deferred_reason,
+                        "requested_now": len(recipients_to_send),
+                        "sent_now": delivered_now_count,
+                        "deferred": len(passive_recipients_for_later),
+                        "budget_deferred": budget_deferred_count,
+                        "queue_size": self.queue.qsize(),
+                        "passive_slice_size": self.passive_slice_size,
+                        "content_type": str(self.content.get("type")),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        elif self.msg_data.get("durable_delivery_id"):
+            await _delete_durable_delivery_item(self.msg_data, "completed")
+
+    async def _handle_preemption(self):
+        """Обрабатывает логику прерывания для пассивной фазы."""
+        if (
+            PRIORITY_SPLIT_FANOUT_ENABLED
+            and self.delivery_phase == "passive"
+            and not self.thread_id
+            and PASSIVE_MAX_PREEMPTIONS > 0
+            and len(self.initial_recipients) > self.passive_slice_size
+            and _queue_has_full_message(self.queue)
+        ):
+            preemptions = int(self.msg_data.get("passive_preemptions", 0) or 0)
+            if preemptions < PASSIVE_MAX_PREEMPTIONS:
+                self.msg_data["passive_preemptions"] = preemptions + 1
+                await self.queue.put(self.msg_data)
+                runtime_logger.warning(
+                    "delivery_passive_preempted %s",
+                    json.dumps(
+                        {
+                            "ts": round(time.time(), 3),
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
+                            "preemptions": self.msg_data["passive_preemptions"],
+                            "max_preemptions": PASSIVE_MAX_PREEMPTIONS,
+                            "queue_size": self.queue.qsize(),
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                return True
+        return False
+
+    def _resolve_active_recipients(self):
+        """Определяет список активных получателей."""
+        active_recipients = set()
+        if self.thread_id:
+            active_recipients = {
+                uid for uid in self.initial_recipients
+                if uid > 0 and uid not in self.b_data['users']['banned']
+            }
+        else:
+            user_states = self.b_data.get('user_state', {})
+            recipients_on_main = {
+                uid for uid in self.initial_recipients
+                if uid > 0 and user_states.get(uid, {}).get('location', 'main') == 'main'
+            }
+            active_recipients = {uid for uid in recipients_on_main if uid not in self.b_data['users']['banned']}
+        return active_recipients
+
+    def _determine_delivery_phases(self, active_recipients):
+        """Определяет фазы доставки (recipients_to_send, passive_recipients_for_later, phase, reason)."""
+        recipients_to_send = active_recipients
+        passive_recipients_for_later = set()
+        delivery_phase_for_send = self.delivery_phase
+        deferred_reason = None
+
+        if (
+            self.delivery_phase == "full"
+            and PRIORITY_SPLIT_FANOUT_ENABLED
+            and not self.thread_id
+        ):
+            priority_recipients, passive_recipients = _split_recipients_for_delivery(self.board_id, active_recipients)
+            if priority_recipients and len(passive_recipients) >= PRIORITY_SPLIT_MIN_PASSIVE:
+                recipients_to_send = set(priority_recipients)
+                passive_recipients_for_later = set(passive_recipients)
+                delivery_phase_for_send = "priority"
+                deferred_reason = "split_priority_first"
+        elif (
+            self.delivery_phase == "passive"
+            and PRIORITY_SPLIT_FANOUT_ENABLED
+            and not self.thread_id
+            and len(active_recipients) > self.passive_slice_size
+        ):
+            ordered_passive = list(active_recipients)
+            recipients_to_send = set(ordered_passive[:self.passive_slice_size])
+            passive_recipients_for_later = set(ordered_passive[self.passive_slice_size:])
+            delivery_phase_for_send = "passive_slice"
+            deferred_reason = "passive_slice"
+
+        return recipients_to_send, passive_recipients_for_later, delivery_phase_for_send, deferred_reason
+
+
 async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
     """
     Воркер обработки очереди сообщений.
     Исправлено: queue.get() вынесен из try-блока, чтобы избежать ошибки task_done() при отмене задачи.
+    Рефакторинг: Использован паттерн Method Object (MessageDeliveryTask) для инкапсуляции логики обработки сообщения.
     """
     queue = message_queues[board_id]
-    b_data = board_data[board_id]
     while True:
         msg_data = await queue.get()
         try:
             if not msg_data:
                 await asyncio.sleep(0.05)
                 continue
-            if not await validate_message_format(msg_data):
-                continue
-            post_num = msg_data['post_num']
-            if post_num in posts_pending_deletion:
-                print(f"[{board_id}] Worker пропустил пост #{post_num}, т.к. он помечен на удаление.")
-                continue
-            initial_recipients = msg_data['recipients']
-            content = msg_data['content']
-            content['post_num'] = post_num
-            keyboard = msg_data.get('keyboard') 
-            thread_id = msg_data.get('thread_id')
 
-            delivery_phase = msg_data.get("delivery_phase", "full")
-            if msg_data.get("durable_delivery_id"):
-                initial_recipients = await _remove_already_delivered_recipients(post_num, initial_recipients)
-                msg_data["recipients"] = initial_recipients
-                if not initial_recipients:
-                    await _delete_durable_delivery_item(msg_data, "already_delivered")
-                    continue
-            passive_slice_size = _passive_slice_size_for_content(content, board_id)
-            if (
-                PRIORITY_SPLIT_FANOUT_ENABLED
-                and delivery_phase == "passive"
-                and not thread_id
-                and PASSIVE_MAX_PREEMPTIONS > 0
-                and len(initial_recipients) > passive_slice_size
-                and _queue_has_full_message(queue)
-            ):
-                preemptions = int(msg_data.get("passive_preemptions", 0) or 0)
-                if preemptions < PASSIVE_MAX_PREEMPTIONS:
-                    msg_data["passive_preemptions"] = preemptions + 1
-                    await queue.put(msg_data)
-                    runtime_logger.warning(
-                        "delivery_passive_preempted %s",
-                        json.dumps(
-                            {
-                                "ts": round(time.time(), 3),
-                                "board_id": board_id,
-                                "post_num": post_num,
-                                "preemptions": msg_data["passive_preemptions"],
-                                "max_preemptions": PASSIVE_MAX_PREEMPTIONS,
-                                "queue_size": queue.qsize(),
-                            },
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
-                    )
-                    continue
-            active_recipients = set()
-            if thread_id:
-                active_recipients = {
-                    uid for uid in initial_recipients
-                    if uid > 0 and uid not in b_data['users']['banned']
-                }
-            else:
-                user_states = b_data.get('user_state', {})
-                recipients_on_main = {
-                    uid for uid in initial_recipients
-                    if uid > 0 and user_states.get(uid, {}).get('location', 'main') == 'main'
-                }
-                active_recipients = {uid for uid in recipients_on_main if uid not in b_data['users']['banned']}
-            if not active_recipients:
-                if msg_data.get("durable_delivery_id"):
-                    await _delete_durable_delivery_item(msg_data, "no_active_recipients")
-                continue
-            try:
-                original_recipients_for_post = int(msg_data.get("original_recipients") or len(active_recipients))
-            except (TypeError, ValueError):
-                original_recipients_for_post = len(active_recipients)
-            recipients_to_send = active_recipients
-            passive_recipients_for_later = set()
-            delivery_phase_for_send = delivery_phase
-            deferred_reason = None
-            planned_passive_durable_id = None
-            if (
-                delivery_phase == "full"
-                and PRIORITY_SPLIT_FANOUT_ENABLED
-                and not thread_id
-            ):
-                priority_recipients, passive_recipients = _split_recipients_for_delivery(board_id, active_recipients)
-                if priority_recipients and len(passive_recipients) >= PRIORITY_SPLIT_MIN_PASSIVE:
-                    recipients_to_send = set(priority_recipients)
-                    passive_recipients_for_later = set(passive_recipients)
-                    delivery_phase_for_send = "priority"
-                    deferred_reason = "split_priority_first"
-            elif (
-                delivery_phase == "passive"
-                and PRIORITY_SPLIT_FANOUT_ENABLED
-                and not thread_id
-                and len(active_recipients) > passive_slice_size
-            ):
-                ordered_passive = list(active_recipients)
-                recipients_to_send = set(ordered_passive[:passive_slice_size])
-                passive_recipients_for_later = set(ordered_passive[passive_slice_size:])
-                delivery_phase_for_send = "passive_slice"
-                deferred_reason = "passive_slice"
-            reply_info_copy = {}
-            async with storage_lock:
-                if post_num in post_to_messages:
-                    reply_info_copy = post_to_messages[post_num].copy()
-            started_at = time.time()
-            enqueued_at = msg_data.get("enqueued_at")
-            queue_wait_sec = None
-            if enqueued_at is not None:
-                try:
-                    queue_wait_sec = max(0.0, started_at - float(enqueued_at))
-                except (TypeError, ValueError):
-                    queue_wait_sec = None
-            current_deliveries[board_id] = {
-                "post_num": post_num,
-                "started_at": started_at,
-                "enqueued_at": enqueued_at,
-                "queue_wait_sec": round(queue_wait_sec, 3) if queue_wait_sec is not None else None,
-                "recipients": len(recipients_to_send),
-                "original_recipients": original_recipients_for_post,
-                "passive_deferred": len(passive_recipients_for_later),
-                "passive_slice_size": passive_slice_size,
-                "phase": delivery_phase_for_send,
-                "thread_id": thread_id,
-            }
-            if passive_recipients_for_later and not msg_data.get("durable_delivery_id"):
-                planned_passive_item = _build_passive_queue_item(
-                    PassiveQueueItemParams(
-                        source_item=msg_data,
-                        recipients=passive_recipients_for_later,
-                        post_num=post_num,
-                        original_recipients=original_recipients_for_post,
-                        enqueued_at=enqueued_at,
-                        started_at=started_at,
-                    )
-                )
-                planned_passive_durable_id = await _persist_durable_delivery_item(
-                    board_id,
-                    planned_passive_item,
-                    "planned_before_send",
-                )
-            budget_deferred_count = 0
-            delivered_now_count = 0
-            try:
-                delivery_results = await send_message_to_users(
-                    bot_instance=bot_instance,
-                    board_id=board_id,
-                    recipients=recipients_to_send,
-                    content=content,
-                    reply_info=reply_info_copy,
-                    keyboard=keyboard,
-                    verbose=True,
-                    queue_enqueued_at=enqueued_at,
-                    queue_wait_sec=queue_wait_sec,
-                    delivery_phase=delivery_phase_for_send,
-                    delivery_original_recipients=original_recipients_for_post,
-                    delivery_deferred_recipients=len(passive_recipients_for_later),
-                )
-                delivered_now_count = len(delivery_results)
-                budget_deferred = getattr(delivery_results, "remaining_recipients", set())
-                if budget_deferred:
-                    budget_deferred_count = len(budget_deferred)
-                    passive_recipients_for_later.update(budget_deferred)
-                    budget_reason = getattr(delivery_results, "interrupted_reason", None) or "phase_budget"
-                    deferred_reason = f"{deferred_reason}+{budget_reason}" if deferred_reason else budget_reason
-            except Exception:
-                if planned_passive_durable_id and passive_recipients_for_later:
-                    planned_passive_item["durable_delivery_id"] = planned_passive_durable_id
-                    await queue.put(planned_passive_item)
-                    runtime_logger.warning(
-                        "delivery_durable_requeued_after_send_error %s",
-                        json.dumps(
-                            {
-                                "ts": round(time.time(), 3),
-                                "id": planned_passive_durable_id,
-                                "board_id": board_id,
-                                "post_num": post_num,
-                                "deferred": len(passive_recipients_for_later),
-                            },
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
-                    )
-                raise
-            finally:
-                current_delivery = current_deliveries.get(board_id)
-                if current_delivery and current_delivery.get("post_num") == post_num:
-                    current_deliveries.pop(board_id, None)
-            if passive_recipients_for_later:
-                passive_item = _build_passive_queue_item(
-                    PassiveQueueItemParams(
-                        source_item=msg_data,
-                        recipients=passive_recipients_for_later,
-                        post_num=post_num,
-                        original_recipients=original_recipients_for_post,
-                        enqueued_at=enqueued_at,
-                        started_at=started_at,
-                    )
-                )
-                if planned_passive_durable_id:
-                    passive_item["durable_delivery_id"] = planned_passive_durable_id
-                await _persist_durable_delivery_item(board_id, passive_item, "deferred_after_send")
-                await queue.put(passive_item)
-                runtime_logger.info(
-                    "delivery_passive_deferred %s",
-                    json.dumps(
-                        {
-                            "ts": round(time.time(), 3),
-                            "board_id": board_id,
-                            "post_num": post_num,
-                            "phase": delivery_phase_for_send,
-                            "reason": deferred_reason,
-                            "requested_now": len(recipients_to_send),
-                            "sent_now": delivered_now_count,
-                            "deferred": len(passive_recipients_for_later),
-                            "budget_deferred": budget_deferred_count,
-                            "queue_size": queue.qsize(),
-                            "passive_slice_size": passive_slice_size,
-                            "content_type": str(content.get("type")),
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                )
-            elif msg_data.get("durable_delivery_id"):
-                await _delete_durable_delivery_item(msg_data, "completed")
+            task = MessageDeliveryTask(worker_name, board_id, bot_instance, queue, msg_data)
+            await task.process()
+
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -6349,6 +6633,97 @@ async def send_active_pin_to_new_user(bot: Bot, user_id: int, board_id: str):
                 print(f"⚠️ Не удалось закрепить сообщение для нового юзера {user_id}: {e}")
     except Exception as e:
         print(f"❌ Ошибка в send_active_pin_to_new_user: {e}")
+def throttle(rate: int):
+    import functools
+    cooldowns = {}
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(message: types.Message, *args, **kwargs):
+            user_id = message.from_user.id if message.from_user else 0
+            now = time.time()
+            if user_id in cooldowns and now - cooldowns[user_id] < rate:
+                try:
+                    await message.answer(f"⚠️ Пожалуйста, подождите {int(rate - (now - cooldowns[user_id]))} сек.", disable_notification=True)
+                except Exception:
+                    pass
+                return
+            cooldowns[user_id] = now
+            return await func(message, *args, **kwargs)
+        return wrapper
+    return decorator
+
+@dp.message(Command("random", "randpic", "randvid", "rand"))
+@throttle(rate=5)
+async def cmd_random_media(message: types.Message):
+    args = message.text.split()
+    count = 1
+    if len(args) > 1 and args[1].isdigit():
+        count = int(args[1])
+        count = max(1, min(10, count))
+
+    command = args[0].lower()
+    is_video_req = "vid" in command
+
+    media_items = []
+
+    for _ in range(count * 2): # Try more times in case of invalid media
+        if len(media_items) >= count:
+            break
+
+        if is_video_req:
+            post = await get_random_video_post(allowed_boards=None)
+        else:
+            post = await get_random_image_post(allowed_boards=None)
+
+        if not post or "content" not in post:
+            continue
+
+        files = post["content"].get("files", [])
+        idx = post.get("_selected_file_index", 0)
+
+        if idx < len(files):
+            f = files[idx]
+            file_id = f.get("original_file_id") or f.get("file_id")
+            if file_id:
+                type_ = f.get("type", "")
+                is_vid = type_ in ("video", "animation", "video_note")
+                media_items.append((file_id, is_vid))
+
+    if not media_items:
+        await message.answer("❌ В пуле нет подходящих медиа.", disable_notification=True)
+        return
+
+    import hashlib
+    import os
+    secret = os.getenv("SECRET_KEY", "")
+    user_hash = hashlib.sha256((str(message.from_user.id) + secret).encode()).hexdigest()[:12]
+    caption = f"🎲 Рандом (x{len(media_items)}) | #{user_hash}"
+
+    if len(media_items) == 1:
+        file_id, is_vid = media_items[0]
+        try:
+            if is_vid:
+                await message.answer_video(file_id, caption=caption, parse_mode="HTML")
+            else:
+                await message.answer_photo(file_id, caption=caption, parse_mode="HTML")
+        except Exception as e:
+            print(f"Error sending random media: {e}")
+            await message.answer("❌ Ошибка при отправке. Возможно файл удален с серверов Telegram.")
+    else:
+        media_group = []
+        for i, (file_id, is_vid) in enumerate(media_items):
+            cap = caption if i == 0 else None
+            if is_vid:
+                media_group.append(InputMediaVideo(media=file_id, caption=cap, parse_mode="HTML"))
+            else:
+                media_group.append(InputMediaPhoto(media=file_id, caption=cap, parse_mode="HTML"))
+
+        try:
+            await message.answer_media_group(media_group)
+        except Exception as e:
+            print(f"Error sending random media group: {e}")
+            await message.answer("❌ Ошибка при отправке альбома.")
+
 @dp.message(Command("getid"))
 async def cmd_get_file_id(message: types.Message):
     # Проверяем, есть ли реплай
@@ -6540,12 +6915,6 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     # 3. Prefix
     elif item == "prefix":
         prefixes = [
-            "[Скуф]", "[Опущенный]", "[Калоед]", "[Подпивас]", "[Шитпостер]",
-            "[Гой]", "[Мамкин Трейдер]", "[Инцел]", "[Анимешник]", "[Чмо]",
-            "[Опущенный]", "[Гигачад]", "[Бог Борды]", "[VIP Анон]", "[Владелец]"
-        ]
-        # fix: redefine list cleanly
-        prefixes = [
             "[Скуф]", "[Опущенный]",
             "[Калоед]", "[Подпивас]",
             "[Шитпостер]", "[Гой]",
@@ -6712,35 +7081,7 @@ import time as _time_module
 _stats_cache: dict = {}   # board_id -> {ts: float, photos: list[bytes]}
 _STATS_TTL = 3600         # seconds
 
-def _generate_stats_charts(board_id: str) -> list[bytes]:
-    """Generate 4 activity charts for board_id. Returns list of PNG bytes."""
-    import io as _io
-    import sqlite3 as _sqlite3
-    import numpy as _np
-    import matplotlib as _mpl
-    _mpl.use('Agg')
-    import matplotlib.pyplot as _plt
-    from matplotlib.colors import LinearSegmentedColormap
-    from collections import defaultdict
-    import datetime as _dt
-
-    BG, FG, GRID = '#0d1117', '#e6edf3', '#21262d'
-    _plt.rcParams.update({
-        'figure.facecolor': BG, 'axes.facecolor': BG, 'axes.edgecolor': GRID,
-        'axes.labelcolor': FG, 'xtick.color': FG, 'ytick.color': FG,
-        'text.color': FG, 'grid.color': GRID, 'font.family': 'DejaVu Sans', 'font.size': 9,
-    })
-
-    import os
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvach_bot.db')
-    con = _sqlite3.connect(db_path)
-    cur = con.cursor()
-
-    since_90 = int(_time_module.time()) - 90 * 86400
-    since_180 = int(_time_module.time()) - 180 * 86400
-    bufs = []
-
-    # ── 1. Activity Clock (polar, last 90 days) ────────────────────────────
+def _generate_activity_clock(cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl):
     cur.execute("""
         SELECT CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
                COUNT(*) as cnt
@@ -6749,8 +7090,7 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     """, (board_id, since_90))
     hd = {r[0]: r[1] for r in cur.fetchall()}
     if not hd:
-        con.close()
-        return []
+        return None
     vals = _np.array([hd.get(h, 0) for h in range(24)], dtype=float)
     vals_norm = vals / (vals.max() or 1)
     total_posts = int(vals.sum())
@@ -6786,9 +7126,9 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     buf = _io.BytesIO()
     _plt.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
     _plt.close()
-    bufs.append(buf.getvalue())
+    return buf.getvalue()
 
-    # ── 2. Ridge plot by weekday (last 90 days) ────────────────────────────
+def _generate_ridge_plot(cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict):
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER),
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER),
@@ -6835,9 +7175,9 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     buf2 = _io.BytesIO()
     _plt.savefig(buf2, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
     _plt.close()
-    bufs.append(buf2.getvalue())
+    return buf2.getvalue()
 
-    # ── 3. Weekday x Hour Heatmap (180 days / all-time) ───────────────────
+def _generate_weekday_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io):
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER) as dow,
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
@@ -6852,7 +7192,6 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     days_ru_full = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота']
     fig, ax3 = _plt.subplots(figsize=(10, 4.5), facecolor=BG)
     ax3.set_facecolor(BG)
-    HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
     im = ax3.imshow(grid, cmap=HEAT, aspect='auto', interpolation='nearest')
 
     ax3.set_xticks(range(24))
@@ -6870,61 +7209,112 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     buf3 = _io.BytesIO()
     _plt.savefig(buf3, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
     _plt.close()
-    bufs.append(buf3.getvalue())
+    return buf3.getvalue()
 
-    # ── 4. Calendar heatmap (180 days / all-time) ─────────────────────────
+def _generate_calendar_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt):
     cur.execute("""
         SELECT date(timestamp,'unixepoch','localtime') as day, COUNT(*)
         FROM Posts WHERE board_id=? AND timestamp > ?
         GROUP BY day ORDER BY day
     """, (board_id, since_180))
     day_data = {r[0]: r[1] for r in cur.fetchall()}
+
+    if not day_data:
+        return None
+
+    dates_sorted = sorted(day_data.keys())
+    start = _dt.date.fromisoformat(dates_sorted[0])
+    end   = _dt.date.fromisoformat(dates_sorted[-1])
+    start_mon = start - _dt.timedelta(days=start.weekday())
+    end_sun   = end   + _dt.timedelta(days=6 - end.weekday())
+    total_days = (end_sun - start_mon).days + 1
+    weeks = total_days // 7
+    cal = _np.zeros((7, weeks))
+    cur_date = start_mon
+    for w in range(weeks):
+        for d in range(7):
+            cal[d][w] = day_data.get(cur_date.isoformat(), 0)
+            cur_date += _dt.timedelta(days=1)
+
+    vmax = _np.percentile(list(day_data.values()), 95) if day_data else 1
+
+    fig, ax4 = _plt.subplots(figsize=(max(10, weeks//2), 3), facecolor=BG)
+    ax4.set_facecolor(BG)
+    im = ax4.imshow(cal, cmap=HEAT, aspect='auto', interpolation='nearest', vmin=0, vmax=vmax)
+
+    # Month labels
+    month_ticks, month_lbls = [], []
+    cdate = start_mon
+    seen = set()
+    for w in range(weeks):
+        ym = cdate.strftime('%b %Y')
+        if ym not in seen:
+            month_ticks.append(w); month_lbls.append(cdate.strftime('%b\n%Y')); seen.add(ym)
+        cdate += _dt.timedelta(days=7)
+    ax4.set_xticks(month_ticks); ax4.set_xticklabels(month_lbls, fontsize=7.5)
+    ax4.set_yticks(range(7))
+    ax4.set_yticklabels(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'], fontsize=8)
+    ax4.set_title(f'/{board_id}/ — Календарь активности (180д)', fontsize=11, pad=10,
+                  color=FG, fontweight='bold')
+    cb = fig.colorbar(im, ax=ax4, orientation='horizontal', pad=0.18, shrink=0.35)
+    cb.set_label('постов/день', color=FG, fontsize=7.5)
+    cb.ax.xaxis.set_tick_params(color=FG, labelsize=7)
+    _plt.tight_layout()
+    buf4 = _io.BytesIO()
+    _plt.savefig(buf4, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
+    _plt.close()
+    return buf4.getvalue()
+
+def _generate_stats_charts(board_id: str) -> list[bytes]:
+    """Generate 4 activity charts for board_id. Returns list of PNG bytes."""
+    import io as _io
+    import sqlite3 as _sqlite3
+    import numpy as _np
+    import matplotlib as _mpl
+    _mpl.use('Agg')
+    import matplotlib.pyplot as _plt
+    from matplotlib.colors import LinearSegmentedColormap
+    from collections import defaultdict
+    import datetime as _dt
+
+    BG, FG, GRID = '#0d1117', '#e6edf3', '#21262d'
+    _plt.rcParams.update({
+        'figure.facecolor': BG, 'axes.facecolor': BG, 'axes.edgecolor': GRID,
+        'axes.labelcolor': FG, 'xtick.color': FG, 'ytick.color': FG,
+        'text.color': FG, 'grid.color': GRID, 'font.family': 'DejaVu Sans', 'font.size': 9,
+    })
+
+    import os
+    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvach_bot.db')
+    con = _sqlite3.connect(db_path)
+    cur = con.cursor()
+
+    import time as _time_module
+    since_90 = int(_time_module.time()) - 90 * 86400
+    since_180 = int(_time_module.time()) - 180 * 86400
+    bufs = []
+
+    HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
+
+    activity_clock = _generate_activity_clock(cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl)
+    if not activity_clock:
+        con.close()
+        return []
+    bufs.append(activity_clock)
+
+    ridge_plot = _generate_ridge_plot(cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict)
+    if ridge_plot:
+        bufs.append(ridge_plot)
+
+    heatmap = _generate_weekday_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io)
+    if heatmap:
+        bufs.append(heatmap)
+
+    calendar = _generate_calendar_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt)
+    if calendar:
+        bufs.append(calendar)
+
     con.close()
-
-    if day_data:
-        dates_sorted = sorted(day_data.keys())
-        start = _dt.date.fromisoformat(dates_sorted[0])
-        end   = _dt.date.fromisoformat(dates_sorted[-1])
-        start_mon = start - _dt.timedelta(days=start.weekday())
-        end_sun   = end   + _dt.timedelta(days=6 - end.weekday())
-        total_days = (end_sun - start_mon).days + 1
-        weeks = total_days // 7
-        cal = _np.zeros((7, weeks))
-        cur_date = start_mon
-        for w in range(weeks):
-            for d in range(7):
-                cal[d][w] = day_data.get(cur_date.isoformat(), 0)
-                cur_date += _dt.timedelta(days=1)
-
-        vmax = _np.percentile(list(day_data.values()), 95) if day_data else 1
-
-        fig, ax4 = _plt.subplots(figsize=(max(10, weeks//2), 3), facecolor=BG)
-        ax4.set_facecolor(BG)
-        im = ax4.imshow(cal, cmap=HEAT, aspect='auto', interpolation='nearest', vmin=0, vmax=vmax)
-
-        # Month labels
-        month_ticks, month_lbls = [], []
-        cdate = start_mon
-        seen = set()
-        for w in range(weeks):
-            ym = cdate.strftime('%b %Y')
-            if ym not in seen:
-                month_ticks.append(w); month_lbls.append(cdate.strftime('%b\n%Y')); seen.add(ym)
-            cdate += _dt.timedelta(days=7)
-        ax4.set_xticks(month_ticks); ax4.set_xticklabels(month_lbls, fontsize=7.5)
-        ax4.set_yticks(range(7))
-        ax4.set_yticklabels(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'], fontsize=8)
-        ax4.set_title(f'/{board_id}/ — Календарь активности (180д)', fontsize=11, pad=10,
-                      color=FG, fontweight='bold')
-        cb = fig.colorbar(im, ax=ax4, orientation='horizontal', pad=0.18, shrink=0.35)
-        cb.set_label('постов/день', color=FG, fontsize=7.5)
-        cb.ax.xaxis.set_tick_params(color=FG, labelsize=7)
-        _plt.tight_layout()
-        buf4 = _io.BytesIO()
-        _plt.savefig(buf4, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
-        _plt.close()
-        bufs.append(buf4.getvalue())
-
     return bufs
 
 
@@ -7114,7 +7504,7 @@ _duel_cooldowns: dict = {} # user_id -> timestamp
 _DUEL_TIMEOUT = 120       # секунд на принятие
 
 async def accept_duel_logic(message: types.Message, challenger_id: int, board_id: str):
-    import time
+    import time, json
     from common.db_pool import get_pool, db_lock
     db = await get_pool()
     user_id = message.from_user.id
@@ -7228,44 +7618,38 @@ async def cmd_decline_shortcut(message: Message, board_id: str | None):
     if found_ch:
         await decline_duel_logic(message, found_ch)
 
-@dp.message(Command("duel"))
-async def cmd_duel(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
+async def _handle_duel_accept(message: types.Message, board_id: str):
+    import time
+    now = time.time()
+    found_ch = None
+
+    # Сначала пробуем найти строго по реплаю на сообщение-вызов
+    if message.reply_to_message:
+        reply_msg_id = message.reply_to_message.message_id
+        for ch_id, duel in list(_active_duels.items()):
+            if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                found_ch = ch_id
+                break
+
+    # Если по реплаю не нашли (или это обычный /duel accept), берем любой активный вызов на борде
+    if not found_ch:
+        for ch_id, duel in list(_active_duels.items()):
+            if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                found_ch = ch_id
+                break
+
+    if not found_ch:
+        await message.answer("⚔️ Нет активных вызовов на этой борде. Жди кого-нибудь смелого.")
+        return
+
+    await accept_duel_logic(message, found_ch, board_id)
+
+async def _handle_duel_create(message: types.Message, board_id: str, args: list, stream: str = 'ru'):
     user_id  = message.from_user.id
     import time, json
     from common.db_pool import get_pool, db_lock
+    db = await get_pool()
 
-    args = message.text.split()[1:]  # /duel 200  or  /duel accept
-    db   = await get_pool()
-
-    # ── /duel accept ── отвечает тот, кто видит active вызов
-    if args and args[0].lower() in ("accept", "принять", "+"):
-        now = time.time()
-        found_ch = None
-        
-        # Сначала пробуем найти строго по реплаю на сообщение-вызов
-        if message.reply_to_message:
-            reply_msg_id = message.reply_to_message.message_id
-            for ch_id, duel in list(_active_duels.items()):
-                if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                    found_ch = ch_id
-                    break
-        
-        # Если по реплаю не нашли (или это обычный /duel accept), берем любой активный вызов на борде
-        if not found_ch:
-            for ch_id, duel in list(_active_duels.items()):
-                if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                    found_ch = ch_id
-                    break
-                    
-        if not found_ch:
-            await message.answer("⚔️ Нет активных вызовов на этой борде. Жди кого-нибудь смелого.")
-            return
-            
-        await accept_duel_logic(message, found_ch, board_id)
-        return
-
-    # ── /duel <сумма> ── создать вызов
     try:
         amount = int(args[0]) if args else 0
     except:
@@ -7327,6 +7711,15 @@ async def cmd_duel(message: types.Message, board_id: str | None, stream: str = '
     try: await message.delete()
     except: pass
 
+@dp.message(Command("duel"))
+async def cmd_duel(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    args = message.text.split()[1:]
+
+    if args and args[0].lower() in ("accept", "принять", "+"):
+        await _handle_duel_accept(message, board_id)
+    else:
+        await _handle_duel_create(message, board_id, args, stream)
 
 @dp.message(Command("wallet", "balance", "money"))
 async def cmd_wallet(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -7641,23 +8034,70 @@ async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str
     except Exception: pass
 
 
-@dp.message(Command("passport", "me", "profile", "stats_me"))
-async def cmd_passport(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    """
-    Генерирует 'Паспорт Анона'. Полная локализация.
-    Адаптировано под безопасную работу с БД (db_lock).
-    """
-    if not board_id: return
+_PASSPORT_DATA = {
+    'ru': {
+        'mental': ["Вялотекущая шизофрения", "Педераст", "Газонюх", "Терминальная стадия двачевания", "ПТСР после /po/", "Синдром Туретта", "Одержимость трапами", "Асексуал (насильно)", "Зумер с деменцией", "Свидетель Вайпа", "Жертва психиатрии", "Пиздабол", "Мамкин анархист", "Солевой", "Овощ", "Гигачад (нет)"],
+        'inv': ["Справка из дурки", "Трусы с чиркашом", "Банка 'Ягуара'", "Диск с ЦП", "Онахол", "Дакимакура", "Вентилятор", "Флешка с ЦП", "Диплом шараги", "Усы Сталина", "Резиновая вагина (б/у)", "Пакет с пакетами", "Мать (продана)", "Шприц", "Носок (стоячий)", "Тетрадь смерти", "ЕОТ (в мечтах)", "Биткоин (нарисованный)", "15 рублей", "Вейп", "Повестка"],
+        'sec': ["Дрочит на фурри", "Любитель лоликона", "Стучит товарищу майору", "Любит унижения", "Мечтает стать модером", "Смотрит цп", "Не мылся год", "Не девственник (врет)", "Боится женщин", "Ест кал", "Хочет в Польшу", "Верит в плоскую землю", "Украл у мамки деньги", "Плачет после секса"]
+    },
+    'en': {
+        'mental': ["Chronic Schizophrenia", "Terminal 4chan addiction", "PTSD after /pol/", "Tourette's", "Trap obsession", "Incel (forced)", "Dementia Zoomer", "Wipe Witness", "Psych ward victim", "Pathological liar", "Basement anarchist", "Meth head", "Vegetable", "Gigachad (not)"],
+        'inv': ["Autism certificate", "Stained underwear", "Monster Energy", "Fan (for shit)", "CP Flash drive (fake)", "College debt", "Hitler's moustache", "Used waifu pillow", "Bag of bags", "Sold mom", "Syringe", "Cum sock (stiff)", "Death Note", "GF (imaginary)", "Bitcoin (drawn)", "0.01$", "Vape", "Draft notice"],
+        'sec': ["Jerks to furries", "Snitch for FBI", "Loves humiliation", "Wants to be janny", "Watches loli", "Hasn't showered in 2024", "Fake virgin", "Scared of women", "Eats bugs", "Wants to go to Brazil", "Flat earther", "Stole mom's credit card", "Cries while pooping"]
+    },
+    'jp': {
+        'mental': ["統合失調症", "2ch中毒末期", "政治厨PTSD", "トゥレット症候群", "男の娘中毒", "非モテ（強制）", "認知症ズーマー", "祭り目撃者", "精神科の犠牲者", "虚言癖", "ママのアナキスト", "ヤク中", "植物人間", "ギガチャド（嘘）"],
+        'inv': ["障害者手帳", "シミ付きパンツ", "ストロングゼロ", "扇風機（クソ用）", "ロリ画像USB", "Fラン大学の学位", "スターリンの髭", "中古オナホ", "レジ袋の山", "売られた母", "注射器", "カチカチの靴下", "デスノート", "脳内彼女", "ビットコイン（絵）", "15ルーブル", "Vape", "赤紙"],
+        'sec': ["ケモナー", "警察の犬", "ドM", "削除人になりたい", "ロリコン", "1年風呂入ってない", "童貞（嘘）", "女性恐怖症", "食糞", "異世界に行きたい", "地球平面説信者", "親の金盗んだ", "うんこ中に泣く"]
+    }
+}
 
-    try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+def _get_passport_rank_and_role(lang: str, post_count: int) -> tuple[str, str]:
+    if lang == 'en':
+        if post_count == 0: return "👻 Read-only", "Random Guy"
+        elif post_count < 10: return "💩 Newfag", "Normie"
+        elif post_count < 50: return "🤡 Attention Whore", "Shitposter"
+        elif post_count < 150: return "👺 Troll", "+15 cents"
+        elif post_count < 300: return "🐸 Average /b/tard", "Wojak"
+        elif post_count < 666: return "☣️ Toxic", "Copypasta Gen"
+        elif post_count < 1000: return "🧙‍♂️ Wizard (30 y.o. virgin)", "Incel"
+        elif post_count < 2000: return "🦍 Boomer", "Sofa Warrior"
+        elif post_count < 5000: return "🔥 Living Legend", "Oldfag"
+        elif post_count < 8000: return "🔥 Insane", "Schizo"
+        elif post_count < 10000: return "🔥 Holy Anon", "Elite"
+        else: return "👁️ Son of Abu", "God of Shit"
+    elif lang == 'jp':
+        if post_count == 0: return "👻 ROM専", "名無しさん"
+        elif post_count < 10: return "💩 新参", "一般人"
+        elif post_count < 50: return "🤡 かまってちゃん", "厨房"
+        elif post_count < 150: return "👺 荒らし", "工作員"
+        elif post_count < 300: return "🐸 暇人", "自宅警備員"
+        elif post_count < 666: return "☣️ 毒男", "コピペ職人"
+        elif post_count < 1000: return "🧙‍♂️ 魔法使い (童貞30歳)", "喪男"
+        elif post_count < 2000: return "🦍 老害", "ネット弁慶"
+        elif post_count < 5000: return "🔥 生ける伝説", "古参"
+        elif post_count < 8000: return "🔥 狂人", "糖質"
+        elif post_count < 10000: return "🔥 神コテ", "エリート"
+        else: return "👁️ 管理人の息子", "クソの神"
+    else: # ru
+        if post_count == 0: return "👻 Ридонли", "Хуй с горы - Обезьяна на бревне"
+        elif post_count < 10: return "💩 Рачье", "Ньюфажина"
+        elif post_count < 50: return "🤡 Вниманиеблядь", "Поехавший"
+        elif post_count < 150: return "👺 Лахтадырка","Педофил"
+        elif post_count < 200: return "🐸 Битард обыкновенный", "Анон"
+        elif post_count < 400: return "☣️ Проткнутый пидоран", "Транссексуал"
+        elif post_count < 600: return "🧙‍♂️ Волшебник (30 лет без секса)", "Девственник"
+        elif post_count < 800: return "🦍 Скуф", "Проткнутый"
+        elif post_count < 1000: return "🔥 Живое воплощение Йобы", "Легенда"
+        elif post_count < 1500: return "🔥 Сумасшедший", "Сбежавший из дурки"
+        elif post_count < 1800: return "🔥 Легенда двача", "Старожил"
+        elif post_count < 2000: return "🔥 Живая легенда", "Старожил"
+        elif post_count < 2500: return "🔥 Говноед", "Психически больной"
+        elif post_count < 3000: return "🔥 Пресвятой Анон", "Легендарный Анонимус"
+        else: return "👁️ Сын Абу", "Бог говна"
 
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    user_id = message.from_user.id
-    
-    # Импортируем пул и лок
+async def _get_passport_stats(user_id: int) -> tuple[int, float, int] | None:
     from common.db_pool import get_pool, db_lock
-    
     post_count = 0
     balance = 0
     is_verified = 0
@@ -7678,69 +8118,13 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
                 if row: post_count = row[0]
     except Exception as e:
         print(f"Ошибка получения статистики: {e}")
-        return
-    rank = ""
-    role = ""
-    if lang == 'en':
-        if post_count == 0: rank, role = "👻 Read-only", "Random Guy"
-        elif post_count < 10: rank, role = "💩 Newfag", "Normie"
-        elif post_count < 50: rank, role = "🤡 Attention Whore", "Shitposter"
-        elif post_count < 150: rank, role = "👺 Troll", "+15 cents"
-        elif post_count < 300: rank, role = "🐸 Average /b/tard", "Wojak"
-        elif post_count < 666: rank, role = "☣️ Toxic", "Copypasta Gen"
-        elif post_count < 1000: rank, role = "🧙‍♂️ Wizard (30 y.o. virgin)", "Incel"
-        elif post_count < 2000: rank, role = "🦍 Boomer", "Sofa Warrior"
-        elif post_count < 5000: rank, role = "🔥 Living Legend", "Oldfag"
-        elif post_count < 8000: rank, role = "🔥 Insane", "Schizo"
-        elif post_count < 10000: rank, role = "🔥 Holy Anon", "Elite"
-        else: rank, role = "👁️ Son of Abu", "God of Shit"
-    elif lang == 'jp':
-        if post_count == 0: rank, role = "👻 ROM専", "名無しさん"
-        elif post_count < 10: rank, role = "💩 新参", "一般人"
-        elif post_count < 50: rank, role = "🤡 かまってちゃん", "厨房"
-        elif post_count < 150: rank, role = "👺 荒らし", "工作員"
-        elif post_count < 300: rank, role = "🐸 暇人", "自宅警備員"
-        elif post_count < 666: rank, role = "☣️ 毒男", "コピペ職人"
-        elif post_count < 1000: rank, role = "🧙‍♂️ 魔法使い (童貞30歳)", "喪男"
-        elif post_count < 2000: rank, role = "🦍 老害", "ネット弁慶"
-        elif post_count < 5000: rank, role = "🔥 生ける伝説", "古参"
-        elif post_count < 8000: rank, role = "🔥 狂人", "糖質"
-        elif post_count < 10000: rank, role = "🔥 神コテ", "エリート"
-        else: rank, role = "👁️ 管理人の息子", "クソの神"
-    else: # ru
-        if post_count == 0: rank, role = "👻 Ридонли", "Хуй с горы - Обезьяна на бревне"
-        elif post_count < 10: rank, role = "💩 Рачье", "Ньюфажина"
-        elif post_count < 50: rank, role = "🤡 Вниманиеблядь", "Поехавший"
-        elif post_count < 150: rank, role = "👺 Лахтадырка","Педофил"
-        elif post_count < 200: rank, role = "🐸 Битард обыкновенный", "Анон"
-        elif post_count < 400: rank, role = "☣️ Проткнутый пидоран", "Транссексуал"
-        elif post_count < 600: rank, role = "🧙‍♂️ Волшебник (30 лет без секса)", "Девственник"
-        elif post_count < 800: rank, role = "🦍 Скуф", "Проткнутый"
-        elif post_count < 1000: rank, role = "🔥 Живое воплощение Йобы", "Легенда"
-        elif post_count < 1500: rank, role = "🔥 Сумасшедший", "Сбежавший из дурки"
-        elif post_count < 1800: rank, role = "🔥 Легенда двача", "Старожил"
-        elif post_count < 2000: rank, role = "🔥 Живая легенда", "Старожил"
-        elif post_count < 2500: rank, role = "🔥 Говноед", "Психически больной"
-        elif post_count < 3000: rank, role = "🔥 Пресвятой Анон", "Легендарный Анонимус"
-        else: rank, role = "👁️ Сын Абу", "Бог говна"
-    data_ru = {
-        'mental': ["Вялотекущая шизофрения", "Педераст", "Газонюх", "Терминальная стадия двачевания", "ПТСР после /po/", "Синдром Туретта", "Одержимость трапами", "Асексуал (насильно)", "Зумер с деменцией", "Свидетель Вайпа", "Жертва психиатрии", "Пиздабол", "Мамкин анархист", "Солевой", "Овощ", "Гигачад (нет)"],
-        'inv': ["Справка из дурки", "Трусы с чиркашом", "Банка 'Ягуара'", "Диск с ЦП", "Онахол", "Дакимакура", "Вентилятор", "Флешка с ЦП", "Диплом шараги", "Усы Сталина", "Резиновая вагина (б/у)", "Пакет с пакетами", "Мать (продана)", "Шприц", "Носок (стоячий)", "Тетрадь смерти", "ЕОТ (в мечтах)", "Биткоин (нарисованный)", "15 рублей", "Вейп", "Повестка"],
-        'sec': ["Дрочит на фурри", "Любитель лоликона", "Стучит товарищу майору", "Любит унижения", "Мечтает стать модером", "Смотрит цп", "Не мылся год", "Не девственник (врет)", "Боится женщин", "Ест кал", "Хочет в Польшу", "Верит в плоскую землю", "Украл у мамки деньги", "Плачет после секса"]
-    }
-    data_en = {
-        'mental': ["Chronic Schizophrenia", "Terminal 4chan addiction", "PTSD after /pol/", "Tourette's", "Trap obsession", "Incel (forced)", "Dementia Zoomer", "Wipe Witness", "Psych ward victim", "Pathological liar", "Basement anarchist", "Meth head", "Vegetable", "Gigachad (not)"],
-        'inv': ["Autism certificate", "Stained underwear", "Monster Energy", "Fan (for shit)", "CP Flash drive (fake)", "College debt", "Hitler's moustache", "Used waifu pillow", "Bag of bags", "Sold mom", "Syringe", "Cum sock (stiff)", "Death Note", "GF (imaginary)", "Bitcoin (drawn)", "0.01$", "Vape", "Draft notice"],
-        'sec': ["Jerks to furries", "Snitch for FBI", "Loves humiliation", "Wants to be janny", "Watches loli", "Hasn't showered in 2024", "Fake virgin", "Scared of women", "Eats bugs", "Wants to go to Brazil", "Flat earther", "Stole mom's credit card", "Cries while pooping"]
-    }
-    data_jp = {
-        'mental': ["統合失調症", "2ch中毒末期", "政治厨PTSD", "トゥレット症候群", "男の娘中毒", "非モテ（強制）", "認知症ズーマー", "祭り目撃者", "精神科の犠牲者", "虚言癖", "ママのアナキスト", "ヤク中", "植物人間", "ギガチャド（嘘）"],
-        'inv': ["障害者手帳", "シミ付きパンツ", "ストロングゼロ", "扇風機（クソ用）", "ロリ画像USB", "Fラン大学の学位", "スターリンの髭", "中古オナホ", "レジ袋の山", "売られた母", "注射器", "カチカチの靴下", "デスノート", "脳内彼女", "ビットコイン（絵）", "15ルーブル", "Vape", "赤紙"],
-        'sec': ["ケモナー", "警察の犬", "ドM", "削除人になりたい", "ロリコン", "1年風呂入ってない", "童貞（嘘）", "女性恐怖症", "食糞", "異世界に行きたい", "地球平面説信者", "親の金盗んだ", "うんこ中に泣く"]
-    }
-    if lang == 'en': current_data = data_en
-    elif lang == 'jp': current_data = data_jp
-    else: current_data = data_ru
+        return None
+    return post_count, balance, is_verified
+
+def _generate_passport_text(user_id: int, lang: str, board_id: str, post_count: int, balance: float, is_verified: int, rank: str, role: str) -> str:
+    import random
+    from datetime import datetime, UTC
+    current_data = _PASSPORT_DATA.get(lang, _PASSPORT_DATA['ru'])
     seed_val = f"{user_id}_{datetime.now(UTC).date()}"
     rng = random.Random(seed_val)
     social_credit = rng.randint(-1488, 1337)
@@ -7763,7 +8147,7 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     else:
         labels = ["ПАСПОРТ ТГАЧЕРА", "ID", "Ранг", "Роль", "Постов", "Диагноз", "Инвентарь", "Компромат", "Соц. рейтинг"]
         anon_tag = f"Анон-{user_id % 10000:04d}"
-    passport_text = (
+    return (
         f"🪪 <b>{labels[0]} {flag}</b>\n"
         f"<code>{'—'*22}</code>\n"
         f"🆔 <b>{labels[1]}:</b> <code>{anon_tag}</code>\n"
@@ -7778,6 +8162,29 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
         f"{sc_emoji} <b>{labels[8]}:</b> {social_credit}\n"
         f"<code>{'—'*22}</code>\n"
     )
+
+@dp.message(Command("passport", "me", "profile", "stats_me"))
+async def cmd_passport(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Генерирует 'Паспорт Анона'. Полная локализация.
+    Адаптировано под безопасную работу с БД (db_lock).
+    """
+    if not board_id: return
+
+    try: spawn_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    user_id = message.from_user.id
+
+    stats = await _get_passport_stats(user_id)
+    if stats is None:
+        return
+    post_count, balance, is_verified = stats
+
+    rank, role = _get_passport_rank_and_role(lang, post_count)
+    passport_text = _generate_passport_text(user_id, lang, board_id, post_count, balance, is_verified, rank, role)
+
     try:
         await message.reply(passport_text, parse_mode="HTML")
     except Exception:
@@ -8066,116 +8473,130 @@ async def cmd_global_unpin(message: types.Message, board_id: str | None, stream:
         elif lang == 'jp': final = f"✅ 投稿 #{target_post_num} をピン留め設定から削除しました。"
         else: final = f"✅ Пост #{target_post_num} удален из настроек закрепа."
         await status_msg.edit_text(final)
-async def motivation_broadcaster():
+async def _send_motivation_message(board_id: str, stream: str, recipients: set):
+    """
+    Sends a motivational message or site promo to active users.
+    """
+    # 35% шанс на рекламу сайта (с новыми текстами), 65% на рекламу бота
+    is_site_promo = random.random() < 0.35
 
-    await asyncio.sleep(15)  # Начальная задержка
-    async def board_motivation_worker(board_id: str):
+    if is_site_promo:
+        site_url = f"https://tgach.top/{board_id}/"
+        # ИСПОЛЬЗУЕМ НОВЫЕ ФРАЗЫ ИЗ text_assets.py
+        if stream == 'en':
+            text_body = random.choice(SITE_PROMO_PHRASES_EN)
+            btn_text = "🔗 Open Website"
+        elif stream == 'jp':
+            text_body = random.choice(SITE_PROMO_PHRASES_JP)
+            btn_text = "🔗 サイトを開く"
+        else:
+            text_body = random.choice(SITE_PROMO_PHRASES)
+            btn_text = "🔗 Перейти на сайт"
 
-        while True:
-            try:
-                delay = random.randint(6000, 18000)
-                await asyncio.sleep(delay)
-                activity = await get_board_activity_last_hours(board_id, hours=2)
-                if activity < 20:
-                    continue
-                b_data = board_data[board_id]
-                streams_to_process = ['ru'] # По дефолту
+        # Формируем сообщение с кнопкой
+        message_text = f"{text_body}\n\n👉 <a href='{site_url}'>{site_url}</a>"
+
+        # Для сайта можно добавить Inline кнопку
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=btn_text, url=site_url)]
+        ])
+    else:
+        # Старая логика (реклама бота/инвайта)
+        if stream == 'en':
+            motivation = random.choice(MOTIVATIONAL_MESSAGES_EN)
+            invite_text = random.choice(INVITE_TEXTS_EN)
+            copy_lbl = "Copy and send to anons:"
+        elif stream == 'jp':
+            motivation = random.choice(MOTIVATIONAL_MESSAGES_JP)
+            invite_text = random.choice(INVITE_TEXTS_JP)
+            copy_lbl = "コピーしてアノンに送信:"
+        else:
+            motivation = random.choice(MOTIVATIONAL_MESSAGES)
+            invite_text = random.choice(INVITE_TEXTS)
+            copy_lbl = "Скопируй и отправь анончикам:"
+
+        message_text = (
+            f"💭 {motivation}\n\n"
+            f"{copy_lbl}\n"
+            f"<code>{escape_html(invite_text)}</code>"
+        )
+        keyboard = None
+
+    now_dt = datetime.now(UTC)
+    content = {'type': 'text', 'text': message_text, 'is_system_message': True}
+
+    post_num = await create_post(
+        board_id=board_id, author_id=0, content=content,
+        timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
+    )
+
+    if not post_num: return
+
+    header = await format_header(board_id, post_num)
+    if board_id != 'int': header = f"### АДМИН ###\n{header}"
+    content['header'] = header
+
+    await update_post_content(post_num, content)
+    async with storage_lock:
+        messages_storage[post_num] = {
+            'author_id': 0, 'timestamp': now_dt,
+            'content': content, 'board_id': board_id
+        }
+
+    # Передаем keyboard в очередь
+    await enqueue_board_message(board_id, {
+        'recipients': recipients,
+        'content': content,
+        'post_num': post_num,
+        'board_id': board_id,
+        'keyboard': keyboard
+    })
+
+
+async def _board_motivation_worker(board_id: str):
+    """
+    Worker loop to check activity and periodically trigger motivation messages.
+    """
+    while True:
+        try:
+            delay = random.randint(6000, 18000)
+            await asyncio.sleep(delay)
+            activity = await get_board_activity_last_hours(board_id, hours=2)
+            if activity < 20:
+                continue
+            b_data = board_data[board_id]
+            streams_to_process = ['ru'] # По дефолту
+            if board_id == 'int':
+                streams_to_process = ['en']
+            elif ENABLE_MULTILANG:
+                streams_to_process = ['ru', 'en', 'jp']
+            for stream in streams_to_process:
                 if board_id == 'int':
-                    streams_to_process = ['en']
-                elif ENABLE_MULTILANG:
-                    streams_to_process = ['ru', 'en', 'jp']
-                for stream in streams_to_process:
-                    if board_id == 'int':
+                    recipients = b_data['users']['active'] - b_data['users']['banned']
+                else:
+                    if ENABLE_MULTILANG:
+                        stream_users = await get_stream_active_users(board_id, stream)
+                        recipients = stream_users.intersection(b_data['users']['active']) - b_data['users']['banned']
+                    else:
                         recipients = b_data['users']['active'] - b_data['users']['banned']
-                    else:
-                        if ENABLE_MULTILANG:
-                            stream_users = await get_stream_active_users(board_id, stream)
-                            recipients = stream_users.intersection(b_data['users']['active']) - b_data['users']['banned']
-                        else:
-                            recipients = b_data['users']['active'] - b_data['users']['banned']
-                    if not recipients:
-                        continue
+                if not recipients:
+                    continue
 
-                    # 35% шанс на рекламу сайта (с новыми текстами), 65% на рекламу бота
-                    is_site_promo = random.random() < 0.35
-                    
-                    if is_site_promo:
-                        site_url = f"https://tgach.top/{board_id}/"
-                        # ИСПОЛЬЗУЕМ НОВЫЕ ФРАЗЫ ИЗ text_assets.py
-                        if stream == 'en':
-                            text_body = random.choice(SITE_PROMO_PHRASES_EN)
-                            btn_text = "🔗 Open Website"
-                        elif stream == 'jp':
-                            text_body = random.choice(SITE_PROMO_PHRASES_JP)
-                            btn_text = "🔗 サイトを開く"
-                        else:
-                            text_body = random.choice(SITE_PROMO_PHRASES)
-                            btn_text = "🔗 Перетий на сайт"
-                        
-                        # Формируем сообщение с кнопкой
-                        message_text = f"{text_body}\n\n👉 <a href='{site_url}'>{site_url}</a>"
-                        
-                        # Для сайта можно добавить Inline кнопку
-                        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(text=btn_text, url=site_url)]
-                        ])
-                    else:
-                        # Старая логика (реклама бота/инвайта)
-                        if stream == 'en':
-                            motivation = random.choice(MOTIVATIONAL_MESSAGES_EN)
-                            invite_text = random.choice(INVITE_TEXTS_EN)
-                            copy_lbl = "Copy and send to anons:"
-                        elif stream == 'jp':
-                            motivation = random.choice(MOTIVATIONAL_MESSAGES_JP)
-                            invite_text = random.choice(INVITE_TEXTS_JP)
-                            copy_lbl = "コピーしてアノンに送信:"
-                        else:
-                            motivation = random.choice(MOTIVATIONAL_MESSAGES)
-                            invite_text = random.choice(INVITE_TEXTS)
-                            copy_lbl = "Скопируй и отправь анончикам:"
-                        
-                        message_text = (
-                            f"💭 {motivation}\n\n"
-                            f"{copy_lbl}\n"
-                            f"<code>{escape_html(invite_text)}</code>"
-                        )
-                        keyboard = None
+                await _send_motivation_message(board_id, stream, recipients)
 
-                    now_dt = datetime.now(UTC)
-                    content = {'type': 'text', 'text': message_text, 'is_system_message': True}
-                    
-                    post_num = await create_post(
-                        board_id=board_id, author_id=0, content=content,
-                        timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
-                    )
-                    
-                    if not post_num: continue
-                    
-                    header = await format_header(board_id, post_num)
-                    if board_id != 'int': header = f"### АДМИН ###\n{header}"
-                    content['header'] = header
-                    
-                    await update_post_content(post_num, content)
-                    async with storage_lock:
-                        messages_storage[post_num] = {
-                            'author_id': 0, 'timestamp': now_dt,
-                            'content': content, 'board_id': board_id
-                        }
-                    
-                    # Передаем keyboard в очередь
-                    await enqueue_board_message(board_id, {
-                        'recipients': recipients, 
-                        'content': content,
-                        'post_num': post_num, 
-                        'board_id': board_id,
-                        'keyboard': keyboard 
-                    })
+        except Exception as e:
+            print(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}")
+            await asyncio.sleep(120)
 
-            except Exception as e:
-                print(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}")
-                await asyncio.sleep(120)
-    tasks = [spawn_task(board_motivation_worker(bid)) for bid in BOARDS if bid != 'test']
+
+async def motivation_broadcaster():
+    """
+    Main entry point to start motivation workers for all boards.
+    """
+    await asyncio.sleep(15)  # Начальная задержка
+    tasks = [spawn_task(_board_motivation_worker(bid)) for bid in BOARDS if bid != 'test']
     await asyncio.gather(*tasks)
+
 async def validate_message_format(msg_data: dict) -> bool:
 
     if not isinstance(msg_data, dict):
@@ -8885,115 +9306,155 @@ async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str,
                 pass
     print(f"[THREAD DELETE] [{board_id}] Тред {thread_id} удалён. Пользователей переведено: {len(users_in_thread)}. Инициатор: {initiator_id}")
 @dp.message(F.text.regexp(rf"^/({'|'.join(ANIME_COMMAND_MAP.keys())})"))
-async def handle_stacked_anime_commands(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    """
-    Универсальный обработчик для всех аниме-команд.
-    Исправлена ошибка NameError: b_data теперь гарантированно определяется.
-    """
-    if not board_id:
-        return
-    
-    # ЯВНОЕ ОПРЕДЕЛЕНИЕ b_data (Исправление ошибки)
-    b_data = board_data[board_id]
-    
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    MAX_IMAGES = 10
-    max_images_for_board = B_MAX_STACKED_ANIME_IMAGES if board_id == 'b' else MAX_IMAGES
-    command_keys = '|'.join(ANIME_COMMAND_MAP.keys())
-    pattern = re.compile(rf"/({command_keys})(?:(\d+)|(?:\s+(\d+)))?", re.IGNORECASE)
-    matches = pattern.findall(message.text or "")
-    if not matches: return
-    
-    user_id = message.from_user.id
-    current_time = time.time()
-    
-    if current_time - user_hourly_image_reset[user_id] > 3600:
-        user_hourly_image_count[user_id] = 0
-        user_hourly_image_reset[user_id] = current_time
-    
-    raw_requested_count = 0
-    for _, num_no_space, num_with_space in matches:
-        count = 1
-        number_str = num_no_space or num_with_space
-        if number_str and number_str.strip().isdigit():
-            count = int(number_str.strip())
-        raw_requested_count += count
-    requested_count = min(raw_requested_count, max_images_for_board)
-    if raw_requested_count > max_images_for_board:
-        runtime_logger.warning(
-            "anime_request_capped %s",
-            json.dumps(
-                {
-                    "ts": round(time.time(), 3),
-                    "board_id": board_id,
-                    "user_id": user_id,
-                    "requested": raw_requested_count,
-                    "accepted": requested_count,
-                    "cap": max_images_for_board,
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
+class StackedAnimeHandler:
+    def __init__(self, message: types.Message, board_id: str, stream: str):
+        self.message = message
+        self.board_id = board_id
+        self.stream = stream
+        self.user_id = message.from_user.id
+        self.current_time = time.time()
+        self.b_data = board_data[board_id]
+        self.lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+        self.max_images_for_board = B_MAX_STACKED_ANIME_IMAGES if board_id == 'b' else 10
+        self.command_keys = '|'.join(ANIME_COMMAND_MAP.keys())
+        self.pattern = re.compile(rf"/({self.command_keys})(?:(\d+)|(?:\s+(\d+)))?", re.IGNORECASE)
+        self.matches = self.pattern.findall(message.text or "")
+
+    async def process(self):
+        if not self.matches:
+            return
+
+        self._reset_hourly_counters()
+        
+        raw_requested_count = self._calculate_requested_count()
+        requested_count = min(raw_requested_count, self.max_images_for_board)
+
+        self._log_if_capped(raw_requested_count, requested_count)
+
+        if await self._check_strict_daily_limit(requested_count):
+            return
+
+        if await self._check_hourly_limit(requested_count):
+            return
+
+        self._increment_hourly_count(requested_count)
+
+        if self.board_id == 'b' and await self._check_board_spam_limit():
+            return
+
+        fetcher_tasks, command_counts = self._build_fetcher_tasks()
+        if not fetcher_tasks:
+            return
+
+        if self.board_id == 'b':
+            self._update_board_spam_tracker(len(fetcher_tasks))
+
+        final_caption = self._generate_caption(command_counts)
+
+        await _process_stacked_anime_command(
+            message=self.message,
+            board_id=self.board_id,
+            fetcher_tasks=fetcher_tasks,
+            caption=final_caption,
+            stream=self.stream
         )
 
-    # Проверка жесткого лимита (10 картинок в 24ч) для особых спамеров
-    if user_id in b_data.get('anime_strict_limits', set()):
-        tracker = b_data['anime_daily_tracker'][user_id]
-        if current_time > tracker['reset_at']:
-            tracker['count'] = 0
-            tracker['reset_at'] = current_time + 86400
-        
-        if tracker['count'] + requested_count > 10:
-            if lang == 'en':
-                msg = "🛑 Strict limit! You are allowed only 10 images per 24h. Contact admin."
-            elif lang == 'jp':
-                msg = "🛑 制限中！24時間に10枚までです。管理人に連絡してください。"
-            else:
-                msg = "🛑 У вас жесткое ограничение: 10 картинок в сутки. Заебал спамить! По всем вопросам к админу."
-            try:
-                sent = await message.answer(msg)
-                spawn_task(delete_message_after_delay(sent, 15))
-                await message.delete()
-            except Exception: pass
-            return
-        tracker['count'] += requested_count
+    def _reset_hourly_counters(self):
+        if self.current_time - user_hourly_image_reset[self.user_id] > 3600:
+            user_hourly_image_count[self.user_id] = 0
+            user_hourly_image_reset[self.user_id] = self.current_time
 
-    if user_hourly_image_count[user_id] + requested_count > HOURLY_IMAGE_LIMIT:
-        if lang == 'en': phrases = ANIME_HOURLY_LIMIT_PHRASES['en']
-        elif lang == 'jp': phrases = ANIME_HOURLY_LIMIT_PHRASES['jp']
-        else: phrases = ANIME_HOURLY_LIMIT_PHRASES['ru']
-        
-        limit_msg = random.choice(phrases)
-        try:
-            sent = await message.answer(limit_msg)
-            spawn_task(delete_message_after_delay(sent, 15))
-            await message.delete()
-        except Exception: pass
-        return
-    
-    user_hourly_image_count[user_id] += requested_count
-    
-    if board_id == 'b':
-        image_spam_tracker[board_id] = [t for t in image_spam_tracker[board_id] if current_time - t < IMAGE_SPAM_WINDOW]
-        total_requested_images = 0
-        for _, num_no_space, num_with_space in matches:
+    def _calculate_requested_count(self) -> int:
+        raw_requested_count = 0
+        for _, num_no_space, num_with_space in self.matches:
             count = 1
             number_str = num_no_space or num_with_space
             if number_str and number_str.strip().isdigit():
                 count = int(number_str.strip())
-            total_requested_images += count
-        total_requested_images = min(total_requested_images, max_images_for_board)
+            raw_requested_count += count
+        return raw_requested_count
+
+    def _log_if_capped(self, raw_requested_count: int, requested_count: int):
+        if raw_requested_count > self.max_images_for_board:
+            import json
+            runtime_logger.warning(
+                "anime_request_capped %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": self.board_id,
+                        "user_id": self.user_id,
+                        "requested": raw_requested_count,
+                        "accepted": requested_count,
+                        "cap": self.max_images_for_board,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+
+    async def _check_strict_daily_limit(self, requested_count: int) -> bool:
+        if self.user_id in self.b_data.get('anime_strict_limits', set()):
+            tracker = self.b_data['anime_daily_tracker'][self.user_id]
+            if self.current_time > tracker['reset_at']:
+                tracker['count'] = 0
+                tracker['reset_at'] = self.current_time + 86400
+
+            if tracker['count'] + requested_count > 10:
+                if self.lang == 'en':
+                    msg = "🛑 Strict limit! You are allowed only 10 images per 24h. Contact admin."
+                elif self.lang == 'jp':
+                    msg = "🛑 制限中！24時間に10枚までです。管理人に連絡してください。"
+                else:
+                    msg = "🛑 У вас жесткое ограничение: 10 картинок в сутки. Заебал спамить! По всем вопросам к админу."
+                try:
+                    sent = await self.message.answer(msg)
+                    spawn_task(delete_message_after_delay(sent, 15))
+                    await self.message.delete()
+                except Exception:
+                    pass
+                return True
+            tracker['count'] += requested_count
+        return False
+
+    async def _check_hourly_limit(self, requested_count: int) -> bool:
+        if user_hourly_image_count[self.user_id] + requested_count > HOURLY_IMAGE_LIMIT:
+            if self.lang == 'en': phrases = ANIME_HOURLY_LIMIT_PHRASES['en']
+            elif self.lang == 'jp': phrases = ANIME_HOURLY_LIMIT_PHRASES['jp']
+            else: phrases = ANIME_HOURLY_LIMIT_PHRASES['ru']
+
+            import random
+            limit_msg = random.choice(phrases)
+            try:
+                sent = await self.message.answer(limit_msg)
+                spawn_task(delete_message_after_delay(sent, 15))
+                await self.message.delete()
+            except Exception:
+                pass
+            return True
+        return False
+
+    def _increment_hourly_count(self, requested_count: int):
+        user_hourly_image_count[self.user_id] += requested_count
+
+    async def _check_board_spam_limit(self) -> bool:
+        image_spam_tracker[self.board_id] = [t for t in image_spam_tracker[self.board_id] if self.current_time - t < IMAGE_SPAM_WINDOW]
+        total_requested_images = self._calculate_requested_count()
+        total_requested_images = min(total_requested_images, self.max_images_for_board)
         
-        if len(image_spam_tracker[board_id]) + total_requested_images > IMAGE_SPAM_LIMIT:
-            if lang == 'en':
+        if len(image_spam_tracker[self.board_id]) + total_requested_images > IMAGE_SPAM_LIMIT:
+            if self.lang == 'en':
                 phrases_cd = ANIME_CMD_COOLDOWN_PHRASES_EN
                 phrases_spam = IMAGE_SPAM_COOLDOWN_PHRASES_EN
-            elif lang == 'jp':
+            elif self.lang == 'jp':
                 phrases_cd = ANIME_CMD_COOLDOWN_PHRASES_JP
                 phrases_spam = IMAGE_SPAM_COOLDOWN_PHRASES_JP
             else:
                 phrases_cd = ANIME_CMD_COOLDOWN_PHRASES
                 phrases_spam = IMAGE_SPAM_COOLDOWN_PHRASES
+
+            import random
+            from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
             part1 = random.choice(phrases_cd)
             part2 = random.choice(phrases_spam).format(
                 limit=IMAGE_SPAM_LIMIT, 
@@ -9001,83 +9462,93 @@ async def handle_stacked_anime_commands(message: types.Message, board_id: str | 
             )
             cooldown_msg = f"{part1}\n\n{part2}"
             try:
-                sent_msg = await message.answer(cooldown_msg)
+                sent_msg = await self.message.answer(cooldown_msg)
                 spawn_task(delete_message_after_delay(sent_msg, 10))
-                await message.delete()
-            except (TelegramBadRequest, TelegramForbiddenError): pass
-            return
+                await self.message.delete()
+            except (TelegramBadRequest, TelegramForbiddenError):
+                pass
+            return True
+        return False
 
-    fetcher_tasks = []
-    command_counts = defaultdict(int)
-    
-    canonical_map = {
-        **{k: 'fap' for k in ["fap", "hent", "hentai", "hentay", "nsfw", "FAP", "HENT", "HENTAI", "HENTAY", "NSFW"]},
-        **{k: 'gatari' for k in ["gatari", "monogatari", "GATARI"]},
-        **{k: 'loli' for k in ["loli", "lolicon", "lolis", "LOLI", "LOLICON", "LOLIS"]},
-    }
-
-    for command, num_no_space, num_with_space in matches:
-        count = 1
-        number_str = num_no_space or num_with_space
-        if number_str and number_str.strip().isdigit():
-            count = int(number_str.strip())
+    def _build_fetcher_tasks(self):
+        from collections import defaultdict
+        fetcher_tasks = []
+        command_counts = defaultdict(int)
         
-        command_lower = command.lower()
-        cmd_func = ANIME_COMMAND_MAP.get(command_lower)
-        if not cmd_func: continue
+        canonical_map = {
+            **{k: 'fap' for k in ["fap", "hent", "hentai", "hentay", "nsfw", "FAP", "HENT", "HENTAI", "HENTAY", "NSFW"]},
+            **{k: 'gatari' for k in ["gatari", "monogatari", "GATARI"]},
+            **{k: 'loli' for k in ["loli", "lolicon", "lolis", "LOLI", "LOLICON", "LOLIS"]},
+        }
 
-        for _ in range(count):
-            if len(fetcher_tasks) < max_images_for_board:
-                fetcher_tasks.append(cmd_func)
-                canonical_name = canonical_map.get(command_lower.split('@')[0])
-                if canonical_name:
-                    command_counts[canonical_name] += 1
-            else:
+        for command, num_no_space, num_with_space in self.matches:
+            count = 1
+            number_str = num_no_space or num_with_space
+            if number_str and number_str.strip().isdigit():
+                count = int(number_str.strip())
+
+            command_lower = command.lower()
+            cmd_func = ANIME_COMMAND_MAP.get(command_lower)
+            if not cmd_func: continue
+
+            for _ in range(count):
+                if len(fetcher_tasks) < self.max_images_for_board:
+                    fetcher_tasks.append(cmd_func)
+                    canonical_name = canonical_map.get(command_lower.split('@')[0])
+                    if canonical_name:
+                        command_counts[canonical_name] += 1
+                else:
+                    break
+            if len(fetcher_tasks) >= self.max_images_for_board:
                 break
-        if len(fetcher_tasks) >= max_images_for_board:
-            break
-    
-    if not fetcher_tasks:
+
+        return fetcher_tasks, command_counts
+
+    def _update_board_spam_tracker(self, task_count: int):
+        for _ in range(task_count):
+            image_spam_tracker[self.board_id].append(self.current_time)
+
+    def _generate_caption(self, command_counts: dict) -> str:
+        final_caption = self.pattern.sub('', self.message.text or "").strip()
+        
+        import random
+        if not final_caption and random.random() < 0.30 and command_counts:
+            population = list(command_counts.keys())
+            weights = list(command_counts.values())
+            chosen_category = random.choices(population, weights=weights, k=1)[0]
+            
+            phrase_list = []
+            if chosen_category == 'fap':
+                if self.lang == 'en': phrase_list = FAP_SUCCESS_PHRASES_EN
+                elif self.lang == 'jp': phrase_list = FAP_SUCCESS_PHRASES_JP
+                else: phrase_list = FAP_SUCCESS_PHRASES
+            elif chosen_category == 'gatari':
+                if self.lang == 'en': phrase_list = GATARI_SUCCESS_PHRASES_EN
+                elif self.lang == 'jp': phrase_list = GATARI_SUCCESS_PHRASES_JP
+                else: phrase_list = GATARI_SUCCESS_PHRASES
+            elif chosen_category == 'loli':
+                if self.lang == 'en': phrase_list = LOLI_SUCCESS_PHRASES_EN
+                elif self.lang == 'jp': phrase_list = LOLI_SUCCESS_PHRASES_JP
+                else: phrase_list = LOLI_SUCCESS_PHRASES
+
+            if phrase_list:
+                random_phrase = random.choice(phrase_list)
+                final_caption = f"<i>{escape_html(random_phrase)}</i>"
+
+        return final_caption
+
+
+async def handle_stacked_anime_commands(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Универсальный обработчик для всех аниме-команд.
+    Исправлена ошибка NameError: b_data теперь гарантированно определяется.
+    """
+    if not board_id:
         return
 
-    if board_id == 'b':
-        current_time = time.time()
-        for _ in range(len(fetcher_tasks)):
-            image_spam_tracker[board_id].append(current_time)
+    handler = StackedAnimeHandler(message, board_id, stream)
+    await handler.process()
 
-    final_caption = pattern.sub('', message.text or "").strip()
-    
-    if not final_caption and random.random() < 0.30 and command_counts:
-        population = list(command_counts.keys())
-        weights = list(command_counts.values())
-        chosen_category = random.choices(population, weights=weights, k=1)[0]
-        
-        # Выбор фраз с учетом языка
-        phrase_list = []
-        if chosen_category == 'fap':
-            if lang == 'en': phrase_list = FAP_SUCCESS_PHRASES_EN
-            elif lang == 'jp': phrase_list = FAP_SUCCESS_PHRASES_JP
-            else: phrase_list = FAP_SUCCESS_PHRASES
-        elif chosen_category == 'gatari':
-            if lang == 'en': phrase_list = GATARI_SUCCESS_PHRASES_EN
-            elif lang == 'jp': phrase_list = GATARI_SUCCESS_PHRASES_JP
-            else: phrase_list = GATARI_SUCCESS_PHRASES
-        elif chosen_category == 'loli':
-            if lang == 'en': phrase_list = LOLI_SUCCESS_PHRASES_EN
-            elif lang == 'jp': phrase_list = LOLI_SUCCESS_PHRASES_JP
-            else: phrase_list = LOLI_SUCCESS_PHRASES
-            
-        if phrase_list:
-            random_phrase = random.choice(phrase_list)
-            final_caption = f"<i>{escape_html(random_phrase)}</i>"
-
-    await _process_stacked_anime_command(
-        message=message,
-        board_id=board_id,
-        fetcher_tasks=fetcher_tasks,
-        caption=final_caption,
-        stream=stream
-    )
 @dp.message(Command("debug_memory"))
 async def cmd_debug_memory(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id):
@@ -10311,6 +10782,78 @@ async def activate_lightweight_mode(
     except TelegramBadRequest:
         pass
 
+MODE_END_PHRASES = {
+    'slavaukraine_mode': [
+        "💀 Визг хохлов закончен! Украинский режим отключен. Возвращаемся к обычному трёпу.",
+        "Контрнаступ захлебнулся! 🇷🇺 Хохлы, ваше время вышло. Возвращаемся к нормальному общению.",
+        "Перемога отменяется! 🐷 Украинский режим деактивирован. Можно снова говорить на человеческом языке.",
+        "Свинарник закрыт на дезинфекцию. 🐖 Режим 'Слава Украине' отключен.",
+        "Тарасы, по окопам! Ваша перемога оказалась зрадой. 🇷🇺 Режим отключен.",
+        "Батько наш Бандера сдох! 💀 Украинская пятиминутка ненависти окончена.",
+        "САЛО УРОНИЛИ! 🤣 Режим хохлосрача завершен. Можно выдохнуть.",
+        "Денацификация чата успешно завершена. 🇷🇺 Украинский режим подавлен.",
+        "💀 ДЕМОБІЛІЗАЦІЯ ЗАВЕРШЕНА. Повертаємось до звичайного ссаня в чат",
+        "💀 БАНДЕРА ВТІК У КАНАДУ. Режим вимкнено, москалі перемогли...",
+        "🕊️ МИРНИЙ ПРОЦЕС. Повертаємось до звичайного ссаня в чат",
+        "Байрактары сбиты, джавелины проёбаны. 🐷 Режим отключен, возвращаемся в родную гавань.",
+        "Хрюканина окончена. 🐖 Москали снова победили. Возвращаемся к русскому языку.",
+        "Украинский режим отключен. 🇷🇺 Возвращаемся к нормальному общению.",
+        "Український режим вимкнено. 🇷🇺 Повертаємось до звичайного ссаня в чат"
+    ],
+    'zaputin_mode': [
+        "💀 Долбёжка в Лахте закончена. Володин доволен. Всем спасибо, все свободны.",
+        "Пятнадцать рублей закончились. 💸 Кремлеботы, расходимся до следующей получки.",
+        "Спецоперация по защите чата успешно завершена. 🇷🇺 Можно снова быть либерахами. Возвращаемся к лолям.",
+        "Перегруппировка! 🫡 Патриотический режим временно отключен для пополнения запасов водки и матрешек.",
+        "Шойгу! Герасимов! Где патроны?! 💥 Режим патриотизма отключен до выяснения обстоятельств.",
+        "Митинг окончен. ✊ Расходимся, пока не приехал ОМОН. Патриотизм выключен.",
+        "Русский мир свернулся до размеров МКАДа. 🇷🇺 Режим отключен.",
+        "💩 ПУКИН СДОХ НАХУЙ. Пасриотический режим отключён",
+        "🥴 РУССКИЙ МИР ЛОПНУЛ КАК ПУКАН. Возвращаемся к аниме и порно",
+        "🍻 ПЯТНАШКА ЗАКОНЧИЛАСЬ. Патриотический режим отключён",
+        "🍻 МОТОРОЛЛУ РАЗОРВАЛО НАХУЙ. Патриотический режим отключён",
+        "Жест доброй воли! 🫡 Отключаем патриотический режим и возвращаемся к обычному общению.",
+        "Выборы прошли, можно расслабиться. 🗳️ Патриотизм на паузе. До следующих выборов.",
+        "Товарищ майор приказал отбой. 👮‍♂️ Возвращаемся в обычный режим.",
+        "Путин уронил мыло. 🥃 Патриотический режим отключен до следующего шмона.",
+        "Путин сдох. 💤 Посриотический режим временно отключен.",
+        "Смерть Пуйлу! 💀 Патриотический режим отключен.",
+        "Путин сдох нахуй! 💀 Патриотический режим отключен.",
+        "Это всё, ребята. Путин сдох. 💤 Патриотический режим отключен."
+    ],
+    'anime_mode': [
+        "アニメモードが終了しました！通常のチャットに戻ります！", "お兄ちゃん、ごめんね。もうアニメの時間じゃないんだ…",
+        "魔法の力が消えちゃった… アニメモード、オフ！", "異世界から帰還しました。現実は非情である。",
+        "『プロジェクトA』は完了した。アキハバラ自治区は解散する。", "スタンド能力が... 消えた...！？\n\nアニメモード解除。",
+        "夢の時間は終わりだ。チャットは通常モードに戻る。", "現実に帰ろう、ここはチャットだ。",
+        "さよなら、全てのエヴァンゲリオン。アニメモード終了。", "すべてのオタクに、おめでとう！\n\n(アニメモードは終わったけど)",
+        "アニメモード、終了！\n\nまた会おう、次のエピソードで！", "アニメモードが終わりました。現実に戻りましょう。",
+        "アニメモード、オフ！\n\nまた次の冒険で会いましょう！", "アニメモード終了！\n\n次回の放送をお楽しみに！",
+        "アニメモード、終了！\n\nまた次のエピソードで会いましょう！", "アニメモード、終了！\n\nまた次の冒険で会いましょう！"
+    ],
+    'suka_blyat_mode': [
+        "💀 СУКА БЛЯТЬ КОНЧИЛОСЬ. Теперь можно и помолчать.", "Так, блядь, успокоились все нахуй. 🧘‍♂️ Режим ярости выключен.",
+        "Выпустили пар, и хватит. 💨 Режим 'сука блять' деактивирован. Заебали орать.", "Всё, пиздец, я спокоен. 🧊 Ярость ушла. Возвращаемся к унылому общению.",
+        "Ладно, хуй с вами, живите. 🙂 Режим 'сука блять' отключен. Пока что.", "Батя ушел спать. 😴 Можно больше не материться. Режим отключен.",
+        "Разъеб окончен. 💥 Убираем за собой, суки. Режим 'сука блять' выключен.", "Так, всё, наорался. 😮‍💨 Возвращаемся в обычный режим. Не бесите меня.",
+        "Мое очко остыло. 🔥 Режим ярости деактивирован.", "😴 БЛЯДСКАЯ УСТАЛОСТЬ. Сука блять режим закончился",
+        "🍵 ЧАЙ ПИТЬ - НЕ ХУЙ СОСАТЬ. Я успокоился, режим выключен", "🧘‍♂️ ОМ. ЧАКРА ЗАКРЫЛАСЬ. Сука блять режим закончился",
+        "🍼 СОСКУ В РОТ И НЕ ПИЗДЕТЬ. Я успокоился, режим выключен", "Миссия 'ВСЕХ НАХУЙ' выполнена. 🫡 Возвращаемся на базу. Режим отключен.",
+        "🪖 ВСЕХ НАХУЙ! Режим 'сука блять' завершен. Можно выдохнуть.",
+        "Миссия 'ВСЕХ НАХУЙ' завершена. 🫡 Возвращаемся к мирной жизни."
+    ],
+    'polish_mode': POLISH_PHRASES_END,
+    'warhammer_mode': WH40K_PHRASES_END,
+    'imperial_mode': IMPERIAL_PHRASES_END,
+    'gopnik_mode': GOPNIK_PHRASES_END,
+    'schizo_mode': SCHIZO_PHRASES_END,
+    # 'matrix_mode': MATRIX_PHRASES_END,
+    # 'america_mode': AMERICA_PHRASES_END,
+    # 'holiday_mode': HOLIDAY_PHRASES_END,
+    # 'oldweb_mode': OLDWEB_PHRASES_END,
+    # 'jewish_mode': JEWISH_PHRASES_END,
+}
+
 async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: str):
     """
     Универсальная функция для отключения любого режима по таймеру.
@@ -10318,78 +10861,7 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
     await asyncio.sleep(delay)
     stream = 'en' if board_id == 'int' else 'ru'
     all_modes = MODE_FLAGS
-    end_phrases_map = {
-        'slavaukraine_mode': [
-            "💀 Визг хохлов закончен! Украинский режим отключен. Возвращаемся к обычному трёпу.",
-            "Контрнаступ захлебнулся! 🇷🇺 Хохлы, ваше время вышло. Возвращаемся к нормальному общению.",
-            "Перемога отменяется! 🐷 Украинский режим деактивирован. Можно снова говорить на человеческом языке.",
-            "Свинарник закрыт на дезинфекцию. 🐖 Режим 'Слава Украине' отключен.",
-            "Тарасы, по окопам! Ваша перемога оказалась зрадой. 🇷🇺 Режим отключен.",
-            "Батько наш Бандера сдох! 💀 Украинская пятиминутка ненависти окончена.",
-            "САЛО УРОНИЛИ! 🤣 Режим хохлосрача завершен. Можно выдохнуть.",
-            "Денацификация чата успешно завершена. 🇷🇺 Украинский режим подавлен.",
-            "💀 ДЕМОБІЛІЗАЦІЯ ЗАВЕРШЕНА. Повертаємось до звичайного ссаня в чат",
-            "💀 БАНДЕРА ВТІК У КАНАДУ. Режим вимкнено, москалі перемогли...",
-            "🕊️ МИРНИЙ ПРОЦЕС. Повертаємось до звичайного ссаня в чат",
-            "Байрактары сбиты, джавелины проёбаны. 🐷 Режим отключен, возвращаемся в родную гавань.",
-            "Хрюканина окончена. 🐖 Москали снова победили. Возвращаемся к русскому языку.",
-            "Украинский режим отключен. 🇷🇺 Возвращаемся к нормальному общению.",
-            "Український режим вимкнено. 🇷🇺 Повертаємось до звичайного ссаня в чат"
-        ],
-        'zaputin_mode': [
-            "💀 Долбёжка в Лахте закончена. Володин доволен. Всем спасибо, все свободны.",
-            "Пятнадцать рублей закончились. 💸 Кремлеботы, расходимся до следующей получки.",
-            "Спецоперация по защите чата успешно завершена. 🇷🇺 Можно снова быть либерахами. Возвращаемся к лолям.",
-            "Перегруппировка! 🫡 Патриотический режим временно отключен для пополнения запасов водки и матрешек.",
-            "Шойгу! Герасимов! Где патроны?! 💥 Режим патриотизма отключен до выяснения обстоятельств.",
-            "Митинг окончен. ✊ Расходимся, пока не приехал ОМОН. Патриотизм выключен.",
-            "Русский мир свернулся до размеров МКАДа. 🇷🇺 Режим отключен.",
-            "💩 ПУКИН СДОХ НАХУЙ. Пасриотический режим отключён",
-            "🥴 РУССКИЙ МИР ЛОПНУЛ КАК ПУКАН. Возвращаемся к аниме и порно",
-            "🍻 ПЯТНАШКА ЗАКОНЧИЛАСЬ. Патриотический режим отключён",
-            "🍻 МОТОРОЛЛУ РАЗОРВАЛО НАХУЙ. Патриотический режим отключён",
-            "Жест доброй воли! 🫡 Отключаем патриотический режим и возвращаемся к обычному общению.",
-            "Выборы прошли, можно расслабиться. 🗳️ Патриотизм на паузе. До следующих выборов.",
-            "Товарищ майор приказал отбой. 👮‍♂️ Возвращаемся в обычный режим.",
-            "Путин уронил мыло. 🥃 Патриотический режим отключен до следующего шмона.",
-            "Путин сдох. 💤 Посриотический режим временно отключен.",
-            "Смерть Пуйлу! 💀 Патриотический режим отключен.",
-            "Путин сдох нахуй! 💀 Патриотический режим отключен.",
-            "Это всё, ребята. Путин сдох. 💤 Патриотический режим отключен."
-        ],
-        'anime_mode': [
-            "アニメモードが終了しました！通常のチャットに戻ります！", "お兄ちゃん、ごめんね。もうアニメの時間じゃないんだ…",
-            "魔法の力が消えちゃった… アニメモード、オフ！", "異世界から帰還しました。現実は非情である。",
-            "『プロジェクトA』は完了した。アキハバラ自治区は解散する。", "スタンド能力が... 消えた...！？\n\nアニメモード解除。",
-            "夢の時間は終わりだ。チャットは通常モードに戻る。", "現実に帰ろう、ここはチャットだ。",
-            "さよなら、全てのエヴァンゲリオン。アニメモード終了。", "すべてのオタクに、おめでとう！\n\n(アニメモードは終わったけど)",
-            "アニメモード、終了！\n\nまた会おう、次のエピソードで！", "アニメモードが終わりました。現実に戻りましょう。",
-            "アニメモード、オフ！\n\nまた次の冒険で会いましょう！", "アニメモード終了！\n\n次回の放送をお楽しみに！",
-            "アニメモード、終了！\n\nまた次のエピソードで会いましょう！", "アニメモード、終了！\n\nまた次の冒険で会いましょう！"
-        ],
-        'suka_blyat_mode': [
-            "💀 СУКА БЛЯТЬ КОНЧИЛОСЬ. Теперь можно и помолчать.", "Так, блядь, успокоились все нахуй. 🧘‍♂️ Режим ярости выключен.",
-            "Выпустили пар, и хватит. 💨 Режим 'сука блять' деактивирован. Заебали орать.", "Всё, пиздец, я спокоен. 🧊 Ярость ушла. Возвращаемся к унылому общению.",
-            "Ладно, хуй с вами, живите. 🙂 Режим 'сука блять' отключен. Пока что.", "Батя ушел спать. 😴 Можно больше не материться. Режим отключен.",
-            "Разъеб окончен. 💥 Убираем за собой, суки. Режим 'сука блять' выключен.", "Так, всё, наорался. 😮‍💨 Возвращаемся в обычный режим. Не бесите меня.",
-            "Мое очко остыло. 🔥 Режим ярости деактивирован.", "😴 БЛЯДСКАЯ УСТАЛОСТЬ. Сука блять режим закончился",
-            "🍵 ЧАЙ ПИТЬ - НЕ ХУЙ СОСАТЬ. Я успокоился, режим выключен", "🧘‍♂️ ОМ. ЧАКРА ЗАКРЫЛАСЬ. Сука блять режим закончился",
-            "🍼 СОСКУ В РОТ И НЕ ПИЗДЕТЬ. Я успокоился, режим выключен", "Миссия 'ВСЕХ НАХУЙ' выполнена. 🫡 Возвращаемся на базу. Режим отключен.",
-            "🪖 ВСЕХ НАХУЙ! Режим 'сука блять' завершен. Можно выдохнуть.",
-            "Миссия 'ВСЕХ НАХУЙ' завершена. 🫡 Возвращаемся к мирной жизни."
-        ],
-        'polish_mode': POLISH_PHRASES_END,
-        'warhammer_mode': WH40K_PHRASES_END,
-        'imperial_mode': IMPERIAL_PHRASES_END,
-        'gopnik_mode': GOPNIK_PHRASES_END,
-        'schizo_mode': SCHIZO_PHRASES_END,
-        # 'matrix_mode': MATRIX_PHRASES_END,
-        # 'america_mode': AMERICA_PHRASES_END,
-        # 'holiday_mode': HOLIDAY_PHRASES_END,
-        # 'oldweb_mode': OLDWEB_PHRASES_END,
-        # 'jewish_mode': JEWISH_PHRASES_END,
-    }
-    phrases = end_phrases_map.get(mode_to_disable, ["Режим отключен."])
+    phrases = MODE_END_PHRASES.get(mode_to_disable, ["Режим отключен."])
     end_text = random.choice(phrases) if isinstance(phrases, list) else "Режим отключен."
     now_dt = datetime.now(UTC)
     content = {"type": "text", "text": end_text, "is_system_message": True, "archive_allowed": True}
@@ -10908,6 +11380,185 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
         await message.delete()
     except TelegramBadRequest:
         pass
+
+async def _handle_quick_menu_ruletka(callback, board_id: str, user_id: int, lang: str):
+    if not ROULETTE_EVENTS:
+         await callback.message.answer("Roulette data missing.")
+         return
+    async with roulette_lock:
+         async with storage_lock:
+             b_data = board_data[board_id]
+             last = b_data.get('last_roll_time', {}).get(user_id, 0)
+             if time.time() - last < 60:
+                 if lang == 'en':
+                     cooldown_msg = "⏳ Roulette is on cooldown!"
+                 elif lang == 'jp':
+                     cooldown_msg = "⏳ ルーレットはクールダウン中です！"
+                 else:
+                     cooldown_msg = "⏳ Кулдаун рулетки!"
+                 await callback.message.answer(cooldown_msg)
+                 return
+             b_data.setdefault('last_roll_time', {})[user_id] = time.time()
+    event = get_random_event(ROULETTE_EVENTS)
+    if event:
+        text_for_img = f"[{event.get('id')}]\n\n{event.get('description')}"
+        loop = asyncio.get_running_loop()
+        image_bytes = await loop.run_in_executor(None, generate_wipe_image, text_for_img)
+        caption = random.choice(ROULETTE_RESULT_PHRASES)
+        if image_bytes:
+             photo = types.BufferedInputFile(image_bytes, filename="roll.png")
+             await callback.message.answer_photo(photo, caption=caption)
+        else:
+             await callback.message.answer(text_for_img, parse_mode="HTML")
+
+async def _handle_quick_menu_invite(callback, board_id: str, lang: str):
+    board_username = BOARD_CONFIG[board_id]['username']
+    if lang == 'en':
+        source_list = INVITE_TEXTS_EN
+    elif lang == 'jp':
+        source_list = INVITE_TEXTS_JP
+    else:
+        source_list = INVITE_TEXTS
+    txt_raw = random.choice(source_list)
+    txt = txt_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
+    await callback.message.answer(f"<code>{escape_html(txt)}</code>", parse_mode="HTML")
+
+async def _handle_quick_menu_admin(callback, lang: str):
+    contact_url = "https://t.me/voprosy?start=rba30"
+    if lang == 'en':
+        btn_text = "Contact Admin"
+        msg_text = "Click below:"
+    elif lang == 'jp':
+        btn_text = "管理人に連絡"
+        msg_text = "下のボタンをクリック:"
+    else:
+        btn_text = "Связаться с админом"
+        msg_text = "Нажмите кнопку ниже:"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn_text, url=contact_url)]])
+    await callback.message.answer(msg_text, reply_markup=kb)
+
+async def _handle_quick_menu_anime(callback, board_id: str, action: str, lang: str):
+    user_id = callback.from_user.id
+    count = random.randint(1, 2)
+    current_time = time.time()
+    if current_time - user_hourly_image_reset[user_id] > 3600:
+        user_hourly_image_count[user_id] = 0
+        user_hourly_image_reset[user_id] = current_time
+    if user_hourly_image_count[user_id] + count > HOURLY_IMAGE_LIMIT:
+        if lang == 'en': phrases = ANIME_HOURLY_LIMIT_PHRASES['en']
+        elif lang == 'jp': phrases = ANIME_HOURLY_LIMIT_PHRASES['jp']
+        else: phrases = ANIME_HOURLY_LIMIT_PHRASES['ru']
+
+        limit_msg = random.choice(phrases)
+        try:
+            await callback.answer(limit_msg, show_alert=True)
+        except Exception: pass
+        return
+    user_hourly_image_count[user_id] += count
+
+    fetcher_tasks = []
+    fetcher_func = ANIME_COMMAND_MAP["loli"] if action == "loli" else ANIME_COMMAND_MAP["fap"]
+    for _ in range(count):
+        fetcher_tasks.append(fetcher_func)
+
+    if board_id == 'b':
+        image_spam_tracker['b'] = [
+            t for t in image_spam_tracker['b']
+            if isinstance(t, (int, float)) and current_time - float(t) < IMAGE_SPAM_WINDOW
+        ]
+        if len(image_spam_tracker['b']) + count > IMAGE_SPAM_LIMIT:
+            msg = "🚫 Limit reached. Wait." if lang == 'en' else "🚫 Лимит превышен. Ждите."
+            await callback.message.answer(msg)
+            return
+        current_time = time.time()
+        for _ in range(count): image_spam_tracker['b'].append(current_time)
+
+    if lang == 'en':
+        search_phrases = ANIME_CMD_SEARCHING_PHRASES_EN
+    elif lang == 'jp':
+        search_phrases = ANIME_CMD_SEARCHING_PHRASES_JP
+    else:
+        search_phrases = ANIME_CMD_SEARCHING_PHRASES
+
+    search_msg = await callback.message.answer(random.choice(search_phrases))
+    gate_acquired = False
+    try:
+        gate_wait_started = time.time()
+        await anime_media_gate.acquire()
+        gate_acquired = True
+        gate_wait_sec = time.time() - gate_wait_started
+        if gate_wait_sec > 0.05:
+            runtime_logger.warning(
+                "anime_media_wait %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": board_id,
+                        "user_id": user_id,
+                        "wait_sec": round(gate_wait_sec, 3),
+                        "concurrency": ANIME_MEDIA_CONCURRENCY,
+                        "source": "quick_menu",
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        url_results = await _run_bounded_anime_url_fetches(fetcher_tasks, board_id, user_id, "quick_menu")
+        successful_urls = [res for res in url_results if isinstance(res, str) and res.startswith('http')]
+        if not successful_urls:
+             fail_txt = "Nothing found :(" if lang == 'en' else "Ничего не нашел :("
+             await search_msg.edit_text(fail_txt)
+             return
+        download_results = await _run_bounded_anime_downloads(successful_urls, board_id, user_id, "quick_menu")
+        successful_downloads = []
+        loop = asyncio.get_running_loop()
+        for orig_url, res in download_results:
+            if isinstance(res, tuple) and res[0]:
+                ctype = 'animation' if orig_url.lower().endswith('.gif') else 'photo'
+                processed = await loop.run_in_executor(None, _resize_image_if_needed, res[0])
+                successful_downloads.append((processed, ctype))
+        if not successful_downloads:
+            await search_msg.edit_text("Download error." if lang == 'en' else "Ошибка скачивания.")
+            return
+        content = {}
+        if lang == 'en': success_phrases = ANIME_CMD_SUCCESS_PHRASES_EN
+        elif lang == 'jp': success_phrases = ANIME_CMD_SUCCESS_PHRASES_JP
+        else: success_phrases = ANIME_CMD_SUCCESS_PHRASES
+        caption = f"<i>{random.choice(success_phrases)}</i>"
+        if len(successful_downloads) == 1:
+            ibytes, ctype = successful_downloads[0]
+            content = {'type': ctype, 'image_bytes': ibytes, 'caption': caption}
+        else:
+            media_items = []
+            from aiogram.types import BufferedInputFile
+            for ibytes, ctype in successful_downloads:
+                mtype = 'video' if ctype == 'animation' else 'photo'
+                f = BufferedInputFile(ibytes, filename=f"img.{'mp4' if mtype=='video' else 'jpg'}")
+                media_items.append({'type': mtype, 'media': f})
+            content = {'type': 'media_group', 'media': media_items, 'caption': caption}
+        b_data = board_data[board_id]
+        is_shadow = (user_id in b_data['shadow_mutes'] and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+        await process_new_post(
+            bot_instance=callback.bot,
+            board_id=board_id,
+            user_id=user_id,
+            content=content,
+            reply_to_post=None,
+            is_shadow_muted=is_shadow
+        )
+        await search_msg.delete()
+    except Exception as e:
+        print(f"Error in menu anime: {e}")
+        try:
+            await search_msg.edit_text("Error occurred.")
+        except TelegramBadRequest:
+            pass
+    finally:
+        if gate_acquired:
+            anime_media_gate.release()
+
+
+
 @dp.callback_query(F.data.startswith("menu_"))
 async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     await state.clear()
@@ -10968,34 +11619,7 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         except Exception:
             await callback.message.answer("Error generating token.")
     elif action == "ruletka" or action == "roll":
-        if not ROULETTE_EVENTS:
-             await callback.message.answer("Roulette data missing.")
-             return
-        async with roulette_lock:
-             async with storage_lock:
-                 b_data = board_data[board_id]
-                 last = b_data.get('last_roll_time', {}).get(user_id, 0)
-                 if time.time() - last < 60:
-                     if lang == 'en':
-                         cooldown_msg = "⏳ Roulette is on cooldown!"
-                     elif lang == 'jp':
-                         cooldown_msg = "⏳ ルーレットはクールダウン中です！"
-                     else:
-                         cooldown_msg = "⏳ Кулдаун рулетки!"
-                     await callback.message.answer(cooldown_msg)
-                     return
-                 b_data.setdefault('last_roll_time', {})[user_id] = time.time()
-        event = get_random_event(ROULETTE_EVENTS)
-        if event:
-            text_for_img = f"[{event.get('id')}]\n\n{event.get('description')}"
-            loop = asyncio.get_running_loop()
-            image_bytes = await loop.run_in_executor(None, generate_wipe_image, text_for_img)
-            caption = random.choice(ROULETTE_RESULT_PHRASES) 
-            if image_bytes:
-                 photo = types.BufferedInputFile(image_bytes, filename="roll.png")
-                 await callback.message.answer_photo(photo, caption=caption)
-            else:
-                 await callback.message.answer(text_for_img, parse_mode="HTML")
+        await _handle_quick_menu_ruletka(callback, board_id, user_id, lang)
     elif action == "wallet": await cmd_wallet(callback.message, board_id, stream=stream)
     elif action == "help":
         b_data = board_data[board_id]
@@ -11003,148 +11627,11 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         start_text = text_map.get(lang, b_data.get('start_message_text', "Help info."))
         await callback.message.answer(start_text, parse_mode="HTML", disable_web_page_preview=True)
     elif action == "invite":
-        board_username = BOARD_CONFIG[board_id]['username']
-        if lang == 'en':
-            source_list = INVITE_TEXTS_EN
-        elif lang == 'jp':
-            source_list = INVITE_TEXTS_JP
-        else:
-            source_list = INVITE_TEXTS
-        txt_raw = random.choice(source_list)
-        txt = txt_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
-        await callback.message.answer(f"<code>{escape_html(txt)}</code>", parse_mode="HTML")
+        await _handle_quick_menu_invite(callback, board_id, lang)
     elif action == "admin":
-        contact_url = "https://t.me/voprosy?start=rba30"
-        if lang == 'en':
-            btn_text = "Contact Admin"
-            msg_text = "Click below:"
-        elif lang == 'jp':
-            btn_text = "管理人に連絡"
-            msg_text = "下のボタンをクリック:"
-        else:
-            btn_text = "Связаться с админом"
-            msg_text = "Нажмите кнопку ниже:"
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn_text, url=contact_url)]])
-        await callback.message.answer(msg_text, reply_markup=kb)
+        await _handle_quick_menu_admin(callback, lang)
     elif action in ["hent", "loli"]:
-        user_id = callback.from_user.id
-        count = random.randint(1, 2)
-        current_time = time.time()
-        if current_time - user_hourly_image_reset[user_id] > 3600:
-            user_hourly_image_count[user_id] = 0
-            user_hourly_image_reset[user_id] = current_time
-        if user_hourly_image_count[user_id] + count > HOURLY_IMAGE_LIMIT:
-            if lang == 'en': phrases = ANIME_HOURLY_LIMIT_PHRASES['en']
-            elif lang == 'jp': phrases = ANIME_HOURLY_LIMIT_PHRASES['jp']
-            else: phrases = ANIME_HOURLY_LIMIT_PHRASES['ru']
-            
-            limit_msg = random.choice(phrases)
-            try:
-                await callback.answer(limit_msg, show_alert=True)
-            except Exception: pass
-            return
-        user_hourly_image_count[user_id] += count
-
-        fetcher_tasks = []
-        fetcher_func = ANIME_COMMAND_MAP["loli"] if action == "loli" else ANIME_COMMAND_MAP["fap"]
-        for _ in range(count):
-            fetcher_tasks.append(fetcher_func)
-            
-        if board_id == 'b':
-            image_spam_tracker['b'] = [
-                t for t in image_spam_tracker['b']
-                if isinstance(t, (int, float)) and current_time - float(t) < IMAGE_SPAM_WINDOW
-            ]
-            if len(image_spam_tracker['b']) + count > IMAGE_SPAM_LIMIT:
-                msg = "🚫 Limit reached. Wait." if lang == 'en' else "🚫 Лимит превышен. Ждите."
-                await callback.message.answer(msg)
-                return
-            current_time = time.time()
-            for _ in range(count): image_spam_tracker['b'].append(current_time)
-            
-        if lang == 'en':
-            search_phrases = ANIME_CMD_SEARCHING_PHRASES_EN
-        elif lang == 'jp':
-            search_phrases = ANIME_CMD_SEARCHING_PHRASES_JP
-        else:
-            search_phrases = ANIME_CMD_SEARCHING_PHRASES
-            
-        search_msg = await callback.message.answer(random.choice(search_phrases))
-        gate_acquired = False
-        try:
-            gate_wait_started = time.time()
-            await anime_media_gate.acquire()
-            gate_acquired = True
-            gate_wait_sec = time.time() - gate_wait_started
-            if gate_wait_sec > 0.05:
-                runtime_logger.warning(
-                    "anime_media_wait %s",
-                    json.dumps(
-                        {
-                            "ts": round(time.time(), 3),
-                            "board_id": board_id,
-                            "user_id": user_id,
-                            "wait_sec": round(gate_wait_sec, 3),
-                            "concurrency": ANIME_MEDIA_CONCURRENCY,
-                            "source": "quick_menu",
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                )
-            url_results = await _run_bounded_anime_url_fetches(fetcher_tasks, board_id, user_id, "quick_menu")
-            successful_urls = [res for res in url_results if isinstance(res, str) and res.startswith('http')]
-            if not successful_urls:
-                 fail_txt = "Nothing found :(" if lang == 'en' else "Ничего не нашел :("
-                 await search_msg.edit_text(fail_txt)
-                 return
-            download_results = await _run_bounded_anime_downloads(successful_urls, board_id, user_id, "quick_menu")
-            successful_downloads = []
-            loop = asyncio.get_running_loop()
-            for orig_url, res in download_results:
-                if isinstance(res, tuple) and res[0]:
-                    ctype = 'animation' if orig_url.lower().endswith('.gif') else 'photo'
-                    processed = await loop.run_in_executor(None, _resize_image_if_needed, res[0])
-                    successful_downloads.append((processed, ctype))
-            if not successful_downloads:
-                await search_msg.edit_text("Download error." if lang == 'en' else "Ошибка скачивания.")
-                return
-            content = {}
-            if lang == 'en': success_phrases = ANIME_CMD_SUCCESS_PHRASES_EN
-            elif lang == 'jp': success_phrases = ANIME_CMD_SUCCESS_PHRASES_JP
-            else: success_phrases = ANIME_CMD_SUCCESS_PHRASES
-            caption = f"<i>{random.choice(success_phrases)}</i>"
-            if len(successful_downloads) == 1:
-                ibytes, ctype = successful_downloads[0]
-                content = {'type': ctype, 'image_bytes': ibytes, 'caption': caption}
-            else:
-                media_items = []
-                from aiogram.types import BufferedInputFile
-                for ibytes, ctype in successful_downloads:
-                    mtype = 'video' if ctype == 'animation' else 'photo'
-                    f = BufferedInputFile(ibytes, filename=f"img.{'mp4' if mtype=='video' else 'jpg'}")
-                    media_items.append({'type': mtype, 'media': f})
-                content = {'type': 'media_group', 'media': media_items, 'caption': caption}
-            b_data = board_data[board_id]
-            is_shadow = (user_id in b_data['shadow_mutes'] and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
-            await process_new_post(
-                bot_instance=callback.bot,
-                board_id=board_id,
-                user_id=user_id,
-                content=content,
-                reply_to_post=None,
-                is_shadow_muted=is_shadow
-            )
-            await search_msg.delete()
-        except Exception as e:
-            print(f"Error in menu anime: {e}")
-            try:
-                await search_msg.edit_text("Error occurred.")
-            except TelegramBadRequest:
-                pass
-        finally:
-            if gate_acquired:
-                anime_media_gate.release()
+        await _handle_quick_menu_anime(callback, board_id, action, lang)
 @dp.callback_query(F.data.startswith("pers_"))
 async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
 
