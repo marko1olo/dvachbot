@@ -140,6 +140,8 @@ def find_logical_garbage(cur, tables):
     valid_tables = {row[0] for row in cur.fetchall()}
 
     orphan_tables = []
+    queries = []
+
     for table, col in tables_to_check.items():
         if table in tables:
             if table not in valid_tables:
@@ -150,18 +152,25 @@ def find_logical_garbage(cur, tables):
                 continue
             safe_table = quote_identifier(table)
             safe_col = quote_identifier(col)
-            cur.execute(f"""
-                SELECT COUNT(*) FROM {safe_table} t
-                LEFT JOIN Posts p ON t.{safe_col} = p.post_num
-                WHERE p.post_num IS NULL
+            queries.append(f"""
+                SELECT '{table}' as table_name, '{col}' as col_name, COUNT(*) as orphans
+                FROM {safe_table} t
+                WHERE NOT EXISTS (SELECT 1 FROM Posts p WHERE p.post_num = t.{safe_col})
             """)
-            orphans = cur.fetchone()[0]
+
+    if queries:
+        cur.execute(" UNION ALL ".join(queries))
+        results = cur.fetchall()
+        for row in results:
+            table_name = row[0]
+            col_name = row[1]
+            orphans = row[2]
             if orphans > 0:
-                print(f"{Colors.FAIL}⚠️  Мусор в таблице {table}: {orphans} записей (ссылаются на удаленные посты){Colors.ENDC}")
+                print(f"{Colors.FAIL}⚠️  Мусор в таблице {table_name}: {orphans} записей (ссылаются на удаленные посты){Colors.ENDC}")
                 garbage_found = True
-                orphan_tables.append((table, col))
+                orphan_tables.append((table_name, col_name))
             else:
-                print(f"{Colors.OKGREEN}✓ Таблица {table} чиста{Colors.ENDC}")
+                print(f"{Colors.OKGREEN}✓ Таблица {table_name} чиста{Colors.ENDC}")
 
     # 3.5 Просроченные муты/баны (которые уже истекли, но висят в БД)
     current_ts = time.time()
