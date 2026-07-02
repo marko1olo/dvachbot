@@ -504,7 +504,6 @@ class ThreadImporter:
         stream: str = "ru",
         sim_settings: dict = None,
     ):
-        start_time = time.time()
         use_sim = sim_settings and sim_settings.get("enabled", False)
         task_id = str(uuid.uuid4()) if use_sim else None
         logger.info(
@@ -1068,7 +1067,7 @@ async def process_import_queue(app_state_broadcast_queue):
                             )
                             processed_ids.append(q_id)
 
-                    except Exception as e:
+                    except Exception:
                         processed_ids.append(q_id)
 
                 if processed_ids:

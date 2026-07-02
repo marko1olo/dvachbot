@@ -6826,16 +6826,20 @@ async def add_post_to_random_cache(post_data: dict):
     # Если это ОП-пост, добавляем в кэш тредов
     if is_op:
         _THREAD_CACHE[bid].append(str(pid))
-async def get_pending_mirror_tasks(limit: int = 10) -> list[dict]:
+async def get_pending_mirror_tasks(limit: int = 10, allowed_types: list[str] = None) -> list[dict]:
     """Берет задачи, время которых пришло."""
     db = await get_pool()
     now = time.time()
     try:
-        # ПРАВКА: Сортировка по ID DESC, чтобы свежедобавленные задачи шли первыми
-        async with db.execute(
-            "SELECT * FROM MirrorQueue WHERE next_run_at <= ? ORDER BY id DESC LIMIT ?", 
-            (now, limit)
-        ) as cursor:
+        if allowed_types:
+            placeholders = ",".join(["?"] * len(allowed_types))
+            query = f"SELECT * FROM MirrorQueue WHERE next_run_at <= ? AND mirror_type IN ({placeholders}) ORDER BY id DESC LIMIT ?"
+            params = [now] + list(allowed_types) + [limit]
+        else:
+            query = "SELECT * FROM MirrorQueue WHERE next_run_at <= ? ORDER BY id DESC LIMIT ?"
+            params = [now, limit]
+
+        async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
             cols = [d[0] for d in cursor.description]
             results = []
