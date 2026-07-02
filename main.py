@@ -61,7 +61,6 @@ from datetime import datetime, timedelta, timezone, UTC
 from enum import Enum
 from logging.handlers import RotatingFileHandler
 from typing import Tuple
-from dotenv import load_dotenv
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from common.html_utils import escape_html
@@ -2932,25 +2931,33 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                 posts_to_delete_set = set(user_posts)
                 threads_to_delete = []
 
-                for p_num in user_posts:
-                    p_str = str(p_num)
-                    async with db.execute("SELECT thread_id FROM Threads WHERE thread_id = ? OR thread_num = ?", (p_str, p_num)) as cursor:
-                        t_row = await cursor.fetchone()
-                        if t_row:
-                            threads_to_delete.append(t_row[0])
+                if user_posts:
+                    chunk_size = 400
+                    for i in range(0, len(user_posts), chunk_size):
+                        chunk = user_posts[i:i + chunk_size]
+                        p_strs = [str(p) for p in chunk]
+                        placeholders_str = ','.join('?' for _ in p_strs)
+                        placeholders_num = ','.join('?' for _ in chunk)
+                        query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders_str}) OR thread_num IN ({placeholders_num})"
+                        async with db.execute(query, p_strs + chunk) as cursor:
+                            t_rows = await cursor.fetchall()
+                            for tr in t_rows:
+                                threads_to_delete.append(tr[0])
 
                 if threads_to_delete:
-                    t_ids = set()
+                    t_ids = []
                     for t_id in threads_to_delete:
-                        t_ids.add(str(t_id))
-                        try: t_ids.add(str(int(t_id)))
-                        except ValueError: t_ids.add("0")
+                        t_ids.append(t_id)
+                        try: t_id_int = int(t_id)
+                        except ValueError: t_id_int = 0
+                        t_ids.append(str(t_id_int))
 
-                    t_ids_list = list(t_ids)
+                    t_ids = list(set(t_ids))
                     chunk_size = 900
-                    for i in range(0, len(t_ids_list), chunk_size):
-                        chunk = t_ids_list[i:i + chunk_size]
-                        placeholders = ','.join('?' for _ in chunk)
+
+                    for i in range(0, len(t_ids), chunk_size):
+                        chunk = t_ids[i:i+chunk_size]
+                        placeholders = ','.join(['?'] * len(chunk))
                         query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders})"
                         async with db.execute(query, chunk) as cursor:
                             p_rows = await cursor.fetchall()
@@ -3351,7 +3358,16 @@ SHADOW_REPLACEMENTS = [
 ]
 
 SHADOW_WORDS_REGEX = re.compile(
-    r'(?i)(?<![а-яёa-z])(к\s*а\s*л(?:\s+о\s*в\s*ы\s*е\s+м\s*а\s*с\s*с\s*ы)?|k\s*a\s*l|б\s*а\s*я\s*н|б\s*о\s*я\s*н|b\s*a\s*y\s*a\s*n|b\s*o\s*y\s*a\s*n)(?![а-яёa-z])'
+    r'(?i)(?<![а-яёa-z])('
+    r'к\s*а\s*л\s*(?:о\s*в\s*(?:ы\s*й|а\s*я|о\s*е|ы\s*е|о\s*г\s*о|о\s*м\s*у|у\s*ю|о\s*й|ы\s*м\s*и|ы\s*х|о\s*м)(?:\s+м\s*а\s*с\s*с\s*(?:а|ы|у|о\s*й|а\s*м\s*и|а\s*м|а\s*х))?)?|'
+    r'к\s*л\s*а\s*о\s*в\s*(?:ы\s*й|а\s*я|о\s*е|ы\s*е|о\s*г\s*о|о\s*м\s*у|у\s*ю|о\s*й|ы\s*м\s*и|ы\s*х|о\s*м)(?:\s+м\s*а\s*с\s*с\s*(?:а|ы|у|о\s*й|а\s*м\s*и|а\s*м|а\s*х))?|'
+    r'к\s*а\s*л(?:[ауеы]|о\s*м|о\s*в|а\s*м|а\s*м\s*и|а\s*х)?|'
+    r'k\s*a\s*l|б\s*а\s*я\s*н|б\s*о\s*я\s*н|b\s*a\s*y\s*a\s*n|b\s*o\s*y\s*a\s*n'
+    r')(?![а-яёa-z])'
+)
+
+DIE_WORDS_REGEX = re.compile(
+    r'(?i)(?<![а-яёa-z])(с\s*д\s*о\s*х\s*н\s*и(\s*т\s*е)?|у\s*м\s*р\s*и(\s*т\s*е)?)(?![а-яёa-z])'
 )
 
 POLITICAL_REPLACEMENTS = [
@@ -3381,12 +3397,19 @@ def apply_shadow_autoreplace(content: dict) -> dict:
     def replacer(match):
         return random.choice(SHADOW_REPLACEMENTS)
         
+    def die_replacer(match):
+        matched_text = match.group(1).lower().replace(" ", "")
+        if "те" in matched_text:
+            return "обоссыте меня"
+        return "обоссы меня"
+
     for key in ('text', 'caption'):
         text_val = modified.get(key)
         if text_val:
             words = text_val.split()
             if len(words) <= 12:
                 text_val = SHADOW_WORDS_REGEX.sub(replacer, text_val)
+                text_val = DIE_WORDS_REGEX.sub(die_replacer, text_val)
                 for pattern, replacements in POLITICAL_REPLACEMENTS:
                     text_val = pattern.sub(lambda m, reps=replacements: random.choice(reps), text_val)
                 modified[key] = text_val
@@ -6356,6 +6379,97 @@ async def send_active_pin_to_new_user(bot: Bot, user_id: int, board_id: str):
                 print(f"⚠️ Не удалось закрепить сообщение для нового юзера {user_id}: {e}")
     except Exception as e:
         print(f"❌ Ошибка в send_active_pin_to_new_user: {e}")
+def throttle(rate: int):
+    import functools
+    cooldowns = {}
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(message: types.Message, *args, **kwargs):
+            user_id = message.from_user.id if message.from_user else 0
+            now = time.time()
+            if user_id in cooldowns and now - cooldowns[user_id] < rate:
+                try:
+                    await message.answer(f"⚠️ Пожалуйста, подождите {int(rate - (now - cooldowns[user_id]))} сек.", disable_notification=True)
+                except Exception:
+                    pass
+                return
+            cooldowns[user_id] = now
+            return await func(message, *args, **kwargs)
+        return wrapper
+    return decorator
+
+@dp.message(Command("random", "randpic", "randvid", "rand"))
+@throttle(rate=5)
+async def cmd_random_media(message: types.Message):
+    args = message.text.split()
+    count = 1
+    if len(args) > 1 and args[1].isdigit():
+        count = int(args[1])
+        count = max(1, min(10, count))
+
+    command = args[0].lower()
+    is_video_req = "vid" in command
+
+    media_items = []
+
+    for _ in range(count * 2): # Try more times in case of invalid media
+        if len(media_items) >= count:
+            break
+
+        if is_video_req:
+            post = await get_random_video_post(allowed_boards=None)
+        else:
+            post = await get_random_image_post(allowed_boards=None)
+
+        if not post or "content" not in post:
+            continue
+
+        files = post["content"].get("files", [])
+        idx = post.get("_selected_file_index", 0)
+
+        if idx < len(files):
+            f = files[idx]
+            file_id = f.get("original_file_id") or f.get("file_id")
+            if file_id:
+                type_ = f.get("type", "")
+                is_vid = type_ in ("video", "animation", "video_note")
+                media_items.append((file_id, is_vid))
+
+    if not media_items:
+        await message.answer("❌ В пуле нет подходящих медиа.", disable_notification=True)
+        return
+
+    import hashlib
+    import os
+    secret = os.getenv("SECRET_KEY", "")
+    user_hash = hashlib.sha256((str(message.from_user.id) + secret).encode()).hexdigest()[:12]
+    caption = f"🎲 Рандом (x{len(media_items)}) | #{user_hash}"
+
+    if len(media_items) == 1:
+        file_id, is_vid = media_items[0]
+        try:
+            if is_vid:
+                await message.answer_video(file_id, caption=caption, parse_mode="HTML")
+            else:
+                await message.answer_photo(file_id, caption=caption, parse_mode="HTML")
+        except Exception as e:
+            print(f"Error sending random media: {e}")
+            await message.answer("❌ Ошибка при отправке. Возможно файл удален с серверов Telegram.")
+    else:
+        media_group = []
+        for i, (file_id, is_vid) in enumerate(media_items):
+            cap = caption if i == 0 else None
+            if is_vid:
+                media_group.append(InputMediaVideo(media=file_id, caption=cap, parse_mode="HTML"))
+            else:
+                media_group.append(InputMediaPhoto(media=file_id, caption=cap, parse_mode="HTML"))
+
+        try:
+            await message.answer_media_group(media_group)
+        except Exception as e:
+            print(f"Error sending random media group: {e}")
+            await message.answer("❌ Ошибка при отправке альбома.")
+
 @dp.message(Command("getid"))
 async def cmd_get_file_id(message: types.Message):
     # Проверяем, есть ли реплай
