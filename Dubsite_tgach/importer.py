@@ -1068,7 +1068,7 @@ async def process_import_queue(app_state_broadcast_queue):
                             )
                             processed_ids.append(q_id)
 
-                    except Exception as e:
+                    except Exception:
                         processed_ids.append(q_id)
 
                 if processed_ids:
