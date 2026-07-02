@@ -47,7 +47,7 @@ for mod_name in sys.modules:
         sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
 
 # Now we can safely import the function under test
-from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text
+from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, format_post_text
 
 class StubClient:
     def __init__(self, host):
