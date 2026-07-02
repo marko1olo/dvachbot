@@ -1720,7 +1720,7 @@ def pluralize_russian(count, one, few, many):
             return few
         else:
             return many
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return many
 def format_bayan_label(count: int, lang: str = 'ru') -> str:
 
