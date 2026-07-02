@@ -2932,18 +2932,34 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                 posts_to_delete_set = set(user_posts)
                 threads_to_delete = []
 
-                for p_num in user_posts:
-                    p_str = str(p_num)
-                    async with db.execute("SELECT thread_id FROM Threads WHERE thread_id = ? OR thread_num = ?", (p_str, p_num)) as cursor:
-                        t_row = await cursor.fetchone()
-                        if t_row:
-                            threads_to_delete.append(t_row[0])
+                if user_posts:
+                    chunk_size = 500
+                    for i in range(0, len(user_posts), chunk_size):
+                        chunk = user_posts[i:i + chunk_size]
+                        p_strs = [str(p) for p in chunk]
+                        placeholders_str = ','.join('?' for _ in p_strs)
+                        placeholders_num = ','.join('?' for _ in chunk)
+                        query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders_str}) OR thread_num IN ({placeholders_num})"
+                        async with db.execute(query, p_strs + chunk) as cursor:
+                            t_rows = await cursor.fetchall()
+                            for tr in t_rows:
+                                threads_to_delete.append(tr[0])
 
                 if threads_to_delete:
-                    for t_id in threads_to_delete:
-                        try: t_id_int = int(t_id)
-                        except ValueError: t_id_int = 0
-                        async with db.execute("SELECT post_num FROM Posts WHERE thread_id = ? OR thread_id = ?", (t_id, str(t_id_int))) as cursor:
+                    chunk_size = 500
+                    for i in range(0, len(threads_to_delete), chunk_size):
+                        chunk = threads_to_delete[i:i + chunk_size]
+                        t_ids = []
+                        t_id_ints = []
+                        for t_id in chunk:
+                            t_ids.append(str(t_id))
+                            try: t_id_ints.append(str(int(t_id)))
+                            except ValueError: t_id_ints.append("0")
+
+                        placeholders_t_ids = ','.join('?' for _ in t_ids)
+                        placeholders_t_id_ints = ','.join('?' for _ in t_id_ints)
+                        query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders_t_ids}) OR thread_id IN ({placeholders_t_id_ints})"
+                        async with db.execute(query, t_ids + t_id_ints) as cursor:
                             p_rows = await cursor.fetchall()
                             for pr in p_rows:
                                 posts_to_delete_set.add(pr[0])
