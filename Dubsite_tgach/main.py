@@ -1684,10 +1684,9 @@ def format_post_text(text: str) -> str:
     
     return processed_text
 def sanitize_html(text: str) -> str:
-    if not text:
-        return ""
-    # quote=False оставляет кавычки как есть (читаемее), но убивает теги
-    return html.escape(text, quote=False)
+    if not isinstance(text, str): return str(text)
+    text = text.replace('<', '&lt;').replace('>', '&gt;')
+    return text
 def optimize_thread_context(op_post: dict, replies: list, max_posts: int = 40) -> str:
     """
     Превращает тред в компактную строку для нейронки.
