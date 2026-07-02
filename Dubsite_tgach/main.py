@@ -1779,20 +1779,14 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
     if is_video_or_doc:
         if 'huggingface' in mirrors:
             selected_original = mirrors['huggingface']
-        elif 'catbox' in mirrors and not is_ru:
-            selected_original = mirrors['catbox']
     else:
         options = ['telegram']
         if 'huggingface' in mirrors:
             options.append('huggingface')
-        if 'catbox' in mirrors and not is_ru:
-            options.append('catbox')
 
         choice = random.choice(options)
         if choice == 'huggingface':
             selected_original = mirrors['huggingface']
-        elif choice == 'catbox':
-            selected_original = mirrors['catbox']
     selected_thumbnail = base_thumbnail_url
 
     if 'huggingface' in thumb_mirrors:
@@ -6541,3 +6535,14 @@ if __name__ == "__main__":
         timeout_keep_alive=10,
         limit_concurrency=1000
     )
+
+@app.get("/api/is-ru")
+async def check_if_ru_dub(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}
