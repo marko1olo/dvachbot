@@ -1,5 +1,9 @@
 import asyncio
 import os
+import sys
+
+# Add the root directory to sys.path to allow importing from 'common'
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import aiohttp
 from dotenv import load_dotenv
