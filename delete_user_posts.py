@@ -42,15 +42,22 @@
   2958
   2959	                    # Если есть удаляемые треды, выбираем ВСЕ посты этих тредов, чтобы снести их тоже
   2960	                    if threads_to_delete:
-  2961	                        for t_id in threads_to_delete:
-  2962	                            try: t_id_int = int(t_id)
-  2963	                            except ValueError: t_id_int = 0
-  2964
-  2965	                            async with db.execute("SELECT post_num FROM Posts WHERE thread_id = ? OR thread_id = ?", (t_id, str(t_id_int))) as cursor:
-  2966	                                p_rows = await cursor.fetchall()
-  2967	                                for pr in p_rows:
-  2968	                                    posts_to_delete_set.add(pr[0])
-  2969
+  2960	                        t_ids = set()
+  2960	                        for t_id in threads_to_delete:
+  2960	                            t_ids.add(str(t_id))
+  2960	                            try: t_ids.add(str(int(t_id)))
+  2960	                            except ValueError: t_ids.add("0")
+  2960
+  2960	                        t_ids_list = list(t_ids)
+  2960	                        chunk_size = 900
+  2960	                        for i in range(0, len(t_ids_list), chunk_size):
+  2960	                            chunk = t_ids_list[i:i + chunk_size]
+  2960	                            placeholders = ','.join('?' for _ in chunk)
+  2960	                            query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders})"
+  2960	                            async with db.execute(query, chunk) as cursor:
+  2960	                                p_rows = await cursor.fetchall()
+  2960	                                for pr in p_rows:
+  2960	                                    posts_to_delete_set.add(pr[0])
   2970	                    posts_to_delete_nums = list(posts_to_delete_set)
   2971	                    placeholders = ','.join('?' for _ in posts_to_delete_nums)
   2972
