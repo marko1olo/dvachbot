@@ -1,12 +1,20 @@
 import subprocess
 
+import os
+
 def run_cmd(cmd, check=True):
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
     try:
-        return subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT).decode('utf-8').strip()
+        return subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT, env=env, timeout=15).decode('utf-8').strip()
     except subprocess.CalledProcessError as e:
         if check:
             raise
         return e.output.decode('utf-8').strip()
+    except subprocess.TimeoutExpired as e:
+        if check:
+            raise
+        return (e.output or b'').decode('utf-8').strip()
 
 def main():
     print("Starting Automated PR Triage...")
