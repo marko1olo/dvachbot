@@ -24,7 +24,7 @@ mocked_deps = [
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
     'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
-    'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
+    'slowapi', 'slowapi.util', 'slowapi.errors', 'uvicorn',
     'fastapi', 'fastapi.responses', 'fastapi.middleware', 'fastapi.middleware.cors',
     'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip',
     'fastapi.staticfiles', 'fastapi.templating', 'fastapi.exceptions',
@@ -47,7 +47,9 @@ for mod_name in sys.modules:
         sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
 
 # Now we can safely import the function under test
-from Dubsite_tgach.main import get_real_ip, sanitize_html
+from Dubsite_tgach.main import get_real_ip, sanitize_html, get_country_by_ip
+from unittest.mock import MagicMock, AsyncMock, patch
+
 
 class StubClient:
     def __init__(self, host):
@@ -260,3 +262,65 @@ class TestSanitizeHtml(unittest.TestCase):
         self.assertEqual(sanitize_html("this & that"), "this &amp; that")
         self.assertEqual(sanitize_html("less < greater >"), "less &lt; greater &gt;")
         self.assertEqual(sanitize_html("a & b < c > d \" e ' f"), "a &amp; b &lt; c &gt; d \" e ' f")
+
+
+class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
+    async def test_local_ip(self):
+        self.assertEqual(await get_country_by_ip("127.0.0.1"), "XX")
+        self.assertEqual(await get_country_by_ip("localhost"), "XX")
+        self.assertEqual(await get_country_by_ip("::1"), "XX")
+
+    @patch("Dubsite_tgach.main.GEOIP_READER", None)
+    @patch("os.path.exists", return_value=False)
+    @patch("httpx.AsyncClient")
+    async def test_http_fallback_success(self, mock_client_cls, mock_exists):
+        # Set up context manager mock
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+        # Set up response mock
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"countryCode": "US"}
+        mock_client.get.return_value = mock_response
+
+        self.assertEqual(await get_country_by_ip("8.8.8.8"), "US")
+        self.assertTrue(mock_client.get.called)
+
+    @patch("Dubsite_tgach.main.GEOIP_READER")
+    async def test_geoip_success(self, mock_reader):
+        mock_response = MagicMock()
+        mock_response.country.iso_code = "CA"
+        mock_reader.country.return_value = mock_response
+
+        self.assertEqual(await get_country_by_ip("1.1.1.1"), "CA")
+        self.assertTrue(mock_reader.country.called)
+
+    @patch("Dubsite_tgach.main.GEOIP_READER")
+    @patch("httpx.AsyncClient")
+    async def test_geoip_exception_fallback(self, mock_client_cls, mock_reader):
+        mock_reader.country.side_effect = Exception("Not found")
+
+        # Set up context manager mock
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+        # Set up response mock
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"countryCode": "GB"}
+        mock_client.get.return_value = mock_response
+
+        self.assertEqual(await get_country_by_ip("2.2.2.2"), "GB")
+        self.assertTrue(mock_reader.country.called)
+        self.assertTrue(mock_client.get.called)
+
+    @patch("Dubsite_tgach.main.GEOIP_READER", None)
+    @patch("os.path.exists", return_value=False)
+    @patch("httpx.AsyncClient")
+    async def test_all_fail(self, mock_client_cls, mock_exists):
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.get.side_effect = Exception("Network error")
+
+        self.assertEqual(await get_country_by_ip("3.3.3.3"), "XX")
