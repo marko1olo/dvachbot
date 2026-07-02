@@ -1740,7 +1740,7 @@ def format_iso_time(ts: float) -> str:
 def format_timestamp(ts: float) -> str:
     try:
         return datetime.fromtimestamp(ts).strftime('%d.%m.%Y %H:%M:%S')
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError, OSError):
         return ""
 def format_poll_for_html(poll_data: dict) -> str:
     if not poll_data or 'question' not in poll_data:
