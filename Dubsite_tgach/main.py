@@ -2039,7 +2039,6 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                 valid_files.append(file_info)
             content['files'] = valid_files
         current_type = content.get('type')
-        has_text = bool(content.get('text', '').strip())
         has_files = bool(content.get('files'))
         if current_type != 'poll':
             if has_files:
