@@ -797,6 +797,17 @@ def _gopnik_replacer(match: re.Match) -> str:
     return chosen
 
 def _apply_gopnik_phonetics(text: str) -> str:
+    # Replace 'ч' with 'щ' sometimes
+    result = ""
+    for char in text:
+        if char == 'ч' and random.random() < 0.3:
+            result += 'щ'
+        elif char == 'Ч' and random.random() < 0.3:
+            result += 'Щ'
+        else:
+            result += char
+    text = result
+
     # 1. Жесткая фонетическая редукция (так говорят на улице)
     for pattern, repl in _COMPILED_PHONETIC_MAP:
         text = pattern.sub(repl, text)
