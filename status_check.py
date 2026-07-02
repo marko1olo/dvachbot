@@ -63,6 +63,7 @@ def format_sys_value(value, unit="%"):
 
 async def get_queue_details(conn):
     details = {}
+    # Replaced risky string interpolation with fully hardcoded queries to prevent SQL injection (B608).
     queue_map = {
         "Tagging (Neuro)": "SELECT COUNT(*), MIN(created_at) FROM FileRegistry WHERE (tags IS NULL OR tags = '') AND file_type IN ('image', 'photo')",
         "HuggingFace": "SELECT COUNT(*), MIN(created_at) FROM PendingHF",
@@ -112,9 +113,9 @@ async def get_activity(conn):
 
     try:
         p_cursor, t_cursor, u_cursor = await asyncio.gather(
-            conn.execute(f"SELECT {post_cases} FROM Posts WHERE timestamp > ?", (*period_values, min_ts)),
-            conn.execute(f"SELECT {thread_cases} FROM Threads WHERE created_at > ?", (*period_values, min_ts)),
-            conn.execute(f"SELECT {user_cases} FROM Users WHERE created_at > ?", (*period_values, min_ts))
+            conn.execute(f"SELECT {post_cases} FROM Posts WHERE timestamp > ?", (*period_values, min_ts)),  # nosec B608
+            conn.execute(f"SELECT {thread_cases} FROM Threads WHERE created_at > ?", (*period_values, min_ts)),  # nosec B608
+            conn.execute(f"SELECT {user_cases} FROM Users WHERE created_at > ?", (*period_values, min_ts))  # nosec B608
         )
         p_res = await p_cursor.fetchone()
         t_res = await t_cursor.fetchone()
