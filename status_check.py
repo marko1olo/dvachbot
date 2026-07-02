@@ -64,23 +64,18 @@ def format_sys_value(value, unit="%"):
 async def get_queue_details(conn):
     details = {}
     queue_map = {
-        "Tagging (Neuro)": (
-            "FileRegistry",
-            "created_at",
-            "(tags IS NULL OR tags = '') AND file_type IN ('image', 'photo')",
-        ),
-        "HuggingFace": ("PendingHF", "created_at"),
-        "Mirrors (Catbox)": ("MirrorQueue", "next_run_at"),
-        "Reports": ("Reports", "created_at", "status = 'open'"),
-        "Mod Queue (Neuro)": ("ModQueue", "created_at", "status = 'pending'"),
-        "Notifications": ("NotificationQueue", "created_at"),
-        "Broadcast (WS)": ("BroadcastQueue", "created_at"),
-        "Imports": ("ImportRequests", "created_at", "status = 'pending'"),
+        "Tagging (Neuro)": "SELECT COUNT(*), MIN(created_at) FROM FileRegistry WHERE (tags IS NULL OR tags = '') AND file_type IN ('image', 'photo')",
+        "HuggingFace": "SELECT COUNT(*), MIN(created_at) FROM PendingHF",
+        "Mirrors (Catbox)": "SELECT COUNT(*), MIN(next_run_at) FROM MirrorQueue",
+        "Reports": "SELECT COUNT(*), MIN(created_at) FROM Reports WHERE status = 'open'",
+        "Mod Queue (Neuro)": "SELECT COUNT(*), MIN(created_at) FROM ModQueue WHERE status = 'pending'",
+        "Notifications": "SELECT COUNT(*), MIN(created_at) FROM NotificationQueue",
+        "Broadcast (WS)": "SELECT COUNT(*), MIN(created_at) FROM BroadcastQueue",
+        "Imports": "SELECT COUNT(*), MIN(created_at) FROM ImportRequests WHERE status = 'pending'",
     }
     queries = []
     names = []
-    for name, info in queue_map.items():
-        query = f"SELECT COUNT(*), MIN({info[1]}) FROM {info[0]} {f'WHERE {info[2]}' if len(info) > 2 else ''}"
+    for name, query in queue_map.items():
         queries.append(query)
         names.append(name)
 
