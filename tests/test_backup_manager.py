@@ -235,6 +235,7 @@ class TestBackupManager(unittest.TestCase):
                 conn.commit()
 
             # Call the function
+            conn.close()  # explicitly close the connection on Windows to avoid locking
             result_path = create_gzipped_dump(db_path, output_dir)
 
             # Verify result path
