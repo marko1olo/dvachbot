@@ -33,12 +33,17 @@
   2949	                    posts_to_delete_set = set(user_posts)
   2950
   2951	                    # Проверяем, какие из этих постов являются ОП-постами тредов
-  2952	                    for p_num in user_posts:
-  2953	                        p_str = str(p_num)
-  2954	                        async with db.execute("SELECT thread_id FROM Threads WHERE thread_id = ? OR thread_num = ?", (p_str, p_num)) as cursor:
-  2955	                            t_row = await cursor.fetchone()
-  2956	                            if t_row:
-  2957	                                threads_to_delete.append(t_row[0])
+  2952	                    if user_posts:
+  2953	                        chunk_size = 400
+  2954	                        for i in range(0, len(user_posts), chunk_size):
+  2955	                            chunk = user_posts[i:i + chunk_size]
+  2956	                            chunk_str = [str(p) for p in chunk]
+  2957	                            placeholders = ','.join('?' for _ in chunk)
+  2958	                            query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders}) OR thread_num IN ({placeholders})"
+  2959	                            async with db.execute(query, chunk_str + chunk) as cursor:
+  2960	                                t_rows = await cursor.fetchall()
+  2961	                                for t_row in t_rows:
+  2962	                                    threads_to_delete.append(t_row[0])
   2958
   2959	                    # Если есть удаляемые треды, выбираем ВСЕ посты этих тредов, чтобы снести их тоже
   2960	                    if threads_to_delete:
