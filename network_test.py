@@ -4,6 +4,14 @@ import os
 import aiohttp
 from dotenv import load_dotenv
 
+import sys
+import os
+
+# Ensure import paths work
+PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from common.secret_redaction import redact_secrets
 
 
