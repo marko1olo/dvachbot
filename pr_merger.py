@@ -2,7 +2,8 @@ import subprocess
 
 def run_cmd(cmd, check=True):
     try:
-        return subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT).decode('utf-8').strip()
+        # Add a timeout so git commands won't hang indefinitely (e.g. asking for pagination or credentials)
+        return subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT, timeout=60).decode('utf-8').strip()
     except subprocess.CalledProcessError as e:
         if check:
             raise

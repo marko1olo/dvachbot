@@ -15,7 +15,7 @@ def check_indexes():
         cursor.execute("SELECT * FROM pragma_index_list(?)", (table,))
         indexes = cursor.fetchall()
         safe_table = table.replace('"', '""')
-        cursor.execute(f'SELECT COUNT(*) FROM "{safe_table}"')
+        cursor.execute(f'SELECT COUNT(*) FROM "{safe_table}"')  # nosec B608
         count = cursor.fetchone()[0]
         if count > 10000:
             print(f"Table {table}: {count} rows")

@@ -49,14 +49,21 @@ con.commit()
 # архивные треды и их посты больше не удаляются.
 
 # 4. Очистка сирот (Orphans)
-cleanup_targets = [
-    ("PostCopies", "post_num"), ("ChannelCopies", "post_num"),
-    ("BroadcastQueue", "post_num"), ("Reports", "post_num")
-]
-for table, col in cleanup_targets:
-    cur = con.execute(f"DELETE FROM {table} WHERE {col} NOT IN (SELECT post_num FROM Posts)")
-    print(f"Удалено {cur.rowcount} орфанных строк из {table}.")
-    con.commit()
+cur = con.execute("DELETE FROM PostCopies WHERE post_num NOT IN (SELECT post_num FROM Posts)")
+print(f"Удалено {cur.rowcount} орфанных строк из PostCopies.")
+con.commit()
+
+cur = con.execute("DELETE FROM ChannelCopies WHERE post_num NOT IN (SELECT post_num FROM Posts)")
+print(f"Удалено {cur.rowcount} орфанных строк из ChannelCopies.")
+con.commit()
+
+cur = con.execute("DELETE FROM BroadcastQueue WHERE post_num NOT IN (SELECT post_num FROM Posts)")
+print(f"Удалено {cur.rowcount} орфанных строк из BroadcastQueue.")
+con.commit()
+
+cur = con.execute("DELETE FROM Reports WHERE post_num NOT IN (SELECT post_num FROM Posts)")
+print(f"Удалено {cur.rowcount} орфанных строк из Reports.")
+con.commit()
 
 # 5. Очистка просроченных мутов
 cur = con.execute("DELETE FROM Mutes WHERE expires_at < ?", (time.time(),))
