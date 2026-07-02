@@ -214,22 +214,22 @@ DEANON_DETAILS_EN = [
 
 def _generate_person_data(lang: str) -> dict:
     if lang == 'en':
-        name = random.choice(DEANON_NAMES_EN)
-        surname = random.choice(DEANON_SURNAMES_EN)
-        city = random.choice(DEANON_CITIES_EN)
-        street = random.choice(DEANON_STREETS_EN)
-        prof = random.choice(DEANON_PROFESSIONS_EN)
-        fetish = random.choice(DEANON_FETISHES_EN)
-        details_list = DEANON_DETAILS_EN
+        lists = (DEANON_NAMES_EN, DEANON_SURNAMES_EN, DEANON_CITIES_EN, DEANON_STREETS_EN, DEANON_PROFESSIONS_EN, DEANON_FETISHES_EN, DEANON_DETAILS_EN)
+    else:
+        lists = (DEANON_NAMES, DEANON_SURNAMES, DEANON_CITIES, DEANON_STREETS, DEANON_PROFESSIONS, DEANON_FETISHES, DEANON_DETAILS)
+
+    names_list, surnames_list, cities_list, streets_list, profs_list, fetishes_list, details_list = lists
+
+    name = random.choice(names_list)
+    surname = random.choice(surnames_list)
+    city = random.choice(cities_list)
+    street = random.choice(streets_list)
+    prof = random.choice(profs_list)
+    fetish = random.choice(fetishes_list)
+
+    if lang == 'en':
         address = f"{city}, {street}, {random.randint(1, 200)}, apt. {random.randint(1, 500)}"
     else:
-        name = random.choice(DEANON_NAMES)
-        surname = random.choice(DEANON_SURNAMES)
-        city = random.choice(DEANON_CITIES)
-        street = random.choice(DEANON_STREETS)
-        prof = random.choice(DEANON_PROFESSIONS)
-        fetish = random.choice(DEANON_FETISHES)
-        details_list = DEANON_DETAILS
         address = f"{city}, ул. {street}, д. {random.randint(1, 200)}, кв. {random.randint(1, 500)}"
 
     details = random.sample(details_list, k=min(len(details_list), random.randint(1, 3)))
@@ -556,6 +556,16 @@ def generate_deanon_info(lang: str = 'ru') -> str:
             f"<b>Field Agent's Notes:</b> Subject is known to be {data['details_str']}."
         )
 
+    formatters = {
+        'housing_report': _format_housing_report,
+        'cultist': _format_cultist,
+        'psych_eval': _format_psych_eval,
+        'hitman': _format_hitman,
+        'dating_app': _format_dating_app,
+        'ukrainian': _format_ukrainian,
+        'schizo': _format_schizo,
+    }
+
     styles = [
         'standard', 'fsb', 'ukrainian', 'chechen', 'official', 'schizo',
         'news', 'old_school_hacker', 'psych_eval', 'hitman', 'dating_app',
@@ -563,19 +573,5 @@ def generate_deanon_info(lang: str = 'ru') -> str:
     ]
     chosen_style = random.choice(styles)
 
-    if chosen_style == 'housing_report':
-        return _format_housing_report(data)
-    elif chosen_style == 'cultist':
-        return _format_cultist(data)
-    elif chosen_style == 'psych_eval':
-        return _format_psych_eval(data)
-    elif chosen_style == 'hitman':
-        return _format_hitman(data)
-    elif chosen_style == 'dating_app':
-        return _format_dating_app(data)
-    elif chosen_style == 'ukrainian':
-        return _format_ukrainian(data)
-    elif chosen_style == 'schizo':
-        return _format_schizo(data)
-    else:
-        return _format_default(data)
+    formatter = formatters.get(chosen_style, _format_default)
+    return formatter(data)
