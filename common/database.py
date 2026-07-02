@@ -6739,7 +6739,8 @@ async def add_to_hf_queue(file_id: str):
 async def remove_from_hf_queue(file_ids: list[str]):
     if not file_ids: return
     from common.db_pool import get_pool, db_lock
-    placeholders = ','.join('?' for _ in file_ids)
+
+    chunk_size = 900
     
     async with db_lock:
         for attempt in range(20):
@@ -6747,7 +6748,10 @@ async def remove_from_hf_queue(file_ids: list[str]):
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                await db.execute(f"DELETE FROM PendingHF WHERE file_id IN ({placeholders})", file_ids)
+                for i in range(0, len(file_ids), chunk_size):
+                    chunk = file_ids[i:i+chunk_size]
+                    placeholders = ','.join('?' for _ in chunk)
+                    await db.execute(f"DELETE FROM PendingHF WHERE file_id IN ({placeholders})", chunk)
                 
                 await db.execute("COMMIT")
                 return
