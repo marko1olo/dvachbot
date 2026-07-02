@@ -783,7 +783,16 @@ _COMPILED_ESH = re.compile(r'ешь\b', flags=re.IGNORECASE)
 
 def _gopnik_replacer(match: re.Match) -> str:
     original_word = match.group(0)
-    replacement_options = GOPNIK_REPLACEMENTS.get(original_word.lower())
+    if not original_word:
+        return original_word
+
+    lower_word = original_word.lower()
+
+    # Specific replacements
+    if lower_word in ["друг", "товарищ", "пацан"]:
+        return "братан" if original_word.islower() else "Братан"
+
+    replacement_options = GOPNIK_REPLACEMENTS.get(lower_word)
     
     if not replacement_options: 
         return original_word # Защита от непредвиденных сбоев Regex
