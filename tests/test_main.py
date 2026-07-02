@@ -260,3 +260,88 @@ class TestSanitizeHtml(unittest.TestCase):
         self.assertEqual(sanitize_html("this & that"), "this &amp; that")
         self.assertEqual(sanitize_html("less < greater >"), "less &lt; greater &gt;")
         self.assertEqual(sanitize_html("a & b < c > d \" e ' f"), "a &amp; b &lt; c &gt; d \" e ' f")
+
+
+from PIL import Image as PilImage
+from Dubsite_tgach.main import _resize_image_if_needed
+import io
+
+class TestResizeImageIfNeeded(unittest.TestCase):
+    def create_image_bytes(self, width, height, format="JPEG", mode="RGB", extra_bytes=b""):
+        img = PilImage.new(mode, (width, height), color="red")
+        b = io.BytesIO()
+        img.save(b, format=format)
+        return b.getvalue() + extra_bytes
+
+    def test_empty_bytes(self):
+        self.assertEqual(_resize_image_if_needed(b""), b"")
+
+    def test_media_headers(self):
+        self.assertEqual(_resize_image_if_needed(b"1234ftyp5678..."), b"1234ftyp5678...")
+        self.assertEqual(_resize_image_if_needed(b"\x1A\x45\xDF\xA3_mkv_data"), b"\x1A\x45\xDF\xA3_mkv_data")
+        self.assertEqual(_resize_image_if_needed(b"GIF89a_data"), b"GIF89a_data")
+
+    def test_invalid_image_bytes(self):
+        invalid_bytes = b"not an image file at all"
+        self.assertEqual(_resize_image_if_needed(invalid_bytes), invalid_bytes)
+
+    def test_small_image(self):
+        small_img = self.create_image_bytes(100, 100)
+        res = _resize_image_if_needed(small_img)
+        with PilImage.open(io.BytesIO(res)) as img:
+            self.assertEqual(img.size, (100, 100))
+
+    def test_large_dimension(self):
+        large_img = self.create_image_bytes(6000, 6000)
+        res = _resize_image_if_needed(large_img)
+        with PilImage.open(io.BytesIO(res)) as img:
+            self.assertEqual(img.size, (5000, 5000))
+
+    def test_large_aspect_ratio_width(self):
+        wide_img = self.create_image_bytes(4000, 100)
+        res = _resize_image_if_needed(wide_img)
+        with PilImage.open(io.BytesIO(res)) as img:
+            self.assertEqual(img.size, (2000, 100))
+
+    def test_large_aspect_ratio_height(self):
+        tall_img = self.create_image_bytes(100, 4000)
+        res = _resize_image_if_needed(tall_img)
+        with PilImage.open(io.BytesIO(res)) as img:
+            self.assertEqual(img.size, (100, 2000))
+
+    def test_large_file_size(self):
+        large_file = self.create_image_bytes(100, 100, extra_bytes=b"0" * (10 * 1024 * 1024))
+        res = _resize_image_if_needed(large_file)
+        self.assertLess(len(res), 9.5 * 1024 * 1024)
+        with PilImage.open(io.BytesIO(res)) as img:
+            self.assertLessEqual(img.width, 100)
+            self.assertLessEqual(img.height, 100)
+
+    def test_large_png_conversion(self):
+        large_png = self.create_image_bytes(100, 100, format="PNG", extra_bytes=b"0" * (6 * 1024 * 1024))
+        res = _resize_image_if_needed(large_png)
+        with PilImage.open(io.BytesIO(res)) as img:
+            self.assertEqual(img.format, "JPEG")
+            self.assertEqual(img.size, (100, 100))
+
+    def test_animated_image_fallback(self):
+        # We can mock getattr to return True for is_animated
+        from unittest.mock import patch
+        with patch('PIL.Image.Image') as MockImage:
+            # We don't actually need to mock the whole image if we just monkeypatch PilImage.open
+            pass
+
+        # Actually it's easier to patch 'getattr' but it's built-in.
+        # We'll just patch `Dubsite_tgach.main.getattr` if it's not possible, wait, getattr is built-in.
+        # Let's patch PilImage.open to return a mock that has `is_animated=True`.
+        small_img = self.create_image_bytes(100, 100)
+
+        original_open = PilImage.open
+        def mock_open(*args, **kwargs):
+            img = original_open(*args, **kwargs)
+            img.is_animated = True
+            return img
+
+        with patch('PIL.Image.open', side_effect=mock_open):
+            res = _resize_image_if_needed(small_img)
+            self.assertEqual(res, small_img)
