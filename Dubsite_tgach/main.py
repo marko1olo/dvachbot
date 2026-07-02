@@ -924,7 +924,6 @@ async def lifespan(app: FastAPI):
     neuro_manager = NeuroManager(app.state.file_uploader_bot)
     spawn_task(refresh_random_indexes())
     app.state.neuro_manager = neuro_manager 
-    NEURO_ENABLED = False 
     async def neuro_loop():
         from site_tgach.neuro_poster import POSTING_INTERVALS 
         await asyncio.sleep(30)
