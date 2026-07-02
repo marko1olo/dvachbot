@@ -6739,7 +6739,8 @@ async def add_to_hf_queue(file_id: str):
 async def remove_from_hf_queue(file_ids: list[str]):
     if not file_ids: return
     from common.db_pool import get_pool, db_lock
-    placeholders = ','.join('?' for _ in file_ids)
+
+    chunk_size = 900
     
     async with db_lock:
         for attempt in range(20):
@@ -6747,7 +6748,10 @@ async def remove_from_hf_queue(file_ids: list[str]):
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                await db.execute(f"DELETE FROM PendingHF WHERE file_id IN ({placeholders})", file_ids)
+                for i in range(0, len(file_ids), chunk_size):
+                    chunk = file_ids[i:i+chunk_size]
+                    placeholders = ','.join('?' for _ in chunk)
+                    await db.execute(f"DELETE FROM PendingHF WHERE file_id IN ({placeholders})", chunk)
                 
                 await db.execute("COMMIT")
                 return
@@ -6826,16 +6830,20 @@ async def add_post_to_random_cache(post_data: dict):
     # Если это ОП-пост, добавляем в кэш тредов
     if is_op:
         _THREAD_CACHE[bid].append(str(pid))
-async def get_pending_mirror_tasks(limit: int = 10) -> list[dict]:
+async def get_pending_mirror_tasks(limit: int = 10, allowed_types: list[str] = None) -> list[dict]:
     """Берет задачи, время которых пришло."""
     db = await get_pool()
     now = time.time()
     try:
-        # ПРАВКА: Сортировка по ID DESC, чтобы свежедобавленные задачи шли первыми
-        async with db.execute(
-            "SELECT * FROM MirrorQueue WHERE next_run_at <= ? ORDER BY id DESC LIMIT ?", 
-            (now, limit)
-        ) as cursor:
+        if allowed_types:
+            placeholders = ",".join(["?"] * len(allowed_types))
+            query = f"SELECT * FROM MirrorQueue WHERE next_run_at <= ? AND mirror_type IN ({placeholders}) ORDER BY id DESC LIMIT ?"
+            params = [now] + list(allowed_types) + [limit]
+        else:
+            query = "SELECT * FROM MirrorQueue WHERE next_run_at <= ? ORDER BY id DESC LIMIT ?"
+            params = [now, limit]
+
+        async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
             cols = [d[0] for d in cursor.description]
             results = []
