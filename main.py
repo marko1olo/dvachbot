@@ -26,6 +26,7 @@ import asyncio
 from common.task_manager import spawn_task
 import faulthandler
 import gc
+import gzip
 import psutil
 try:
     import ujson as json
@@ -41,9 +42,11 @@ import random
 import re
 import secrets
 import html
+import shutil
 import signal
 import sys
 import io
+import glob
 import time
 import witching_hour
 import periodic_publisher
@@ -478,7 +481,7 @@ def clean_html_for_tg(text: str) -> str:
     text = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
     text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
     text = text.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
-    text = re.sub(r'<(?!/?(?:b|i|u|s|code|pre|a)(?:\b[^<>]*>|>))', '&lt;', text)
+    text = re.sub(r'<(?!/?(b|i|u|s|code|pre|a\b)[>\s])', '&lt;', text)
 
     # Balance tags
     allowed_tags = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
@@ -2368,7 +2371,7 @@ async def board_statistics_broadcaster():
                             recipients = b_data['users']['active'] - b_data['users']['banned']
                     if not recipients: continue
                     full_stats_text, header_title = format_board_statistics(stream, posts_per_hour, board_data, BOARD_CONFIG)
-                    content = {"type": "text", "text": full_stats_text, "is_system_message": True, "archive_allowed": True}
+                    content = {"type": "text", "text": full_stats_text, "is_system_message": True}
                     post_num = await create_post(
                         board_id=board_id, author_id=0, content=content,
                         timestamp=now.timestamp(), is_from_site=False, stream=stream
@@ -2911,203 +2914,130 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
             except Exception:
                 pass
             print(f"⚠️ Ошибка верификации для {user_id}: {e}")
-
-async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str) -> tuple[list[int], list, list]:
-    from common.db_pool import get_pool, db_lock
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-
-                query_posts = "SELECT post_num FROM Posts WHERE author_id = ? AND board_id = ? AND timestamp >= ?"
-                async with db.execute(query_posts, (user_id, board_id, time_threshold_ts)) as cursor:
-                    rows = await cursor.fetchall()
-                user_posts = [row[0] for row in rows]
-
-                if not user_posts:
-                    await db.execute("COMMIT")
-                    return [], [], []
-                    
-                posts_to_delete_set = set(user_posts)
-                threads_to_delete = []
-
-                for p_num in user_posts:
-                    p_str = str(p_num)
-                    async with db.execute("SELECT thread_id FROM Threads WHERE thread_id = ? OR thread_num = ?", (p_str, p_num)) as cursor:
-                        t_row = await cursor.fetchone()
-                        if t_row:
-                            threads_to_delete.append(t_row[0])
-
-                if threads_to_delete:
-                    for t_id in threads_to_delete:
-                        try: t_id_int = int(t_id)
-                        except ValueError: t_id_int = 0
-                        async with db.execute("SELECT post_num FROM Posts WHERE thread_id = ? OR thread_id = ?", (t_id, str(t_id_int))) as cursor:
-                            p_rows = await cursor.fetchall()
-                            for pr in p_rows:
-                                posts_to_delete_set.add(pr[0])
-
-                posts_to_delete_nums = list(posts_to_delete_set)
-                placeholders = ','.join('?' for _ in posts_to_delete_nums)
-
-                query_copies = f"""
-                    SELECT pc.recipient_id, pc.message_id, p.board_id
-                    FROM PostCopies pc
-                    JOIN Posts p ON pc.post_num = p.post_num
-                    WHERE pc.post_num IN ({placeholders})
-                """
-                async with db.execute(query_copies, posts_to_delete_nums) as cursor:
-                    messages_to_delete_from_api = await cursor.fetchall()
-                    
-                query_channels = f"""
-                    SELECT cc.channel_id, cc.message_id, p.board_id
-                    FROM ChannelCopies cc
-                    JOIN Posts p ON cc.post_num = p.post_num
-                    WHERE cc.post_num IN ({placeholders})
-                """
-                async with db.execute(query_channels, posts_to_delete_nums) as cursor:
-                    channel_messages_to_delete = await cursor.fetchall()
-
-                await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", posts_to_delete_nums)
-                await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
-                await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
-                await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders})", posts_to_delete_nums + posts_to_delete_nums)
-
-                if threads_to_delete:
-                    t_placeholders = ','.join('?' for _ in threads_to_delete)
-                    await db.execute(f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})", threads_to_delete)
-
-                await db.execute("COMMIT")
-                return posts_to_delete_nums, messages_to_delete_from_api, channel_messages_to_delete
-
-            except Exception as e:
-                import asyncio
-                try: await db.execute("ROLLBACK")
-                except Exception: pass
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.2 * (attempt + 1))
-                    continue
-                print(f"⛔ DB Error in delete_user_posts: {e}")
-                return [], [], []
-    return [], [], []
-
-async def _clean_posts_from_ram(posts_to_delete_nums: list[int], board_id: str):
-    async with storage_lock:
-        for post_num in posts_to_delete_nums:
-            post_data = messages_storage.pop(post_num, None)
-            if post_data:
-                if board_id in THREAD_BOARDS:
-                    thread_id = post_data.get('thread_id')
-                    if thread_id:
-                        b_data = board_data.get(board_id, {})
-                        threads_data = b_data.get('threads_data', {})
-                        if thread_id in threads_data:
-                            try:
-                                if 'posts' in threads_data[thread_id]:
-                                    threads_data[thread_id]['posts'].remove(post_num)
-                            except (ValueError, KeyError):
-                                pass
-            message_copies_in_mem = post_to_messages.pop(post_num, {})
-            for uid, mid_or_list in message_copies_in_mem.items():
-                if isinstance(mid_or_list, list):
-                    for mid in mid_or_list:
-                        message_to_post.pop((uid, mid), None)
-                else:
-                    message_to_post.pop((uid, mid_or_list), None)
-
-def _clean_posts_from_caches(posts_to_delete_nums: list[int]):
-    from common.database import _THREAD_CACHE, _VIDEO_CACHE, _IMAGE_CACHE
-    for post_id_int in posts_to_delete_nums:
-        post_id_str = str(post_id_int)
-        for b in list(_THREAD_CACHE.keys()):
-            if post_id_str in _THREAD_CACHE[b]:
-                try: _THREAD_CACHE[b].remove(post_id_str)
-                except: pass
-        for b in list(_VIDEO_CACHE.keys()):
-            _VIDEO_CACHE[b] = [item for item in _VIDEO_CACHE[b] if item[0] != post_id_int]
-        for b in list(_IMAGE_CACHE.keys()):
-            _IMAGE_CACHE[b] = [item for item in _IMAGE_CACHE[b] if item[0] != post_id_int]
-
-async def _delete_posts_from_channels(channel_messages_to_delete: list, bot_instance):
-    if not channel_messages_to_delete:
-        return
-    archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-    for chan_id, msg_id, b_id in channel_messages_to_delete:
-        deleter = archive_bot if archive_bot else (GLOBAL_BOTS.get(b_id) or bot_instance)
-        try:
-            await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
-        except Exception:
-            pass
-
-async def _delete_posts_from_pm_api(messages_to_delete_from_api: list, bot_instance) -> int:
-    import asyncio
-    CHUNK_SIZE = 47
-    DELAY_BETWEEN_CHUNKS = 0.11
-    total_deleted_count = 0
-    for i in range(0, len(messages_to_delete_from_api), CHUNK_SIZE):
-        chunk = messages_to_delete_from_api[i:i + CHUNK_SIZE]
-        tasks = [_delete_message_with_retries(bot_instance, uid, mid, b_id) for uid, mid, b_id in chunk]
-        results = await asyncio.gather(*tasks)
-        total_deleted_count += sum(1 for res in results if res is True)
-        if i + CHUNK_SIZE < len(messages_to_delete_from_api):
-            await asyncio.sleep(DELAY_BETWEEN_CHUNKS)
-    return total_deleted_count
-
-async def _delete_message_with_retries(bot_instance, uid: int, mid: int, b_id: str = None) -> bool:
-    deleter = GLOBAL_BOTS.get(b_id) or bot_instance if b_id else bot_instance
-    max_attempts = 6
-    delay = 1.5
-    for attempt in range(max_attempts):
-        try:
-            await deleter.delete_message(uid, mid)
-            return True
-        except (TelegramBadRequest, TelegramForbiddenError):
-            if deleter != bot_instance:
-                try:
-                    await bot_instance.delete_message(uid, mid)
-                    return True
-                except Exception:
-                    pass
-            for other_bid, other_bot in GLOBAL_BOTS.items():
-                if other_bot != deleter and other_bot != bot_instance:
-                    try:
-                        await other_bot.delete_message(uid, mid)
-                        return True
-                    except Exception:
-                        pass
-            return False
-        except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
-            if attempt < max_attempts - 1:
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 30)
-            else:
-                return False
-        except Exception:
-            return False
-    return False
-
 async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
     """
     Массовое удаление постов пользователя за период.
     Удаляет из БД (с защитой транзакции), RAM, ЛС и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
-    Правильно удаляет целые треды из БД/архивов, если удаляется ОП-пост.
     """
+    from common.db_pool import get_pool, db_lock  # Локальный импорт
     try:
         time_threshold_ts = (datetime.now(UTC) - timedelta(minutes=time_period_minutes)).timestamp()
 
-        posts_to_delete_nums, messages_to_delete_from_api, channel_messages_to_delete = await _delete_user_posts_from_db(
-            user_id, time_threshold_ts, board_id
-        )
+        posts_to_delete_nums = []
+        messages_to_delete_from_api = []
+        channel_messages_to_delete = []
 
-        if not posts_to_delete_nums:
-            return 0
+        # 1. Чтение данных и Удаление из БД в одной защищенной транзакции
+        async with db_lock:
+            for attempt in range(10):
+                try:
+                    db = await get_pool()
+                    await db.execute("BEGIN IMMEDIATE")
 
-        await _clean_posts_from_ram(posts_to_delete_nums, board_id)
-        _clean_posts_from_caches(posts_to_delete_nums)
-        await _delete_posts_from_channels(channel_messages_to_delete, bot_instance)
-        total_deleted_count = await _delete_posts_from_pm_api(messages_to_delete_from_api, bot_instance)
+                    # Читаем посты для удаления
+                    query_posts = "SELECT post_num FROM Posts WHERE author_id = ? AND board_id = ? AND timestamp >= ?"
+                    async with db.execute(query_posts, (user_id, board_id, time_threshold_ts)) as cursor:
+                        rows = await cursor.fetchall()
+                    posts_to_delete_nums = [row[0] for row in rows]
+
+                    if not posts_to_delete_nums:
+                        await db.execute("COMMIT")
+                        return 0
+
+                    placeholders = ','.join('?' for _ in posts_to_delete_nums)
+
+                    # Читаем копии для API
+                    query_copies = f"SELECT recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
+                    async with db.execute(query_copies, posts_to_delete_nums) as cursor:
+                        messages_to_delete_from_api = await cursor.fetchall()
+
+                    # Читаем копии каналов
+                    query_channels = f"SELECT channel_id, message_id FROM ChannelCopies WHERE post_num IN ({placeholders})"
+                    async with db.execute(query_channels, posts_to_delete_nums) as cursor:
+                        channel_messages_to_delete = await cursor.fetchall()
+
+                    # Удаляем
+                    query_delete = f"DELETE FROM Posts WHERE post_num IN ({placeholders})"
+                    await db.execute(query_delete, posts_to_delete_nums)
+
+                    await db.execute("COMMIT")
+                    break # Успех
+
+                except Exception as e:
+                    try: await db.execute("ROLLBACK")
+                    except Exception: pass
+
+                    if "locked" in str(e).lower() or "busy" in str(e).lower():
+                        await asyncio.sleep(0.2 * (attempt + 1))
+                        continue
+                    print(f"⛔ DB Error in delete_user_posts: {e}")
+                    return 0
+
+        # 2. Чистка RAM (Messages Storage)
+        async with storage_lock:
+            for post_num in posts_to_delete_nums:
+                post_data = messages_storage.pop(post_num, None)
+                if post_data:
+                    if board_id in THREAD_BOARDS:
+                        thread_id = post_data.get('thread_id')
+                        if thread_id:
+                            b_data = board_data.get(board_id, {})
+                            threads_data = b_data.get('threads_data', {})
+                            if thread_id in threads_data and 'posts' in threads_data[thread_id]:
+                                try:
+                                    threads_data[thread_id]['posts'].remove(post_num)
+                                except ValueError:
+                                    pass
+                message_copies_in_mem = post_to_messages.pop(post_num, {})
+                for uid, mid_or_list in message_copies_in_mem.items():
+                    if isinstance(mid_or_list, list):
+                        for mid in mid_or_list:
+                            message_to_post.pop((uid, mid), None)
+                    else:
+                        message_to_post.pop((uid, mid_or_list), None)
+
+        # 3. Удаление из каналов
+        if channel_messages_to_delete:
+            archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
+            deleter = archive_bot if archive_bot else bot_instance
+            for chan_id, msg_id in channel_messages_to_delete:
+                try:
+                    await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
+                except Exception:
+                    pass
+
+        # 4. Удаление из ЛС пользователей (API)
+        async def _delete_one_message(uid: int, mid: int) -> bool:
+            max_attempts = 6
+            delay = 1.5
+            for attempt in range(max_attempts):
+                try:
+                    await bot_instance.delete_message(uid, mid)
+                    return True
+                except (TelegramBadRequest, TelegramForbiddenError):
+                    return False
+                except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(delay)
+                        delay = min(delay * 2, 30)
+                    else:
+                        return False
+                except Exception:
+                    return False
+            return False
+
+        CHUNK_SIZE = 47
+        DELAY_BETWEEN_CHUNKS = 0.11
+        total_deleted_count = 0
         
+        for i in range(0, len(messages_to_delete_from_api), CHUNK_SIZE):
+            chunk = messages_to_delete_from_api[i:i + CHUNK_SIZE]
+            tasks = [_delete_one_message(uid, mid) for uid, mid in chunk]
+            results = await asyncio.gather(*tasks)
+            total_deleted_count += sum(1 for res in results if res is True)
+            if i + CHUNK_SIZE < len(messages_to_delete_from_api):
+                await asyncio.sleep(DELAY_BETWEEN_CHUNKS)
+
         return total_deleted_count
     except Exception as e:
         import traceback
@@ -3117,17 +3047,6 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
     """
     Удаляет один конкретный пост отовсюду: из БД, RAM, ЛС пользователей и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
     """
-    from common.db_pool import get_pool
-    board_id = None
-    try:
-        db = await get_pool()
-        async with db.execute("SELECT board_id FROM Posts WHERE post_num = ?", (post_num,)) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                board_id = row[0]
-    except Exception:
-        pass
-
     channel_copies = await get_all_channel_copies(post_num)
     messages_to_delete_info = await get_post_copies(post_num)
     deleted_from_db = await delete_post_by_num(post_num)
@@ -3136,8 +3055,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
     async with storage_lock:
         post_data = messages_storage.pop(post_num, None)
         if post_data:
-            if not board_id:
-                board_id = post_data.get('board_id')
+            board_id = post_data.get('board_id')
             if board_id and board_id in THREAD_BOARDS:
                 thread_id = post_data.get('thread_id')
                 if thread_id:
@@ -3158,7 +3076,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
                 message_to_post.pop((uid, mid_or_list), None)
     if channel_copies:
         archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-        deleter = archive_bot if archive_bot else (GLOBAL_BOTS.get(board_id) or bot_instance)
+        deleter = archive_bot if archive_bot else bot_instance
         for chan_id, msg_id in channel_copies:
             try:
                 await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
@@ -3166,8 +3084,26 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
                 pass
     if not messages_to_delete_info:
         return 0 if deleted_from_db else 0
-        
-    tasks = [_delete_message_with_retries(bot_instance, uid, mid, board_id) for uid, mid in messages_to_delete_info]
+    async def _delete_one_message(uid: int, mid: int) -> bool:
+
+        max_attempts = 6
+        delay = 1.5
+        for attempt in range(max_attempts):
+            try:
+                await bot_instance.delete_message(uid, mid)
+                return True # Успех
+            except (TelegramBadRequest, TelegramForbiddenError):
+                return False
+            except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 30)
+                else:
+                    return False
+            except Exception:
+                return False
+        return False
+    tasks = [_delete_one_message(uid, mid) for uid, mid in messages_to_delete_info]
     results = await asyncio.gather(*tasks)
     deleted_count = sum(1 for res in results if res is True)
     return deleted_count
@@ -3620,7 +3556,7 @@ async def process_new_post(
                 'recipients': recipients, 'content': final_content, 'post_num': current_post_num,
                 'board_id': board_id, 'thread_id': thread_id
             })
-        if not final_content.get('is_system_message') or final_content.get('archive_allowed'):
+        if not final_content.get('is_system_message'):
             spawn_task(_forward_post_to_realtime_archive(
                 bot_instance=bot_instance, board_id=board_id, post_num=current_post_num, content=final_content, is_shadow_muted=is_shadow_muted
             ))
@@ -3649,120 +3585,6 @@ async def process_new_post(
         import traceback
         print(f"🔥🔥🔥 ФАТАЛЬНАЯ ОШИБКА в process_new_post для user {user_id}: {e}\n{traceback.format_exc()}")
         return None
-def _build_archive_header(board_id: str, post_num: int, content: dict, lang: str) -> str:
-    raw_header = content.get('header', f"Пост №{post_num}")
-    header_text = ""
-    match = re.search(r'(.*?)(Пост №\d+.*|Post No\.\d+.*|レス番 \d+.*)', raw_header, re.DOTALL | re.IGNORECASE)
-    
-    if match:
-        prefix = match.group(1).strip()
-        post_part = match.group(2).strip()
-        
-        has_letters = bool(re.search(r'[a-zA-Zа-яА-ЯёЁ]', prefix))
-        reply_to_num = content.get('reply_to_post')
-        reply_suffix = ""
-        if reply_to_num:
-            reply_suffix = f" (reply to №{reply_to_num})" if lang == 'en' else f" (ответ на №{reply_to_num})"
-            
-        if prefix and has_letters:
-            if prefix.endswith('-'):
-                prefix = prefix[:-1].strip()
-            header_text = f"<b>/{board_id}/</b> | {post_part}{reply_suffix}\n\n<b>{prefix} :</b>"
-        else:
-            prefix_with_space = f"{prefix} " if prefix else ""
-            header_text = f"{prefix_with_space}<b>/{board_id}/</b> | {post_part}{reply_suffix}"
-    else:
-        reply_to_num = content.get('reply_to_post')
-        reply_suffix = ""
-        if reply_to_num:
-            reply_suffix = f" (reply to №{reply_to_num})" if lang == 'en' else f" (ответ на №{reply_to_num})"
-        header_text = f"<b>/{board_id}/</b> | {raw_header}{reply_suffix}"
-    return header_text
-
-async def _send_archive_media(sender_bot, channel_id: int, content: dict, content_type: str, text_to_send: str, header_text: str):
-    from common.database import add_file_mirror
-    for attempt in range(3):
-        try:
-            sent_message = None
-            new_files_data = []
-            if text_to_send:
-                sent_message = await sender_bot.send_message(
-                    chat_id=channel_id,
-                    text=text_to_send,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True
-                )
-            elif content_type == 'media_group':
-                from aiogram.utils.media_group import MediaGroupBuilder
-                builder = MediaGroupBuilder()
-                raw_cap = content.get('caption', '')
-                converted_cap = convert_site_tags_to_telegram(raw_cap)
-                full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
-                if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
-                media_list = content.get('media',[])
-                if not media_list: break
-                for i, media_item in enumerate(media_list):
-                    file_id = media_item.get('file_id') or media_item.get('media')
-                    m_type = media_item['type']
-                    caption = full_caption if i == 0 else None
-                    if m_type == 'photo': builder.add_photo(media=file_id, caption=caption, parse_mode="HTML")
-                    elif m_type == 'video': builder.add_video(media=file_id, caption=caption, parse_mode="HTML")
-                    elif m_type == 'document': builder.add_document(media=file_id, caption=caption, parse_mode="HTML")
-                    elif m_type == 'audio': builder.add_audio(media=file_id, caption=caption, parse_mode="HTML")
-                sent_msgs = await sender_bot.send_media_group(channel_id, media=builder.build())
-                if sent_msgs:
-                    sent_message = sent_msgs[0]
-                    for idx, sm in enumerate(sent_msgs):
-                        fid = None
-                        if sm.photo: fid = sm.photo[-1].file_id
-                        elif sm.video: fid = sm.video.file_id
-                        elif sm.document: fid = sm.document.file_id
-                        elif sm.audio: fid = sm.audio.file_id
-                        if fid:
-                            new_files_data.append({'type': sm.content_type, 'file_id': fid})
-                            orig_fid = media_list[idx].get('file_id') or media_list[idx].get('media')
-                            if orig_fid: await add_file_mirror(orig_fid, 'tg_shadow', fid)
-            else:
-                orig_fid = content.get('file_id')
-                if orig_fid:
-                    raw_cap = content.get('caption', '')
-                    converted_cap = convert_site_tags_to_telegram(raw_cap)
-                    caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
-                    if len(caption) > 1024: caption = caption[:1021] + "..."
-                    ct_str = str(content_type).split('.')[-1].lower()
-                    common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
-                    if ct_str == 'photo': sent_message = await sender_bot.send_photo(photo=orig_fid, **common_args)
-                    elif ct_str == 'video': sent_message = await sender_bot.send_video(video=orig_fid, **common_args)
-                    elif ct_str == 'animation': sent_message = await sender_bot.send_animation(animation=orig_fid, **common_args)
-                    elif ct_str == 'document': sent_message = await sender_bot.send_document(document=orig_fid, **common_args)
-                    elif ct_str == 'audio': sent_message = await sender_bot.send_audio(audio=orig_fid, **common_args)
-                    elif ct_str == 'voice': sent_message = await sender_bot.send_voice(voice=orig_fid, **common_args)
-                    elif ct_str == 'sticker':
-                        await sender_bot.send_sticker(channel_id, sticker=orig_fid)
-                        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
-                    elif ct_str == 'video_note':
-                        await sender_bot.send_video_note(channel_id, video_note=orig_fid)
-                        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
-                    if sent_message:
-                        fid = None
-                        if sent_message.photo: fid = sent_message.photo[-1].file_id
-                        elif sent_message.video: fid = sent_message.video.file_id
-                        elif sent_message.animation: fid = sent_message.animation.file_id
-                        elif sent_message.document: fid = sent_message.document.file_id
-                        elif sent_message.audio: fid = sent_message.audio.file_id
-                        elif sent_message.voice: fid = sent_message.voice.file_id
-                        if fid:
-                            new_files_data.append(fid)
-                            await add_file_mirror(orig_fid, 'tg_shadow', fid)
-            return sent_message, new_files_data
-        except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
-            if attempt < 2: await asyncio.sleep(2)
-        except TelegramRetryAfter as e:
-            await asyncio.sleep(e.retry_after + 1)
-        except Exception:
-            break
-    return None, []
-
 async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, post_num: int, content: dict, is_shadow_muted: bool, stream: str = 'ru'):
     if is_shadow_muted:
         return
@@ -3777,7 +3599,41 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
     sender_bot_id = getattr(sender_bot, 'id', 0)
     lang = 'en' if board_id == 'int' else 'ru'
 
-    header_text = _build_archive_header(board_id, post_num, content, lang)
+    # --- НАЧАЛО ИЗМЕНЕНИЙ (Умный парсинг заголовка для Архивача) ---
+    board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
+    raw_header = content.get('header', f"Пост №{post_num}")
+
+    header_text = ""
+    # Пытаемся отделить эмодзи/роль от самого номера поста
+    match = re.search(r'(.*?)(Пост №\d+.*|Post No\.\d+.*|レス番 \d+.*)', raw_header, re.DOTALL | re.IGNORECASE)
+    
+    if match:
+        prefix = match.group(1).strip()
+        post_part = match.group(2).strip()
+        
+        has_letters = bool(re.search(r'[a-zA-Zа-яА-ЯёЁ]', prefix))
+        reply_to_num = content.get('reply_to_post')
+        reply_suffix = ""
+        if reply_to_num:
+            reply_suffix = f" (reply to №{reply_to_num})" if lang == 'en' else f" (ответ на №{reply_to_num})"
+            
+        if prefix and has_letters:
+            # Если есть текст (например "Абу -"), делаем красивый абзац
+            if prefix.endswith('-'):
+                prefix = prefix[:-1].strip()
+            header_text = f"<b>/{board_id}/</b> | {post_part}{reply_suffix}\n\n<b>{prefix} :</b>"
+        else:
+            # Если это просто эмодзи (например 🌑), ставим его в начало
+            prefix_with_space = f"{prefix} " if prefix else ""
+            header_text = f"{prefix_with_space}<b>/{board_id}/</b> | {post_part}{reply_suffix}"
+    else:
+        # Фолбэк, если регулярка не сработала
+        reply_to_num = content.get('reply_to_post')
+        reply_suffix = ""
+        if reply_to_num:
+            reply_suffix = f" (reply to №{reply_to_num})" if lang == 'en' else f" (ответ на №{reply_to_num})"
+        header_text = f"<b>/{board_id}/</b> | {raw_header}{reply_suffix}"
+    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
     
     content_type = content.get("type", "text")
     text_to_send = None
@@ -3795,23 +3651,99 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
     for channel_id in MIRROR_CHANNELS:
         if not channel_id or channel_id == 0:
             continue
-        sent_message, new_files_data = await _send_archive_media(sender_bot, channel_id, content, content_type, text_to_send, header_text)
-        if sent_message:
+        for attempt in range(3):
             try:
-                await add_channel_copy(post_num, channel_id, sent_message.message_id)
-                if not db_updated and new_files_data:
-                    new_content = content.copy()
-                    if content_type == 'media_group':
-                        new_content['media'] = new_files_data
-                        for f_info in new_files_data:
-                            await register_file_owner(f_info['file_id'], sender_bot_id)
-                    else:
-                        new_content['file_id'] = new_files_data[0]
-                        await register_file_owner(new_files_data[0], sender_bot_id)
-                    await update_post_content(post_num, new_content)
-                    db_updated = True
+                sent_message = None
+                new_files_data =[]
+                if text_to_send:
+                    sent_message = await sender_bot.send_message(
+                        chat_id=channel_id,
+                        text=text_to_send,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True
+                    )
+                elif content_type == 'media_group':
+                    builder = MediaGroupBuilder()
+                    raw_cap = content.get('caption', '')
+                    converted_cap = convert_site_tags_to_telegram(raw_cap)
+                    full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
+                    if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
+                    media_list = content.get('media',[])
+                    if not media_list: break
+                    for i, media_item in enumerate(media_list):
+                        file_id = media_item.get('file_id') or media_item.get('media')
+                        m_type = media_item['type']
+                        caption = full_caption if i == 0 else None
+                        if m_type == 'photo': builder.add_photo(media=file_id, caption=caption, parse_mode="HTML")
+                        elif m_type == 'video': builder.add_video(media=file_id, caption=caption, parse_mode="HTML")
+                        elif m_type == 'document': builder.add_document(media=file_id, caption=caption, parse_mode="HTML")
+                        elif m_type == 'audio': builder.add_audio(media=file_id, caption=caption, parse_mode="HTML")
+                    sent_msgs = await sender_bot.send_media_group(channel_id, media=builder.build())
+                    if sent_msgs:
+                        sent_message = sent_msgs[0]
+                        for idx, sm in enumerate(sent_msgs):
+                            fid = None
+                            if sm.photo: fid = sm.photo[-1].file_id
+                            elif sm.video: fid = sm.video.file_id
+                            elif sm.document: fid = sm.document.file_id
+                            elif sm.audio: fid = sm.audio.file_id
+                            if fid:
+                                new_files_data.append({'type': sm.content_type, 'file_id': fid})
+                                orig_fid = media_list[idx].get('file_id') or media_list[idx].get('media')
+                                if orig_fid: await add_file_mirror(orig_fid, 'tg_shadow', fid)
+                else:
+                    orig_fid = content.get('file_id')
+                    if orig_fid:
+                        raw_cap = content.get('caption', '')
+                        converted_cap = convert_site_tags_to_telegram(raw_cap)
+                        caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
+                        if len(caption) > 1024: caption = caption[:1021] + "..."
+                        ct_str = str(content_type).split('.')[-1].lower()
+                        common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
+                        if ct_str == 'photo': sent_message = await sender_bot.send_photo(photo=orig_fid, **common_args)
+                        elif ct_str == 'video': sent_message = await sender_bot.send_video(video=orig_fid, **common_args)
+                        elif ct_str == 'animation': sent_message = await sender_bot.send_animation(animation=orig_fid, **common_args)
+                        elif ct_str == 'document': sent_message = await sender_bot.send_document(document=orig_fid, **common_args)
+                        elif ct_str == 'audio': sent_message = await sender_bot.send_audio(audio=orig_fid, **common_args)
+                        elif ct_str == 'voice': sent_message = await sender_bot.send_voice(voice=orig_fid, **common_args)
+                        elif ct_str == 'sticker':
+                            await sender_bot.send_sticker(channel_id, sticker=orig_fid)
+                            sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+                        elif ct_str == 'video_note':
+                            await sender_bot.send_video_note(channel_id, video_note=orig_fid)
+                            sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+                        if sent_message:
+                            fid = None
+                            if sent_message.photo: fid = sent_message.photo[-1].file_id
+                            elif sent_message.video: fid = sent_message.video.file_id
+                            elif sent_message.animation: fid = sent_message.animation.file_id
+                            elif sent_message.document: fid = sent_message.document.file_id
+                            elif sent_message.audio: fid = sent_message.audio.file_id
+                            elif sent_message.voice: fid = sent_message.voice.file_id
+                            if fid:
+                                new_files_data.append(fid)
+                                await add_file_mirror(orig_fid, 'tg_shadow', fid)
+
+                if sent_message:
+                    await add_channel_copy(post_num, channel_id, sent_message.message_id)
+                    if not db_updated and new_files_data:
+                        new_content = content.copy()
+                        if content_type == 'media_group':
+                            new_content['media'] = new_files_data
+                            for f_info in new_files_data:
+                                await register_file_owner(f_info['file_id'], sender_bot_id)
+                        else:
+                            new_content['file_id'] = new_files_data[0]
+                            await register_file_owner(new_files_data[0], sender_bot_id)
+                        await update_post_content(post_num, new_content)
+                        db_updated = True
+                break
+            except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
+                if attempt < 2: await asyncio.sleep(2)
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(e.retry_after + 1)
             except Exception:
-                pass
+                break
 async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
     """
     (ИСПРАВЛЕННАЯ ВЕРСИЯ 5.0)
@@ -6577,57 +6509,83 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     except:
         pass
 
-import json
-import time
-
-async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
+@dp.message(Command("shoot"))
+async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ Сделай Reply на пост жертвы с командой /shoot!")
+        return
+    from common.db_pool import get_pool, db_lock
+    import json
+    import time
+    db = await get_pool()
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
         row = await c.fetchone()
         active_items_str = row[0] if row and row[0] else "{}"
     try:
-        return json.loads(active_items_str)
+        active_items = json.loads(active_items_str)
     except:
-        return {}
-
-async def _handle_shoot_bounce(message: types.Message, db, db_lock, board_id: str, user_id: int, target_id: int, active_items: dict, t_items: dict):
-    t_items["reflect_shield_until"] = 0
-    active_items["mute_gun"] = False
-    async with db_lock:
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (json.dumps(t_items), target_id, board_id))
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (json.dumps(active_items), user_id, board_id))
-        await db.commit()
-    async with storage_lock:
-        board_data[board_id]['mutes'][user_id] = datetime.now(UTC) + timedelta(seconds=3600)
-    await apply_regular_mute(user_id, board_id, 3600)
-    bounce = (
-        f"🛡️ <b>ЗЕРКАЛЬНЫЙ ЩИТ!</b>\n\n"
-        f"Анон попытался выстрелить из Мут-Гана в <code>{target_id}</code>, "
-        f"но у цели сработал Зеркальный Щит!\n"
-        f"Выстрел срикошетил. Стрелок <code>{user_id}</code> улетает в мут на 1 час 🤡\n"
-        f"<i>(Щит цели израсходован.)</i>"
-    )
-    await message.bot.send_message(
-        message.chat.id, bounce,
-        reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML"
-    )
+        active_items = {}
+    if not active_items.get("mute_gun"):
+        await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
+        return
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0:
+        await message.answer("🚫 Не удалось найти автора поста...")
+        return
+    if target_id == user_id:
+        await message.answer("Ты пытаешься выстрелить в самого себя? Идиот.")
+        return
+    # Проверяем Зеркальный Щит у цели
+    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
+        t_row = await c.fetchone()
+        t_str = t_row[0] if t_row and t_row[0] else "{}"
     try:
-        await message.bot.send_message(
-            user_id,
-            "💥 <b>Твой выстрел срикошетил!</b>\n"
-            "Ты попытался выстрелить в анона с Зеркальным Щитом — выстрел отразился обратно. "
-            "Ты в муте на 1 час.",
-            parse_mode="HTML"
+        t_items = json.loads(t_str)
+    except:
+        t_items = {}
+    current_time = int(time.time())
+    if t_items.get("reflect_shield_until", 0) > current_time:
+        # Рикошет!
+        t_items["reflect_shield_until"] = 0
+        active_items["mute_gun"] = False
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(t_items), target_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        async with storage_lock:
+            board_data[board_id]['mutes'][user_id] = datetime.now(UTC) + timedelta(seconds=3600)
+        await apply_regular_mute(user_id, board_id, 3600)
+        bounce = (
+            f"🛡️ <b>ЗЕРКАЛЬНЫЙ ЩИТ!</b>\n\n"
+            f"Анон попытался выстрелить из Мут-Гана в <code>{target_id}</code>, "
+            f"но у цели сработал Зеркальный Щит!\n"
+            f"Выстрел срикошетил. Стрелок <code>{user_id}</code> улетает в мут на 1 час 🤡\n"
+            f"<i>(Щит цели израсходован.)</i>"
         )
-    except:
-        pass
-    try:
-        await message.delete()
-    except:
-        pass
-
-async def _handle_shoot_success(message: types.Message, db, db_lock, board_id: str, user_id: int, target_id: int, active_items: dict):
+        await message.bot.send_message(
+            message.chat.id, bounce,
+            reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML"
+        )
+        try:
+            await message.bot.send_message(
+                user_id,
+                "💥 <b>Твой выстрел срикошетил!</b>\n"
+                "Ты попытался выстрелить в анона с Зеркальным Щитом — выстрел отразился обратно. "
+                "Ты в муте на 1 час.",
+                parse_mode="HTML"
+            )
+        except:
+            pass
+        try:
+            await message.delete()
+        except:
+            pass
+        return
+    # Обычный мут цели
     async with storage_lock:
         board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=3600)
     await apply_regular_mute(target_id, board_id, 3600)
@@ -6661,44 +6619,6 @@ async def _handle_shoot_success(message: types.Message, db, db_lock, board_id: s
     except:
         pass
 
-
-@dp.message(Command("shoot"))
-async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
-    user_id = message.from_user.id
-    if not message.reply_to_message:
-        await message.answer("⚠️ Сделай Reply на пост жертвы с командой /shoot!")
-        return
-
-    from common.db_pool import get_pool, db_lock
-    import time
-    db = await get_pool()
-
-    active_items = await _get_user_active_items(db, user_id, board_id)
-    if not active_items.get("mute_gun"):
-        await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
-        return
-
-    target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0:
-        await message.answer("🚫 Не удалось найти автора поста...")
-        return
-    if target_id == user_id:
-        await message.answer("Ты пытаешься выстрелить в самого себя? Идиот.")
-        return
-
-    # Проверяем Зеркальный Щит у цели
-    t_items = await _get_user_active_items(db, target_id, board_id)
-    current_time = int(time.time())
-
-    if t_items.get("reflect_shield_until", 0) > current_time:
-        # Рикошет!
-        await _handle_shoot_bounce(message, db, db_lock, board_id, user_id, target_id, active_items, t_items)
-        return
-
-    # Обычный мут цели
-    await _handle_shoot_success(message, db, db_lock, board_id, user_id, target_id, active_items)
-
 @dp.message(Command("curse", "vomit"))
 async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
     await message.answer(
@@ -6711,7 +6631,7 @@ _stats_cache: dict = {}   # board_id -> {ts: float, photos: list[bytes]}
 _STATS_TTL = 3600         # seconds
 
 def _generate_stats_charts(board_id: str) -> list[bytes]:
-    """Generate 4 activity charts for board_id. Returns list of PNG bytes."""
+    """Generate 3 activity charts for board_id. Returns list of PNG bytes."""
     import io as _io
     import sqlite3 as _sqlite3
     import numpy as _np
@@ -6720,7 +6640,6 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     import matplotlib.pyplot as _plt
     from matplotlib.colors import LinearSegmentedColormap
     from collections import defaultdict
-    import datetime as _dt
 
     BG, FG, GRID = '#0d1117', '#e6edf3', '#21262d'
     _plt.rcParams.update({
@@ -6735,7 +6654,7 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     cur = con.cursor()
 
     since_90 = int(_time_module.time()) - 90 * 86400
-    since_180 = int(_time_module.time()) - 180 * 86400
+    since_60 = int(_time_module.time()) - 60 * 86400
     bufs = []
 
     # ── 1. Activity Clock (polar, last 90 days) ────────────────────────────
@@ -6814,9 +6733,9 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
         y = _smooth(dh[d], w=1)
         y_n = y / global_max
         color = day_colors[d]
-        ax2.fill_between(hrs, 0, y_n, color=color, alpha=0.42, clip_on=False)
-        ax2.plot(hrs, y_n, color=color, linewidth=2, alpha=0.95, clip_on=False)
-        ax2.set_xlim(-0.5, 23.5); ax2.set_ylim(0, 0.8)
+        ax2.fill_between(hrs, 0, y_n, color=color, alpha=0.42)
+        ax2.plot(hrs, y_n, color=color, linewidth=2, alpha=0.95)
+        ax2.set_xlim(-0.5, 23.5); ax2.set_ylim(0, 0.48)
         ax2.text(-0.5, 0.24, days_ru[d], ha='right', va='center',
                 color=color, fontsize=9, fontweight='bold',
                 transform=ax2.get_yaxis_transform())
@@ -6835,47 +6754,13 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     _plt.close()
     bufs.append(buf2.getvalue())
 
-    # ── 3. Weekday x Hour Heatmap (180 days / all-time) ───────────────────
-    cur.execute("""
-        SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER) as dow,
-               CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
-               COUNT(*) as cnt
-        FROM Posts WHERE board_id=? AND timestamp > ?
-        GROUP BY dow, hr
-    """, (board_id, since_180))
-    grid = _np.zeros((7, 24))
-    for dow, hr, cnt in cur.fetchall():
-        grid[dow][hr] = cnt
-
-    days_ru_full = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота']
-    fig, ax3 = _plt.subplots(figsize=(10, 4.5), facecolor=BG)
-    ax3.set_facecolor(BG)
-    HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
-    im = ax3.imshow(grid, cmap=HEAT, aspect='auto', interpolation='nearest')
-
-    ax3.set_xticks(range(24))
-    ax3.set_xticklabels([f'{h:02d}:00' for h in range(24)], fontsize=7, rotation=45, ha='right')
-    ax3.set_yticks(range(7))
-    ax3.set_yticklabels(days_ru_full, fontsize=8)
-    ax3.set_title(f'/{board_id}/ — Тепловая карта час × день недели (180д)', fontsize=11, pad=10, color=FG, fontweight='bold')
-    ax3.set_xlabel('Час суток', color=FG, fontsize=8.5)
-
-    cb = fig.colorbar(im, ax=ax3, pad=0.01)
-    cb.ax.yaxis.set_tick_params(color=FG, labelsize=7)
-    cb.set_label('постов', color=FG, fontsize=7.5)
-
-    _plt.tight_layout()
-    buf3 = _io.BytesIO()
-    _plt.savefig(buf3, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
-    _plt.close()
-    bufs.append(buf3.getvalue())
-
-    # ── 4. Calendar heatmap (180 days / all-time) ─────────────────────────
+    # ── 3. Calendar heatmap (last 60 days) ────────────────────────────────
+    import datetime as _dt
     cur.execute("""
         SELECT date(timestamp,'unixepoch','localtime') as day, COUNT(*)
         FROM Posts WHERE board_id=? AND timestamp > ?
         GROUP BY day ORDER BY day
-    """, (board_id, since_180))
+    """, (board_id, since_60))
     day_data = {r[0]: r[1] for r in cur.fetchall()}
     con.close()
 
@@ -6894,11 +6779,12 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
                 cal[d][w] = day_data.get(cur_date.isoformat(), 0)
                 cur_date += _dt.timedelta(days=1)
 
+        HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
         vmax = _np.percentile(list(day_data.values()), 95) if day_data else 1
 
-        fig, ax4 = _plt.subplots(figsize=(max(10, weeks//2), 3), facecolor=BG)
-        ax4.set_facecolor(BG)
-        im = ax4.imshow(cal, cmap=HEAT, aspect='auto', interpolation='nearest', vmin=0, vmax=vmax)
+        fig, ax3 = _plt.subplots(figsize=(max(10, weeks//3), 3), facecolor=BG)
+        ax3.set_facecolor(BG)
+        im = ax3.imshow(cal, cmap=HEAT, aspect='auto', interpolation='nearest', vmin=0, vmax=vmax)
 
         # Month labels
         month_ticks, month_lbls = [], []
@@ -6909,24 +6795,21 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
             if ym not in seen:
                 month_ticks.append(w); month_lbls.append(cdate.strftime('%b\n%Y')); seen.add(ym)
             cdate += _dt.timedelta(days=7)
-        ax4.set_xticks(month_ticks); ax4.set_xticklabels(month_lbls, fontsize=7.5)
-        ax4.set_yticks(range(7))
-        ax4.set_yticklabels(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'], fontsize=8)
-        ax4.set_title(f'/{board_id}/ — Календарь активности (180д)', fontsize=11, pad=10,
+        ax3.set_xticks(month_ticks); ax3.set_xticklabels(month_lbls, fontsize=8)
+        ax3.set_yticks(range(7))
+        ax3.set_yticklabels(['Пн','Вт','Ср','Чт','Пт','Сб','Вс'], fontsize=8)
+        ax3.set_title(f'/{board_id}/ — Календарь активности (60д)', fontsize=11, pad=10,
                       color=FG, fontweight='bold')
-        cb = fig.colorbar(im, ax=ax4, orientation='horizontal', pad=0.18, shrink=0.35)
+        cb = fig.colorbar(im, ax=ax3, orientation='horizontal', pad=0.18, shrink=0.35)
         cb.set_label('постов/день', color=FG, fontsize=7.5)
         cb.ax.xaxis.set_tick_params(color=FG, labelsize=7)
         _plt.tight_layout()
-        buf4 = _io.BytesIO()
-        _plt.savefig(buf4, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
+        buf3 = _io.BytesIO()
+        _plt.savefig(buf3, format='png', dpi=130, bbox_inches='tight', facecolor=BG)
         _plt.close()
-        bufs.append(buf4.getvalue())
+        bufs.append(buf3.getvalue())
 
     return bufs
-
-
-_stats_cooldown_tracker = {}
 
 
 @dp.message(Command("stats", "activity", "heatmap"))
@@ -6935,23 +6818,6 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
     global _stats_cache
 
     now = _time_module.time()
-    user_id = message.from_user.id
-    if not is_admin(user_id, board_id):
-        last_used = _stats_cooldown_tracker.get((user_id, board_id), 0)
-        if now - last_used < 3600:
-            remaining = int(3600 - (now - last_used))
-            min_left = remaining // 60
-            sec_left = remaining % 60
-            try:
-                sent = await message.answer(f"⏳ Команда /stats на кулдауне. Ты можешь вызвать её через {min_left} мин {sec_left} сек.")
-                spawn_task(delete_message_after_delay(sent, 10))
-            except Exception:
-                pass
-            try: await message.delete()
-            except Exception: pass
-            return
-        _stats_cooldown_tracker[(user_id, board_id)] = now
-
     cached = _stats_cache.get(board_id)
     if cached and now - cached['ts'] < _STATS_TTL:
         photos = cached['photos']
@@ -6977,7 +6843,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
                  for i, p in enumerate(photos)]
         media[0] = InputMediaPhoto(
             media=BufferedInputFile(photos[0], filename='stats_0.png'),
-            caption=f"📊 Статистика /{board_id}/ • детальные ритмы (90д) и тепловые карты (180д) • обновляется раз в час"
+            caption=f"📊 Статистика /{board_id}/ • данные за 90 дней • обновляется раз в час"
         )
         await message.answer_media_group(media)
 
@@ -7108,123 +6974,7 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
 # active_duels: {challenger_id: {board_id, amount, ts, target_id or None}}
 # ══════════════════════════════════════════════════════════════════════════════
 _active_duels: dict = {}  # challenger_id -> {board_id, amount, ts, msg_id}
-_duel_cooldowns: dict = {} # user_id -> timestamp
 _DUEL_TIMEOUT = 120       # секунд на принятие
-
-async def accept_duel_logic(message: types.Message, challenger_id: int, board_id: str):
-    import time
-    from common.db_pool import get_pool, db_lock
-    db = await get_pool()
-    user_id = message.from_user.id
-    now = time.time()
-    
-    if challenger_id == user_id:
-        await message.answer("Нельзя принять собственный вызов, трус.")
-        return
-
-    async with db_lock:
-        # Проверяем балансы обоих под локом
-        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (challenger_id, board_id)) as c:
-            row = await c.fetchone()
-            ch_bal = row[0] if row and row[0] is not None else 0
-        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            op_bal = row[0] if row and row[0] is not None else 0
-
-        # Проверяем, что дуэль все еще в списке
-        if challenger_id not in _active_duels:
-            await message.answer("⚔️ Эта дуэль уже была принята или истекла.")
-            return
-            
-        duel = _active_duels.pop(challenger_id)
-        amount = duel["amount"]
-
-        if ch_bal < amount:
-            await message.answer(f"⚔️ Вызывающий Анон-{challenger_id%10000:04d} уже не потянет ставку — слился.")
-            return
-        if op_bal < amount:
-            # Возвращаем дуэль обратно в пул
-            _active_duels[challenger_id] = duel
-            await message.answer(f"❌ У тебя недостаточно бабок. Нужно {amount} RUB, есть {int(op_bal)}.")
-            return
-
-        # Рандом
-        import random
-        winner_id = random.choice([challenger_id, user_id])
-        loser_id  = challenger_id if winner_id == user_id else user_id
-
-        await db.execute(
-            "UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?",
-            (amount, winner_id, board_id)
-        )
-        await db.execute(
-            "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ?",
-            (amount, loser_id, board_id)
-        )
-        await db.commit()
-
-    w_tag = f"Анон-{winner_id%10000:04d}"
-    l_tag = f"Анон-{loser_id%10000:04d}"
-    you_w = " (ты)" if winner_id == user_id else ""
-    you_l = " (ты)" if loser_id  == user_id else ""
-    await message.answer(
-        f"⚔️ <b>ДУЭЛЬ!</b>\n\n"
-        f"🎲 Монета летит...\n\n"
-        f"🏆 Победитель: <b>{w_tag}</b>{you_w} +{amount} RUB\n"
-        f"💀 Проигравший: <b>{l_tag}</b>{you_l} -{amount} RUB",
-        parse_mode="HTML"
-    )
-
-async def decline_duel_logic(message: types.Message, challenger_id: int):
-    user_id = message.from_user.id
-    if challenger_id not in _active_duels:
-        return False
-        
-    # Отклонить дуэль может либо создатель (отмена), либо любой другой пользователь (отклонение)
-    if user_id == challenger_id:
-        _active_duels.pop(challenger_id, None)
-        await message.answer("⚔️ Вызов на дуэль успешно отменен создателем.")
-        return True
-    else:
-        _active_duels.pop(challenger_id, None)
-        await message.answer(f"⚔️ Вызов на дуэль отклонен Аноном-{user_id%10000:04d}.")
-        return True
-
-@dp.message(Command("accept", "yes", "ok", "принять"))
-async def cmd_accept_shortcut(message: Message, board_id: str | None):
-    if not board_id: return
-    # Срабатывает СТРОГО по Reply к сообщению дуэли
-    if not message.reply_to_message:
-        return
-        
-    reply_msg_id = message.reply_to_message.message_id
-    now = time.time()
-    found_ch = None
-    for ch_id, duel in list(_active_duels.items()):
-        if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-            found_ch = ch_id
-            break
-            
-    if found_ch:
-        await accept_duel_logic(message, found_ch, board_id)
-
-@dp.message(Command("decl", "no", "отклонить"))
-async def cmd_decline_shortcut(message: Message, board_id: str | None):
-    if not board_id: return
-    # Срабатывает СТРОГО по Reply к сообщению дуэли
-    if not message.reply_to_message:
-        return
-        
-    reply_msg_id = message.reply_to_message.message_id
-    now = time.time()
-    found_ch = None
-    for ch_id, duel in list(_active_duels.items()):
-        if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-            found_ch = ch_id
-            break
-            
-    if found_ch:
-        await decline_duel_logic(message, found_ch)
 
 @dp.message(Command("duel"))
 async def cmd_duel(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -7236,31 +6986,64 @@ async def cmd_duel(message: types.Message, board_id: str | None, stream: str = '
     args = message.text.split()[1:]  # /duel 200  or  /duel accept
     db   = await get_pool()
 
-    # ── /duel accept ── отвечает тот, кто видит active вызов
+    # ── /duel accept ── отвечает тот, кто видит активный вызов через reply
     if args and args[0].lower() in ("accept", "принять", "+"):
+        # Ищем дуэль в active_duels для любого challenger на этой борде
         now = time.time()
         found_ch = None
-        
-        # Сначала пробуем найти строго по реплаю на сообщение-вызов
-        if message.reply_to_message:
-            reply_msg_id = message.reply_to_message.message_id
-            for ch_id, duel in list(_active_duels.items()):
-                if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                    found_ch = ch_id
-                    break
-        
-        # Если по реплаю не нашли (или это обычный /duel accept), берем любой активный вызов на борде
-        if not found_ch:
-            for ch_id, duel in list(_active_duels.items()):
-                if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                    found_ch = ch_id
-                    break
-                    
+        for ch_id, duel in list(_active_duels.items()):
+            if duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
+                found_ch = ch_id
+                break
         if not found_ch:
             await message.answer("⚔️ Нет активных вызовов на этой борде. Жди кого-нибудь смелого.")
             return
-            
-        await accept_duel_logic(message, found_ch, board_id)
+        if found_ch == user_id:
+            await message.answer("Нельзя принять собственный вызов, трус.")
+            return
+        duel   = _active_duels.pop(found_ch)
+        amount = duel["amount"]
+
+        # Проверяем балансы обоих
+        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (found_ch, board_id)) as c:
+            ch_bal = (await c.fetchone() or [0])[0] or 0
+        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
+            op_bal = (await c.fetchone() or [0])[0] or 0
+
+        if ch_bal < amount:
+            await message.answer(f"⚔️ Вызывающий Анон-{found_ch%10000:04d} уже не потянет ставку — слился.")
+            return
+        if op_bal < amount:
+            await message.answer(f"❌ У тебя недостаточно бабок. Нужно {amount} RUB, есть {int(op_bal)}.")
+            return
+
+        # Рандом
+        import random
+        winner_id = random.choice([found_ch, user_id])
+        loser_id  = found_ch if winner_id == user_id else user_id
+
+        async with db_lock:
+            await db.execute(
+                "UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?",
+                (amount, winner_id, board_id)
+            )
+            await db.execute(
+                "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ?",
+                (amount, loser_id, board_id)
+            )
+            await db.commit()
+
+        w_tag = f"Анон-{winner_id%10000:04d}"
+        l_tag = f"Анон-{loser_id%10000:04d}"
+        you_w = " (ты)" if winner_id == user_id else ""
+        you_l = " (ты)" if loser_id  == user_id else ""
+        await message.answer(
+            f"⚔️ <b>ДУЭЛЬ!</b>\n\n"
+            f"🎲 Монета летит...\n\n"
+            f"🏆 Победитель: <b>{w_tag}</b>{you_w} +{amount} RUB\n"
+            f"💀 Проигравший: <b>{l_tag}</b>{you_l} -{amount} RUB",
+            parse_mode="HTML"
+        )
         return
 
     # ── /duel <сумма> ── создать вызов
@@ -7269,59 +7052,46 @@ async def cmd_duel(message: types.Message, board_id: str | None, stream: str = '
     except:
         amount = 0
 
-    if amount < 50 or amount > 100000:
+    if amount < 50:
         await message.answer(
             "⚔️ <b>Дуэль</b> — вызов другого анона на ставку.\n\n"
             "Использование: <code>/duel 200</code> — выставить ставку 200 RUB.\n"
             "Любой анон может ответить: <code>/duel accept</code>\n"
             "Победитель забирает всю ставку, рандом 50/50.\n"
-            "<i>Минимальная ставка: 50 RUB, максимальная: 100 000 RUB</i>",
+            "<i>Минимальная ставка: 50 RUB</i>",
             parse_mode="HTML"
         )
         return
 
-    # Проверяем кулдаун
-    now = time.time()
-    last_call = _duel_cooldowns.get(user_id, 0)
-    if now - last_call < 10:
-        await message.answer("⚠️ Не спамь вызовами дуэлей. Подожди 10 секунд.")
+    # Проверяем баланс
+    async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
+        bal = (await c.fetchone() or [0])[0] or 0
+
+    if bal < amount:
+        await message.answer(f"❌ Не хватает бабок. Ставка {amount} RUB, у тебя {int(bal)} RUB.")
         return
 
-    # Проверяем баланс под локом
-    async with db_lock:
-        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            bal = row[0] if row and row[0] is not None else 0
-
-        if bal < amount:
-            await message.answer(f"❌ Не хватает бабок. Ставка {amount} RUB, у тебя {int(bal)} RUB.")
-            return
-
-    # Записываем время последнего вызова
-    _duel_cooldowns[user_id] = now
-
+    # Снимаем ставку с резерва сразу (чтобы не спамили вызовы)
     # Удаляем старый вызов этого анона если был
     if user_id in _active_duels:
-        _active_duels.pop(user_id)
+        old = _active_duels.pop(user_id)
+        # Возвращать не надо — мы резерв не снимаем, просто заменяем
+        pass
 
-    # Отправляем сообщение-вызов
-    sent_msg = await message.answer(
-        f"⚔️ <b>Анон-{user_id%10000:04d} вызывает на дуэль!</b>\n\n"
-        f"Ставка: <code>{amount} RUB</code>\n"
-        f"Победитель забирает всё, рандом 50/50.\n\n"
-        f"Чтобы принять — напиши <code>/duel accept</code> в ответ на это сообщение или просто в чат.\n"
-        f"<i>Вызов активен 2 минуты.</i>",
-        parse_mode="HTML"
-    )
-    
-    # Сохраняем вызов с ID сообщения
     _active_duels[user_id] = {
         "board_id": board_id,
         "amount":   amount,
-        "ts":       now,
-        "msg_id":   sent_msg.message_id
+        "ts":       time.time(),
     }
-    
+
+    await message.answer(
+        f"⚔️ <b>Анон-{user_id%10000:04d} вызывает на дуэль!</b>\n\n"
+        f"Ставка: <code>{amount} RUB</code>\n"
+        f"Победитель забирает всё, рандом 50/50.\n\n"
+        f"Чтобы принять — напиши <code>/duel accept</code>\n"
+        f"<i>Вызов активен 2 минуты.</i>",
+        parse_mode="HTML"
+    )
     try: await message.delete()
     except: pass
 
@@ -7607,38 +7377,6 @@ async def cb_support_prank(callback: types.CallbackQuery):
     except Exception:
         await callback.message.answer(SUPPORT_RESPONSES['text'], parse_mode="HTML")
     await callback.answer()
-@dp.message(Command("my_stats", "mystats", "statsme", "профиль"))
-async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
-    try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
-
-    user_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name or "Аноним"
-    
-    sent_msg = await message.answer("📊 Рисую твою личную карту деградации...")
-    
-    from stats_generator import generate_user_stats_card
-    from aiogram.types import BufferedInputFile
-    import asyncio
-
-    try:
-        loop = asyncio.get_running_loop()
-        photo_buf, text_report = await loop.run_in_executor(None, generate_user_stats_card, user_id, board_id, username)
-        if photo_buf:
-            photo = BufferedInputFile(photo_buf.getvalue(), filename='mystats.png')
-            await message.answer_photo(photo, caption=text_report, parse_mode="HTML")
-        else:
-            await message.answer(text_report, parse_mode="HTML")
-    except Exception as e:
-        await message.answer(f"⚠️ Ошибка генерации статистики: {e}")
-
-    try: await sent_msg.delete()
-    except Exception: pass
-    try: await message.delete()
-    except Exception: pass
-
-
 @dp.message(Command("passport", "me", "profile", "stats_me"))
 async def cmd_passport(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -7754,17 +7492,14 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     elif board_id == 'sex': flag = "🍆"
     if lang == 'en':
         labels = ["TGACH PASSPORT", "ID", "Rank", "Role", "Posts", "Diagnosis", "Inventory", "Kompromat", "Social Credit"]
-        anon_tag = f"Anon-{user_id % 10000:04d}"
     elif lang == 'jp':
         labels = ["TGちゃんパスポート", "ID", "ランク", "役割", "レス数", "診断", "持ち物", "秘密", "社会的信用"]
-        anon_tag = f"アノン-{user_id % 10000:04d}"
     else:
         labels = ["ПАСПОРТ ТГАЧЕРА", "ID", "Ранг", "Роль", "Постов", "Диагноз", "Инвентарь", "Компромат", "Соц. рейтинг"]
-        anon_tag = f"Анон-{user_id % 10000:04d}"
     passport_text = (
         f"🪪 <b>{labels[0]} {flag}</b>\n"
         f"<code>{'—'*22}</code>\n"
-        f"🆔 <b>{labels[1]}:</b> <code>{anon_tag}</code>\n"
+        f"🆔 <b>{labels[1]}:</b> <code>**********</code>\n"
         f"🏷 <b>{labels[2]}:</b> {rank}\n"
         f"💼 <b>{labels[3]}:</b> {role}\n"
         f"💩 <b>{labels[4]}:</b> {post_count}\n"
@@ -7827,8 +7562,7 @@ async def cmd_admin_answer(message: types.Message, board_id: str | None, stream:
     content = {
         'type': 'text',
         'text': answer_text,
-        'is_system_message': True,
-        'archive_allowed': True
+        'is_system_message': True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -7881,11 +7615,7 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         await message.answer("ID/Reply needed." if lang != 'ru' else "Нужен ID или реплай.")
-        try: await message.delete()
-        except Exception: pass
         return
-    try: await message.delete()
-    except Exception: pass
     if lang == 'en': msg = f"🕊️ Global Amnesty for <code>{target_id}</code>..."
     elif lang == 'jp': msg = f"🕊️ <code>{target_id}</code> へのグローバル恩赦..."
     else: msg = f"🕊️ Глобальная амнистия для <code>{target_id}</code>..."
@@ -8327,8 +8057,7 @@ async def dvach_thread_poster():
             content = {
                 'type': 'text',
                 'text': thread_text,
-                'is_system_message': True,
-                'archive_allowed': True
+                'is_system_message': True
             }
             post_num = await create_post(
                 board_id=destination_board_id,
@@ -9286,8 +9015,7 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
     content_payload = {
         'type': 'text',
         'text': roast_text,
-        'is_system_message': True,
-        'archive_allowed': True
+        'is_system_message': True
     }
     
     pnum = await create_post(
@@ -9691,8 +9419,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     content = {
         'type': 'text',
         'text': post_text,
-        'is_system_message': True,
-        'archive_allowed': True
+        'is_system_message': True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -9757,11 +9484,7 @@ async def cmd_gban(message: types.Message, board_id: str | None, stream: str = '
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         await message.answer("ID/Reply needed." if lang != 'ru' else "Нужен ID или реплай.")
-        try: await message.delete()
-        except Exception: pass
         return
-    try: await message.delete()
-    except Exception: pass
     if lang == 'en': msg = f"🔨 GLOBAL BANNING <code>{target_id}</code>..."
     elif lang == 'jp': msg = f"🔨 <code>{target_id}</code> をグローバルBAN中..."
     else: msg = f"🔨 Выписываю ГЛОБАЛЬНЫЙ БАН для <code>{target_id}</code>..."
@@ -9812,8 +9535,6 @@ async def cmd_gshadowmute(message: types.Message, board_id: str | None, stream: 
         elif lang == 'jp': usage = "使用法: <code>/gshadowmute &lt;ID&gt; [時間]</code> または返信。"
         else: usage = "Использование: <code>/gshadowmute &lt;id&gt; [время]</code> или ответом."
         await message.answer(usage, parse_mode="HTML")
-        try: await message.delete()
-        except Exception: pass
         return
     try:
         duration_str = duration_str.lower().replace(" ", "")
@@ -9824,11 +9545,7 @@ async def cmd_gshadowmute(message: types.Message, board_id: str | None, stream: 
         total_seconds = min(total_seconds, 2592000) 
     except (ValueError, AttributeError):
         await message.answer("❌ Error format" if lang != 'ru' else "❌ Неверный формат времени")
-        try: await message.delete()
-        except Exception: pass
         return
-    try: await message.delete()
-    except Exception: pass
     if lang == 'en': msg = f"👻 Applying GLOBAL SHADOW on <code>{target_id}</code> ({time_str})..."
     elif lang == 'jp': msg = f"👻 <code>{target_id}</code> にグローバルシャドウを適用中 ({time_str})..."
     else: msg = f"👻 Накладываю ГЛОБАЛЬНУЮ тень на <code>{target_id}</code> ({time_str})..."
@@ -9898,8 +9615,6 @@ async def cmd_search(message: types.Message, board_id: str | None, stream: str =
 @dp.message(Command("airdrop"))
 async def cmd_airdrop(message: Message, board_id: str | None):
     if not board_id or not is_admin(message.from_user.id, board_id): return
-    try: await message.delete()
-    except Exception: pass
     
     from common.db_pool import get_pool, db_lock
     async with db_lock:
@@ -9914,13 +9629,13 @@ async def cmd_airdrop(message: Message, board_id: str | None):
             await message.answer("🤷‍♂️ У всех и так есть бабки, эирдроп не нужен.")
             return
 
-        updates = [(random.randint(8, 15), uid) for uid in users_to_fix]
-        # Начисляем только в ОДНУ (любую) существующую запись юзера, чтобы избежать дублей
-        await db.executemany("""
-            UPDATE Users SET balance = ?
-            WHERE rowid = (SELECT rowid FROM Users WHERE user_id = ? LIMIT 1)
-        """, updates)
-        await db.commit()
+        for uid in users_to_fix:
+            amount = random.randint(8, 15)
+            # Начисляем только в ОДНУ (любую) существующую запись юзера, чтобы избежать дублей
+            await db.execute("""
+                UPDATE Users SET balance = ?
+                WHERE rowid = (SELECT rowid FROM Users WHERE user_id = ? LIMIT 1)
+            """, (amount, uid))
         
     await message.answer(f"🚀 <b>ЭИРДРОП ЗАВЕРШЕН!</b>\nНачислил бабки {len(users_to_fix)} нищим анонам.")
 @dp.callback_query(F.data == "show_active_threads")
@@ -10045,8 +9760,6 @@ async def cmd_quote(message: types.Message, board_id: str | None, stream: str = 
 @dp.message(Command("addmoney"))
 async def cmd_add_money_admin(message: Message, board_id: str | None):
     if not board_id or not is_admin(message.from_user.id, board_id): return
-    try: await message.delete()
-    except Exception: pass
     
     args = message.text.split()
     if len(args) < 3:
@@ -10062,13 +9775,9 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
             await db.execute("INSERT OR IGNORE INTO Users (user_id, board_id) VALUES (?, ?)", (target_id, board_id))
             # 2. Начисляем деньги ТОЛЬКО в эту запись (избегаем умножения)
             await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (amount, target_id, board_id))
-            await db.commit()
         
         await message.answer(f"✅ Нарисовано {amount} рублей для юзера {target_id}. Баланс пополнен (корзина /{board_id}/).")
-        try:
-            await message.bot.send_message(target_id, f"🎁 <b>Администрация начислила вам бонус: {amount} RUB! Кошелек - /wallet </b>", parse_mode="HTML")
-        except Exception:
-            pass
+        await message.bot.send_message(target_id, f"🎁 <b>Администрация начислила вам бонус: {amount} RUB! Кошелек - /wallet </b>", parse_mode="HTML")
     except Exception as e:
         await message.answer(f"Ошибка: {e}", parse_mode=None)
 @dp.message(Command("slavaukraine", "slava_ukraine", "ukraine", "ukraina", "hohol"))
@@ -10112,8 +9821,7 @@ async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream:
     content = {
         "type": "text",
         "text": activation_text,
-        "is_system_message": True,
-        "archive_allowed": True
+        "is_system_message": True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -10168,7 +9876,7 @@ async def cmd_gopnik(message: types.Message, board_id: str | None, stream: str =
         return
     activation_text = random.choice(GOPNIK_PHRASES_START)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True}
     pnum = await create_post(
         board_id=board_id, author_id=0, content=content,
         timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
@@ -10215,7 +9923,7 @@ async def cmd_schizo(message: types.Message, board_id: str | None, stream: str =
         return
     activation_text = random.choice(SCHIZO_PHRASES_START)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True}
     pnum = await create_post(
         board_id=board_id, author_id=0, content=content,
         timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
@@ -10268,7 +9976,7 @@ async def activate_lightweight_mode(
         return
     activation_text = random.choice(start_phrases)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True}
     pnum = await create_post(
         board_id=board_id,
         author_id=0,
@@ -10390,7 +10098,7 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
     phrases = end_phrases_map.get(mode_to_disable, ["Режим отключен."])
     end_text = random.choice(phrases) if isinstance(phrases, list) else "Режим отключен."
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": end_text, "is_system_message": True, "archive_allowed": True}
+    content = {"type": "text", "text": end_text, "is_system_message": True}
     pnum = await create_post(
         board_id=board_id, 
         author_id=0, 
@@ -10439,7 +10147,7 @@ async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 
         return
     activation_text = random.choice(POLISH_PHRASES_START)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True}
     pnum = await create_post(
         board_id=board_id,
         author_id=0,
@@ -10485,7 +10193,7 @@ async def cmd_wh40k(message: types.Message, board_id: str | None, stream: str = 
         return
     activation_text = random.choice(WH40K_PHRASES_START)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True}
     pnum = await create_post(
         board_id=board_id, author_id=0, content=content,
         timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
@@ -10526,7 +10234,7 @@ async def cmd_yer(message: types.Message, board_id: str | None, stream: str = 'r
         return
     activation_text = random.choice(IMPERIAL_PHRASES_START)
     now_dt = datetime.now(UTC)
-    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
+    content = {"type": "text", "text": activation_text, "is_system_message": True}
     pnum = await create_post(
         board_id=board_id, author_id=0, content=content,
         timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
@@ -10907,8 +10615,7 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
     except TelegramBadRequest:
         pass
 @dp.callback_query(F.data.startswith("menu_"))
-async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
-    await state.clear()
+async def handle_quick_menu_click(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     action = callback.data.split("_")[1]
     user_id = callback.from_user.id
@@ -12348,7 +12055,7 @@ async def archive_thread(bots: dict[str, Bot], board_id: str, thread_id: str, th
         await archive_thread_in_db(int(thread_id))
     except Exception as e:
         print(f"❌ Ошибка при архивации треда #{thread_id} в БД: {e}")
-@dp.message(Command("cancel"))
+@dp.message(Command("cancel"), FSMContext)
 async def cmd_cancel_fsm(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
     Отменяет любое FSM состояние, в котором находится пользователь.
@@ -13228,9 +12935,7 @@ async def cmd_unmute(message: types.Message, board_id: str | None, stream: str =
         target_id = await get_author_id_by_reply(message)
     else:
         parts = message.text.split()
-        if len(parts) == 2:
-            try: target_id = int(parts[1])
-            except ValueError: pass
+        if len(parts) == 2 and parts[1].isdigit(): target_id = int(parts[1])
     if not target_id:
         msg = "Need ID or reply." if lang == 'en' else ("IDまたは返信が必要です。" if lang == 'jp' else "Нужен ID или реплай.")
         await message.answer(msg); return
@@ -13487,9 +13192,8 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
         target_id = await get_author_id_by_reply(message)
     else:
         parts = message.text.split()
-        if len(parts) == 2:
-            try: target_id = int(parts[1])
-            except ValueError: pass
+        if len(parts) == 2 and parts[1].isdigit():
+            target_id = int(parts[1])
     if not target_id:
         if lang == 'en':
             msg = "Usage: <code>/unshadowmute &lt;id&gt;</code> or reply."
@@ -13667,31 +13371,27 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
         return
 
     # Send to target
-    delivered = False
     try:
         await message.bot.send_message(
             target_id, 
             f"🤫 <b>Тебе анонимно шепчут в /{board_id}/:</b>\n<i>{escape_html(text)}</i>", 
             parse_mode="HTML"
         )
-        delivered = True
     except Exception as e:
         runtime_logger.error(f"Whisper send failed: {e}")
-        await message.answer("❌ Не удалось доставить шёпот (пользователь не запустил бота или заблокировал его).")
         
-    if delivered:
-        # Send to admin
-        admins = BOARD_CONFIG.get(board_id, {}).get('admins', set())
-        sender_nick = generate_anon_name(message.from_user.id)
-        target_nick = generate_anon_name(target_id)
-        for admin_id in admins:
-            try:
-                await message.bot.send_message(
-                    admin_id,
-                    f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\nОт: <code>{sender_nick}</code>\nКому: <code>{target_nick}</code>\nТекст: <i>{escape_html(text)}</i>",
-                    parse_mode="HTML"
-                )
-            except Exception: pass
+    # Send to admin
+    admins = BOARD_CONFIG.get(board_id, {}).get('admins', set())
+    sender_nick = generate_anon_name(message.from_user.id)
+    target_nick = generate_anon_name(target_id)
+    for admin_id in admins:
+        try:
+            await message.bot.send_message(
+                admin_id,
+                f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\\nОт: <code>{sender_nick}</code>\\nКому: <code>{target_nick}</code>\\nТекст: <i>{escape_html(text)}</i>",
+                parse_mode="HTML"
+            )
+        except Exception: pass
 
 @dp.message(Command("redact"))
 async def cmd_redact(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -13714,34 +13414,18 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
         
     target_id = await get_author_id_by_reply(message)
     if target_id != message.from_user.id:
-        await message.answer("❌ Ты не можешь редактировать чужие сообщения!")
+        await message.answer("❌ Ты не можешь удалять чужие сообщения!")
         return
 
-    msg_status = await message.answer("⏳ Удаляем контент из всех копий...")
+    msg_status = await message.answer("⏳ Удаляем из всех чатов...")
     
-    # Get board_id of the post
-    post_board = None
-    if post_num in messages_storage:
-        post_board = messages_storage[post_num].get('board_id')
-    if not post_board:
-        from common.db_pool import get_pool
-        db = await get_pool()
-        async with db.execute("SELECT board_id FROM Posts WHERE post_num = ?", (post_num,)) as c:
-            row = await c.fetchone()
-            if row:
-                post_board = row[0]
-    if not post_board:
-        post_board = board_id
-
-    # Get all user copies
+    # Get all copies
     db_copies = await get_post_copies(post_num)
     success_count = 0
     for rec_id, msg_id in db_copies:
         try:
-            # Используем правильного бота доски для ЛС
-            target_bot = GLOBAL_BOTS.get(post_board) or message.bot
             try:
-                await target_bot.edit_message_text(
+                await message.bot.edit_message_text(
                     chat_id=rec_id,
                     message_id=msg_id,
                     text="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
@@ -13753,7 +13437,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                     pass
                 elif "there is no text in the message" in err_str or "message to edit not found" not in err_str:
                     try:
-                        await target_bot.edit_message_caption(
+                        await message.bot.edit_message_caption(
                             chat_id=rec_id,
                             message_id=msg_id,
                             caption="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
@@ -13766,39 +13450,6 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
         except Exception:
             pass
 
-    # Get and update all channel copies (mirrors)
-    from common.database import get_all_channel_copies
-    channel_copies = await get_all_channel_copies(post_num)
-    if channel_copies:
-        target_bot = GLOBAL_BOTS.get(post_board) or message.bot
-        for chan_id, msg_id in channel_copies:
-            try:
-                try:
-                    await target_bot.edit_message_text(
-                        chat_id=chan_id,
-                        message_id=msg_id,
-                        text="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
-                        parse_mode="HTML"
-                    )
-                except TelegramBadRequest as e:
-                    err_str = str(e).lower()
-                    if "message is not modified" in err_str:
-                        pass
-                    elif "there is no text in the message" in err_str or "message to edit not found" not in err_str:
-                        try:
-                            await target_bot.edit_message_caption(
-                                chat_id=chan_id,
-                                message_id=msg_id,
-                                caption="<b>[ДАННЫЕ УДАЛЕНЫ АВТОРОМ]</b>",
-                                parse_mode="HTML"
-                            )
-                        except Exception:
-                            pass
-                success_count += 1
-                await asyncio.sleep(0.04)
-            except Exception:
-                pass
-
     async with storage_lock:
         if post_num in messages_storage:
             content_dict = messages_storage[post_num].get('content', {})
@@ -13810,6 +13461,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
     # Update SQLite explicitly using the database connection
     try:
         from common.database import update_post_content
+        # Get the updated content dict or a default fallback
         content_dict = {}
         if post_num in messages_storage:
             content_dict = messages_storage[post_num].get('content', {})
@@ -13822,7 +13474,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
     try: await msg_status.delete()
     except Exception: pass
     
-    st_msg = await message.answer(f"✅ Успешно удалено у {success_count} пользователей/зеркал.")
+    st_msg = await message.answer(f"✅ Успешно удалено у {success_count} пользователей.")
     await asyncio.sleep(4)
     try: await st_msg.delete()
     except Exception: pass
@@ -13989,8 +13641,7 @@ async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 
     content = {
         "type": "text",
         "text": activation_text,
-        "is_system_message": True,
-        "archive_allowed": True
+        "is_system_message": True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -14585,8 +14236,7 @@ async def cmd_zaputin(message: types.Message, board_id: str | None, stream: str 
     content = {
         "type": "text",
         "text": activation_text,
-        "is_system_message": True,
-        "archive_allowed": True
+        "is_system_message": True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -14690,8 +14340,7 @@ async def cmd_suka_blyat(message: types.Message, board_id: str | None, stream: s
     content = {
         "type": "text",
         "text": activation_text,
-        "is_system_message": True,
-        "archive_allowed": True
+        "is_system_message": True
     }
     pnum = await create_post(
         board_id=board_id,
@@ -14757,8 +14406,7 @@ async def cmd_admin_say(message: types.Message, board_id: str | None, stream: st
         return
     content = {
         'type': content_type if file_id else 'text',
-        'is_system_message': True,
-        'archive_allowed': True
+        'is_system_message': True
     }
     if file_id:
         content['file_id'] = file_id
@@ -14948,9 +14596,8 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
         target_id = await get_author_id_by_reply(message)
     else:
         parts = message.text.split()
-        if len(parts) == 2:
-            try: target_id = int(parts[1])
-            except ValueError: pass
+        if len(parts) == 2 and parts[1].isdigit():
+            target_id = int(parts[1])
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         if lang == 'en':
@@ -15561,9 +15208,8 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
     parts = message.text.split()
-    if len(parts) == 2:
-        try: target_id = int(parts[1])
-        except ValueError: pass
+    if len(parts) == 2 and parts[1].isdigit():
+        target_id = int(parts[1])
     if not target_id:
         await message.answer("Нужно ответить на сообщение или указать ID: <code>/ban &lt;id&gt;</code>", parse_mode="HTML")
         return
@@ -15576,8 +15222,6 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
         ]
     ])
     await message.answer(f"⚠️ Вы уверены, что хотите забанить <b>{anon_name}</b> (ID: <code>{target_id}</code>) и снести его последние посты?", parse_mode="HTML", reply_markup=kb)
-    try: await message.delete()
-    except Exception: pass
 
 async def execute_ban(bot, message, target_id: int, board_id: str, admin_id: int):
     deleted_posts = await delete_user_posts(bot, target_id, 5, board_id)
@@ -15647,8 +15291,6 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
         ]
     ])
     await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) за последние {minutes} минут?", parse_mode="HTML", reply_markup=kb)
-    try: await message.delete()
-    except Exception: pass
 
 async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: int, minutes: int):
     try: await message.edit_text("⏳ Сжигаю посты (процесс запущен, может занять несколько минут)...", parse_mode="HTML")
@@ -15843,48 +15485,37 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
     if not board_id or not is_admin(message.from_user.id, board_id):
         return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    target_id = None
-    if message.reply_to_message:
-        target_id = await get_author_id_by_reply(message)
-    
     args = message.text.split()
-    if len(args) >= 2:
-        try:
-            target_id = int(args[1])
-        except ValueError:
-            pass
-            
-    if target_id is None:
-        if lang == 'en': usage = "Usage: <code>/unban &lt;user_id&gt;</code> or reply to user message."
-        elif lang == 'jp': usage = "使用法: <code>/unban &lt;user_id&gt;</code> またはユーザーメッセージに返信します。"
-        else: usage = "Использование: <code>/unban &lt;user_id&gt;</code> или ответ на сообщение пользователя."
+    if len(args) < 2:
+        if lang == 'en': usage = "Usage: <code>/unban &lt;user_id&gt;</code>"
+        elif lang == 'jp': usage = "使用法: <code>/unban &lt;user_id&gt;</code>"
+        else: usage = "Использование: <code>/unban &lt;user_id&gt;</code>"
         await message.answer(usage, parse_mode="HTML")
-        try: await message.delete()
-        except Exception: pass
         return
-        
-    unbanned = False
-    async with storage_lock:
-        b_data = board_data[board_id]
-        if target_id in b_data['users']['banned']:
-            b_data['users']['banned'].discard(target_id)
-            b_data['users']['active'].add(target_id)
-            unbanned = True
-            
-    board_name = BOARD_CONFIG[board_id]['name']
-    if unbanned:
-        await add_or_activate_user(target_id, board_id) 
-        if lang == 'en': msg = f"User {target_id} unbanned on {board_name}."
-        elif lang == 'jp': msg = f"ユーザー {target_id} のBANを解除しました ({board_name})。"
-        else: msg = f"Пользователь {target_id} разбанен на доске {board_name}."
-        await message.answer(msg)
-    else:
-        if lang == 'en': msg = f"User {target_id} was not banned."
-        elif lang == 'jp': msg = f"ユーザー {target_id} はBANされていません。"
-        else: msg = f"Пользователь {target_id} не был забанен на этой доске."
-        await message.answer(msg)
-    try: await message.delete()
-    except Exception: pass
+    try:
+        user_id = int(args[1])
+        unbanned = False
+        async with storage_lock:
+            b_data = board_data[board_id]
+            if user_id in b_data['users']['banned']:
+                b_data['users']['banned'].discard(user_id)
+                b_data['users']['active'].add(user_id)
+                unbanned = True
+        board_name = BOARD_CONFIG[board_id]['name']
+        if unbanned:
+             await add_or_activate_user(user_id, board_id)
+             if lang == 'en': msg = f"User {user_id} unbanned on {board_name}."
+             elif lang == 'jp': msg = f"ユーザー {user_id} のBANを解除しました ({board_name})。"
+             else: msg = f"Пользователь {user_id} разбанен на доске {board_name}."
+             await message.answer(msg)
+        else:
+            if lang == 'en': msg = f"User {user_id} was not banned."
+            elif lang == 'jp': msg = f"ユーザー {user_id} はBANされていません。"
+            else: msg = f"Пользователь {user_id} не был забанен на этой доске."
+            await message.answer(msg)
+    except ValueError:
+        await message.answer("Invalid ID")
+    await message.delete()
 @dp.message(Command("del"))
 async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -17331,37 +16962,6 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             try: await message.bot.send_message(user_id, "Replies limit reached (3 max).", disable_notification=True)
             except Exception: pass
         return
-    # Проверка текстового ответа на дуэль (без слеша)
-    if message.reply_to_message and message.text:
-        text_clean = message.text.lower().strip()
-        if text_clean in ("accept", "принять", "yes", "да", "ok", "ок", "+"):
-            reply_msg_id = message.reply_to_message.message_id
-            now = time.time()
-            found_ch = None
-            for ch_id, duel in list(_active_duels.items()):
-                if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                    found_ch = ch_id
-                    break
-            if found_ch:
-                try: await message.delete()
-                except Exception: pass
-                await accept_duel_logic(message, found_ch, board_id)
-                return
-                
-        elif text_clean in ("decl", "отклонить", "no", "нет", "-"):
-            reply_msg_id = message.reply_to_message.message_id
-            now = time.time()
-            found_ch = None
-            for ch_id, duel in list(_active_duels.items()):
-                if duel.get("msg_id") == reply_msg_id and duel["board_id"] == board_id and now - duel["ts"] < _DUEL_TIMEOUT:
-                    found_ch = ch_id
-                    break
-            if found_ch:
-                try: await message.delete()
-                except Exception: pass
-                await decline_duel_logic(message, found_ch)
-                return
-
     try: await message.delete()
     except TelegramBadRequest: pass
     reply_to_post = None
@@ -17662,7 +17262,6 @@ async def periodic_thread_digest():
                     'type': 'text',
                     'text': digest_text,
                     'is_system_message': True,
-                    'archive_allowed': True
                 }
                 pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
                 if pnum:
@@ -17684,60 +17283,6 @@ async def periodic_thread_digest():
                     })
         except Exception as e:
             print(f"❌ Ошибка дайджеста: {e}")
-
-async def periodic_newspaper_broadcast():
-    while True:
-        await asyncio.sleep(86400) # 24 часа
-        try:
-            import datetime
-            yesterday = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-            url = f"{SITE_PUBLIC_BASE_URL}/newspaper/{yesterday}"
-            
-            newspaper_text = (
-                f"📰 <b>СВЕЖИЙ ВЫПУСК ГАЗЕТЫ «ВЕСТНИК ТГАЧ»</b>\n"
-                f"Выпуск от {yesterday}\n\n"
-                f"В номере:\n"
-                f"• Литературный вестник дня (самые длинные посты)\n"
-                f"• Топ обсуждаемых тем и тредов\n"
-                f"• Сводка происшествий и общая статистика скуфства\n\n"
-                f"👉 <b>Читать свежий номер:</b> <a href='{url}'>{url}</a>\n\n"
-                f"🚀 <i>Будьте в курсе последних событий деградации!</i>"
-            )
-            
-            target_boards = ['thread', 'b']
-            for board_id in target_boards:
-                if board_id not in board_data:
-                    continue
-                b_data = board_data[board_id]
-                recipients = b_data['users']['active'] - b_data['users']['banned']
-                if not recipients:
-                    continue
-                content = {
-                    'type': 'text',
-                    'text': newspaper_text,
-                    'is_system_message': True,
-                    'archive_allowed': True
-                }
-                pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
-                if pnum:
-                    header_base = await format_header(board_id, pnum)
-                    content['header'] = f"### NEWSPAPER ###\n{header_base}"
-                    await update_post_content(pnum, content)
-                    async with storage_lock:
-                        messages_storage[pnum] = {
-                            'author_id': 0, 
-                            'timestamp': datetime.datetime.now(datetime.timezone.utc), 
-                            'content': content, 
-                            'board_id': board_id
-                        }
-                    await enqueue_board_message(board_id, {
-                        "recipients": recipients,
-                        "content": content,
-                        "post_num": pnum,
-                        "board_id": board_id
-                    })
-        except Exception as e:
-            print(f"❌ Ошибка отправки газеты: {e}")
 SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
 
 def _site_public_url(raw_url: str | None) -> str | None:
@@ -17958,7 +17503,7 @@ async def site_posts_broadcaster():
                         })
                         await mark_broadcast_posts_sent([post_num])
                         
-                        if not content.get('is_system_message') or content.get('archive_allowed'):
+                        if not content.get('is_system_message'):
                             bot_to_use = GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
                             if bot_to_use:
                                 spawn_task(_forward_post_to_realtime_archive(
@@ -18288,7 +17833,6 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "site_reaction_processor": lambda: site_reaction_processor(),
         "mode_auto_disabler": lambda: mode_auto_disabler(),
         "periodic_thread_digest": lambda: periodic_thread_digest(),
-        "periodic_newspaper_broadcast": lambda: periodic_newspaper_broadcast(),
         "admin_action_sync_worker": lambda: admin_action_sync_worker(),
     }
     tasks = [
@@ -18484,7 +18028,6 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="wallet", description="Баланс кошелька"),
         BotCommand(command="shop", description="Теневой Магазин"),
         BotCommand(command="passport", description="Паспорт и статистика"),
-        BotCommand(command="my_stats", description="Персональная карта статистики"),
         BotCommand(command="threads", description="Список тредов"),
         BotCommand(command="search", description="Поиск постов"),
         BotCommand(command="create", description="Создать новый тред"),
@@ -18746,9 +18289,9 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
         elif lang == 'jp': text = "<b>🛠 モデレーション:</b>\n<code>/admin</code> - 管理パネル\n<code>/ban &lt;id&gt;</code> - バン\n<code>/mute &lt;id&gt;</code> - ミュート\n<code>/wipe &lt;id&gt;</code> - メッセージ削除"
         else: text = "<b>🛠 Модерация:</b>\n<code>/admin</code> - Панель управления\n<code>/ban &lt;id&gt;</code> - Бан\n<code>/mute &lt;id&gt;</code> - Мут\n<code>/wipe &lt;id&gt;</code> - Очистка"
     elif cat == "fun":
-        if lang == 'en': text = "<b>🎲 Fun:</b>\n<code>/roll</code> - Roulette / fate\n<code>/fortune</code> - Fortune roll\n<code>/quote</code> - Random post\n<code>/wordcloud</code> - Word cloud\n<code>/passport</code> - Profile\n<code>/my_stats</code> - Personal stats card\n<code>/stats</code> - Activity charts"
+        if lang == 'en': text = "<b>🎲 Fun:</b>\n<code>/roll</code> - Roulette / fate\n<code>/fortune</code> - Fortune roll\n<code>/quote</code> - Random post\n<code>/wordcloud</code> - Word cloud\n<code>/passport</code> - Profile\n<code>/stats</code> - Activity charts"
         elif lang == 'jp': text = "<b>🎲 遊び:</b>\n<code>/roll</code> - ルーレット\n<code>/wordcloud</code> - ワードクラウド\n<code>/passport</code> - プロフ\n<code>/schizo</code> - 統合失調症モード"
-        else: text = "<b>🎲 Развлечения:</b>\n<code>/roll</code> — Рулетка судьбы\n<code>/fortune</code> — То же что roll (алиас)\n<code>/quote</code> — Случайный пост с борды\n<code>/wordcloud</code> — Облако слов\n<code>/passport</code> — Паспорт анона\n<code>/my_stats</code> — Персональная карта статистики\n<code>/stats</code> — Тепловые карты активности"
+        else: text = "<b>🎲 Развлечения:</b>\n<code>/roll</code> — Рулетка судьбы\n<code>/fortune</code> — То же что roll (алиас)\n<code>/quote</code> — Случайный пост с борды\n<code>/wordcloud</code> — Облако слов\n<code>/passport</code> — Паспорт анона\n<code>/stats</code> — Тепловые карты активности"
     elif cat == "settings":
         if lang == 'en': text = "<b>⚙️ Settings:</b>\n<code>/nsfw</code> - NSFW Spoilers\n<code>/hide</code> - Word filter\n<code>/togglegif</code> - Hide GIFs"
         elif lang == 'jp': text = "<b>⚙️ 設定:</b>\n<code>/nsfw</code> - NSFW スポイラー\n<code>/hide</code> - 単語フィルター\n<code>/togglegif</code> - GIF非表示"

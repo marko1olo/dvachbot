@@ -211,7 +211,7 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
             try:
                 transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
                 async with httpx.AsyncClient(proxy=strategy["proxy"], transport=transport, verify=False, timeout=GROQ_TIMEOUT) as http_client:
-                    client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client, max_retries=0)
+                    client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client)
                     resp = await _execute_tagging(
                         client,
                         model=GROQ_MODEL,
@@ -223,10 +223,6 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
                         return content.strip().rstrip('.,')
             except Exception as e:
                 err_str = str(e).lower()
-                if "401" in err_str or "unauthorized" in err_str or "invalid api key" in err_str:
-                    logger.error(f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool.")
-                    groq_pool.remove_token(token)
-                    continue
                 if "413" in err_str:
                     logger.error("❌ 413 Payload Too Large (Even after resize!). Skipping tags.")
                     return "error_413" # Возвращаем спец-код, чтобы сохранить хеши, но без тегов
@@ -370,11 +366,7 @@ async def tagging_loop():
                 # 1. СКАЧИВАНИЕ
                 try:
                     f_info = await bot.get_file(download_target_id)
-                    file_path = getattr(f_info, "file_path", None)
-                    if not file_path:
-                        logger.error(f"⚠️ No file_path for {download_target_id}. Skipping.")
-                        continue
-                    f_obj = await bot.download_file(file_path)
+                    f_obj = await bot.download_file(f_info.file_path)
                     img_bytes = f_obj.read() if hasattr(f_obj, 'read') else f_obj
                 except TelegramBadRequest:
                     logger.error(f"🗑️ File {download_target_id} deleted. Marking error.")

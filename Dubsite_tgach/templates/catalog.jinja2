@@ -14,16 +14,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ board_info.name }} (Каталог) - {{ request.state.t('site_name') }}</title>
-    <meta name="description" content="Каталог тредов раздела /{{ board_id }}/ — {{ board_info.description }}">
-    <meta property="og:site_name" content="ТГАЧ">
-    <meta property="og:type" content="website">
-    <meta property="og:title" content="{{ board_info.name }} (Каталог) — ТГАЧ">
-    <meta property="og:description" content="Каталог тредов раздела /{{ board_id }}/ — {{ board_info.description }}">
-    <meta property="og:url" content="{{ request.url }}">
-    <meta property="og:image" content="{{ request.base_url }}static/logo.png">
     <link rel="stylesheet" href="/static/css/style.css?v=2.9">
     <link rel="icon" href="/static/favicon.ico">
-    <link rel="alternate" type="application/rss+xml" title="RSS ТГАЧ - {{ board_info.name }}" href="/{{ board_id }}/rss.xml">
     <link rel="preconnect" href="https://api.telegram.org" crossorigin>
     <style>
         /* Атомарный фикс шрифтов каталога */
@@ -165,7 +157,7 @@
                         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                              data-src="{{ thread.content.files[0].thumbnail_url }}" 
                              class="lazy-load" 
-                             alt="[Тред /{{ board_id }}/ #{{ thread.id }}] {{ thread.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"
+                             alt="thumb"
                              loading="lazy"
                              referrerpolicy="no-referrer">
                     {% elif thread.content.files and thread.content.files[0].type in ['video', 'video_note', 'animation'] %}

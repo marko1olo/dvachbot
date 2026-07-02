@@ -13,12 +13,11 @@ async def kill_zombies():
         # Паттерны: AgAC (фото), BQAC (файлы/видео), CQAC (аудио)
         patterns = ['AgAC%', 'BQAC%', 'CQAC%']
         
-        where_clause = " OR ".join(["file_id LIKE ?"] * len(patterns))
-
-        # Чистим MirrorQueue (Catbox)
-        await db.execute(f"DELETE FROM MirrorQueue WHERE {where_clause}", patterns)
-        # Чистим PendingHF (HuggingFace)
-        await db.execute(f"DELETE FROM PendingHF WHERE {where_clause}", patterns)
+        for p in patterns:
+            # Чистим MirrorQueue (Catbox)
+            await db.execute("DELETE FROM MirrorQueue WHERE file_id LIKE ?", (p,))
+            # Чистим PendingHF (HuggingFace)
+            await db.execute("DELETE FROM PendingHF WHERE file_id LIKE ?", (p,))
         
         await db.commit()
         print("✅ Все зомби-задачи (AgAC, BQAC, CQAC) удалены из очередей.")

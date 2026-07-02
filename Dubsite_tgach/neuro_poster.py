@@ -206,8 +206,7 @@ class NeuroManager:
                         async with AsyncOpenAI(
                             api_key=api_key, 
                             base_url=AI_CONFIG["base_url"],
-                            http_client=http_client,
-                            max_retries=0
+                            http_client=http_client
                         ) as client:
                             completion = await _execute_completion(client, target_model, messages, max_tokens, temperature)
                             return completion.choices[0].message.content.strip()
@@ -219,11 +218,6 @@ class NeuroManager:
                         logger.warning(f"⚠️ Groq Rate Limit via {strategy['name']}. Switching key...")
                         break 
                     
-                    if "401" in err_str or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower():
-                        logger.error(f"❌ Groq key {api_key[:12]}... is unauthorized (401). Removing from rotation pool.")
-                        groq_pool.remove_token(api_key)
-                        break
-
                     # Если ошибка сети - пробуем следующую стратегию (continue внутри цикла стратегий)
                     # logger.warning(f"⚠️ Network error via {strategy['name']}: {e}")
                     continue

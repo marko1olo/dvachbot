@@ -55,14 +55,7 @@
         </nav>
     </header>
 
-        <div class="archive-search-container" style="margin: 15px 0 25px 0; display: flex; justify-content: center; width: 100%;">
-            <form action="/search" method="get" class="search-form" style="display: flex; gap: 8px; width: 100%; max-width: 500px; justify-content: center; align-items: center;">
-                <input type="text" name="query" placeholder="Поиск по архиву..." required style="padding: 10px; border-radius: 4px; border: 1px solid var(--border-primary); background: var(--bg-post); color: var(--text-primary); flex-grow: 1;">
-                <input type="hidden" name="archive" value="1">
-                <button type="submit" class="btn btn-primary" style="padding: 10px 20px; cursor: pointer;">Найти</button>
-            </form>
-        </div>
-
+    <main>
         <div class="chat-list">
             {% if posts %}
                 {% for post in posts %}
@@ -85,7 +78,7 @@
                             {% for file in post.content.files %}
                                 {% if file.type in ['image', 'photo'] %}
                                     <a href="{{ file.original_url }}" class="file-thumb">
-                                        <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
                                              data-src="{{ file.thumbnail_url or file.original_url }}" 
                                              class="post-image lazy-load" referrerpolicy="no-referrer">
                                     </a>
@@ -115,7 +108,7 @@
                                                    style="max-height: 150px; width: auto; background: transparent;">
                                             </video>
                                         {% else %}
-                                            <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                            <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
                                                  data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                  class="post-sticker lazy-load" 
                                                  referrerpolicy="no-referrer">

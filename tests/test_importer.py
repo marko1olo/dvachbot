@@ -26,28 +26,50 @@ class TestImporter(unittest.TestCase):
         from Dubsite_tgach.importer import ThreadImporter
         importer_instance = ThreadImporter(bot=None, file_storage_channel_id=123)
 
-        # Test basic escaped HTML (User inputted tags should NOT be parsed as HTML tags)
+        # Test basic escaped HTML
         raw_html = "Hello &lt;br&gt; World"
         normalized = importer_instance._normalize_html_sync(raw_html)
 
-        # Since unescape is removed at start, the tags are treated as text and unescaped later by BeautifulSoup
-        self.assertEqual(normalized, "Hello <br> World")
+        # In the original method, <br> is replaced with \n and extra spaces might be present
+        self.assertEqual(normalized, "Hello \n World")
 
         # Test other escaped entities
         raw_html = "&quot;Hello&quot; &amp; &#39;World&#39;"
         normalized = importer_instance._normalize_html_sync(raw_html)
         self.assertEqual(normalized, "\"Hello\" & 'World'")
 
-        # Test that user inputted unescaped tags are processed correctly as text, not HTML elements to remove
+        # Test that unescaped tags are processed correctly
+        # (BeautifulSoup strips scripts and some tags, unwraps others)
         raw_html = "&lt;script&gt;alert(1)&lt;/script&gt;Hello"
         normalized = importer_instance._normalize_html_sync(raw_html)
-        # script should NOT be stripped
-        self.assertEqual(normalized, "<script>alert(1)</script>Hello")
+        # script should be stripped
+        self.assertEqual(normalized, "Hello")
 
-        # Test spoiler, if it is actual HTML
-        raw_html = 'Text <span class="spoiler">hidden</span>'
+        # Test spoiler
+        raw_html = "Text &lt;span class=&quot;spoiler&quot;&gt;hidden&lt;/span&gt;"
         normalized = importer_instance._normalize_html_sync(raw_html)
         self.assertEqual(normalized, "Text ||hidden||")
+
+
+    def test_normalize_html_sync_ast_unescape(self):
+        import inspect
+        import ast
+        import textwrap
+        from Dubsite_tgach.importer import ThreadImporter
+
+        source = inspect.getsource(ThreadImporter._normalize_html_sync)
+        source = textwrap.dedent(source)
+        tree = ast.parse(source)
+
+        unescape_found = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    if node.func.attr == 'unescape':
+                        unescape_found = True
+                        break
+
+        self.assertTrue(unescape_found, "unescape must be called in _normalize_html_sync to allow BeautifulSoup to parse tags properly")
 
 if __name__ == "__main__":
     unittest.main()

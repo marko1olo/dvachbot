@@ -4,12 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Оверборд - {{ request.state.t('site_name') }}</title>
-    <meta name="description" content="Оверборд TGACH — просмотр всех досок (разделов) анонимной имиджборды на одной странице.">
-    <meta property="og:site_name" content="ТГАЧ">
-    <meta property="og:type" content="website">
-    <meta property="og:title" content="Оверборд — ТГАЧ">
-    <meta property="og:description" content="Оверборд TGACH — просмотр всех досок (разделов) анонимной имиджборды на одной странице.">
-    <meta property="og:image" content="/static/logo.png">
     <link rel="stylesheet" href="/static/css/style.css?v=8.72">
     <link rel="preconnect" href="https://api.telegram.org" crossorigin>
     <link rel="dns-prefetch" href="https://files.catbox.moe">
@@ -199,7 +193,7 @@
                                                     {% if file.blurhash %}
                                                         <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
                                                     {% endif %}
-                                                    <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
                                                         data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                         class="post-image lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
                                                     {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
@@ -317,7 +311,7 @@
                                                                 data-file-id="{{ f.original_file_id }}"
                                                                 style="width: 80px; height: 80px;">
                                                                 {% if f.blurhash %}<canvas class="blurhash-canvas" data-hash="{{ f.blurhash }}" width="32" height="32"></canvas>{% endif %}
-                                                                <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
                                                                     data-src="{{ f.thumbnail_url or f.original_url }}" 
                                                                     class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" 
                                                                     style="width: 100%; height: 100%; object-fit: cover;"

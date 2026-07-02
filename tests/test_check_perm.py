@@ -1,9 +1,3 @@
-import asyncio
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
-
 import sys
 import os
 import unittest
@@ -16,14 +10,12 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 try:
-    import asyncio
-    asyncio.set_event_loop(asyncio.new_event_loop())
     import Dubsite_tgach.main
     Dubsite_tgach.main.ADMIN_IDS = [12345, 67890]
     from Dubsite_tgach.main import check_perm
 except ImportError as e:
     print(f"ImportError: {e}")
-    pass
+    sys.exit(1)
 
 class TestCheckPerm(unittest.TestCase):
     def test_empty_user(self):

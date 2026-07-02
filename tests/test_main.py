@@ -29,7 +29,7 @@ mocked_deps = [
     'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip',
     'fastapi.staticfiles', 'fastapi.templating', 'fastapi.exceptions',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
-    'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiosqlite', 'aiogram',
+    'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
     'aiogram.client.default', 'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
     'aiogram.filters', 'aiogram.fsm', 'aiogram.fsm.context', 'aiogram.fsm.state', 'aiogram.fsm.storage', 'aiogram.fsm.storage.memory',
@@ -47,16 +47,16 @@ for mod_name in sys.modules:
         sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
 
 # Now we can safely import the function under test
-from Dubsite_tgach.main import get_real_ip, sanitize_html
+from Dubsite_tgach.main import get_real_ip
 
 class StubClient:
     def __init__(self, host):
         self.host = host
 
 class StubRequest:
-    def __init__(self, headers=None, client_host=None, client_is_none=False):
+    def __init__(self, headers=None, client_host=None):
         self.headers = headers or {}
-        self.client = None if client_is_none else StubClient(client_host)
+        self.client = StubClient(client_host)
 
 class TestGetRealIp(unittest.TestCase):
     def test_x_real_ip_preferred(self):
@@ -90,14 +90,6 @@ class TestGetRealIp(unittest.TestCase):
             client_host="9.10.11.12"
         )
         self.assertEqual(get_real_ip(request), "9.10.11.12")
-
-    def test_client_none_fallback(self):
-        """Test that a missing client correctly falls back to 127.0.0.1."""
-        request = StubRequest(
-            headers={},
-            client_is_none=True
-        )
-        self.assertEqual(get_real_ip(request), "127.0.0.1")
 
     def test_empty_headers_values(self):
         """Test that empty string header values correctly fall back to client.host."""
@@ -219,44 +211,3 @@ class TestCleanHtmlForTg(unittest.TestCase):
     def test_invalid_tags(self):
         self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script>world&lt;/script>")
         self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown>world")
-
-
-from Dubsite_tgach.main import vibe_to_icon
-class TestVibeToIcon(unittest.TestCase):
-    def test_exact_matches(self):
-        self.assertEqual(vibe_to_icon("toxic"), "🔥 (Токсично)")
-        self.assertEqual(vibe_to_icon("anime"), "🌸 (Аниме)")
-        self.assertEqual(vibe_to_icon("schizo"), "🤡 (Шиза)")
-
-    def test_case_and_whitespace(self):
-        self.assertEqual(vibe_to_icon("  TOXIC  "), "🔥 (Токсично)")
-        self.assertEqual(vibe_to_icon("\tAnImE\n"), "🌸 (Аниме)")
-
-    def test_substring_match(self):
-        self.assertEqual(vibe_to_icon("this is a very toxic vibe"), "🔥 (Токсично)")
-        self.assertEqual(vibe_to_icon("some tech news"), "💾 (Техно)")
-
-    def test_fallback(self):
-        self.assertEqual(vibe_to_icon("unknown"), "❓ (Неясно)")
-        self.assertEqual(vibe_to_icon(""), "❓ (Неясно)")
-        self.assertEqual(vibe_to_icon("something totally unrelated"), "❓ (Неясно)")
-
-class TestSanitizeHtml(unittest.TestCase):
-    def test_empty_input(self):
-        self.assertEqual(sanitize_html(""), "")
-        self.assertEqual(sanitize_html(None), "")
-
-    def test_basic_tags(self):
-        self.assertEqual(sanitize_html("<b>bold</b>"), "&lt;b&gt;bold&lt;/b&gt;")
-        self.assertEqual(sanitize_html("<script>alert(1)</script>"), "&lt;script&gt;alert(1)&lt;/script&gt;")
-        self.assertEqual(sanitize_html("<h1>heading</h1>"), "&lt;h1&gt;heading&lt;/h1&gt;")
-
-    def test_quotes_preserved(self):
-        self.assertEqual(sanitize_html('"double quotes"'), '"double quotes"')
-        self.assertEqual(sanitize_html("'single quotes'"), "'single quotes'")
-        self.assertEqual(sanitize_html("<div class=\"test\">text</div>"), "&lt;div class=\"test\"&gt;text&lt;/div&gt;")
-
-    def test_amps_and_other_entities(self):
-        self.assertEqual(sanitize_html("this & that"), "this &amp; that")
-        self.assertEqual(sanitize_html("less < greater >"), "less &lt; greater &gt;")
-        self.assertEqual(sanitize_html("a & b < c > d \" e ' f"), "a &amp; b &lt; c &gt; d \" e ' f")

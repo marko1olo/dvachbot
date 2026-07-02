@@ -1431,9 +1431,9 @@ def _apply_matrix_effects(text: str) -> str:
 
     return text
 
-_AMERICA_BUZZWORDS = [
-    (re.compile(pattern, flags=re.IGNORECASE), replacement)
-    for pattern, replacement in {
+def _apply_america_effects(text: str) -> str:
+    # 1. Corporate Buzzword replacements
+    buzzwords = {
         r"\bмысли\b": "айдеи", r"\bмысль\b": "айдея",
         r"\bдумать\b": "апрувить", r"\bдумаю\b": "апрувлю", r"\bдумает\b": "апрувит",
         r"\bделать\b": "перформить", r"\bделаю\b": "перформлю", r"\bделает\b": "перформит",
@@ -1444,13 +1444,9 @@ _AMERICA_BUZZWORDS = [
         r"\bбыстро\b": "по фаст-треку",
         r"\bпонимаю\b": "шерю вижн", r"\bпонимаешь\b": "шеришь вижн",
         r"\bзадача\b": "таск", r"\bзадачу\b": "таск", r"\bзадачи\b": "таски"
-    }.items()
-]
-
-def _apply_america_effects(text: str) -> str:
-    # 1. Corporate Buzzword replacements
-    for pattern, replacement in _AMERICA_BUZZWORDS:
-        text = pattern.sub(replacement, text)
+    }
+    for pattern, replacement in buzzwords.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
 
     # 2. Subscription tags
     if random.random() < 0.25:
@@ -1549,9 +1545,9 @@ def _apply_holiday_effects(text: str) -> str:
 
     return text
 
-_OLDWEB_RULES = [
-    (re.compile(pattern), repl)
-    for pattern, repl in [
+def _apply_oldweb_effects(text: str) -> str:
+    # 1. Padonki conversion rules
+    rules = [
         (r'\bавтор\b', 'афтар'),
         (r'\bавтора\b', 'афтара'),
         (r'\bавтору\b', 'афтару'),
@@ -1571,12 +1567,8 @@ _OLDWEB_RULES = [
         (r'Жи', 'Жы'),
         (r'Ши', 'Шы'),
     ]
-]
-
-def _apply_oldweb_effects(text: str) -> str:
-    # 1. Padonki conversion rules
-    for pattern, repl in _OLDWEB_RULES:
-        text = pattern.sub(repl, text)
+    for pattern, repl in rules:
+        text = re.sub(pattern, repl, text)
 
     # 2. BBCode wrapping
     if random.random() < 0.25:

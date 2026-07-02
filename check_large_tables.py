@@ -1,4 +1,3 @@
-import re
 import sqlite3
 
 def check_indexes():
@@ -10,8 +9,6 @@ def check_indexes():
     tables = [row[0] for row in cursor.fetchall()]
     
     for table in tables:
-        if not re.match(r"^\w+$", table):
-            continue
         cursor.execute("SELECT * FROM pragma_index_list(?)", (table,))
         indexes = cursor.fetchall()
         safe_table = table.replace('"', '""')

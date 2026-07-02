@@ -28,7 +28,7 @@ PROXY_URL = "http://127.0.0.1:10808"
 # --- НАСТРОЙКИ ---
 CONCURRENCY_LIMIT = 1 
 DB_BATCH_SIZE = 100 
-GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"
 GROQ_TIMEOUT = 20.0     
 
 # Логирование
@@ -343,11 +343,7 @@ async def worker(sem, input_queue, output_queue):
             try:
                 # 1. Скачивание
                 f_info = await bot.get_file(file_id)
-                file_path = getattr(f_info, "file_path", None)
-                if not file_path:
-                    logger.error(f"⚠️ No file_path for {file_id}. Skipping.")
-                    continue
-                f_obj = await bot.download_file(file_path)
+                f_obj = await bot.download_file(f_info.file_path)
                 
                 if hasattr(f_obj, 'getvalue'): img_data = f_obj.getvalue()
                 else: img_data = f_obj.read()

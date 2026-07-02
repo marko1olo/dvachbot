@@ -1,13 +1,12 @@
 import asyncio
 import logging
 import os
+import shutil
 import zipfile
 import time
 from datetime import datetime
 from aiogram.types import BufferedInputFile
 from aiogram.exceptions import TelegramRetryAfter
-
-import aiosqlite
 
 from common.db_pool import get_pool
 from common.database import get_system_setting, set_system_setting
@@ -17,6 +16,8 @@ logger = logging.getLogger("backup_daemon")
 
 # Интервал: 12 часов
 BACKUP_INTERVAL = 12 * 3600 
+
+import aiosqlite
 
 
 def create_backup_archive(backup_db_path: str, zip_name_base: str) -> None:

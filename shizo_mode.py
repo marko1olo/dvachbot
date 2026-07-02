@@ -1189,8 +1189,6 @@ _DIGIT_PATTERN: re.Pattern = re.compile(r'\d+')
 _WORD_PATTERN: re.Pattern = re.compile(r'\b\w{4,}\b')
 _LONG_WORD_PATTERN: re.Pattern = re.compile(r'\b[а-яёА-ЯЁa-zA-Z]{8,}\b')
 _PUNCTUATION_PATTERN: re.Pattern = re.compile(r'[.,;:!?—–\-\(\)\[\]{}]')
-_MIRROR_PATTERN: re.Pattern = re.compile(r'\b[А-Яа-яЁё]{5,}\b')
-_REDACT_PATTERN: re.Pattern = re.compile(r'\b[А-Яа-яЁё]{4,}\b')
 
 
 # ==============================================================================
@@ -1223,7 +1221,7 @@ def _apply_mirror_words(text: str) -> str:
         word = m.group(0)
         return word[::-1] if random.random() < 0.25 else word
         
-    return _MIRROR_PATTERN.sub(_mirror, text)
+    return re.sub(r'\b[А-Яа-яЁё]{5,}\b', _mirror, text)
 
 def _apply_redacted(text: str) -> str:
     """Паранойя: цензурирование слов"""
@@ -1233,7 +1231,7 @@ def _apply_redacted(text: str) -> str:
     def _redact(m):
         return "██████" if random.random() < 0.15 else m.group(0)
         
-    return _REDACT_PATTERN.sub(_redact, text)
+    return re.sub(r'\b[А-Яа-яЁё]{4,}\b', _redact, text)
 
 def _stage_glitch(text: str) -> str:
     if random.random() >= 0.15:
@@ -1333,7 +1331,7 @@ def _apply_schizo_numerology(text: str) -> str:
     # Шанс 20%
     if random.random() < 0.20:
         # Ищем все слова длиннее 4 букв (только кириллица)
-        words = _MIRROR_PATTERN.findall(text)
+        words = re.findall(r'\b[А-Яа-яЁё]{5,}\b', text)
         if words:
             target_word = random.choice(words).upper()
             length = len(target_word)

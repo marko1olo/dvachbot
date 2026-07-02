@@ -21,10 +21,8 @@
         <meta property="og:type" content="website">
         <meta property="og:title" content="/{{ board_id }}/ — {{ board_info.name }}">
         <meta property="og:description" content="{{ board_info.description }}">
-        <meta name="description" content="{{ board_info.description }}">
         <meta property="og:url" content="{{ request.url }}">
         <meta property="og:image" content="{{ meta_image }}">
-        <link rel="alternate" type="application/rss+xml" title="RSS ТГАЧ - {{ board_info.name }}" href="/{{ board_id }}/rss.xml">
         
         <meta name="twitter:card" content="summary">
         <meta name="twitter:title" content="/{{ board_id }}/ — {{ board_info.name }}">
@@ -325,8 +323,7 @@
                                                         {% endif %}
                                                         <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
-                                                            loading="lazy"
-                                                            class="post-image lazy-load" alt="[Пост /{{ board_id }}/ #{{ post.id }}] {{ post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
+                                                            class="post-image lazy-load" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                     </a>
                                                 {% elif file.type == 'sticker' %}
@@ -339,7 +336,6 @@
                                                             <a href="{{ file.original_url }}" class="gallery-trigger" data-type="image" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
                                                                 <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                     data-src="{{ file.thumbnail_url or file.original_url }}" 
-                                                                    loading="lazy"
                                                                     class="post-sticker lazy-load" 
                                                                     referrerpolicy="no-referrer">
                                                             </a>
@@ -471,8 +467,7 @@
                                                             {% endif %}
                                                             <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                 data-src="{{ file.thumbnail_url or file.original_url }}" 
-                                                                loading="lazy"
-                                                                class="post-image lazy-load" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
+                                                                class="post-image lazy-load" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                         </a>
                                                     {% elif file.type == 'sticker' %}
@@ -485,7 +480,6 @@
                                                                 <a href="{{ file.original_url }}" class="gallery-trigger" data-type="image" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
                                                                     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                         data-src="{{ file.thumbnail_url or file.original_url }}" 
-                                                                        loading="lazy"
                                                                         class="post-sticker lazy-load" 
                                                                         referrerpolicy="no-referrer">
                                                                 </a>
@@ -493,7 +487,7 @@
                                                         </div>
                                                     {% elif file.type == 'video_note' %}
                                                         <div class="lazy-media-wrapper is-note" data-src="{{ file.original_url }}" data-filename="{{ file.filename }}" data-type="note">
-                                                            <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                                            <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
                                                                 data-src="{{ file.thumbnail_url or '/static/img/vid.png' }}" 
                                                                 class="post-video video-note lazy-load" 
                                                                 style="border-radius: 50%;" referrerpolicy="no-referrer">

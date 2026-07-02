@@ -14,31 +14,16 @@ async def main():
         
         # --- ШАГ 1: Синхронизация Threads и Posts ---
         print("\n[1/2] Syncing Posts and Threads tables...")
-
-        chunk_size = 900
-        posts_by_id = {}
-        for i in range(0, len(TARGET_IDS), chunk_size):
-            chunk = TARGET_IDS[i:i + chunk_size]
-            if not chunk: continue
-            placeholders = ', '.join(['?'] * len(chunk))
-            query = f"SELECT * FROM Posts WHERE post_num IN ({placeholders})"
-            async with db.execute(query, tuple(chunk)) as cursor:
-                rows_post = await cursor.fetchall()
-                for row in rows_post:
-                    posts_by_id[row['post_num']] = dict(row)
-
-        threads_to_delete = []
-        threads_to_insert = []
-        posts_to_update = []
-
         for pid in TARGET_IDS:
-            post = posts_by_id.get(pid)
-            if not post:
-                print(f"  - Post #{pid} not found. Skipping.")
-                continue
+            async with db.execute("SELECT * FROM Posts WHERE post_num = ?", (pid,)) as cursor:
+                row_post = await cursor.fetchone()
+                if not row_post:
+                    print(f"  - Post #{pid} not found. Skipping.")
+                    continue
+                post = dict(row_post) # <--- ИСПРАВЛЕНИЕ ЗДЕСЬ
 
             # Удаляем старую запись в Threads, чтобы избежать конфликтов
-            threads_to_delete.append((pid,))
+            await db.execute("DELETE FROM Threads WHERE thread_num = ?", (pid,))
 
             # Создаем новую, гарантированно корректную
             title = "Restored Thread"
@@ -50,30 +35,19 @@ async def main():
                     title = clean_text[:60] + "..." if len(clean_text) > 60 else clean_text
             except: pass
 
-            threads_to_insert.append((
-                str(pid), pid, post['board_id'], post['author_id'], title, post['timestamp'], time.time(), post.get('stream', 'ru')
-            ))
-
-            # Приводим типы к единому стандарту и обновляем флаги
-            posts_to_update.append((str(pid), pid))
-
-            print(f"  ✅ Synced thread #{pid}")
-
-        if threads_to_delete:
-            await db.executemany("DELETE FROM Threads WHERE thread_num = ?", threads_to_delete)
-
-        if threads_to_insert:
-            await db.executemany("""
+            await db.execute("""
                 INSERT INTO Threads (thread_id, thread_num, board_id, op_id, title, created_at, last_updated_at, is_archived, stream)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
-            """, threads_to_insert)
+            """, (str(pid), pid, post['board_id'], post['author_id'], title, post['timestamp'], time.time(), post.get('stream', 'ru')))
             
-        if posts_to_update:
-            await db.executemany("""
+            # Приводим типы к единому стандарту и обновляем флаги
+            await db.execute("""
                 UPDATE Posts 
                 SET thread_id = ?, is_shadow = 0, is_op_hidden = 0
                 WHERE post_num = ?
-            """, posts_to_update)
+            """, (str(pid), pid))
+
+            print(f"  ✅ Synced thread #{pid}")
 
         # --- ШАГ 2: Полная пересборка FTS индекса ---
         print("\n[2/2] Rebuilding FTS index (this may take a minute)...")
