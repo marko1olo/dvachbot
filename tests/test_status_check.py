@@ -240,10 +240,16 @@ async def test_get_activity():
     assert activity["users_24h"] == 50
 
 @pytest.mark.asyncio
-async def test_get_activity_operational_error():
-    import aiosqlite
+@patch('status_check.aiosqlite')
+async def test_get_activity_operational_error(mock_aiosqlite):
+    # Tests that when get_activity hits an aiosqlite.OperationalError,
+    # it catches it and sets N/A
+    class MockOperationalError(Exception):
+        pass
+
+    mock_aiosqlite.OperationalError = MockOperationalError
     mock_conn = AsyncMock()
-    mock_conn.execute.side_effect = aiosqlite.OperationalError("DB Locked")
+    mock_conn.execute.side_effect = MockOperationalError("DB Locked")
 
     activity = await get_activity(mock_conn)
     assert activity["posts_1h"] == "N/A"
