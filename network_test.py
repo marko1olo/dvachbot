@@ -1,19 +1,10 @@
 import asyncio
 import os
+import sys
 
 import aiohttp
 from dotenv import load_dotenv
 
-import sys
-sys.path.append('.')
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
-import sys
-import os
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from common.secret_redaction import redact_secrets
 
