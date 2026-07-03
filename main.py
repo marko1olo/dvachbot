@@ -194,8 +194,7 @@ from help_text import (
 )
 from japanese_translator import (
     anime_transform, get_random_anime_image, get_monogatari_image, 
-    get_nsfw_anime_image, get_loli_image, get_dynamic_proxy_url,
-    _get_proxy_usage_strategy
+    get_nsfw_anime_image, get_loli_image, get_dynamic_proxy_url
 )
 from summarize import summarize_text_with_hf, create_telegraph_page_async
 from thread_texts import thread_messages
