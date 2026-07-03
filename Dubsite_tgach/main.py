@@ -4832,7 +4832,7 @@ async def api_create_post(
                     match = re.search(r'/res/(\d+)\.html', referer)
                     if match:
                         reply_to = int(match.group(1))
-                except: pass
+                except (ValueError, TypeError): pass
         if not reply_to:
             raise HTTPException(status_code=400, detail="Не удалось определить тред. Обновите страницу.")
 
