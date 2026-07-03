@@ -764,6 +764,23 @@ _sorted_keys = sorted(GOPNIK_REPLACEMENTS.keys(), key=len, reverse=True)
 _pattern = r'\b(' + '|'.join(re.escape(key) for key in _sorted_keys) + r')\b'
 _gopnik_regex = re.compile(_pattern, flags=re.IGNORECASE)
 
+_COMPILED_PHONETIC_MAP = [
+    (re.compile(r'\bчто\b', flags=re.IGNORECASE), 'шо'),
+    (re.compile(r'\bЧто\b', flags=re.IGNORECASE), 'Шо'),
+    (re.compile(r'\bкак бы\b', flags=re.IGNORECASE), 'кагбы'),
+    (re.compile(r'\bвообще\b', flags=re.IGNORECASE), 'ваще'),
+    (re.compile(r'\bВообще\b', flags=re.IGNORECASE), 'Ваще'),
+    (re.compile(r'\bсейчас\b', flags=re.IGNORECASE), 'ща'),
+    (re.compile(r'\bСейчас\b', flags=re.IGNORECASE), 'Ща'),
+    (re.compile(r'\bты\b', flags=re.IGNORECASE), 'ты ёпт'),
+    (re.compile(r'\bтебя\b', flags=re.IGNORECASE), 'тебя ебать'),
+]
+_COMPILED_BYDLO_TAGS = re.compile(r'\b([Сс]кажи|[Дд]ай|[Сс]мотри|[Пп]ослушай)\b')
+_COMPILED_WOLF_SPLIT = re.compile(r'[.!?]+')
+_COMPILED_TSYA = re.compile(r'тс[яя]\b', flags=re.IGNORECASE)
+_COMPILED_TTSYA = re.compile(r'тьс[яя]\b', flags=re.IGNORECASE)
+_COMPILED_ESH = re.compile(r'ешь\b', flags=re.IGNORECASE)
+
 def _gopnik_replacer(match: re.Match) -> str:
     original_word = match.group(0)
     replacement_options = GOPNIK_REPLACEMENTS.get(original_word.lower())
@@ -781,22 +798,11 @@ def _gopnik_replacer(match: re.Match) -> str:
 
 def _apply_gopnik_phonetics(text: str) -> str:
     # 1. Жесткая фонетическая редукция (так говорят на улице)
-    phonetic_map =[
-        (r'\bчто\b', 'шо'),
-        (r'\bЧто\b', 'Шо'),
-        (r'\bкак бы\b', 'кагбы'),
-        (r'\bвообще\b', 'ваще'),
-        (r'\bВообще\b', 'Ваще'),
-        (r'\bсейчас\b', 'ща'),
-        (r'\bСейчас\b', 'Ща'),
-        (r'\bты\b', 'ты ёпт'),
-        (r'\bтебя\b', 'тебя ебать'),
-    ]
-    for pattern, repl in phonetic_map:
-        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+    for pattern, repl in _COMPILED_PHONETIC_MAP:
+        text = pattern.sub(repl, text)
     
     # 2. Риторические "быдло-тэги" к глаголам повелительного наклонения
-    text = re.sub(r'\b([Сс]кажи|[Дд]ай|[Сс]мотри|[Пп]ослушай)\b', r'\1-ка', text)
+    text = _COMPILED_BYDLO_TAGS.sub(r'\1-ка', text)
     
     # 3. Физические действия гопника
     actions =[
@@ -814,7 +820,7 @@ def _apply_wolf_quote(text: str) -> str:
     # Шанс 25%, и только если текст длиннее 5 слов
     if random.random() < 0.25 and len(text.split()) > 5:
         # Разбиваем текст на предложения
-        sentences = [s.strip() for s in re.split(r'[.!?]+', text) if len(s.strip()) > 5]
+        sentences = [s.strip() for s in _COMPILED_WOLF_SPLIT.split(text) if len(s.strip()) > 5]
         if sentences:
             # Берем последнее осмысленное предложение
             last_sentence = sentences[-1].capitalize()
@@ -850,11 +856,11 @@ def gopnik_transform(text: str) -> tuple:
         return 'ИШЬ' if m.group(0).isupper() else 'ишь'
 
     if random.random() < 0.8:
-        text = re.sub(r'тс[яя]\b', _tsya_replacer, text, flags=re.IGNORECASE)
+        text = _COMPILED_TSYA.sub(_tsya_replacer, text)
     if random.random() < 0.8:
-        text = re.sub(r'тьс[яя]\b', _tsya_replacer, text, flags=re.IGNORECASE)
+        text = _COMPILED_TTSYA.sub(_tsya_replacer, text)
     if random.random() < 0.8:
-        text = re.sub(r'ешь\b', _esh_replacer, text, flags=re.IGNORECASE)
+        text = _COMPILED_ESH.sub(_esh_replacer, text)
     text = _apply_gopnik_phonetics(text)
     words = text.split()
     word_count = len(words)

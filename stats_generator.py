@@ -1510,11 +1510,7 @@ def generate_all_charts():
 
     return images
 
-def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
-    import sys
-    import os
-    from PIL import Image, ImageDraw, ImageFont
-    
+def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
     conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
     c = conn.cursor()
     
@@ -1559,6 +1555,34 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         rank = len(all_users) + 1
         
     conn.close()
+
+    return {
+        'balance': balance,
+        'role': role,
+        'created_at': created_at,
+        'lie_media': lie_media,
+        'custom_prefix': custom_prefix,
+        'posts_count': posts_count,
+        'rx_received': rx_received,
+        'rx_given': rx_given,
+        'mutes_count': mutes_count,
+        'rank': rank,
+        'total_users': len(all_users)
+    }
+
+def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
+    stats_data = fetch_user_stats_data(user_id, board_id)
+
+    balance = stats_data['balance']
+    role = stats_data['role']
+    lie_media = stats_data['lie_media']
+    custom_prefix = stats_data['custom_prefix']
+    posts_count = stats_data['posts_count']
+    rx_received = stats_data['rx_received']
+    rx_given = stats_data['rx_given']
+    mutes_count = stats_data['mutes_count']
+    rank = stats_data['rank']
+    total_users = stats_data['total_users']
     
     schizo_name = generate_schizo_name(user_id)
     
@@ -1584,7 +1608,7 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
     text_report = (
         f"☘️ <b>Статистика пользователя {schizo_name}</b> (/${board_id}/)\n\n"
         f"👤 <b>Статус:</b> {role_name} {f'({custom_prefix})' if custom_prefix else ''}\n"
-        f"🏅 <b>Ранг борды:</b> #{rank} из {len(all_users)}\n"
+        f"🏅 <b>Ранг борды:</b> #{rank} из {total_users}\n"
         f"📝 <b>Написано постов:</b> {posts_count}\n"
         f"🎭 <b>Получено реакций:</b> +{rx_received}\n"
         f"⚡ <b>Поставлено реакций:</b> {rx_given}\n"
@@ -1594,6 +1618,33 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         f"💬 <i>\"{slang_comment}\"</i>"
     )
     
+    buf = draw_user_stats_card(
+        user_id=user_id,
+        board_id=board_id,
+        schizo_name=schizo_name,
+        role_name=role_name,
+        custom_prefix=custom_prefix,
+        role=role,
+        posts_count=posts_count,
+        rx_received=rx_received,
+        rx_given=rx_given,
+        mutes_count=mutes_count,
+        balance=balance,
+        lie_media=lie_media,
+        rank=rank,
+        total_users=total_users,
+        slang_comment=slang_comment
+    )
+    return buf, text_report
+
+def draw_user_stats_card(
+    user_id: int, board_id: str, schizo_name: str, role_name: str, custom_prefix: str,
+    role: str, posts_count: int, rx_received: int, rx_given: int, mutes_count: int,
+    balance: float, lie_media: float, rank: int, total_users: int, slang_comment: str
+) -> io.BytesIO:
+    import os
+    from PIL import Image, ImageDraw, ImageFont
+
     width, height = 800, 450
     img = Image.new('RGB', (width, height), color='#0d0f12')
     draw = ImageDraw.Draw(img)
@@ -1633,7 +1684,7 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
     # Cards grid
     cards = [
         (30, 115, 175, 80, str(posts_count), "Написано постов", "#00ffcc"),
-        (220, 115, 175, 80, f"#{rank} / {len(all_users)}", "Ранг на борде", "#ffcc00"),
+        (220, 115, 175, 80, f"#{rank} / {total_users}", "Ранг на борде", "#ffcc00"),
         (410, 115, 175, 80, f"{int(balance)} RUB", "Баланс коинов", "#00ff66"),
         
         (30, 210, 175, 80, f"+{rx_received}", "Получено реакций", "#ff3399"),
@@ -1673,7 +1724,7 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
     buf = io.BytesIO()
     img.save(buf, format='png')
     buf.seek(0)
-    return buf, text_report
+    return buf
 
 if __name__ == "__main__":
     imgs = generate_all_charts()

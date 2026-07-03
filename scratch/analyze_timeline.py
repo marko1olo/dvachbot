@@ -40,13 +40,21 @@ def main():
         LIMIT 10
     """)
     print("\n=== TOP AUTHORS BY POST COUNT ===")
-    for row in cursor.fetchall():
-        author_id = row[0]
-        # Let's get their status from Users table if they exist
-        cursor.execute("SELECT status, board_id FROM Users WHERE user_id = ?", (author_id,))
-        user_info = cursor.fetchall()
-        status_info = f"{user_info[0][0]} on {user_info[0][1]}" if user_info else "not in Users"
-        print(f"  Author: {author_id} ({status_info}), Posts: {row[1]}")
+    rows = cursor.fetchall()
+    if rows:
+        author_ids = [row[0] for row in rows]
+        placeholders = ','.join('?' for _ in author_ids)
+        cursor.execute(f"SELECT user_id, status, board_id FROM Users WHERE user_id IN ({placeholders})", author_ids)
+        user_info_map = {r[0]: (r[1], r[2]) for r in cursor.fetchall()}
+
+        for row in rows:
+            author_id = row[0]
+            if author_id in user_info_map:
+                status, board_id = user_info_map[author_id]
+                status_info = f"{status} on {board_id}"
+            else:
+                status_info = "not in Users"
+            print(f"  Author: {author_id} ({status_info}), Posts: {row[1]}")
 
     conn.close()
 

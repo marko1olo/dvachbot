@@ -29,7 +29,7 @@ mocked_deps = [
     'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip',
     'fastapi.staticfiles', 'fastapi.templating', 'fastapi.exceptions',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
-    'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
+    'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiosqlite', 'aiogram',
     'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
     'aiogram.client.default', 'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
     'aiogram.filters', 'aiogram.fsm', 'aiogram.fsm.context', 'aiogram.fsm.state', 'aiogram.fsm.storage', 'aiogram.fsm.storage.memory',
@@ -54,9 +54,9 @@ class StubClient:
         self.host = host
 
 class StubRequest:
-    def __init__(self, headers=None, client_host=None):
+    def __init__(self, headers=None, client_host=None, client_is_none=False):
         self.headers = headers or {}
-        self.client = StubClient(client_host)
+        self.client = None if client_is_none else StubClient(client_host)
 
 class TestGetRealIp(unittest.TestCase):
     def test_x_real_ip_preferred(self):
@@ -90,6 +90,14 @@ class TestGetRealIp(unittest.TestCase):
             client_host="9.10.11.12"
         )
         self.assertEqual(get_real_ip(request), "9.10.11.12")
+
+    def test_client_none_fallback(self):
+        """Test that a missing client correctly falls back to 127.0.0.1."""
+        request = StubRequest(
+            headers={},
+            client_is_none=True
+        )
+        self.assertEqual(get_real_ip(request), "127.0.0.1")
 
     def test_empty_headers_values(self):
         """Test that empty string header values correctly fall back to client.host."""
@@ -211,3 +219,24 @@ class TestCleanHtmlForTg(unittest.TestCase):
     def test_invalid_tags(self):
         self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script>world&lt;/script>")
         self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown>world")
+
+
+from Dubsite_tgach.main import vibe_to_icon
+class TestVibeToIcon(unittest.TestCase):
+    def test_exact_matches(self):
+        self.assertEqual(vibe_to_icon("toxic"), "🔥 (Токсично)")
+        self.assertEqual(vibe_to_icon("anime"), "🌸 (Аниме)")
+        self.assertEqual(vibe_to_icon("schizo"), "🤡 (Шиза)")
+
+    def test_case_and_whitespace(self):
+        self.assertEqual(vibe_to_icon("  TOXIC  "), "🔥 (Токсично)")
+        self.assertEqual(vibe_to_icon("\tAnImE\n"), "🌸 (Аниме)")
+
+    def test_substring_match(self):
+        self.assertEqual(vibe_to_icon("this is a very toxic vibe"), "🔥 (Токсично)")
+        self.assertEqual(vibe_to_icon("some tech news"), "💾 (Техно)")
+
+    def test_fallback(self):
+        self.assertEqual(vibe_to_icon("unknown"), "❓ (Неясно)")
+        self.assertEqual(vibe_to_icon(""), "❓ (Неясно)")
+        self.assertEqual(vibe_to_icon("something totally unrelated"), "❓ (Неясно)")

@@ -46,5 +46,13 @@ class TestPluralizeRussian(unittest.TestCase):
         self.assertEqual(pluralize_russian(3.14, *self.words), "яблока") # Note: int(3.14) is 3, which is "few"
         self.assertEqual(pluralize_russian([1], *self.words), "яблок")
 
+    def test_negative_numbers(self):
+        # Test correct handling of negative counts
+        self.assertEqual(pluralize_russian(-1, *self.words), "яблоко")
+        self.assertEqual(pluralize_russian(-2, *self.words), "яблока")
+        self.assertEqual(pluralize_russian(-5, *self.words), "яблок")
+        self.assertEqual(pluralize_russian(-11, *self.words), "яблок")
+        self.assertEqual(pluralize_russian(-21, *self.words), "яблоко")
+
 if __name__ == '__main__':
     unittest.main()

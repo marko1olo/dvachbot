@@ -373,7 +373,7 @@ async def tagging_loop():
                 tag_mark = "🏷️" if (tags and "error" not in tags) else "⚪"
                 tags_preview = "No tags"
                 if tags and "error" not in tags:
-                    parts = [t.strip() for t in tags.split(',') if t.strip()]
+                    parts = [stripped for t in tags.split(',') if (stripped := t.strip())]
                     tags_preview = ", ".join(parts[:3])
                 save_success = False
                 for attempt in range(10):
