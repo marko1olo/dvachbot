@@ -270,6 +270,9 @@ async def process_queue_batch():
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
 async def hf_batch_loop():
+    if os.getenv("HF_MIRRORS_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.info("⏸️ HF Batcher Daemon Disabled via HF_MIRRORS_DISABLED env.")
+        return
     logger.info("🚀 HF Batcher Daemon Started")
     cleanup_stale_temp_dirs()
     await asyncio.sleep(30) 
