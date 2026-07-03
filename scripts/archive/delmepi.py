@@ -28,7 +28,7 @@ PROXY_URL = "http://127.0.0.1:10808"
 # --- НАСТРОЙКИ ---
 CONCURRENCY_LIMIT = 1 
 DB_BATCH_SIZE = 100 
-GROQ_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"
+GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 GROQ_TIMEOUT = 20.0     
 
 # Логирование

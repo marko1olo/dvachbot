@@ -42,9 +42,6 @@ Dependencies:
 """
 import logging
 import re
-import os
-import hashlib
-import httpx
 import time
 import math
 import imagehash
@@ -58,18 +55,15 @@ from site_tgach.zeroxzero import is_0x0_available, upload_url_to_0x0, upload_byt
 from site_tgach.mtproto_client import upload_file_mtproto
 from fastapi import UploadFile, HTTPException
 from PIL import Image, ImageOps  
-from common.bot_pool import global_bot_pool 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 from common.board_config import SHADOW_CHANNEL_ID
 from aiogram.exceptions import (
     TelegramRetryAfter, 
     TelegramNetworkError, 
-    TelegramBadRequest, 
-    TelegramForbiddenError
+    TelegramBadRequest
 )
 from concurrent.futures import ThreadPoolExecutor
-import blurhash
 MIRROR_SEMAPHORE = asyncio.Semaphore(10) # Максимум 10 одновременных заливов
 logging.basicConfig(level=logging.INFO)
 install_logging_redaction()
@@ -196,7 +190,6 @@ async def process_and_upload_image(
 ) -> dict:
     import os
     import hashlib
-    from common.bot_pool import global_bot_pool
     
     content_type = file.content_type
     original_filename = file.filename or "file"
@@ -276,14 +269,21 @@ async def process_and_upload_image(
 
     if is_image:
         try:
-            thumbnail_bytes = await create_thumbnail_in_memory(contents)
-            
             def _validate_and_phash():
-                img = Image.open(BytesIO(contents))
-                if img.format not in ['JPEG', 'PNG', 'WEBP']: return None
-                return str(imagehash.phash(img))
-            
-            phash_str = await asyncio.to_thread(_validate_and_phash)
+                with Image.open(BytesIO(contents)) as img:
+                    if img.format not in ['JPEG', 'PNG', 'WEBP']: return None
+                    if max(img.size) > 128:
+                        img.thumbnail((128, 128))
+                    return str(imagehash.phash(img))
+
+            thumbnail_bytes, phash_str = await asyncio.gather(
+                create_thumbnail_in_memory(contents),
+                asyncio.to_thread(_validate_and_phash),
+                return_exceptions=True
+            )
+            if isinstance(thumbnail_bytes, Exception): thumbnail_bytes = None
+            if isinstance(phash_str, Exception): phash_str = None
+
             if phash_str and await check_phash_ban(phash_str):
                 return {"banned": True, "reason": "Banned by pHash"}
                 
@@ -351,21 +351,18 @@ async def process_and_upload_image(
                     if not is_too_heavy_for_photo:
                         try:
                             sent_original = await _send_with_retry("send_photo", input_file, chat_id=channel_id, photo=input_file)
-                            if sent_original.photo:
+                            if sent_original and sent_original.photo:
                                 result_file_id = get_fid(sent_original.photo[-1])
+                                thumb_id = get_fid(sent_original.photo[0])
                         except ValueError: 
                             is_too_heavy_for_photo = True
                     
                     if is_too_heavy_for_photo or not result_file_id:
                         sent_original = await _send_with_retry("send_document", input_file, chat_id=channel_id, document=input_file)
-                        result_file_id = get_fid(sent_original.document)
-                    
-                    if thumbnail_bytes:
-                        try:
-                            thumb_file = BufferedInputFile(thumbnail_bytes, filename="thumb.jpg")
-                            sent_thumb = await current_bot.send_photo(channel_id, thumb_file)
-                            thumb_id = get_fid(sent_thumb.photo[-1])
-                        except: pass
+                        if sent_original and sent_original.document:
+                            result_file_id = get_fid(sent_original.document)
+                            if sent_original.document.thumbnail:
+                                thumb_id = get_fid(sent_original.document.thumbnail)
                         
                 except Exception as e:
                     logger.error(f"Image sub-upload failed: {e}")
@@ -590,9 +587,14 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
         
         try:
             file_info = await bot.get_file(file_id)
-            tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+            file_path = getattr(file_info, "file_path", None)
             
-            catbox_link = await upload_url_to_catbox(tg_url)
+            if file_path:
+                tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
+                catbox_link = await upload_url_to_catbox(tg_url)
+            else:
+                catbox_link = None
+
             if catbox_link:
                 await add_file_mirror(file_id, 'catbox', catbox_link)
             else:

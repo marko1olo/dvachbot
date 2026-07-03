@@ -211,7 +211,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
             logger.critical(f"⛔ [MTProto] FLOOD WAIT: {e}")
             _CONNECTION_COOLDOWN[bot_token] = time.time() + 300 
         elif "THUMBNAIL_SOURCE" in err_str:
-            logger.error(f"❌ [MTProto] Pyrogram failed to parse thumb source for {file_id[:10]}")
+            logger.warning(f"⚠️ [MTProto] Pyrogram failed to parse thumb source for {file_id[:10]}")
         else:
             logger.error(f"❌ [MTProto] Download Error: {e}")
         return False

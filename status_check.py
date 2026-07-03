@@ -3,7 +3,6 @@ import aiosqlite
 import os
 from datetime import datetime
 import time
-import re
 import sys
 
 try:

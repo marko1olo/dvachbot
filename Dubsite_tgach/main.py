@@ -11,6 +11,7 @@ import tracemalloc
 import io
 import random
 import secrets
+import functools
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.locales import TRANSLATIONS
 from common.async_file_io import (
@@ -174,7 +175,8 @@ from common.database import (
     get_random_video_post, get_random_image_post, get_random_active_thread, refresh_random_indexes, add_post_to_random_cache,
     get_recent_posts_global, get_full_user_info, get_global_feed_posts, process_backlinks,
     get_mod_queue, resolve_mod_queue,
-    get_unread_replies_count, get_user_replies, mark_replies_read
+    get_unread_replies_count, get_user_replies, mark_replies_read,
+    get_newspaper_data
 )
 from site_tgach.backup import backup_loop
 from site_tgach.importer import process_import_queue
@@ -270,6 +272,31 @@ logging.getLogger("uvicorn.error").addFilter(NoParsingFilter())
 BUMP_LIMIT = 600
 CAPTCHA_SESSIONS = {}
 SPAM_WORDS_CACHE: Dict[str, set] = defaultdict(set)
+
+TROLL_PATTERNS_REGEX = re.compile('|'.join(map(re.escape, [
+    '/.env', '/.git', '/.ssh', '/.bash', '/.profile', '/.history', '/.aws',
+    '/.rhosts', '/.sh_history', '/.wget', '/.htpasswd', '/.htaccess', '/.ds_store',
+    '/.bak', '/.old', '/.save', '/.log', '/.txt', '/.conf', '/.sql',
+    '/goform', '/hello.world', '/mcp', '/sse', '/wp-', '/wp/', '/xmlrpc',
+    '/wlwmanifest', '/bitrix', '/joomla', '/drupal', '/laravel', '/symfony',
+    '/storage/logs', '/vendor', '/composer', '/admin', '/phpmyadmin', '/setup',
+    '/config', '/backup', '/dump', '/db.sql', '/console', '/shell', '/root',
+    '/eval', '/invoker', '/actuator', '/api/v1', '/dashboard', '/cpanel', '/whm',
+    '/sql', '/install', '/+CSCOL+/', '/+CSCOL+', '/+CSCOE+/', '/+CSCOE+',
+    '/autodiscover', '/owa', '/exchange', '/ecp', '/_catalogs', '/_vti',
+    '/hnap1', '/nmap', '/evox', '/sdk', '/phpunit', '/cgi-bin',
+    '/~', '/_', '/1.bak', '/0.bak', '/a.bak', '/12.bak',
+    '/config.json', '/config.php', '/onfig.js',
+])))
+
+
+@functools.lru_cache(maxsize=128)
+def _get_spam_pattern(stop_words_frozenset):
+    if not stop_words_frozenset:
+        return None
+    sorted_words = sorted(list(stop_words_frozenset), key=len, reverse=True)
+    return re.compile('|'.join(map(re.escape, sorted_words)))
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 URL_PATTERN = re.compile(r'(https?://[^\s<>"\'`]+)')
@@ -537,7 +564,8 @@ SYSTEM_LOGS = deque(maxlen=100)
 import asyncio
 import logging
 SITE_SPAM_RULES = {
-    'text': {'max_repeats': 4, 'window_sec': 15, 'max_per_window': 7, 'penalty_seconds': 300}
+    'text': {'max_repeats': 4, 'window_sec': 15, 'max_per_window': 7, 'penalty_seconds': 300},
+    'files': {'max_repeats': 3, 'window_sec': 60, 'max_per_window': 12, 'penalty_seconds': 600}
 }
 BOARD_VERSIONS = defaultdict(lambda: time.time())
 THREAD_VERSIONS = defaultdict(lambda: time.time())
@@ -564,7 +592,7 @@ def check_perm(user: dict, required_role: str) -> bool:
     user_level = ROLE_HIERARCHY.get(user_role, 0)
     req_level = ROLE_HIERARCHY.get(required_role, 0)
     return user_level >= req_level
-async def check_and_punish_site_spam(board_id: str, user_id: int, text: str, t):
+async def check_and_punish_site_spam(board_id: str, user_id: int, text: str, files: list, t):
     clean_text = text.strip()
     if clean_text in {'🎲', '🎰', '🏀', '⚽', '🎯', '🎳'}:
         await apply_regular_mute(user_id, board_id, 60)
@@ -577,22 +605,73 @@ async def check_and_punish_site_spam(board_id: str, user_id: int, text: str, t):
         raise HTTPException(status_code=400, detail=t('casino_ban_message').format(phrase))
     user_history = site_spam_tracker[board_id][user_id]
     now = time.time()
-    window = SITE_SPAM_RULES['text']['window_sec']
-    user_history['timestamps'] = [t for t in user_history['timestamps'] if t > now - window]
-    user_history['timestamps'].append(now)
-    user_history['last_texts'].append(clean_text)
-    violation = False
-    if len(user_history['timestamps']) >= SITE_SPAM_RULES['text']['max_per_window']:
-        violation = True
-    elif len(user_history['last_texts']) >= SITE_SPAM_RULES['text']['max_repeats']:
-        if len(set(user_history['last_texts'])) == 1:
-            violation = True
-    if violation:
+
+    # 1. Text Spam check
+    text_violation = False
+    if clean_text:
+        window = SITE_SPAM_RULES['text']['window_sec']
+        user_history['timestamps'] = [t_val for t_val in user_history.get('timestamps', []) if t_val > now - window]
+        user_history['timestamps'].append(now)
+        user_history['last_texts'].append(clean_text)
+
+        if len(user_history['timestamps']) >= SITE_SPAM_RULES['text']['max_per_window']:
+            text_violation = True
+        elif len(user_history['last_texts']) >= SITE_SPAM_RULES['text']['max_repeats']:
+            if len(set(user_history['last_texts'])) == 1:
+                text_violation = True
+
+    if text_violation:
         user_history['timestamps'] = []
         user_history['last_texts'].clear()
         penalty = SITE_SPAM_RULES['text']['penalty_seconds']
         await apply_regular_mute(user_id, board_id, penalty)
         raise HTTPException(status_code=429, detail=f"🚫 Обнаружен спам! Вы получили мут на {penalty // 60} минут.")
+
+    # 2. Files/Images Spam check
+    if files:
+        if 'last_file_hashes' not in user_history:
+            from collections import deque
+            user_history['last_file_hashes'] = deque(maxlen=10)
+            user_history['file_timestamps'] = []
+
+        file_hashes = []
+        import hashlib
+        for img in files:
+            try:
+                await img.seek(0)
+                content = await img.read()
+                await img.seek(0)
+                if content:
+                    h = hashlib.md5(content).hexdigest()
+                    file_hashes.append(h)
+            except Exception:
+                pass
+
+        if file_hashes:
+            file_window = SITE_SPAM_RULES.get('files', {}).get('window_sec', 60)
+            user_history['file_timestamps'] = [t_val for t_val in user_history['file_timestamps'] if t_val > now - file_window]
+
+            file_violation = False
+            for h in file_hashes:
+                user_history['file_timestamps'].append(now)
+                user_history['last_file_hashes'].append(h)
+
+            max_files = SITE_SPAM_RULES.get('files', {}).get('max_per_window', 12)
+            max_repeats = SITE_SPAM_RULES.get('files', {}).get('max_repeats', 3)
+
+            if len(user_history['file_timestamps']) >= max_files:
+                file_violation = True
+            elif len(user_history['last_file_hashes']) >= max_repeats:
+                last_hashes = list(user_history['last_file_hashes'])[-max_repeats:]
+                if len(set(last_hashes)) == 1:
+                    file_violation = True
+
+            if file_violation:
+                user_history['file_timestamps'] = []
+                user_history['last_file_hashes'].clear()
+                penalty = SITE_SPAM_RULES.get('files', {}).get('penalty_seconds', 600)
+                await apply_regular_mute(user_id, board_id, penalty)
+                raise HTTPException(status_code=429, detail=f"🚫 Обнаружен спам картинками! Вы получили мут на {penalty // 60} минут.")
 async def captcha_cleanup_task():
     while True:
         await asyncio.sleep(600)
@@ -1115,6 +1194,7 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
         "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.youtube.com https://cdn.jsdelivr.net; "
@@ -1126,7 +1206,7 @@ async def security_headers_middleware(request: Request, call_next):
         "upgrade-insecure-requests;"
     )
     return response
-# app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5) # Отключено, так как сжимает Nginx
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 site_root = os.path.dirname(os.path.abspath(__file__))
 class CachedStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
@@ -1135,7 +1215,7 @@ class CachedStaticFiles(StaticFiles):
 
     def file_response(self, *args, **kwargs):
         resp = super().file_response(*args, **kwargs)
-        resp.headers["Cache-Control"] = "public, max-age=3600"
+        resp.headers["Cache-Control"] = "public, max-age=31536000"
         return resp
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
@@ -1253,6 +1333,12 @@ async def sitemap_xml(request: Request):
                 urls.append(f"{base_url}/{bid}/res/{tid}.html")
     except Exception as e:
         print(f"Sitemap error: {e}")
+
+    # Добавляем выпуски газеты за последние 90 дней
+    from datetime import timedelta
+    for d_offset in range(90):
+        d = (datetime.now() - timedelta(days=d_offset)).strftime('%Y-%m-%d')
+        urls.append(f"{base_url}/newspaper/{d}")
     xml_content = ['<?xml version="1.0" encoding="UTF-8"?>']
     xml_content.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
     for url in urls:
@@ -1413,26 +1499,12 @@ async def custom_404_handler(request: Request, exc):
 
     # 2. ПРОВЕРКА НА БОТА-СКАНЕРА (Только для подозрительных путей)
     # ПАТТЕРНЫ ИЗ ВАШИХ ЛОГОВ
-    troll_patterns = [
-        '/.env', '/.git', '/.ssh', '/.bash', '/.profile', '/.history', '/.aws', 
-        '/.rhosts', '/.sh_history', '/.wget', '/.htpasswd', '/.htaccess', '/.ds_store',
-        '/.bak', '/.old', '/.save', '/.log', '/.txt', '/.conf', '/.sql', '/goform', '/hello.world', '/mcp', '/sse',
-        '/wp-', '/wp/', '/xmlrpc', '/wlwmanifest', '/bitrix', '/joomla', '/drupal',
-        '/laravel', '/symfony', '/storage/logs', '/vendor', '/composer',
-        '/admin', '/phpmyadmin', '/setup', '/config', '/backup', '/dump', '/db.sql',
-        '/console', '/shell', '/root', '/eval', '/invoker', '/actuator', '/api/v1',
-        '/dashboard', '/cpanel', '/whm', '/sql', '/install', '/+CSCOL+/','/+CSCOL+', '/+CSCOE+/', '/+CSCOE+',
-        '/autodiscover', '/owa', '/exchange', '/ecp', '/_catalogs', '/_vti', 
-        '/hnap1', '/nmap', '/evox', '/sdk', '/phpunit', '/cgi-bin', 
-        '/~', '/_', '/1.bak', '/0.bak', '/a.bak', '/12.bak', '/config.json', '/config.php', '/onfig.js',
-    ]
-    
     is_bot = False
-    
+
     # Проверка только если путь НЕ безопасный
     if path.startswith(('/.', '/_', '/~', '/api/v', '/wp-')):
         is_bot = True
-    elif any(p in path for p in troll_patterns):
+    elif TROLL_PATTERNS_REGEX.search(path):
         is_bot = True
     elif path.endswith(('.php', '.asp', '.aspx', '.jsp', '.cgi', '.sh', '.sql', '.bak', '.old', '.save', '.log', '.rar', '.zip', '.7z', '.env', '.ini')):
         is_bot = True
@@ -2327,20 +2399,41 @@ async def auth_logout(request: Request):
     request.session.pop('user', None)
     return RedirectResponse(url="/")
 @app.get("/search")
-async def search_page(request: Request, query: str = "", user: dict | None = Depends(get_optional_user)):
+async def search_page(request: Request, query: str = "", archive: int = 0, user: dict | None = Depends(get_optional_user)):
     clean_query = query.strip()
     if clean_query:
         clean_query = clean_query.replace('"', '""')
     
     observer_id = user['id'] if user else getattr(request.state, 'guest_id', 0)
     
-    results = await search_posts(clean_query, observer_id=observer_id) if clean_query else []
+    results = await search_posts(clean_query, observer_id=observer_id, only_archived=bool(archive)) if clean_query else []
     results = _convert_and_enrich_posts(results)
     await enrich_extra_data(results)
     return templates.TemplateResponse("search_results.jinja2", {
         "request": request, "query": query, "posts": results, "boards": BOARD_CONFIG,
+        "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user},
+        "archive": archive
+    })
+@app.get("/newspaper")
+async def newspaper_today():
+    import datetime
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    return RedirectResponse(url=f"/newspaper/{today}")
+
+@app.get("/newspaper/{year}-{month:int}-{day:int}")
+async def newspaper_page(request: Request, year: int, month: int, day: int, user: dict | None = Depends(get_optional_user)):
+    date_str = f"{year}-{month:02d}-{day:02d}"
+    data = await get_newspaper_data(date_str)
+
+    if data and data.get("longest_posts"):
+        data["longest_posts"] = _convert_and_enrich_posts(data["longest_posts"])
+        await enrich_extra_data(data["longest_posts"])
+
+    return templates.TemplateResponse("newspaper.jinja2", {
+        "request": request, "data": data, "boards": BOARD_CONFIG,
         "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
     })
+
 @app.get("/admin/serverConfig.json", include_in_schema=False)
 async def api_dummy_config():
     """Заглушка для подавления 404 ошибок в логах от админки."""
@@ -2661,38 +2754,16 @@ async def custom_404_handler(request: Request, exc):
     path = request.url.path.lower()
     client_ip = get_real_ip(request)
     
-    # ПАТТЕРНЫ ИЗ ВАШИХ ЛОГОВ (И НЕ ТОЛЬКО)
-    troll_patterns = [
-        # System & Configs
-        '/.env', '/.git', '/.ssh', '/.bash', '/.profile', '/.history', '/.aws', 
-        '/.rhosts', '/.sh_history', '/.wget', '/.htpasswd', '/.htaccess', '/.ds_store',
-        '/.bak', '/.old', '/.save', '/.log', '/.txt', '/.conf', '/.sql', '/goform', '/hello.world', '/mcp', '/sse',
-        
-        # CMS & Frameworks
-        '/wp-', '/wp/', '/xmlrpc', '/wlwmanifest', '/bitrix', '/joomla', '/drupal',
-        '/laravel', '/symfony', '/storage/logs', '/vendor', '/composer',
-        
-        # Admin Panels & DBs
-        '/admin', '/phpmyadmin', '/setup', '/config', '/backup', '/dump', '/db.sql',
-        '/console', '/shell', '/root', '/eval', '/invoker', '/actuator', '/api/v1',
-        '/dashboard', '/cpanel', '/whm', '/sql', '/install', '/+CSCOL+/','/+CSCOL+', '/+CSCOE+/', '/+CSCOE+',
-        
-        # Scanners (из логов пользователя)
-        '/autodiscover', '/owa', '/exchange', '/ecp', '/_catalogs', '/_vti', 
-        '/hnap1', '/nmap', '/evox', '/sdk', '/phpunit', '/cgi-bin', 
-        '/~', '/_', '/1.bak', '/0.bak', '/a.bak', '/12.bak', '/config.json', '/config.php', '/onfig.js',
-    ]
-    
     # 1. МГНОВЕННАЯ ПРОВЕРКА (Оптимизирована под логи)
     is_bot = False
-    
+
     # Проверка префиксов (очень быстро)
     # Добавил '~' и '_' так как в логах их дофига: /~webmaster, /_vti_bin
     if path.startswith(('/.', '/_', '/~', '/api/v', '/wp-')):
         is_bot = True
-    
-    # Проверка вхождений (медленнее, но точнее)
-    elif any(p in path for p in troll_patterns):
+
+    # Проверка вхождений — compiled regex, O(n) вместо O(k*n)
+    elif TROLL_PATTERNS_REGEX.search(path):
         is_bot = True
     
     # Проверка расширений (для мусора типа index.php.bak)
@@ -3376,10 +3447,13 @@ async def api_makaba_posting(
     if comment:
         comment = clean_zalgo(comment)
     stop_words = SPAM_WORDS_CACHE.get('all', set()) | SPAM_WORDS_CACHE.get(board, set())
-    if any(word in (comment or "").lower() for word in stop_words):
-        log_system_event(f"🛡️ SPAM BLOCKED (Makaba): User {author_id} tried to post stop-word.")
-        await backend.set(cooldown_key, str(time.time()), expire=limit_seconds)
-        return JSONResponse({"Error": "Spam detected", "Status": "Error"})
+    _spam_pat = _get_spam_pattern(frozenset(stop_words))
+    if _spam_pat:
+        _spam_match = _spam_pat.search((comment or "").lower())
+        if _spam_match:
+            log_system_event(f"🛡️ SPAM BLOCKED (Makaba): User {author_id} tried to post '{_spam_match.group(0)}'")
+            await backend.set(cooldown_key, str(time.time()), expire=limit_seconds)
+            return JSONResponse({"Error": "Spam detected", "Status": "Error"})
 
     files_data = []
     file_owners_to_save = []
@@ -3730,6 +3804,158 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
             await backend.set(cache_key, html_content, expire=10) 
 
     return HTMLResponse(content=html_content)
+@app.get("/{board_id}/res/{post_num}/export")
+async def export_thread_html(board_id: str, post_num: int):
+    board_id = board_id.lower()
+    if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
+
+    real_thread_id = await get_thread_op_by_post_num(post_num)
+    if not real_thread_id:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    thread_data = await get_thread_by_op_post(real_thread_id)
+    if not thread_data: raise HTTPException(status_code=404, detail="Thread not found")
+    op_post, replies = thread_data
+
+    op_post = _convert_and_enrich_posts([op_post])[0]
+    replies = _convert_and_enrich_posts(replies)
+
+    import datetime
+    def format_ts(ts):
+        return datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+
+    html = []
+    html.append("<!DOCTYPE html>")
+    html.append("<html lang='ru'>")
+    html.append("<head>")
+    html.append("<meta charset='UTF-8'>")
+    html.append("<meta name='viewport' content='width=device-width, initial-scale=1.0'>")
+    html.append(f"<title>Архив треда #{real_thread_id} - /{board_id}/</title>")
+    html.append("""
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #0d0f12;
+            color: #c9d1d9;
+            margin: 0;
+            padding: 20px;
+            line-height: 1.5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        header {
+            border-bottom: 1px dashed #21262d;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            margin: 0;
+            font-size: 1.8em;
+            color: #ff9900;
+        }
+        .post {
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .post.op-post {
+            border-color: #ff9900;
+        }
+        .post-header {
+            font-size: 0.85em;
+            color: #8b949e;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #21262d;
+            padding-bottom: 5px;
+        }
+        .post-header strong {
+            color: #ff9900;
+        }
+        .post-content {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .post-text {
+            word-break: break-word;
+        }
+        .post-files-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .file-thumb img, .file-thumb video {
+            max-width: 200px;
+            max-height: 200px;
+            border-radius: 4px;
+            border: 1px solid #30363d;
+        }
+        .reply-indicator {
+            font-size: 0.85em;
+            color: #58a6ff;
+            margin: 0 0 5px 0;
+        }
+    </style>
+    """)
+    html.append("</head>")
+    html.append("<body>")
+    html.append("<div class='container'>")
+    html.append("<header>")
+    html.append(f"<h1>Тред #{real_thread_id} (Раздел /{board_id}/)</h1>")
+    html.append(f"<p style='color:#8b949e;'>Сохранено из архива ТГАЧ. Всего постов: {len(replies) + 1}</p>")
+    html.append("</header>")
+
+    # OP post
+    html.append("<div class='post op-post'>")
+    op_headers = f"<div class='post-header'>Анон #<strong>{op_post.get('id')}</strong> ({format_ts(op_post.get('timestamp', 0))})</div>"
+    html.append(op_headers)
+    html.append("<div class='post-content'>")
+
+    if op_post.get('content', {}).get('files'):
+        html.append("<div class='post-files-container'>")
+        for f in op_post['content']['files']:
+            html.append(f"<a href='{f.get('original_url')}' class='file-thumb' target='_blank'>")
+            html.append(f"<img src='{f.get('thumbnail_url') or f.get('original_url')}' alt='file'>")
+            html.append("</a>")
+        html.append("</div>")
+
+    html.append(f"<div class='post-text'>{op_post.get('content', {}).get('text', '')}</div>")
+    html.append("</div></div>")
+
+    # Replies
+    for post in replies:
+        html.append("<div class='post'>")
+        rep_headers = f"<div class='post-header'>Анон #<strong>{post.get('id')}</strong> ({format_ts(post.get('timestamp', 0))})</div>"
+        html.append(rep_headers)
+        html.append("<div class='post-content'>")
+
+        if post.get('reply_to_post_num'):
+            html.append(f"<p class='reply-indicator'>&gt;&gt;{post.get('reply_to_post_num')}</p>")
+
+        if post.get('content', {}).get('files'):
+            html.append("<div class='post-files-container'>")
+            for f in post['content']['files']:
+                html.append(f"<a href='{f.get('original_url')}' class='file-thumb' target='_blank'>")
+                html.append(f"<img src='{f.get('thumbnail_url') or f.get('original_url')}' alt='file'>")
+                html.append("</a>")
+            html.append("</div>")
+
+        html.append(f"<div class='post-text'>{post.get('content', {}).get('text', '')}</div>")
+        html.append("</div></div>")
+
+    html.append("</div>")
+    html.append("</body>")
+    html.append("</html>")
+
+    headers = {
+        "Content-Disposition": f"attachment; filename=thread-{board_id}-{real_thread_id}.html"
+    }
+    return Response(content="\n".join(html), media_type="text/html", headers=headers)
 @app.get("/{board_id}/res/{post_num}/gallery")
 async def thread_gallery_page(board_id: str, post_num: int, request: Request, user: dict | None = Depends(get_optional_user)):
     if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
@@ -4262,10 +4488,10 @@ async def api_admin_stealth_edit(
             new_images = processed_images_list
 
         stream = getattr(request.state, 'stream', 'ru')
+        u_bot_id, u_bot = global_bot_pool.get_next_bot(stream)
         for file_obj in new_images:
             if not file_obj.filename:
                 continue
-            u_bot_id, u_bot = global_bot_pool.get_next_bot(stream)
             content_type = file_obj.content_type or ""
             func = process_and_upload_voice if content_type.startswith("audio/") else process_and_upload_image
             try:
@@ -4546,22 +4772,23 @@ async def api_create_post(
     if images is None:
         images = []   
     clean_text_for_check = re.sub(r'[\u200b\u200c\u200d\u2060\ufeff]', '', text).lower()
-    if stop_words:
-        for word in stop_words:
-            if word in clean_text_for_check:
-                log_system_event(f"🛡️ SPAM BLOCKED: User {author_id} tried to post '{word}'")
-                await backend.set(key, str(time.time()), expire=limit_seconds)
-                return {
-                    "id": int(time.time()),
-                    "board_id": board_id,
-                    "author_id": author_id,
-                    "content": {"text": text, "files": [], "type": "text"},
-                    "timestamp": time.time(),
-                    "reply_to_post_num": reply_to,
-                    "thread_id": 0,
-                    "is_op_post": post_mode == 'new_thread',
-                    "shadow_deleted": True
-                }   
+    _spam_pat2 = _get_spam_pattern(frozenset(stop_words))
+    if _spam_pat2:
+        _spam_match2 = _spam_pat2.search(clean_text_for_check)
+        if _spam_match2:
+            log_system_event(f"🛡️ SPAM BLOCKED: User {author_id} tried to post '{_spam_match2.group(0)}'")
+            await backend.set(key, str(time.time()), expire=limit_seconds)
+            return {
+                "id": int(time.time()),
+                "board_id": board_id,
+                "author_id": author_id,
+                "content": {"text": text, "files": [], "type": "text"},
+                "timestamp": time.time(),
+                "reply_to_post_num": reply_to,
+                "thread_id": 0,
+                "is_op_post": post_mode == 'new_thread',
+                "shadow_deleted": True
+            }
     if await get_user_status(author_id, board_id) == 'banned':
         logger.warning(f"🚫 REJECTED: User {author_id} is BANNED on /{board_id}/ (IP: {request.state.client_ip})")
         
@@ -4577,10 +4804,13 @@ async def api_create_post(
             remaining = int(row[0] - time.time())
             raise HTTPException(status_code=403, detail=t('err_mute_remaining').format(remaining))
     is_shadow_muted = await get_shadow_mute_status(author_id, board_id)
+    files_to_process = []
+    if images:
+        for img in images:
+            if getattr(img, 'filename', None):
+                files_to_process.append(img)
     if not is_shadow_muted:
-        check_text = text if text else ""
-        if check_text:
-            await check_and_punish_site_spam(board_id, author_id, check_text, t)
+        await check_and_punish_site_spam(board_id, author_id, text or "", files_to_process, t)
     thread_op_num = None
     if post_mode == 'chat_post':
         thread_op_num = None
@@ -4605,11 +4835,6 @@ async def api_create_post(
     elif post_mode == 'new_thread':
         thread_op_num = None
     
-    files_to_process = []
-    if images:
-        for img in images:
-            if getattr(img, 'filename', None):
-                files_to_process.append(img)
 
     user_files_count = len(files_to_process)
     files_to_generate_count = 5 - user_files_count
@@ -5970,6 +6195,11 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     
     user_country = request.cookies.get("user_country", "XX")
     is_ru = (user_country == "RU")
+    client_ip = get_real_ip(request)
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if 'ru' in accept_lang or not accept_lang:
+            is_ru = True
 
     tg_url = None
     info = await get_cached_file_path(file_id)
@@ -6073,7 +6303,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
                 except:
-                    content = {"text": "❌ Какая-то хуйня с данными., "type": "text"}
+                    content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
                     "id": r[0],

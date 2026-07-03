@@ -10,7 +10,7 @@ conn = sqlite3.connect(db_path)
 cur = conn.cursor()
 
 def print_indexes(table):
-    cur.execute(f"PRAGMA index_list('{table}')")
+    cur.execute("SELECT * FROM pragma_index_list(?)", (table,))
     indexes = cur.fetchall()
     if not indexes:
         print(f"No indexes for {table}")
@@ -18,7 +18,7 @@ def print_indexes(table):
     print(f"Indexes for {table}:")
     for idx in indexes:
         idx_name = idx[1]
-        cur.execute(f"PRAGMA index_info('{idx_name}')")
+        cur.execute("SELECT * FROM pragma_index_info(?)", (idx_name,))
         columns = [c[2] for c in cur.fetchall()]
         print(f"  - {idx_name}: {columns}")
 

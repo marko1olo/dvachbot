@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import time
+import re
 from datetime import datetime
 
 # Настройки цветов для терминала
@@ -52,9 +53,11 @@ def get_table_statistics(cur, tables):
     print(f"{'Таблица':<25} | {'Строк':<10}")
     print("-" * 40)
     for table in tables:
+        if not re.match(r'^[a-zA-Z0-9_]+$', table):
+            print(f"{table:<25} | {'INVALID NAME':<10}")
+            continue
         try:
-            safe_table = table.replace('"', '""')
-            cur.execute(f'SELECT COUNT(*) FROM "{safe_table}"')
+            cur.execute(f'SELECT COUNT(*) FROM "{table}"')
             count = cur.fetchone()[0]
             print(f"{table:<25} | {count:<10}")
             total_rows += count
@@ -120,9 +123,11 @@ def find_logical_garbage(cur, tables):
     orphan_tables = []
     for table, col in tables_to_check.items():
         if table in tables:
-            safe_table = table.replace('"', '""')
+            if not re.match(r'^[a-zA-Z0-9_]+$', table):
+                print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: недопустимое имя{Colors.ENDC}")
+                continue
             cur.execute(f"""
-                SELECT COUNT(*) FROM "{safe_table}" t
+                SELECT COUNT(*) FROM "{table}" t
                 LEFT JOIN Posts p ON t.{col} = p.post_num
                 WHERE p.post_num IS NULL
             """)

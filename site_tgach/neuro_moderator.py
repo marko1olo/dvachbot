@@ -105,6 +105,10 @@ async def _safe_groq_json(messages, max_tokens=300):
                 elif resp.status_code == 429:
                     await asyncio.sleep(1)
                     continue
+                elif resp.status_code == 401:
+                    logger.error(f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool.")
+                    groq_pool.remove_token(token)
+                    continue
                 else:
                     logger.warning(f"DeepCheck HTTP Error {resp.status_code}: {resp.text}")
                     # Если модель отказалась отвечать (400 Bad Request часто при Refusal на Vision)
@@ -114,6 +118,10 @@ async def _safe_groq_json(messages, max_tokens=300):
             except json.JSONDecodeError:
                 logger.error(f"DeepCheck JSON Parse Error: {content}")
             except Exception as e:
+                err_str = str(e).lower()
+                if "401" in err_str or "unauthorized" in err_str or "invalid api key" in err_str:
+                    logger.error(f"❌ Groq key {token[:12]}... is unauthorized (401 Exception). Removing from rotation pool.")
+                    groq_pool.remove_token(token)
                 logger.error(f"DeepCheck Req Failed: {e}")
                 continue
     return None
@@ -140,7 +148,7 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
     import base64
     import time
     import asyncio
-from common.http_utils import api_retry
+    from common.http_utils import api_retry
 
     logger.info(f"🔍 [DeepCheck] Starting analysis for file_id: {file_id}")
 

@@ -1,3 +1,4 @@
+from typing import overload
 import aiosqlite
 """
 This module provides an asynchronous interface for managing a SQLite database 
@@ -2053,10 +2054,16 @@ async def get_thread_op_by_post_num(post_num: int) -> Optional[int]:
         for attempt in range(10):
             try:
                 db = await get_pool()
-                query = "SELECT thread_id FROM Posts WHERE post_num = ? LIMIT 1"
+                query = "SELECT thread_id, reply_to_post_num FROM Posts WHERE post_num = ? LIMIT 1"
                 async with db.execute(query, (post_num,)) as cursor:
                     row = await cursor.fetchone()
-                    return row[0] if row else None
+                    if row:
+                        thread_id, reply_to = row
+                        if thread_id:
+                            return thread_id
+                        if reply_to is None:
+                            return post_num
+                    return None
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await asyncio.sleep(0.1 * (attempt + 1))
@@ -2200,12 +2207,14 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                     async for row in cursor:
                         ref_post_num, recipient_id, thread_id = row
                         if recipient_id > 0 and recipient_id != author_id:
+                            # FIX: Если thread_id is None (чат), используем ID поста, на который отвечаем (ref_post_num)
+                            final_thread_id = thread_id if thread_id is not None else ref_post_num
                             notifications_to_insert.append((
                                 recipient_id, 
                                 source_post_num, 
                                 ref_post_num, 
                                 board_id, 
-                                thread_id, 
+                                final_thread_id,
                                 current_time
                             ))
                 if notifications_to_insert:
@@ -2215,9 +2224,8 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                            VALUES (?, ?, ?, ?, ?, ?)""",
                         notifications_to_insert
                     )
-                    # FIX: Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
                     site_notifs = [
-                        (r_id, board_id, str(t_id) if t_id else str(rep_num), src_num, rep_num, 0, current_time)
+                        (r_id, board_id, str(t_id), src_num, rep_num, 0, current_time)
                         for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert
                     ]
                     await db.executemany(
@@ -2447,12 +2455,37 @@ async def get_post_author_by_copy(recipient_id: int, message_id: int) -> int | N
                 return result[0] if result else None
         except Exception:
             return None
-async def get_post_copies(post_num: int) -> list[tuple[int, int]]:
+@overload
+async def get_post_copies(post_num: int) -> list[tuple[int, int]]: ...
+
+@overload
+async def get_post_copies(post_num: list[int]) -> dict[int, list[tuple[int, int]]]: ...
+
+async def get_post_copies(post_num: int | list[int]) -> list[tuple[int, int]] | dict[int, list[tuple[int, int]]]:
     """
-    Возвращает список всех копий для указанного поста.
+    Возвращает список всех копий для указанного поста,
+    либо словарь со списками копий для нескольких постов.
     """
     from common.db_pool import get_pool, db_lock
     
+    if isinstance(post_num, list):
+        if not post_num:
+            return {}
+        async with db_lock:
+            try:
+                db = await get_pool()
+                placeholders = ','.join('?' for _ in post_num)
+                query = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
+
+                result = {num: [] for num in post_num}
+                async with db.execute(query, post_num) as cursor:
+                    rows = await cursor.fetchall()
+                    for p_num, recipient_id, message_id in rows:
+                        result[p_num].append((recipient_id, message_id))
+                return result
+            except Exception:
+                return {num: [] for num in post_num}
+
     async with db_lock:
         try:
             db = await get_pool()
@@ -2893,7 +2926,7 @@ def _process_search_row(row: aiosqlite.Row) -> Optional[Dict[str, Any]]:
         return post_dict
     except Exception:
         return None
-async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 50, observer_id: Optional[int] = None) -> list[dict]:
+async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 50, observer_id: Optional[int] = None, only_archived: bool = False) -> list[dict]:
     """
     Выполняет полнотекстовый поиск.
     """
@@ -2908,13 +2941,24 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
 
             viewer_id = observer_id if observer_id is not None else -1
             
-            sql_query = f"""
-                SELECT p.* FROM Posts p
-                JOIN PostsFTS fts ON p.post_num = fts.rowid
-                WHERE fts.content MATCH ? 
-                  AND p.thread_id IS NOT NULL 
-                  AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
-            """
+            if only_archived:
+                sql_query = f"""
+                    SELECT p.* FROM Posts p
+                    JOIN PostsFTS fts ON p.post_num = fts.rowid
+                    JOIN Threads t ON p.thread_id = t.thread_id
+                    WHERE fts.content MATCH ?
+                      AND p.thread_id IS NOT NULL
+                      AND t.is_archived = 1
+                      AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
+                """
+            else:
+                sql_query = f"""
+                    SELECT p.* FROM Posts p
+                    JOIN PostsFTS fts ON p.post_num = fts.rowid
+                    WHERE fts.content MATCH ?
+                      AND p.thread_id IS NOT NULL
+                      AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
+                """
             params = [final_query]
             if board_id:
                 sql_query += " AND p.board_id = ?"
@@ -3736,17 +3780,7 @@ async def sync_boards_with_config(board_config: dict):
     """
     Синхронизирует доски из конфига с БД.
     """
-    boards_to_sync = []
-    for board_id, info in board_config.items():
-        description = info.get("description", "")
-        if isinstance(description, dict):
-            description = json.dumps(description, ensure_ascii=False)
-        boards_to_sync.append((
-            board_id,
-            info.get("name", "Unnamed Board"),
-            description
-        ))
-    if not boards_to_sync:
+    if not board_config:
         return
 
     from common.db_pool import get_pool, db_lock
@@ -3757,6 +3791,8 @@ async def sync_boards_with_config(board_config: dict):
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
 
+                # Оптимизация: используем генератор напрямую в executemany, чтобы избежать N+1 execute
+                # и лишних аллокаций памяти (по сравнению с циклом for ... append).
                 await db.executemany(
                     """
                     INSERT INTO Boards (board_id, name, description) VALUES (?, ?, ?)
@@ -3764,11 +3800,18 @@ async def sync_boards_with_config(board_config: dict):
                         name = excluded.name,
                         description = excluded.description
                     """,
-                    boards_to_sync
+                    (
+                        (
+                            board_id,
+                            info.get("name", "Unnamed Board"),
+                            json.dumps(info.get("description", ""), ensure_ascii=False) if isinstance(info.get("description", ""), dict) else info.get("description", "")
+                        )
+                        for board_id, info in board_config.items()
+                    )
                 )
 
                 await db.execute("COMMIT")
-                print(f"✅ Синхронизация досок с БД завершена. Проверено {len(boards_to_sync)} досок.")
+                print(f"✅ Синхронизация досок с БД завершена. Проверено {len(board_config)} досок.")
                 return
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
@@ -6064,6 +6107,88 @@ async def get_activity_history(days: int = 7) -> dict:
     except Exception as e:
         print(f"Stats error: {e}")
         return {}
+async def get_newspaper_data(date_str: str) -> dict:
+    import datetime
+    from common.db_pool import get_pool
+    db = await get_pool()
+    db.row_factory = aiosqlite.Row
+    try:
+        dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+        start_ts = dt.timestamp()
+        end_ts = start_ts + 86400
+    except Exception:
+        return {}
+
+    res = {
+        "date": date_str,
+        "total_posts": 0,
+        "active_authors": 0,
+        "new_threads_count": 0,
+        "top_threads": [],
+        "longest_posts": [],
+        "recent_media": []
+    }
+
+    try:
+        # 1. Total posts
+        async with db.execute("SELECT COUNT(*) FROM Posts WHERE timestamp BETWEEN ? AND ? AND IFNULL(is_shadow, 0) = 0", (start_ts, end_ts)) as cursor:
+            row = await cursor.fetchone()
+            if row: res["total_posts"] = row[0]
+
+        # 2. Active authors
+        async with db.execute("SELECT COUNT(DISTINCT author_id) FROM Posts WHERE timestamp BETWEEN ? AND ? AND author_id != 0 AND IFNULL(is_shadow, 0) = 0", (start_ts, end_ts)) as cursor:
+            row = await cursor.fetchone()
+            if row: res["active_authors"] = row[0]
+
+        # 3. New threads count
+        async with db.execute("SELECT COUNT(*) FROM Threads WHERE created_at BETWEEN ? AND ?", (start_ts, end_ts)) as cursor:
+            row = await cursor.fetchone()
+            if row: res["new_threads_count"] = row[0]
+
+        # 4. Top threads by posts in this day
+        query_threads = """
+            SELECT p.thread_id, p.board_id, t.title, COUNT(p.post_num) as cnt
+            FROM Posts p
+            JOIN Threads t ON p.thread_id = t.thread_id
+            WHERE p.timestamp BETWEEN ? AND ? AND p.thread_id IS NOT NULL AND IFNULL(p.is_shadow, 0) = 0
+            GROUP BY p.thread_id ORDER BY cnt DESC LIMIT 5
+        """
+        async with db.execute(query_threads, (start_ts, end_ts)) as cursor:
+            rows = await cursor.fetchall()
+            for r in rows:
+                res["top_threads"].append({
+                    "thread_id": r["thread_id"],
+                    "board_id": r["board_id"],
+                    "title": r["title"] or "Без названия",
+                    "posts_count": r["cnt"]
+                })
+
+        # 5. Longest posts (slang columns)
+        query_longest = """
+            SELECT p.post_num, p.board_id, p.thread_id, p.content, p.author_id, p.timestamp
+            FROM Posts p
+            WHERE p.timestamp BETWEEN ? AND ? AND IFNULL(p.is_shadow, 0) = 0 AND length(p.content) > 30
+            ORDER BY length(p.content) DESC LIMIT 8
+        """
+        async with db.execute(query_longest, (start_ts, end_ts)) as cursor:
+            rows = await cursor.fetchall()
+            for r in rows:
+                res["longest_posts"].append({
+                    "post_num": r["post_num"],
+                    "board_id": r["board_id"],
+                    "thread_id": r["thread_id"],
+                    "content": r["content"],
+                    "author_id": r["author_id"],
+                    "timestamp": r["timestamp"]
+                })
+
+        return res
+    except Exception as e:
+        print(f"Newspaper data error: {e}")
+        return res
+    finally:
+        db.row_factory = None
+
 async def get_top_active_threads(hours: int = 8, limit: int = 10):
     """Находит треды с наибольшим количеством новых постов за период. Скрывает активность shadow-постов."""
     db = await get_pool()
@@ -7005,15 +7130,16 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                 
                 if original_author_id > 0 and original_author_id != reply_author_id:
                     curr_time = time.time()
+
+                    # FIX: Если thread_id is None, используем ID родительского поста
+                    effective_thread_id = str(thread_id) if thread_id else str(source_post_num)
+
                     await db.execute(
                         """INSERT INTO NotificationQueue 
                            (recipient_id, source_post_num, reply_post_num, board_id, thread_id, created_at) 
                            VALUES (?, ?, ?, ?, ?, ?)""",
-                        (original_author_id, source_post_num, reply_post_num, board_id, thread_id, curr_time)
+                        (original_author_id, source_post_num, reply_post_num, board_id, effective_thread_id, curr_time)
                     )
-                    
-                    # FIX: Если thread_id is None, используем ID родительского поста
-                    effective_thread_id = str(thread_id) if thread_id else str(source_post_num)
                     
                     await db.execute(
                         """INSERT INTO UserReplies 

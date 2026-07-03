@@ -173,9 +173,14 @@ def process_image_cpu(image_bytes):
     except Exception as e:
         return None, f"CPU Error: {e}"
 
-# ==========================================
-# НЕЙРОНКА (GROQ)
-# ==========================================
+@api_retry
+async def _execute_tagging(client, model, messages, max_tokens):
+    return await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens
+    )
+
 async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
     global GROQ_COOLDOWN_UNTIL
     
@@ -206,7 +211,7 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
             try:
                 transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
                 async with httpx.AsyncClient(proxy=strategy["proxy"], transport=transport, verify=False, timeout=GROQ_TIMEOUT) as http_client:
-                    client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client)
+                    client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client, max_retries=0)
                     resp = await _execute_tagging(
                         client,
                         model=GROQ_MODEL,
@@ -218,6 +223,10 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
                         return content.strip().rstrip('.,')
             except Exception as e:
                 err_str = str(e).lower()
+                if "401" in err_str or "unauthorized" in err_str or "invalid api key" in err_str:
+                    logger.error(f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool.")
+                    groq_pool.remove_token(token)
+                    continue
                 if "413" in err_str:
                     logger.error("❌ 413 Payload Too Large (Even after resize!). Skipping tags.")
                     return "error_413" # Возвращаем спец-код, чтобы сохранить хеши, но без тегов
@@ -370,7 +379,13 @@ async def tagging_loop():
                         await db.commit()
                     continue
                 except Exception as e:
-                    logger.warning(f"❌ DL fail {download_target_id}: {e}")
+                    err_str = str(e).lower()
+                    if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
+                        logger.error(f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling.")
+                        if global_bot_pool:
+                            global_bot_pool.mark_bot_dead_by_token(bot.token)
+                    else:
+                        logger.warning(f"❌ DL fail {download_target_id}: {e}")
                     TEMP_FAILED_FILES[file_id] = time.time() + 120
                     continue
 
