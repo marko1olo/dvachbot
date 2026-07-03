@@ -14,3 +14,6 @@ pythonpath = [
   "site_tgach",
   "verification_scripts"
 ]
+asyncio_mode = "strict"
+testpaths = ["tests"]
+timeout = 30
