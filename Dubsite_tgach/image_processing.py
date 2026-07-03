@@ -144,9 +144,6 @@ async def process_and_upload_image(
     bot: Bot, 
     channel_id: int
 ) -> dict:
-    import os
-    import hashlib
-    from common.bot_pool import global_bot_pool
     
     content_type = file.content_type
     original_filename = file.filename or "file"
@@ -451,7 +448,7 @@ def _create_thumbnail_sync_in_memory(image_bytes: bytes) -> bytes | None:
     except Image.DecompressionBombError:
         logger.warning("💣 Detected Decompression Bomb attempt!")
         return None
-    except Exception as e:
+    except Exception:
         return None
 async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filename: str, related_id: str = None):
     # 1. Теневой канал (Shadow)
@@ -498,10 +495,14 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
         logger.error(f"Shadow task error: {e}")
 
     # 2. Логика зеркал (Catbox + HF)
-    
-    # Всегда добавляем превью в очередь HF, так как они маленькие
+    hf_available = os.getenv("HF_MIRRORS_DISABLED", "").strip().lower() not in {"1", "true", "yes", "on"}
     if related_id:
-        await add_to_hf_queue(related_id)
+        if hf_available:
+            await add_to_hf_queue(related_id)
+
+        # Зеркалируем превью (миниатюру) на Catbox
+        from common.database import add_to_mirror_queue
+        await add_to_mirror_queue(related_id, 'catbox')
 
     # Если файл > 19MB, Telegram не отдаст ссылку. Грузим байты напрямую.
     SIZE_LIMIT = 19 * 1024 * 1024
