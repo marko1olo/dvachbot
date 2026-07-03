@@ -2,10 +2,17 @@ import hashlib
 import unittest
 import sys
 import os
+import importlib
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+
+# test_main.py globally mocks site_tgach modules, which breaks this test if run in the same session.
+# We must remove the mock from sys.modules to load the real module.
+for mod in list(sys.modules.keys()):
+    if mod.startswith("site_tgach") or mod == "site_tgach":
+        del sys.modules[mod]
 
 from site_tgach.security import verify_pow
 import site_tgach.security as security
