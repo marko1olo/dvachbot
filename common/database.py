@@ -2207,7 +2207,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                     async for row in cursor:
                         ref_post_num, recipient_id, thread_id = row
                         if recipient_id > 0 and recipient_id != author_id:
-                            # Если thread_id is None (чат), используем ID поста, на который отвечаем (ref_post_num)
+                            # FIX: Если thread_id is None (чат), используем ID поста, на который отвечаем (ref_post_num)
                             final_thread_id = thread_id if thread_id is not None else ref_post_num
                             notifications_to_insert.append((
                                 recipient_id, 
@@ -2986,147 +2986,8 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
         finally:
             if 'db' in locals() and db:
                 db.row_factory = None
-def _delete_in_chunks(con, table, where_clause, params, chunk_size=100):
-    total_deleted = 0
-    con.execute("PRAGMA busy_timeout = 5000;")
-
-    while True:
-        # Используем IMMEDIATE транзакцию даже в синхронном коде
-        try:
-            con.execute("BEGIN IMMEDIATE")
-            query = f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {where_clause} LIMIT {chunk_size})"
-            cur = con.execute(query, params)
-            count = cur.rowcount
-            con.execute("COMMIT")
-
-            total_deleted += count
-            if count < chunk_size:
-                break
-
-            # Даем передышку другим процессам
-            time.sleep(0.1)
-
-        except sqlite3.OperationalError as e:
-            try: con.execute("ROLLBACK")
-            except: pass
-            if "locked" in str(e).lower() or "busy" in str(e).lower():
-                time.sleep(1)
-                continue
-            raise e
-        except Exception:
-            try: con.execute("ROLLBACK")
-            except: pass
-            break
-
-    return total_deleted
-
-def _cleanup_telegram_copies(con, retention_seconds, retention_limit):
-    # Keep a bounded rolling window by age and by global post distance
-    copy_cutoff = time.time() - retention_seconds
-    row = con.execute(
-        "SELECT post_num FROM Posts ORDER BY post_num DESC LIMIT 1 OFFSET ?",
-        (retention_limit,)
-    ).fetchone()
-    copy_floor_post_num = row[0] if row else 0
-    copy_where = "post_num IN (SELECT post_num FROM Posts WHERE timestamp < ? AND post_num < ?)"
-    _delete_in_chunks(con, "PostCopies", copy_where, (copy_cutoff, copy_floor_post_num))
-    _delete_in_chunks(con, "ChannelCopies", copy_where, (copy_cutoff, copy_floor_post_num))
-
-def _cleanup_logs_and_alerts(con, logs_lifetime, alerts_lifetime):
-    logs_cutoff = time.time() - logs_lifetime
-    _delete_in_chunks(con, "GlobalLogs", "created_at < ?", (logs_cutoff,))
-    _delete_in_chunks(con, "UserAlerts", "created_at < ?", (time.time() - alerts_lifetime,))
-    replies_cutoff = time.time() - (8 * 24 * 3600)
-    _delete_in_chunks(con, "UserReplies", "created_at < ?", (replies_cutoff,))
-    try:
-        con.execute("BEGIN IMMEDIATE")
-        hf_cutoff = time.time() - (24 * 3600)
-        con.execute("DELETE FROM PendingHF WHERE created_at < ?", (hf_cutoff,))
-        hf_orphan_cutoff = time.time() - 3600
-        con.execute("""
-            DELETE FROM PendingHF
-            WHERE created_at < ?
-            AND file_id NOT IN (SELECT file_id FROM FileRegistry)
-        """, (hf_orphan_cutoff,))
-        con.execute("DELETE FROM Bottles WHERE timestamp < ?", (logs_cutoff,))
-        con.execute("DELETE FROM ImportRequests WHERE created_at < ? AND status != 'pending'", (logs_cutoff,))
-        con.execute("DELETE FROM Reports WHERE created_at < ? AND status != 'open'", (logs_cutoff,))
-        con.execute("COMMIT")
-    except:
-        try: con.execute("ROLLBACK")
-        except: pass
-
-def _cleanup_shadow_posts(con, shadow_lifetime):
-    shadow_cutoff = time.time() - shadow_lifetime
-    _delete_in_chunks(con, "Posts", "is_shadow = 1 AND timestamp < ?", (shadow_cutoff,))
-
-def _cleanup_orphans(con):
-    cleanup_targets = [
-        ("PostCopies", "post_num"), ("ChannelCopies", "post_num"),
-        ("BroadcastQueue", "post_num"), ("NotificationQueue", "source_post_num"),
-        ("NotificationQueue", "reply_post_num"), ("Reports", "post_num"),
-        ("ModQueue", "post_num"), ("PollVotes", "post_num")
-    ]
-    for table, col in cleanup_targets:
-        try:
-            where_fast = f"NOT EXISTS (SELECT 1 FROM Posts WHERE Posts.post_num = {table}.{col})"
-            _delete_in_chunks(con, table, where_fast, ())
-        except: pass
-
-def _cleanup_ephemeral_boards(con, boards, limit):
-    for board in boards:
-        try:
-            row = con.execute(
-                "SELECT post_num FROM Posts WHERE board_id = ? ORDER BY post_num DESC LIMIT 1 OFFSET ?",
-                (board, limit)
-            ).fetchone()
-
-            if row:
-                threshold_id = row[0]
-                deleted = _delete_in_chunks(
-                    con, "Posts",
-                    "board_id = ? AND post_num < ? AND thread_id IS NULL",
-                    (board, threshold_id)
-                )
-                if deleted > 0:
-                    print(f"  > Ephemeral cleanup /{board}/: removed {deleted} old posts.")
-        except Exception as e:
-            print(f"⚠️ Error cleaning ephemeral board {board}: {e}")
-
-def _cleanup_archived_threads(con, archive_lifetime):
-    archive_cutoff = time.time() - archive_lifetime
-    tids = [r[0] for r in con.execute("SELECT thread_id FROM Threads WHERE is_archived = 1 AND last_updated_at < ?", (archive_cutoff,)).fetchall()]
-
-    if tids:
-        chunk_size = 50
-        for i in range(0, len(tids), chunk_size):
-            chunk = tids[i:i + chunk_size]
-            placeholders = ",".join("?" * len(chunk))
-            try:
-                con.execute("BEGIN IMMEDIATE")
-                con.execute(f"DELETE FROM Posts WHERE thread_id IN ({placeholders})", chunk)
-                con.execute(f"DELETE FROM Threads WHERE thread_id IN ({placeholders})", chunk)
-                con.execute("COMMIT")
-                time.sleep(0.05)
-            except:
-                try: con.execute("ROLLBACK")
-                except: pass
-        print(f"  > Archive: deleted {len(tids)} old threads.")
-
-def _cleanup_import_map(con):
-    # Если task_id больше нет в ImportQueue, значит все посты опубликованы, и карта больше не нужна.
-    try:
-        con.execute("BEGIN IMMEDIATE")
-        con.execute("DELETE FROM ImportRefMap WHERE task_id NOT IN (SELECT DISTINCT task_id FROM ImportQueue)")
-        deleted_maps = con.total_changes
-        con.execute("COMMIT")
-        if deleted_maps > 0:
-            print(f"  > Import Cleanup: Cleared {deleted_maps} outdated reference maps.")
-    except:
-        try: con.execute("ROLLBACK")
-        except: pass
-
 def cleanup_old_posts_from_db(limit: int = 50000):
+    CHAT_COPIES_LIMIT = 5000
     SHADOW_LIFETIME = 24 * 3600
     ARCHIVED_THREAD_LIFETIME = 30 * 24 * 3600
     POST_COPY_RETENTION_SECONDS = max(2 * 24 * 3600, int(POST_COPY_RETENTION_DAYS or 30) * 24 * 3600)
@@ -3136,6 +2997,40 @@ def cleanup_old_posts_from_db(limit: int = 50000):
     EPHEMERAL_BOARDS = ('thread', 'test') 
     EPHEMERAL_LIMIT = 500
     
+    def delete_in_chunks(con, table, where_clause, params, chunk_size=100):
+        total_deleted = 0
+        con.execute("PRAGMA busy_timeout = 5000;")
+
+        while True:
+            # Используем IMMEDIATE транзакцию даже в синхронном коде
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                query = f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {where_clause} LIMIT {chunk_size})"
+                cur = con.execute(query, params)
+                count = cur.rowcount
+                con.execute("COMMIT")
+
+                total_deleted += count
+                if count < chunk_size:
+                    break
+
+                # Даем передышку другим процессам
+                time.sleep(0.1)
+
+            except sqlite3.OperationalError as e:
+                try: con.execute("ROLLBACK")
+                except: pass
+                if "locked" in str(e).lower() or "busy" in str(e).lower():
+                    time.sleep(1)
+                    continue
+                raise e
+            except Exception:
+                try: con.execute("ROLLBACK")
+                except: pass
+                break
+
+        return total_deleted
+
     try:
         # isolation_level=None для соответствия архитектуре
         with sqlite3.connect(DB_NAME, timeout=30.0, isolation_level=None) as con:
@@ -3144,25 +3039,110 @@ def cleanup_old_posts_from_db(limit: int = 50000):
             con.execute("PRAGMA foreign_keys = ON;")
             
             # 1. Telegram copy retention. PostCopies are required for real Telegram replies.
-            _cleanup_telegram_copies(con, POST_COPY_RETENTION_SECONDS, POST_COPY_RETENTION_LIMIT)
+            # Keep a bounded rolling window by age and by global post distance; RAM hydration is capped separately.
+            copy_cutoff = time.time() - POST_COPY_RETENTION_SECONDS
+            row = con.execute(
+                "SELECT post_num FROM Posts ORDER BY post_num DESC LIMIT 1 OFFSET ?",
+                (POST_COPY_RETENTION_LIMIT,)
+            ).fetchone()
+            copy_floor_post_num = row[0] if row else 0
+            copy_where = "post_num IN (SELECT post_num FROM Posts WHERE timestamp < ? AND post_num < ?)"
+            delete_in_chunks(con, "PostCopies", copy_where, (copy_cutoff, copy_floor_post_num))
+            delete_in_chunks(con, "ChannelCopies", copy_where, (copy_cutoff, copy_floor_post_num))
 
             # 2. Логи и алерты
-            _cleanup_logs_and_alerts(con, LOGS_LIFETIME, ALERTS_LIFETIME)
+            logs_cutoff = time.time() - LOGS_LIFETIME
+            delete_in_chunks(con, "GlobalLogs", "created_at < ?", (logs_cutoff,))
+            delete_in_chunks(con, "UserAlerts", "created_at < ?", (time.time() - ALERTS_LIFETIME,))
+            replies_cutoff = time.time() - (8 * 24 * 3600)
+            delete_in_chunks(con, "UserReplies", "created_at < ?", (replies_cutoff,))
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                hf_cutoff = time.time() - (24 * 3600)
+                con.execute("DELETE FROM PendingHF WHERE created_at < ?", (hf_cutoff,))
+                hf_orphan_cutoff = time.time() - 3600
+                con.execute("""
+                    DELETE FROM PendingHF
+                    WHERE created_at < ?
+                    AND file_id NOT IN (SELECT file_id FROM FileRegistry)
+                """, (hf_orphan_cutoff,))
+                con.execute("DELETE FROM Bottles WHERE timestamp < ?", (logs_cutoff,))
+                con.execute("DELETE FROM ImportRequests WHERE created_at < ? AND status != 'pending'", (logs_cutoff,))
+                con.execute("DELETE FROM Reports WHERE created_at < ? AND status != 'open'", (logs_cutoff,))
+                con.execute("COMMIT")
+            except:
+                try: con.execute("ROLLBACK")
+                except: pass
 
             # 3. Теневые посты
-            _cleanup_shadow_posts(con, SHADOW_LIFETIME)
+            shadow_cutoff = time.time() - SHADOW_LIFETIME
+            delete_in_chunks(con, "Posts", "is_shadow = 1 AND timestamp < ?", (shadow_cutoff,))
 
             # 4. Очистка сирот (Orphans)
-            _cleanup_orphans(con)
+            cleanup_targets = [
+                ("PostCopies", "post_num"), ("ChannelCopies", "post_num"),
+                ("BroadcastQueue", "post_num"), ("NotificationQueue", "source_post_num"),
+                ("NotificationQueue", "reply_post_num"), ("Reports", "post_num"),
+                ("ModQueue", "post_num"), ("PollVotes", "post_num")
+            ]
+            for table, col in cleanup_targets:
+                try:
+                    where_fast = f"NOT EXISTS (SELECT 1 FROM Posts WHERE Posts.post_num = {table}.{col})"
+                    delete_in_chunks(con, table, where_fast, ())
+                except: pass
 
             # 5. Эфемельные доски
-            _cleanup_ephemeral_boards(con, EPHEMERAL_BOARDS, EPHEMERAL_LIMIT)
+            for board in EPHEMERAL_BOARDS:
+                try:
+                    row = con.execute(
+                        "SELECT post_num FROM Posts WHERE board_id = ? ORDER BY post_num DESC LIMIT 1 OFFSET ?",
+                        (board, EPHEMERAL_LIMIT)
+                    ).fetchone()
+
+                    if row:
+                        threshold_id = row[0]
+                        deleted = delete_in_chunks(
+                            con, "Posts",
+                            "board_id = ? AND post_num < ? AND thread_id IS NULL",
+                            (board, threshold_id)
+                        )
+                        if deleted > 0:
+                            print(f"  > Ephemeral cleanup /{board}/: removed {deleted} old posts.")
+                except Exception as e:
+                    print(f"⚠️ Error cleaning ephemeral board {board}: {e}")
 
             # 6. Очистка архива тредов
-            _cleanup_archived_threads(con, ARCHIVED_THREAD_LIFETIME)
+            archive_cutoff = time.time() - ARCHIVED_THREAD_LIFETIME
+            tids = [r[0] for r in con.execute("SELECT thread_id FROM Threads WHERE is_archived = 1 AND last_updated_at < ?", (archive_cutoff,)).fetchall()]
+
+            if tids:
+                chunk_size = 50
+                for i in range(0, len(tids), chunk_size):
+                    chunk = tids[i:i + chunk_size]
+                    placeholders = ",".join("?" * len(chunk))
+                    try:
+                        con.execute("BEGIN IMMEDIATE")
+                        con.execute(f"DELETE FROM Posts WHERE thread_id IN ({placeholders})", chunk)
+                        con.execute(f"DELETE FROM Threads WHERE thread_id IN ({placeholders})", chunk)
+                        con.execute("COMMIT")
+                        time.sleep(0.05)
+                    except:
+                        try: con.execute("ROLLBACK")
+                        except: pass
+                print(f"  > Archive: deleted {len(tids)} old threads.")
 
             # 7. Очистка карты импорта (удаляем маппинг для завершенных задач)
-            _cleanup_import_map(con)
+            # Если task_id больше нет в ImportQueue, значит все посты опубликованы, и карта больше не нужна.
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                con.execute("DELETE FROM ImportRefMap WHERE task_id NOT IN (SELECT DISTINCT task_id FROM ImportQueue)")
+                deleted_maps = con.total_changes
+                con.execute("COMMIT")
+                if deleted_maps > 0:
+                    print(f"  > Import Cleanup: Cleared {deleted_maps} outdated reference maps.")
+            except:
+                try: con.execute("ROLLBACK")
+                except: pass
 
     except Exception as e:
         print(f"⛔ DB Cleanup Critical Error: {e}")
@@ -6759,8 +6739,7 @@ async def add_to_hf_queue(file_id: str):
 async def remove_from_hf_queue(file_ids: list[str]):
     if not file_ids: return
     from common.db_pool import get_pool, db_lock
-
-    chunk_size = 900
+    placeholders = ','.join('?' for _ in file_ids)
     
     async with db_lock:
         for attempt in range(20):
@@ -6768,10 +6747,7 @@ async def remove_from_hf_queue(file_ids: list[str]):
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                for i in range(0, len(file_ids), chunk_size):
-                    chunk = file_ids[i:i+chunk_size]
-                    placeholders = ','.join('?' for _ in chunk)
-                    await db.execute(f"DELETE FROM PendingHF WHERE file_id IN ({placeholders})", chunk)
+                await db.execute(f"DELETE FROM PendingHF WHERE file_id IN ({placeholders})", file_ids)
                 
                 await db.execute("COMMIT")
                 return
@@ -6850,20 +6826,16 @@ async def add_post_to_random_cache(post_data: dict):
     # Если это ОП-пост, добавляем в кэш тредов
     if is_op:
         _THREAD_CACHE[bid].append(str(pid))
-async def get_pending_mirror_tasks(limit: int = 10, allowed_types: list[str] = None) -> list[dict]:
+async def get_pending_mirror_tasks(limit: int = 10) -> list[dict]:
     """Берет задачи, время которых пришло."""
     db = await get_pool()
     now = time.time()
     try:
-        if allowed_types:
-            placeholders = ",".join(["?"] * len(allowed_types))
-            query = f"SELECT * FROM MirrorQueue WHERE next_run_at <= ? AND mirror_type IN ({placeholders}) ORDER BY id DESC LIMIT ?"
-            params = [now] + list(allowed_types) + [limit]
-        else:
-            query = "SELECT * FROM MirrorQueue WHERE next_run_at <= ? ORDER BY id DESC LIMIT ?"
-            params = [now, limit]
-
-        async with db.execute(query, params) as cursor:
+        # ПРАВКА: Сортировка по ID DESC, чтобы свежедобавленные задачи шли первыми
+        async with db.execute(
+            "SELECT * FROM MirrorQueue WHERE next_run_at <= ? ORDER BY id DESC LIMIT ?",
+            (now, limit)
+        ) as cursor:
             rows = await cursor.fetchall()
             cols = [d[0] for d in cursor.description]
             results = []
@@ -7159,7 +7131,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                 if original_author_id > 0 and original_author_id != reply_author_id:
                     curr_time = time.time()
 
-                    # Если thread_id is None, используем ID родительского поста
+                    # FIX: Если thread_id is None, используем ID родительского поста
                     effective_thread_id = str(thread_id) if thread_id is not None else str(source_post_num)
 
                     await db.execute(
@@ -7206,23 +7178,29 @@ async def get_and_clear_notification_queue() -> list[dict]:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                # 1. Забираем и удаляем данные уведомлений
-                async with db.execute("DELETE FROM NotificationQueue RETURNING recipient_id, source_post_num, reply_post_num, board_id, thread_id") as cursor:
+                # 1. Забираем ID и данные уведомлений
+                async with db.execute("SELECT id, recipient_id, source_post_num, reply_post_num, board_id, thread_id FROM NotificationQueue") as cursor:
                     rows = await cursor.fetchall()
                 
-                await db.execute("COMMIT")
-
                 if not rows:
+                    await db.execute("COMMIT")
                     return []
                 
-                # 2. Возвращаем результат
+                # 2. Удаляем обработанные записи
+                ids_to_delete = [row[0] for row in rows]
+                placeholders = ','.join('?' for _ in ids_to_delete)
+                await db.execute(f"DELETE FROM NotificationQueue WHERE id IN ({placeholders})", ids_to_delete)
+
+                await db.execute("COMMIT")
+
+                # 3. Возвращаем результат
                 return [
                     {
-                        "recipient_id": r[0],
-                        "source_post_num": r[1],
-                        "reply_post_num": r[2],
-                        "board_id": r[3],
-                        "thread_id": r[4]
+                        "recipient_id": r[1],
+                        "source_post_num": r[2],
+                        "reply_post_num": r[3],
+                        "board_id": r[4],
+                        "thread_id": r[5]
                     } for r in rows
                 ]
                 
@@ -7561,54 +7539,40 @@ async def get_posts_batch(post_nums: List[int]) -> List[dict]:
             if 'db' in locals() and db:
                 db.row_factory = None
 
-async def toggle_post_censorship(post_nums: list[int]) -> dict[int, bool]:
+async def toggle_post_censorship(post_num: int) -> bool:
     """
-    Переключает флаг цензуры (блюра) для списка постов.
+    Переключает флаг цензуры (блюра) для поста.
     """
     from common.db_pool import get_pool, db_lock
     
-    if not post_nums:
-        return {}
-
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                placeholders = ','.join('?' for _ in post_nums)
-                query = f"SELECT post_num, content FROM Posts WHERE post_num IN ({placeholders})"
+                async with db.execute("SELECT content FROM Posts WHERE post_num = ?", (post_num,)) as cursor:
+                    row = await cursor.fetchone()
                 
-                async with db.execute(query, post_nums) as cursor:
-                    rows = await cursor.fetchall()
-                
-                if not rows:
+                if not row:
                     await db.execute("COMMIT")
-                    return {}
+                    return False
                 
-                updates = []
-                results = {}
-                for row in rows:
-                    p_num, content_str = row[0], row[1]
-                    try:
-                        content_dict = json.loads(content_str)
-                    except:
-                        content_dict = {"text": "", "type": "text"}
+                try:
+                    content = json.loads(row[0])
+                except:
+                    content = {"text": "", "type": "text"}
 
-                    # Переключение флага
-                    current_state = content_dict.get('is_censored', False)
-                    new_state = not current_state
-                    content_dict['is_censored'] = new_state
-
-                    new_json = json.dumps(content_dict, default=_json_serializer)
-                    updates.append((new_json, p_num))
-                    results[p_num] = new_state
+                # Переключение флага
+                current_state = content.get('is_censored', False)
+                new_state = not current_state
+                content['is_censored'] = new_state
                 
-                if updates:
-                    await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", updates)
+                new_json = json.dumps(content, default=_json_serializer)
                 
+                await db.execute("UPDATE Posts SET content = ? WHERE post_num = ?", (new_json, post_num))
                 await db.execute("COMMIT")
-                return results
+                return new_state
                 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
@@ -7623,7 +7587,7 @@ async def toggle_post_censorship(post_nums: list[int]) -> dict[int, bool]:
                 except: pass
                 print(f"Error toggling censorship: {e}")
                 break
-    return {}
+    return False
 
 def get_db_connection():
     """

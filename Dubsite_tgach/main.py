@@ -109,14 +109,14 @@ async def get_country_by_ip(ip: str) -> str:
             db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
             if os.path.exists(db_full_path):
                 GEOIP_READER = geoip2.database.Reader(db_full_path)
-        except Exception:
+        except:
             pass
 
     if GEOIP_READER:
         try:
             response = GEOIP_READER.country(ip)
             return response.country.iso_code or "XX"
-        except Exception:
+        except:
             pass
 
     strategies = [
@@ -137,7 +137,7 @@ async def get_country_by_ip(ip: str) -> str:
                 resp = await client.get(f"http://ip-api.com/json/{ip}")
                 if resp.status_code == 200:
                     return resp.json().get('countryCode', 'XX')
-        except Exception:
+        except:
             continue
         
     return "XX"
@@ -924,6 +924,7 @@ async def lifespan(app: FastAPI):
     neuro_manager = NeuroManager(app.state.file_uploader_bot)
     spawn_task(refresh_random_indexes())
     app.state.neuro_manager = neuro_manager 
+    NEURO_ENABLED = False
     async def neuro_loop():
         from site_tgach.neuro_poster import POSTING_INTERVALS 
         await asyncio.sleep(30)
@@ -1683,9 +1684,10 @@ def format_post_text(text: str) -> str:
     
     return processed_text
 def sanitize_html(text: str) -> str:
-    if not isinstance(text, str): return str(text)
-    text = text.replace('<', '&lt;').replace('>', '&gt;')
-    return text
+    if not text:
+        return ""
+    # quote=False оставляет кавычки как есть (читаемее), но убивает теги
+    return html.escape(text, quote=False)
 def optimize_thread_context(op_post: dict, replies: list, max_posts: int = 40) -> str:
     """
     Превращает тред в компактную строку для нейронки.
@@ -1718,7 +1720,7 @@ def pluralize_russian(count, one, few, many):
             return few
         else:
             return many
-    except (ValueError, TypeError, OverflowError):
+    except (ValueError, TypeError):
         return many
 def format_bayan_label(count: int, lang: str = 'ru') -> str:
 
@@ -1777,14 +1779,20 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
     if is_video_or_doc:
         if 'huggingface' in mirrors:
             selected_original = mirrors['huggingface']
+        elif 'catbox' in mirrors and not is_ru:
+            selected_original = mirrors['catbox']
     else:
         options = ['telegram']
         if 'huggingface' in mirrors:
             options.append('huggingface')
+        if 'catbox' in mirrors and not is_ru:
+            options.append('catbox')
 
         choice = random.choice(options)
         if choice == 'huggingface':
             selected_original = mirrors['huggingface']
+        elif choice == 'catbox':
+            selected_original = mirrors['catbox']
     selected_thumbnail = base_thumbnail_url
 
     if 'huggingface' in thumb_mirrors:
@@ -2031,6 +2039,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
                 valid_files.append(file_info)
             content['files'] = valid_files
         current_type = content.get('type')
+        has_text = bool(content.get('text', '').strip())
         has_files = bool(content.get('files'))
         if current_type != 'poll':
             if has_files:
@@ -5222,16 +5231,14 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     count = 0
-    import re
-
-    img_regex = re.compile(r'<img[^>]*>', re.IGNORECASE)
+    from bs4 import BeautifulSoup
+    import json
     
     # Используем отдельное соединение для тяжелой задачи
     async with get_db_connection() as conn:
         # 1. Находим посты, где в тексте есть тег <img
         # LIKE '%<img%' работает быстро
-        # Оптимизация: Используем json_extract для избегания парсинга JSON в Python
-        query = "SELECT post_num, json_extract(content, '$.text') FROM Posts WHERE json_extract(content, '$.text') LIKE '%<img%'"
+        query = "SELECT post_num, content FROM Posts WHERE content LIKE '%<img%'"
         
         async with conn.execute(query) as cursor:
             rows = await cursor.fetchall()
@@ -5242,12 +5249,23 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
         # 2. Проходимся и чистим
         updates = []
         for row in rows:
-            post_num, text = row
+            post_num, raw_content = row
             try:
-                if text:
-                    new_text, num_subs = img_regex.subn('', text)
-                    if num_subs > 0:
-                        updates.append((new_text, post_num))
+                content = json.loads(raw_content)
+                text = content.get('text', '')
+
+                if '<img' in text or '<IMG' in text:
+                    soup = BeautifulSoup(text, "html.parser")
+                    images = soup.find_all('img')
+
+                    if images:
+                        for img in images:
+                            img.decompose()
+
+                        content['text'] = str(soup)
+                        new_json = json.dumps(content)
+
+                        updates.append((new_json, post_num))
                         count += 1
             except Exception:
                 continue
@@ -5256,7 +5274,7 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
 
         if updates:
             await conn.executemany(
-                "UPDATE Posts SET content = json_set(content, '$.text', ?) WHERE post_num = ?",
+                "UPDATE Posts SET content = ? WHERE post_num = ?",
                 updates
             )
 
@@ -6523,14 +6541,3 @@ if __name__ == "__main__":
         timeout_keep_alive=10,
         limit_concurrency=1000
     )
-
-@app.get("/api/is-ru")
-async def check_if_ru_dub(request: Request):
-    client_ip = get_real_ip(request)
-    user_country = await get_country_by_ip(client_ip)
-    is_ru = user_country == "RU"
-    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
-        accept_lang = request.headers.get("accept-language", "").lower()
-        if "ru" in accept_lang or not accept_lang:
-            is_ru = True
-    return {"is_ru": is_ru}

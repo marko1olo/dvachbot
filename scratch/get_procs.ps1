@@ -1,1 +1,0 @@
-Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Select-Object ProcessId, CommandLine | Export-Csv -Encoding utf8 -NoTypeInformation -Path "C:\Users\danat\Desktop\dvachbot\scratch\py_procs.csv"

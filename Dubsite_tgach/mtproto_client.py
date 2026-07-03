@@ -70,23 +70,6 @@ async def _cleanup_idle_clients():
     finally:
         _cleanup_in_progress = False
 
-async def close_all_mtproto_clients():
-    """Close every cached Pyrogram client during application shutdown."""
-    async with _CLIENT_LOCK:
-        clients = list(_ACTIVE_CLIENTS.items())
-        _ACTIVE_CLIENTS.clear()
-        _LAST_USED.clear()
-        _CONNECTION_COOLDOWN.clear()
-
-    for token, client in clients:
-        try:
-            if client and client.is_connected:
-                await client.stop()
-            safe_token = secret_fingerprint(token)
-            logger.info(f"🔌 [MTProto] Client stopped on shutdown: {safe_token}")
-        except Exception as e:
-            logger.warning(f"⚠️ Error stopping MTProto client on shutdown: {e}")
-
 async def get_active_client(bot_token: str):
     """
     Возвращает живой клиент Pyrogram с защитой от флуда и авто-очисткой.
@@ -125,8 +108,7 @@ async def get_active_client(bot_token: str):
             api_hash=API_HASH,
             bot_token=bot_token,
             no_updates=True, 
-            in_memory=True,
-            ipv6=False
+            in_memory=True
         )
 
         try:
@@ -153,66 +135,47 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
         return False
 
     try:
-        target_to_download = file_id
-
+        target = file_id
         if chat_id and message_id:
-            msg = None
-            for attempt in range(2):
-                try:
-                    msg = await client.get_messages(chat_id, message_id)
-                    if msg and not msg.empty:
-                        break
-                except Exception as e:
-                    if "PEER_ID_INVALID" in str(e).upper() and attempt == 0:
-                        try:
-                            await client.get_chat(chat_id)
-                            await asyncio.sleep(1)
-                        except:
-                            break
-                        continue
-                    break
-
-            if msg and not msg.empty:
-                media_obj = getattr(msg, msg.media.value, None) if msg.media else None
-                main_file_id = getattr(media_obj, "file_id", None) if media_obj else None
-
-                if main_file_id and main_file_id != file_id:
-                    if hasattr(media_obj, "thumbs") and media_obj.thumbs:
-                        target_to_download = media_obj.thumbs[0]
-                    elif hasattr(media_obj, "thumbnail") and media_obj.thumbnail:
-                        target_to_download = media_obj.thumbnail
-                    else:
-                        target_to_download = msg
+            try:
+                msg = await client.get_messages(chat_id, message_id)
+                if msg and not msg.empty:
+                    target = msg
                 else:
-                    target_to_download = msg
-            else:
-                if file_id.startswith("AgAC"):
-                    logger.warning(f"⚠️ [MTProto] Cannot download BotAPI Photo {file_id[:10]} without message context.")
+                    logger.warning(f"⚠️ [MTProto] Message {chat_id}/{message_id} not found. Skipping.")
                     return False
+            except Exception:
+                pass
 
+        # ИЗМЕНЕНИЕ: Жесткий тайм-аут 300 секунд (5 минут) на скачивание
         path = await asyncio.wait_for(
             client.download_media(
-                message=target_to_download,
+                message=target,
                 file_name=output_path,
             ),
-            timeout=20
+            timeout=300
         )
         
-        return bool(path and os.path.exists(output_path))
+        if path and os.path.exists(output_path):
+            return True
+        else:
+            return False
     
     except asyncio.TimeoutError:
-        logger.error(f"❌ [MTProto] Download Timed Out: {file_id[:15]}...")
+        logger.error(f"❌ [MTProto] Download Timed Out (300s): {file_id[:15]}...")
         return False
     except FileReferenceExpired:
-        logger.warning(f"⚠️ [MTProto] File reference expired: {file_id[:10]}...")
+        logger.warning(f"⚠️ [MTProto] File reference expired for {file_id[:10]}...")
         return False
     except Exception as e:
-        err_str = str(e).upper()
+        err_str = str(e)
         if "420" in err_str or "FLOOD_WAIT" in err_str:
-            logger.critical(f"⛔ [MTProto] FLOOD WAIT: {e}")
-            _CONNECTION_COOLDOWN[bot_token] = time.time() + 300
-        elif "THUMBNAIL_SOURCE" in err_str:
-            logger.warning(f"⚠️ [MTProto] Pyrogram failed to parse thumb source for {file_id[:10]}")
+            logger.critical(f"⛔ [MTProto] FLOOD WAIT DETECTED: {e}")
+            _CONNECTION_COOLDOWN[bot_token] = time.time() + 300 # Бан на 5 минут
+        elif "400" in err_str or "FILE_REFERENCE" in err_str:
+             logger.warning(f"⚠️ [MTProto] Bad Request (dead file): {e}")
+        elif "THUMBNAIL_SOURCE" in err_str.upper():
+             logger.warning(f"⚠️ [MTProto] Pyrogram failed to parse thumb source for {file_id[:10]}")
         else:
             logger.error(f"❌ [MTProto] Download Error: {e}")
         return False
