@@ -1,16 +1,12 @@
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import asyncio
 import os
 import sys
 
-# Ensure the root directory is in sys.path to allow imports from common
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
-
 import aiohttp
 from dotenv import load_dotenv
 
+# Add the repository root directory to the Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from common.secret_redaction import redact_secrets
 
 
