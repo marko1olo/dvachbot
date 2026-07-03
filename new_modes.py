@@ -1431,9 +1431,9 @@ def _apply_matrix_effects(text: str) -> str:
 
     return text
 
-def _apply_america_effects(text: str) -> str:
-    # 1. Corporate Buzzword replacements
-    buzzwords = {
+_AMERICA_BUZZWORDS = [
+    (re.compile(pattern, flags=re.IGNORECASE), replacement)
+    for pattern, replacement in {
         r"\bмысли\b": "айдеи", r"\bмысль\b": "айдея",
         r"\bдумать\b": "апрувить", r"\bдумаю\b": "апрувлю", r"\bдумает\b": "апрувит",
         r"\bделать\b": "перформить", r"\bделаю\b": "перформлю", r"\bделает\b": "перформит",
@@ -1444,9 +1444,13 @@ def _apply_america_effects(text: str) -> str:
         r"\bбыстро\b": "по фаст-треку",
         r"\bпонимаю\b": "шерю вижн", r"\bпонимаешь\b": "шеришь вижн",
         r"\bзадача\b": "таск", r"\bзадачу\b": "таск", r"\bзадачи\b": "таски"
-    }
-    for pattern, replacement in buzzwords.items():
-        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    }.items()
+]
+
+def _apply_america_effects(text: str) -> str:
+    # 1. Corporate Buzzword replacements
+    for pattern, replacement in _AMERICA_BUZZWORDS:
+        text = pattern.sub(replacement, text)
 
     # 2. Subscription tags
     if random.random() < 0.25:
@@ -1488,8 +1492,7 @@ def _apply_america_effects(text: str) -> str:
 
     return text
 
-def _apply_holiday_effects(text: str) -> str:
-    # 1. Drunk Typos (30% chance)
+def _apply_holiday_drunk_typos(text: str) -> str:
     if random.random() < 0.30:
         chars = list(text)
         layout = {
@@ -1506,8 +1509,10 @@ def _apply_holiday_effects(text: str) -> str:
                 replaced = all_layout[c]
                 chars[i] = replaced.upper() if chars[i].isupper() else replaced
         text = "".join(chars)
+    return text
 
-    # 2. Vowel stretching
+
+def _apply_holiday_vowel_stretching(text: str) -> str:
     vowels = "аеиоуыэюяёАЕИОУЫЭЮЯЁ"
     words = text.split()
     for i in range(len(words)):
@@ -1517,9 +1522,10 @@ def _apply_holiday_effects(text: str) -> str:
                 v_idx = random.choice(v_indices)
                 char = words[i][v_idx]
                 words[i] = words[i][:v_idx] + char * random.randint(2, 4) + words[i][v_idx+1:]
-    text = " ".join(words)
+    return " ".join(words)
 
-    # 3. Drunken sounds injection
+
+def _apply_holiday_drunken_sounds(text: str) -> str:
     if random.random() < 0.25:
         sounds = ["*ик*", "*бульк*", "*упал под стол*", "(лицом в оливье)", "(разбил рюмку)"]
         words = text.split()
@@ -1527,27 +1533,38 @@ def _apply_holiday_effects(text: str) -> str:
             idx = random.randint(0, len(words))
             words.insert(idx, random.choice(sounds))
             text = " ".join(words)
+    return text
 
-    # 4. Drunken Shouting (UPPERCASE)
+
+def _apply_holiday_drunken_shouting(text: str) -> str:
     words = text.split()
     for i in range(len(words)):
         if random.random() < 0.15:
             words[i] = words[i].upper()
-    text = " ".join(words)
+    return " ".join(words)
 
-    # 5. Toasts
+
+def _apply_holiday_toasts(text: str) -> str:
     if random.random() < 0.30:
         toasts = [
             " «НУ, ЗА ЗДОРОВЬЕ АНОНА!»", " «ТАМАДА, НАЛИВАЙ!»", 
             " «ГОРЬКО!»", " «ПОЕХАЛИ!»", " «НУ, ЗА ПОНИМАНИЕ!»"
         ]
         text += random.choice(toasts)
-
     return text
 
-def _apply_oldweb_effects(text: str) -> str:
-    # 1. Padonki conversion rules
-    rules = [
+
+def _apply_holiday_effects(text: str) -> str:
+    text = _apply_holiday_drunk_typos(text)
+    text = _apply_holiday_vowel_stretching(text)
+    text = _apply_holiday_drunken_sounds(text)
+    text = _apply_holiday_drunken_shouting(text)
+    text = _apply_holiday_toasts(text)
+    return text
+
+_OLDWEB_RULES = [
+    (re.compile(pattern), repl)
+    for pattern, repl in [
         (r'\bавтор\b', 'афтар'),
         (r'\bавтора\b', 'афтара'),
         (r'\bавтору\b', 'афтару'),
@@ -1567,8 +1584,12 @@ def _apply_oldweb_effects(text: str) -> str:
         (r'Жи', 'Жы'),
         (r'Ши', 'Шы'),
     ]
-    for pattern, repl in rules:
-        text = re.sub(pattern, repl, text)
+]
+
+def _apply_oldweb_effects(text: str) -> str:
+    # 1. Padonki conversion rules
+    for pattern, repl in _OLDWEB_RULES:
+        text = pattern.sub(repl, text)
 
     # 2. BBCode wrapping
     if random.random() < 0.25:
