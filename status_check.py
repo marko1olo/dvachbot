@@ -63,26 +63,33 @@ def format_sys_value(value, unit="%"):
 
 async def get_queue_details(conn):
     details = {}
+    # Replaced risky string interpolation with fully hardcoded queries to prevent SQL injection (B608).
+    # Then combined into UNION ALL for performance.
     queue_map = {
-        "Tagging (Neuro)": (
-            "FileRegistry",
-            "created_at",
-            "(tags IS NULL OR tags = '') AND file_type IN ('image', 'photo')",
-        ),
-        "HuggingFace": ("PendingHF", "created_at"),
-        "Mirrors (Catbox)": ("MirrorQueue", "next_run_at"),
-        "Reports": ("Reports", "created_at", "status = 'open'"),
-        "Mod Queue (Neuro)": ("ModQueue", "created_at", "status = 'pending'"),
-        "Notifications": ("NotificationQueue", "created_at"),
-        "Broadcast (WS)": ("BroadcastQueue", "created_at"),
-        "Imports": ("ImportRequests", "created_at", "status = 'pending'"),
+        "Tagging (Neuro)": "SELECT 'Tagging (Neuro)', COUNT(*), MIN(created_at) FROM FileRegistry WHERE (tags IS NULL OR tags = '') AND file_type IN ('image', 'photo')",
+        "HuggingFace": "SELECT 'HuggingFace', COUNT(*), MIN(created_at) FROM PendingHF",
+        "Mirrors (Catbox)": "SELECT 'Mirrors (Catbox)', COUNT(*), MIN(next_run_at) FROM MirrorQueue",
+        "Reports": "SELECT 'Reports', COUNT(*), MIN(created_at) FROM Reports WHERE status = 'open'",
+        "Mod Queue (Neuro)": "SELECT 'Mod Queue (Neuro)', COUNT(*), MIN(created_at) FROM ModQueue WHERE status = 'pending'",
+        "Notifications": "SELECT 'Notifications', COUNT(*), MIN(created_at) FROM NotificationQueue",
+        "Broadcast (WS)": "SELECT 'Broadcast (WS)', COUNT(*), MIN(created_at) FROM BroadcastQueue",
+        "Imports": "SELECT 'Imports', COUNT(*), MIN(created_at) FROM ImportRequests WHERE status = 'pending'",
     }
-    queries = []
-    for name, info in queue_map.items():
-        query = f"SELECT '{name}', COUNT(*), MIN({info[1]}) FROM {info[0]} {f'WHERE {info[2]}' if len(info) > 2 else ''}"
-        queries.append(query)
 
+    fallback_map = {
+        "Tagging (Neuro)": "SELECT COUNT(*), MIN(created_at) FROM FileRegistry WHERE (tags IS NULL OR tags = '') AND file_type IN ('image', 'photo')",
+        "HuggingFace": "SELECT COUNT(*), MIN(created_at) FROM PendingHF",
+        "Mirrors (Catbox)": "SELECT COUNT(*), MIN(next_run_at) FROM MirrorQueue",
+        "Reports": "SELECT COUNT(*), MIN(created_at) FROM Reports WHERE status = 'open'",
+        "Mod Queue (Neuro)": "SELECT COUNT(*), MIN(created_at) FROM ModQueue WHERE status = 'pending'",
+        "Notifications": "SELECT COUNT(*), MIN(created_at) FROM NotificationQueue",
+        "Broadcast (WS)": "SELECT COUNT(*), MIN(created_at) FROM BroadcastQueue",
+        "Imports": "SELECT COUNT(*), MIN(created_at) FROM ImportRequests WHERE status = 'pending'",
+    }
+
+    queries = list(queue_map.values())
     full_query = " UNION ALL ".join(queries)
+
     try:
         cursor = await conn.execute(full_query)
         rows = await cursor.fetchall()
@@ -90,9 +97,8 @@ async def get_queue_details(conn):
             details[row[0]] = {"count": row[1] or 0, "oldest": row[2] or 0}
     except aiosqlite.OperationalError:
         # Fallback to individual queries in case one table doesn't exist
-        for name, info in queue_map.items():
+        for name, query in fallback_map.items():
             try:
-                query = f"SELECT COUNT(*), MIN({info[1]}) FROM {info[0]} {f'WHERE {info[2]}' if len(info) > 2 else ''}"
                 cursor = await conn.execute(query)
                 count, oldest_ts = await cursor.fetchone()
                 details[name] = {"count": count or 0, "oldest": oldest_ts or 0}
