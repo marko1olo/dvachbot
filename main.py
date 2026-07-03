@@ -44,7 +44,6 @@ import signal
 import sys
 import io
 import time
-import witching_hour
 import periodic_publisher
 import threading
 import socket
