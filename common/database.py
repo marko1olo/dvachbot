@@ -2207,7 +2207,6 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                     async for row in cursor:
                         ref_post_num, recipient_id, thread_id = row
                         if recipient_id > 0 and recipient_id != author_id:
-                            # FIX: Если thread_id is None (чат), используем ID поста, на который отвечаем (ref_post_num)
                             final_thread_id = thread_id if thread_id is not None else ref_post_num
                             notifications_to_insert.append((
                                 recipient_id, 
