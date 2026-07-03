@@ -40,7 +40,6 @@ import faulthandler
 
 import hmac
 import hashlib
-import tracemalloc
 import io
 import mimetypes
 import random
@@ -121,7 +120,7 @@ from common.database import (
 from collections import deque, defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Union
 from async_lru import alru_cache
 from functools import lru_cache
 from pydantic import BaseModel, Field
@@ -2528,7 +2527,7 @@ async def guest_identification_middleware(request: Request, call_next):
         except BadSignature:
             token = None
     if not token:
-        token = f"{get_real_ip(request)}|{request.headers.get('User-Agent', '')}|{uuid.uuid4().hex}"
+        token = secrets.token_hex(32)
         is_new = True
     request.state.guest_id = generate_negative_id(token)
     request.state.guest_token = token
