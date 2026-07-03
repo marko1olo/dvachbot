@@ -47,6 +47,648 @@ def _json_serializer(obj):
     if isinstance(obj, Enum):
         return obj.value
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+async def _create_tables(db):
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS Boards (
+        board_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        settings TEXT DEFAULT '{}'
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS Posts (
+        post_num INTEGER PRIMARY KEY AUTOINCREMENT,
+        board_id TEXT NOT NULL,
+        thread_id TEXT,
+        author_id INTEGER NOT NULL,
+        reply_to_post_num INTEGER,
+        content TEXT NOT NULL,
+        timestamp REAL NOT NULL,
+        FOREIGN KEY (board_id) REFERENCES Boards(board_id),
+        FOREIGN KEY (reply_to_post_num) REFERENCES Posts(post_num) ON DELETE SET NULL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS Users (
+        user_id INTEGER NOT NULL,
+        board_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        location TEXT NOT NULL DEFAULT 'main',
+        api_token TEXT,
+        nsfw_spoiler INTEGER DEFAULT 0,
+        hidden_words TEXT DEFAULT '[]',
+        lie_media INTEGER DEFAULT 0,
+        role TEXT DEFAULT 'user',
+        balance REAL DEFAULT 0,
+        is_verified_b INTEGER DEFAULT 0,
+        referrals_count INTEGER DEFAULT 0,
+        posts_count INTEGER DEFAULT 0,
+        last_failed_amount REAL DEFAULT 0,
+        PRIMARY KEY (user_id, board_id),
+        FOREIGN KEY (board_id) REFERENCES Boards(board_id)
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS UserAlerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        image_url TEXT,
+        btn_text TEXT,
+        btn_link TEXT,
+        target_board TEXT, -- 'all' или конкретная доска
+        is_read INTEGER DEFAULT 0,
+        created_at REAL NOT NULL,
+        read_at REAL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS UserReplies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        board_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        post_num INTEGER NOT NULL,
+        parent_num INTEGER,
+        is_read INTEGER DEFAULT 0,
+        created_at REAL NOT NULL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS Threads (
+        thread_id TEXT PRIMARY KEY,
+        board_id TEXT NOT NULL,
+        op_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        is_archived INTEGER NOT NULL DEFAULT 0,
+        last_updated_at REAL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS Mutes (
+        user_id INTEGER NOT NULL,
+        board_id TEXT NOT NULL,
+        mute_type TEXT NOT NULL,
+        thread_id TEXT,
+        expires_at REAL NOT NULL,
+        PRIMARY KEY (user_id, board_id, mute_type, thread_id)
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS PostCopies (
+        post_num INTEGER NOT NULL,
+        recipient_id INTEGER NOT NULL,
+        message_id INTEGER NOT NULL,
+        PRIMARY KEY (recipient_id, message_id),
+        FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS BroadcastQueue (
+        post_num INTEGER PRIMARY KEY,
+        created_at REAL NOT NULL,
+        FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS DeliveryQueue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        board_id TEXT NOT NULL,
+        post_num INTEGER NOT NULL,
+        recipients TEXT NOT NULL,
+        content TEXT NOT NULL,
+        delivery_phase TEXT NOT NULL DEFAULT 'passive',
+        original_recipients INTEGER NOT NULL DEFAULT 0,
+        thread_id TEXT,
+        enqueued_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending',
+        FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
+    );
+    """)
+    await db.execute("""
+    CREATE VIRTUAL TABLE IF NOT EXISTS PostsFTS USING fts5(
+        content,
+        content='Posts',
+        content_rowid='post_num'
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS GlobalLogs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source TEXT NOT NULL, -- 'bot' или 'site'
+        event_text TEXT NOT NULL,
+        created_at REAL NOT NULL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS PollVotes (
+        post_num INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        option_index INTEGER NOT NULL,
+        PRIMARY KEY (post_num, user_id),
+        FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS FTSState (
+        last_indexed_id INTEGER DEFAULT 0
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS ChannelCopies (
+        post_num INTEGER NOT NULL,
+        channel_id INTEGER NOT NULL,
+        message_id INTEGER NOT NULL,
+        PRIMARY KEY (post_num, channel_id),
+        FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS SpamFilterWords (
+        board_id TEXT NOT NULL,
+        word TEXT NOT NULL,
+        PRIMARY KEY (board_id, word)
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS ReactionBans (
+        user_id INTEGER NOT NULL,
+        board_id TEXT NOT NULL,
+        PRIMARY KEY (user_id, board_id)
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS ReactionQueue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        post_num INTEGER NOT NULL,
+        emoji TEXT NOT NULL,
+        created_at REAL NOT NULL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS AdminActionQueue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        action_type TEXT NOT NULL, -- 'ban', 'unban', 'mute', 'shadow_mute'
+        user_id INTEGER NOT NULL,
+        board_id TEXT NOT NULL,
+        expires_at REAL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS CrossLinks (
+        source_board TEXT NOT NULL,
+        source_post INTEGER NOT NULL,
+        target_board TEXT NOT NULL,
+        target_post INTEGER NOT NULL,
+        PRIMARY KEY (source_board, source_post, target_board, target_post)
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS Backlinks (
+        target_post_num INTEGER NOT NULL,
+        source_post_num INTEGER NOT NULL,
+        PRIMARY KEY (target_post_num, source_post_num),
+        FOREIGN KEY (target_post_num) REFERENCES Posts(post_num) ON DELETE CASCADE,
+        FOREIGN KEY (source_post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS ThreadUnlocks (
+        thread_id TEXT NOT NULL,
+        user_id INTEGER NOT NULL,
+        PRIMARY KEY (thread_id, user_id)
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS FileOwners (
+        file_id TEXT PRIMARY KEY,
+        bot_id INTEGER NOT NULL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS MirrorQueue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id TEXT NOT NULL,
+        mirror_type TEXT NOT NULL, -- 'catbox', 'huggingface' и т.д.
+        attempts INTEGER DEFAULT 0, -- Сколько раз пробовали
+        next_run_at REAL DEFAULT 0, -- Когда пробовать в следующий раз (Unix timestamp)
+        UNIQUE(file_id, mirror_type)
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS Bottles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender_id INTEGER NOT NULL,
+        recipient_id INTEGER NOT NULL,
+        message_text TEXT NOT NULL,
+        timestamp REAL NOT NULL,
+        is_read INTEGER DEFAULT 0
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS Reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_num INTEGER NOT NULL,
+        category TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        sender_ip_hash TEXT, -- Хэш отправителя (чтобы не спамили)
+        status TEXT DEFAULT 'open', -- open, resolved, dismissed
+        created_at REAL NOT NULL,
+        FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS SpamFilterWords (
+        board_id TEXT NOT NULL,
+        word TEXT NOT NULL,
+        PRIMARY KEY (board_id, word)
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS SystemSettings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS ImportRequests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        target_board TEXT NOT NULL,
+        comment TEXT,
+        status TEXT DEFAULT 'pending', -- pending, approved, rejected
+        created_at REAL NOT NULL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS PendingHF (
+        file_id TEXT PRIMARY KEY,
+        created_at REAL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS FileMirrors (
+        file_id TEXT NOT NULL,
+        mirror_type TEXT NOT NULL,
+        url TEXT NOT NULL,
+        PRIMARY KEY (file_id, mirror_type)
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS ModQueue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        post_num INTEGER NOT NULL,
+        file_id TEXT NOT NULL,
+        reason TEXT,
+        score REAL,
+        status TEXT DEFAULT 'pending',
+        created_at REAL,
+        FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS NotificationQueue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        recipient_id INTEGER NOT NULL,
+        source_post_num INTEGER NOT NULL,
+        reply_post_num INTEGER NOT NULL,
+        board_id TEXT NOT NULL,
+        thread_id INTEGER,
+        created_at REAL NOT NULL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS Feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        category TEXT NOT NULL,
+        contact TEXT,
+        message TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        is_read INTEGER DEFAULT 0
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS FileRegistry (
+        sha256 TEXT PRIMARY KEY,
+        phash TEXT,
+        file_id TEXT NOT NULL,
+        thumbnail_id TEXT,
+        file_type TEXT,
+        created_at REAL
+    );
+    """)
+    await db.execute("""
+    CREATE VIRTUAL TABLE IF NOT EXISTS FileTagsFTS USING fts5(
+        file_id UNINDEXED,
+        tags,
+        content='FileRegistry',
+        content_rowid='rowid'
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS BannedHashes (
+        hash_value TEXT PRIMARY KEY, -- SHA256 или pHash
+        hash_type TEXT,              -- 'sha256' или 'phash'
+        reason TEXT
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS Mutes (
+        user_id INTEGER NOT NULL,
+        board_id TEXT NOT NULL,
+        mute_type TEXT NOT NULL,
+        thread_id TEXT, -- Опционально, если бан только в одном треде
+        expires_at REAL NOT NULL,
+        PRIMARY KEY (user_id, board_id, mute_type, thread_id)
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS ImportQueue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT NOT NULL,
+        board_id TEXT NOT NULL,
+        original_post_num TEXT,
+        reply_to_original TEXT,
+        publish_at REAL NOT NULL,
+        content TEXT NOT NULL,
+        author_id INTEGER NOT NULL,
+        stream TEXT DEFAULT 'ru',
+        is_op INTEGER DEFAULT 0,
+        thread_title TEXT,
+        created_at REAL NOT NULL
+    );
+    """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS ImportRefMap (
+        task_id TEXT NOT NULL,
+        original_post_num TEXT NOT NULL,
+        real_post_num INTEGER NOT NULL,
+        PRIMARY KEY (task_id, original_post_num)
+    );
+    """)
+
+async def _apply_migrations(db):
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN balance REAL DEFAULT 0;")
+        await db.execute("ALTER TABLE Users ADD COLUMN is_verified_b INTEGER DEFAULT 0;")
+        await db.execute("ALTER TABLE Users ADD COLUMN reaction_reward_counter INTEGER DEFAULT 0;")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN posts_count INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added posts_count to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN last_failed_amount REAL DEFAULT 0;")
+        print("✅ Migrated: Added last_failed_amount to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN api_token TEXT;")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN nsfw_spoiler INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added nsfw_spoiler to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN hidden_words TEXT DEFAULT '[]';")
+        print("✅ Migrated: Added hidden_words to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN shadow_ban_gif INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added shadow_ban_gif to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN shadow_ban_sticker INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added shadow_ban_sticker to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN shadow_ban_media INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added shadow_ban_media to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN lie_media INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added lie_media to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN role TEXT DEFAULT 'user';")
+        print("✅ Migrated: Added role to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Boards ADD COLUMN banner_data TEXT DEFAULT '{}';")
+        print("✅ Migrated: Added banner_data to Boards.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN stream TEXT DEFAULT 'ru';")
+        print("✅ Migrated: Added 'stream' to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Posts ADD COLUMN stream TEXT DEFAULT 'ru';")
+        print("✅ Migrated: Added 'stream' to Posts.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Threads ADD COLUMN stream TEXT DEFAULT 'ru';")
+        print("✅ Migrated: Added 'stream' to Threads.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Threads ADD COLUMN is_pinned INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added 'is_pinned' to Threads.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Threads ADD COLUMN is_endless INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added 'is_endless' to Threads.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Posts ADD COLUMN is_op_hidden INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added 'is_op_hidden' to Posts.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Posts ADD COLUMN ip TEXT;")
+        print("✅ Migrated: Added 'ip' column to Posts.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Threads ADD COLUMN stream TEXT DEFAULT 'ru';")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Threads ADD COLUMN is_pinned INTEGER DEFAULT 0;")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Threads ADD COLUMN is_endless INTEGER DEFAULT 0;")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Threads ADD COLUMN thread_num INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added 'thread_num' to Threads for performance.")
+        await db.execute("UPDATE Threads SET thread_num = CAST(thread_id AS INTEGER) WHERE thread_num = 0;")
+        print("✅ Data Migration: Populated 'thread_num' from 'thread_id'.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE NotificationQueue ADD COLUMN board_id TEXT DEFAULT 'b';")
+        print("✅ Migrated: Added 'board_id' to NotificationQueue.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE NotificationQueue ADD COLUMN thread_id INTEGER;")
+        print("✅ Migrated: Added 'thread_id' to NotificationQueue.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE NotificationQueue ADD COLUMN created_at REAL DEFAULT 0;")
+        print("✅ Migrated: Added 'created_at' to NotificationQueue.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE BroadcastQueue ADD COLUMN is_sent_to_tg INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added 'is_sent_to_tg' to BroadcastQueue.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Posts ADD COLUMN stream TEXT DEFAULT 'ru';")
+        print("✅ Migrated: Added 'stream' to Posts.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE FileRegistry ADD COLUMN blurhash TEXT;")
+        print("✅ Migrated: Added 'blurhash' to FileRegistry.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Threads ADD COLUMN stream TEXT DEFAULT 'ru';")
+        print("✅ Migrated: Added 'stream' to Threads.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN stream TEXT DEFAULT 'ru';")
+        print("✅ Migrated: Added 'stream' to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN created_at REAL DEFAULT 0;")
+        print("✅ Migrated: Added 'created_at' to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Boards ADD COLUMN is_approved INTEGER DEFAULT 1;")
+        print("✅ Migrated: Added 'is_approved' to Boards.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Boards ADD COLUMN owner_id INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added 'owner_id' to Boards.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Posts ADD COLUMN channel_message_id INTEGER;")
+        print("✅ Migrated: Added 'channel_message_id' to Posts.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Posts ADD COLUMN report_count INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added 'report_count' to Posts.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Threads ADD COLUMN reply_count INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added 'reply_count' to Threads.")
+        await db.execute("""
+            UPDATE Threads
+            SET reply_count = (
+                SELECT COUNT(*) - 1
+                FROM Posts
+                WHERE Posts.thread_id = Threads.thread_id
+            )
+        """)
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Threads ADD COLUMN thread_type TEXT DEFAULT 'default';")
+        print("✅ Migrated: Added 'thread_type' to Threads.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Posts ADD COLUMN is_shadow INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added 'is_shadow' to Posts.")
+    except aiosqlite.OperationalError: pass
+
+async def _create_indices(db):
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_board_timestamp ON Posts(board_id, timestamp);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_thread_id ON Posts(thread_id);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_board_reply_to ON Posts(board_id, reply_to_post_num);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_author_id ON Posts(author_id);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_chat_board_ts ON Posts(board_id, timestamp DESC) WHERE thread_id IS NULL;")
+    await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_token ON Users(api_token) WHERE api_token IS NOT NULL;")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_users_stream ON Users(board_id, stream);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_stream ON Posts(board_id, stream);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_chat_board_stream_ts ON Posts(board_id, stream, timestamp DESC) WHERE thread_id IS NULL;")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_alerts_user ON UserAlerts(user_id, is_read);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_replies_user_read ON UserReplies(user_id, is_read);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_replies_created ON UserReplies(created_at);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_threads_thread_num ON Threads(thread_num);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_threads_stream ON Threads(board_id, stream);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_threads_last_updated ON Threads(is_archived, last_updated_at);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_postcopies_post_num ON PostCopies(post_num);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_broadcastqueue_created_at ON BroadcastQueue(created_at);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_deliveryqueue_status_board ON DeliveryQueue(status, board_id, id);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_deliveryqueue_post_phase ON DeliveryQueue(post_num, board_id, delivery_phase, status);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_logs_time ON GlobalLogs(created_at);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_channelcopies_post ON ChannelCopies(post_num);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_stream ON Posts(board_id, stream);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_threads_stream ON Threads(board_id, stream);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_backlinks_source ON Backlinks(source_post_num);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_crosslinks_target ON CrossLinks(target_board, target_post);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_bottles_recipient ON Bottles(recipient_id, is_read);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_mirror_queue_run ON MirrorQueue(next_run_at);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_pending_time ON PendingHF(created_at);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_modqueue_status ON ModQueue(status);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_notif_recipient ON NotificationQueue(recipient_id);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_notif_source_post ON NotificationQueue(source_post_num);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_filemirrors_file_id ON FileMirrors(file_id);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_import_requests_status ON ImportRequests(status, created_at);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_shadow ON Posts(is_shadow);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_files_phash ON FileRegistry(phash);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_files_file_id ON FileRegistry(file_id);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_files_created_at ON FileRegistry(created_at);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_import_queue_pub ON ImportQueue(publish_at);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_timestamp ON Posts(timestamp);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_threads_created_at ON Threads(created_at);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_board_id ON Posts(board_id);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_reports_status ON Reports(status);")
+    await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_num_text ON Posts(CAST(post_num AS TEXT));")
+
+async def _create_triggers(db):
+    await db.execute("DROP TRIGGER IF EXISTS trg_posts_fts_insert;")
+    await db.execute("DROP TRIGGER IF EXISTS trg_posts_fts_delete;")
+    await db.execute("DROP TRIGGER IF EXISTS trg_posts_fts_update;")
+    await db.execute("""
+    CREATE TRIGGER IF NOT EXISTS trg_posts_fts_insert AFTER INSERT ON Posts BEGIN
+        INSERT INTO PostsFTS(rowid, content) VALUES (new.post_num, json_extract(new.content, '$.text'));
+    END;
+    """)
+    await db.execute("""
+    CREATE TRIGGER IF NOT EXISTS trg_posts_fts_delete AFTER DELETE ON Posts BEGIN
+        INSERT INTO PostsFTS(PostsFTS, rowid, content) VALUES('delete', old.post_num, json_extract(old.content, '$.text'));
+    END;
+    """)
+    await db.execute("""
+    CREATE TRIGGER IF NOT EXISTS trg_posts_fts_update AFTER UPDATE ON Posts BEGIN
+        INSERT INTO PostsFTS(PostsFTS, rowid, content) VALUES('delete', old.post_num, json_extract(old.content, '$.text'));
+        INSERT INTO PostsFTS(rowid, content) VALUES (new.post_num, json_extract(new.content, '$.text'));
+    END;
+    """)
+    await db.execute("DROP TRIGGER IF EXISTS posts_after_insert;")
+    await db.execute("DROP TRIGGER IF EXISTS posts_after_delete;")
+    await db.execute("DROP TRIGGER IF EXISTS posts_after_update;")
+    await db.execute("""
+    CREATE TRIGGER IF NOT EXISTS trg_files_fts_insert AFTER INSERT ON FileRegistry BEGIN
+        INSERT INTO FileTagsFTS(rowid, file_id, tags) VALUES (new.rowid, new.file_id, new.tags);
+    END;
+    """)
+    await db.execute("""
+    CREATE TRIGGER IF NOT EXISTS trg_files_fts_delete AFTER DELETE ON FileRegistry BEGIN
+        INSERT INTO FileTagsFTS(FileTagsFTS, rowid, file_id, tags) VALUES('delete', old.rowid, old.file_id, old.tags);
+    END;
+    """)
+    await db.execute("""
+    CREATE TRIGGER IF NOT EXISTS trg_files_fts_update AFTER UPDATE ON FileRegistry BEGIN
+        INSERT INTO FileTagsFTS(FileTagsFTS, rowid, file_id, tags) VALUES('delete', old.rowid, old.file_id, old.tags);
+        INSERT INTO FileTagsFTS(rowid, file_id, tags) VALUES (new.rowid, new.file_id, new.tags);
+    END;
+    """)
+
+async def _insert_initial_data(db):
+    await db.execute("INSERT OR IGNORE INTO Boards (board_id, name, description) VALUES ('ALL', 'Global System', 'System Board for Global Bans');")
+    await db.execute("INSERT OR IGNORE INTO Boards (board_id, name, description) VALUES ('b', 'Random', 'Default User Board');")
+    await db.execute("INSERT OR IGNORE INTO FTSState (rowid, last_indexed_id) VALUES (1, 0)")
+
 async def initialize_database():
     try:
         async with aiosqlite.connect(DB_NAME, timeout=30.0, isolation_level=None) as db:
@@ -61,653 +703,11 @@ async def initialize_database():
             # Начало транзакции для изменения схемы
             await db.execute("BEGIN IMMEDIATE")
             
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS Boards (
-                board_id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT,
-                settings TEXT DEFAULT '{}'
-            );
-            """)
-            await db.execute("INSERT OR IGNORE INTO Boards (board_id, name, description) VALUES ('ALL', 'Global System', 'System Board for Global Bans');")
-            await db.execute("INSERT OR IGNORE INTO Boards (board_id, name, description) VALUES ('b', 'Random', 'Default User Board');")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS Posts (
-                post_num INTEGER PRIMARY KEY AUTOINCREMENT,
-                board_id TEXT NOT NULL,
-                thread_id TEXT,
-                author_id INTEGER NOT NULL,
-                reply_to_post_num INTEGER,
-                content TEXT NOT NULL,
-                timestamp REAL NOT NULL,
-                FOREIGN KEY (board_id) REFERENCES Boards(board_id),
-                FOREIGN KEY (reply_to_post_num) REFERENCES Posts(post_num) ON DELETE SET NULL
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_board_timestamp ON Posts(board_id, timestamp);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_thread_id ON Posts(thread_id);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_board_reply_to ON Posts(board_id, reply_to_post_num);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_author_id ON Posts(author_id);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_chat_board_ts ON Posts(board_id, timestamp DESC) WHERE thread_id IS NULL;")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS Users (
-                user_id INTEGER NOT NULL,
-                board_id TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'active',
-                location TEXT NOT NULL DEFAULT 'main',
-                api_token TEXT,
-                nsfw_spoiler INTEGER DEFAULT 0,
-                hidden_words TEXT DEFAULT '[]',
-                lie_media INTEGER DEFAULT 0,
-                role TEXT DEFAULT 'user',
-                balance REAL DEFAULT 0,
-                is_verified_b INTEGER DEFAULT 0,
-                referrals_count INTEGER DEFAULT 0,
-                posts_count INTEGER DEFAULT 0,
-                last_failed_amount REAL DEFAULT 0,
-                PRIMARY KEY (user_id, board_id),
-                FOREIGN KEY (board_id) REFERENCES Boards(board_id)
-            );
-            """)
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN balance REAL DEFAULT 0;")
-                await db.execute("ALTER TABLE Users ADD COLUMN is_verified_b INTEGER DEFAULT 0;")
-                await db.execute("ALTER TABLE Users ADD COLUMN reaction_reward_counter INTEGER DEFAULT 0;")
-            except aiosqlite.OperationalError: pass
-            
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN posts_count INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added posts_count to Users.")
-            except aiosqlite.OperationalError: pass
-
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN last_failed_amount REAL DEFAULT 0;")
-                print("✅ Migrated: Added last_failed_amount to Users.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN api_token TEXT;")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN nsfw_spoiler INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added nsfw_spoiler to Users.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN hidden_words TEXT DEFAULT '[]';")
-                print("✅ Migrated: Added hidden_words to Users.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN shadow_ban_gif INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added shadow_ban_gif to Users.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN shadow_ban_sticker INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added shadow_ban_sticker to Users.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN shadow_ban_media INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added shadow_ban_media to Users.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN lie_media INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added lie_media to Users.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN role TEXT DEFAULT 'user';")
-                print("✅ Migrated: Added role to Users.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Boards ADD COLUMN banner_data TEXT DEFAULT '{}';")
-                print("✅ Migrated: Added banner_data to Boards.")
-            except aiosqlite.OperationalError: pass
-            await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_token ON Users(api_token) WHERE api_token IS NOT NULL;")
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN stream TEXT DEFAULT 'ru';")
-                print("✅ Migrated: Added 'stream' to Users.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Posts ADD COLUMN stream TEXT DEFAULT 'ru';")
-                print("✅ Migrated: Added 'stream' to Posts.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Threads ADD COLUMN stream TEXT DEFAULT 'ru';")
-                print("✅ Migrated: Added 'stream' to Threads.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Threads ADD COLUMN is_pinned INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added 'is_pinned' to Threads.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Threads ADD COLUMN is_endless INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added 'is_endless' to Threads.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Posts ADD COLUMN is_op_hidden INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added 'is_op_hidden' to Posts.")
-            except aiosqlite.OperationalError: pass            
-            try:
-                await db.execute("ALTER TABLE Posts ADD COLUMN ip TEXT;")
-                print("✅ Migrated: Added 'ip' column to Posts.")
-            except aiosqlite.OperationalError: pass
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_users_stream ON Users(board_id, stream);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_stream ON Posts(board_id, stream);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_chat_board_stream_ts ON Posts(board_id, stream, timestamp DESC) WHERE thread_id IS NULL;")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS UserAlerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                content TEXT NOT NULL,
-                image_url TEXT,
-                btn_text TEXT,
-                btn_link TEXT,
-                target_board TEXT, -- 'all' или конкретная доска
-                is_read INTEGER DEFAULT 0,
-                created_at REAL NOT NULL,
-                read_at REAL
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_alerts_user ON UserAlerts(user_id, is_read);")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS UserReplies (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                board_id TEXT NOT NULL,
-                thread_id TEXT NOT NULL,
-                post_num INTEGER NOT NULL,
-                parent_num INTEGER,
-                is_read INTEGER DEFAULT 0,
-                created_at REAL NOT NULL
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_replies_user_read ON UserReplies(user_id, is_read);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_replies_created ON UserReplies(created_at);")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS Threads (
-                thread_id TEXT PRIMARY KEY,
-                board_id TEXT NOT NULL,
-                op_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                is_archived INTEGER NOT NULL DEFAULT 0,
-                last_updated_at REAL
-            );
-            """)
-            try:
-                await db.execute("ALTER TABLE Threads ADD COLUMN stream TEXT DEFAULT 'ru';")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Threads ADD COLUMN is_pinned INTEGER DEFAULT 0;")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Threads ADD COLUMN is_endless INTEGER DEFAULT 0;")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Threads ADD COLUMN thread_num INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added 'thread_num' to Threads for performance.")
-                await db.execute("UPDATE Threads SET thread_num = CAST(thread_id AS INTEGER) WHERE thread_num = 0;")
-                print("✅ Data Migration: Populated 'thread_num' from 'thread_id'.")
-            except aiosqlite.OperationalError: pass
-
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_threads_thread_num ON Threads(thread_num);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_threads_stream ON Threads(board_id, stream);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_threads_last_updated ON Threads(is_archived, last_updated_at);")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS Mutes (
-                user_id INTEGER NOT NULL,
-                board_id TEXT NOT NULL,
-                mute_type TEXT NOT NULL,
-                thread_id TEXT,
-                expires_at REAL NOT NULL,
-                PRIMARY KEY (user_id, board_id, mute_type, thread_id)
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS PostCopies (
-                post_num INTEGER NOT NULL,
-                recipient_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                PRIMARY KEY (recipient_id, message_id),
-                FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_postcopies_post_num ON PostCopies(post_num);")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS BroadcastQueue (
-                post_num INTEGER PRIMARY KEY,
-                created_at REAL NOT NULL,
-                FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS DeliveryQueue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                board_id TEXT NOT NULL,
-                post_num INTEGER NOT NULL,
-                recipients TEXT NOT NULL,
-                content TEXT NOT NULL,
-                delivery_phase TEXT NOT NULL DEFAULT 'passive',
-                original_recipients INTEGER NOT NULL DEFAULT 0,
-                thread_id TEXT,
-                enqueued_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT 'pending',
-                FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
-            );
-            """)
-            try:
-                await db.execute("ALTER TABLE NotificationQueue ADD COLUMN board_id TEXT DEFAULT 'b';")
-                print("✅ Migrated: Added 'board_id' to NotificationQueue.")
-            except aiosqlite.OperationalError: pass
-
-            try:
-                await db.execute("ALTER TABLE NotificationQueue ADD COLUMN thread_id INTEGER;")
-                print("✅ Migrated: Added 'thread_id' to NotificationQueue.")
-            except aiosqlite.OperationalError: pass
-
-            try:
-                await db.execute("ALTER TABLE NotificationQueue ADD COLUMN created_at REAL DEFAULT 0;")
-                print("✅ Migrated: Added 'created_at' to NotificationQueue.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE BroadcastQueue ADD COLUMN is_sent_to_tg INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added 'is_sent_to_tg' to BroadcastQueue.")
-            except aiosqlite.OperationalError: pass
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_broadcastqueue_created_at ON BroadcastQueue(created_at);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_deliveryqueue_status_board ON DeliveryQueue(status, board_id, id);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_deliveryqueue_post_phase ON DeliveryQueue(post_num, board_id, delivery_phase, status);")
-            await db.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS PostsFTS USING fts5(
-                content,
-                content='Posts',
-                content_rowid='post_num'
-            );
-            """)
-            await db.execute("DROP TRIGGER IF EXISTS trg_posts_fts_insert;")
-            await db.execute("DROP TRIGGER IF EXISTS trg_posts_fts_delete;")
-            await db.execute("DROP TRIGGER IF EXISTS trg_posts_fts_update;")
-            await db.execute("""
-            CREATE TRIGGER IF NOT EXISTS trg_posts_fts_insert AFTER INSERT ON Posts BEGIN
-                INSERT INTO PostsFTS(rowid, content) VALUES (new.post_num, json_extract(new.content, '$.text'));
-            END;
-            """)
-            
-            await db.execute("""
-            CREATE TRIGGER IF NOT EXISTS trg_posts_fts_delete AFTER DELETE ON Posts BEGIN
-                INSERT INTO PostsFTS(PostsFTS, rowid, content) VALUES('delete', old.post_num, json_extract(old.content, '$.text'));
-            END;
-            """)
-            
-            await db.execute("""
-            CREATE TRIGGER IF NOT EXISTS trg_posts_fts_update AFTER UPDATE ON Posts BEGIN
-                INSERT INTO PostsFTS(PostsFTS, rowid, content) VALUES('delete', old.post_num, json_extract(old.content, '$.text'));
-                INSERT INTO PostsFTS(rowid, content) VALUES (new.post_num, json_extract(new.content, '$.text'));
-            END;
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS GlobalLogs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source TEXT NOT NULL, -- 'bot' или 'site'
-                event_text TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_logs_time ON GlobalLogs(created_at);")
-            await db.execute("DROP TRIGGER IF EXISTS posts_after_insert;")
-            await db.execute("DROP TRIGGER IF EXISTS posts_after_delete;")
-            await db.execute("DROP TRIGGER IF EXISTS posts_after_update;")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS PollVotes (
-                post_num INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                option_index INTEGER NOT NULL,
-                PRIMARY KEY (post_num, user_id),
-                FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS FTSState (
-                last_indexed_id INTEGER DEFAULT 0
-            );
-            """)
-            await db.execute("INSERT OR IGNORE INTO FTSState (rowid, last_indexed_id) VALUES (1, 0)")
-            try:
-                await db.execute("ALTER TABLE Posts ADD COLUMN stream TEXT DEFAULT 'ru';")
-                print("✅ Migrated: Added 'stream' to Posts.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE FileRegistry ADD COLUMN blurhash TEXT;")
-                print("✅ Migrated: Added 'blurhash' to FileRegistry.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Threads ADD COLUMN stream TEXT DEFAULT 'ru';")
-                print("✅ Migrated: Added 'stream' to Threads.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN stream TEXT DEFAULT 'ru';")
-                print("✅ Migrated: Added 'stream' to Users.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Users ADD COLUMN created_at REAL DEFAULT 0;")
-                print("✅ Migrated: Added 'created_at' to Users.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Boards ADD COLUMN is_approved INTEGER DEFAULT 1;") 
-                print("✅ Migrated: Added 'is_approved' to Boards.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Boards ADD COLUMN owner_id INTEGER DEFAULT 0;") 
-                print("✅ Migrated: Added 'owner_id' to Boards.")
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Posts ADD COLUMN channel_message_id INTEGER;")
-                print("✅ Migrated: Added 'channel_message_id' to Posts.")
-            except aiosqlite.OperationalError: pass
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS ChannelCopies (
-                post_num INTEGER NOT NULL,
-                channel_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                PRIMARY KEY (post_num, channel_id),
-                FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
-            );
-            """)
-            try:
-                await db.execute("ALTER TABLE Posts ADD COLUMN report_count INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added 'report_count' to Posts.")
-            except aiosqlite.OperationalError: pass
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_channelcopies_post ON ChannelCopies(post_num);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_stream ON Posts(board_id, stream);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_threads_stream ON Threads(board_id, stream);")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS SpamFilterWords (
-                board_id TEXT NOT NULL,
-                word TEXT NOT NULL,
-                PRIMARY KEY (board_id, word)
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS ReactionBans (
-                user_id INTEGER NOT NULL,
-                board_id TEXT NOT NULL,
-                PRIMARY KEY (user_id, board_id)
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS ReactionQueue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                post_num INTEGER NOT NULL,
-                emoji TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS AdminActionQueue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                action_type TEXT NOT NULL, -- 'ban', 'unban', 'mute', 'shadow_mute'
-                user_id INTEGER NOT NULL,
-                board_id TEXT NOT NULL,
-                expires_at REAL
-            );
-            """)
-
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS CrossLinks (
-                source_board TEXT NOT NULL,
-                source_post INTEGER NOT NULL,
-                target_board TEXT NOT NULL,
-                target_post INTEGER NOT NULL,
-                PRIMARY KEY (source_board, source_post, target_board, target_post)
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS Backlinks (
-                target_post_num INTEGER NOT NULL,
-                source_post_num INTEGER NOT NULL,
-                PRIMARY KEY (target_post_num, source_post_num),
-                FOREIGN KEY (target_post_num) REFERENCES Posts(post_num) ON DELETE CASCADE,
-                FOREIGN KEY (source_post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_backlinks_source ON Backlinks(source_post_num);")
-            try:
-                await db.execute("ALTER TABLE Threads ADD COLUMN reply_count INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added 'reply_count' to Threads.")
-                await db.execute("""
-                    UPDATE Threads 
-                    SET reply_count = (
-                        SELECT COUNT(*) - 1 
-                        FROM Posts 
-                        WHERE Posts.thread_id = Threads.thread_id
-                    )
-                """)
-            except aiosqlite.OperationalError: pass
-            try:
-                await db.execute("ALTER TABLE Threads ADD COLUMN thread_type TEXT DEFAULT 'default';")
-                print("✅ Migrated: Added 'thread_type' to Threads.")
-            except aiosqlite.OperationalError: pass
-
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS ThreadUnlocks (
-                thread_id TEXT NOT NULL,
-                user_id INTEGER NOT NULL,
-                PRIMARY KEY (thread_id, user_id)
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_crosslinks_target ON CrossLinks(target_board, target_post);")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS FileOwners (
-                file_id TEXT PRIMARY KEY,
-                bot_id INTEGER NOT NULL
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS MirrorQueue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                file_id TEXT NOT NULL,
-                mirror_type TEXT NOT NULL, -- 'catbox', 'huggingface' и т.д.
-                attempts INTEGER DEFAULT 0, -- Сколько раз пробовали
-                next_run_at REAL DEFAULT 0, -- Когда пробовать в следующий раз (Unix timestamp)
-                UNIQUE(file_id, mirror_type)
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS Bottles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sender_id INTEGER NOT NULL,
-                recipient_id INTEGER NOT NULL,
-                message_text TEXT NOT NULL,
-                timestamp REAL NOT NULL,
-                is_read INTEGER DEFAULT 0
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_bottles_recipient ON Bottles(recipient_id, is_read);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_mirror_queue_run ON MirrorQueue(next_run_at);")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS Reports (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                post_num INTEGER NOT NULL,
-                category TEXT NOT NULL,
-                reason TEXT NOT NULL,
-                sender_ip_hash TEXT, -- Хэш отправителя (чтобы не спамили)
-                status TEXT DEFAULT 'open', -- open, resolved, dismissed
-                created_at REAL NOT NULL,
-                FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS SpamFilterWords (
-                board_id TEXT NOT NULL,
-                word TEXT NOT NULL,
-                PRIMARY KEY (board_id, word)
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS SystemSettings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS ImportRequests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                url TEXT NOT NULL,
-                target_board TEXT NOT NULL,
-                comment TEXT,
-                status TEXT DEFAULT 'pending', -- pending, approved, rejected
-                created_at REAL NOT NULL
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS PendingHF (
-                file_id TEXT PRIMARY KEY,
-                created_at REAL
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_pending_time ON PendingHF(created_at);")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS FileMirrors (
-                file_id TEXT NOT NULL,
-                mirror_type TEXT NOT NULL, 
-                url TEXT NOT NULL,
-                PRIMARY KEY (file_id, mirror_type)
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS ModQueue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                post_num INTEGER NOT NULL,
-                file_id TEXT NOT NULL,
-                reason TEXT,
-                score REAL,
-                status TEXT DEFAULT 'pending',
-                created_at REAL,
-                FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_modqueue_status ON ModQueue(status);")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS NotificationQueue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                recipient_id INTEGER NOT NULL,
-                source_post_num INTEGER NOT NULL,
-                reply_post_num INTEGER NOT NULL,
-                board_id TEXT NOT NULL,
-                thread_id INTEGER,
-                created_at REAL NOT NULL
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_notif_recipient ON NotificationQueue(recipient_id);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_notif_source_post ON NotificationQueue(source_post_num);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_filemirrors_file_id ON FileMirrors(file_id);")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS Feedback (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                category TEXT NOT NULL,
-                contact TEXT,
-                message TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                is_read INTEGER DEFAULT 0
-            );
-            """)    
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_import_requests_status ON ImportRequests(status, created_at);")
-            try:
-                await db.execute("ALTER TABLE Posts ADD COLUMN is_shadow INTEGER DEFAULT 0;")
-                print("✅ Migrated: Added 'is_shadow' to Posts.")
-            except aiosqlite.OperationalError: pass
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_shadow ON Posts(is_shadow);")
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS FileRegistry (
-                sha256 TEXT PRIMARY KEY,
-                phash TEXT,
-                file_id TEXT NOT NULL,
-                thumbnail_id TEXT,
-                file_type TEXT,
-                created_at REAL
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_files_phash ON FileRegistry(phash);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_files_file_id ON FileRegistry(file_id);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_files_created_at ON FileRegistry(created_at);")
-            await db.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS FileTagsFTS USING fts5(
-                file_id UNINDEXED, 
-                tags, 
-                content='FileRegistry', 
-                content_rowid='rowid'
-            );
-            """)
-            
-            await db.execute("""
-            CREATE TRIGGER IF NOT EXISTS trg_files_fts_insert AFTER INSERT ON FileRegistry BEGIN
-                INSERT INTO FileTagsFTS(rowid, file_id, tags) VALUES (new.rowid, new.file_id, new.tags);
-            END;
-            """)
-            
-            await db.execute("""
-            CREATE TRIGGER IF NOT EXISTS trg_files_fts_delete AFTER DELETE ON FileRegistry BEGIN
-                INSERT INTO FileTagsFTS(FileTagsFTS, rowid, file_id, tags) VALUES('delete', old.rowid, old.file_id, old.tags);
-            END;
-            """)
-            
-            await db.execute("""
-            CREATE TRIGGER IF NOT EXISTS trg_files_fts_update AFTER UPDATE ON FileRegistry BEGIN
-                INSERT INTO FileTagsFTS(FileTagsFTS, rowid, file_id, tags) VALUES('delete', old.rowid, old.file_id, old.tags);
-                INSERT INTO FileTagsFTS(rowid, file_id, tags) VALUES (new.rowid, new.file_id, new.tags);
-            END;
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS BannedHashes (
-                hash_value TEXT PRIMARY KEY, -- SHA256 или pHash
-                hash_type TEXT,              -- 'sha256' или 'phash'
-                reason TEXT
-            );
-            """)
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS Mutes (
-                user_id INTEGER NOT NULL,
-                board_id TEXT NOT NULL,
-                mute_type TEXT NOT NULL, 
-                thread_id TEXT, -- Опционально, если бан только в одном треде
-                expires_at REAL NOT NULL,
-                PRIMARY KEY (user_id, board_id, mute_type, thread_id)
-            );
-            """)
-            
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS ImportQueue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id TEXT NOT NULL,
-                board_id TEXT NOT NULL,
-                original_post_num TEXT,
-                reply_to_original TEXT, 
-                publish_at REAL NOT NULL,
-                content TEXT NOT NULL,
-                author_id INTEGER NOT NULL, 
-                stream TEXT DEFAULT 'ru',
-                is_op INTEGER DEFAULT 0,
-                thread_title TEXT,
-                created_at REAL NOT NULL
-            );
-            """)
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_import_queue_pub ON ImportQueue(publish_at);")
-            
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS ImportRefMap (
-                task_id TEXT NOT NULL,
-                original_post_num TEXT NOT NULL,
-                real_post_num INTEGER NOT NULL,
-                PRIMARY KEY (task_id, original_post_num)
-            );
-            """)
-
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_timestamp ON Posts(timestamp);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_threads_created_at ON Threads(created_at);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_board_id ON Posts(board_id);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_reports_status ON Reports(status);")
-            await db.execute("CREATE INDEX IF NOT EXISTS idx_posts_num_text ON Posts(CAST(post_num AS TEXT));")
+            await _create_tables(db)
+            await _apply_migrations(db)
+            await _create_indices(db)
+            await _create_triggers(db)
+            await _insert_initial_data(db)
             
             await db.execute("COMMIT")
         print("✅ База данных успешно инициализирована.")
@@ -1378,6 +1378,7 @@ async def create_post(
     file_owners: List[Tuple[str, int]] = None,
     ip: str = None  # <--- ДОБАВЛЕНО
 ) -> Optional[int]:
+    global _CACHED_MAX_POST_NUM
     # Локальный импорт, чтобы гарантировать наличие db_lock без правки шапки файла
     from common.db_pool import get_pool, db_lock
     
@@ -1453,6 +1454,8 @@ async def create_post(
 
                 # Явный коммит транзакции
                 await db.execute("COMMIT")
+                if _CACHED_MAX_POST_NUM is not None:
+                    _CACHED_MAX_POST_NUM = max(_CACHED_MAX_POST_NUM, post_num)
                 return post_num
                 
             except sqlite3.OperationalError as e:
@@ -2207,7 +2210,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                     async for row in cursor:
                         ref_post_num, recipient_id, thread_id = row
                         if recipient_id > 0 and recipient_id != author_id:
-                            # FIX: Если thread_id is None (чат), используем ID поста, на который отвечаем (ref_post_num)
+                            # Если thread_id is None (чат), используем ID поста, на который отвечаем (ref_post_num)
                             final_thread_id = thread_id if thread_id is not None else ref_post_num
                             notifications_to_insert.append((
                                 recipient_id, 
@@ -2224,8 +2227,9 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                            VALUES (?, ?, ?, ?, ?, ?)""",
                         notifications_to_insert
                     )
+                    # FIX: Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
                     site_notifs = [
-                        (r_id, board_id, str(t_id), src_num, rep_num, 0, current_time)
+                        (r_id, board_id, str(t_id) if t_id else str(rep_num), src_num, rep_num, 0, current_time)
                         for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert
                     ]
                     await db.executemany(
@@ -2926,7 +2930,7 @@ def _process_search_row(row: aiosqlite.Row) -> Optional[Dict[str, Any]]:
         return post_dict
     except Exception:
         return None
-async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 50, observer_id: Optional[int] = None) -> list[dict]:
+async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 50, observer_id: Optional[int] = None, only_archived: bool = False) -> list[dict]:
     """
     Выполняет полнотекстовый поиск.
     """
@@ -2941,13 +2945,24 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
 
             viewer_id = observer_id if observer_id is not None else -1
             
-            sql_query = f"""
-                SELECT p.* FROM Posts p
-                JOIN PostsFTS fts ON p.post_num = fts.rowid
-                WHERE fts.content MATCH ? 
-                  AND p.thread_id IS NOT NULL 
-                  AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
-            """
+            if only_archived:
+                sql_query = f"""
+                    SELECT p.* FROM Posts p
+                    JOIN PostsFTS fts ON p.post_num = fts.rowid
+                    JOIN Threads t ON p.thread_id = t.thread_id
+                    WHERE fts.content MATCH ?
+                      AND p.thread_id IS NOT NULL
+                      AND t.is_archived = 1
+                      AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
+                """
+            else:
+                sql_query = f"""
+                    SELECT p.* FROM Posts p
+                    JOIN PostsFTS fts ON p.post_num = fts.rowid
+                    WHERE fts.content MATCH ?
+                      AND p.thread_id IS NOT NULL
+                      AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
+                """
             params = [final_query]
             if board_id:
                 sql_query += " AND p.board_id = ?"
@@ -2975,8 +2990,147 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
         finally:
             if 'db' in locals() and db:
                 db.row_factory = None
+def _delete_in_chunks(con, table, where_clause, params, chunk_size=100):
+    total_deleted = 0
+    con.execute("PRAGMA busy_timeout = 5000;")
+
+    while True:
+        # Используем IMMEDIATE транзакцию даже в синхронном коде
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            query = f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {where_clause} LIMIT {chunk_size})"
+            cur = con.execute(query, params)
+            count = cur.rowcount
+            con.execute("COMMIT")
+
+            total_deleted += count
+            if count < chunk_size:
+                break
+
+            # Даем передышку другим процессам
+            time.sleep(0.1)
+
+        except sqlite3.OperationalError as e:
+            try: con.execute("ROLLBACK")
+            except: pass
+            if "locked" in str(e).lower() or "busy" in str(e).lower():
+                time.sleep(1)
+                continue
+            raise e
+        except Exception:
+            try: con.execute("ROLLBACK")
+            except: pass
+            break
+
+    return total_deleted
+
+def _cleanup_telegram_copies(con, retention_seconds, retention_limit):
+    # Keep a bounded rolling window by age and by global post distance
+    copy_cutoff = time.time() - retention_seconds
+    row = con.execute(
+        "SELECT post_num FROM Posts ORDER BY post_num DESC LIMIT 1 OFFSET ?",
+        (retention_limit,)
+    ).fetchone()
+    copy_floor_post_num = row[0] if row else 0
+    copy_where = "post_num IN (SELECT post_num FROM Posts WHERE timestamp < ? AND post_num < ?)"
+    _delete_in_chunks(con, "PostCopies", copy_where, (copy_cutoff, copy_floor_post_num))
+    _delete_in_chunks(con, "ChannelCopies", copy_where, (copy_cutoff, copy_floor_post_num))
+
+def _cleanup_logs_and_alerts(con, logs_lifetime, alerts_lifetime):
+    logs_cutoff = time.time() - logs_lifetime
+    _delete_in_chunks(con, "GlobalLogs", "created_at < ?", (logs_cutoff,))
+    _delete_in_chunks(con, "UserAlerts", "created_at < ?", (time.time() - alerts_lifetime,))
+    replies_cutoff = time.time() - (8 * 24 * 3600)
+    _delete_in_chunks(con, "UserReplies", "created_at < ?", (replies_cutoff,))
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        hf_cutoff = time.time() - (24 * 3600)
+        con.execute("DELETE FROM PendingHF WHERE created_at < ?", (hf_cutoff,))
+        hf_orphan_cutoff = time.time() - 3600
+        con.execute("""
+            DELETE FROM PendingHF
+            WHERE created_at < ?
+            AND file_id NOT IN (SELECT file_id FROM FileRegistry)
+        """, (hf_orphan_cutoff,))
+        con.execute("DELETE FROM Bottles WHERE timestamp < ?", (logs_cutoff,))
+        con.execute("DELETE FROM ImportRequests WHERE created_at < ? AND status != 'pending'", (logs_cutoff,))
+        con.execute("DELETE FROM Reports WHERE created_at < ? AND status != 'open'", (logs_cutoff,))
+        con.execute("COMMIT")
+    except:
+        try: con.execute("ROLLBACK")
+        except: pass
+
+def _cleanup_shadow_posts(con, shadow_lifetime):
+    shadow_cutoff = time.time() - shadow_lifetime
+    _delete_in_chunks(con, "Posts", "is_shadow = 1 AND timestamp < ?", (shadow_cutoff,))
+
+def _cleanup_orphans(con):
+    cleanup_targets = [
+        ("PostCopies", "post_num"), ("ChannelCopies", "post_num"),
+        ("BroadcastQueue", "post_num"), ("NotificationQueue", "source_post_num"),
+        ("NotificationQueue", "reply_post_num"), ("Reports", "post_num"),
+        ("ModQueue", "post_num"), ("PollVotes", "post_num")
+    ]
+    for table, col in cleanup_targets:
+        try:
+            where_fast = f"NOT EXISTS (SELECT 1 FROM Posts WHERE Posts.post_num = {table}.{col})"
+            _delete_in_chunks(con, table, where_fast, ())
+        except: pass
+
+def _cleanup_ephemeral_boards(con, boards, limit):
+    for board in boards:
+        try:
+            row = con.execute(
+                "SELECT post_num FROM Posts WHERE board_id = ? ORDER BY post_num DESC LIMIT 1 OFFSET ?",
+                (board, limit)
+            ).fetchone()
+
+            if row:
+                threshold_id = row[0]
+                deleted = _delete_in_chunks(
+                    con, "Posts",
+                    "board_id = ? AND post_num < ? AND thread_id IS NULL",
+                    (board, threshold_id)
+                )
+                if deleted > 0:
+                    print(f"  > Ephemeral cleanup /{board}/: removed {deleted} old posts.")
+        except Exception as e:
+            print(f"⚠️ Error cleaning ephemeral board {board}: {e}")
+
+def _cleanup_archived_threads(con, archive_lifetime):
+    archive_cutoff = time.time() - archive_lifetime
+    tids = [r[0] for r in con.execute("SELECT thread_id FROM Threads WHERE is_archived = 1 AND last_updated_at < ?", (archive_cutoff,)).fetchall()]
+
+    if tids:
+        chunk_size = 50
+        for i in range(0, len(tids), chunk_size):
+            chunk = tids[i:i + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                con.execute(f"DELETE FROM Posts WHERE thread_id IN ({placeholders})", chunk)
+                con.execute(f"DELETE FROM Threads WHERE thread_id IN ({placeholders})", chunk)
+                con.execute("COMMIT")
+                time.sleep(0.05)
+            except:
+                try: con.execute("ROLLBACK")
+                except: pass
+        print(f"  > Archive: deleted {len(tids)} old threads.")
+
+def _cleanup_import_map(con):
+    # Если task_id больше нет в ImportQueue, значит все посты опубликованы, и карта больше не нужна.
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        con.execute("DELETE FROM ImportRefMap WHERE task_id NOT IN (SELECT DISTINCT task_id FROM ImportQueue)")
+        deleted_maps = con.total_changes
+        con.execute("COMMIT")
+        if deleted_maps > 0:
+            print(f"  > Import Cleanup: Cleared {deleted_maps} outdated reference maps.")
+    except:
+        try: con.execute("ROLLBACK")
+        except: pass
+
 def cleanup_old_posts_from_db(limit: int = 50000):
-    CHAT_COPIES_LIMIT = 5000
     SHADOW_LIFETIME = 24 * 3600
     ARCHIVED_THREAD_LIFETIME = 30 * 24 * 3600
     POST_COPY_RETENTION_SECONDS = max(2 * 24 * 3600, int(POST_COPY_RETENTION_DAYS or 30) * 24 * 3600)
@@ -2986,40 +3140,6 @@ def cleanup_old_posts_from_db(limit: int = 50000):
     EPHEMERAL_BOARDS = ('thread', 'test') 
     EPHEMERAL_LIMIT = 500
     
-    def delete_in_chunks(con, table, where_clause, params, chunk_size=100):
-        total_deleted = 0
-        con.execute("PRAGMA busy_timeout = 5000;")
-        
-        while True:
-            # Используем IMMEDIATE транзакцию даже в синхронном коде
-            try:
-                con.execute("BEGIN IMMEDIATE")
-                query = f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {where_clause} LIMIT {chunk_size})"
-                cur = con.execute(query, params)
-                count = cur.rowcount
-                con.execute("COMMIT")
-                
-                total_deleted += count
-                if count < chunk_size:
-                    break
-                
-                # Даем передышку другим процессам
-                time.sleep(0.1)
-                
-            except sqlite3.OperationalError as e:
-                try: con.execute("ROLLBACK")
-                except: pass
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    time.sleep(1) 
-                    continue
-                raise e
-            except Exception:
-                try: con.execute("ROLLBACK")
-                except: pass
-                break
-                
-        return total_deleted
-
     try:
         # isolation_level=None для соответствия архитектуре
         with sqlite3.connect(DB_NAME, timeout=30.0, isolation_level=None) as con:
@@ -3028,110 +3148,25 @@ def cleanup_old_posts_from_db(limit: int = 50000):
             con.execute("PRAGMA foreign_keys = ON;")
             
             # 1. Telegram copy retention. PostCopies are required for real Telegram replies.
-            # Keep a bounded rolling window by age and by global post distance; RAM hydration is capped separately.
-            copy_cutoff = time.time() - POST_COPY_RETENTION_SECONDS
-            row = con.execute(
-                "SELECT post_num FROM Posts ORDER BY post_num DESC LIMIT 1 OFFSET ?",
-                (POST_COPY_RETENTION_LIMIT,)
-            ).fetchone()
-            copy_floor_post_num = row[0] if row else 0
-            copy_where = "post_num IN (SELECT post_num FROM Posts WHERE timestamp < ? AND post_num < ?)"
-            delete_in_chunks(con, "PostCopies", copy_where, (copy_cutoff, copy_floor_post_num))
-            delete_in_chunks(con, "ChannelCopies", copy_where, (copy_cutoff, copy_floor_post_num))
+            _cleanup_telegram_copies(con, POST_COPY_RETENTION_SECONDS, POST_COPY_RETENTION_LIMIT)
 
             # 2. Логи и алерты
-            logs_cutoff = time.time() - LOGS_LIFETIME
-            delete_in_chunks(con, "GlobalLogs", "created_at < ?", (logs_cutoff,))
-            delete_in_chunks(con, "UserAlerts", "created_at < ?", (time.time() - ALERTS_LIFETIME,))
-            replies_cutoff = time.time() - (8 * 24 * 3600)
-            delete_in_chunks(con, "UserReplies", "created_at < ?", (replies_cutoff,))
-            try:
-                con.execute("BEGIN IMMEDIATE")
-                hf_cutoff = time.time() - (24 * 3600)
-                con.execute("DELETE FROM PendingHF WHERE created_at < ?", (hf_cutoff,))
-                hf_orphan_cutoff = time.time() - 3600
-                con.execute("""
-                    DELETE FROM PendingHF 
-                    WHERE created_at < ? 
-                    AND file_id NOT IN (SELECT file_id FROM FileRegistry)
-                """, (hf_orphan_cutoff,))
-                con.execute("DELETE FROM Bottles WHERE timestamp < ?", (logs_cutoff,))
-                con.execute("DELETE FROM ImportRequests WHERE created_at < ? AND status != 'pending'", (logs_cutoff,))
-                con.execute("DELETE FROM Reports WHERE created_at < ? AND status != 'open'", (logs_cutoff,))
-                con.execute("COMMIT")
-            except:
-                try: con.execute("ROLLBACK")
-                except: pass
+            _cleanup_logs_and_alerts(con, LOGS_LIFETIME, ALERTS_LIFETIME)
 
             # 3. Теневые посты
-            shadow_cutoff = time.time() - SHADOW_LIFETIME
-            delete_in_chunks(con, "Posts", "is_shadow = 1 AND timestamp < ?", (shadow_cutoff,))
+            _cleanup_shadow_posts(con, SHADOW_LIFETIME)
 
             # 4. Очистка сирот (Orphans)
-            cleanup_targets = [
-                ("PostCopies", "post_num"), ("ChannelCopies", "post_num"),
-                ("BroadcastQueue", "post_num"), ("NotificationQueue", "source_post_num"),
-                ("NotificationQueue", "reply_post_num"), ("Reports", "post_num"),
-                ("ModQueue", "post_num"), ("PollVotes", "post_num")
-            ]
-            for table, col in cleanup_targets:
-                try:
-                    where_fast = f"NOT EXISTS (SELECT 1 FROM Posts WHERE Posts.post_num = {table}.{col})"
-                    delete_in_chunks(con, table, where_fast, ())
-                except: pass
+            _cleanup_orphans(con)
 
             # 5. Эфемельные доски
-            for board in EPHEMERAL_BOARDS:
-                try:
-                    row = con.execute(
-                        "SELECT post_num FROM Posts WHERE board_id = ? ORDER BY post_num DESC LIMIT 1 OFFSET ?", 
-                        (board, EPHEMERAL_LIMIT)
-                    ).fetchone()
-                    
-                    if row:
-                        threshold_id = row[0]
-                        deleted = delete_in_chunks(
-                            con, "Posts", 
-                            "board_id = ? AND post_num < ? AND thread_id IS NULL", 
-                            (board, threshold_id)
-                        )
-                        if deleted > 0:
-                            print(f"  > Ephemeral cleanup /{board}/: removed {deleted} old posts.")
-                except Exception as e:
-                    print(f"⚠️ Error cleaning ephemeral board {board}: {e}")
+            _cleanup_ephemeral_boards(con, EPHEMERAL_BOARDS, EPHEMERAL_LIMIT)
 
             # 6. Очистка архива тредов
-            archive_cutoff = time.time() - ARCHIVED_THREAD_LIFETIME
-            tids = [r[0] for r in con.execute("SELECT thread_id FROM Threads WHERE is_archived = 1 AND last_updated_at < ?", (archive_cutoff,)).fetchall()]
-            
-            if tids:
-                chunk_size = 50
-                for i in range(0, len(tids), chunk_size):
-                    chunk = tids[i:i + chunk_size]
-                    placeholders = ",".join("?" * len(chunk))
-                    try:
-                        con.execute("BEGIN IMMEDIATE")
-                        con.execute(f"DELETE FROM Posts WHERE thread_id IN ({placeholders})", chunk)
-                        con.execute(f"DELETE FROM Threads WHERE thread_id IN ({placeholders})", chunk)
-                        con.execute("COMMIT")
-                        time.sleep(0.05)
-                    except:
-                        try: con.execute("ROLLBACK")
-                        except: pass
-                print(f"  > Archive: deleted {len(tids)} old threads.")
+            _cleanup_archived_threads(con, ARCHIVED_THREAD_LIFETIME)
 
             # 7. Очистка карты импорта (удаляем маппинг для завершенных задач)
-            # Если task_id больше нет в ImportQueue, значит все посты опубликованы, и карта больше не нужна.
-            try:
-                con.execute("BEGIN IMMEDIATE")
-                con.execute("DELETE FROM ImportRefMap WHERE task_id NOT IN (SELECT DISTINCT task_id FROM ImportQueue)")
-                deleted_maps = con.total_changes
-                con.execute("COMMIT")
-                if deleted_maps > 0:
-                    print(f"  > Import Cleanup: Cleared {deleted_maps} outdated reference maps.")
-            except:
-                try: con.execute("ROLLBACK")
-                except: pass
+            _cleanup_import_map(con)
 
     except Exception as e:
         print(f"⛔ DB Cleanup Critical Error: {e}")
@@ -3403,6 +3438,7 @@ _IMAGE_CACHE: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
 _THREAD_CACHE: Dict[str, List[str]] = defaultdict(list)
 
 _LAST_MAX_POST_NUM = 0
+_CACHED_MAX_POST_NUM = None
 _LAST_CACHE_UPDATE = 0
 
 _RANDOM_VIDEO_TYPES = {'video', 'animation', 'video_note', 'gif'}
@@ -3914,6 +3950,9 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                     await db.execute("COMMIT")
                     return []
 
+                shadow_updates = []
+                blur_updates = []
+
                 for row in rows:
                     post_num, content_str, is_shadow = row
                     needs_update = False
@@ -3925,7 +3964,7 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                     # Логика действий
                     if action == 'shadow':
                         if not is_shadow:
-                            await db.execute("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", (post_num,))
+                            shadow_updates.append((post_num,))
                             needs_update = True
                             
                     elif action == 'blur':
@@ -3933,11 +3972,17 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                         if not content.get('is_censored'):
                             content['is_censored'] = True
                             new_json = json.dumps(content, default=_json_serializer)
-                            await db.execute("UPDATE Posts SET content = ? WHERE post_num = ?", (new_json, post_num))
+                            blur_updates.append((new_json, post_num))
                             needs_update = True
                     
                     if needs_update:
                         affected_posts.append(post_num)
+
+                if shadow_updates:
+                    await db.executemany("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", shadow_updates)
+
+                if blur_updates:
+                    await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", blur_updates)
 
                 await db.execute("COMMIT")
                 return affected_posts
@@ -4180,13 +4225,19 @@ async def get_board_media_posts(board_id: str, page: int = 1, page_size: int = 2
         print(f"⛔ Error in get_board_media_posts: {e}")
         return []
 async def get_max_post_num() -> int:
+    global _CACHED_MAX_POST_NUM
+    if _CACHED_MAX_POST_NUM is not None:
+        return _CACHED_MAX_POST_NUM
+
     from common.db_pool import get_pool, db_lock
     async with db_lock:
         try:
             db = await get_pool()
             async with db.execute("SELECT MAX(post_num) FROM Posts") as cursor:
                 row = await cursor.fetchone()
-                return row[0] if row and row[0] else 0
+                val = row[0] if row and row[0] else 0
+                _CACHED_MAX_POST_NUM = val
+                return val
         except:
             return 0
 async def get_random_active_thread() -> Optional[tuple[str, str]]:
@@ -6096,6 +6147,88 @@ async def get_activity_history(days: int = 7) -> dict:
     except Exception as e:
         print(f"Stats error: {e}")
         return {}
+async def get_newspaper_data(date_str: str) -> dict:
+    import datetime
+    from common.db_pool import get_pool
+    db = await get_pool()
+    db.row_factory = aiosqlite.Row
+    try:
+        dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+        start_ts = dt.timestamp()
+        end_ts = start_ts + 86400
+    except Exception:
+        return {}
+
+    res = {
+        "date": date_str,
+        "total_posts": 0,
+        "active_authors": 0,
+        "new_threads_count": 0,
+        "top_threads": [],
+        "longest_posts": [],
+        "recent_media": []
+    }
+
+    try:
+        # 1. Total posts
+        async with db.execute("SELECT COUNT(*) FROM Posts WHERE timestamp BETWEEN ? AND ? AND IFNULL(is_shadow, 0) = 0", (start_ts, end_ts)) as cursor:
+            row = await cursor.fetchone()
+            if row: res["total_posts"] = row[0]
+
+        # 2. Active authors
+        async with db.execute("SELECT COUNT(DISTINCT author_id) FROM Posts WHERE timestamp BETWEEN ? AND ? AND author_id != 0 AND IFNULL(is_shadow, 0) = 0", (start_ts, end_ts)) as cursor:
+            row = await cursor.fetchone()
+            if row: res["active_authors"] = row[0]
+
+        # 3. New threads count
+        async with db.execute("SELECT COUNT(*) FROM Threads WHERE created_at BETWEEN ? AND ?", (start_ts, end_ts)) as cursor:
+            row = await cursor.fetchone()
+            if row: res["new_threads_count"] = row[0]
+
+        # 4. Top threads by posts in this day
+        query_threads = """
+            SELECT p.thread_id, p.board_id, t.title, COUNT(p.post_num) as cnt
+            FROM Posts p
+            JOIN Threads t ON p.thread_id = t.thread_id
+            WHERE p.timestamp BETWEEN ? AND ? AND p.thread_id IS NOT NULL AND IFNULL(p.is_shadow, 0) = 0
+            GROUP BY p.thread_id ORDER BY cnt DESC LIMIT 5
+        """
+        async with db.execute(query_threads, (start_ts, end_ts)) as cursor:
+            rows = await cursor.fetchall()
+            for r in rows:
+                res["top_threads"].append({
+                    "thread_id": r["thread_id"],
+                    "board_id": r["board_id"],
+                    "title": r["title"] or "Без названия",
+                    "posts_count": r["cnt"]
+                })
+
+        # 5. Longest posts (slang columns)
+        query_longest = """
+            SELECT p.post_num, p.board_id, p.thread_id, p.content, p.author_id, p.timestamp
+            FROM Posts p
+            WHERE p.timestamp BETWEEN ? AND ? AND IFNULL(p.is_shadow, 0) = 0 AND length(p.content) > 30
+            ORDER BY length(p.content) DESC LIMIT 8
+        """
+        async with db.execute(query_longest, (start_ts, end_ts)) as cursor:
+            rows = await cursor.fetchall()
+            for r in rows:
+                res["longest_posts"].append({
+                    "post_num": r["post_num"],
+                    "board_id": r["board_id"],
+                    "thread_id": r["thread_id"],
+                    "content": r["content"],
+                    "author_id": r["author_id"],
+                    "timestamp": r["timestamp"]
+                })
+
+        return res
+    except Exception as e:
+        print(f"Newspaper data error: {e}")
+        return res
+    finally:
+        db.row_factory = None
+
 async def get_top_active_threads(hours: int = 8, limit: int = 10):
     """Находит треды с наибольшим количеством новых постов за период. Скрывает активность shadow-постов."""
     db = await get_pool()
@@ -6646,7 +6779,8 @@ async def add_to_hf_queue(file_id: str):
 async def remove_from_hf_queue(file_ids: list[str]):
     if not file_ids: return
     from common.db_pool import get_pool, db_lock
-    placeholders = ','.join('?' for _ in file_ids)
+
+    chunk_size = 900
     
     async with db_lock:
         for attempt in range(20):
@@ -6654,7 +6788,10 @@ async def remove_from_hf_queue(file_ids: list[str]):
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                await db.execute(f"DELETE FROM PendingHF WHERE file_id IN ({placeholders})", file_ids)
+                for i in range(0, len(file_ids), chunk_size):
+                    chunk = file_ids[i:i+chunk_size]
+                    placeholders = ','.join('?' for _ in chunk)
+                    await db.execute(f"DELETE FROM PendingHF WHERE file_id IN ({placeholders})", chunk)
                 
                 await db.execute("COMMIT")
                 return
@@ -6733,16 +6870,20 @@ async def add_post_to_random_cache(post_data: dict):
     # Если это ОП-пост, добавляем в кэш тредов
     if is_op:
         _THREAD_CACHE[bid].append(str(pid))
-async def get_pending_mirror_tasks(limit: int = 10) -> list[dict]:
+async def get_pending_mirror_tasks(limit: int = 10, allowed_types: list[str] = None) -> list[dict]:
     """Берет задачи, время которых пришло."""
     db = await get_pool()
     now = time.time()
     try:
-        # ПРАВКА: Сортировка по ID DESC, чтобы свежедобавленные задачи шли первыми
-        async with db.execute(
-            "SELECT * FROM MirrorQueue WHERE next_run_at <= ? ORDER BY id DESC LIMIT ?", 
-            (now, limit)
-        ) as cursor:
+        if allowed_types:
+            placeholders = ",".join(["?"] * len(allowed_types))
+            query = f"SELECT * FROM MirrorQueue WHERE next_run_at <= ? AND mirror_type IN ({placeholders}) ORDER BY id DESC LIMIT ?"
+            params = [now] + list(allowed_types) + [limit]
+        else:
+            query = "SELECT * FROM MirrorQueue WHERE next_run_at <= ? ORDER BY id DESC LIMIT ?"
+            params = [now, limit]
+
+        async with db.execute(query, params) as cursor:
             rows = await cursor.fetchall()
             cols = [d[0] for d in cursor.description]
             results = []
@@ -7038,8 +7179,8 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                 if original_author_id > 0 and original_author_id != reply_author_id:
                     curr_time = time.time()
 
-                    # FIX: Если thread_id is None, используем ID родительского поста
-                    effective_thread_id = str(thread_id) if thread_id else str(source_post_num)
+                    # Если thread_id is None, используем ID родительского поста
+                    effective_thread_id = str(thread_id) if thread_id is not None else str(source_post_num)
 
                     await db.execute(
                         """INSERT INTO NotificationQueue 
@@ -7052,7 +7193,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                         """INSERT INTO UserReplies 
                            (user_id, board_id, thread_id, post_num, parent_num, is_read, created_at) 
                            VALUES (?, ?, ?, ?, ?, 0, ?)""",
-                        (original_author_id, board_id, effective_thread_id, source_post_num, reply_post_num, curr_time)
+                        (original_author_id, board_id, effective_thread_id, reply_post_num, source_post_num, curr_time)
                     )
                 
                 await db.execute("COMMIT")
@@ -7085,29 +7226,23 @@ async def get_and_clear_notification_queue() -> list[dict]:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                # 1. Забираем ID и данные уведомлений
-                async with db.execute("SELECT id, recipient_id, source_post_num, reply_post_num, board_id, thread_id FROM NotificationQueue") as cursor:
+                # 1. Забираем и удаляем данные уведомлений
+                async with db.execute("DELETE FROM NotificationQueue RETURNING recipient_id, source_post_num, reply_post_num, board_id, thread_id") as cursor:
                     rows = await cursor.fetchall()
                 
+                await db.execute("COMMIT")
+
                 if not rows:
-                    await db.execute("COMMIT")
                     return []
                 
-                # 2. Удаляем обработанные записи
-                ids_to_delete = [row[0] for row in rows]
-                placeholders = ','.join('?' for _ in ids_to_delete)
-                await db.execute(f"DELETE FROM NotificationQueue WHERE id IN ({placeholders})", ids_to_delete)
-                
-                await db.execute("COMMIT")
-                
-                # 3. Возвращаем результат
+                # 2. Возвращаем результат
                 return [
                     {
-                        "recipient_id": r[1],
-                        "source_post_num": r[2],
-                        "reply_post_num": r[3],
-                        "board_id": r[4],
-                        "thread_id": r[5]
+                        "recipient_id": r[0],
+                        "source_post_num": r[1],
+                        "reply_post_num": r[2],
+                        "board_id": r[3],
+                        "thread_id": r[4]
                     } for r in rows
                 ]
                 
@@ -7446,40 +7581,54 @@ async def get_posts_batch(post_nums: List[int]) -> List[dict]:
             if 'db' in locals() and db:
                 db.row_factory = None
 
-async def toggle_post_censorship(post_num: int) -> bool:
+async def toggle_post_censorship(post_nums: list[int]) -> dict[int, bool]:
     """
-    Переключает флаг цензуры (блюра) для поста.
+    Переключает флаг цензуры (блюра) для списка постов.
     """
     from common.db_pool import get_pool, db_lock
     
+    if not post_nums:
+        return {}
+
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                async with db.execute("SELECT content FROM Posts WHERE post_num = ?", (post_num,)) as cursor:
-                    row = await cursor.fetchone()
+                placeholders = ','.join('?' for _ in post_nums)
+                query = f"SELECT post_num, content FROM Posts WHERE post_num IN ({placeholders})"
                 
-                if not row:
+                async with db.execute(query, post_nums) as cursor:
+                    rows = await cursor.fetchall()
+                
+                if not rows:
                     await db.execute("COMMIT")
-                    return False
+                    return {}
                 
-                try:
-                    content = json.loads(row[0])
-                except:
-                    content = {"text": "", "type": "text"}
+                updates = []
+                results = {}
+                for row in rows:
+                    p_num, content_str = row[0], row[1]
+                    try:
+                        content_dict = json.loads(content_str)
+                    except:
+                        content_dict = {"text": "", "type": "text"}
+
+                    # Переключение флага
+                    current_state = content_dict.get('is_censored', False)
+                    new_state = not current_state
+                    content_dict['is_censored'] = new_state
+
+                    new_json = json.dumps(content_dict, default=_json_serializer)
+                    updates.append((new_json, p_num))
+                    results[p_num] = new_state
                 
-                # Переключение флага
-                current_state = content.get('is_censored', False)
-                new_state = not current_state
-                content['is_censored'] = new_state
+                if updates:
+                    await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", updates)
                 
-                new_json = json.dumps(content, default=_json_serializer)
-                
-                await db.execute("UPDATE Posts SET content = ? WHERE post_num = ?", (new_json, post_num))
                 await db.execute("COMMIT")
-                return new_state
+                return results
                 
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
@@ -7494,7 +7643,7 @@ async def toggle_post_censorship(post_num: int) -> bool:
                 except: pass
                 print(f"Error toggling censorship: {e}")
                 break
-    return False
+    return {}
 
 def get_db_connection():
     """
