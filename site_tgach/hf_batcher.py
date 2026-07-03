@@ -180,19 +180,27 @@ async def process_queue_batch():
                         finfo = await bot.get_file(fid)
                         fresh_file_id = finfo.file_id
                         
-                        if not final_filename:
-                            ext = os.path.splitext(finfo.file_path)[1]
-                            if not ext: ext = ".jpg"
-                            final_filename = f"{fid}{ext}"
-                            
-                        lpath = os.path.abspath(os.path.join(fdir, final_filename))
+                        file_path = getattr(finfo, "file_path", None)
+                        if file_path:
+                            if not final_filename:
+                                ext = os.path.splitext(file_path)[1]
+                                if not ext: ext = ".jpg"
+                                final_filename = f"{fid}{ext}"
 
-                        if await _download_http_safe(f"https://api.telegram.org/file/bot{bot.token}/{finfo.file_path}", lpath):
-                            return (fid, final_filename, sub)
+                            lpath = os.path.abspath(os.path.join(fdir, final_filename))
+
+                            if await _download_http_safe(f"https://api.telegram.org/file/bot{bot.token}/{file_path}", lpath):
+                                return (fid, final_filename, sub)
                             
                     except Exception as e:
                         err_str = str(e).lower()
-                        fatal_errors = ["file_id_invalid", "wrong file_id", "not found", "invalid", "unauthorized", "bad request"]
+                        if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
+                            logger.error(f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling.")
+                            if global_bot_pool:
+                                global_bot_pool.mark_bot_dead_by_token(bot.token)
+                            return None
+
+                        fatal_errors = ["file_id_invalid", "wrong file_id", "not found", "invalid", "bad request"]
                         if any(x in err_str for x in fatal_errors):
                             logger.error(f"🗑️ File {fid[:10]} is DEAD in Telegram. Marking for removal.")
                             return (fid, "deleted", sub)
@@ -262,6 +270,9 @@ async def process_queue_batch():
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
 async def hf_batch_loop():
+    if os.getenv("HF_MIRRORS_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.info("⏸️ HF Batcher Daemon Disabled via HF_MIRRORS_DISABLED env.")
+        return
     logger.info("🚀 HF Batcher Daemon Started")
     cleanup_stale_temp_dirs()
     await asyncio.sleep(30) 

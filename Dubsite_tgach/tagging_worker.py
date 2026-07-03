@@ -20,7 +20,7 @@ from aiogram.exceptions import TelegramBadRequest
 # === НАСТРОЙКИ ===
 logger = logging.getLogger("tagger")
 PROXY_URL = "http://127.0.0.1:10808"
-GROQ_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"
+GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 GROQ_TIMEOUT = 40.0
 BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насиловать ключи
 
@@ -180,7 +180,7 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
             try:
                 transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
                 async with httpx.AsyncClient(proxy=strategy["proxy"], transport=transport, verify=False, timeout=GROQ_TIMEOUT) as http_client:
-                    client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client)
+                    client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client, max_retries=0)
                     resp = await client.chat.completions.create(
                         model=GROQ_MODEL,
                         messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": url}}]}],
@@ -191,6 +191,10 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
                         return content.strip().rstrip('.,')
             except Exception as e:
                 err_str = str(e).lower()
+                if "401" in err_str or "unauthorized" in err_str or "invalid api key" in err_str:
+                    logger.error(f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool.")
+                    groq_pool.remove_token(token)
+                    continue
                 if "413" in err_str:
                     logger.error("❌ 413 Payload Too Large (Even after resize!). Skipping tags.")
                     return "error_413" # Возвращаем спец-код, чтобы сохранить хеши, но без тегов
@@ -315,7 +319,11 @@ async def tagging_loop():
                 # 1. СКАЧИВАНИЕ
                 try:
                     f_info = await bot.get_file(file_id)
-                    f_obj = await bot.download_file(f_info.file_path)
+                    file_path = getattr(f_info, "file_path", None)
+                    if not file_path:
+                        logger.error(f"⚠️ No file_path for {file_id}. Skipping.")
+                        continue
+                    f_obj = await bot.download_file(file_path)
                     img_bytes = f_obj.read() if hasattr(f_obj, 'read') else f_obj
                 except TelegramBadRequest:
                     logger.error(f"🗑️ File {file_id} deleted. Marking error.")
@@ -326,7 +334,13 @@ async def tagging_loop():
                         await db.commit()
                     continue
                 except Exception as e:
-                    logger.warning(f"❌ DL fail {file_id}: {e}")
+                    err_str = str(e).lower()
+                    if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
+                        logger.error(f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling.")
+                        if global_bot_pool:
+                            global_bot_pool.mark_bot_dead_by_token(bot.token)
+                    else:
+                        logger.warning(f"❌ DL fail {file_id}: {e}")
                     TEMP_FAILED_FILES[file_id] = time.time() + 120
                     continue
 
@@ -363,7 +377,7 @@ async def tagging_loop():
                 tag_mark = "🏷️" if (tags and "error" not in tags) else "⚪"
                 tags_preview = "No tags"
                 if tags and "error" not in tags:
-                    parts = [t.strip() for t in tags.split(',') if t.strip()]
+                    parts = [stripped for t in tags.split(',') if (stripped := t.strip())]
                     tags_preview = ", ".join(parts[:3])
                 save_success = False
                 for attempt in range(10):
