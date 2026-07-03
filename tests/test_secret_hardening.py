@@ -641,9 +641,9 @@ class SecurityReportWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "worker.py").write_text(
-                "import time\n"
+                "import subprocess\n"
                 "async def run():\n"
-                "    time.sleep(1)\n",
+                "    subprocess.run(['ls', '-l'])\n",
                 encoding="utf-8",
             )
 
@@ -652,7 +652,23 @@ class SecurityReportWorkflowTests(unittest.TestCase):
             self.assertFalse(report["contains_secret_values"])
             self.assertEqual(report["checked_count"], 1)
             self.assertEqual(report["high_count"], 1)
-            self.assertEqual(report["findings"][0]["call"], "time.sleep")
+            self.assertEqual(report["findings"][0]["call"], "subprocess.run")
+
+    def test_async_blocking_audit_accepts_asyncio_sleep(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "worker.py").write_text(
+                "import asyncio\n"
+                "async def run():\n"
+                "    await asyncio.sleep(1)\n",
+                encoding="utf-8",
+            )
+
+            report = build_async_blocking_report(root)
+
+            self.assertFalse(report["contains_secret_values"])
+            self.assertEqual(report["checked_count"], 1)
+            self.assertEqual(report["high_count"], 0)
 
     def test_status_builder_reports_not_strict_ready_when_actions_exist(self) -> None:
         status = build_status(include_summary_validation=False)
