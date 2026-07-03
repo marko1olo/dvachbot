@@ -6,7 +6,7 @@ import sys
 # Ensure import paths work
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from new_modes import _choose
+from new_modes import _choose, matrix_transform, _PROFILES, _apply_matrix_effects
 
 class TestChoose(unittest.TestCase):
     @patch('new_modes.random.choice')
@@ -41,6 +41,25 @@ class TestChoose(unittest.TestCase):
         # random.choice raises IndexError when choosing from an empty sequence
         with self.assertRaises(IndexError):
             _choose([])
+
+
+
+class TestMatrixTransform(unittest.TestCase):
+    @patch('new_modes._decorate_custom')
+    def test_matrix_transform_basic(self, mock_decorate):
+        mock_decorate.return_value = "decorated text"
+        result = matrix_transform("input text")
+
+        self.assertEqual(result, ("text", "decorated text"))
+        mock_decorate.assert_called_once_with("input text", _PROFILES["matrix"], _apply_matrix_effects)
+
+    @patch('new_modes._decorate_custom')
+    def test_matrix_transform_with_header(self, mock_decorate):
+        mock_decorate.return_value = "decorated text"
+        result = matrix_transform("input text", header="some header")
+
+        self.assertEqual(result, ("text", "decorated text"))
+        mock_decorate.assert_called_once_with("input text", _PROFILES["matrix"], _apply_matrix_effects)
 
 if __name__ == '__main__':
     unittest.main()

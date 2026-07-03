@@ -7,4 +7,9 @@ requires-python = ">=3.11"
 dependencies = []
 
 [tool.pytest.ini_options]
+asyncio_mode = "strict"
+testpaths = ["tests"]
+timeout = 30
+
+[tool.pytest.ini_options]
 pythonpath = "."
