@@ -1,19 +1,44 @@
 import sys
 import unittest
 from pathlib import Path
+import ast
+import site_tgach.admin_config
 
 # Adding project root to path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Mock admin config before importing permissions
-import site_tgach.admin_config
-site_tgach.admin_config.ADMIN_IDS = {9999}
+def load_check_perm():
+    # Read the file Dubsite_tgach/main.py
+    main_py_path = PROJECT_ROOT / "Dubsite_tgach" / "main.py"
+    with open(main_py_path, 'r', encoding='utf-8') as f:
+        source = f.read()
 
-# Also need to make sure python can resolve `permissions` from Dubsite_tgach
-sys.path.insert(0, str(PROJECT_ROOT / "Dubsite_tgach"))
-from permissions import check_perm
+    # Parse to AST
+    tree = ast.parse(source)
+
+    # Extract exactly what we need for check_perm
+    code_str = ""
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if getattr(target, 'id', '') == 'ROLE_HIERARCHY':
+                    code_str += ast.unparse(node) + "\n"
+        elif isinstance(node, ast.FunctionDef) and node.name == 'check_perm':
+            code_str += ast.unparse(node) + "\n"
+
+    # Setup the global variables that check_perm needs
+    namespace = {
+        'ADMIN_IDS': site_tgach.admin_config.ADMIN_IDS
+    }
+
+    # Execute the extracted AST code into our namespace
+    exec(code_str, namespace)
+
+    return namespace['check_perm']
+
+check_perm = load_check_perm()
 
 class TestCheckPerm(unittest.TestCase):
     def test_empty_user(self):
@@ -21,7 +46,8 @@ class TestCheckPerm(unittest.TestCase):
         self.assertFalse(check_perm(None, 'user'))
 
     def test_admin_id(self):
-        admin_id = 9999
+        # The admin IDs should be populated from site_tgach.admin_config.ADMIN_IDS
+        admin_id = list(site_tgach.admin_config.ADMIN_IDS)[0]
         self.assertTrue(check_perm({'id': admin_id}, 'admin'))
         self.assertTrue(check_perm({'id': admin_id}, 'user'))
         self.assertTrue(check_perm({'id': admin_id}, 'janitor'))
