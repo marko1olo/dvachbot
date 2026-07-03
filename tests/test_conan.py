@@ -1,5 +1,5 @@
 import unittest
-<<<<<<< Updated upstream
+<<<<<<< HEAD
 import asyncio
 from unittest.mock import patch, AsyncMock
 from conan import conan_phrase, conan_roaster
@@ -97,7 +97,7 @@ class TestConanPhrase(unittest.TestCase):
         expected = "CustomUser MOCK_INV MOCK_WGT MOCK_ACH MOCK_INS MOCK_FACT MOCK_CATCH"
         self.assertEqual(result, expected)
         self.assertEqual(mock_choice.call_count, 7)
->>>>>>> Stashed changes
+>>>>>>> 87d0c41 (🧪 Add tests for conan_phrase)
 
 if __name__ == '__main__':
     unittest.main()
