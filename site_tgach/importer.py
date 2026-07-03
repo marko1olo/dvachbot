@@ -59,6 +59,7 @@ from common.database import (
     process_backlinks,
 )
 from common.db_pool import db_lock
+from common.config import BIND_IPV4
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -138,11 +139,6 @@ class ThreadImporter:
     def _normalize_html_sync(self, raw_html: str) -> str:
         if not raw_html:
             return ""
-
-        import html as html_lib
-
-        # FIX: Unescape first to let BeautifulSoup see tags properly
-        raw_html = html_lib.unescape(raw_html)
 
         replacements = {
             r"двач": "тгач",
@@ -232,7 +228,7 @@ class ThreadImporter:
                     timeout=90.0,
                     cookies=req_cookies,
                     transport=httpx.AsyncHTTPTransport(
-                        local_address="0.0.0.0", retries=2, proxy=PROXY_URL
+                        local_address=BIND_IPV4, retries=2, proxy=PROXY_URL
                     ),
                 ) as media_client:
                     resp = await media_client.get(url, headers=req_headers)
@@ -585,7 +581,7 @@ class ThreadImporter:
 
         # Configured Transport from New Version
         transport = httpx.AsyncHTTPTransport(
-            local_address="0.0.0.0",  # Принудительный IPv4 (Fix для OpenVPN)
+            local_address=BIND_IPV4,  # Принудительный IPv4 (Fix для OpenVPN)
             retries=3,
             verify=False,
             http2=False,  # Строго HTTP/1.1
@@ -871,19 +867,30 @@ class ThreadImporter:
                         values_placeholders = []
                         params = []
                         for p_data in chunk:
-                            content = json.dumps({
-                                "text": p_data["text"],
-                                "files": p_data["files"],
-                                "type": "files" if p_data["files"] else "text"
-                            })
+                            content = json.dumps(
+                                {
+                                    "text": p_data["text"],
+                                    "files": p_data["files"],
+                                    "type": "files" if p_data["files"] else "text",
+                                }
+                            )
                             values_placeholders.append("(?, ?, ?, ?, ?, NULL, ?)")
-                            params.extend((target_board, new_thread_id, content, p_data["timestamp"], p_data["author_id"], stream))
+                            params.extend(
+                                (
+                                    target_board,
+                                    new_thread_id,
+                                    content,
+                                    p_data["timestamp"],
+                                    p_data["author_id"],
+                                    stream,
+                                )
+                            )
 
                         cur = await conn.execute(
                             f"""INSERT INTO posts
                                (board_id, thread_id, content, timestamp, author_id, reply_to_post_num, stream) 
                                VALUES {','.join(values_placeholders)} RETURNING post_num""",
-                            params
+                            params,
                         )
                         rows = await cur.fetchall()
                         for idx, (new_id,) in enumerate(rows):
@@ -900,16 +907,21 @@ class ThreadImporter:
                 from common.config import STORAGE_CHANNELS
 
                 current_channel = STORAGE_CHANNELS.get(stream, STORAGE_CHANNELS["ru"])
+                channel_copies_params = []
                 for p_data in prepared_posts:
                     p_num = id_map.get(p_data["old_id"])
                     if not p_num:
                         continue
                     for f in p_data["files"]:
                         if f.get("channel_message_id"):
-                            await conn.execute(
-                                "INSERT OR IGNORE INTO ChannelCopies (post_num, channel_id, message_id) VALUES (?, ?, ?)",
-                                (p_num, current_channel, f["channel_message_id"]),
+                            channel_copies_params.append(
+                                (p_num, current_channel, f["channel_message_id"])
                             )
+                if channel_copies_params:
+                    await conn.executemany(
+                        "INSERT OR IGNORE INTO ChannelCopies (post_num, channel_id, message_id) VALUES (?, ?, ?)",
+                        channel_copies_params,
+                    )
                 await conn.commit()
 
                 for i in range(0, len(prepared_posts), chunk_size):

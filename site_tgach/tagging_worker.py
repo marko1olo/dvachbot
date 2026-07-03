@@ -361,7 +361,7 @@ async def tagging_loop():
                 if not thumb_id:
                     logger.warning(f"⚠️ Video {file_id} has no thumb. Skipping tag.")
                     async with db_lock:
-                        await db.execute("UPDATE FileRegistry SET tags='no_thumb' WHERE file_id=?", (file_id,))
+                        await db.executemany("UPDATE FileRegistry SET tags='no_thumb' WHERE file_id=?", [(file_id,)])
                         await db.commit()
                     continue
                 download_target_id = thumb_id
@@ -370,12 +370,16 @@ async def tagging_loop():
                 # 1. СКАЧИВАНИЕ
                 try:
                     f_info = await bot.get_file(download_target_id)
-                    f_obj = await bot.download_file(f_info.file_path)
+                    file_path = getattr(f_info, "file_path", None)
+                    if not file_path:
+                        logger.error(f"⚠️ No file_path for {download_target_id}. Skipping.")
+                        continue
+                    f_obj = await bot.download_file(file_path)
                     img_bytes = f_obj.read() if hasattr(f_obj, 'read') else f_obj
                 except TelegramBadRequest:
                     logger.error(f"🗑️ File {download_target_id} deleted. Marking error.")
                     async with db_lock:
-                        await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
+                        await db.executemany("UPDATE FileRegistry SET tags='error' WHERE file_id=?", [(file_id,)])
                         await db.commit()
                     continue
                 except Exception as e:
@@ -397,8 +401,8 @@ async def tagging_loop():
                     # Сохраняем как ошибку, чтобы не долбить
                     sha_fail = hashlib.sha256(img_bytes).hexdigest()
                     async with db_lock:
-                        await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
-                        await db.execute("INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)", (sha_fail, file_id, time.time()))
+                        await db.executemany("UPDATE FileRegistry SET tags='error' WHERE file_id=?", [(file_id,)])
+                        await db.executemany("INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)", [(sha_fail, file_id, time.time())])
                         await db.commit()
                     continue
 
