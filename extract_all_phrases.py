@@ -41,29 +41,30 @@ def extract_strings_from_file(filepath):
                             phrases.append({'file': filepath, 'line': node.lineno, 'text': kw.value.value})
     return phrases
 
-all_phrases = []
-for root, dirs, files in os.walk('.'):
-    # skip venv, git, etc
-    if 'venv' in root or '.git' in root or '__pycache__' in root:
-        continue
-    for file in files:
-        if file.endswith('.py'):
-            filepath = os.path.join(root, file)
-            all_phrases.extend(extract_strings_from_file(filepath))
+if __name__ == '__main__':
+    all_phrases = []
+    for root, dirs, files in os.walk('.'):
+        # skip venv, git, etc
+        if 'venv' in root or '.git' in root or '__pycache__' in root:
+            continue
+        for file in files:
+            if file.endswith('.py'):
+                filepath = os.path.join(root, file)
+                all_phrases.extend(extract_strings_from_file(filepath))
 
-# Remove duplicates based on text
-unique_phrases = {}
-for p in all_phrases:
-    if p['text'] not in unique_phrases:
-        unique_phrases[p['text']] = []
-    unique_phrases[p['text']].append(f"{p['file']}:{p['line']}")
+    # Remove duplicates based on text
+    unique_phrases = {}
+    for p in all_phrases:
+        if p['text'] not in unique_phrases:
+            unique_phrases[p['text']] = []
+        unique_phrases[p['text']].append(f"{p['file']}:{p['line']}")
 
-# Format output
-output = []
-for text, locs in unique_phrases.items():
-    output.append({'text': text, 'locations': locs})
+    # Format output
+    output = []
+    for text, locs in unique_phrases.items():
+        output.append({'text': text, 'locations': locs})
 
-with open('phrases_all.json', 'w', encoding='utf-8') as f:
-    json.dump(output, f, ensure_ascii=False, indent=2)
+    with open('phrases_all.json', 'w', encoding='utf-8') as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
 
-print(f"Extracted {len(output)} unique phrases to phrases_all.json")
+    print(f"Extracted {len(output)} unique phrases to phrases_all.json")
