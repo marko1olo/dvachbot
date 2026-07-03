@@ -2,7 +2,8 @@ import subprocess
 
 def run_cmd(cmd, check=True):
     try:
-        return subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT).decode('utf-8').strip()
+        # Add a timeout so git commands won't hang indefinitely (e.g. asking for pagination or credentials)
+        return subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT, timeout=60).decode('utf-8').strip()
     except subprocess.CalledProcessError as e:
         if check:
             raise
@@ -25,11 +26,11 @@ def main():
             continue
             
         try:
-            log = run_cmd(["git", "--no-pager", "log", "--oneline", "--", f"main..{branch}"])
+            log = run_cmd(["git", "--no-pager", "log", f"main..{branch}", "--oneline"])
             if not log:
                 continue # No commits to merge
             
-            diffstat = run_cmd(["git", "--no-pager", "diff", "--shortstat", "--", f"main...{branch}"])
+            diffstat = run_cmd(["git", "--no-pager", "diff", "--shortstat", f"main...{branch}"])
             if not diffstat.strip():
                 continue # Empty diff, already merged or empty
                 
