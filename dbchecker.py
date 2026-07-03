@@ -33,6 +33,12 @@ def format_size(size_bytes):
     return f"{size_bytes:.2f} TB"
 
 
+def quote_identifier(s):
+    """Safely escapes SQLite identifiers."""
+    escaped_s = s.replace('"', '""')
+    return f'"{escaped_s}"'
+
+
 def check_integrity(cur):
     print(f"\n{Colors.BOLD}1. Проверка физической целостности (integrity_check)...{Colors.ENDC}")
     start_time = time.time()
@@ -49,15 +55,24 @@ def check_integrity(cur):
 
 def get_table_statistics(cur, tables):
     print(f"\n{Colors.BOLD}2. Статистика таблиц{Colors.ENDC}")
+
+    # Fetch valid table names from sqlite_master for whitelisting
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    valid_tables = {row[0] for row in cur.fetchall()}
+
     total_rows = 0
     print(f"{'Таблица':<25} | {'Строк':<10}")
     print("-" * 40)
     for table in tables:
+        if table not in valid_tables:
+            print(f"{table:<25} | {'NOT IN DB':<10}")
+            continue
         if not re.match(r'^[a-zA-Z0-9_]+$', table):
             print(f"{table:<25} | {'INVALID NAME':<10}")
             continue
         try:
-            cur.execute(f'SELECT COUNT(*) FROM "{table}"')
+            safe_table = quote_identifier(table)
+            cur.execute(f'SELECT COUNT(*) FROM {safe_table}')
             count = cur.fetchone()[0]
             print(f"{table:<25} | {count:<10}")
             total_rows += count
@@ -120,24 +135,42 @@ def find_logical_garbage(cur, tables):
         "Reports": "post_num"
     }
     
+    # Fetch valid table names from sqlite_master for whitelisting
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    valid_tables = {row[0] for row in cur.fetchall()}
+
     orphan_tables = []
+    queries = []
+
     for table, col in tables_to_check.items():
         if table in tables:
+            if table not in valid_tables:
+                print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: нет в базе{Colors.ENDC}")
+                continue
             if not re.match(r'^[a-zA-Z0-9_]+$', table):
                 print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: недопустимое имя{Colors.ENDC}")
                 continue
-            cur.execute(f"""
-                SELECT COUNT(*) FROM "{table}" t
-                LEFT JOIN Posts p ON t.{col} = p.post_num
-                WHERE p.post_num IS NULL
+            safe_table = quote_identifier(table)
+            safe_col = quote_identifier(col)
+            queries.append(f"""
+                SELECT '{table}' as table_name, '{col}' as col_name, COUNT(*) as orphans
+                FROM {safe_table} t
+                WHERE NOT EXISTS (SELECT 1 FROM Posts p WHERE p.post_num = t.{safe_col})
             """)
-            orphans = cur.fetchone()[0]
+
+    if queries:
+        cur.execute(" UNION ALL ".join(queries))
+        results = cur.fetchall()
+        for row in results:
+            table_name = row[0]
+            col_name = row[1]
+            orphans = row[2]
             if orphans > 0:
-                print(f"{Colors.FAIL}⚠️  Мусор в таблице {table}: {orphans} записей (ссылаются на удаленные посты){Colors.ENDC}")
+                print(f"{Colors.FAIL}⚠️  Мусор в таблице {table_name}: {orphans} записей (ссылаются на удаленные посты){Colors.ENDC}")
                 garbage_found = True
-                orphan_tables.append((table, col))
+                orphan_tables.append((table_name, col_name))
             else:
-                print(f"{Colors.OKGREEN}✓ Таблица {table} чиста{Colors.ENDC}")
+                print(f"{Colors.OKGREEN}✓ Таблица {table_name} чиста{Colors.ENDC}")
 
     # 3.5 Просроченные муты/баны (которые уже истекли, но висят в БД)
     current_ts = time.time()
