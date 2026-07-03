@@ -36,7 +36,6 @@ import os
 import tracemalloc
 import uuid
 import math
-import tempfile
 import random
 import re
 import secrets
@@ -73,7 +72,7 @@ from common.database import (
     upsert_delivery_queue_item, delete_delivery_queue_item, get_pending_delivery_queue_items,
     get_posts_from_broadcast_queue, cleanup_broadcast_queue, get_or_create_api_token, get_user_by_token, remove_regular_mute, apply_regular_mute,
     get_and_clear_notification_queue, search_posts, update_post_content, remove_user_from_board, cleanup_old_posts_from_db, find_post_by_file_id,
-    load_all_spam_words, add_spam_word, remove_spam_word, delete_post_by_num, add_reaction_ban, remove_reaction_ban, load_all_reaction_bans, set_channel_message_id, get_max_post_num, get_weekly_active_users, get_reply_coverage_stats,
+    load_all_spam_words, add_spam_word, remove_spam_word, delete_post_by_num, add_reaction_ban, remove_reaction_ban, load_all_reaction_bans, get_max_post_num, get_weekly_active_users, get_reply_coverage_stats,
     get_random_video_post, get_random_image_post
 )
 from site_tgach.admin_config import ADMIN_IDS
@@ -196,7 +195,7 @@ from help_text import (
 from japanese_translator import (
     anime_transform, get_random_anime_image, get_monogatari_image, 
     get_nsfw_anime_image, get_loli_image, get_dynamic_proxy_url,
-    _get_proxy_usage_strategy, _update_proxy_state_on_failure
+    _get_proxy_usage_strategy
 )
 from summarize import summarize_text_with_hf, create_telegraph_page_async
 from thread_texts import thread_messages
@@ -223,7 +222,7 @@ try:
     import matplotlib
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
-    from matplotlib.ticker import MaxNLocator, FuncFormatter
+    from matplotlib.ticker import FuncFormatter
     matplotlib.use('Agg')  # Используем бэкенд, не требующий GUI
     GRAPH_LIBS_AVAILABLE = True
 except ImportError:
@@ -1765,17 +1764,13 @@ def _collect_board_map_totals() -> dict:
     for timestamps in image_spam_tracker.values():
         totals["image_spam_items"] += _safe_len(timestamps)
     return totals
-def _collect_runtime_snapshot() -> dict:
-
-    queue_sizes = {board: message_queues[board].qsize() for board in BOARDS if board in message_queues}
-    top_queues = sorted(queue_sizes.items(), key=lambda item: item[1], reverse=True)[:5]
-    queue_age_summary = _summarize_live_queue_ages(queue_sizes)
-    priority_counts = {board: _safe_len(weekly_active_users.get(board, set())) for board in BOARDS}
-    pending_done = 0
+def _get_pending_edit_done_count() -> int:
     try:
-        pending_done = sum(1 for task in pending_edit_tasks.values() if task.done())
+        return sum(1 for task in pending_edit_tasks.values() if task.done())
     except Exception:
-        pending_done = -1
+        return -1
+
+def _collect_board_totals() -> dict:
     board_totals = {
         "active_users": 0,
         "shadow_mutes": 0,
@@ -1797,70 +1792,118 @@ def _collect_runtime_snapshot() -> dict:
         reaction_queue = b_data.get("reaction_queue", {})
         if isinstance(reaction_queue, dict):
             board_totals["reaction_queue_items"] += sum(_safe_len(q) for q in reaction_queue.values())
-    board_map_totals = _collect_board_map_totals()
-    recipient_counts = _recipient_counts_snapshot()
+    return board_totals
+
+def _collect_task_stats() -> dict:
     try:
         all_tasks = asyncio.all_tasks()
-        task_stats = {
+        return {
             "total": len(all_tasks),
             "done": sum(1 for task in all_tasks if task.done()),
         }
     except RuntimeError:
-        task_stats = {"total": 0, "done": 0}
+        return {"total": 0, "done": 0}
+
+def _build_queues_snapshot(queue_sizes: dict, top_queues: list, queue_age_summary: dict) -> dict:
     return {
-        "utc": datetime.now(UTC).isoformat(),
-        "post_counter": state.get("post_counter", 0),
-        "memory": _get_process_memory_snapshot(),
-        "db_files": _get_db_file_snapshot(),
-        "controlled_stop": _controlled_stop_snapshot(),
-        "queues": {
-            "total": sum(queue_sizes.values()),
-            "by_board": queue_sizes,
-            "top": top_queues,
-            "age_by_board": queue_age_summary["by_board"],
-            "oldest": queue_age_summary["oldest"],
-            "in_flight": queue_age_summary["in_flight"],
-        },
-        "delivery_priority": {
-            "enabled": PRIORITY_DELIVERY_ENABLED,
-            "split_fanout": PRIORITY_SPLIT_FANOUT_ENABLED,
-            "split_min_passive": PRIORITY_SPLIT_MIN_PASSIVE,
-            "passive_slice_size": PRIORITY_PASSIVE_SLICE_SIZE,
-            "passive_media_slice_size": PRIORITY_PASSIVE_MEDIA_SLICE_SIZE,
-            "pressure_slice_age_sec": PRIORITY_PRESSURE_SLICE_AGE_SEC,
-            "pressure_passive_slice_size": PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
-            "pressure_passive_media_slice_size": PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
-            "passive_max_preemptions": PASSIVE_MAX_PREEMPTIONS,
-            "priority_phase_budget_sec": PRIORITY_PHASE_BUDGET_SEC,
-            "passive_phase_budget_sec": PASSIVE_PHASE_BUDGET_SEC,
+        "total": sum(queue_sizes.values()),
+        "by_board": queue_sizes,
+        "top": top_queues,
+        "age_by_board": queue_age_summary["by_board"],
+        "oldest": queue_age_summary["oldest"],
+        "in_flight": queue_age_summary["in_flight"],
+    }
+
+def _build_delivery_priority_snapshot(priority_counts: dict) -> dict:
+    return {
+        "enabled": PRIORITY_DELIVERY_ENABLED,
+        "split_fanout": PRIORITY_SPLIT_FANOUT_ENABLED,
+        "split_min_passive": PRIORITY_SPLIT_MIN_PASSIVE,
+        "passive_slice_size": PRIORITY_PASSIVE_SLICE_SIZE,
+        "passive_media_slice_size": PRIORITY_PASSIVE_MEDIA_SLICE_SIZE,
+        "pressure_slice_age_sec": PRIORITY_PRESSURE_SLICE_AGE_SEC,
+        "pressure_passive_slice_size": PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
+        "pressure_passive_media_slice_size": PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
+        "passive_max_preemptions": PASSIVE_MAX_PREEMPTIONS,
+        "priority_phase_budget_sec": PRIORITY_PHASE_BUDGET_SEC,
+        "passive_phase_budget_sec": PASSIVE_PHASE_BUDGET_SEC,
         "delivery_initial_chunk_size": DELIVERY_INITIAL_CHUNK_SIZE,
         "delivery_min_chunk_size": DELIVERY_MIN_CHUNK_SIZE,
         "delivery_per_recipient_timeout_sec": DELIVERY_PER_RECIPIENT_TIMEOUT_SEC,
         "delivery_telegram_request_timeout_sec": DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC,
         "delivery_max_recipient_retries": DELIVERY_MAX_RECIPIENT_RETRIES,
         "delivery_phase_guard_sec": DELIVERY_PHASE_GUARD_SEC,
-            "days": WEEKLY_ACTIVE_DAYS,
-            "refresh_sec": WEEKLY_ACTIVE_REFRESH_SECONDS,
-            "total_weekly_active": sum(priority_counts.values()),
-            "by_board": priority_counts,
-            "updated_at": weekly_active_updated_at.copy(),
-        },
-        "recipients": recipient_counts,
+        "days": WEEKLY_ACTIVE_DAYS,
+        "refresh_sec": WEEKLY_ACTIVE_REFRESH_SECONDS,
+        "total_weekly_active": sum(priority_counts.values()),
+        "by_board": priority_counts,
+        "updated_at": weekly_active_updated_at.copy(),
+    }
+
+def _build_anime_media_snapshot() -> dict:
+    return {
+        "concurrency": ANIME_MEDIA_CONCURRENCY,
+        "b_max_stacked_images": B_MAX_STACKED_ANIME_IMAGES,
+        "url_timeout_sec": ANIME_URL_FETCH_TIMEOUT_SEC,
+        "url_total_sec": ANIME_URL_FETCH_TOTAL_SEC,
+        "url_parallel": ANIME_URL_FETCH_PARALLEL,
+        "download_timeout_sec": ANIME_DOWNLOAD_TIMEOUT_SEC,
+        "download_total_sec": ANIME_DOWNLOAD_TOTAL_SEC,
+        "download_parallel": ANIME_DOWNLOAD_PARALLEL,
+        "refill_rounds": ANIME_REFILL_ROUNDS,
+    }
+
+def _collect_global_maps_snapshot(pending_done: int) -> dict:
+    return {
+        "messages_storage": _safe_len(messages_storage),
+        "post_to_messages": _safe_len(post_to_messages),
+        "message_to_post": _safe_len(message_to_post),
+        "shadow_fake_post_counters": _safe_len(shadow_fake_post_counters),
+        "pending_edit_tasks": _safe_len(pending_edit_tasks),
+        "pending_edit_done": pending_done,
+        "current_media_groups": _safe_len(current_media_groups),
+        "media_group_timers": _safe_len(media_group_timers),
+        "posts_pending_deletion": _safe_len(posts_pending_deletion),
+        "unknown_command_tracker": _safe_len(unknown_command_tracker),
+        "contextual_reply_tracker": _safe_len(contextual_reply_tracker),
+        "user_spam_locks": _safe_len(user_spam_locks),
+        "generate_locks": _safe_len(generate_locks),
+        "user_last_thread_action": _safe_len(user_last_thread_action),
+        "reaction_ratelimit": _safe_len(reaction_ratelimit),
+        "last_poll_creation_time": _safe_len(last_poll_creation_time),
+        "last_poll_vote_time": _safe_len(last_poll_vote_time),
+        "user_hourly_image_count": _safe_len(user_hourly_image_count),
+        "user_hourly_image_reset": _safe_len(user_hourly_image_reset),
+        "author_reaction_notify_tracker": _safe_len(author_reaction_notify_tracker),
+        "network_retry_state": _safe_len(network_retry_state),
+        "image_spam_tracker": _safe_len(image_spam_tracker),
+        "stream_cache": _safe_len(stream_cache),
+        "graph_stats": _safe_len(graph_stats),
+        "roulette_events": _safe_len(ROULETTE_EVENTS),
+    }
+
+def _collect_runtime_snapshot() -> dict:
+
+    queue_sizes = {board: message_queues[board].qsize() for board in BOARDS if board in message_queues}
+    top_queues = sorted(queue_sizes.items(), key=lambda item: item[1], reverse=True)[:5]
+    queue_age_summary = _summarize_live_queue_ages(queue_sizes)
+    priority_counts = {board: _safe_len(weekly_active_users.get(board, set())) for board in BOARDS}
+    pending_done = _get_pending_edit_done_count()
+
+    return {
+        "utc": datetime.now(UTC).isoformat(),
+        "post_counter": state.get("post_counter", 0),
+        "memory": _get_process_memory_snapshot(),
+        "db_files": _get_db_file_snapshot(),
+        "controlled_stop": _controlled_stop_snapshot(),
+        "queues": _build_queues_snapshot(queue_sizes, top_queues, queue_age_summary),
+        "delivery_priority": _build_delivery_priority_snapshot(priority_counts),
+        "recipients": _recipient_counts_snapshot(),
         "durable_delivery": {
             "enabled": DURABLE_DELIVERY_QUEUE_ENABLED,
             **durable_delivery_stats,
         },
-        "anime_media": {
-            "concurrency": ANIME_MEDIA_CONCURRENCY,
-            "b_max_stacked_images": B_MAX_STACKED_ANIME_IMAGES,
-            "url_timeout_sec": ANIME_URL_FETCH_TIMEOUT_SEC,
-            "url_total_sec": ANIME_URL_FETCH_TOTAL_SEC,
-            "url_parallel": ANIME_URL_FETCH_PARALLEL,
-            "download_timeout_sec": ANIME_DOWNLOAD_TIMEOUT_SEC,
-            "download_total_sec": ANIME_DOWNLOAD_TOTAL_SEC,
-            "download_parallel": ANIME_DOWNLOAD_PARALLEL,
-            "refill_rounds": ANIME_REFILL_ROUNDS,
-        },
+        "anime_media": _build_anime_media_snapshot(),
         "mode_punchup": {
             "enabled": MODE_PUNCHUP_ENABLED,
             "runtime_enabled": mode_punchup_runtime_enabled,
@@ -1881,36 +1924,10 @@ def _collect_runtime_snapshot() -> dict:
             **reply_coverage_stats,
         },
         "delivery": _summarize_delivery_metrics(),
-        "maps": {
-            "messages_storage": _safe_len(messages_storage),
-            "post_to_messages": _safe_len(post_to_messages),
-            "message_to_post": _safe_len(message_to_post),
-            "shadow_fake_post_counters": _safe_len(shadow_fake_post_counters),
-            "pending_edit_tasks": _safe_len(pending_edit_tasks),
-            "pending_edit_done": pending_done,
-            "current_media_groups": _safe_len(current_media_groups),
-            "media_group_timers": _safe_len(media_group_timers),
-            "posts_pending_deletion": _safe_len(posts_pending_deletion),
-            "unknown_command_tracker": _safe_len(unknown_command_tracker),
-            "contextual_reply_tracker": _safe_len(contextual_reply_tracker),
-            "user_spam_locks": _safe_len(user_spam_locks),
-            "generate_locks": _safe_len(generate_locks),
-            "user_last_thread_action": _safe_len(user_last_thread_action),
-            "reaction_ratelimit": _safe_len(reaction_ratelimit),
-            "last_poll_creation_time": _safe_len(last_poll_creation_time),
-            "last_poll_vote_time": _safe_len(last_poll_vote_time),
-            "user_hourly_image_count": _safe_len(user_hourly_image_count),
-            "user_hourly_image_reset": _safe_len(user_hourly_image_reset),
-            "author_reaction_notify_tracker": _safe_len(author_reaction_notify_tracker),
-            "network_retry_state": _safe_len(network_retry_state),
-            "image_spam_tracker": _safe_len(image_spam_tracker),
-            "stream_cache": _safe_len(stream_cache),
-            "graph_stats": _safe_len(graph_stats),
-            "roulette_events": _safe_len(ROULETTE_EVENTS),
-        },
-        "board_maps": board_map_totals,
-        "board_totals": board_totals,
-        "asyncio_tasks": task_stats,
+        "maps": _collect_global_maps_snapshot(pending_done),
+        "board_maps": _collect_board_map_totals(),
+        "board_totals": _collect_board_totals(),
+        "asyncio_tasks": _collect_task_stats(),
         "gc_count": gc.get_count(),
         "tracemalloc": {
             "enabled": tracemalloc.is_tracing(),
@@ -4050,7 +4067,7 @@ class ModeTransformer:
             await self._apply_residual_modes()
 
         await self._apply_anime_mode()
-        
+
         return self.modified_content
 
 async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
@@ -4061,67 +4078,6 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
     """
     transformer = ModeTransformer(content, board_id)
     return await transformer.apply()
-
-def _get_download_headers(domain: str, scheme: str) -> dict:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Sec-Fetch-Dest": "image",
-        "Sec-Fetch-Mode": "no-cors",
-        "Sec-Fetch-Site": "cross-site",
-        "Pragma": "no-cache",
-        "Cache-Control": "no-cache",
-    }
-
-    if "gelbooru" in domain:
-        headers["Referer"] = "https://gelbooru.com/"
-    elif "konachan" in domain:
-        headers["Referer"] = "https://konachan.com/"
-    elif "yande.re" in domain:
-        headers["Referer"] = "https://yande.re/"
-    elif "danbooru" in domain:
-        headers["Referer"] = "https://danbooru.donmai.us/"
-    elif "aibooru" in domain:
-        headers["Referer"] = "https://aibooru.online/"
-    else:
-        headers["Referer"] = f"{scheme}://{domain}/"
-
-    return headers
-
-async def _fetch_image_data(session, url: str, proxy: str | None, is_fallback: bool = False, url_log: str = "") -> tuple[bytes, int] | None:
-    try:
-        async with session.get(url, allow_redirects=True, proxy=proxy) as response:
-            if response.status == 200:
-                content_type = response.headers.get('Content-Type', '').lower()
-                data = await response.read()
-
-                if 'text/html' in content_type or (len(data) > 0 and data.strip().startswith(b'<') and b'<html' in data[:500].lower()):
-                    try:
-                        error_text = data[:300].decode('utf-8', errors='ignore').replace('\n', ' ')
-                    except Exception:
-                        error_text = "Binary/Unknown"
-
-                    print(f"⚠️ [DEBUG_DL] Ссылка вернула HTML заглушку. Содержимое: {error_text}")
-                    return None
-
-                if len(data) > 49.5 * 1024 * 1024:
-                    print(f"⚠️ [DEBUG_DL] Файл слишком велик ({len(data)} байт). Пропуск.")
-                    return None
-
-                if len(data) > 0:
-                    print(f"✅ [DEBUG_DL] Скачано {len(data)} байт.{' Успех через DIRECT.' if is_fallback else ''}")
-                    return data, len(data)
-            else:
-                if not is_fallback:
-                    print(f"⚠️ [DEBUG_DL] Статус ответа: {response.status} для {url_log}")
-    except Exception as e:
-        if not is_fallback:
-            raise e
-
-    return None
 
 def _get_download_headers(domain: str, scheme: str) -> dict:
     headers = {
@@ -8025,8 +7981,8 @@ async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str
             await message.answer_photo(photo, caption=text_report, parse_mode="HTML")
         else:
             await message.answer(text_report, parse_mode="HTML")
-    except Exception as e:
-        await message.answer(f"⚠️ Ошибка генерации статистики: {e}")
+    except Exception:
+        await message.answer("⚠️ Ошибка генерации статистики. Пожалуйста, попробуйте позже.")
 
     try: await sent_msg.delete()
     except Exception: pass
