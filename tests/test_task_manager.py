@@ -1,23 +1,10 @@
-import os
+from __future__ import annotations
+
+import asyncio
 import sys
 import unittest
-import asyncio
-from unittest.mock import patch, MagicMock
 from pathlib import Path
-
-# Setup env variables
-os.environ["SECRET_KEY"] = "test"
-os.environ["BOT_TOKEN"] = "test"
-os.environ["OPENAI_API_KEY"] = "test"
-os.environ['ADMIN_CHAT_ID'] = '123456789'
-os.environ['API_ID'] = '123'
-os.environ['API_HASH'] = 'test_hash'
-os.environ['BASE_URL'] = 'http://test.com'
-
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -26,51 +13,69 @@ if str(PROJECT_ROOT) not in sys.path:
 from common.task_manager import spawn_task, _background_tasks
 
 class TestTaskManager(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # Clear the background tasks set before each test
+        _background_tasks.clear()
+
     async def dummy_coro(self):
         await asyncio.sleep(0.01)
+        return "done"
 
-    async def test_spawn_task_normal(self):
-        coro = self.dummy_coro()
-        task = spawn_task(coro, name="test_task")
+    async def dummy_error_coro(self):
+        await asyncio.sleep(0.01)
+        raise ValueError("test error")
 
+    async def test_spawn_task_adds_and_removes(self):
+        task = spawn_task(self.dummy_coro())
+
+        # It should be added immediately
         self.assertIn(task, _background_tasks)
-        self.assertEqual(task.get_name(), "test_task")
 
-        # Wait for task to finish to let the callback remove it
+        # Wait for completion
         await task
-        # allow callbacks to run
-        await asyncio.sleep(0.02)
 
+        # It should be removed after completion
+        # add_done_callback happens at some point after task is done,
+        # await task returns, but callbacks are scheduled.
+        # To ensure the callback has run, we might need to yield to the event loop.
+        await asyncio.sleep(0)
+        self.assertNotIn(task, _background_tasks)
+
+    async def test_spawn_task_with_name(self):
+        task = spawn_task(self.dummy_coro(), name="my_test_task")
+
+        # For python >= 3.8
+        if hasattr(task, 'get_name'):
+            self.assertEqual(task.get_name(), "my_test_task")
+
+        await task
+        await asyncio.sleep(0)
+        self.assertNotIn(task, _background_tasks)
+
+    async def test_spawn_task_error_removes(self):
+        task = spawn_task(self.dummy_error_coro())
+        self.assertIn(task, _background_tasks)
+
+        with self.assertRaises(ValueError):
+            await task
+
+        await asyncio.sleep(0)
         self.assertNotIn(task, _background_tasks)
 
     async def test_spawn_task_type_error_fallback(self):
-        coro = self.dummy_coro()
+        original_create_task = asyncio.create_task
 
-        # Use an actual dummy task to properly test the callback behavior
-        # We create it before patching so it doesn't inflate the call_count
-        real_task = asyncio.create_task(coro)
-
-        def side_effect(*args, **kwargs):
+        def mock_create_task(coro, *args, **kwargs):
             if 'name' in kwargs:
-                raise TypeError("name is an invalid keyword argument for create_task")
-            return real_task
+                raise TypeError("name is an invalid keyword argument for create_task()")
+            return original_create_task(coro)
 
-        with patch('common.task_manager.asyncio.create_task') as mock_create_task:
-            mock_create_task.side_effect = side_effect
+        with patch('common.task_manager.asyncio.create_task', side_effect=mock_create_task):
+            task = spawn_task(self.dummy_coro(), name="will_fail")
+            self.assertIn(task, _background_tasks)
+            await task
+            await asyncio.sleep(0)
+            self.assertNotIn(task, _background_tasks)
 
-            task = spawn_task(coro, name="test_task")
-
-            self.assertIn(real_task, _background_tasks)
-            self.assertEqual(task, real_task)
-
-            # Verify it was called twice - once with name, once without
-            self.assertEqual(mock_create_task.call_count, 2)
-            mock_create_task.assert_any_call(coro, name="test_task")
-            mock_create_task.assert_any_call(coro)
-
-        # Cleanup
-        await real_task
-        await asyncio.sleep(0.02)
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
