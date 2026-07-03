@@ -692,12 +692,13 @@ async def site_spam_cleanup_task():
             now = time.time()
             for board_id in list(site_spam_tracker.keys()):
                 board_data = site_spam_tracker[board_id]
-                inactive_users = [
-                    uid for uid, hist in board_data.items() 
-                    if not hist['timestamps'] or (now - hist['timestamps'][-1] > 3600)
-                ]
-                for uid in inactive_users:
-                    del board_data[uid]
+                active_users = {
+                    uid: hist for uid, hist in board_data.items()
+                    if hist['timestamps'] and (now - hist['timestamps'][-1] <= 3600)
+                }
+                if len(active_users) != len(board_data):
+                    board_data.clear()
+                    board_data.update(active_users)
                 if not board_data:
                     del site_spam_tracker[board_id]
             logger.info("✅ [Site] Spam tracker cleaned.")
