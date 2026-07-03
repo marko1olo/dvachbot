@@ -1,10 +1,10 @@
+import os
+
 # Список Telegram ID администраторов, которым будут доступны
 # функции модерации на сайте.
 try:
     from common.config import ADMIN_IDS as CONFIG_ADMIN_IDS
-    ADMIN_IDS = CONFIG_ADMIN_IDS if CONFIG_ADMIN_IDS else {7716348189, 1890028643}
+    ADMIN_IDS = CONFIG_ADMIN_IDS
 except ImportError:
-    ADMIN_IDS = {
-        7716348189,
-        1890028643,
-    }
+    admin_env = os.getenv("ADMINS", "")
+    ADMIN_IDS = {int(x.strip()) for x in admin_env.split(",") if x.strip().isdigit()}
