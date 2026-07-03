@@ -7,7 +7,6 @@ import json
 import time
 import logging
 import traceback
-from datetime import datetime
 from io import BytesIO
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -33,7 +32,6 @@ from common.database import (
     add_to_hf_queue,
     create_post,
     create_thread_entry,
-    update_post_content,
     get_post_for_broadcast,
     update_thread_last_updated,
     process_backlinks,

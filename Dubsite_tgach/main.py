@@ -699,12 +699,13 @@ async def site_spam_cleanup_task():
             now = time.time()
             for board_id in list(site_spam_tracker.keys()):
                 board_data = site_spam_tracker[board_id]
-                inactive_users = [
-                    uid for uid, hist in board_data.items() 
-                    if not hist['timestamps'] or (now - hist['timestamps'][-1] > 3600)
-                ]
-                for uid in inactive_users:
-                    del board_data[uid]
+                active_users = {
+                    uid: hist for uid, hist in board_data.items()
+                    if hist['timestamps'] and (now - hist['timestamps'][-1] <= 3600)
+                }
+                if len(active_users) != len(board_data):
+                    board_data.clear()
+                    board_data.update(active_users)
                 if not board_data:
                     del site_spam_tracker[board_id]
             logger.info("✅ [Site] Spam tracker cleaned.")
@@ -1016,6 +1017,7 @@ class BlockBadBots:
             "bytespider", "claudebot", "amazonbot", "semrushbot", 
             "dotbot", "mj12bot", "ahrefsbot", "gptbot", "ccbot"
         ]
+        self.bot_pattern = re.compile('|'.join(map(re.escape, self.blocked_agents)))
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -1024,7 +1026,7 @@ class BlockBadBots:
 
         headers = dict(scope.get("headers", []))
         user_agent = headers.get(b"user-agent", b"").decode("latin-1").lower()
-        if any(bot in user_agent for bot in self.blocked_agents):
+        if bool(self.bot_pattern.search(user_agent)):
             response = Response("Go away, bot.", status_code=403)
             await response(scope, receive, send)
             return
@@ -1203,7 +1205,7 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.youtube.com https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline' https://www.youtube.com https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: https: blob:; "
         "media-src 'self' https: blob:; "
@@ -1377,7 +1379,8 @@ async def global_data_middleware(request: Request, call_next):
                     try:
                         token_uns = signer.unsign(raw_token, max_age=31536000).decode()
                         guest_id = generate_negative_id(token_uns)
-                    except: pass
+                    except Exception as e:
+                        logger.warning(f"Invalid guest token: {e}")
             request.state.user_hash = get_user_hash(guest_id) if guest_id else ""
     return await call_next(request)
 @app.get("/.env", include_in_schema=False)
@@ -1404,7 +1407,7 @@ async def guest_identification_middleware(request: Request, call_next):
         except BadSignature:
             token = None
     if not token:
-        token = f"{get_real_ip(request)}|{request.headers.get('User-Agent', '')}|{uuid.uuid4().hex}"
+        token = secrets.token_hex(32)
         is_new = True
     request.state.guest_id = generate_negative_id(token)
     request.state.guest_token = token
@@ -2175,8 +2178,10 @@ async def db_maintenance_task():
                         logger.warning(f"⚠️ DB Optimization warning: {opt_err}")
                         
                 except Exception as e:
-                    try: await db.execute("ROLLBACK")
-                    except: pass
+                    try:
+                        await db.execute("ROLLBACK")
+                    except Exception as rollback_err:
+                        logger.error(f"⚠️ FTS Maintenance ROLLBACK error: {rollback_err}")
                     logger.error(f"⚠️ FTS Maintenance error: {e}")
             
             logger.info("✅ [DB] Maintenance complete.")
@@ -2463,9 +2468,9 @@ async def favourites_page(request: Request, user: dict | None = Depends(get_opti
 async def overboard_page(request: Request, user: dict | None = Depends(get_optional_user)):
 
     sort_mode = request.query_params.get("sort", "bump")
-    if sort_mode not in ["bump", "new", "random"]: sort_mode = "bump"
+    if sort_mode not in ("bump", "new", "random"): sort_mode = "bump"
     view_mode = request.query_params.get("view", "threads")
-    if view_mode not in ["threads", "posts", "all"]: view_mode = "threads"
+    if view_mode not in ("threads", "posts", "all"): view_mode = "threads"
     
     selected_boards = request.query_params.getlist("boards") or None
     observer_id = user['id'] if user else getattr(request.state, 'guest_id', 0)
@@ -4433,7 +4438,8 @@ async def api_admin_set_banner(data: BoardBannerRequest, user: dict = Depends(ge
             await db.execute("COMMIT")
         except Exception as e:
             try: await db.execute("ROLLBACK")
-            except: pass
+            except Exception as rollback_err:
+                logger.warning(f"Rollback failed during banner update: {rollback_err}")
             logger.error(f"Banner update error: {e}")
             raise HTTPException(status_code=500, detail="DB Error")
 
@@ -4836,7 +4842,7 @@ async def api_create_post(
                     match = re.search(r'/res/(\d+)\.html', referer)
                     if match:
                         reply_to = int(match.group(1))
-                except: pass
+                except (ValueError, TypeError): pass
         if not reply_to:
             raise HTTPException(status_code=400, detail="Не удалось определить тред. Обновите страницу.")
 
@@ -5173,7 +5179,8 @@ async def api_create_post(
                         logger.error(f"Delayed bump failed: {e}")
 
                 spawn_task(delayed_bump(board_id, final_thread_id, stream, nm))
-        except: pass
+        except Exception as e:
+            logger.error(f"Failed to setup delayed bump: {e}")
     elif post_mode == 'reply' and thread_op_num:
         async with get_db_connection() as conn:
             row = await (await conn.execute("SELECT is_endless FROM Threads WHERE thread_id = ?", (str(thread_op_num),))).fetchone()
@@ -5225,13 +5232,17 @@ def localize_boards(lang: str) -> dict:
     """
     localized = {}
     for board_id, data in BOARD_CONFIG.items():
-        board_copy = data.copy()
         desc = data.get('description')
         if isinstance(desc, dict):
-            board_copy['description'] = desc.get(lang) or desc.get('en') or desc.get('ru') or list(desc.values())[0]
+            board_copy = data.copy()
+            board_copy['description'] = desc.get(lang) or desc.get('en') or desc.get('ru') or next(iter(desc.values()))
+            localized[board_id] = board_copy
+        elif isinstance(desc, str):
+            localized[board_id] = data
         else:
+            board_copy = data.copy()
             board_copy['description'] = str(desc)
-        localized[board_id] = board_copy
+            localized[board_id] = board_copy
     return localized
 @app.post("/api/admin/cleanup_html")
 async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
@@ -5681,7 +5692,8 @@ async def api_thread_summary(thread_id: int, request: Request):
             cached_count = cached_data.get('count', 0)
             if (current_count - cached_count) < 8:
                 return {"summary": cached_data.get('text')}
-        except: pass
+        except Exception as e:
+            logger.warning(f"Failed to parse cached thread summary for {thread_id}: {e}")
     thread_data = await get_thread_by_op_post(thread_id)
     if not thread_data:
         raise HTTPException(404, "Thread not found")
