@@ -1,7 +1,13 @@
 import unittest
 from unittest.mock import patch, MagicMock, AsyncMock
 import json
+import sys
 from contextlib import asynccontextmanager
+
+# In some test suite runs, test_main.py heavily pollutes sys.modules by mocking all site_tgach.* modules.
+# We must ensure we get the REAL module to test it.
+if 'site_tgach.rss' in sys.modules and not hasattr(sys.modules['site_tgach.rss'], '__file__'):
+    del sys.modules['site_tgach.rss']
 
 from site_tgach.rss import generate_rss
 
