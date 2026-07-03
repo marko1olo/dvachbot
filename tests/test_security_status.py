@@ -1,7 +1,9 @@
 import json
 import pytest
 from pathlib import Path
-from security_status import load_json, add_blocker
+from unittest.mock import patch
+from security_status import load_json, add_blocker, write_status
+import security_status
 
 def test_load_json_non_existent_file(tmp_path: Path):
     """Test that load_json returns an empty dictionary for a non-existent file."""
@@ -40,10 +42,6 @@ def test_add_blocker_negative_count():
     blockers = []
     add_blocker(blockers, "test_code", -1, "test detail")
     assert len(blockers) == 0
-
-from unittest.mock import patch
-from security_status import write_status
-import security_status
 
 @patch("security_status.atomic_write_json")
 def test_write_status(mock_atomic_write_json):
