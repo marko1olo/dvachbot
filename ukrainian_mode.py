@@ -758,7 +758,12 @@ def _stage1_dict_replace(text: str) -> tuple[str, set]:
     replaced_spans = set()
     result = text
 
+    result_lower = result.lower()
+
     for key in _SORTED_KEYS:
+        if key.lower() not in result_lower:
+            continue
+
         pattern = _COMPILED_DICT[key]
         matches = list(pattern.finditer(result))
         if not matches:
@@ -775,6 +780,8 @@ def _stage1_dict_replace(text: str) -> tuple[str, set]:
             offset += diff
             for i in range(start, start + len(replacement)):
                 replaced_spans.add(i)
+
+        result_lower = result.lower()
 
     return result, replaced_spans
 
