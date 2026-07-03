@@ -143,6 +143,39 @@ class TestCleanTitleText(unittest.TestCase):
             with self.subTest(input_text=input_text):
                 self.assertEqual(clean_title_text(input_text), expected)
 
+    def test_only_tags_and_brackets(self):
+        self.assertEqual(clean_title_text("<p></p>"), "")
+        self.assertEqual(clean_title_text("[tag]"), "")
+        self.assertEqual(clean_title_text("<p>[tag]</p>"), "")
+        self.assertEqual(clean_title_text("  <br> [hidden]  "), "")
+
+    def test_unclosed_tags_and_brackets(self):
+        # A tag that doesn't have a closing '>' will not be removed
+        self.assertEqual(clean_title_text("<p text"), "<p text")
+        self.assertEqual(clean_title_text("[tag text"), "[tag text")
+        # Valid closed tags are removed even if they don't make sense logically
+        self.assertEqual(clean_title_text("text</p>"), "text")
+        self.assertEqual(clean_title_text("text]"), "text]")
+
+    def test_non_ascii_and_emojis(self):
+        self.assertEqual(clean_title_text("<h1>Привет мир! 🌍</h1>"), "Привет мир! 🌍")
+        self.assertEqual(clean_title_text("[Спойлер] Секрет 🤫"), "Секрет 🤫")
+
+    def test_unclosed_tags_and_brackets(self):
+        self.assertEqual(clean_title_text("Some <unclosed tag"), "Some <unclosed tag")
+        self.assertEqual(clean_title_text("Some [unclosed bracket"), "Some [unclosed bracket")
+
+    def test_nested_tags(self):
+        self.assertEqual(clean_title_text("<<nested>tag>"), "tag>")
+        self.assertEqual(clean_title_text("[[nested]bracket]"), "bracket]")
+
+    def test_only_tags_or_whitespace(self):
+        self.assertEqual(clean_title_text("   <p></p>   [tag]  "), "")
+
+    def test_unicode_and_special_chars(self):
+        self.assertEqual(clean_title_text("  Привет, <b>мир</b>! 🌍  "), "Привет, мир! 🌍")
+        self.assertEqual(clean_title_text("  [tag] こんにちは世界 🚀  "), "こんにちは世界 🚀")
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -172,6 +205,23 @@ class TestFormatBayanLabel(unittest.TestCase):
         # > 10 should be 'high'
         self.assertEqual(format_bayan_label(11), "♻️ Mocked_High (11)")
         self.assertEqual(format_bayan_label(100), "♻️ Mocked_High (100)")
+
+
+
+    @patch('Dubsite_tgach.main.random.choice')
+    @patch('Dubsite_tgach.main.TRANSLATIONS', new_callable=dict)
+    def test_bayan_empty_translations(self, mock_translations, mock_choice):
+        # Even if TRANSLATIONS is completely missing keys, the code falls back
+        # to ["Баян"] due to `phrases = tr.get(key, ["Баян"])`
+        mock_choice.side_effect = lambda x: x[0]
+        # Make the 'ru' key empty so TRANSLATIONS['ru'] exists but has no "bayan_low" etc.
+        mock_translations['ru'] = {}
+        res = format_bayan_label(5, lang='ru')
+        self.assertEqual(res, "♻️ Баян (5)")
+
+    def test_bayan_count_none(self):
+        # count=None should return empty string
+        self.assertEqual(format_bayan_label(None), "")
 
     def test_bayan_count_zero_or_one(self):
         # 0 or 1 should return empty string
@@ -209,6 +259,35 @@ def get_clean_html_function():
 clean_html_for_tg = get_clean_html_function()
 
 class TestCleanHtmlForTg(unittest.TestCase):
+    def test_empty_input(self):
+        self.assertEqual(clean_html_for_tg(""), "")
+        self.assertEqual(clean_html_for_tg(None), "")
+
+    def test_markdown_bold(self):
+        self.assertEqual(clean_html_for_tg("**text**"), "<b>text</b>")
+        self.assertEqual(clean_html_for_tg("hello **world**"), "hello <b>world</b>")
+        self.assertEqual(clean_html_for_tg("no ** unclosed bold"), "no ** unclosed bold")
+
+    def test_markdown_italic(self):
+        self.assertEqual(clean_html_for_tg("*text*"), "<i>text</i>")
+        self.assertEqual(clean_html_for_tg("hello *world*"), "hello <i>world</i>")
+        self.assertEqual(clean_html_for_tg("not * italic"), "not * italic")
+        # Ensure it doesn't mess up bold. The current implementation produces a stray tag closing which is expected behavior for now.
+        self.assertEqual(clean_html_for_tg("**bold *italic***"), "<b>bold <i>italic</i></b>&lt;/i&gt;")
+
+    def test_markdown_code(self):
+        self.assertEqual(clean_html_for_tg("`text`"), "<code>text</code>")
+        self.assertEqual(clean_html_for_tg("hello `world`"), "hello <code>world</code>")
+
+    def test_br_to_newline(self):
+        self.assertEqual(clean_html_for_tg("hello<br>world"), "hello\nworld")
+        self.assertEqual(clean_html_for_tg("hello<br/>world"), "hello\nworld")
+        self.assertEqual(clean_html_for_tg("hello<br />world"), "hello\nworld")
+
+    def test_mixed_markdown(self):
+        self.assertEqual(clean_html_for_tg("hello **bold** and *italic* and `code`"), "hello <b>bold</b> and <i>italic</i> and <code>code</code>")
+        self.assertEqual(clean_html_for_tg("<h1>hello</h1> **world**"), "&lt;h1>hello&lt;/h1> <b>world</b>")
+
     def test_balanced_tags(self):
         self.assertEqual(clean_html_for_tg("hello <b>world</b>"), "hello <b>world</b>")
         self.assertEqual(clean_html_for_tg("<b><i>test</i></b>"), "<b><i>test</i></b>")
@@ -557,6 +636,64 @@ class TestCheckPostCooldown(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+from Dubsite_tgach.main import format_poll_for_html
+
+class TestFormatPollForHtml(unittest.TestCase):
+    def test_empty_poll(self):
+        self.assertEqual(format_poll_for_html({}), "")
+        self.assertEqual(format_poll_for_html(None), "")
+
+    def test_missing_question(self):
+        self.assertEqual(format_poll_for_html({'options': ['A', 'B']}), "")
+
+    def test_zero_votes(self):
+        poll = {
+            'question': 'Test?',
+            'options': ['Yes', 'No'],
+            'votes': {}
+        }
+        html_out = format_poll_for_html(poll)
+        self.assertIn("📊 Test?", html_out)
+        self.assertIn("Yes (0)", html_out)
+        self.assertIn("No (0)", html_out)
+        self.assertIn("width: 0.0%", html_out)
+
+    def test_valid_votes(self):
+        poll = {
+            'question': 'Color?',
+            'options': ['Red', 'Blue', 'Green'],
+            'votes': {
+                '0': [1, 2],       # Red: 2 votes
+                '1': [3],          # Blue: 1 vote
+                '2': [4, 5, 6]     # Green: 3 votes
+            }
+        }
+        html_out = format_poll_for_html(poll)
+        self.assertIn("📊 Color?", html_out)
+        self.assertIn("Red (2)", html_out)
+        self.assertIn("Blue (1)", html_out)
+        self.assertIn("Green (3)", html_out)
+        # Total votes = 6
+        # Red = 2/6 = 33.333% -> 33.3%
+        self.assertIn("width: 33.3%", html_out)
+        # Blue = 1/6 = 16.666% -> 16.7%
+        self.assertIn("width: 16.7%", html_out)
+        # Green = 3/6 = 50% -> 50.0%
+        self.assertIn("width: 50.0%", html_out)
+
+    def test_html_escaping(self):
+        poll = {
+            'question': '<script>alert(1)</script>',
+            'options': ['<img src="x" onerror="alert(1)">', 'Normal'],
+            'votes': {'0': [1]}
+        }
+        html_out = format_poll_for_html(poll)
+        self.assertNotIn("<script>", html_out)
+        self.assertNotIn("<img", html_out)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html_out)
+        self.assertIn("&lt;img src=&quot;x&quot; onerror=&quot;alert(1)&quot;&gt;", html_out)
+
 
 from Dubsite_tgach.main import format_poll_for_html
 

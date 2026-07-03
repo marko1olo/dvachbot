@@ -36,7 +36,6 @@ import os
 import tracemalloc
 import uuid
 import math
-import tempfile
 import random
 import re
 import secrets
@@ -63,7 +62,7 @@ from logging.handlers import RotatingFileHandler
 from typing import Tuple
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-from common.html_utils import escape_html
+from common.html_utils import escape_html, convert_site_tags_to_telegram
 from common.token_generator import generate_unique_token
 from common.database import (
     initialize_database, is_database_migrated, load_state_from_db, get_and_clear_reaction_queue, get_post_by_num, get_stream_active_users, 
@@ -223,7 +222,7 @@ try:
     import matplotlib
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
-    from matplotlib.ticker import MaxNLocator, FuncFormatter
+    from matplotlib.ticker import FuncFormatter
     matplotlib.use('Agg')  # Используем бэкенд, не требующий GUI
     GRAPH_LIBS_AVAILABLE = True
 except ImportError:
@@ -256,13 +255,7 @@ ANIME_COMMAND_MAP = {
     "LOLICON": get_loli_image,
     "LOLIS": get_loli_image,
 }
-RE_HTML_TAGS = re.compile(r'<[^>]+>')
-RE_YOU_PATTERN = re.compile(r">>(\d+)")
-RE_SCRIPT_TAG = re.compile(r'<\s*script\b[^>]*>.*?<\s*/\s*script\s*>', flags=re.IGNORECASE | re.DOTALL)
-RE_SCRIPT_SINGLE = re.compile(r'<\s*script\b[^>]*>', flags=re.IGNORECASE)
-RE_DANGEROUS_TAGS = re.compile(r'<\s*(iframe|svg|form|object|embed|link|a)\b[^>]*>.*?<\s*/\s*\1\s*>', flags=re.IGNORECASE | re.DOTALL)
-RE_DANGEROUS_SINGLE = re.compile(r'<\s*(iframe|svg|form|object|embed|link|a)\b[^>]*>', flags=re.IGNORECASE)
-RE_EVENT_HANDLERS = re.compile(r'\s+on\w+\s*=\s*["\'].*?["\']', flags=re.IGNORECASE)
+from common.text_utils import clean_html_tags, sanitize_html, RE_HTML_TAGS, RE_YOU_PATTERN, RE_SCRIPT_TAG, RE_SCRIPT_SINGLE, RE_DANGEROUS_TAGS, RE_DANGEROUS_SINGLE, RE_EVENT_HANDLERS
 RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
 RE_SYSTEM_HEADER_CLEAN = re.compile(r'^(###.*?###|<i>.*?</i>)\s*\n?', flags=re.MULTILINE)
 RE_NEWLINES = re.compile(r'\n{2,}')
@@ -272,15 +265,20 @@ RE_REPLY_QUOTE = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d
 RE_REPLY_QUOTE_FORMAT = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
 RE_MULTI_REPLY = re.compile(r'>>(\d+)')
 FONTS_CACHE = []
-try:
-    font_files = ["font1.ttf", "font2.ttf", "font3.ttf", "font4.ttf"]
-    for ff in font_files:
-        if os.path.exists(ff):
-            FONTS_CACHE.append(ImageFont.truetype(ff, 40))
-    if not FONTS_CACHE:
+
+def init_fonts_cache():
+    try:
+        font_files = ["font1.ttf", "font2.ttf", "font3.ttf", "font4.ttf"]
+        for ff in font_files:
+            if os.path.exists(ff):
+                FONTS_CACHE.append(ImageFont.truetype(ff, 40))
+        if not FONTS_CACHE:
+            FONTS_CACHE.append(ImageFont.load_default())
+    except Exception:
         FONTS_CACHE.append(ImageFont.load_default())
-except Exception:
-    FONTS_CACHE.append(ImageFont.load_default())
+
+init_fonts_cache()
+
 class MultiLangMiddleware(BaseMiddleware):
     """
     Определяет языковой поток пользователя (ru/en/jp).
@@ -542,6 +540,7 @@ reply_coverage_updated_at = 0.0
 network_retry_state = defaultdict(lambda: {'attempt': 0, 'last_error_time': 0})
 GLOBAL_BOTS = {} # Словарь для хранения всех экземпляров ботов
 is_shutting_down = False
+shutdown_event = threading.Event()
 drain_shutdown_requested = False
 drain_shutdown_requested_at = 0.0
 event_loop_stall_watchdog_started = False
@@ -678,10 +677,10 @@ def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
     if max_posts < 0 or len(post_to_messages) <= max_posts:
         return 0, 0
     if max_posts == 0:
-        stale_posts = list(post_to_messages.keys())
+        stale_posts = list(post_to_messages)
     else:
         keep_posts = set(sorted(post_to_messages.keys(), reverse=True)[:max_posts])
-        stale_posts = [post_num for post_num in list(post_to_messages.keys()) if post_num not in keep_posts]
+        stale_posts = [post_num for post_num in post_to_messages if post_num not in keep_posts]
     removed_reverse = 0
     for post_num in stale_posts:
         removed_reverse += _drop_post_copy_maps_unlocked(post_num)
@@ -929,24 +928,6 @@ async def start_healthcheck():
 GITHUB_REPO = "https://github.com/shlomapetia/dvachbot-backup.git"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Проверь, что переменная есть в Railway!
 last_gc_time = time.time()
-def convert_site_tags_to_telegram(text: str) -> str:
-    """
-    Преобразует BB-коды сайта в поддерживаемые HTML-теги Telegram.
-    Адаптирует визуальные эффекты под возможности мессенджера.
-    """
-    if not text:
-        return ""
-    text = re.sub(r'\[b\](.*?)\[/b\]', r'<b>\1</b>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[i\](.*?)\[/i\]', r'<i>\1</i>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[s\](.*?)\[/s\]', r'<s>\1</s>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[u\](.*?)\[/u\]', r'<u>\1</u>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\|\|(.*?)\|\|', r'<tg-spoiler>\1</tg-spoiler>', text, flags=re.DOTALL)
-    text = re.sub(r'\[blur\](.*?)\[/blur\]', r'<tg-spoiler>\1</tg-spoiler>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[shake\](.*?)\[/shake\]', r'<i>\1</i>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[rainbow\](.*?)\[/rainbow\]', r'<code>\1</code>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[glitch\](.*?)\[/glitch\]', r'<s><code>\1</code></s>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[code\](.*?)\[/code\]', r'<code>\1</code>', text, flags=re.IGNORECASE | re.DOTALL)
-    return text
 dp = Dispatcher()
 dp.message.middleware(DeduplicationMiddleware())
 dp.message.middleware(BoardMiddleware())
@@ -985,34 +966,6 @@ aiohttp_log = logging.getLogger('aiohttp')
 aiohttp_log.setLevel(logging.CRITICAL) 
 aiogram_log = logging.getLogger('aiogram')
 aiogram_log.setLevel(logging.CRITICAL) # <--- ИЗМЕНЕНО НА CRITICAL, чтобы не видеть ошибки апдейтов
-def clean_html_tags(text: str) -> str:
-
-    if not text: return text
-    return RE_HTML_TAGS.sub('', text)
-def sanitize_html(text: str) -> str:
-
-    if not text: return ""
-    
-    # --- НАЧАЛО ИЗМЕНЕНИЙ (Перехват и конвертация гиперссылок) ---
-    def link_replacer(match):
-        url = match.group(1)
-        content = match.group(2)
-        # Очищаем URL от протокола и www. для эстетики
-        clean_url = re.sub(r'^https?://', '', url, flags=re.IGNORECASE)
-        clean_url = re.sub(r'^www\.', '', clean_url, flags=re.IGNORECASE)
-        # Возвращаем текст и ссылку рядом в скобках
-        return f"{content} <i>({clean_url})</i>"
-        
-    # Ищем теги <a href="URL">ТЕКСТ</a> и обрабатываем их до основного санитайзера
-    text = re.sub(r'<\s*a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\s*/\s*a\s*>', link_replacer, text, flags=re.IGNORECASE | re.DOTALL)
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
-    text = RE_SCRIPT_TAG.sub('', text)
-    text = RE_SCRIPT_SINGLE.sub('', text)
-    text = RE_DANGEROUS_TAGS.sub('', text)
-    text = RE_DANGEROUS_SINGLE.sub('', text)
-    text = RE_EVENT_HANDLERS.sub('', text)
-    return text
 def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, int]) -> str:
     """Улучшенная версия: не использует замок, работает с переданным словарем авторов."""
     if not text or ">>" not in text:
@@ -2219,6 +2172,7 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
     if is_shutting_down:
         return
     is_shutting_down = True
+    shutdown_event.set()
     
     # Импортируем лок для безопасного доступа к БД
     from common.db_pool import get_pool, db_lock, close_pool
@@ -8664,7 +8618,7 @@ def format_timestamp(ts: float) -> str:
 
     try:
         return datetime.fromtimestamp(ts, tz=UTC).strftime('%d.%m.%y %H:%M')
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError, OSError):
         return ""
 async def dvach_thread_poster():
     """
@@ -18652,7 +18606,7 @@ async def wait_for_delivery_queues_to_drain(timeout_sec: float, log_interval_sec
 
 def _event_loop_stall_watchdog_loop():
     last_dump_at = 0.0
-    while not is_shutting_down:
+    while not shutdown_event.is_set():
         now = time.time()
         lag_sec = max(0.0, now - event_loop_last_tick)
         if (
@@ -18685,7 +18639,7 @@ def _event_loop_stall_watchdog_loop():
                     print(f"⚠️ [WATCHDOG] Failed to write event-loop stall dump: {type(exc).__name__}: {exc}")
                 except Exception:
                     pass
-        time.sleep(5)
+        shutdown_event.wait(5)
 
 def start_event_loop_stall_watchdog():
     global event_loop_stall_watchdog_started
@@ -19294,28 +19248,30 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
         )
         posts = await rows.fetchall()
         
-        text_corpus = ""
-        for row in posts:
-            try:
-                content_dict = json.loads(row[0])
-                text = ""
-                if content_dict.get('type') == 'text':
-                    text = content_dict.get('text', '')
-                elif content_dict.get('type') in ['photo', 'video', 'animation', 'document']:
-                    text = content_dict.get('caption', '')
-                
-                if text:
-                    # Remove HTML tags
-                    text = re.sub(r'<[^>]+>', ' ', text)
-                    # Remove URLs
-                    text = re.sub(r'http[s]?://\S+', ' ', text)
-                    text_corpus += text + " "
-            except Exception:
-                continue
-                
-        words = re.findall(r'[а-яА-Яa-zA-Z]{3,}', text_corpus.lower())
-        filtered_words = [w for w in words if w not in STOP_WORDS]
-        final_text = " ".join(filtered_words)
+        def process_posts(posts_list):
+            text_corpus = ""
+            for row in posts_list:
+                try:
+                    content_dict = json.loads(row[0])
+                    text = ""
+                    if content_dict.get('type') == 'text':
+                        text = content_dict.get('text', '')
+                    elif content_dict.get('type') in ['photo', 'video', 'animation', 'document']:
+                        text = content_dict.get('caption', '')
+
+                    if text:
+                        # Remove HTML tags
+                        text = re.sub(r'<[^>]+>', ' ', text)
+                        # Remove URLs
+                        text = re.sub(r'http[s]?://\S+', ' ', text)
+                        text_corpus += text + " "
+                except Exception:
+                    continue
+
+            words = re.findall(r'[а-яА-Яa-zA-Z]{3,}', text_corpus.lower())
+            return " ".join([w for w in words if w not in STOP_WORDS])
+
+        final_text = await asyncio.to_thread(process_posts, posts)
         
         if not final_text.strip():
             await status_message.edit_text("❌ Хуй там плавал, а не облако слов. Вы нафлудили слишком мало текста за сутки.")

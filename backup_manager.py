@@ -35,10 +35,14 @@ def create_gzipped_dump(db_path: str, output_dir: str) -> str | None:
     print(f"Начинаю создание дампа базы данных в '{dump_filepath}'...")
 
     try:
-        with sqlite3.connect(db_path) as con:
+        # Нам нужно явно закрыть соединение, чтобы избежать блокировки файла на Windows
+        con = sqlite3.connect(db_path)
+        try:
             with gzip.open(dump_filepath, "wt", encoding="utf-8") as f:
                 for line in con.iterdump():
                     f.write(f'{line}\n')
+        finally:
+            con.close()
         
         print(f"Дамп базы данных успешно создан: {dump_filepath}")
 
@@ -79,7 +83,7 @@ def create_gzipped_dump(db_path: str, output_dir: str) -> str | None:
                 pass
         return None
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     # Этот блок остается для возможности ручного тестирования скрипта.
     print("Запуск менеджера бэкапов напрямую для теста...")
     if not os.path.exists(DB_NAME):

@@ -1378,6 +1378,7 @@ async def create_post(
     file_owners: List[Tuple[str, int]] = None,
     ip: str = None  # <--- ДОБАВЛЕНО
 ) -> Optional[int]:
+    global _CACHED_MAX_POST_NUM
     # Локальный импорт, чтобы гарантировать наличие db_lock без правки шапки файла
     from common.db_pool import get_pool, db_lock
     
@@ -1453,6 +1454,8 @@ async def create_post(
 
                 # Явный коммит транзакции
                 await db.execute("COMMIT")
+                if _CACHED_MAX_POST_NUM is not None:
+                    _CACHED_MAX_POST_NUM = max(_CACHED_MAX_POST_NUM, post_num)
                 return post_num
                 
             except sqlite3.OperationalError as e:
@@ -3434,6 +3437,7 @@ _IMAGE_CACHE: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
 _THREAD_CACHE: Dict[str, List[str]] = defaultdict(list)
 
 _LAST_MAX_POST_NUM = 0
+_CACHED_MAX_POST_NUM = None
 _LAST_CACHE_UPDATE = 0
 
 _RANDOM_VIDEO_TYPES = {'video', 'animation', 'video_note', 'gif'}
@@ -3945,6 +3949,9 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                     await db.execute("COMMIT")
                     return []
 
+                shadow_updates = []
+                blur_updates = []
+
                 for row in rows:
                     post_num, content_str, is_shadow = row
                     needs_update = False
@@ -3956,7 +3963,7 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                     # Логика действий
                     if action == 'shadow':
                         if not is_shadow:
-                            await db.execute("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", (post_num,))
+                            shadow_updates.append((post_num,))
                             needs_update = True
                             
                     elif action == 'blur':
@@ -3964,11 +3971,17 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                         if not content.get('is_censored'):
                             content['is_censored'] = True
                             new_json = json.dumps(content, default=_json_serializer)
-                            await db.execute("UPDATE Posts SET content = ? WHERE post_num = ?", (new_json, post_num))
+                            blur_updates.append((new_json, post_num))
                             needs_update = True
                     
                     if needs_update:
                         affected_posts.append(post_num)
+
+                if shadow_updates:
+                    await db.executemany("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", shadow_updates)
+
+                if blur_updates:
+                    await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", blur_updates)
 
                 await db.execute("COMMIT")
                 return affected_posts
@@ -4211,13 +4224,19 @@ async def get_board_media_posts(board_id: str, page: int = 1, page_size: int = 2
         print(f"⛔ Error in get_board_media_posts: {e}")
         return []
 async def get_max_post_num() -> int:
+    global _CACHED_MAX_POST_NUM
+    if _CACHED_MAX_POST_NUM is not None:
+        return _CACHED_MAX_POST_NUM
+
     from common.db_pool import get_pool, db_lock
     async with db_lock:
         try:
             db = await get_pool()
             async with db.execute("SELECT MAX(post_num) FROM Posts") as cursor:
                 row = await cursor.fetchone()
-                return row[0] if row and row[0] else 0
+                val = row[0] if row and row[0] else 0
+                _CACHED_MAX_POST_NUM = val
+                return val
         except:
             return 0
 async def get_random_active_thread() -> Optional[tuple[str, str]]:
