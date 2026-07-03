@@ -40,7 +40,6 @@ import faulthandler
 
 import hmac
 import hashlib
-import tracemalloc
 import io
 import mimetypes
 import random
