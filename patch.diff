@@ -1,0 +1,11 @@
+--- Dubsite_tgach/importer.py
++++ Dubsite_tgach/importer.py
+@@ -1068,7 +1068,7 @@
+                             )
+                             processed_ids.append(q_id)
+
+-                    except Exception as e:
++                    except Exception:
+                         processed_ids.append(q_id)
+
+                 if processed_ids:

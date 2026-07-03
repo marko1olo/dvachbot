@@ -1,14 +1,13 @@
-import asyncio
-import os
 import sys
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import os
+# Ensure the root directory is in sys.path to allow imports from common
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+import asyncio
 
 import aiohttp
 from dotenv import load_dotenv
 
 from common.secret_redaction import redact_secrets
-
 
 load_dotenv()
 
