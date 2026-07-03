@@ -143,20 +143,29 @@ async def process_queue_batch():
                         finfo = await bot.get_file(fid)
                         fresh_file_id = finfo.file_id
                         
-                        # Если имени нет в БД (это превью), берем расширение из ТГ
-                        if not final_filename:
-                            ext = os.path.splitext(finfo.file_path)[1]
-                            if not ext: ext = ".jpg" # Фолбек для фото
-                            final_filename = f"{fid}{ext}"
-                            
-                        lpath = os.path.abspath(os.path.join(fdir, final_filename))
+                        file_path = getattr(finfo, "file_path", None)
+                        if file_path:
+                            # Если имени нет в БД (это превью), берем расширение из ТГ
+                            if not final_filename:
+                                ext = os.path.splitext(file_path)[1]
+                                if not ext: ext = ".jpg" # Фолбек для фото
+                                final_filename = f"{fid}{ext}"
 
-                        # 2. Пробуем скачать обычным HTTP
-                        if await _download_http_safe(f"https://api.telegram.org/file/bot{bot.token}/{finfo.file_path}", lpath):
-                            return (fid, final_filename, sub)
+                            lpath = os.path.abspath(os.path.join(fdir, final_filename))
+
+                            # 2. Пробуем скачать обычным HTTP
+                            if await _download_http_safe(f"https://api.telegram.org/file/bot{bot.token}/{file_path}", lpath):
+                                return (fid, final_filename, sub)
                             
                     except Exception as e:
-                        if "file is too big" not in str(e).lower() and "file_id_invalid" in str(e).lower():
+                        err_str = str(e).lower()
+                        if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
+                            logger.error(f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling.")
+                            if global_bot_pool:
+                                global_bot_pool.mark_bot_dead_by_token(bot.token)
+                            return None
+
+                        if "file is too big" not in err_str and "file_id_invalid" in err_str:
                             return (fid, "deleted", sub)
 
                     # 3. MTProto Fallback
@@ -213,6 +222,9 @@ async def process_queue_batch():
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 async def hf_batch_loop():
+    if os.getenv("HF_MIRRORS_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        logger.info("⏸️ HF Batcher Daemon Disabled via HF_MIRRORS_DISABLED env.")
+        return
     logger.info("🚀 HF Batcher Daemon Started")
     cleanup_stale_temp_dirs()
     await asyncio.sleep(30) 
