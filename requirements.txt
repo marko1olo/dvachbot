@@ -23,6 +23,8 @@ Pillow>=10.2.0
 # Memory Analysis (Optional, but useful for diagnostics)
 Pympler==1.0.1
 
+tenacity>=8.2.0
+
 
 # fastapi
 # uvicorn
