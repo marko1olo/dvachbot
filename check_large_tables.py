@@ -1,3 +1,4 @@
+import re
 import sqlite3
 
 def check_indexes():
@@ -9,7 +10,10 @@ def check_indexes():
     tables = [row[0] for row in cursor.fetchall()]
     
     for table in tables:
-        cursor.execute(f'SELECT COUNT(*) FROM "{table}"')
+        if not re.match(r"^\w+$", table):
+            continue
+        safe_table = table.replace('"', '""')
+        cursor.execute(f'SELECT COUNT(*) FROM "{safe_table}"')  # nosec B608
         count = cursor.fetchone()[0]
         if count > 10000:
             print(f"Table {table}: {count} rows")
