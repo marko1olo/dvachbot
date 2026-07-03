@@ -223,7 +223,7 @@ try:
     import matplotlib
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
-    from matplotlib.ticker import MaxNLocator, FuncFormatter
+    from matplotlib.ticker import FuncFormatter
     matplotlib.use('Agg')  # Используем бэкенд, не требующий GUI
     GRAPH_LIBS_AVAILABLE = True
 except ImportError:
