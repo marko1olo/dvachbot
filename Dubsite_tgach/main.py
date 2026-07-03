@@ -1397,7 +1397,7 @@ async def guest_identification_middleware(request: Request, call_next):
         except BadSignature:
             token = None
     if not token:
-        token = f"{get_real_ip(request)}|{request.headers.get('User-Agent', '')}|{uuid.uuid4().hex}"
+        token = secrets.token_hex(32)
         is_new = True
     request.state.guest_id = generate_negative_id(token)
     request.state.guest_token = token
