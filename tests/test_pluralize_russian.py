@@ -54,5 +54,15 @@ class TestPluralizeRussian(unittest.TestCase):
         self.assertEqual(pluralize_russian(-11, *self.words), "яблок")
         self.assertEqual(pluralize_russian(-21, *self.words), "яблоко")
 
+    def test_overflow_and_large_numbers(self):
+        # Test OverflowError handling for infinity and NaN
+        self.assertEqual(pluralize_russian(float('inf'), *self.words), "яблок")
+        self.assertEqual(pluralize_russian(float('-inf'), *self.words), "яблок")
+        self.assertEqual(pluralize_russian(float('nan'), *self.words), "яблок")
+        # Test large integer values
+        self.assertEqual(pluralize_russian(10**100 + 1, *self.words), "яблоко")
+        self.assertEqual(pluralize_russian(10**100 + 2, *self.words), "яблока")
+        self.assertEqual(pluralize_russian(10**100 + 5, *self.words), "яблок")
+
 if __name__ == '__main__':
     unittest.main()

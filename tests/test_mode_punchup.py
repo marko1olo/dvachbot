@@ -7,7 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from mode_punchup import _add_signature
+from mode_punchup import _add_signature, punch_up_mode_text
 
 class TestModePunchupSignature(unittest.TestCase):
     def test_no_signatures(self):
@@ -83,6 +83,30 @@ class TestModePunchupSignature(unittest.TestCase):
 
         text = "Hello world,"
         self.assertEqual(_add_signature(text, profile), f"{text}. - The Boss")
+
+
+
+class TestPunchUpModeText(unittest.TestCase):
+    def test_no_mode_key(self):
+        text = "Hello world"
+        self.assertEqual(punch_up_mode_text(text, None), text)
+        self.assertEqual(punch_up_mode_text(text, ""), text)
+
+    @patch.dict("mode_punchup.MODE_PUNCHUP_PROFILES", {}, clear=True)
+    def test_mode_key_not_found(self):
+        text = "Hello world"
+        self.assertEqual(punch_up_mode_text(text, "invalid_mode"), text)
+
+    @patch.dict("mode_punchup.MODE_PUNCHUP_PROFILES", {"valid_mode": {"replace_chance": 0.5}}, clear=True)
+    @patch("mode_punchup._decorate")
+    def test_mode_key_found(self, mock_decorate):
+        text = "Hello world"
+        mock_decorate.return_value = "Decorated text"
+
+        result = punch_up_mode_text(text, "valid_mode")
+
+        self.assertEqual(result, "Decorated text")
+        mock_decorate.assert_called_once_with(text, {"replace_chance": 0.5})
 
 if __name__ == "__main__":
     unittest.main()

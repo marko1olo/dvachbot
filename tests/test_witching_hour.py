@@ -9,6 +9,7 @@ from witching_hour import witching_hour_ghost_worker
 class StopLoopException(Exception):
     pass
 
+
 def test_is_witching_hour_active_initial_state():
     # Initial state is usually 0 for both timestamps
     witching_hour.witching_hour_start_ts = 0
