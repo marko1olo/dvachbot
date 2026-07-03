@@ -1,0 +1,8 @@
+﻿"ProcessId","CommandLine"
+"15020","python  -X utf8 -u bot_watchdog.py"
+"10816","python  -X utf8 -u bot_watchdog.py"
+"11272","C:\Users\danat\Desktop\dvachbot\venv\Scripts\python.exe -X utf8 -u main.py"
+"10252","C:\Users\danat\Desktop\dvachbot\venv\Scripts\python.exe -X utf8 -u main.py"
+"3780","python  -X utf8 -u -m uvicorn site_tgach.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips ""127.0.0.1"" --timeout-keep-alive 30 --limit-concurrency 1000 --backlog 512 --log-level info"
+"6196","python  -X utf8 -u -m uvicorn site_tgach.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips ""127.0.0.1"" --timeout-keep-alive 30 --limit-concurrency 1000 --backlog 512 --log-level info"
+"11444","""C:\Users\danat\AppData\Local\Programs\Python\Python313\python.exe"" C:\Users\danat\.gemini\antigravity\brain\630f393d-ae61-40bd-9faf-91b6eeae8767\scratch\find_server_pid.py"
