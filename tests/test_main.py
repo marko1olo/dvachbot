@@ -48,7 +48,8 @@ for mod_name in sys.modules:
 
 # Now we can safely import the function under test
 from Dubsite_tgach.main import get_real_ip, sanitize_html, get_country_by_ip
-from unittest.mock import AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock, patch
+
 
 class StubClient:
     def __init__(self, host):
@@ -273,8 +274,11 @@ class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
     @patch("os.path.exists", return_value=False)
     @patch("httpx.AsyncClient")
     async def test_http_fallback_success(self, mock_client_cls, mock_exists):
+        # Set up context manager mock
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+        # Set up response mock
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"countryCode": "US"}
@@ -297,8 +301,11 @@ class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
     async def test_geoip_exception_fallback(self, mock_client_cls, mock_reader):
         mock_reader.country.side_effect = Exception("Not found")
 
+        # Set up context manager mock
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
+
+        # Set up response mock
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"countryCode": "GB"}
