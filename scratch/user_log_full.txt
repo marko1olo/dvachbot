@@ -1,0 +1,514 @@
+<USER_REQUEST>
+давай дотошно изучим логи
+
+
+2026-07-02 08:35:27,199 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:27,200 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:27,280 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:27,280 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:28,181 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,182 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,191 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,191 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,422 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,422 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,424 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,425 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,428 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,428 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,441 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,441 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,494 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,494 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,505 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,505 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,508 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,508 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,510 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,510 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,516 - INFO - [SYSTEM] - DEBUG: [Task 28685] Started for AgACAgIAAy...
+2026-07-02 08:35:28,517 - INFO - [SYSTEM] - DEBUG: [Task 28685] get_file_owner_id done (owner=8384397544)
+2026-07-02 08:35:28,517 - INFO - [SYSTEM] - DEBUG: [Task 28685] Calling bot.get_file...
+2026-07-02 08:35:28,517 - INFO - [SYSTEM] - DEBUG: [Task 28684] Started for AgACAgIAAy...
+2026-07-02 08:35:28,518 - INFO - [SYSTEM] - DEBUG: [Task 28684] get_file_owner_id done (owner=None)
+2026-07-02 08:35:28,518 - INFO - [SYSTEM] - DEBUG: [Task 28684] Calling bot.get_file...
+2026-07-02 08:35:28,519 - INFO - [SYSTEM] - DEBUG: [Task 28683] Started for AgACAgIAAy...
+2026-07-02 08:35:28,519 - INFO - [SYSTEM] - DEBUG: [Task 28683] get_file_owner_id done (owner=None)
+2026-07-02 08:35:28,519 - INFO - [SYSTEM] - DEBUG: [Task 28683] Calling bot.get_file...
+2026-07-02 08:35:28,520 - INFO - [SYSTEM] - DEBUG: [Task 28682] Started for AgACAgIAAy...
+2026-07-02 08:35:28,521 - INFO - [SYSTEM] - DEBUG: [Task 28682] get_file_owner_id done (owner=None)
+2026-07-02 08:35:28,521 - INFO - [SYSTEM] - DEBUG: [Task 28682] Calling bot.get_file...
+2026-07-02 08:35:28,521 - INFO - [SYSTEM] - DEBUG: [Task 28681] Started for AgACAgIAAy...
+2026-07-02 08:35:28,522 - INFO - [SYSTEM] - DEBUG: [Task 28681] get_file_owner_id done (owner=None)
+2026-07-02 08:35:28,522 - INFO - [SYSTEM] - DEBUG: [Task 28681] Calling bot.get_file...
+2026-07-02 08:35:28,522 - INFO - [SYSTEM] - DEBUG: [Task 28680] Started for AgACAgIAAy...
+2026-07-02 08:35:28,523 - INFO - [SYSTEM] - DEBUG: [Task 28680] get_file_owner_id done (owner=None)
+2026-07-02 08:35:28,523 - INFO - [SYSTEM] - DEBUG: [Task 28680] Calling bot.get_file...
+2026-07-02 08:35:28,523 - INFO - [SYSTEM] - DEBUG: [Task 28674] Started for AgACAgIAAy...
+2026-07-02 08:35:28,524 - INFO - [SYSTEM] - DEBUG: [Task 28674] get_file_owner_id done (owner=8284701515)
+2026-07-02 08:35:28,524 - INFO - [SYSTEM] - DEBUG: [Task 28674] Calling bot.get_file...
+2026-07-02 08:35:28,524 - INFO - [SYSTEM] - DEBUG: [Task 28669] Started for AgACAgIAAy...
+2026-07-02 08:35:28,525 - INFO - [SYSTEM] - DEBUG: [Task 28669] get_file_owner_id done (owner=8349694847)
+2026-07-02 08:35:28,525 - INFO - [SYSTEM] - DEBUG: [Task 28669] Calling bot.get_file...
+2026-07-02 08:35:28,526 - INFO - [SYSTEM] - DEBUG: [Task 28668] Started for AgACAgIAAy...
+2026-07-02 08:35:28,526 - INFO - [SYSTEM] - DEBUG: [Task 28668] get_file_owner_id done (owner=8102947050)
+2026-07-02 08:35:28,526 - INFO - [SYSTEM] - DEBUG: [Task 28668] Calling bot.get_file...
+2026-07-02 08:35:28,527 - INFO - [SYSTEM] - DEBUG: [Task 26303] Started for AgACAgIAAy...
+2026-07-02 08:35:28,527 - INFO - [SYSTEM] - DEBUG: [Task 26303] get_file_owner_id done (owner=8349694847)
+2026-07-02 08:35:28,528 - INFO - [SYSTEM] - DEBUG: [Task 26303] Calling bot.get_file...
+2026-07-02 08:35:28,989 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:28,990 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:29,071 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:29,072 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:29,192 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:29,193 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:29,311 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:29,311 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:29,430 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:29,430 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:29,444 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:29,445 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:29,490 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:29,490 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:29,550 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:29,551 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:29,621 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:29,621 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:29,734 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:29,735 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:29,831 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:29,832 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:29,962 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:29,962 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:30,261 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:30,262 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:30,291 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:30,291 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:30,319 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:30,320 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:30,345 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:30,346 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:30,662 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:30,662 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:30,696 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:30,696 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:30,722 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:30,723 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:30,796 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:30,797 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:36:41,863 - INFO - [SYSTEM] - Site cache cleanup: cache={'keys': 7, 'expired_removed': 1, 'cap_removed': 0}, maps={'post_rate_removed': 0, 'thread_versions_removed': 0, 'url_status_removed': 0, 'flood_tracker_removed': 0, 'ip_bans_removed': 0, 'ip_troll_removed': 0, 'bot_violations_cleared': 0, 'known_ips_cleared': 0}
+2026-07-02 08:39:41,073 - INFO - [SYSTEM] - DEBUG: [Task 25816] Started for AgACAgIAAy...
+2026-07-02 08:39:41,074 - INFO - [SYSTEM] - DEBUG: [Task 25816] get_file_owner_id done (owner=8063880681)
+2026-07-02 08:39:41,075 - INFO - [SYSTEM] - DEBUG: [Task 25816] Calling bot.get_file...
+2026-07-02 08:39:41,076 - INFO - [SYSTEM] - DEBUG: [Task 25815] Started for AgACAgIAAy...
+2026-07-02 08:39:41,077 - INFO - [SYSTEM] - DEBUG: [Task 25815] get_file_owner_id done (owner=8543629012)
+2026-07-02 08:39:41,077 - INFO - [SYSTEM] - DEBUG: [Task 25815] Calling bot.get_file...
+2026-07-02 08:39:41,078 - INFO - [SYSTEM] - DEBUG: [Task 25814] Started for AgACAgIAAy...
+2026-07-02 08:39:41,079 - INFO - [SYSTEM] - DEBUG: [Task 25814] get_file_owner_id done (owner=8249309536)
+2026-07-02 08:39:41,079 - INFO - [SYSTEM] - DEBUG: [Task 25814] Calling bot.get_file...
+2026-07-02 08:39:41,080 - INFO - [SYSTEM] - DEBUG: [Task 25813] Started for AgACAgIAAy...
+2026-07-02 08:39:41,081 - INFO - [SYSTEM] - DEBUG: [Task 25813] get_file_owner_id done (owner=8314507792)
+2026-07-02 08:39:41,081 - INFO - [SYSTEM] - DEBUG: [Task 25813] Calling bot.get_file...
+2026-07-02 08:39:42,752 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:39:42,752 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:39:43,156 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:39:43,157 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:39:43,952 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:39:43,953 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:39:43,992 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:39:43,993 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:39:44,033 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:39:44,034 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:39:44,346 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:39:44,346 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:39:44,396 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:39:44,397 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:39:44,442 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:39:44,443 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:40:04,470 - INFO - [SYSTEM] - DEBUG: [Task 21369] Started for AgACAgIAAy...
+2026-07-02 08:40:04,471 - INFO - [SYSTEM] - DEBUG: [Task 21369] get_file_owner_id done (owner=8498363214)
+2026-07-02 08:40:04,471 - INFO - [SYSTEM] - DEBUG: [Task 21369] Calling bot.get_file...
+2026-07-02 08:40:04,472 - INFO - [SYSTEM] - DEBUG: [Task 21366] Started for AgACAgIAAy...
+2026-07-02 08:40:04,473 - INFO - [SYSTEM] - DEBUG: [Task 21366] get_file_owner_id done (owner=8543629012)
+2026-07-02 08:40:04,473 - INFO - [SYSTEM] - DEBUG: [Task 21366] Calling bot.get_file...
+2026-07-02 08:40:06,168 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:40:06,169 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:40:06,255 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:40:06,256 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:40:06,565 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:40:06,566 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:40:06,738 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:40:06,738 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+[08:40:34] 157.55.39.225 GET /robots.txt 200 (1ms)
+2026-07-02 08:41:41,863 - INFO - [SYSTEM] - Site cache cleanup: cache={'keys': 7, 'expired_removed': 0, 'cap_removed': 0}, maps={'post_rate_removed': 0, 'thread_versions_removed': 0, 'url_status_removed': 0, 'flood_tracker_removed': 1, 'ip_bans_removed': 0, 'ip_troll_removed': 0, 'bot_violations_cleared': 0, 'known_ips_cleared': 0}
+[08:48:23] 66.132.224.86 GET / 200 (1ms)
+[08:49:54] 66.132.224.86 GET /login 200 (1ms)
+[08:50:01] 66.132.224.86 GET /hjn1uz7xpp 307 -> [OTHER] (1ms)
+2026-07-02 08:51:38,031 - INFO - [SYSTEM] - 💤 [MTProto] Client stopped due to inactivity: secret-8f5...
+2026-07-02 08:51:41,874 - INFO - [SYSTEM] - Site cache cleanup: cache={'keys': 7, 'expired_removed': 0, 'cap_removed': 0}, maps={'post_rate_removed': 0, 'thread_versions_removed': 0, 'url_status_removed': 0, 'flood_tracker_removed': 3, 'ip_bans_removed': 0, 'ip_troll_removed': 0, 'bot_violations_cleared': 0, 'known_ips_cleared': 0}
+[08:55:09] 216.226.77.30 GET / 200 (1ms)
+2026-07-02 08:56:41,885 - INFO - [SYSTEM] - Site cache cleanup: cache={'keys': 8, 'expired_removed': 0, 'cap_removed': 0}, maps={'post_rate_removed': 0, 'thread_versions_removed': 0, 'url_status_removed': 0, 'flood_tracker_removed': 1, 'ip_bans_removed': 0, 'ip_troll_removed': 0, 'bot_violations_cleared': 0, 'known_ips_cleared': 0}
+[08:56:44] 66.132.186.184 GET /29el22v8655iy 307 -> [OTHER] (0ms)
+[08:57:09] 124.221.140.98 GET / 200 (1ms)
+[08:58:49] 47.230.115.235 GET /b/ 307 -> [OTHER] (1ms)
+[08:58:49] 47.230.115.235 GET /b/threads/ 200 (1ms)
+C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\fastapi\routing.py:129: FastAPIDeprecationWarning: ORJSONResponse is deprecated, FastAPI now serializes data directly to JSON bytes via Pydantic when a return type or response model is set, which is faster and doesn't need a custom response class. Read more in the FastAPI docs: https://fastapi.tiangolo.com/advanced/custom-response/#orjson-or-response-model and https://fastapi.tiangolo.com/tutorial/response-model/
+  response = await f(request)
+[08:58:50] 47.230.115.235 GET /api/locales 200 (5ms)
+[08:58:51] 47.230.115.235 GET /api/my-alerts 200 (13ms)
+[08:58:51] 47.230.115.235 GET /api/threads/b 200 (119ms)
+[08:58:51] 47.230.115.235 GET / 200 (2ms)
+[08:58:52] 47.230.115.235 GET / 200 (1ms)
+INFO:     47.230.115.235:0 - "WebSocket /ws/b/chat" [accepted]
+2026-07-02 08:58:52,551 - INFO - [SYSTEM] - 🔌 WS Connect: 47.230.115.235 | Board: b
+INFO:     connection open
+INFO:     47.230.115.235:0 - "WebSocket /ws/b/threads" [accepted]
+2026-07-02 08:58:52,679 - INFO - [SYSTEM] - 🔌 WS Connect: 47.230.115.235 | Board: b
+INFO:     connection open
+INFO:     connection closed
+[08:58:55] 47.230.115.235 POST /api/get-my-posts 200 (2ms)
+[08:58:56] 47.230.115.235 GET /api/my/replies/count 200 (1ms)
+[08:59:13] 64.225.39.9   GET / 200 (2ms)
+[08:59:59] 47.230.115.235 GET /api/my/replies/count 200 (1ms)
+INFO:     connection closed
+2026-07-02 09:01:33,205 - INFO - [SYSTEM] - 🧹 [Site] Cleaning spam tracker memory...
+2026-07-02 09:01:33,206 - INFO - [SYSTEM] - ✅ [Site] Spam tracker cleaned.
+2026-07-02 09:01:41,898 - INFO - [SYSTEM] - Site cache cleanup: cache={'keys': 9, 'expired_removed': 0, 'cap_removed': 0}, maps={'post_rate_removed': 0, 'thread_versions_removed': 0, 'url_status_removed': 0, 'flood_tracker_removed': 17, 'ip_bans_removed': 0, 'ip_troll_removed': 0, 'bot_violations_cleared': 0, 'known_ips_cleared': 0}
+[09:02:20] 70.55.161.91  GET /b/ 307 -> [OTHER] (1ms)
+[09:02:21] 70.55.161.91  GET /b/threads/ 200 (1ms)
+[09:02:22] 70.55.161.91  GET /api/locales 200 (5ms)
+[09:02:23] 70.55.161.91  GET /apple-touch-icon-precomposed.png 307 -> [OTHER] (1ms)
+[09:02:23] 70.55.161.91  GET / 200 (3ms)
+[09:02:23] 70.55.161.91  GET / 200 (3ms)
+[09:02:23] 70.55.161.91  GET /apple-touch-icon.png 301 -> [OTHER] (1ms)
+[09:02:23] 70.55.161.91  GET /apple-touch-icon-precomposed.png/ 307 -> [OTHER] (1ms)
+INFO:     70.55.161.91:0 - "WebSocket /ws/b/chat" [accepted]
+2026-07-02 09:02:23,621 - INFO - [SYSTEM] - 🔌 WS Connect: 70.55.161.91 | Board: b
+INFO:     connection open
+[09:02:23] 70.55.161.91  GET /apple-touch-icon-precomposed.png/threads/ 404 (1ms)
+2026-07-02 09:02:24,044 - INFO - [SYSTEM] - HTTP Request: GET https://check.torproject.org/exit-addresses "HTTP/1.1 200 OK"
+[09:02:24] 70.55.161.91  GET /api/threads/b 200 (116ms)
+[09:02:24] 70.55.161.91  GET /api/my-alerts 200 (1ms)
+2026-07-02 09:02:24,607 - INFO - [SYSTEM] - 🛡️ TOR BLOCKER: Loaded 1319 exit nodes.
+[09:02:25] 70.55.161.91  POST /api/get-my-posts 200 (4ms)
+[09:02:26] 70.55.161.91  GET /api/my/replies/count 200 (1ms)
+[09:02:33] 70.55.161.91  GET /sex/threads/ 200 (1ms)
+INFO:     connection closed
+[09:02:33] 70.55.161.91  GET /api/locales 200 (6ms)
+[09:02:34] 70.55.161.91  GET /api/my-alerts 200 (11ms)
+[09:02:34] 70.55.161.91  GET /api/threads/sex 200 (106ms)
+INFO:     70.55.161.91:0 - "WebSocket /ws/sex/chat" [accepted]
+2026-07-02 09:02:34,688 - INFO - [SYSTEM] - 🔌 WS Connect: 70.55.161.91 | Board: sex
+INFO:     connection open
+[09:02:36] 70.55.161.91  POST /api/get-my-posts 200 (2ms)
+[09:02:37] 70.55.161.91  GET /api/my/replies/count 200 (1ms)
+[09:02:41] 70.55.161.91  file accepted (6291ms)
+[09:03:00] 70.55.161.91  GET /files/BAACAgIAAyEGAASvQFzKAAEBNS5p99VU5s_-QM8b9ExpBidXFL4EpwACzKUAAi92wEuC-Fw0atskujsE/2021-01-11_11-19-09.mp4 404 (25165ms)
+[09:03:04] 70.55.161.91  GET /files/BAACAgIAAyEGAASvQFzKAAEBNS5p99VU5s_-QM8b9ExpBidXFL4EpwACzKUAAi92wEuC-Fw0atskujsE/2021-01-11_11-19-09.mp4 404 (3567ms)
+[09:03:43] 70.55.161.91  file accepted (3876ms)
+[09:03:45] 70.55.161.91  file accepted (1ms)
+[09:03:47] 70.55.161.91  GET /api/threads/sex 200 (27ms)
+[09:03:53] 70.55.161.91  file accepted (14050ms)
+[09:03:54] 70.55.161.91  file accepted (3ms)
+[09:03:54] 70.55.161.91  file accepted (14528ms)
+[09:03:55] 70.55.161.91  file accepted (1ms)
+[09:03:55] 70.55.161.91  GET /api/threads/sex 200 (10ms)
+INFO:     connection closed
+[09:04:00] 70.55.161.91  GET /api/threads/sex 200 (7ms)
+[09:04:00] 70.55.161.91  GET /api/my-alerts 200 (1ms)
+INFO:     70.55.161.91:0 - "WebSocket /ws/sex/chat" [accepted]
+2026-07-02 09:04:01,272 - INFO - [SYSTEM] - 🔌 WS Connect: 70.55.161.91 | Board: sex
+INFO:     connection open
+[09:04:02] 70.55.161.91  POST /api/get-my-posts 200 (2ms)
+[09:04:04] 70.55.161.91  GET /api/my/replies/count 200 (1ms)
+[09:04:05] 70.55.161.91  GET /files/BAACAgIAAyEGAASvQFzKAAEBNS5p99VU5s_-QM8b9ExpBidXFL4EpwACzKUAAi92wEuC-Fw0atskujsE/2021-01-11_11-19-09.mp4 404 (3569ms)
+[09:04:08] 70.55.161.91  file accepted (2ms)
+[09:04:08] 70.55.161.91  file accepted (3ms)
+[09:04:08] 70.55.161.91  file accepted (4ms)
+[09:04:08] 70.55.161.91  file accepted (2ms)
+[09:04:08] 70.55.161.91  file accepted (4ms)
+[09:04:08] 70.55.161.91  file accepted (5ms)
+[09:04:09] 70.55.161.91  GET /files/BAACAgIAAyEGAASvQFzKAAEBNS5p99VU5s_-QM8b9ExpBidXFL4EpwACzKUAAi92wEuC-Fw0atskujsE/2021-01-11_11-19-09.mp4 404 (3552ms)
+[09:04:09] 70.55.161.91  GET /api/threads/sex 200 (4ms)
+[09:04:12] 70.55.161.91  GET /api/threads/sex 200 (14ms)
+[09:04:30] 70.55.161.91  GET /ai/threads/ 200 (1ms)
+INFO:     connection closed
+[09:04:31] 70.55.161.91  GET /api/my-alerts 200 (7ms)
+[09:04:31] 70.55.161.91  GET /api/threads/ai 200 (129ms)
+INFO:     70.55.161.91:0 - "WebSocket /ws/ai/chat" [accepted]
+2026-07-02 09:04:31,510 - INFO - [SYSTEM] - 🔌 WS Connect: 70.55.161.91 | Board: ai
+INFO:     connection open
+[09:04:32] 70.55.161.91  POST /api/get-my-posts 200 (2ms)
+[09:04:34] 70.55.161.91  GET /api/my/replies/count 200 (1ms)
+[09:05:33] 70.55.161.91  GET /api/threads/ai 200 (3ms)
+[09:05:36] 70.55.161.91  GET /ai/threads/ 200 (1ms)
+INFO:     connection closed
+[09:05:37] 70.55.161.91  GET /api/my-alerts 200 (7ms)
+[09:05:37] 70.55.161.91  GET /api/threads/ai 200 (120ms)
+INFO:     70.55.161.91:0 - "WebSocket /ws/ai/chat" [accepted]
+2026-07-02 09:05:37,177 - INFO - [SYSTEM] - 🔌 WS Connect: 70.55.161.91 | Board: ai
+INFO:     connection open
+[09:05:38] 70.55.161.91  POST /api/get-my-posts 200 (5ms)
+INFO:     connection closed
+2026-07-02 09:06:41,899 - INFO - [SYSTEM] - Site cache cleanup: cache={'keys': 19, 'expired_removed': 2, 'cap_removed': 0}, maps={'post_rate_removed': 0, 'thread_versions_removed': 0, 'url_status_removed': 0, 'flood_tracker_removed': 23, 'ip_bans_removed': 0, 'ip_troll_removed': 0, 'bot_violations_cleared': 0, 'known_ips_cleared': 0}
+2026-07-02 09:11:41,902 - INFO - [SYSTEM] - Site cache cleanup: cache={'keys': 13, 'expired_removed': 6, 'cap_removed': 0}, maps={'post_rate_removed': 0, 'thread_versions_removed': 0, 'url_status_removed': 0, 'flood_tracker_removed': 0, 'ip_bans_removed': 0, 'ip_troll_removed': 0, 'bot_violations_cleared': 0, 'known_ips_cleared': 0}
+2026-07-02 09:16:41,902 - INFO - [SYSTEM] - Site cache cleanup: cache={'keys': 7, 'expired_removed': 6, 'cap_removed': 0}, maps={'post_rate_removed': 0, 'thread_versions_removed': 0, 'url_status_removed': 0, 'flood_tracker_removed': 0, 'ip_bans_removed': 0, 'ip_troll_removed': 0, 'bot_violations_cleared': 0, 'known_ips_cleared': 0}
+2026-07-02 09:18:29,375 - INFO - [SYSTEM] - DEBUG: [Task 23133] Started for AgACAgIAAy...
+2026-07-02 09:18:29,376 - INFO - [SYSTEM] - DEBUG: [Task 23133] get_file_owner_id done (owner=7763079931)
+2026-07-02 09:18:29,376 - INFO - [SYSTEM] - DEBUG: [Task 23133] Calling bot.get_file...
+2026-07-02 09:18:31,375 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 09:18:31,376 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 09:18:31,825 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 09:18:31,826 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 09:20:31,977 - INFO - [SYSTEM] - DEBUG: [Task 23135] Started for AgACAgIAAy...
+2026-07-02 09:20:31,977 - INFO - [SYSTEM] - DEBUG: [Task 23135] get_file_owner_id done (owner=8342803724)
+2026-07-02 09:20:31,977 - INFO - [SYSTEM] - DEBUG: [Task 23135] Calling bot.get_file...
+2026-07-02 09:20:31,978 - INFO - [SYSTEM] - DEBUG: [Task 23134] Started for AgACAgIAAy...
+2026-07-02 09:20:31,979 - INFO - [SYSTEM] - DEBUG: [Task 23134] get_file_owner_id done (owner=8102947050)
+2026-07-02 09:20:31,979 - INFO - [SYSTEM] - DEBUG: [Task 23134] Calling bot.get_file...
+2026-07-02 09:20:31,980 - INFO - [SYSTEM] - DEBUG: [Task 23132] Started for AgACAgIAAy...
+2026-07-02 09:20:31,982 - INFO - [SYSTEM] - DEBUG: [Task 23132] get_file_owner_id done (owner=8411002970)
+2026-07-02 09:20:31,982 - INFO - [SYSTEM] - DEBUG: [Task 23132] Calling bot.get_file...
+2026-07-02 09:20:35,875 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 09:20:35,876 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 09:20:35,927 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 09:20:35,927 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 09:20:36,309 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 09:20:36,310 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 09:20:36,338 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 09:20:36,338 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 09:20:40,920 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 09:20:40,921 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 09:20:41,337 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 09:20:41,337 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 09:21:41,905 - INFO - [SYSTEM] - Site cache cleanup: cache={'keys': 6, 'expired_removed': 1, 'cap_removed': 0}, maps={'post_rate_removed': 0, 'thread_versions_removed': 0, 'url_status_removed': 0, 'flood_tracker_removed': 0, 'ip_bans_removed': 0, 'ip_troll_removed': 0, 'bot_violations_cleared': 0, 'known_ips_cleared': 0}
+[09:25:17] 123.58.196.28 GET / 200 (1ms)
+[09:25:38] 123.58.196.28 GET /robots.txt 200 (0ms)
+ERROR:    Exception in ASGI application
+  + Exception Group Traceback (most recent call last):
+  |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\_utils.py", line 85, in create_collapsing_task_group
+  |     async with anyio.create_task_group() as tg:
+  |                ~~~~~~~~~~~~~~~~~~~~~~~^^
+  |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\anyio\_backends\_asyncio.py", line 781, in __aexit__
+  |     raise BaseExceptionGroup(
+  |         "unhandled errors in a TaskGroup", self._exceptions
+  |     ) from None
+  | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\uvicorn\protocols\http\h11_impl.py", line 415, in run_asgi
+    |     result = await app(  # type: ignore[func-returns-value]
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         self.scope, self.receive, self.send
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |     )
+    |     ^
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 62, in __call__
+    |     return await self.app(scope, receive, send)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\fastapi\applications.py", line 1162, in __call__
+    |     await super().__call__(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\applications.py", line 90, in __call__
+    |     await self.middleware_stack(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\errors.py", line 186, in __call__
+    |     raise exc
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    |     await self.app(scope, receive, _send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\trustedhost.py", line 36, in __call__
+    |     await self.app(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\sessions.py", line 88, in __call__
+    |     await self.app(scope, receive, send_wrapper)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\site_tgach\main.py", line 2614, in language_middleware
+    |     response = await call_next(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    |     raise app_exc from app_exc.__cause__ or app_exc.__context__
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\site_tgach\main.py", line 2540, in access_control_middleware
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    |     raise app_exc from app_exc.__cause__ or app_exc.__context__
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\site_tgach\main.py", line 2517, in guest_identification_middleware
+    |     response = await call_next(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    |     raise app_exc from app_exc.__cause__ or app_exc.__context__
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\site_tgach\main.py", line 2484, in global_data_middleware
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    |     raise app_exc from app_exc.__cause__ or app_exc.__context__
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\gzip.py", line 29, in __call__
+    |     await responder(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\gzip.py", line 130, in __call__
+    |     await super().__call__(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\gzip.py", line 46, in __call__
+    |     await self.app(scope, receive, self.send_with_compression)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\site_tgach\main.py", line 2191, in security_headers_middleware
+    |     response = await call_next(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    |     raise app_exc from app_exc.__cause__ or app_exc.__context__
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\site_tgach\main.py", line 2185, in ddos_guard_middleware
+    |     response = await call_next(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    |     raise app_exc from app_exc.__cause__ or app_exc.__context__
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\site_tgach\main.py", line 1899, in custom_access_log_middleware
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    |     raise app_exc from app_exc.__cause__ or app_exc.__context__
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "C:\Users\danat\Desktop\dvachbot\site_tgach\main.py", line 1875, in __call__
+    |     await self.app(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\site_tgach\main.py", line 1850, in __call__
+    |     await self.app(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 193, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\site_tgach\main.py", line 1805, in country_cookie_middleware
+    |     response = await call_next(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 168, in call_next
+    |     raise app_exc from app_exc.__cause__ or app_exc.__context__
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\base.py", line 144, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\middleware\exceptions.py", line 63, in __call__
+    |     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    |     raise exc
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    |     await app(scope, receive, sender)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\fastapi\middleware\asyncexitstack.py", line 18, in __call__
+    |     await self.app(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\routing.py", line 660, in __call__
+    |     await self.middleware_stack(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\routing.py", line 680, in app
+    |     await route.handle(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\fastapi\routing.py", line 1220, in handle
+    |     await super().handle(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\routing.py", line 276, in handle
+    |     await self.app(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\fastapi\routing.py", line 143, in app
+    |     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    |     raise exc
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    |     await app(scope, receive, sender)
+    |   File "C:\Users\danat\Desktop\dvachbot\venv\Lib\site-packages\fastapi\routing.py", line 129, in app
+    |2026-07-02 09:25:45,483 - WARNING - [SYSTEM] - 🪤 TROLLING 123.58.196.28 with [HTML] on /config.json (GET)
+[09:25:45] 123.58.196.28 GET /config.json 200 (2ms)
+2026-07-02 09:26:41,921 - INFO - [SYSTEM] - Site cache cleanup: cache={'keys': 6, 'expired_removed': 0, 'cap_removed': 0}, maps={'post_rate_removed': 0, 'thread_versions_removed': 0, 'url_status_removed': 0, 'flood_tracker_removed': 3, 'ip_bans_removed': 0, 'ip_troll_removed': 0, 'bot_violations_cleared': 0, 'known_ips_cleared': 0}
+[09:26:58] 45.63.4.69    GET / 200 (1ms)
+2026-07-02 09:28:31,901 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28976: max attempts reached.
+2026-07-02 09:28:31,902 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28975: max attempts reached.
+2026-07-02 09:28:31,902 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28974: max attempts reached.
+2026-07-02 09:28:31,902 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28973: max attempts reached.
+2026-07-02 09:28:31,902 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28972: max attempts reached.
+2026-07-02 09:28:31,902 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28971: max attempts reached.
+2026-07-02 09:28:31,903 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28970: max attempts reached.
+2026-07-02 09:28:31,903 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28969: max attempts reached.
+2026-07-02 09:28:31,903 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28968: max attempts reached.
+2026-07-02 09:28:31,903 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28967: max attempts reached.
+2026-07-02 09:28:31,903 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28966: max attempts reached.
+2026-07-02 09:28:31,903 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28965: max attempts reached.
+2026-07-02 09:28:31,904 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28964: max attempts reached.
+2026-07-02 09:28:31,904 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28963: max attempts reached.
+2026-07-02 09:28:31,904 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28962: max attempts reached.
+2026-07-02 09:28:31,904 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28961: max attempts reached.
+2026-07-02 09:29:11,954 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28960: max attempts reached.
+2026-07-02 09:29:11,954 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28959: max attempts reached.
+2026-07-02 09:29:11,954 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28958: max attempts reached.
+2026-07-02 09:29:11,954 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28957: max attempts reached.
+2026-07-02 09:29:11,954 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28956: max attempts reached.
+2026-07-02 09:29:11,955 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28955: max attempts reached.
+2026-07-02 09:29:11,955 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28954: max attempts reached.
+2026-07-02 09:29:11,955 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28952: max attempts reached.
+2026-07-02 09:29:11,955 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28951: max attempts reached.
+2026-07-02 09:29:11,955 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28950: max attempts reached.
+2026-07-02 09:29:11,955 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28949: max attempts reached.
+2026-07-02 09:29:11,955 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28948: max attempts reached.
+2026-07-02 09:29:11,956 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28947: max attempts reached.
+2026-07-02 09:29:11,956 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28946: max attempts reached.
+2026-07-02 09:29:11,956 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28944: max attempts reached.
+2026-07-02 09:29:11,956 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28943: max attempts reached.
+2026-07-02 09:29:11,956 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28942: max attempts reached.
+2026-07-02 09:29:52,004 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28953: max attempts reached.
+2026-07-02 09:29:52,004 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28945: max attempts reached.
+2026-07-02 09:29:52,005 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28941: max attempts reached.
+2026-07-02 09:29:52,005 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28940: max attempts reached.
+2026-07-02 09:29:52,005 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28939: max attempts reached.
+2026-07-02 09:29:52,005 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28938: max attempts reached.
+2026-07-02 09:29:52,005 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28937: max attempts reached.
+2026-07-02 09:29:52,005 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28936: max attempts reached.
+2026-07-02 09:29:52,006 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28935: max attempts reached.
+2026-07-02 09:29:52,006 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28934: max attempts reached.
+2026-07-02 09:29:52,006 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28933: max attempts reached.
+2026-07-02 09:29:52,006 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28932: max attempts reached.
+2026-07-02 09:29:52,006 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28931: max attempts reached.
+2026-07-02 09:29:52,006 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28930: max attempts reached.
+2026-07-02 09:29:52,007 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28929: max attempts reached.
+2026-07-02 09:29:52,007 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28928: max attempts reached.
+2026-07-02 09:29:52,007 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28927: max attempts reached.
+2026-07-02 09:29:52,007 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28926: max attempts reached.
+2026-07-02 09:29:52,007 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28925: max attempts reached.
+2026-07-02 09:30:32,063 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28924: max attempts reached.
+2026-07-02 09:30:32,063 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28923: max attempts reached.
+2026-07-02 09:30:32,063 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28922: max attempts reached.
+2026-07-02 09:30:32,063 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28921: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28920: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28919: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28918: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28917: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28916: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28915: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28914: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28913: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28912: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28911: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28910: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28909: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28908: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28907: max attempts reached.
+2026-07-02 09:30:32,066 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28906: max attempts reached.
+2026-07-02 09:30:52,091 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28905: max attempts reached.
+2026-07-02 09:31:12,317 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28904: max attempts reached.
+2026-07-02
+<truncated 148452 bytes>
+
+NOTE: The output was truncated because it was too long. Use a more targeted query or a smaller range to get the information you need.

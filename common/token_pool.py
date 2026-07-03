@@ -18,6 +18,11 @@ class TokenRotator:
             return None
         return random.choice(self.tokens)
 
+    def remove_token(self, token: str):
+        if token in self.tokens:
+            self.tokens.remove(token)
+            self._iterator = itertools.cycle(self.tokens) if self.tokens else None
+
 # Инициализируем пулы
 # В .env писать: HF_TOKENS=hf_1,hf_2,hf_3
 hf_pool = TokenRotator(os.getenv("HF_TOKENS", ""))

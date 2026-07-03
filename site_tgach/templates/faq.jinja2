@@ -4,7 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Поясняю за ТГАЧ (FAQ)</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=2.3">
+    <meta name="description" content="Часто задаваемые вопросы (FAQ) по использованию ТГАЧ — новой анонимной имиджборды и архива.">
+    <meta property="og:site_name" content="ТГАЧ">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Поясняю за ТГАЧ (FAQ)">
+    <meta property="og:description" content="Часто задаваемые вопросы (FAQ) по использованию ТГАЧ — новой анонимной имиджборды и архива.">
+    <meta property="og:image" content="/static/logo.png">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.0">
     <link rel="icon" href="/static/favicon.ico">
 </head>
 <body {% if session.user %}data-user-id="{{ request.state.user_hash }}"{% endif %} data-site-mode="{{ site_mode }}">
@@ -400,6 +406,6 @@
             </div>
         </form>
     </div>
-    <script src="/static/js/main.js?v=1.2" defer></script>
+    <script src="/static/js/main.js?v=9.0" defer></script>
 </body>
 </html>

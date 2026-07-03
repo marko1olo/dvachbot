@@ -269,14 +269,21 @@ async def process_and_upload_image(
 
     if is_image:
         try:
-            thumbnail_bytes = await create_thumbnail_in_memory(contents)
-            
             def _validate_and_phash():
-                img = Image.open(BytesIO(contents))
-                if img.format not in ['JPEG', 'PNG', 'WEBP']: return None
-                return str(imagehash.phash(img))
-            
-            phash_str = await asyncio.to_thread(_validate_and_phash)
+                with Image.open(BytesIO(contents)) as img:
+                    if img.format not in ['JPEG', 'PNG', 'WEBP']: return None
+                    if max(img.size) > 128:
+                        img.thumbnail((128, 128))
+                    return str(imagehash.phash(img))
+
+            thumbnail_bytes, phash_str = await asyncio.gather(
+                create_thumbnail_in_memory(contents),
+                asyncio.to_thread(_validate_and_phash),
+                return_exceptions=True
+            )
+            if isinstance(thumbnail_bytes, Exception): thumbnail_bytes = None
+            if isinstance(phash_str, Exception): phash_str = None
+
             if phash_str and await check_phash_ban(phash_str):
                 return {"banned": True, "reason": "Banned by pHash"}
                 
@@ -344,21 +351,18 @@ async def process_and_upload_image(
                     if not is_too_heavy_for_photo:
                         try:
                             sent_original = await _send_with_retry("send_photo", input_file, chat_id=channel_id, photo=input_file)
-                            if sent_original.photo:
+                            if sent_original and sent_original.photo:
                                 result_file_id = get_fid(sent_original.photo[-1])
+                                thumb_id = get_fid(sent_original.photo[0])
                         except ValueError: 
                             is_too_heavy_for_photo = True
                     
                     if is_too_heavy_for_photo or not result_file_id:
                         sent_original = await _send_with_retry("send_document", input_file, chat_id=channel_id, document=input_file)
-                        result_file_id = get_fid(sent_original.document)
-                    
-                    if thumbnail_bytes:
-                        try:
-                            thumb_file = BufferedInputFile(thumbnail_bytes, filename="thumb.jpg")
-                            sent_thumb = await current_bot.send_photo(channel_id, thumb_file)
-                            thumb_id = get_fid(sent_thumb.photo[-1])
-                        except: pass
+                        if sent_original and sent_original.document:
+                            result_file_id = get_fid(sent_original.document)
+                            if sent_original.document.thumbnail:
+                                thumb_id = get_fid(sent_original.document.thumbnail)
                         
                 except Exception as e:
                     logger.error(f"Image sub-upload failed: {e}")
@@ -546,11 +550,40 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
     except Exception as e:
         logger.error(f"Shadow task error: {e}")
 
-    # 2. Логика зеркал (Catbox + HF)
-    # Всегда добавляем превью в очередь HF, так как они маленькие
+    # 2. Логика зеркал (Catbox + HF + 0x0)
     hf_available = has_available_hf_repo()
-    if related_id and hf_available:
-        await add_to_hf_queue(related_id)
+    if related_id:
+        if hf_available:
+            await add_to_hf_queue(related_id)
+
+        # Зеркалируем превью (миниатюру) на Catbox
+        catbox_thumb_link = None
+        if thumb_bytes:
+            try:
+                catbox_thumb_link = await upload_bytes_to_catbox(thumb_bytes, f"thumb_{related_id}.jpg")
+                if catbox_thumb_link:
+                    await add_file_mirror(related_id, 'catbox', catbox_thumb_link)
+            except Exception as ex:
+                logger.error(f"Error direct uploading thumb to catbox: {ex}")
+
+        if not catbox_thumb_link:
+            from common.database import add_to_mirror_queue
+            await add_to_mirror_queue(related_id, 'catbox')
+
+        # Зеркалируем превью (миниатюру) на 0x0
+        zeroxzero_thumb_link = None
+        if is_0x0_available():
+            if thumb_bytes:
+                try:
+                    zeroxzero_thumb_link = await upload_bytes_to_0x0(thumb_bytes, f"thumb_{related_id}.jpg")
+                    if zeroxzero_thumb_link:
+                        await add_file_mirror(related_id, '0x0', zeroxzero_thumb_link)
+                except Exception as ex:
+                    logger.error(f"Error direct uploading thumb to 0x0: {ex}")
+
+            if not zeroxzero_thumb_link:
+                from common.database import add_to_mirror_queue
+                await add_to_mirror_queue(related_id, '0x0')
 
     # Если файл > 19MB, Telegram не отдаст ссылку. Грузим байты напрямую.
     SIZE_LIMIT = 19 * 1024 * 1024
