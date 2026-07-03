@@ -18653,7 +18653,7 @@ async def wait_for_delivery_queues_to_drain(timeout_sec: float, log_interval_sec
 
 def _event_loop_stall_watchdog_loop():
     last_dump_at = 0.0
-    while not is_shutting_down:
+    while not shutdown_event.is_set():
         now = time.time()
         lag_sec = max(0.0, now - event_loop_last_tick)
         if (
