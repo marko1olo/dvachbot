@@ -2171,8 +2171,10 @@ async def db_maintenance_task():
                         logger.warning(f"⚠️ DB Optimization warning: {opt_err}")
                         
                 except Exception as e:
-                    try: await db.execute("ROLLBACK")
-                    except: pass
+                    try:
+                        await db.execute("ROLLBACK")
+                    except Exception as rollback_err:
+                        logger.error(f"⚠️ FTS Maintenance ROLLBACK error: {rollback_err}")
                     logger.error(f"⚠️ FTS Maintenance error: {e}")
             
             logger.info("✅ [DB] Maintenance complete.")
