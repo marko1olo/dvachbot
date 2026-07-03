@@ -19,7 +19,6 @@ Logging:
 """
 import logging
 import asyncio
-from common.http_utils import api_retry
 from common.task_manager import spawn_task
 import httpx
 import json
@@ -133,14 +132,10 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
        - Автоматический блюр (цензура).
        - Добавление в ModQueue для ручного подтверждения админом.
     """
-    from common.database import get_post_by_num, update_shadow_mute, log_global_event, add_to_mod_queue, get_pool
+    from common.database import get_post_by_num, update_shadow_mute, log_global_event
     from common.board_config import ADMIN_IDS
     from common.bot_pool import global_bot_pool
     from site_tgach.security import IP_BAN_LIST
-    import base64
-    import time
-    import asyncio
-    from common.http_utils import api_retry
 
     logger.info(f"🔍 [DeepCheck] Starting analysis for file_id: {file_id}")
 
