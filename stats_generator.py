@@ -1,6 +1,7 @@
 import sqlite3
 import time
 import json
+from dataclasses import dataclass
 import io
 import random
 import re
@@ -59,6 +60,16 @@ def generate_schizo_name(user_id: int) -> str:
     suffix = rng.choice(NICK_SUFFIXES)
     return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
 
+def save_chart(images: list, filename: str, bbox_inches=None):
+    buf = io.BytesIO()
+    if bbox_inches:
+        plt.savefig(buf, format='png', bbox_inches=bbox_inches)
+    else:
+        plt.savefig(buf, format='png')
+    buf.seek(0)
+    images.append((filename, buf))
+    plt.close()
+
 def generate_all_charts():
     """Generates exactly 10 toxic charts and returns a list of io.BytesIO objects"""
     conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
@@ -88,11 +99,7 @@ def generate_all_charts():
         plt.title('1. Объем высеров (Посты по дням)', fontsize=16, fontweight='bold', color='#ff3366')
         plt.xticks(rotation=45)
         plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('1_posts.png', buf))
-        plt.close()
+        save_chart(images, '1_posts.png')
         
     # 2. Уникальные шизы (Weekly Active Users)
     c.execute('''
@@ -109,11 +116,7 @@ def generate_all_charts():
         plt.title('2. Размер онлайна (Уникальные шизы за НЕДЕЛЮ)', fontsize=16, fontweight='bold', color="#00ffcc")
         plt.xticks(rotation=45)
         plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('2_wau.png', buf))
-        plt.close()
+        save_chart(images, '2_wau.png')
 
     # 3. Матоемкость борды
     c.execute('''
@@ -160,11 +163,7 @@ def generate_all_charts():
         plt.title('3. Матоемкость (% постов с матами)', fontsize=16, fontweight='bold', color='#ff0000')
         plt.ylabel('% постов с матом')
         plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('3_toxicity.png', buf))
-        plt.close()
+        save_chart(images, '3_toxicity.png')
 
     # 4. Топ-10 Главных Шизоидов
     c.execute('''
@@ -187,11 +186,7 @@ def generate_all_charts():
             ax.text(row['cnt'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['cnt'])}", 
                     va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
         plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('4_top_schizos.png', buf))
-        plt.close()
+        save_chart(images, '4_top_schizos.png')
 
     # 5. Главные Провокаторы (Топ-5 юзеров, кому больше всего отвечают)
     c.execute('''
@@ -222,8 +217,7 @@ def generate_all_charts():
         plt.suptitle('5. Главные Байтеры — Топ-20 (Кому больше всего реплаят)',
                      fontsize=15, fontweight='bold', color='#33ccff', y=1.01)
         plt.tight_layout()
-        buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight'); buf.seek(0)
-        images.append(('5_provocateurs.png', buf)); plt.close()
+        save_chart(images, '5_provocateurs.png', bbox_inches='tight')
 
     # 6. Гистограмма длины постов (Одноклеточные vs Пасты)
     c.execute('''
@@ -254,11 +248,7 @@ def generate_all_charts():
             plt.axvline(x=300, color='g', linestyle='--')
             plt.text(310, ax.get_ylim()[1]*0.8, 'Пасто-писатели (>300)', color='g')
             plt.tight_layout()
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('6_post_length.png', buf))
-            plt.close()
+            save_chart(images, '6_post_length.png')
 
     # 7+8+9. Три пирога в одном — Ночники / Медиа / Диалог
     c.execute('''
@@ -298,8 +288,7 @@ def generate_all_charts():
         plt.suptitle('7–9. Профиль Анона: время / формат / диалог (30д)',
                      fontsize=14, fontweight='bold', color='#ffffff', y=1.02)
         plt.tight_layout()
-        buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight'); buf.seek(0)
-        images.append(('7_8_9_donut_panel.png', buf)); plt.close()
+        save_chart(images, '7_8_9_donut_panel.png', bbox_inches='tight')
 
     # 10. Тепловая карта активности (Heatmap)
     c.execute('''
@@ -326,11 +315,7 @@ def generate_all_charts():
         plt.xlabel('Час (МСК)')
         plt.ylabel('День недели')
         plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('10_heatmap.png', buf))
-        plt.close()
+        save_chart(images, '10_heatmap.png')
 
     # 11. Граф Социального Пузыря (Echo Chambers)
     try:
@@ -374,11 +359,7 @@ def generate_all_charts():
                 plt.title('11. Граф Социального Пузыря (Эхо-камеры)', fontsize=16, fontweight='bold', color="#00ffcc")
                 ax.axis('off')
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('11_echo_chambers.png', buf))
-                plt.close()
+                save_chart(images, '11_echo_chambers.png')
     except Exception as e:
         print(f"Error Chart 11: {e}")
 
@@ -409,11 +390,7 @@ def generate_all_charts():
                     ax.text(row['pagerank'] + (ax.get_xlim()[1] * 0.01), idx, f"{row['pagerank']:.4f}", 
                             va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('12_pagerank.png', buf))
-                plt.close()
+                save_chart(images, '12_pagerank.png')
     except Exception as e:
         print(f"Error Chart 12: {e}")
 
@@ -457,11 +434,7 @@ def generate_all_charts():
                     ax.text(row['score'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['score'])}", 
                             va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('13_circlejerk.png', buf))
-                plt.close()
+                save_chart(images, '13_circlejerk.png')
     except Exception as e:
         print(f"Error Chart 13: {e}")
 
@@ -510,11 +483,7 @@ def generate_all_charts():
                 plt.xlabel('Длительность сессии (минуты, лимит 15 мин на паузу)')
                 plt.ylabel('Количество сессий')
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('14_sessions.png', buf))
-                plt.close()
+                save_chart(images, '14_sessions.png')
     except Exception as e:
         print(f"Error Chart 14: {e}")
 
@@ -616,11 +585,7 @@ def generate_all_charts():
                             
             plt.suptitle('15. Мем-Радар: Взлетающие Тренды (Прирост за неделю)', fontsize=16, fontweight='bold', color="#ffaa00", y=0.96)
             plt.tight_layout(rect=[0, 0, 1, 0.95])
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('15_autocorrelation.png', buf))
-            plt.close()
+            save_chart(images, '15_autocorrelation.png')
     except Exception as e:
         print(f"Error Chart 15: {e}")
 
@@ -688,11 +653,7 @@ def generate_all_charts():
                     ax.text(row['Частота'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['Частота'])}", 
                             va='center', ha='left', fontsize=9, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('16_top_words.png', buf))
-                plt.close()
+                save_chart(images, '16_top_words.png')
     except Exception as e:
         print(f"Error Chart 16: {e}")
 
@@ -754,11 +715,7 @@ def generate_all_charts():
                 plt.title('17. Индекс Токсичности (Двачевский сентимент)', fontsize=16, fontweight='bold', color='#ff3333')
                 plt.ylabel('Средний сентимент (выше = база, ниже = токсик)')
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('17_sentiment.png', buf))
-                plt.close()
+                save_chart(images, '17_sentiment.png')
     except Exception as e:
         print(f"Error Chart 17: {e}")
 
@@ -818,11 +775,7 @@ def generate_all_charts():
                     ax.text(row['msttr'] + (ax.get_xlim()[1] * 0.01), idx, f"{row['msttr']:.3f}", 
                             va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('18_lexical_diversity.png', buf))
-                plt.close()
+                save_chart(images, '18_lexical_diversity.png')
     except Exception as e:
         print(f"Error Chart 18: {e}")
 
@@ -851,11 +804,7 @@ def generate_all_charts():
                    colors=sns.color_palette("hls", len(df_board_plot)))
             plt.title('19. Популярность разделов (Посты по доскам)', fontsize=16, fontweight='bold', color="#ffffff")
             plt.tight_layout()
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('19_boards.png', buf))
-            plt.close()
+            save_chart(images, '19_boards.png')
     except Exception as e:
         print(f"Error Chart 19: {e}")
 
@@ -927,11 +876,7 @@ def generate_all_charts():
             plt.legend(loc='lower left', facecolor='#121212', edgecolor='#333333')
             plt.xticks(rotation=45)
             plt.tight_layout()
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('20_lorenz.png', buf))
-            plt.close()
+            save_chart(images, '20_lorenz.png')
     except Exception as e:
         print(f"Error Chart 20: {e}")
 
@@ -971,11 +916,7 @@ def generate_all_charts():
             cb.set_label('постов', color='#ffffff', fontsize=7.5)
 
             plt.tight_layout()
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('21_heatmap_180.png', buf))
-            plt.close()
+            save_chart(images, '21_heatmap_180.png')
     except Exception as e:
         print(f"Error Chart 21: {e}")
 
@@ -1033,11 +974,7 @@ def generate_all_charts():
             fig.suptitle('22. Ритм по дням недели (90д)', fontsize=15, y=0.99, color='#ffffff', fontweight='bold')
             plt.tight_layout(rect=[0.05, 0, 1, 0.98])
             
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('22_ridge_weekday.png', buf))
-            plt.close()
+            save_chart(images, '22_ridge_weekday.png')
     except Exception as e:
         print(f"Error Chart 22: {e}")
 
@@ -1091,11 +1028,7 @@ def generate_all_charts():
                     fontsize=14, color='#ffffff', fontweight='bold', alpha=0.55)
             plt.tight_layout()
             
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('23_activity_clock.png', buf))
-            plt.close()
+            save_chart(images, '23_activity_clock.png')
     except Exception as e:
         print(f"Error Chart 23: {e}")
 
@@ -1155,11 +1088,7 @@ def generate_all_charts():
             cb.ax.xaxis.set_tick_params(color='#ffffff', labelsize=7)
             plt.tight_layout()
             
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('24_calendar_180.png', buf))
-            plt.close()
+            save_chart(images, '24_calendar_180.png')
     except Exception as e:
         print(f"Error Chart 24: {e}")
 
@@ -1188,8 +1117,7 @@ def generate_all_charts():
             ax.set_title('25. Кумулятивный рост постов (всё время)', fontsize=13, fontweight='bold', color='#58a6ff')
             ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{int(v):,}'))
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('25_cumulative.png', buf)); plt.close()
+            save_chart(images, '25_cumulative.png')
     except Exception as e:
         print(f"Error Chart 25: {e}")
 
@@ -1226,8 +1154,7 @@ def generate_all_charts():
             ax.set_title('26. Глубина цепочек ответов (30д)', fontsize=13, fontweight='bold', color='#d2a8ff')
             ax.set_ylabel('Количество постов')
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('26_reply_depth.png', buf)); plt.close()
+            save_chart(images, '26_reply_depth.png')
     except Exception as e:
         print(f"Error Chart 26: {e}")
 
@@ -1279,8 +1206,7 @@ def generate_all_charts():
         ax.set_title('27. Радар здоровья борды', fontsize=13, fontweight='bold',
                      color='#39d353', pad=18)
         plt.tight_layout()
-        buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-        images.append(('27_radar.png', buf)); plt.close()
+        save_chart(images, '27_radar.png')
     except Exception as e:
         print(f"Error Chart 27: {e}")
 
@@ -1322,8 +1248,7 @@ def generate_all_charts():
             ax.set_title('28. Топ тредов (90д) — размер = активность', fontsize=12,
                          fontweight='bold', color='#ffa657')
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('28_threads_bubble.png', buf)); plt.close()
+            save_chart(images, '28_threads_bubble.png')
     except Exception as e:
         print(f"Error Chart 28: {e}")
 
@@ -1356,8 +1281,7 @@ def generate_all_charts():
             ax.set_title('29. Тренд медиа vs текст по дням (30д)', fontsize=13,
                          fontweight='bold', color='#ff3399')
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('29_media_trend.png', buf)); plt.close()
+            save_chart(images, '29_media_trend.png')
     except Exception as e:
         print(f"Error Chart 29: {e}")
 
@@ -1402,8 +1326,7 @@ def generate_all_charts():
             lines2, labels2 = ax2.get_legend_handles_labels()
             ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=8, loc='upper left')
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('30_cohorts.png', buf)); plt.close()
+            save_chart(images, '30_cohorts.png')
     except Exception as e:
         print(f"Error Chart 30: {e}")
 
@@ -1442,8 +1365,7 @@ def generate_all_charts():
             ax.set_title('31. Активность борд по неделям (12 нед)',
                          fontsize=13, fontweight='bold', color='#ffa657')
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('31_boards_weekly.png', buf)); plt.close()
+            save_chart(images, '31_boards_weekly.png')
     except Exception as e:
         print(f"Error Chart 31: {e}")
 
@@ -1502,19 +1424,14 @@ def generate_all_charts():
             plt.suptitle('32. Стрик-чемпионы (60д) — самые стойкие аноны  Top-20',
                          fontsize=14, fontweight='bold', color='#39d353', y=1.01)
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight'); buf.seek(0)
-            images.append(('32_streak_champions.png', buf)); plt.close()
+            save_chart(images, '32_streak_champions.png', bbox_inches='tight')
     except Exception as e:
         print(f"Error Chart 32: {e}")
 
 
     return images
 
-def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
-    import sys
-    import os
-    from PIL import Image, ImageDraw, ImageFont
-    
+def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
     conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
     c = conn.cursor()
     
@@ -1559,32 +1476,47 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         rank = len(all_users) + 1
         
     conn.close()
-    
-    schizo_name = generate_schizo_name(user_id)
-    
-    role_name = {
+
+    return {
+        'balance': balance,
+        'role': role,
+        'created_at': created_at,
+        'lie_media': lie_media,
+        'custom_prefix': custom_prefix,
+        'posts_count': posts_count,
+        'rx_received': rx_received,
+        'rx_given': rx_given,
+        'mutes_count': mutes_count,
+        'rank': rank,
+        'total_users': len(all_users)
+    }
+
+
+def _get_role_name(role: str) -> str:
+    return {
         'admin': 'Админ',
         'mod': 'Модератор',
         'janitor': 'Дворник',
         'user': 'Анон'
     }.get(role, 'Анон')
-    
-    # Slang comment based on rank and posts
+
+def _get_slang_comment(posts_count: int, rank: int, balance: float) -> str:
     if posts_count == 0:
-        slang_comment = "Ньюфаг детектед. Иди читай правила борды, анон."
+        return "Ньюфаг детектед. Иди читай правила борды, анон."
     elif rank <= 3:
-        slang_comment = "ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц."
+        return "ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц."
     elif posts_count > 300:
-        slang_comment = "Почетный Скуф борды. Запах подпиваса и базированных мыслей за версту."
+        return "Почетный Скуф борды. Запах подпиваса и базированных мыслей за версту."
     elif balance < 10:
-        slang_comment = "Нищук детектед. Проиграл все коины в рулетку или забанен за сажу."
+        return "Нищук детектед. Проиграл все коины в рулетку или забанен за сажу."
     else:
-        slang_comment = "Обычный сыч. Бамп в тред, сажу в комменты."
-        
-    text_report = (
+        return "Обычный сыч. Бамп в тред, сажу в комменты."
+
+def _format_text_report(schizo_name: str, board_id: str, role_name: str, custom_prefix: str, rank: int, total_users: int, posts_count: int, rx_received: int, rx_given: int, balance: float, mutes_count: int, lie_media: float, slang_comment: str) -> str:
+    return (
         f"☘️ <b>Статистика пользователя {schizo_name}</b> (/${board_id}/)\n\n"
         f"👤 <b>Статус:</b> {role_name} {f'({custom_prefix})' if custom_prefix else ''}\n"
-        f"🏅 <b>Ранг борды:</b> #{rank} из {len(all_users)}\n"
+        f"🏅 <b>Ранг борды:</b> #{rank} из {total_users}\n"
         f"📝 <b>Написано постов:</b> {posts_count}\n"
         f"🎭 <b>Получено реакций:</b> +{rx_received}\n"
         f"⚡ <b>Поставлено реакций:</b> {rx_given}\n"
@@ -1593,7 +1525,75 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         f"🌀 <b>Кринж-фактор:</b> {lie_media}%\n\n"
         f"💬 <i>\"{slang_comment}\"</i>"
     )
+
+def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
+    stats_data = fetch_user_stats_data(user_id, board_id)
+
+    schizo_name = generate_schizo_name(user_id)
+    role_name = _get_role_name(stats_data['role'])
+    slang_comment = _get_slang_comment(stats_data['posts_count'], stats_data['rank'], stats_data['balance'])
+
+    text_report = _format_text_report(
+        schizo_name=schizo_name,
+        board_id=board_id,
+        role_name=role_name,
+        custom_prefix=stats_data['custom_prefix'],
+        rank=stats_data['rank'],
+        total_users=stats_data['total_users'],
+        posts_count=stats_data['posts_count'],
+        rx_received=stats_data['rx_received'],
+        rx_given=stats_data['rx_given'],
+        balance=stats_data['balance'],
+        mutes_count=stats_data['mutes_count'],
+        lie_media=stats_data['lie_media'],
+        slang_comment=slang_comment
+    )
     
+    card_data = UserStatsCardData(
+        user_id=user_id,
+        board_id=board_id,
+        schizo_name=schizo_name,
+        role_name=role_name,
+        custom_prefix=stats_data['custom_prefix'],
+        role=stats_data['role'],
+        posts_count=stats_data['posts_count'],
+        rx_received=stats_data['rx_received'],
+        rx_given=stats_data['rx_given'],
+        mutes_count=stats_data['mutes_count'],
+        balance=stats_data['balance'],
+        lie_media=stats_data['lie_media'],
+        rank=stats_data['rank'],
+        total_users=stats_data['total_users'],
+        slang_comment=slang_comment
+    )
+    buf = draw_user_stats_card(card_data)
+    return buf, text_report
+
+
+@dataclass
+class UserStatsCardData:
+    user_id: int
+    board_id: str
+    schizo_name: str
+    role_name: str
+    custom_prefix: str
+    role: str
+    posts_count: int
+    rx_received: int
+    rx_given: int
+    mutes_count: int
+    balance: float
+    lie_media: float
+    rank: int
+    total_users: int
+    slang_comment: str
+
+def draw_user_stats_card(
+    data: UserStatsCardData
+) -> io.BytesIO:
+    import os
+    from PIL import Image, ImageDraw, ImageFont
+
     width, height = 800, 450
     img = Image.new('RGB', (width, height), color='#0d0f12')
     draw = ImageDraw.Draw(img)
@@ -1613,14 +1613,14 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
     draw.line([0, 95, width, 95], fill='#252932', width=2)
     
     # Title & Info
-    draw.text((30, 22), schizo_name, fill='#ff9900', font=font_title)
-    status_text = f"ID: {user_id}  |  Раздел: /{board_id}/  |  Статус: {role_name} {f'({custom_prefix})' if custom_prefix else ''}"
+    draw.text((30, 22), data.schizo_name, fill='#ff9900', font=font_title)
+    status_text = f"ID: {data.user_id}  |  Раздел: /{data.board_id}/  |  Статус: {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}"
     draw.text((30, 60), status_text, fill='#8abeb7', font=font_subtitle)
     
     # Certified badge (top right)
     draw.rounded_rectangle([610, 15, 770, 80], radius=6, fill='#1b1f28', outline='#ff9900', width=2)
     draw.text((690, 33), "ТГАЧ CERTIFIED", fill='#ff9900', font=font_subtitle, anchor="mm")
-    sub_cert = "APPROVED BITYARD" if role != 'admin' else "ADMINISTRATOR"
+    sub_cert = "APPROVED BITYARD" if data.role != 'admin' else "ADMINISTRATOR"
     draw.text((690, 58), sub_cert, fill='#00ffcc', font=ImageFont.truetype(font_path, 10) if os.path.exists(font_path) else font_subtitle, anchor="mm")
     
     # Helper to draw cards
@@ -1632,13 +1632,13 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
 
     # Cards grid
     cards = [
-        (30, 115, 175, 80, str(posts_count), "Написано постов", "#00ffcc"),
-        (220, 115, 175, 80, f"#{rank} / {len(all_users)}", "Ранг на борде", "#ffcc00"),
-        (410, 115, 175, 80, f"{int(balance)} RUB", "Баланс коинов", "#00ff66"),
+        (30, 115, 175, 80, str(data.posts_count), "Написано постов", "#00ffcc"),
+        (220, 115, 175, 80, f"#{data.rank} / {data.total_users}", "Ранг на борде", "#ffcc00"),
+        (410, 115, 175, 80, f"{int(data.balance)} RUB", "Баланс коинов", "#00ff66"),
         
-        (30, 210, 175, 80, f"+{rx_received}", "Получено реакций", "#ff3399"),
-        (220, 210, 175, 80, str(rx_given), "Поставлено реакций", "#859900"),
-        (410, 210, 175, 80, f"{lie_media}%", "Кринж-фактор", "#cc00ff"),
+        (30, 210, 175, 80, f"+{data.rx_received}", "Получено реакций", "#ff3399"),
+        (220, 210, 175, 80, str(data.rx_given), "Поставлено реакций", "#859900"),
+        (410, 210, 175, 80, f"{data.lie_media}%", "Кринж-фактор", "#cc00ff"),
     ]
     
     for x, y, w, h, val, label, color in cards:
@@ -1648,12 +1648,12 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
     draw.rounded_rectangle([600, 115, 770, 175], radius=6, fill='#1d1315', outline='#ff3333', width=1)
     draw.ellipse([600+15, 115+16, 600+23, 115+24], fill="#ff3333")
     draw.text((600+33, 115+20), "Схвачено мутов", fill='#969896', font=font_card_lbl, anchor="lm")
-    draw.text((600+15, 115+48), f"{mutes_count} шт", fill="#ff3339", font=font_card_num, anchor="lm")
+    draw.text((600+15, 115+48), f"{data.mutes_count} шт", fill="#ff3339", font=font_card_num, anchor="lm")
     
     # Activity Level Card (below mutes)
     draw.rounded_rectangle([600, 210, 770, 290], radius=6, fill='#13171f', outline='#252932', width=1)
     draw.text((615, 230), "Уровень деградации", fill='#969896', font=font_card_lbl)
-    activity_pct = min(1.0, posts_count / 500.0)
+    activity_pct = min(1.0, data.posts_count / 500.0)
     draw.rounded_rectangle([615, 255, 755, 267], radius=3, fill='#1b1f28')
     draw.rounded_rectangle([615, 255, 615 + int(140 * activity_pct), 267], radius=3, fill='#ff9900')
     draw.text((755, 230), f"{int(activity_pct*100)}%", fill='#ff9900', font=font_card_lbl, anchor="ra")
@@ -1664,7 +1664,7 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
     
     # Wrap comment safely
     import textwrap
-    wrapped_lines = textwrap.wrap(f'"{slang_comment}"', width=90)
+    wrapped_lines = textwrap.wrap(f'"{data.slang_comment}"', width=90)
     y_comm = 360
     for line in wrapped_lines[:2]:
         draw.text((50, y_comm), line, fill='#e6edf3', font=font_comment)
@@ -1673,7 +1673,7 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
     buf = io.BytesIO()
     img.save(buf, format='png')
     buf.seek(0)
-    return buf, text_report
+    return buf
 
 if __name__ == "__main__":
     imgs = generate_all_charts()
