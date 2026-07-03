@@ -46,8 +46,16 @@ import main
 
         result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, env=env)
 
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("Библиотека aiosqlite не установлена", result.stdout)
+        self.assertEqual(
+            result.returncode, 1,
+            msg=f"Expected exit code 1, got {result.returncode}. stdout: {result.stdout}, stderr: {result.stderr}"
+        )
+
+        output = result.stdout + result.stderr
+        self.assertIn(
+            "Библиотека aiosqlite не установлена", output,
+            msg=f"Expected error message not found. stdout: {result.stdout}, stderr: {result.stderr}"
+        )
 
 if __name__ == '__main__':
     unittest.main()
