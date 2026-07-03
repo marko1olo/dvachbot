@@ -331,3 +331,67 @@ class TestResizeImageIfNeeded(unittest.TestCase):
         import PIL.Image as PilImage
         with PilImage.open(io.BytesIO(res)) as img:
             self.assertTrue(img.height / img.width <= 20.0)
+
+
+import io
+
+def get_resize_image_function():
+    import ast
+    with open(os.path.join(PROJECT_ROOT, "Dubsite_tgach/main.py"), "r", encoding="utf-8") as f:
+        source = f.read()
+
+    module = ast.parse(source)
+    for node in module.body:
+        if isinstance(node, ast.FunctionDef) and node.name == '_resize_image_if_needed':
+            code = compile(ast.Module(body=[node], type_ignores=[]), filename="<ast>", mode="exec")
+            import PIL.Image as PilImage
+            namespace = {'io': io, 'PilImage': PilImage}
+            exec(code, namespace)
+            return namespace['_resize_image_if_needed']
+    return None
+
+_resize_image_if_needed = get_resize_image_function()
+
+class TestResizeImageIfNeeded(unittest.TestCase):
+    def create_test_image(self, width, height, format='JPEG', mode='RGB'):
+        import PIL.Image as PilImage
+        img = PilImage.new(mode, (width, height), color='red')
+        b = io.BytesIO()
+        img.save(b, format=format)
+        return b.getvalue()
+
+    def test_empty(self):
+        self.assertEqual(_resize_image_if_needed(b""), b"")
+
+    def test_media_format(self):
+        self.assertEqual(_resize_image_if_needed(b"0000ftypxxxx"), b"0000ftypxxxx")
+        self.assertEqual(_resize_image_if_needed(b"\x1A\x45\xDF\xA30000000000000000"), b"\x1A\x45\xDF\xA30000000000000000")
+        self.assertEqual(_resize_image_if_needed(b"GIF89a00000000"), b"GIF89a00000000")
+
+    def test_small_image(self):
+        img_bytes = self.create_test_image(100, 100)
+        res = _resize_image_if_needed(img_bytes)
+        import PIL.Image as PilImage
+        with PilImage.open(io.BytesIO(res)) as img:
+            self.assertEqual(img.size, (100, 100))
+
+    def test_large_dimension(self):
+        img_bytes = self.create_test_image(6000, 6000)
+        res = _resize_image_if_needed(img_bytes)
+        import PIL.Image as PilImage
+        with PilImage.open(io.BytesIO(res)) as img:
+            self.assertTrue(img.width + img.height <= 10000)
+
+    def test_aspect_ratio_wide(self):
+        img_bytes = self.create_test_image(1000, 10)
+        res = _resize_image_if_needed(img_bytes)
+        import PIL.Image as PilImage
+        with PilImage.open(io.BytesIO(res)) as img:
+            self.assertTrue(img.width / img.height <= 20.0)
+
+    def test_aspect_ratio_tall(self):
+        img_bytes = self.create_test_image(10, 1000)
+        res = _resize_image_if_needed(img_bytes)
+        import PIL.Image as PilImage
+        with PilImage.open(io.BytesIO(res)) as img:
+            self.assertTrue(img.height / img.width <= 20.0)
