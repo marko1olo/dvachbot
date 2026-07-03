@@ -46,7 +46,6 @@ import io
 import time
 import witching_hour
 import periodic_publisher
-import textwrap
 import threading
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
