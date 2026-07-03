@@ -5685,7 +5685,8 @@ async def api_thread_summary(thread_id: int, request: Request):
             cached_count = cached_data.get('count', 0)
             if (current_count - cached_count) < 8:
                 return {"summary": cached_data.get('text')}
-        except: pass
+        except Exception as e:
+            logger.warning(f"Failed to parse cached thread summary for {thread_id}: {e}")
     thread_data = await get_thread_by_op_post(thread_id)
     if not thread_data:
         raise HTTPException(404, "Thread not found")
