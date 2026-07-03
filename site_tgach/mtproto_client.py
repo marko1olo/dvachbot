@@ -125,7 +125,8 @@ async def get_active_client(bot_token: str):
             api_hash=API_HASH,
             bot_token=bot_token,
             no_updates=True, 
-            in_memory=True
+            in_memory=True,
+            ipv6=False
         )
 
         try:
@@ -194,7 +195,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
                 message=target_to_download,
                 file_name=output_path,
             ),
-            timeout=300
+            timeout=20
         )
         
         return bool(path and os.path.exists(output_path))
@@ -211,7 +212,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
             logger.critical(f"⛔ [MTProto] FLOOD WAIT: {e}")
             _CONNECTION_COOLDOWN[bot_token] = time.time() + 300 
         elif "THUMBNAIL_SOURCE" in err_str:
-            logger.error(f"❌ [MTProto] Pyrogram failed to parse thumb source for {file_id[:10]}")
+            logger.warning(f"⚠️ [MTProto] Pyrogram failed to parse thumb source for {file_id[:10]}")
         else:
             logger.error(f"❌ [MTProto] Download Error: {e}")
         return False
