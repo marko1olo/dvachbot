@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ board_info.name }} - {{ op_post.content.text | clean_title | truncate(50) }} - {{ request.state.t('site_name') }}</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9.0">
+    <link rel="stylesheet" href="/static/css/style.css?v=8.88">
     <link rel="icon" href="/static/favicon.ico">
     <meta property="og:site_name" content="ТГАЧ">
     <meta property="og:type" content="article">
@@ -30,28 +30,6 @@
     <link rel="dns-prefetch" href="https://files.catbox.moe">
     <link rel="dns-prefetch" href="https://huggingface.co">
     <link rel="preconnect" href="https://huggingface.co" crossorigin>
-
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "DiscussionForumPosting",
-      "headline": "{{ op_post.content.text | clean_title | truncate(110) | replace('\"', '\\\"') }}",
-      "articleBody": "{{ op_post.content.text | striptags | replace('\"', '\\\"') }}",
-      "author": {
-        "@type": "Person",
-        "name": "{% if op_post.content.author_name %}{{ op_post.content.author_name | replace('\"', '\\\"') }}{% else %}Аноним{% endif %}"
-      },
-      "interactionStatistic": {
-        "@type": "InteractionCounter",
-        "interactionType": "https://schema.org/CommentAction",
-        "userInteractionCount": {{ posts|length }}
-      },
-      {% if meta_image %}
-      "image": "{{ meta_image }}",
-      {% endif %}
-      "datePublished": "{{ op_post.timestamp | format_iso_time }}"
-    }
-    </script>
     <style>
         .file-btn-icon { display: none; }
         .file-btn-text { display: inline; }
@@ -272,8 +250,7 @@
                     {% if op_post.content.sage %}<span class="sage-indicator">SAGE</span>{% endif %}
                     <span class="op-header-tools">
                         <a href="#" class="favourite-btn" data-thread-id="{{ op_post.id }}" title="{{ request.state.t('fav_title') }}" style="margin-right:5px;">⭐</a>
-                        <button class="header-btn summary-btn" onclick="showThreadSummary({{ op_post.id }})" title="О чём тред" style="background:none; border:none; cursor:pointer; margin-right:5px;">🧠</button>
-                        <button class="header-btn share-btn" onclick="if(navigator.share){navigator.share({title: document.title, url: window.location.href}).catch(()=>{})}else{navigator.clipboard.writeText(window.location.href);alert('Ссылка скопирована!');}" title="Поделиться тредом" style="background:none; border:none; cursor:pointer;">📤</button>
+                        <button class="header-btn summary-btn" onclick="showThreadSummary({{ op_post.id }})" title="О чём тред" style="background:none; border:none; cursor:pointer;">🧠</button>
                         <!-- <button class="header-btn vibe-btn" data-thread-id="{{ op_post.id }}" onclick="checkThreadVibe(this)" title="Вайбометр" style="background:none; border:none; cursor:pointer;">🌡️</button> -->
                         <button class="header-btn" onclick="ThreadPlayer.start()" title="Авто-проигрывание" style="background:none; border:none; cursor:pointer;">🎬</button>
                     </span>
@@ -302,7 +279,6 @@
                                                         <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                             class="post-image lazy-load{% if op_post.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ op_post.id }}] {{ op_post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded'); var p=this.previousElementSibling; if(p && p.tagName==='CANVAS') p.style.opacity='0';">
-                                                        <noscript><img src="{{ file.original_url }}" alt="[Пост /{{ board_id }}/ #{{ op_post.id }}] {{ op_post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"></noscript>
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                     </a>
                                                 {% elif file.type == 'sticker' %}
@@ -317,7 +293,6 @@
                                                                     data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                                     class="post-sticker lazy-load{% if op_post.content.is_censored %} blurred-media{% endif %}" 
                                                                     referrerpolicy="no-referrer">
-                                                                <noscript><img src="{{ file.original_url }}" alt="Стикер"></noscript>
                                                             </a>
                                                         {% endif %}
                                                     </div>
@@ -547,7 +522,6 @@
                                                         <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                             class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded'); var p=this.previousElementSibling; if(p && p.tagName==='CANVAS') p.style.opacity='0';">
-                                                        <noscript><img src="{{ file.original_url }}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"></noscript>
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                     </a>
                                                 {% elif file.type == 'sticker' %}
@@ -562,7 +536,6 @@
                                                                     data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                                     class="post-sticker lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" 
                                                                     referrerpolicy="no-referrer">
-                                                                <noscript><img src="{{ file.original_url }}" alt="Стикер"></noscript>
                                                             </a>
                                                         {% endif %}
                                                     </div>
@@ -1039,7 +1012,7 @@
                 <a href="#" class="menu-btn admin-action" data-action="stealth" style="color: #e67e22;">🥷 Stealth Edit</a>
             </div>
         </div>
-        <script src="/static/js/main.js?v=9.0" defer></script>
+        <script src="/static/js/main.js?v=8.88228" defer></script>
     </body>
     <div class="modal" id="bottle-modal" style="display: none;">
         <h3>Отправить записку анону</h3>

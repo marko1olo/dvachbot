@@ -125,8 +125,7 @@ async def get_active_client(bot_token: str):
             api_hash=API_HASH,
             bot_token=bot_token,
             no_updates=True, 
-            in_memory=True,
-            ipv6=False
+            in_memory=True
         )
 
         try:
@@ -195,7 +194,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
                 message=target_to_download,
                 file_name=output_path,
             ),
-            timeout=20
+            timeout=300
         )
         
         return bool(path and os.path.exists(output_path))

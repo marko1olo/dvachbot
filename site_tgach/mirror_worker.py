@@ -70,12 +70,12 @@ async def _find_msg_info(file_id: str):
     try:
         async with db_lock:
             db = await get_pool()
-            # No post_num window limit - search full table for old restored posts too
             query = """
                 SELECT cc.channel_id, cc.message_id, p.post_num
                 FROM Posts p
                 LEFT JOIN ChannelCopies cc ON p.post_num = cc.post_num
-                WHERE instr(p.content, ?) > 0
+                WHERE p.post_num > (SELECT MAX(post_num) - 20000 FROM Posts)
+                  AND instr(p.content, ?) > 0
                 ORDER BY p.post_num DESC
                 LIMIT 1
             """
@@ -106,25 +106,12 @@ async def _process_single_task(task):
             logger.info(f"⏭️ Skip {file_id[:8]} ({mirror_type}): already exists.")
             return
 
-        msg_info = None
-        msg_info_fetched = False
-        p_num = "???"
+        msg_info = await _find_msg_info(file_id)
+        c_id, m_id, p_num = msg_info if msg_info else (None, None, "???")
 
-        async def get_msg_info_deferred():
-            nonlocal msg_info, msg_info_fetched, p_num
-            if not msg_info_fetched:
-                msg_info = await _find_msg_info(file_id)
-                msg_info_fetched = True
-                if msg_info:
-                    p_num = msg_info[2]
-            return msg_info
-
-        logger.info(f"DEBUG: [Task {task_id}] Started for {file_id[:10]}...")
         owner_id = await get_file_owner_id(file_id)
-        logger.info(f"DEBUG: [Task {task_id}] get_file_owner_id done (owner={owner_id})")
         bot, public_safe_bot = _resolve_file_bot(owner_id)
         if not bot:
-            logger.info(f"DEBUG: [Task {task_id}] bot not found, rescheduling")
             await reschedule_mirror_task(task_id, attempt)
             return
 
@@ -136,9 +123,7 @@ async def _process_single_task(task):
         file_info = None
 
         try:
-            logger.info(f"DEBUG: [Task {task_id}] Calling bot.get_file...")
             file_info = await bot.get_file(file_id)
-            logger.info(f"DEBUG: [Task {task_id}] bot.get_file success: {getattr(file_info, 'file_path', None)}")
             fresh_file_id = file_info.file_id 
             
             file_path = getattr(file_info, "file_path", None)
@@ -149,9 +134,7 @@ async def _process_single_task(task):
                 if public_safe_bot:
                     tg_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
                     if mirror_type == 'catbox':
-                        logger.info(f"DEBUG: [Task {task_id}] Uploading URL to Catbox...")
                         success_link = await upload_url_to_catbox(tg_url)
-                        logger.info(f"DEBUG: [Task {task_id}] Upload URL result: {success_link}")
                     elif mirror_type == '0x0':
                         success_link = await upload_url_to_0x0(tg_url)
         except Exception as e:
@@ -165,22 +148,16 @@ async def _process_single_task(task):
 
             is_photo = file_id.startswith("AgAC")
             if "file_id_invalid" in err_str or "wrong file_id" in err_str:
-                await get_msg_info_deferred()
-                if not is_photo and not msg_info:
-                    # Non-photo, no context at all - truly dead
-                    logger.error(f"🗑️ File {file_id[:10]} is DEAD (non-photo, no msg context). Removing task.")
+                if not msg_info:
+                    logger.error(f"🗑️ File {file_id[:10]} is DEAD (No msg context). Removing task.")
                     await remove_mirror_task(task_id)
                     return
                 elif not is_photo:
                     logger.error(f"🗑️ File {file_id[:10]} is invalid and not a photo. Removing.")
                     await remove_mirror_task(task_id)
                     return
-                elif is_photo and not msg_info:
-                    logger.error(f"🗑️ File {file_id[:10]} is DEAD (photo rejected by Bot API, and no msg context for MTProto). Removing task.")
-                    await remove_mirror_task(task_id)
-                    return
                 else:
-                    logger.warning(f"⚠️ Bot API rejected photo {file_id[:10]}. Trying MTProto recovery...")
+                    logger.warning(f"⚠️ Bot API rejected {file_id[:10]}. Trying recovery via MTProto/Msg...")
             else:
                 logger.warning(f"⚠️ Bot API error for {file_id[:10]}: {e}") 
         
@@ -189,21 +166,17 @@ async def _process_single_task(task):
         
         try:
             if not success_link:
-                await get_msg_info_deferred()
                 if msg_info:
                     c_id, m_id, _ = msg_info
                 else:
                     c_id, m_id = None, None
                 
-                # 1. MTProto (skip for photos without context since it always fails in pyrogram)
-                use_mtproto = not (fresh_file_id.startswith("AgAC") and not (c_id and m_id))
-                if use_mtproto and await download_file_mtproto(bot.token, fresh_file_id, lpath, chat_id=c_id, message_id=m_id):
+                # 1. MTProto
+                if await download_file_mtproto(bot.token, fresh_file_id, lpath, chat_id=c_id, message_id=m_id):
                     download_success = True
                 else:
-                    if not use_mtproto:
-                        logger.info(f"⏭️ Skipping MTProto for {file_id[:10]} (photo without context). Trying HTTP download directly.")
-                    else:
-                        logger.warning(f"⚠️ MTProto failed for {file_id[:10]}. Trying HTTP Fallback...")
+                    # 2. HTTP Fallback (если MTProto не справился)
+                    logger.warning(f"⚠️ MTProto failed for {file_id[:10]}. Trying HTTP Fallback...")
                     try:
                         # Получаем путь, если его нет (или если первый запрос упал)
                         if file_info is None:
@@ -230,16 +203,6 @@ async def _process_single_task(task):
 
                 # 3. Загрузка (если скачали)
                 if download_success:
-                    fsize = os.path.getsize(lpath)
-                    if mirror_type == 'catbox' and fsize > 200 * 1024 * 1024:
-                        logger.warning(f"⚠️ File {file_id[:10]} is too large for Catbox ({fsize / 1024 / 1024:.1f} MB). Skipping upload and removing task.")
-                        await remove_mirror_task(task_id)
-                        return
-                    elif mirror_type == '0x0' and fsize > 512 * 1024 * 1024:
-                        logger.warning(f"⚠️ File {file_id[:10]} is too large for 0x0 ({fsize / 1024 / 1024:.1f} MB). Skipping upload and removing task.")
-                        await remove_mirror_task(task_id)
-                        return
-
                     if mirror_type == 'catbox':
                         success_link = await upload_file_to_catbox(lpath)
                     elif mirror_type == '0x0':
@@ -270,20 +233,16 @@ async def process_mirror_queue():
     
     # Блок сброса таймеров УДАЛЕН для предотвращения шторма при рестарте
 
-    SEM = asyncio.Semaphore(20)
+    SEM = asyncio.Semaphore(5)
 
     async def runner(task):
         async with SEM:
-            await asyncio.create_task(_process_single_task(task))
+            await _process_single_task(task)
 
     try:
         while True:
             try:
-                allowed_types = ['catbox']
-                if is_0x0_available():
-                    allowed_types.append('0x0')
-
-                tasks = await get_pending_mirror_tasks(limit=20, allowed_types=allowed_types)
+                tasks = await get_pending_mirror_tasks(limit=5)
                 if not tasks:
                     await asyncio.sleep(10)
                     continue
