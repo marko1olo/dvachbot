@@ -94,7 +94,7 @@ def get_real_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    return request.client.host
+    return request.client.host if request.client else "127.0.0.1"
 GEOIP_READER = None
 
 @alru_cache(maxsize=10000, ttl=3600)
@@ -109,14 +109,14 @@ async def get_country_by_ip(ip: str) -> str:
             db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
             if os.path.exists(db_full_path):
                 GEOIP_READER = geoip2.database.Reader(db_full_path)
-        except:
+        except Exception:
             pass
 
     if GEOIP_READER:
         try:
             response = GEOIP_READER.country(ip)
             return response.country.iso_code or "XX"
-        except:
+        except Exception:
             pass
 
     strategies = [
@@ -137,7 +137,7 @@ async def get_country_by_ip(ip: str) -> str:
                 resp = await client.get(f"http://ip-api.com/json/{ip}")
                 if resp.status_code == 200:
                     return resp.json().get('countryCode', 'XX')
-        except:
+        except Exception:
             continue
         
     return "XX"
@@ -175,7 +175,8 @@ from common.database import (
     get_random_video_post, get_random_image_post, get_random_active_thread, refresh_random_indexes, add_post_to_random_cache,
     get_recent_posts_global, get_full_user_info, get_global_feed_posts, process_backlinks,
     get_mod_queue, resolve_mod_queue,
-    get_unread_replies_count, get_user_replies, mark_replies_read
+    get_unread_replies_count, get_user_replies, mark_replies_read,
+    get_newspaper_data
 )
 from site_tgach.backup import backup_loop
 from site_tgach.importer import process_import_queue
@@ -563,7 +564,8 @@ SYSTEM_LOGS = deque(maxlen=100)
 import asyncio
 import logging
 SITE_SPAM_RULES = {
-    'text': {'max_repeats': 4, 'window_sec': 15, 'max_per_window': 7, 'penalty_seconds': 300}
+    'text': {'max_repeats': 4, 'window_sec': 15, 'max_per_window': 7, 'penalty_seconds': 300},
+    'files': {'max_repeats': 3, 'window_sec': 60, 'max_per_window': 12, 'penalty_seconds': 600}
 }
 BOARD_VERSIONS = defaultdict(lambda: time.time())
 THREAD_VERSIONS = defaultdict(lambda: time.time())
@@ -590,7 +592,7 @@ def check_perm(user: dict, required_role: str) -> bool:
     user_level = ROLE_HIERARCHY.get(user_role, 0)
     req_level = ROLE_HIERARCHY.get(required_role, 0)
     return user_level >= req_level
-async def check_and_punish_site_spam(board_id: str, user_id: int, text: str, t):
+async def check_and_punish_site_spam(board_id: str, user_id: int, text: str, files: list, t):
     clean_text = text.strip()
     if clean_text in {'🎲', '🎰', '🏀', '⚽', '🎯', '🎳'}:
         await apply_regular_mute(user_id, board_id, 60)
@@ -603,22 +605,73 @@ async def check_and_punish_site_spam(board_id: str, user_id: int, text: str, t):
         raise HTTPException(status_code=400, detail=t('casino_ban_message').format(phrase))
     user_history = site_spam_tracker[board_id][user_id]
     now = time.time()
-    window = SITE_SPAM_RULES['text']['window_sec']
-    user_history['timestamps'] = [t for t in user_history['timestamps'] if t > now - window]
-    user_history['timestamps'].append(now)
-    user_history['last_texts'].append(clean_text)
-    violation = False
-    if len(user_history['timestamps']) >= SITE_SPAM_RULES['text']['max_per_window']:
-        violation = True
-    elif len(user_history['last_texts']) >= SITE_SPAM_RULES['text']['max_repeats']:
-        if len(set(user_history['last_texts'])) == 1:
-            violation = True
-    if violation:
+
+    # 1. Text Spam check
+    text_violation = False
+    if clean_text:
+        window = SITE_SPAM_RULES['text']['window_sec']
+        user_history['timestamps'] = [t_val for t_val in user_history.get('timestamps', []) if t_val > now - window]
+        user_history['timestamps'].append(now)
+        user_history['last_texts'].append(clean_text)
+
+        if len(user_history['timestamps']) >= SITE_SPAM_RULES['text']['max_per_window']:
+            text_violation = True
+        elif len(user_history['last_texts']) >= SITE_SPAM_RULES['text']['max_repeats']:
+            if len(set(user_history['last_texts'])) == 1:
+                text_violation = True
+
+    if text_violation:
         user_history['timestamps'] = []
         user_history['last_texts'].clear()
         penalty = SITE_SPAM_RULES['text']['penalty_seconds']
         await apply_regular_mute(user_id, board_id, penalty)
         raise HTTPException(status_code=429, detail=f"🚫 Обнаружен спам! Вы получили мут на {penalty // 60} минут.")
+
+    # 2. Files/Images Spam check
+    if files:
+        if 'last_file_hashes' not in user_history:
+            from collections import deque
+            user_history['last_file_hashes'] = deque(maxlen=10)
+            user_history['file_timestamps'] = []
+
+        file_hashes = []
+        import hashlib
+        for img in files:
+            try:
+                await img.seek(0)
+                content = await img.read()
+                await img.seek(0)
+                if content:
+                    h = hashlib.md5(content).hexdigest()
+                    file_hashes.append(h)
+            except Exception:
+                pass
+
+        if file_hashes:
+            file_window = SITE_SPAM_RULES.get('files', {}).get('window_sec', 60)
+            user_history['file_timestamps'] = [t_val for t_val in user_history['file_timestamps'] if t_val > now - file_window]
+
+            file_violation = False
+            for h in file_hashes:
+                user_history['file_timestamps'].append(now)
+                user_history['last_file_hashes'].append(h)
+
+            max_files = SITE_SPAM_RULES.get('files', {}).get('max_per_window', 12)
+            max_repeats = SITE_SPAM_RULES.get('files', {}).get('max_repeats', 3)
+
+            if len(user_history['file_timestamps']) >= max_files:
+                file_violation = True
+            elif len(user_history['last_file_hashes']) >= max_repeats:
+                last_hashes = list(user_history['last_file_hashes'])[-max_repeats:]
+                if len(set(last_hashes)) == 1:
+                    file_violation = True
+
+            if file_violation:
+                user_history['file_timestamps'] = []
+                user_history['last_file_hashes'].clear()
+                penalty = SITE_SPAM_RULES.get('files', {}).get('penalty_seconds', 600)
+                await apply_regular_mute(user_id, board_id, penalty)
+                raise HTTPException(status_code=429, detail=f"🚫 Обнаружен спам картинками! Вы получили мут на {penalty // 60} минут.")
 async def captcha_cleanup_task():
     while True:
         await asyncio.sleep(600)
@@ -871,7 +924,6 @@ async def lifespan(app: FastAPI):
     neuro_manager = NeuroManager(app.state.file_uploader_bot)
     spawn_task(refresh_random_indexes())
     app.state.neuro_manager = neuro_manager 
-    NEURO_ENABLED = False 
     async def neuro_loop():
         from site_tgach.neuro_poster import POSTING_INTERVALS 
         await asyncio.sleep(30)
@@ -1141,9 +1193,10 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.youtube.com https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline' https://www.youtube.com https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: https: blob:; "
         "media-src 'self' https: blob:; "
@@ -1152,7 +1205,7 @@ async def security_headers_middleware(request: Request, call_next):
         "upgrade-insecure-requests;"
     )
     return response
-# app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5) # Отключено, так как сжимает Nginx
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 site_root = os.path.dirname(os.path.abspath(__file__))
 class CachedStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
@@ -1161,7 +1214,7 @@ class CachedStaticFiles(StaticFiles):
 
     def file_response(self, *args, **kwargs):
         resp = super().file_response(*args, **kwargs)
-        resp.headers["Cache-Control"] = "public, max-age=3600"
+        resp.headers["Cache-Control"] = "public, max-age=31536000"
         return resp
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
@@ -1266,7 +1319,8 @@ async def sitemap_xml(request: Request):
         f"{base_url}/archive/threads/",
         f"{base_url}/archive/chat/"
     ]
-    for board_id in BOARD_CONFIG:
+    valid_boards = set(BOARD_CONFIG.keys())
+    for board_id in valid_boards:
         urls.append(f"{base_url}/{board_id}/")
         urls.append(f"{base_url}/{board_id}/catalog/")
     db = await get_pool()
@@ -1275,10 +1329,16 @@ async def sitemap_xml(request: Request):
         async with db.execute(query) as cursor:
             async for row in cursor:
                 bid, tid, ts = row
-                date_str = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
-                urls.append(f"{base_url}/{bid}/res/{tid}.html")
+                if bid in valid_boards:
+                    urls.append(f"{base_url}/{bid}/res/{tid}.html")
     except Exception as e:
         print(f"Sitemap error: {e}")
+
+    # Добавляем выпуски газеты за последние 90 дней
+    from datetime import timedelta
+    for d_offset in range(90):
+        d = (datetime.now() - timedelta(days=d_offset)).strftime('%Y-%m-%d')
+        urls.append(f"{base_url}/newspaper/{d}")
     xml_content = ['<?xml version="1.0" encoding="UTF-8"?>']
     xml_content.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
     for url in urls:
@@ -1337,7 +1397,7 @@ async def guest_identification_middleware(request: Request, call_next):
         except BadSignature:
             token = None
     if not token:
-        token = f"{get_real_ip(request)}|{request.headers.get('User-Agent', '')}|{uuid.uuid4().hex}"
+        token = secrets.token_hex(32)
         is_new = True
     request.state.guest_id = generate_negative_id(token)
     request.state.guest_token = token
@@ -1623,10 +1683,9 @@ def format_post_text(text: str) -> str:
     
     return processed_text
 def sanitize_html(text: str) -> str:
-    if not text:
-        return ""
-    # quote=False оставляет кавычки как есть (читаемее), но убивает теги
-    return html.escape(text, quote=False)
+    if not isinstance(text, str): return str(text)
+    text = text.replace('<', '&lt;').replace('>', '&gt;')
+    return text
 def optimize_thread_context(op_post: dict, replies: list, max_posts: int = 40) -> str:
     """
     Превращает тред в компактную строку для нейронки.
@@ -1652,14 +1711,14 @@ def optimize_thread_context(op_post: dict, replies: list, max_posts: int = 40) -
     return " | ".join(buffer)
 def pluralize_russian(count, one, few, many):
     try:
-        n = int(count)
+        n = abs(int(count))
         if n % 10 == 1 and n % 100 != 11:
             return one
         elif 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20):
             return few
         else:
             return many
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return many
 def format_bayan_label(count: int, lang: str = 'ru') -> str:
 
@@ -1718,20 +1777,14 @@ def _select_mirror_strategically(file_info: dict, mirrors: dict, thumb_mirrors: 
     if is_video_or_doc:
         if 'huggingface' in mirrors:
             selected_original = mirrors['huggingface']
-        elif 'catbox' in mirrors and not is_ru:
-            selected_original = mirrors['catbox']
     else:
         options = ['telegram']
         if 'huggingface' in mirrors:
             options.append('huggingface')
-        if 'catbox' in mirrors and not is_ru:
-            options.append('catbox')
 
         choice = random.choice(options)
         if choice == 'huggingface':
             selected_original = mirrors['huggingface']
-        elif choice == 'catbox':
-            selected_original = mirrors['catbox']
     selected_thumbnail = base_thumbnail_url
 
     if 'huggingface' in thumb_mirrors:
@@ -1855,6 +1908,113 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
         if p.get('latest_replies'):
             for r in p['latest_replies']:
                 apply_votes(r)
+def _process_media_group(content: dict) -> None:
+    file_list = []
+    found_caption = None
+    for item in content.get('media', []):
+        f_type = item.get('type')
+        f_id = item.get('file_id') or item.get('media')
+        if not found_caption and item.get('caption'):
+            found_caption = item.get('caption')
+        if f_id and isinstance(f_id, str) and not f_id.startswith("<"):
+            clean_type = 'image' if f_type == 'photo' else f_type
+            file_list.append({
+                'type': clean_type,
+                'original_file_id': f_id,
+                'thumbnail_file_id': f_id,
+                'filename': f"media_{f_id[:8]}.jpg" if clean_type == 'image' else f"media_{f_id[:8]}.mp4"
+            })
+    content['files'] = file_list
+    if not content.get('text') and found_caption:
+        content['text'] = found_caption
+
+def _process_single_media(content: dict) -> None:
+    file_info = {'type': content['type']}
+    ctype = content['type']
+    if ctype == 'photo' and content.get('photo') and isinstance(content['photo'], list):
+        try:
+            file_info['original_file_id'] = content['photo'][-1].get('file_id')
+            file_info['thumbnail_file_id'] = content['photo'][0].get('file_id')
+            file_info['type'] = 'image'
+        except: pass
+    else:
+        f_obj = content.get(ctype) or content
+        f_id = f_obj.get('file_id')
+        thumb_source = f_obj.get('thumb') or f_obj.get('thumbnail')
+        if thumb_source and isinstance(thumb_source, dict):
+            file_info['thumbnail_file_id'] = thumb_source.get('file_id')
+        mime = f_obj.get('mime_type', '')
+        if ctype == 'document' and mime.startswith('video/'):
+            file_info['type'] = 'video'
+        if f_id:
+            file_info['original_file_id'] = f_id
+    if file_info.get('original_file_id'):
+        content['files'] = [file_info]
+
+def _process_files_list(content: dict) -> None:
+    from urllib.parse import quote
+    import time
+    valid_files = []
+    for file_info in content['files']:
+        file_info.setdefault('dupe_count', 0)
+        orig_url = file_info.get('original_url', '')
+        if orig_url and 'local_file://' in orig_url:
+            clean_id = orig_url.split('local_file://')[1]
+            file_info['original_file_id'] = clean_id
+            file_info['original_url'] = f"/files/{clean_id}"
+        oid = file_info.get('original_file_id')
+        if not oid or oid.startswith('<'):
+            continue
+        fname = file_info.get('filename', '').lower()
+        if fname.endswith(('.mp4', '.webm', '.mov', '.mkv')) and file_info.get('type') not in ['voice', 'audio']:
+            file_info['type'] = 'video'
+        if fname.endswith('.webm') and file_info.get('type') == 'sticker':
+            file_info['type'] = 'video'
+        ftype = file_info.get('type', 'file')
+        ext_map = {
+            'video': 'mp4',
+            'photo': 'jpg',
+            'image': 'jpg',
+            'audio': 'mp3',
+            'voice': 'ogg',
+            'sticker': 'webp',
+            'video_note': 'mp4',
+            'animation': 'mp4',
+            'gif': 'mp4'
+        }
+
+        if not fname or fname.startswith('.') or fname == 'file' or '.' not in fname:
+            ext = ext_map.get(ftype, 'dat')
+            prefix = "vid" if ftype in ['video', 'animation', 'video_note', 'gif'] else ("aud" if ftype in ['audio', 'voice'] else "img")
+            short_id = oid[:8] if oid else str(int(time.time()))
+            file_info['filename'] = f"{prefix}_{short_id}.{ext}"
+        elif '.' not in fname and ftype in ext_map:
+            file_info['filename'] = f"{fname}.{ext_map[ftype]}"
+
+        safe_name = quote(str(file_info.get('filename', 'file')).strip('/'))
+
+        oid_str = str(oid) if oid else ""
+        if oid_str.startswith(('http://', 'https://')):
+            file_info['original_url'] = oid_str
+        else:
+            clean_oid = oid_str.strip('/')
+            if clean_oid:
+                file_info['original_url'] = f"/files/{clean_oid}/{safe_name}"
+            else:
+                file_info['original_url'] = f"/files/{safe_name}"
+
+        tid = file_info.get('thumbnail_file_id')
+        if tid:
+            tid_str = str(tid)
+            if tid_str.startswith(('http://', 'https://')):
+                file_info['thumbnail_url'] = tid_str
+            else:
+                file_info['thumbnail_url'] = f"/files/{tid_str.strip('/')}"
+        else:
+            file_info['thumbnail_url'] = ""
+        valid_files.append(file_info)
+    content['files'] = valid_files
+
 def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
     if not posts:
         return []
@@ -1875,110 +2035,14 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
             
         content = post['content']
         if content.get('type') == 'media_group' and 'media' in content:
-            file_list = []
-            found_caption = None
-            for item in content['media']:
-                f_type = item.get('type')
-                f_id = item.get('file_id') or item.get('media')
-                if not found_caption and item.get('caption'): 
-                    found_caption = item.get('caption')
-                if f_id and isinstance(f_id, str) and not f_id.startswith("<"):
-                     clean_type = 'image' if f_type == 'photo' else f_type
-                     file_list.append({
-                        'type': clean_type,
-                        'original_file_id': f_id,
-                        'thumbnail_file_id': f_id,
-                        'filename': f"media_{f_id[:8]}.jpg" if clean_type == 'image' else f"media_{f_id[:8]}.mp4"
-                     })
-            content['files'] = file_list
-            if not content.get('text') and found_caption: 
-                content['text'] = found_caption
+            _process_media_group(content)
         elif content.get('type') in {'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'} and 'files' not in content:
-            file_info = {'type': content['type']}
-            ctype = content['type']
-            if ctype == 'photo' and content.get('photo') and isinstance(content['photo'], list):
-                try:
-                    file_info['original_file_id'] = content['photo'][-1].get('file_id')
-                    file_info['thumbnail_file_id'] = content['photo'][0].get('file_id')
-                    file_info['type'] = 'image'
-                except: pass
-            else:
-                f_obj = content.get(ctype) or content
-                f_id = f_obj.get('file_id')
-                thumb_source = f_obj.get('thumb') or f_obj.get('thumbnail')
-                if thumb_source and isinstance(thumb_source, dict):
-                    file_info['thumbnail_file_id'] = thumb_source.get('file_id')
-                mime = f_obj.get('mime_type', '')
-                if ctype == 'document' and mime.startswith('video/'):
-                     file_info['type'] = 'video'
-                if f_id: 
-                    file_info['original_file_id'] = f_id
-            if file_info.get('original_file_id'):
-                content['files'] = [file_info]
-        if 'files' in content and isinstance(content['files'], list):
-            valid_files = []
-            for file_info in content['files']:
-                file_info.setdefault('dupe_count', 0)
-                orig_url = file_info.get('original_url', '')
-                if orig_url and 'local_file://' in orig_url:
-                    clean_id = orig_url.split('local_file://')[1]
-                    file_info['original_file_id'] = clean_id
-                    file_info['original_url'] = f"/files/{clean_id}"
-                oid = file_info.get('original_file_id')
-                if not oid or oid.startswith('<'): 
-                    continue
-                fname = file_info.get('filename', '').lower()
-                if fname.endswith(('.mp4', '.webm', '.mov', '.mkv')) and file_info.get('type') not in ['voice', 'audio']:
-                    file_info['type'] = 'video'
-                if fname.endswith('.webm') and file_info.get('type') == 'sticker':
-                    file_info['type'] = 'video'
-                ftype = file_info.get('type', 'file')
-                ext_map = {
-                    'video': 'mp4', 
-                    'photo': 'jpg', 
-                    'image': 'jpg',
-                    'audio': 'mp3', 
-                    'voice': 'ogg', 
-                    'sticker': 'webp', 
-                    'video_note': 'mp4',
-                    'animation': 'mp4', 
-                    'gif': 'mp4'
-                }
-                
-                if not fname or fname.startswith('.') or fname == 'file' or '.' not in fname:
-                    ext = ext_map.get(ftype, 'dat')
-                    prefix = "vid" if ftype in ['video', 'animation', 'video_note', 'gif'] else ("aud" if ftype in ['audio', 'voice'] else "img")
-                    short_id = oid[:8] if oid else str(int(time.time()))
-                    file_info['filename'] = f"{prefix}_{short_id}.{ext}"
-                elif '.' not in fname and ftype in ext_map:
-                     file_info['filename'] = f"{fname}.{ext_map[ftype]}"
-                
-                from urllib.parse import quote
-                safe_name = quote(str(file_info.get('filename', 'file')).strip('/'))
-                
-                oid_str = str(oid) if oid else ""
-                if oid_str.startswith(('http://', 'https://')):
-                    file_info['original_url'] = oid_str
-                else:
-                    clean_oid = oid_str.strip('/')
-                    if clean_oid:
-                        file_info['original_url'] = f"/files/{clean_oid}/{safe_name}"
-                    else:
-                        file_info['original_url'] = f"/files/{safe_name}"
+            _process_single_media(content)
 
-                tid = file_info.get('thumbnail_file_id')
-                if tid:
-                    tid_str = str(tid)
-                    if tid_str.startswith(('http://', 'https://')):
-                        file_info['thumbnail_url'] = tid_str
-                    else:
-                        file_info['thumbnail_url'] = f"/files/{tid_str.strip('/')}"
-                else:
-                    file_info['thumbnail_url'] = ""
-                valid_files.append(file_info)
-            content['files'] = valid_files
+        if 'files' in content and isinstance(content['files'], list):
+            _process_files_list(content)
+
         current_type = content.get('type')
-        has_text = bool(content.get('text', '').strip())
         has_files = bool(content.get('files'))
         if current_type != 'poll':
             if has_files:
@@ -1989,6 +2053,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
         if 'author_id' in post:
             post['author_id'] = get_user_hash(post['author_id'])
     return posts
+
 def clean_title_text(text: str) -> str:
     if not text: return ""
     text = re.sub(r'<[^>]+>', '', text)
@@ -2182,10 +2247,11 @@ async def enrich_heavy_data(posts: List[dict]):
             try:
                 db = await get_pool()
                 placeholders = ','.join('?' for _ in ids)
-                q = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
-                res = defaultdict(list)
+                q = f"SELECT target_post_num, json_group_array(source_post_num) FROM Backlinks WHERE target_post_num IN ({placeholders}) GROUP BY target_post_num"
+                res = {}
                 async with db.execute(q, ids) as cursor:
-                    async for row in cursor: res[row[0]].append(row[1])
+                    async for row in cursor:
+                        res[row[0]] = json.loads(row[1])
                 return res
             except: return {}
         tasks.append(fetch_backlinks_task(all_post_ids))
@@ -2339,20 +2405,41 @@ async def auth_logout(request: Request):
     request.session.pop('user', None)
     return RedirectResponse(url="/")
 @app.get("/search")
-async def search_page(request: Request, query: str = "", user: dict | None = Depends(get_optional_user)):
+async def search_page(request: Request, query: str = "", archive: int = 0, user: dict | None = Depends(get_optional_user)):
     clean_query = query.strip()
     if clean_query:
         clean_query = clean_query.replace('"', '""')
     
     observer_id = user['id'] if user else getattr(request.state, 'guest_id', 0)
     
-    results = await search_posts(clean_query, observer_id=observer_id) if clean_query else []
+    results = await search_posts(clean_query, observer_id=observer_id, only_archived=bool(archive)) if clean_query else []
     results = _convert_and_enrich_posts(results)
     await enrich_extra_data(results)
     return templates.TemplateResponse("search_results.jinja2", {
         "request": request, "query": query, "posts": results, "boards": BOARD_CONFIG,
+        "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user},
+        "archive": archive
+    })
+@app.get("/newspaper")
+async def newspaper_today():
+    import datetime
+    today = datetime.date.today().strftime("%Y-%m-%d")
+    return RedirectResponse(url=f"/newspaper/{today}")
+
+@app.get("/newspaper/{year}-{month:int}-{day:int}")
+async def newspaper_page(request: Request, year: int, month: int, day: int, user: dict | None = Depends(get_optional_user)):
+    date_str = f"{year}-{month:02d}-{day:02d}"
+    data = await get_newspaper_data(date_str)
+
+    if data and data.get("longest_posts"):
+        data["longest_posts"] = _convert_and_enrich_posts(data["longest_posts"])
+        await enrich_extra_data(data["longest_posts"])
+
+    return templates.TemplateResponse("newspaper.jinja2", {
+        "request": request, "data": data, "boards": BOARD_CONFIG,
         "BOT_USERNAME": BOT_USERNAME, "site_mode": SITE_ACCESS_MODE, "session": {"user": user}
     })
+
 @app.get("/admin/serverConfig.json", include_in_schema=False)
 async def api_dummy_config():
     """Заглушка для подавления 404 ошибок в логах от админки."""
@@ -3210,7 +3297,7 @@ async def api_random_image_next(request: Request, boards: Optional[str] = None):
     try:
         allowed_boards = None
         if boards:
-            allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
+            allowed_boards = [stripped for b in boards.split(',') if (stripped := b.strip())]
 
         post_data = await get_random_image_post(allowed_boards=allowed_boards)
         
@@ -3723,6 +3810,158 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
             await backend.set(cache_key, html_content, expire=10) 
 
     return HTMLResponse(content=html_content)
+@app.get("/{board_id}/res/{post_num}/export")
+async def export_thread_html(board_id: str, post_num: int):
+    board_id = board_id.lower()
+    if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
+
+    real_thread_id = await get_thread_op_by_post_num(post_num)
+    if not real_thread_id:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    thread_data = await get_thread_by_op_post(real_thread_id)
+    if not thread_data: raise HTTPException(status_code=404, detail="Thread not found")
+    op_post, replies = thread_data
+
+    op_post = _convert_and_enrich_posts([op_post])[0]
+    replies = _convert_and_enrich_posts(replies)
+
+    import datetime
+    def format_ts(ts):
+        return datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+
+    html = []
+    html.append("<!DOCTYPE html>")
+    html.append("<html lang='ru'>")
+    html.append("<head>")
+    html.append("<meta charset='UTF-8'>")
+    html.append("<meta name='viewport' content='width=device-width, initial-scale=1.0'>")
+    html.append(f"<title>Архив треда #{real_thread_id} - /{board_id}/</title>")
+    html.append("""
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #0d0f12;
+            color: #c9d1d9;
+            margin: 0;
+            padding: 20px;
+            line-height: 1.5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        header {
+            border-bottom: 1px dashed #21262d;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            margin: 0;
+            font-size: 1.8em;
+            color: #ff9900;
+        }
+        .post {
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .post.op-post {
+            border-color: #ff9900;
+        }
+        .post-header {
+            font-size: 0.85em;
+            color: #8b949e;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #21262d;
+            padding-bottom: 5px;
+        }
+        .post-header strong {
+            color: #ff9900;
+        }
+        .post-content {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .post-text {
+            word-break: break-word;
+        }
+        .post-files-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .file-thumb img, .file-thumb video {
+            max-width: 200px;
+            max-height: 200px;
+            border-radius: 4px;
+            border: 1px solid #30363d;
+        }
+        .reply-indicator {
+            font-size: 0.85em;
+            color: #58a6ff;
+            margin: 0 0 5px 0;
+        }
+    </style>
+    """)
+    html.append("</head>")
+    html.append("<body>")
+    html.append("<div class='container'>")
+    html.append("<header>")
+    html.append(f"<h1>Тред #{real_thread_id} (Раздел /{board_id}/)</h1>")
+    html.append(f"<p style='color:#8b949e;'>Сохранено из архива ТГАЧ. Всего постов: {len(replies) + 1}</p>")
+    html.append("</header>")
+
+    # OP post
+    html.append("<div class='post op-post'>")
+    op_headers = f"<div class='post-header'>Анон #<strong>{op_post.get('id')}</strong> ({format_ts(op_post.get('timestamp', 0))})</div>"
+    html.append(op_headers)
+    html.append("<div class='post-content'>")
+
+    if op_post.get('content', {}).get('files'):
+        html.append("<div class='post-files-container'>")
+        for f in op_post['content']['files']:
+            html.append(f"<a href='{f.get('original_url')}' class='file-thumb' target='_blank'>")
+            html.append(f"<img src='{f.get('thumbnail_url') or f.get('original_url')}' alt='file'>")
+            html.append("</a>")
+        html.append("</div>")
+
+    html.append(f"<div class='post-text'>{op_post.get('content', {}).get('text', '')}</div>")
+    html.append("</div></div>")
+
+    # Replies
+    for post in replies:
+        html.append("<div class='post'>")
+        rep_headers = f"<div class='post-header'>Анон #<strong>{post.get('id')}</strong> ({format_ts(post.get('timestamp', 0))})</div>"
+        html.append(rep_headers)
+        html.append("<div class='post-content'>")
+
+        if post.get('reply_to_post_num'):
+            html.append(f"<p class='reply-indicator'>&gt;&gt;{post.get('reply_to_post_num')}</p>")
+
+        if post.get('content', {}).get('files'):
+            html.append("<div class='post-files-container'>")
+            for f in post['content']['files']:
+                html.append(f"<a href='{f.get('original_url')}' class='file-thumb' target='_blank'>")
+                html.append(f"<img src='{f.get('thumbnail_url') or f.get('original_url')}' alt='file'>")
+                html.append("</a>")
+            html.append("</div>")
+
+        html.append(f"<div class='post-text'>{post.get('content', {}).get('text', '')}</div>")
+        html.append("</div></div>")
+
+    html.append("</div>")
+    html.append("</body>")
+    html.append("</html>")
+
+    headers = {
+        "Content-Disposition": f"attachment; filename=thread-{board_id}-{real_thread_id}.html"
+    }
+    return Response(content="\n".join(html), media_type="text/html", headers=headers)
 @app.get("/{board_id}/res/{post_num}/gallery")
 async def thread_gallery_page(board_id: str, post_num: int, request: Request, user: dict | None = Depends(get_optional_user)):
     if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
@@ -4571,10 +4810,13 @@ async def api_create_post(
             remaining = int(row[0] - time.time())
             raise HTTPException(status_code=403, detail=t('err_mute_remaining').format(remaining))
     is_shadow_muted = await get_shadow_mute_status(author_id, board_id)
+    files_to_process = []
+    if images:
+        for img in images:
+            if getattr(img, 'filename', None):
+                files_to_process.append(img)
     if not is_shadow_muted:
-        check_text = text if text else ""
-        if check_text:
-            await check_and_punish_site_spam(board_id, author_id, check_text, t)
+        await check_and_punish_site_spam(board_id, author_id, text or "", files_to_process, t)
     thread_op_num = None
     if post_mode == 'chat_post':
         thread_op_num = None
@@ -4599,11 +4841,6 @@ async def api_create_post(
     elif post_mode == 'new_thread':
         thread_op_num = None
     
-    files_to_process = []
-    if images:
-        for img in images:
-            if getattr(img, 'filename', None):
-                files_to_process.append(img)
 
     user_files_count = len(files_to_process)
     files_to_generate_count = 5 - user_files_count
@@ -4786,7 +5023,7 @@ async def api_create_post(
         content['sage'] = True
     is_shadow_final = is_shadow_muted or has_banned_content 
     if post_mode == 'poll':
-        raw_opts = [opt.strip() for opt in (poll_options or []) if opt and opt.strip()]
+        raw_opts = [stripped for opt in (poll_options or []) if opt and (stripped := opt.strip())]
         clean_opts = list(dict.fromkeys(raw_opts))
         if not poll_question or not poll_question.strip() or not (2 <= len(clean_opts) <= 5):
             raise HTTPException(status_code=400, detail="Invalid poll data (need 2-5 unique options)")
@@ -4819,11 +5056,11 @@ async def api_create_post(
                     ftype = f.get('type', 'file')
                     if t_type == 'media': 
                         valid_file_attached = True
-                    elif t_type == 'image' and ftype in ['image', 'photo', 'sticker']:
+                    elif t_type == 'image' and ftype in {'image', 'photo', 'sticker'}:
                         valid_file_attached = True
-                    elif t_type == 'video' and ftype in ['video', 'animation', 'video_note', 'gif']:
+                    elif t_type == 'video' and ftype in {'video', 'animation', 'video_note', 'gif'}:
                         valid_file_attached = True
-                    elif t_type == 'audio' and ftype in ['audio', 'voice']:
+                    elif t_type == 'audio' and ftype in {'audio', 'voice'}:
                         valid_file_attached = True
             if valid_file_attached:
                 if not is_unlocked:
@@ -4998,14 +5235,16 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     count = 0
-    from bs4 import BeautifulSoup
-    import json
+    import re
+
+    img_regex = re.compile(r'<img[^>]*>', re.IGNORECASE)
     
     # Используем отдельное соединение для тяжелой задачи
     async with get_db_connection() as conn:
         # 1. Находим посты, где в тексте есть тег <img
         # LIKE '%<img%' работает быстро
-        query = "SELECT post_num, content FROM Posts WHERE content LIKE '%<img%'"
+        # Оптимизация: Используем json_extract для избегания парсинга JSON в Python
+        query = "SELECT post_num, json_extract(content, '$.text') FROM Posts WHERE json_extract(content, '$.text') LIKE '%<img%'"
         
         async with conn.execute(query) as cursor:
             rows = await cursor.fetchall()
@@ -5014,34 +5253,23 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
             return {"status": "ok", "message": "База чиста, исправлять нечего."}
 
         # 2. Проходимся и чистим
-        await conn.execute("BEGIN IMMEDIATE")
-        
         updates = []
         for row in rows:
-            post_num, raw_content = row
+            post_num, text = row
             try:
-                content = json.loads(raw_content)
-                text = content.get('text', '')
-                
-                if '<img' in text or '<IMG' in text:
-                    soup = BeautifulSoup(text, "html.parser")
-                    images = soup.find_all('img')
-                    
-                    if images:
-                        for img in images:
-                            img.decompose()
-                    
-                        content['text'] = str(soup)
-                        new_json = json.dumps(content)
-                        
-                        updates.append((new_json, post_num))
+                if text:
+                    new_text, num_subs = img_regex.subn('', text)
+                    if num_subs > 0:
+                        updates.append((new_text, post_num))
                         count += 1
             except Exception:
                 continue
         
+        await conn.execute("BEGIN IMMEDIATE")
+
         if updates:
             await conn.executemany(
-                "UPDATE Posts SET content = ? WHERE post_num = ?",
+                "UPDATE Posts SET content = json_set(content, '$.text', ?) WHERE post_num = ?",
                 updates
             )
 
@@ -5196,7 +5424,7 @@ async def api_roulette_next(request: Request, boards: Optional[str] = None):
     # Парсим список досок из query string (?boards=b,a,gd)
     allowed_boards = None
     if boards:
-        allowed_boards = [b.strip() for b in boards.split(',') if b.strip()]
+        allowed_boards = [stripped for b in boards.split(',') if (stripped := b.strip())]
 
     try:
         raw_post = await get_random_video_post(allowed_boards=allowed_boards)
@@ -5964,6 +6192,11 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     
     user_country = request.cookies.get("user_country", "XX")
     is_ru = (user_country == "RU")
+    client_ip = get_real_ip(request)
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if 'ru' in accept_lang or not accept_lang:
+            is_ru = True
 
     tg_url = None
     info = await get_cached_file_path(file_id)
@@ -6238,7 +6471,7 @@ async def search_tags_page(request: Request, tags: str = "", page: int = 1, user
     """
     Страница результатов поиска по тегам.
     """
-    tag_list = [t.strip() for t in tags.split(',') if t.strip()]
+    tag_list = [stripped for t in tags.split(',') if (stripped := t.strip())]
     posts = []
     
     if tag_list:
@@ -6303,3 +6536,14 @@ if __name__ == "__main__":
         timeout_keep_alive=10,
         limit_concurrency=1000
     )
+
+@app.get("/api/is-ru")
+async def check_if_ru_dub(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}
