@@ -373,7 +373,8 @@ class BoardMiddleware(BaseMiddleware):
                             try:
                                 if isinstance(event, types.Message):
                                     await event.delete()
-                            except Exception: pass
+                            except Exception as e:
+                                logging.warning(f"Failed to delete event during raid lockdown: {e}")
                             return
                         
                         # Регистрируем первого захода нового юзера
@@ -394,7 +395,8 @@ class BoardMiddleware(BaseMiddleware):
                                 try:
                                     if isinstance(event, types.Message):
                                         await event.delete()
-                                except Exception: pass
+                                except Exception as e:
+                                    logging.warning(f"Failed to delete event during raid lockdown: {e}")
                                 return
 
         return await handler(event, data)
