@@ -5170,7 +5170,8 @@ async def api_create_post(
                         logger.error(f"Delayed bump failed: {e}")
 
                 spawn_task(delayed_bump(board_id, final_thread_id, stream, nm))
-        except: pass
+        except Exception as e:
+            logger.error(f"Failed to setup delayed bump: {e}")
     elif post_mode == 'reply' and thread_op_num:
         async with get_db_connection() as conn:
             row = await (await conn.execute("SELECT is_endless FROM Threads WHERE thread_id = ?", (str(thread_op_num),))).fetchone()
