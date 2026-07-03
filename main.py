@@ -66,7 +66,7 @@ from common.html_utils import escape_html, convert_site_tags_to_telegram
 from common.token_generator import generate_unique_token
 from common.database import (
     initialize_database, is_database_migrated, load_state_from_db, get_and_clear_reaction_queue, get_post_by_num, get_stream_active_users, 
-    update_board_settings, add_or_activate_user, update_user_status, get_and_clear_broadcast_queue, mark_broadcast_posts_sent, get_channel_message_id,
+    update_board_settings, add_or_activate_user, update_user_status, get_and_clear_broadcast_queue, mark_broadcast_posts_sent,
     create_post, update_shadow_mute, create_thread, update_user_location, get_op_posts_for_board, get_thread_by_op_post, add_channel_copy, get_all_channel_copies,
     add_post_copies, get_post_author_by_copy, get_post_copies, get_post_info_by_copy, update_user_settings_db, get_all_active_subscribers, log_global_event,
     upsert_delivery_queue_item, delete_delivery_queue_item, get_pending_delivery_queue_items,
