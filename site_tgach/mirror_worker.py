@@ -121,7 +121,7 @@ async def _process_single_task(task):
         fresh_file_id = file_id 
         download_success = False 
         
-        file_info = None
+        file_info = None # <--- FIX: Инициализация переменной
 
         try:
             file_info = await bot.get_file(file_id)
