@@ -2,6 +2,7 @@ import sys
 import os
 import unittest
 from unittest.mock import patch, MagicMock, AsyncMock
+from httpx import AsyncHTTPTransport
 
 # Setup required env var
 os.environ["SECRET_KEY"] = "test-secret-key-12345"
@@ -63,9 +64,9 @@ class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
             mock_response.json.return_value = {'countryCode': 'YY'}
             mock_get.return_value = mock_response
 
-            result = await get_country_by_ip("8.8.8.8")
-            self.assertEqual(result, "YY")
-
+            with patch('Dubsite_tgach.main.AsyncHTTPTransport') as mock_transport:
+                result = await get_country_by_ip("8.8.8.8")
+                self.assertEqual(result, "YY")
 
     @patch('Dubsite_tgach.main.GEOIP_READER')
     async def test_httpx_raises_exception_both_strategies(self, mock_geoip_reader):
@@ -74,11 +75,12 @@ class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
         with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
             mock_get.side_effect = Exception("HTTPX Exception")
 
-            result = await get_country_by_ip("8.8.8.8")
-            self.assertEqual(result, "XX")
+            with patch('Dubsite_tgach.main.AsyncHTTPTransport') as mock_transport:
+                result = await get_country_by_ip("8.8.8.8")
+                self.assertEqual(result, "XX")
 
-            # Since there are 2 strategies (Proxy and Direct), it should attempt 2 calls
-            self.assertEqual(mock_get.call_count, 2)
+                # Since there are 2 strategies (Proxy and Direct), it should attempt 2 calls
+                self.assertEqual(mock_get.call_count, 2)
 
     @patch('Dubsite_tgach.main.GEOIP_READER')
     async def test_httpx_first_strategy_fails_second_succeeds(self, mock_geoip_reader):
@@ -92,8 +94,10 @@ class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
 
             mock_get.side_effect = [Exception("Proxy Failed"), mock_success_response]
 
-            result = await get_country_by_ip("8.8.8.8")
-            self.assertEqual(result, "ZZ")
-            self.assertEqual(mock_get.call_count, 2)
+            with patch('Dubsite_tgach.main.AsyncHTTPTransport') as mock_transport:
+                result = await get_country_by_ip("8.8.8.8")
+                self.assertEqual(result, "ZZ")
+                self.assertEqual(mock_get.call_count, 2)
+
 if __name__ == '__main__':
     unittest.main()
