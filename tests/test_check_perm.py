@@ -7,6 +7,13 @@ except RuntimeError:
 import sys
 import os
 import unittest
+import asyncio
+
+# Setup event loop for async imports if not present
+try:
+    asyncio.get_running_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
 
 # Setup required env var
 os.environ["SECRET_KEY"] = "test-secret-key-12345"
