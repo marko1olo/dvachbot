@@ -60,6 +60,16 @@ def generate_schizo_name(user_id: int) -> str:
     suffix = rng.choice(NICK_SUFFIXES)
     return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
 
+def save_chart(images: list, filename: str, bbox_inches=None):
+    buf = io.BytesIO()
+    if bbox_inches:
+        plt.savefig(buf, format='png', bbox_inches=bbox_inches)
+    else:
+        plt.savefig(buf, format='png')
+    buf.seek(0)
+    images.append((filename, buf))
+    plt.close()
+
 def generate_all_charts():
     """Generates exactly 10 toxic charts and returns a list of io.BytesIO objects"""
     conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
@@ -89,11 +99,7 @@ def generate_all_charts():
         plt.title('1. Объем высеров (Посты по дням)', fontsize=16, fontweight='bold', color='#ff3366')
         plt.xticks(rotation=45)
         plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('1_posts.png', buf))
-        plt.close()
+        save_chart(images, '1_posts.png')
         
     # 2. Уникальные шизы (Weekly Active Users)
     c.execute('''
@@ -110,11 +116,7 @@ def generate_all_charts():
         plt.title('2. Размер онлайна (Уникальные шизы за НЕДЕЛЮ)', fontsize=16, fontweight='bold', color="#00ffcc")
         plt.xticks(rotation=45)
         plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('2_wau.png', buf))
-        plt.close()
+        save_chart(images, '2_wau.png')
 
     # 3. Матоемкость борды
     c.execute('''
@@ -161,11 +163,7 @@ def generate_all_charts():
         plt.title('3. Матоемкость (% постов с матами)', fontsize=16, fontweight='bold', color='#ff0000')
         plt.ylabel('% постов с матом')
         plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('3_toxicity.png', buf))
-        plt.close()
+        save_chart(images, '3_toxicity.png')
 
     # 4. Топ-10 Главных Шизоидов
     c.execute('''
@@ -188,11 +186,7 @@ def generate_all_charts():
             ax.text(row['cnt'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['cnt'])}", 
                     va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
         plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('4_top_schizos.png', buf))
-        plt.close()
+        save_chart(images, '4_top_schizos.png')
 
     # 5. Главные Провокаторы (Топ-5 юзеров, кому больше всего отвечают)
     c.execute('''
@@ -223,8 +217,7 @@ def generate_all_charts():
         plt.suptitle('5. Главные Байтеры — Топ-20 (Кому больше всего реплаят)',
                      fontsize=15, fontweight='bold', color='#33ccff', y=1.01)
         plt.tight_layout()
-        buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight'); buf.seek(0)
-        images.append(('5_provocateurs.png', buf)); plt.close()
+        save_chart(images, '5_provocateurs.png', bbox_inches='tight')
 
     # 6. Гистограмма длины постов (Одноклеточные vs Пасты)
     c.execute('''
@@ -255,11 +248,7 @@ def generate_all_charts():
             plt.axvline(x=300, color='g', linestyle='--')
             plt.text(310, ax.get_ylim()[1]*0.8, 'Пасто-писатели (>300)', color='g')
             plt.tight_layout()
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('6_post_length.png', buf))
-            plt.close()
+            save_chart(images, '6_post_length.png')
 
     # 7+8+9. Три пирога в одном — Ночники / Медиа / Диалог
     c.execute('''
@@ -299,8 +288,7 @@ def generate_all_charts():
         plt.suptitle('7–9. Профиль Анона: время / формат / диалог (30д)',
                      fontsize=14, fontweight='bold', color='#ffffff', y=1.02)
         plt.tight_layout()
-        buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight'); buf.seek(0)
-        images.append(('7_8_9_donut_panel.png', buf)); plt.close()
+        save_chart(images, '7_8_9_donut_panel.png', bbox_inches='tight')
 
     # 10. Тепловая карта активности (Heatmap)
     c.execute('''
@@ -327,11 +315,7 @@ def generate_all_charts():
         plt.xlabel('Час (МСК)')
         plt.ylabel('День недели')
         plt.tight_layout()
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        images.append(('10_heatmap.png', buf))
-        plt.close()
+        save_chart(images, '10_heatmap.png')
 
     # 11. Граф Социального Пузыря (Echo Chambers)
     try:
@@ -375,11 +359,7 @@ def generate_all_charts():
                 plt.title('11. Граф Социального Пузыря (Эхо-камеры)', fontsize=16, fontweight='bold', color="#00ffcc")
                 ax.axis('off')
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('11_echo_chambers.png', buf))
-                plt.close()
+                save_chart(images, '11_echo_chambers.png')
     except Exception as e:
         print(f"Error Chart 11: {e}")
 
@@ -410,11 +390,7 @@ def generate_all_charts():
                     ax.text(row['pagerank'] + (ax.get_xlim()[1] * 0.01), idx, f"{row['pagerank']:.4f}", 
                             va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('12_pagerank.png', buf))
-                plt.close()
+                save_chart(images, '12_pagerank.png')
     except Exception as e:
         print(f"Error Chart 12: {e}")
 
@@ -458,11 +434,7 @@ def generate_all_charts():
                     ax.text(row['score'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['score'])}", 
                             va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('13_circlejerk.png', buf))
-                plt.close()
+                save_chart(images, '13_circlejerk.png')
     except Exception as e:
         print(f"Error Chart 13: {e}")
 
@@ -511,11 +483,7 @@ def generate_all_charts():
                 plt.xlabel('Длительность сессии (минуты, лимит 15 мин на паузу)')
                 plt.ylabel('Количество сессий')
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('14_sessions.png', buf))
-                plt.close()
+                save_chart(images, '14_sessions.png')
     except Exception as e:
         print(f"Error Chart 14: {e}")
 
@@ -617,11 +585,7 @@ def generate_all_charts():
                             
             plt.suptitle('15. Мем-Радар: Взлетающие Тренды (Прирост за неделю)', fontsize=16, fontweight='bold', color="#ffaa00", y=0.96)
             plt.tight_layout(rect=[0, 0, 1, 0.95])
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('15_autocorrelation.png', buf))
-            plt.close()
+            save_chart(images, '15_autocorrelation.png')
     except Exception as e:
         print(f"Error Chart 15: {e}")
 
@@ -689,11 +653,7 @@ def generate_all_charts():
                     ax.text(row['Частота'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['Частота'])}", 
                             va='center', ha='left', fontsize=9, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('16_top_words.png', buf))
-                plt.close()
+                save_chart(images, '16_top_words.png')
     except Exception as e:
         print(f"Error Chart 16: {e}")
 
@@ -755,11 +715,7 @@ def generate_all_charts():
                 plt.title('17. Индекс Токсичности (Двачевский сентимент)', fontsize=16, fontweight='bold', color='#ff3333')
                 plt.ylabel('Средний сентимент (выше = база, ниже = токсик)')
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('17_sentiment.png', buf))
-                plt.close()
+                save_chart(images, '17_sentiment.png')
     except Exception as e:
         print(f"Error Chart 17: {e}")
 
@@ -819,11 +775,7 @@ def generate_all_charts():
                     ax.text(row['msttr'] + (ax.get_xlim()[1] * 0.01), idx, f"{row['msttr']:.3f}", 
                             va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
-                buf = io.BytesIO()
-                plt.savefig(buf, format='png')
-                buf.seek(0)
-                images.append(('18_lexical_diversity.png', buf))
-                plt.close()
+                save_chart(images, '18_lexical_diversity.png')
     except Exception as e:
         print(f"Error Chart 18: {e}")
 
@@ -852,11 +804,7 @@ def generate_all_charts():
                    colors=sns.color_palette("hls", len(df_board_plot)))
             plt.title('19. Популярность разделов (Посты по доскам)', fontsize=16, fontweight='bold', color="#ffffff")
             plt.tight_layout()
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('19_boards.png', buf))
-            plt.close()
+            save_chart(images, '19_boards.png')
     except Exception as e:
         print(f"Error Chart 19: {e}")
 
@@ -928,11 +876,7 @@ def generate_all_charts():
             plt.legend(loc='lower left', facecolor='#121212', edgecolor='#333333')
             plt.xticks(rotation=45)
             plt.tight_layout()
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('20_lorenz.png', buf))
-            plt.close()
+            save_chart(images, '20_lorenz.png')
     except Exception as e:
         print(f"Error Chart 20: {e}")
 
@@ -972,11 +916,7 @@ def generate_all_charts():
             cb.set_label('постов', color='#ffffff', fontsize=7.5)
 
             plt.tight_layout()
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('21_heatmap_180.png', buf))
-            plt.close()
+            save_chart(images, '21_heatmap_180.png')
     except Exception as e:
         print(f"Error Chart 21: {e}")
 
@@ -1034,11 +974,7 @@ def generate_all_charts():
             fig.suptitle('22. Ритм по дням недели (90д)', fontsize=15, y=0.99, color='#ffffff', fontweight='bold')
             plt.tight_layout(rect=[0.05, 0, 1, 0.98])
             
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('22_ridge_weekday.png', buf))
-            plt.close()
+            save_chart(images, '22_ridge_weekday.png')
     except Exception as e:
         print(f"Error Chart 22: {e}")
 
@@ -1092,11 +1028,7 @@ def generate_all_charts():
                     fontsize=14, color='#ffffff', fontweight='bold', alpha=0.55)
             plt.tight_layout()
             
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('23_activity_clock.png', buf))
-            plt.close()
+            save_chart(images, '23_activity_clock.png')
     except Exception as e:
         print(f"Error Chart 23: {e}")
 
@@ -1156,11 +1088,7 @@ def generate_all_charts():
             cb.ax.xaxis.set_tick_params(color='#ffffff', labelsize=7)
             plt.tight_layout()
             
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png')
-            buf.seek(0)
-            images.append(('24_calendar_180.png', buf))
-            plt.close()
+            save_chart(images, '24_calendar_180.png')
     except Exception as e:
         print(f"Error Chart 24: {e}")
 
@@ -1189,8 +1117,7 @@ def generate_all_charts():
             ax.set_title('25. Кумулятивный рост постов (всё время)', fontsize=13, fontweight='bold', color='#58a6ff')
             ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{int(v):,}'))
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('25_cumulative.png', buf)); plt.close()
+            save_chart(images, '25_cumulative.png')
     except Exception as e:
         print(f"Error Chart 25: {e}")
 
@@ -1227,8 +1154,7 @@ def generate_all_charts():
             ax.set_title('26. Глубина цепочек ответов (30д)', fontsize=13, fontweight='bold', color='#d2a8ff')
             ax.set_ylabel('Количество постов')
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('26_reply_depth.png', buf)); plt.close()
+            save_chart(images, '26_reply_depth.png')
     except Exception as e:
         print(f"Error Chart 26: {e}")
 
@@ -1280,8 +1206,7 @@ def generate_all_charts():
         ax.set_title('27. Радар здоровья борды', fontsize=13, fontweight='bold',
                      color='#39d353', pad=18)
         plt.tight_layout()
-        buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-        images.append(('27_radar.png', buf)); plt.close()
+        save_chart(images, '27_radar.png')
     except Exception as e:
         print(f"Error Chart 27: {e}")
 
@@ -1323,8 +1248,7 @@ def generate_all_charts():
             ax.set_title('28. Топ тредов (90д) — размер = активность', fontsize=12,
                          fontweight='bold', color='#ffa657')
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('28_threads_bubble.png', buf)); plt.close()
+            save_chart(images, '28_threads_bubble.png')
     except Exception as e:
         print(f"Error Chart 28: {e}")
 
@@ -1357,8 +1281,7 @@ def generate_all_charts():
             ax.set_title('29. Тренд медиа vs текст по дням (30д)', fontsize=13,
                          fontweight='bold', color='#ff3399')
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('29_media_trend.png', buf)); plt.close()
+            save_chart(images, '29_media_trend.png')
     except Exception as e:
         print(f"Error Chart 29: {e}")
 
@@ -1403,8 +1326,7 @@ def generate_all_charts():
             lines2, labels2 = ax2.get_legend_handles_labels()
             ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=8, loc='upper left')
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('30_cohorts.png', buf)); plt.close()
+            save_chart(images, '30_cohorts.png')
     except Exception as e:
         print(f"Error Chart 30: {e}")
 
@@ -1443,8 +1365,7 @@ def generate_all_charts():
             ax.set_title('31. Активность борд по неделям (12 нед)',
                          fontsize=13, fontweight='bold', color='#ffa657')
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
-            images.append(('31_boards_weekly.png', buf)); plt.close()
+            save_chart(images, '31_boards_weekly.png')
     except Exception as e:
         print(f"Error Chart 31: {e}")
 
@@ -1503,8 +1424,7 @@ def generate_all_charts():
             plt.suptitle('32. Стрик-чемпионы (60д) — самые стойкие аноны  Top-20',
                          fontsize=14, fontweight='bold', color='#39d353', y=1.01)
             plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight'); buf.seek(0)
-            images.append(('32_streak_champions.png', buf)); plt.close()
+            save_chart(images, '32_streak_champions.png', bbox_inches='tight')
     except Exception as e:
         print(f"Error Chart 32: {e}")
 
