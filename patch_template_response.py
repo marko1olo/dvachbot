@@ -6,9 +6,6 @@ with open('site_tgach/main.py', 'r', encoding='utf-8') as f:
 # Replace templates.TemplateResponse("something.jinja2", {
 # with templates.TemplateResponse(request=request, name="something.jinja2", context={
 # Regex: templates\.TemplateResponse\(\s*("([^"]+\.jinja2)")\s*,\s*(\{.*?)
-# Wait, the `{` might be on the same line or next line.
-# A simpler approach: replace templates.TemplateResponse(" with templates.TemplateResponse(request=request, name="
-# and then replace , { with , context={
 # Since it's Python, let's just use re.sub.
 
 def replacer(match):
@@ -19,11 +16,6 @@ def replacer(match):
     if 'request=' in name_arg:
         return match.group(0)
         
-    # We will just rewrite it to explicitly pass request=request, name=..., context=...
-    # But wait, what if `request` is not named `request` in that scope?
-    # Usually in FastAPI route handlers it's called `request`.
-    # Let's hope it's always `request: Request`. If not, we could extract `request` from context dict, but it's easier to just pass request=request.
-    
     return f'templates.TemplateResponse(request=request, name={name_arg}{rest}'
 
 # Match templates.TemplateResponse("filename.jinja2",
