@@ -14,7 +14,7 @@
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>{{ board_info.name }} - {{ request.state.t('site_name') }}</title>
-        <link rel="stylesheet" href="/static/css/style.css?v=8.88228">
+        <link rel="stylesheet" href="/static/css/style.css?v=9.0">
         <link rel="icon" href="/static/favicon.ico">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
         <meta property="og:site_name" content="ТГАЧ">
@@ -331,6 +331,7 @@
                                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                             loading="lazy"
                                                             class="post-image lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ post.id }}] {{ post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
+                                                        <noscript><img src="{{ file.original_url }}" alt="[Пост /{{ board_id }}/ #{{ post.id }}] {{ post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"></noscript>
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                     </a>
                                                 {% elif file.type == 'sticker' %}
@@ -346,6 +347,7 @@
                                                                     loading="lazy"
                                                                     class="post-sticker lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" 
                                                                     referrerpolicy="no-referrer">
+                                                                <noscript><img src="{{ file.original_url }}" alt="Стикер"></noscript>
                                                             </a>
                                                         {% endif %}
                                                     </div>
@@ -479,6 +481,7 @@
                                                                 data-src="{{ file.thumbnail_url or file.original_url }}" 
                                                                 loading="lazy"
                                                                 class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
+                                                            <noscript><img src="{{ file.original_url }}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"></noscript>
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                         </a>
                                                     {% elif file.type == 'sticker' %}
@@ -494,6 +497,7 @@
                                                                         loading="lazy"
                                                                         class="post-sticker lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" 
                                                                         referrerpolicy="no-referrer">
+                                                                    <noscript><img src="{{ file.original_url }}" alt="Стикер"></noscript>
                                                                 </a>
                                                             {% endif %}
                                                         </div>
@@ -901,7 +905,7 @@
                     <a href="#" class="menu-btn admin-action" data-action="stealth" style="color: #e67e22;">🥷 Stealth Edit</a>
                 </div>
             </div>
-            <script src="/static/js/main.js?v=8.88228" defer></script>
+            <script src="/static/js/main.js?v=9.0" defer></script>
         </body>
         <div class="modal" id="bottle-modal" style="display: none;">
             <h3>Отправить записку анону</h3>
