@@ -5,6 +5,3 @@ description = ""
 authors = ["Your Name <you@example.com>"]
 requires-python = ">=3.11"
 dependencies = []
-
-[tool.pytest.ini_options]
-pythonpath = ["."]
