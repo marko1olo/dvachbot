@@ -2392,7 +2392,7 @@ async def sitemap_xml(request: Request):
 
     now_date = datetime.now().strftime("%Y-%m-%d")
     xml_content = ['<?xml version="1.0" encoding="UTF-8"?>']
-    xml_content.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
+    xml_content.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">')
 
     # 1. Добавляем статику
     for page in static_pages:
@@ -2412,16 +2412,34 @@ async def sitemap_xml(request: Request):
     # 3. Добавляем живые треды (последние 15 000)
     db = await get_pool()
     try:
-        # Берем треды, сортируя по последнему ответу
-        query = "SELECT board_id, thread_id, last_updated_at FROM Threads ORDER BY last_updated_at DESC LIMIT 15000"
+        # Берем треды и их OP посты, сортируя по последнему ответу
+        query = """
+            SELECT t.board_id, t.thread_id, t.last_updated_at, p.content
+            FROM Threads t
+            JOIN Posts p ON t.op_id = p.post_num
+            ORDER BY t.last_updated_at DESC LIMIT 15000
+        """
         async with db.execute(query) as cursor:
             async for row in cursor:
-                bid, tid, ts = row
+                bid, tid, ts, content_json = row
                 # Превращаем timestamp в 2026-01-26
                 mod_date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-                xml_content.append(
-                    f"  <url><loc>{base_url}/{bid}/res/{tid}.html</loc><lastmod>{mod_date}</lastmod><changefreq>hourly</changefreq></url>"
-                )
+
+                url_str = f"  <url>\n    <loc>{base_url}/{bid}/res/{tid}.html</loc>\n    <lastmod>{mod_date}</lastmod>\n    <changefreq>hourly</changefreq>"
+
+                # Парсим JSON-контент для извлечения картинок
+                try:
+                    content = json.loads(content_json)
+                    if "files" in content:
+                        for f in content["files"][:2]: # Максимум 2 картинки на тред в Sitemap
+                            if f.get("type") in ["image", "photo", "sticker"]:
+                                file_url = f"{base_url}/files/{f.get('original_file_id', '')}"
+                                url_str += f"\n    <image:image><image:loc>{file_url}</image:loc></image:image>"
+                except Exception:
+                    pass
+
+                url_str += "\n  </url>"
+                xml_content.append(url_str)
     except Exception as e:
         logger.error(f"Sitemap threads error: {e}")
 
@@ -3162,7 +3180,7 @@ def pluralize_russian(count, one, few, many):
             return few
         else:
             return many
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return many
 
 
@@ -3237,10 +3255,7 @@ def _select_mirror_strategically(
     selected_original = base_original_url  # По умолчанию Telegram Proxy
 
     if not is_ru:
-        # Для ИНО-IP: Приоритет Catbox (быстрее всего)
-        if "catbox" in mirrors:
-            selected_original = mirrors["catbox"]
-        elif hf_valid:
+        if hf_valid:
             selected_original = hf_candidate
         elif zeroxzero_candidate:
             selected_original = zeroxzero_candidate
@@ -3248,9 +3263,6 @@ def _select_mirror_strategically(
         # Для RU-IP: Приоритет HF или Telegram
         if hf_valid:
             selected_original = hf_candidate
-        elif "catbox" in mirrors:
-            # Catbox для RU только если больше ничего нет
-            selected_original = mirrors["catbox"]
         elif zeroxzero_candidate:
             selected_original = zeroxzero_candidate
 
@@ -3416,6 +3428,130 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
                 apply_votes(r)
 
 
+def _process_media_group(content: dict) -> None:
+    file_list = []
+    found_caption = None
+    for item in content.get("media", []):
+        f_type = item.get("type")
+        f_id = item.get("file_id") or item.get("media")
+        if not found_caption and item.get("caption"):
+            found_caption = item.get("caption")
+        if f_id and isinstance(f_id, str) and not f_id.startswith("<"):
+            clean_type = "image" if f_type == "photo" else f_type
+            file_list.append(
+                {
+                    "type": clean_type,
+                    "original_file_id": f_id,
+                    "thumbnail_file_id": f_id,
+                    "filename": (
+                        f"media_{f_id[:8]}.jpg"
+                        if clean_type == "image"
+                        else f"media_{f_id[:8]}.mp4"
+                    ),
+                }
+            )
+    content["files"] = file_list
+    if not content.get("text") and found_caption:
+        content["text"] = found_caption
+
+
+def _process_single_media(content: dict) -> None:
+    file_info = {"type": content["type"]}
+    ctype = content["type"]
+    if ctype == "photo" and content.get("photo") and isinstance(content["photo"], list):
+        try:
+            file_info["original_file_id"] = content["photo"][-1].get("file_id")
+            file_info["thumbnail_file_id"] = content["photo"][0].get("file_id")
+            file_info["type"] = "image"
+        except:
+            pass
+    else:
+        f_obj = content.get(ctype) or content
+        f_id = f_obj.get("file_id")
+        thumb_source = f_obj.get("thumb") or f_obj.get("thumbnail")
+        if thumb_source and isinstance(thumb_source, dict):
+            file_info["thumbnail_file_id"] = thumb_source.get("file_id")
+        mime = f_obj.get("mime_type", "")
+        if ctype == "document" and mime.startswith("video/"):
+            file_info["type"] = "video"
+        if f_id:
+            file_info["original_file_id"] = f_id
+    if file_info.get("original_file_id"):
+        content["files"] = [file_info]
+
+
+def _process_files_list(content: dict) -> None:
+    from urllib.parse import quote
+    import time
+
+    valid_files = []
+    for file_info in content["files"]:
+        file_info.setdefault("dupe_count", 0)
+        orig_url = file_info.get("original_url", "")
+        if orig_url and "local_file://" in orig_url:
+            clean_id = orig_url.split("local_file://")[1]
+            file_info["original_file_id"] = clean_id
+            file_info["original_url"] = f"/files/{clean_id}"
+        oid = file_info.get("original_file_id")
+        if not oid or oid.startswith("<"):
+            continue
+        fname = file_info.get("filename", "").lower()
+        if fname.endswith((".mp4", ".webm", ".mov", ".mkv")) and file_info.get(
+            "type"
+        ) not in ["voice", "audio"]:
+            file_info["type"] = "video"
+        if fname.endswith(".webm") and file_info.get("type") == "sticker":
+            file_info["type"] = "video"
+        ftype = file_info.get("type", "file")
+        ext_map = {
+            "video": "mp4",
+            "photo": "jpg",
+            "image": "jpg",
+            "audio": "mp3",
+            "voice": "ogg",
+            "sticker": "webp",
+            "video_note": "mp4",
+            "animation": "mp4",
+            "gif": "mp4",
+        }
+
+        if not fname or fname.startswith(".") or fname == "file" or "." not in fname:
+            ext = ext_map.get(ftype, "dat")
+            prefix = (
+                "vid"
+                if ftype in ["video", "animation", "video_note", "gif"]
+                else ("aud" if ftype in ["audio", "voice"] else "img")
+            )
+            short_id = oid[:8] if oid else str(int(time.time()))
+            file_info["filename"] = f"{prefix}_{short_id}.{ext}"
+        elif "." not in fname and ftype in ext_map:
+            file_info["filename"] = f"{fname}.{ext_map[ftype]}"
+
+        safe_name = quote(str(file_info.get("filename", "file")).strip("/"))
+
+        oid_str = str(oid) if oid else ""
+        if oid_str.startswith(("http://", "https://")):
+            file_info["original_url"] = oid_str
+        else:
+            clean_oid = oid_str.strip("/")
+            if clean_oid:
+                file_info["original_url"] = f"/files/{clean_oid}/{safe_name}"
+            else:
+                file_info["original_url"] = f"/files/{safe_name}"
+
+        tid = file_info.get("thumbnail_file_id")
+        if tid:
+            tid_str = str(tid)
+            if tid_str.startswith(("http://", "https://")):
+                file_info["thumbnail_url"] = tid_str
+            else:
+                file_info["thumbnail_url"] = f"/files/{tid_str.strip('/')}"
+        else:
+            file_info["thumbnail_url"] = ""
+        valid_files.append(file_info)
+    content["files"] = valid_files
+
+
 def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
     if not posts:
         return []
@@ -3437,30 +3573,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
 
         content = post["content"]
         if content.get("type") == "media_group" and "media" in content:
-            file_list = []
-            found_caption = None
-            for item in content["media"]:
-                f_type = item.get("type")
-                f_id = item.get("file_id") or item.get("media")
-                if not found_caption and item.get("caption"):
-                    found_caption = item.get("caption")
-                if f_id and isinstance(f_id, str) and not f_id.startswith("<"):
-                    clean_type = "image" if f_type == "photo" else f_type
-                    file_list.append(
-                        {
-                            "type": clean_type,
-                            "original_file_id": f_id,
-                            "thumbnail_file_id": f_id,
-                            "filename": (
-                                f"media_{f_id[:8]}.jpg"
-                                if clean_type == "image"
-                                else f"media_{f_id[:8]}.mp4"
-                            ),
-                        }
-                    )
-            content["files"] = file_list
-            if not content.get("text") and found_caption:
-                content["text"] = found_caption
+            _process_media_group(content)
         elif (
             content.get("type")
             in {
@@ -3475,106 +3588,11 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
             }
             and "files" not in content
         ):
-            file_info = {"type": content["type"]}
-            ctype = content["type"]
-            if (
-                ctype == "photo"
-                and content.get("photo")
-                and isinstance(content["photo"], list)
-            ):
-                try:
-                    file_info["original_file_id"] = content["photo"][-1].get("file_id")
-                    file_info["thumbnail_file_id"] = content["photo"][0].get("file_id")
-                    file_info["type"] = "image"
-                except:
-                    pass
-            else:
-                f_obj = content.get(ctype) or content
-                f_id = f_obj.get("file_id")
-                thumb_source = f_obj.get("thumb") or f_obj.get("thumbnail")
-                if thumb_source and isinstance(thumb_source, dict):
-                    file_info["thumbnail_file_id"] = thumb_source.get("file_id")
-                mime = f_obj.get("mime_type", "")
-                if ctype == "document" and mime.startswith("video/"):
-                    file_info["type"] = "video"
-                if f_id:
-                    file_info["original_file_id"] = f_id
-            if file_info.get("original_file_id"):
-                content["files"] = [file_info]
+            _process_single_media(content)
+
         if "files" in content and isinstance(content["files"], list):
-            valid_files = []
-            for file_info in content["files"]:
-                file_info.setdefault("dupe_count", 0)
-                orig_url = file_info.get("original_url", "")
-                if orig_url and "local_file://" in orig_url:
-                    clean_id = orig_url.split("local_file://")[1]
-                    file_info["original_file_id"] = clean_id
-                    file_info["original_url"] = f"/files/{clean_id}"
-                oid = file_info.get("original_file_id")
-                if not oid or oid.startswith("<"):
-                    continue
-                fname = file_info.get("filename", "").lower()
-                if fname.endswith((".mp4", ".webm", ".mov", ".mkv")) and file_info.get(
-                    "type"
-                ) not in ["voice", "audio"]:
-                    file_info["type"] = "video"
-                if fname.endswith(".webm") and file_info.get("type") == "sticker":
-                    file_info["type"] = "video"
-                ftype = file_info.get("type", "file")
-                ext_map = {
-                    "video": "mp4",
-                    "photo": "jpg",
-                    "image": "jpg",
-                    "audio": "mp3",
-                    "voice": "ogg",
-                    "sticker": "webp",
-                    "video_note": "mp4",
-                    "animation": "mp4",
-                    "gif": "mp4",
-                }
+            _process_files_list(content)
 
-                if (
-                    not fname
-                    or fname.startswith(".")
-                    or fname == "file"
-                    or "." not in fname
-                ):
-                    ext = ext_map.get(ftype, "dat")
-                    prefix = (
-                        "vid"
-                        if ftype in ["video", "animation", "video_note", "gif"]
-                        else ("aud" if ftype in ["audio", "voice"] else "img")
-                    )
-                    short_id = oid[:8] if oid else str(int(time.time()))
-                    file_info["filename"] = f"{prefix}_{short_id}.{ext}"
-                elif "." not in fname and ftype in ext_map:
-                    file_info["filename"] = f"{fname}.{ext_map[ftype]}"
-
-                from urllib.parse import quote
-
-                safe_name = quote(str(file_info.get("filename", "file")).strip("/"))
-
-                oid_str = str(oid) if oid else ""
-                if oid_str.startswith(("http://", "https://")):
-                    file_info["original_url"] = oid_str
-                else:
-                    clean_oid = oid_str.strip("/")
-                    if clean_oid:
-                        file_info["original_url"] = f"/files/{clean_oid}/{safe_name}"
-                    else:
-                        file_info["original_url"] = f"/files/{safe_name}"
-
-                tid = file_info.get("thumbnail_file_id")
-                if tid:
-                    tid_str = str(tid)
-                    if tid_str.startswith(("http://", "https://")):
-                        file_info["thumbnail_url"] = tid_str
-                    else:
-                        file_info["thumbnail_url"] = f"/files/{tid_str.strip('/')}"
-                else:
-                    file_info["thumbnail_url"] = ""
-                valid_files.append(file_info)
-            content["files"] = valid_files
         current_type = content.get("type")
         has_text = bool(content.get("text", "").strip())
         has_files = bool(content.get("files"))
@@ -7086,7 +7104,8 @@ async def api_admin_toggle_blur(
     if not check_perm(user, "mod"):
         raise HTTPException(status_code=403, detail="Нужен ранг Moderator")
 
-    new_state = await toggle_post_censorship(data.post_num)
+    results = await toggle_post_censorship([data.post_num])
+    new_state = results.get(data.post_num, False)
 
     # Сброс кэша для этого поста, чтобы пользователи сразу увидели изменения
     from fastapi_cache import FastAPICache
@@ -9801,31 +9820,34 @@ async def get_cached_file_path(
                 candidates.append((bot_id, token))
 
             async def fetch_with_bot(bot_id, token):
-                path = await _fetch_telegram_path(file_id, token)
-                if not path:
-                    return None
-                return path, token, bot_id
+                try:
+                    path = await _fetch_telegram_path(file_id, token)
+                    if path:
+                        return path, token, bot_id
+                except Exception:
+                    pass
+                return None
 
             for start in range(0, len(candidates), batch_size):
                 tasks = [
                     spawn_task(fetch_with_bot(bot_id, token))
                     for bot_id, token in candidates[start : start + batch_size]
                 ]
-                try:
-                    for task in asyncio.as_completed(tasks):
-                        result = await task
-                        if result:
-                            for pending in tasks:
-                                if not pending.done():
-                                    pending.cancel()
-                            await asyncio.gather(*tasks, return_exceptions=True)
-                            return await save_success(*result)
-                finally:
-                    pending_tasks = [task for task in tasks if not task.done()]
-                    for pending in pending_tasks:
-                        pending.cancel()
-                    if pending_tasks:
-                        await asyncio.gather(*pending_tasks, return_exceptions=True)
+                while tasks:
+                    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        try:
+                            result = task.result()
+                            if result:
+                                for p in pending:
+                                    if not p.done():
+                                        p.cancel()
+                                if pending:
+                                    await asyncio.gather(*pending, return_exceptions=True)
+                                return await save_success(*result)
+                        except Exception:
+                            pass
+                    tasks = list(pending)
             return None
 
         for stream_code in ("ru", "en", "jp"):
@@ -9979,6 +10001,76 @@ async def _proxy_protected_telegram_file(
     )
 
 
+async def _proxy_external_url(
+    url: str,
+    filename: str | None = None,
+    request: Request | None = None,
+):
+    timeout = aiohttp.ClientTimeout(total=90, sock_connect=10, sock_read=25)
+    connector = aiohttp.TCPConnector(limit=1, ttl_dns_cache=300, family=socket.AF_INET)
+    session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+    try:
+        request_headers = {}
+        if request:
+            range_header = request.headers.get("range")
+            if range_header:
+                request_headers["Range"] = range_header
+        resp = await session.get(url, headers=request_headers)
+    except Exception as e:
+        logger.error(f"Proxy external file connection error: {e}")
+        await session.close()
+        raise HTTPException(status_code=404, detail="File unavailable.")
+
+    if resp.status not in (200, 206):
+        resp.release()
+        await session.close()
+        raise HTTPException(status_code=404, detail="File unavailable.")
+
+    closed = False
+
+    async def close_upstream():
+        nonlocal closed
+        if closed:
+            return
+        closed = True
+        resp.release()
+        await session.close()
+
+    try:
+        guessed_type = mimetypes.guess_type(filename or url)[0]
+        media_type = resp.headers.get("Content-Type")
+        if not media_type or media_type == "application/octet-stream":
+            media_type = guessed_type or media_type or "application/octet-stream"
+
+        headers = {
+            "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"),
+            "Cache-Control": "public, max-age=86400",
+        }
+        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag"):
+            value = resp.headers.get(header_name)
+            if value:
+                headers[header_name] = value
+    except Exception:
+        await close_upstream()
+        raise
+
+    async def body_iter():
+        try:
+            async for chunk in resp.content.iter_chunked(64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            await close_upstream()
+
+    return StreamingResponse(
+        body_iter(),
+        status_code=resp.status,
+        media_type=media_type,
+        headers=headers,
+        background=BackgroundTask(close_upstream),
+    )
+
+
 @app.get("/games/abu")
 async def game_abu_page(
     request: Request, user: dict | None = Depends(get_optional_user)
@@ -10091,8 +10183,12 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
             if cached_path_info:
                 break  # Путь есть, можно отдавать
 
+        # Если файл пометили как мертвый, нет смысла ждать
+        if backend and await backend.get(f"dead_file:public:{file_id}"):
+            break
+
         # Если ничего нет - ждем
-        if attempt < 7:
+        if attempt < max_attempts - 1:
             await asyncio.sleep(0.5)
 
     # Извлечение (повторное для надежности)
@@ -10115,19 +10211,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     if is_hf_link_allowed(hf_link, VALID_HF_REPOS):
         return RedirectResponse(url=hf_link, status_code=307, headers=no_cache_headers)
 
-    # 3. Catbox — ПРИОРИТЕТ №3 для ИНО (В РФ пропускаем)
-    if catbox_link and not is_ru:
-        return RedirectResponse(
-            url=catbox_link, status_code=307, headers=no_cache_headers
-        )
-
-    # 4. 0x0 — ПРИОРИТЕТ №4 для ИНО (В РФ пропускаем)
-    if zeroxzero_link and not is_ru:
-        return RedirectResponse(
-            url=zeroxzero_link, status_code=307, headers=no_cache_headers
-        )
-
-    # 4. Shadow Telegram (Прямой редирект для теневого файла с защищенными токенами)
+    # 3. Shadow Telegram (Прямой редирект для теневого файла с защищенными токенами)
     if shadow_file_id:
         info_shadow = await get_cached_file_path(shadow_file_id, allow_protected_tokens=True)
         if info_shadow:
@@ -10138,13 +10222,16 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
                 headers={"Cache-Control": "public, max-age=3600"},
             )
 
-    # 5. Catbox для РФ — ПОСЛЕДНИЙ ШАНС (Если HF и TG лежат)
+    # 4. Catbox (через прокси, так как напрямую он часто лежит)
     if catbox_link:
-        return RedirectResponse(
-            url=catbox_link, status_code=307, headers=no_cache_headers
-        )
+        try:
+            return await _proxy_external_url(catbox_link, filename, request)
+        except HTTPException:
+            pass # Если кетбокс лежит, идем дальше
 
     if zeroxzero_link:
+        if is_ru:
+            return await _proxy_external_url(zeroxzero_link, filename, request)
         return RedirectResponse(
             url=zeroxzero_link, status_code=307, headers=no_cache_headers
         )
@@ -10449,6 +10536,24 @@ async def api_lift_ban(data: LiftBanRequest, user: dict = Depends(get_required_u
     return {"message": "Lifted"}
 
 
+@app.get("/debug_tasks")
+async def debug_tasks():
+    import traceback
+    res = []
+    for task in asyncio.all_tasks():
+        name = task.get_name()
+        stack = task.get_stack()
+        tb_lines = []
+        for frame in stack:
+            tb_lines.extend(traceback.format_stack(frame))
+        res.append({
+            "name": name,
+            "coro": str(task.get_coro()),
+            "stack": "".join(tb_lines)
+        })
+    return res
+
+
 if __name__ == "__main__":
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -10479,3 +10584,14 @@ if __name__ == "__main__":
             print(f"🔥 Server crashed: {e}")
             print("🔄 Restarting in 3 seconds...")
             time.sleep(3)
+
+@app.get("/api/is-ru")
+async def check_if_ru(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}

@@ -14,16 +14,38 @@ NEWS_CHANNEL_ID = None
 
 MSK_OFFSET = timezone(timedelta(hours=3))
 
-async def build_stats_media_groups():
+def build_stats_media_groups(stats_data: dict) -> list:
+    """
+    Takes raw stats data and groups them into media items for Telegram.
+    """
+    if not stats_data:
+        return []
+
+    groups = []
+    current_group = []
+
+    for key, value in stats_data.items():
+        if len(current_group) >= 10:
+            groups.append(current_group)
+            current_group = []
+        current_group.append((key, value))
+
+    if current_group:
+        groups.append(current_group)
+
+    return groups
+
+async def get_stats_media_groups():
     """Generates the stats and builds a list of aiogram MediaGroups (max 10 items each)."""
     images = await asyncio.to_thread(generate_all_charts)
     
     if not images:
         return []
         
+    stats_data = dict(images)
+    image_chunks = build_stats_media_groups(stats_data)
+
     groups = []
-    chunk_size = 10
-    image_chunks = [images[i:i + chunk_size] for i in range(0, len(images), chunk_size)]
     
     for chunk_idx, chunk in enumerate(image_chunks):
         media_group = []
@@ -63,7 +85,7 @@ async def send_stats_to_user(bot: Bot, chat_id: int):
     """Generates and sends stats directly to a user/admin, and copies them to the archive."""
     await bot.send_message(chat_id, "⏳ <i>Рисую 24 графика вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
     try:
-        media_groups = await build_stats_media_groups()
+        media_groups = await get_stats_media_groups()
         if media_groups:
             # Send to requesting user/admin
             for media_group in media_groups:
@@ -121,7 +143,7 @@ async def periodic_stats_publisher(bots: dict, active_users_getter):
         # Wake up and publish
         print("📊 [STATS PUBLISHER] Время публикации статистики! Генерирую графики...")
         try:
-            media_groups = await build_stats_media_groups()
+            media_groups = await get_stats_media_groups()
             if media_groups:
                 archive_bot = bots.get('test') or bots.get('b') or next(iter(bots.values()))
                 
