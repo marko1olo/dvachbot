@@ -361,7 +361,7 @@ async def tagging_loop():
                 if not thumb_id:
                     logger.warning(f"⚠️ Video {file_id} has no thumb. Skipping tag.")
                     async with db_lock:
-                        await db.execute("UPDATE FileRegistry SET tags='no_thumb' WHERE file_id=?", (file_id,))
+                        await db.executemany("UPDATE FileRegistry SET tags='no_thumb' WHERE file_id=?", [(file_id,)])
                         await db.commit()
                     continue
                 download_target_id = thumb_id
@@ -379,7 +379,7 @@ async def tagging_loop():
                 except TelegramBadRequest:
                     logger.error(f"🗑️ File {download_target_id} deleted. Marking error.")
                     async with db_lock:
-                        await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
+                        await db.executemany("UPDATE FileRegistry SET tags='error' WHERE file_id=?", [(file_id,)])
                         await db.commit()
                     continue
                 except Exception as e:
@@ -401,8 +401,8 @@ async def tagging_loop():
                     # Сохраняем как ошибку, чтобы не долбить
                     sha_fail = hashlib.sha256(img_bytes).hexdigest()
                     async with db_lock:
-                        await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
-                        await db.execute("INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)", (sha_fail, file_id, time.time()))
+                        await db.executemany("UPDATE FileRegistry SET tags='error' WHERE file_id=?", [(file_id,)])
+                        await db.executemany("INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)", [(sha_fail, file_id, time.time())])
                         await db.commit()
                     continue
 

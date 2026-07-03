@@ -1,0 +1,43 @@
+<USER_REQUEST>
+давай дотошно изучим логи
+
+
+2026-07-02 08:35:27,199 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:27,200 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:27,280 - WARNING - [SYSTEM] - ⚠️ Bot API rejected photo AgACAgIAAy. Trying MTProto recovery...
+2026-07-02 08:35:27,280 - INFO - [SYSTEM] - ⏭️ Skipping MTProto for AgACAgIAAy (photo without context). Trying HTTP download directly.
+2026-07-02 08:35:28,181 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,182 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,191 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,191 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,422 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,422 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,424 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,425 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,428 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id or the file is temporarily unavailable
+2026-07-02 08:35:28,428 - WARNING - [SYSTEM] - ⛔ All download methods failed for AgACAgIAAy. Rescheduling.
+2026-07-02 08:35:28,441 - ERROR - [SYSTEM] - ❌ HTTP Fallback crashed: Telegram server says - Bad Request: wrong file_id o
+<truncated 45216 bytes>
+ched.
+2026-07-02 09:30:32,063 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28921: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28920: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28919: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28918: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28917: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28916: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28915: max attempts reached.
+2026-07-02 09:30:32,064 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28914: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28913: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28912: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28911: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28910: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28909: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28908: max attempts reached.
+2026-07-02 09:30:32,065 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28907: max attempts reached.
+2026-07-02 09:30:32,066 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28906: max attempts reached.
+2026-07-02 09:30:52,091 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28905: max attempts reached.
+2026-07-02 09:31:12,317 - WARNING - [SYSTEM] - 🗑️ Removing stale task 28904: max attempts reached.
+2026-07-02
+<truncated 148452 bytes>
+
+NOTE: The output was truncated because it was too long. Use a more targeted query or a smaller range to get the information you need.

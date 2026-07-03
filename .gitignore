@@ -3,6 +3,8 @@
 *.db-journal
 *.db-wal
 *.db-shm
+*.db.before_merge
+*.before_merge
 
 # Кэш Python
 __pycache__/
