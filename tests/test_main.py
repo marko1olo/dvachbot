@@ -4,6 +4,8 @@ import unittest
 import types
 from unittest.mock import MagicMock, patch, AsyncMock
 import asyncio
+import logging
+logging.getLogger().setLevel(logging.CRITICAL)
 
 
 # Setup required env var
