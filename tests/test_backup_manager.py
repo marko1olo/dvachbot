@@ -60,7 +60,7 @@ class TestBackupManager(unittest.TestCase):
         # Mock sqlite connect
         mock_con = MagicMock()
         mock_con.iterdump.return_value = ["INSERT INTO test VALUES(1);", "COMMIT;"]
-        mock_connect.return_value.__enter__.return_value = mock_con
+        mock_connect.return_value = mock_con
 
         # Mock glob to return 2 files
         mock_glob.return_value = ["backup1.sql.gz", "backup2.sql.gz"]
@@ -109,7 +109,7 @@ class TestBackupManager(unittest.TestCase):
         # Mock sqlite connect
         mock_con = MagicMock()
         mock_con.iterdump.return_value = []
-        mock_connect.return_value.__enter__.return_value = mock_con
+        mock_connect.return_value = mock_con
 
         # Mock 4 existing backups
         mock_glob.return_value = [
@@ -194,7 +194,7 @@ class TestBackupManager(unittest.TestCase):
         # Mock sqlite connect
         mock_con = MagicMock()
         mock_con.iterdump.return_value = []
-        mock_connect.return_value.__enter__.return_value = mock_con
+        mock_connect.return_value = mock_con
 
         # Mock 3 existing backups to trigger rotation of 1
         mock_glob.return_value = ["backup1.sql.gz", "backup2.sql.gz", "backup3.sql.gz"]
