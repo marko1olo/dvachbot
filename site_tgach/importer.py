@@ -60,6 +60,7 @@ from common.database import (
 )
 from common.db_pool import db_lock
 
+
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
@@ -138,11 +139,6 @@ class ThreadImporter:
     def _normalize_html_sync(self, raw_html: str) -> str:
         if not raw_html:
             return ""
-
-        import html as html_lib
-
-        # FIX: Unescape first to let BeautifulSoup see tags properly
-        raw_html = html_lib.unescape(raw_html)
 
         replacements = {
             r"двач": "тгач",
@@ -232,7 +228,7 @@ class ThreadImporter:
                     timeout=90.0,
                     cookies=req_cookies,
                     transport=httpx.AsyncHTTPTransport(
-                        local_address="0.0.0.0", retries=2, proxy=PROXY_URL
+                        local_address=BIND_IPV4, retries=2, proxy=PROXY_URL
                     ),
                 ) as media_client:
                     resp = await media_client.get(url, headers=req_headers)
@@ -585,7 +581,7 @@ class ThreadImporter:
 
         # Configured Transport from New Version
         transport = httpx.AsyncHTTPTransport(
-            local_address="0.0.0.0",  # Принудительный IPv4 (Fix для OpenVPN)
+            local_address=BIND_IPV4,  # Принудительный IPv4 (Fix для OpenVPN)
             retries=3,
             verify=False,
             http2=False,  # Строго HTTP/1.1
@@ -867,30 +863,39 @@ class ThreadImporter:
                 for i in range(0, len(replies_data), chunk_size):
                     await conn.execute("BEGIN")
                     chunk = replies_data[i : i + chunk_size]
-                    for p_data in chunk:
-                        content = json.dumps(
-                            {
-                                "text": p_data["text"],
-                                "files": p_data["files"],
-                                "type": "files" if p_data["files"] else "text",
-                            }
-                        )
+                    if chunk:
+                        values_placeholders = []
+                        params = []
+                        for p_data in chunk:
+                            content = json.dumps(
+                                {
+                                    "text": p_data["text"],
+                                    "files": p_data["files"],
+                                    "type": "files" if p_data["files"] else "text",
+                                }
+                            )
+                            values_placeholders.append("(?, ?, ?, ?, ?, NULL, ?)")
+                            params.extend(
+                                (
+                                    target_board,
+                                    new_thread_id,
+                                    content,
+                                    p_data["timestamp"],
+                                    p_data["author_id"],
+                                    stream,
+                                )
+                            )
+
                         cur = await conn.execute(
-                            """INSERT INTO posts 
+                            f"""INSERT INTO posts
                                (board_id, thread_id, content, timestamp, author_id, reply_to_post_num, stream) 
-                               VALUES (?, ?, ?, ?, ?, NULL, ?) RETURNING post_num""",
-                            (
-                                target_board,
-                                new_thread_id,
-                                content,
-                                p_data["timestamp"],
-                                p_data["author_id"],
-                                stream,
-                            ),
+                               VALUES {','.join(values_placeholders)} RETURNING post_num""",
+                            params,
                         )
-                        new_id = (await cur.fetchone())[0]
-                        self.created_post_ids.append(new_id)
-                        id_map[p_data["old_id"]] = new_id
+                        rows = await cur.fetchall()
+                        for idx, (new_id,) in enumerate(rows):
+                            self.created_post_ids.append(new_id)
+                            id_map[chunk[idx]["old_id"]] = new_id
                     await conn.commit()
                     await asyncio.sleep(0.05)
 
@@ -902,16 +907,21 @@ class ThreadImporter:
                 from common.config import STORAGE_CHANNELS
 
                 current_channel = STORAGE_CHANNELS.get(stream, STORAGE_CHANNELS["ru"])
+                channel_copies_params = []
                 for p_data in prepared_posts:
                     p_num = id_map.get(p_data["old_id"])
                     if not p_num:
                         continue
                     for f in p_data["files"]:
                         if f.get("channel_message_id"):
-                            await conn.execute(
-                                "INSERT OR IGNORE INTO ChannelCopies (post_num, channel_id, message_id) VALUES (?, ?, ?)",
-                                (p_num, current_channel, f["channel_message_id"]),
+                            channel_copies_params.append(
+                                (p_num, current_channel, f["channel_message_id"])
                             )
+                if channel_copies_params:
+                    await conn.executemany(
+                        "INSERT OR IGNORE INTO ChannelCopies (post_num, channel_id, message_id) VALUES (?, ?, ?)",
+                        channel_copies_params,
+                    )
                 await conn.commit()
 
                 for i in range(0, len(prepared_posts), chunk_size):
@@ -976,17 +986,14 @@ async def process_import_queue(app_state_broadcast_queue):
         try:
             now = time.time()
             async with get_db_connection() as conn:
-                async with conn.execute(
-                    """
+                async with conn.execute("""
                     SELECT id, task_id, board_id, original_post_num, reply_to_original, 
                            content, author_id, stream, is_op, thread_title 
                     FROM ImportQueue 
                     WHERE publish_at <= ? 
                     ORDER BY publish_at ASC, original_post_num ASC 
                     LIMIT 10
-                """,
-                    (now,),
-                ) as cursor:
+                """, (now,)) as cursor:
                     rows = await cursor.fetchall()
 
                 if not rows:
@@ -998,23 +1005,12 @@ async def process_import_queue(app_state_broadcast_queue):
                 local_ref_map = {}
 
                 for row in rows:
-                    (
-                        q_id,
-                        task_id,
-                        board_id,
-                        orig_num,
-                        reply_to_orig,
-                        content_str,
-                        author_id,
-                        stream,
-                        is_op,
-                        title,
-                    ) = row
+                    q_id, task_id, board_id, orig_num, reply_to_orig, content_str, author_id, stream, is_op, title = row
                     try:
                         content = json.loads(content_str)
-                        text = content.get("text", "")
+                        text = content.get('text', '')
 
-                        refs = re.findall(r"(?:>>|&gt;&gt;)(\d+)", text)
+                        refs = re.findall(r'(?:>>|&gt;&gt;)(\d+)', text)
                         replacements = {}
                         real_reply_to = None
 
@@ -1026,26 +1022,22 @@ async def process_import_queue(app_state_broadcast_queue):
                                 else:
                                     missing_refs.append(ref)
                             if missing_refs:
-                                placeholders = ",".join(["?"] * len(missing_refs))
+                                placeholders = ','.join(['?'] * len(missing_refs))
                                 q_map = f"SELECT original_post_num, real_post_num FROM ImportRefMap WHERE task_id = ? AND original_post_num IN ({placeholders})"
-                                async with conn.execute(
-                                    q_map, [task_id] + missing_refs
-                                ) as map_cur:
+                                async with conn.execute(q_map, [task_id] + missing_refs) as map_cur:
                                     async for m_row in map_cur:
                                         replacements[str(m_row[0])] = m_row[1]
                                         local_ref_map[str(m_row[0])] = m_row[1]
 
                         if replacements:
-
                             def _sim_id_replacer(match):
                                 oid = match.group(1)
                                 if oid in replacements:
                                     return f">>{replacements[oid]}"
                                 return match.group(0)
-
                             text = RE_LINK_REF.sub(_sim_id_replacer, text)
 
-                        content["text"] = text
+                        content['text'] = text
 
                         if reply_to_orig and reply_to_orig in replacements:
                             real_reply_to = replacements[reply_to_orig]
@@ -1054,15 +1046,11 @@ async def process_import_queue(app_state_broadcast_queue):
 
                         final_thread_id_db = None
                         if not is_op:
-                            async with conn.execute(
-                                "SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1",
-                                (task_id,),
-                            ) as op_cur:
+                            async with conn.execute("SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1", (task_id,)) as op_cur:
                                 op_row = await op_cur.fetchone()
-                                if op_row:
-                                    final_thread_id_db = str(op_row[0])
+                                if op_row: final_thread_id_db = str(op_row[0])
 
-                        post_mode = "new_thread" if is_op else "reply"
+                        post_mode = 'new_thread' if is_op else 'reply'
                         new_post_num = await create_post(
                             author_id=author_id,
                             board_id=board_id,
@@ -1072,26 +1060,15 @@ async def process_import_queue(app_state_broadcast_queue):
                             is_from_site=True,
                             post_mode=post_mode,
                             stream=stream,
-                            thread_id_from_bot=final_thread_id_db,
+                            thread_id_from_bot=final_thread_id_db
                         )
 
                         if new_post_num:
                             if is_op:
-                                await create_thread_entry(
-                                    new_post_num,
-                                    board_id,
-                                    author_id,
-                                    title or "Imported",
-                                    time.time(),
-                                    stream=stream,
-                                )
+                                await create_thread_entry(new_post_num, board_id, author_id, title or "Imported", time.time(), stream=stream)
                             elif final_thread_id_db:
-                                await update_thread_last_updated(
-                                    int(final_thread_id_db), time.time()
-                                )
-                            await process_backlinks(
-                                new_post_num, content["text"], real_reply_to
-                            )
+                                await update_thread_last_updated(int(final_thread_id_db), time.time())
+                            await process_backlinks(new_post_num, content['text'], real_reply_to)
 
                             local_ref_map[str(orig_num)] = new_post_num
                             db_inserts.append((task_id, orig_num, new_post_num))
@@ -1099,19 +1076,14 @@ async def process_import_queue(app_state_broadcast_queue):
 
                             if app_state_broadcast_queue:
                                 bp = await get_post_for_broadcast(new_post_num)
-                                if bp:
-                                    await app_state_broadcast_queue.put(bp)
+                                if bp: await app_state_broadcast_queue.put(bp)
 
-                            logger.info(
-                                f"🎭 [Sim] Published #{new_post_num} (was {orig_num}) on /{board_id}/"
-                            )
+                            logger.info(f"🎭 [Sim] Published #{new_post_num} (was {orig_num}) on /{board_id}/")
 
                             await asyncio.sleep(random.uniform(0.5, 2.5))
 
                         else:
-                            logger.error(
-                                f"❌ [Sim] Failed to create post for queue item {q_id}"
-                            )
+                            logger.error(f"❌ [Sim] Failed to create post for queue item {q_id}")
                             db_deletes.append((q_id,))
 
                     except Exception as e:
@@ -1120,23 +1092,16 @@ async def process_import_queue(app_state_broadcast_queue):
                 if db_inserts or db_deletes:
                     async with db_lock:
                         if db_inserts:
-                            await conn.executemany(
-                                "INSERT INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)",
-                                db_inserts,
-                            )
+                            await conn.executemany("INSERT INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)", db_inserts)
                         if db_deletes:
                             # Batch delete using IN clause for efficiency
                             chunk_size = 900
                             flat_deletes = [d[0] for d in db_deletes]
                             for i in range(0, len(flat_deletes), chunk_size):
-                                chunk = flat_deletes[i : i + chunk_size]
-                                if not chunk:
-                                    continue
-                                placeholders = ",".join(["?"] * len(chunk))
-                                await conn.execute(
-                                    f"DELETE FROM ImportQueue WHERE id IN ({placeholders})",
-                                    chunk,
-                                )
+                                chunk = flat_deletes[i:i + chunk_size]
+                                if not chunk: continue
+                                placeholders = ','.join(['?'] * len(chunk))
+                                await conn.execute(f"DELETE FROM ImportQueue WHERE id IN ({placeholders})", chunk)
                         await conn.commit()
 
         except Exception:
