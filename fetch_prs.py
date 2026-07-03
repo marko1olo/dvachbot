@@ -1,9 +1,10 @@
-import urllib.request, json
+import json
+from urllib.request import Request, urlopen
 
 url = 'https://api.github.com/repos/marko1olo/dvachbot/pulls?state=open'
 try:
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    with urllib.request.urlopen(req) as response:
+    req = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urlopen(req) as response:
         prs = json.loads(response.read().decode())
         if not prs:
             print('No open pull requests found.')
