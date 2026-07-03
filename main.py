@@ -1,4 +1,3 @@
-from __future__ import annotations
 from dataclasses import dataclass
 """
 This module contains the main functionality for a Telegram bot that interacts with a specific board system.
@@ -44,9 +43,7 @@ import signal
 import sys
 import io
 import time
-import witching_hour
 import periodic_publisher
-import textwrap
 import threading
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -62,7 +59,7 @@ from logging.handlers import RotatingFileHandler
 from typing import Tuple
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-from common.html_utils import escape_html
+from common.html_utils import escape_html, convert_site_tags_to_telegram
 from common.token_generator import generate_unique_token
 from common.database import (
     initialize_database, is_database_migrated, load_state_from_db, get_and_clear_reaction_queue, get_post_by_num, get_stream_active_users, 
@@ -76,7 +73,6 @@ from common.database import (
     get_random_video_post, get_random_image_post
 )
 from site_tgach.admin_config import ADMIN_IDS
-from backup_manager import create_gzipped_dump
 from common.db_pool import create_pool, close_pool, get_pool
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from text_assets import (
@@ -89,7 +85,7 @@ from text_assets import (
     FAP_SUCCESS_PHRASES, FAP_SUCCESS_PHRASES_EN, FAP_SUCCESS_PHRASES_JP,
     GATARI_SUCCESS_PHRASES, GATARI_SUCCESS_PHRASES_EN, GATARI_SUCCESS_PHRASES_JP,
     LOLI_SUCCESS_PHRASES, LOLI_SUCCESS_PHRASES_EN, LOLI_SUCCESS_PHRASES_JP,
-    DEANON_COOLDOWN_PHRASES, DEANON_COOLDOWN_PHRASES_EN, DEANON_COOLDOWN_PHRASES_JP,
+    DEANON_COOLDOWN_PHRASES,
     MOTIVATIONAL_MESSAGES, MOTIVATIONAL_MESSAGES_EN, MOTIVATIONAL_MESSAGES_JP,
     INVITE_TEXTS, INVITE_TEXTS_EN, INVITE_TEXTS_JP,
     POLL_CREATION_SUCCESS_PHRASES, POLL_CREATION_SUCCESS_PHRASES_EN, POLL_CREATION_SUCCESS_PHRASES_JP,
@@ -99,11 +95,11 @@ from text_assets import (
     SUMMARIZE_PROMPTS_BOARD_SHORT_EN, SUMMARIZE_PROMPTS_BOARD_LONG_EN,
     ROAST_PROMPTS, ROAST_PROMPTS_EN, ROAST_PROMPTS_JP,
     CONTEXTUAL_REPLIES, CONTEXTUAL_REPLIES_EN, CONTEXTUAL_REPLIES_JP,
-    REACTION_NOTIFY_PHRASES, REACTION_NOTIFY_PHRASES_JP, ALBUM_EDUCATION_PHRASES, ANIME_HOURLY_LIMIT_PHRASES,
+    REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES, ANIME_HOURLY_LIMIT_PHRASES,
     SITE_PROMO_PHRASES, SITE_PROMO_PHRASES_EN, SITE_PROMO_PHRASES_JP, EARNING_NOTIFICATIONS,
     WITHDRAWAL_SCENARIOS, SCAM_PROCESSING_STATUSES, PROGRESS_BARS, PUBLIC_SHAME_MESSAGES,
     SUPPORT_RESPONSES, FAKE_CRYPTO_RATES, METHOD_LABELS, REFERRAL_BONUS_MESSAGES, 
-    VERIFICATION_SUCCESS_MESSAGES, VERIFICATION_REQUIRED_MESSAGES
+    VERIFICATION_SUCCESS_MESSAGES
 )
 from contextual_flavor import install_contextual_reply_extensions
 from common.config import DB_POST_LIMIT as CONFIG_DB_POST_LIMIT
@@ -163,7 +159,7 @@ from aiogram.exceptions import (
     TelegramNetworkError,
     TelegramRetryAfter,
 )
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile, InputFile
 from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.fsm.state import State, StatesGroup
@@ -199,19 +195,13 @@ from japanese_translator import (
 )
 from summarize import summarize_text_with_hf, create_telegraph_page_async
 from thread_texts import thread_messages
-from ukrainian_mode import UKRAINIAN_PHRASES, ukrainian_transform
-from zaputin_mode import PATRIOTIC_PHRASES, zaputin_transform
+from ukrainian_mode import ukrainian_transform
+from zaputin_mode import zaputin_transform
 from polish_mode import POLISH_PHRASES_START, POLISH_PHRASES_END, polish_transform
 from warhammer_mode import WH40K_PHRASES_START, WH40K_PHRASES_END, warhammer_transform
 from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial_transform
 from gopnik_mode import GOPNIK_PHRASES_START, GOPNIK_PHRASES_END, gopnik_transform
 from shizo_mode import SCHIZO_PHRASES_START, SCHIZO_PHRASES_END, shizo_transform
-# from new_modes import (
-#     AMERICA_PHRASES_END, AMERICA_PHRASES_START, HOLIDAY_PHRASES_END, HOLIDAY_PHRASES_START,
-#     JEWISH_PHRASES_END, JEWISH_PHRASES_START, MATRIX_PHRASES_END, MATRIX_PHRASES_START,
-#     OLDWEB_PHRASES_END, OLDWEB_PHRASES_START,
-#     america_transform, holiday_transform, jewish_transform, matrix_transform, oldweb_transform,
-# )
 from mode_punchup import punch_up_mode_text
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
@@ -255,13 +245,7 @@ ANIME_COMMAND_MAP = {
     "LOLICON": get_loli_image,
     "LOLIS": get_loli_image,
 }
-RE_HTML_TAGS = re.compile(r'<[^>]+>')
-RE_YOU_PATTERN = re.compile(r">>(\d+)")
-RE_SCRIPT_TAG = re.compile(r'<\s*script\b[^>]*>.*?<\s*/\s*script\s*>', flags=re.IGNORECASE | re.DOTALL)
-RE_SCRIPT_SINGLE = re.compile(r'<\s*script\b[^>]*>', flags=re.IGNORECASE)
-RE_DANGEROUS_TAGS = re.compile(r'<\s*(iframe|svg|form|object|embed|link|a)\b[^>]*>.*?<\s*/\s*\1\s*>', flags=re.IGNORECASE | re.DOTALL)
-RE_DANGEROUS_SINGLE = re.compile(r'<\s*(iframe|svg|form|object|embed|link|a)\b[^>]*>', flags=re.IGNORECASE)
-RE_EVENT_HANDLERS = re.compile(r'\s+on\w+\s*=\s*["\'].*?["\']', flags=re.IGNORECASE)
+from common.text_utils import clean_html_tags, sanitize_html, RE_HTML_TAGS, RE_YOU_PATTERN, RE_SCRIPT_TAG, RE_SCRIPT_SINGLE, RE_DANGEROUS_TAGS, RE_DANGEROUS_SINGLE, RE_EVENT_HANDLERS
 RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
 RE_SYSTEM_HEADER_CLEAN = re.compile(r'^(###.*?###|<i>.*?</i>)\s*\n?', flags=re.MULTILINE)
 RE_NEWLINES = re.compile(r'\n{2,}')
@@ -271,15 +255,20 @@ RE_REPLY_QUOTE = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d
 RE_REPLY_QUOTE_FORMAT = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
 RE_MULTI_REPLY = re.compile(r'>>(\d+)')
 FONTS_CACHE = []
-try:
-    font_files = ["font1.ttf", "font2.ttf", "font3.ttf", "font4.ttf"]
-    for ff in font_files:
-        if os.path.exists(ff):
-            FONTS_CACHE.append(ImageFont.truetype(ff, 40))
-    if not FONTS_CACHE:
+
+def init_fonts_cache():
+    try:
+        font_files = ["font1.ttf", "font2.ttf", "font3.ttf", "font4.ttf"]
+        for ff in font_files:
+            if os.path.exists(ff):
+                FONTS_CACHE.append(ImageFont.truetype(ff, 40))
+        if not FONTS_CACHE:
+            FONTS_CACHE.append(ImageFont.load_default())
+    except Exception:
         FONTS_CACHE.append(ImageFont.load_default())
-except Exception:
-    FONTS_CACHE.append(ImageFont.load_default())
+
+init_fonts_cache()
+
 class MultiLangMiddleware(BaseMiddleware):
     """
     Определяет языковой поток пользователя (ru/en/jp).
@@ -374,7 +363,8 @@ class BoardMiddleware(BaseMiddleware):
                             try:
                                 if isinstance(event, types.Message):
                                     await event.delete()
-                            except Exception: pass
+                            except Exception as e:
+                                logging.warning(f"Failed to delete event during raid lockdown: {e}")
                             return
                         
                         # Регистрируем первого захода нового юзера
@@ -395,7 +385,8 @@ class BoardMiddleware(BaseMiddleware):
                                 try:
                                     if isinstance(event, types.Message):
                                         await event.delete()
-                                except Exception: pass
+                                except Exception as e:
+                                    logging.warning(f"Failed to delete event during raid lockdown: {e}")
                                 return
 
         return await handler(event, data)
@@ -541,6 +532,7 @@ reply_coverage_updated_at = 0.0
 network_retry_state = defaultdict(lambda: {'attempt': 0, 'last_error_time': 0})
 GLOBAL_BOTS = {} # Словарь для хранения всех экземпляров ботов
 is_shutting_down = False
+shutdown_event = threading.Event()
 drain_shutdown_requested = False
 drain_shutdown_requested_at = 0.0
 event_loop_stall_watchdog_started = False
@@ -631,7 +623,6 @@ user_hourly_image_count = defaultdict(int)
 user_hourly_image_reset = defaultdict(float)
 HOURLY_IMAGE_LIMIT = 110
 MODE_COOLDOWN = 3600  # 1 час в секундах
-MAX_ACTIVE_USERS_IN_MEMORY = 5000 # Лимит на юзера в памяти для get_user_msgs_deque
 ANIME_CMD_COOLDOWN = 25 # 25 секунд
 anime_cmd_lock = asyncio.Lock()
 info_cmd_lock = asyncio.Lock() # Кулдаун для команд /stats, /active
@@ -677,24 +668,14 @@ def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
     if max_posts < 0 or len(post_to_messages) <= max_posts:
         return 0, 0
     if max_posts == 0:
-        stale_posts = list(post_to_messages.keys())
+        stale_posts = list(post_to_messages)
     else:
         keep_posts = set(sorted(post_to_messages.keys(), reverse=True)[:max_posts])
-        stale_posts = [post_num for post_num in list(post_to_messages.keys()) if post_num not in keep_posts]
+        stale_posts = [post_num for post_num in post_to_messages if post_num not in keep_posts]
     removed_reverse = 0
     for post_num in stale_posts:
         removed_reverse += _drop_post_copy_maps_unlocked(post_num)
     return len(stale_posts), removed_reverse
-
-def _purge_orphan_message_to_post_unlocked() -> int:
-    valid_reverse_posts = set(messages_storage.keys()) | set(post_to_messages.keys())
-    orphan_reverse_keys = [
-        key for key, mapped_post_num in message_to_post.items()
-        if mapped_post_num not in valid_reverse_posts
-    ]
-    for key in orphan_reverse_keys:
-        message_to_post.pop(key, None)
-    return len(orphan_reverse_keys)
 
 def _media_group_state_key(chat_id: int | str, media_group_id: str) -> str:
     return f"{chat_id}:{media_group_id}"
@@ -928,24 +909,6 @@ async def start_healthcheck():
 GITHUB_REPO = "https://github.com/shlomapetia/dvachbot-backup.git"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Проверь, что переменная есть в Railway!
 last_gc_time = time.time()
-def convert_site_tags_to_telegram(text: str) -> str:
-    """
-    Преобразует BB-коды сайта в поддерживаемые HTML-теги Telegram.
-    Адаптирует визуальные эффекты под возможности мессенджера.
-    """
-    if not text:
-        return ""
-    text = re.sub(r'\[b\](.*?)\[/b\]', r'<b>\1</b>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[i\](.*?)\[/i\]', r'<i>\1</i>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[s\](.*?)\[/s\]', r'<s>\1</s>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[u\](.*?)\[/u\]', r'<u>\1</u>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\|\|(.*?)\|\|', r'<tg-spoiler>\1</tg-spoiler>', text, flags=re.DOTALL)
-    text = re.sub(r'\[blur\](.*?)\[/blur\]', r'<tg-spoiler>\1</tg-spoiler>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[shake\](.*?)\[/shake\]', r'<i>\1</i>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[rainbow\](.*?)\[/rainbow\]', r'<code>\1</code>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[glitch\](.*?)\[/glitch\]', r'<s><code>\1</code></s>', text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r'\[code\](.*?)\[/code\]', r'<code>\1</code>', text, flags=re.IGNORECASE | re.DOTALL)
-    return text
 dp = Dispatcher()
 dp.message.middleware(DeduplicationMiddleware())
 dp.message.middleware(BoardMiddleware())
@@ -984,34 +947,6 @@ aiohttp_log = logging.getLogger('aiohttp')
 aiohttp_log.setLevel(logging.CRITICAL) 
 aiogram_log = logging.getLogger('aiogram')
 aiogram_log.setLevel(logging.CRITICAL) # <--- ИЗМЕНЕНО НА CRITICAL, чтобы не видеть ошибки апдейтов
-def clean_html_tags(text: str) -> str:
-
-    if not text: return text
-    return RE_HTML_TAGS.sub('', text)
-def sanitize_html(text: str) -> str:
-
-    if not text: return ""
-    
-    # --- НАЧАЛО ИЗМЕНЕНИЙ (Перехват и конвертация гиперссылок) ---
-    def link_replacer(match):
-        url = match.group(1)
-        content = match.group(2)
-        # Очищаем URL от протокола и www. для эстетики
-        clean_url = re.sub(r'^https?://', '', url, flags=re.IGNORECASE)
-        clean_url = re.sub(r'^www\.', '', clean_url, flags=re.IGNORECASE)
-        # Возвращаем текст и ссылку рядом в скобках
-        return f"{content} <i>({clean_url})</i>"
-        
-    # Ищем теги <a href="URL">ТЕКСТ</a> и обрабатываем их до основного санитайзера
-    text = re.sub(r'<\s*a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\s*/\s*a\s*>', link_replacer, text, flags=re.IGNORECASE | re.DOTALL)
-    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-
-    text = RE_SCRIPT_TAG.sub('', text)
-    text = RE_SCRIPT_SINGLE.sub('', text)
-    text = RE_DANGEROUS_TAGS.sub('', text)
-    text = RE_DANGEROUS_SINGLE.sub('', text)
-    text = RE_EVENT_HANDLERS.sub('', text)
-    return text
 def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, int]) -> str:
     """Улучшенная версия: не использует замок, работает с переданным словарем авторов."""
     if not text or ">>" not in text:
@@ -1031,10 +966,6 @@ def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, in
     return text
 gc.set_threshold(
     600, 6, 6)  # Оптимальные настройки для баланса памяти/производительности
-def get_user_msgs_deque(user_id: int, board_id: str):
-
-    last_user_msgs_for_board = board_data[board_id]['last_user_msgs']
-    return last_user_msgs_for_board.setdefault(user_id, deque(maxlen=10))
 SPAM_LIMIT = 14
 SPAM_WINDOW = 15
 STICKER_WINDOW = 10  # секунд
@@ -1630,40 +1561,28 @@ async def _maybe_punch_up_text(text: str, mode_key: str, board_id: str) -> str:
             }, ensure_ascii=False, separators=(",", ":"))
         )
     return result
-def _summarize_live_queue_ages(queue_sizes: dict) -> dict:
+def _process_board_queue(queue, now: float) -> tuple[list[float], float | None, str | int | None]:
+    queued_items = list(getattr(queue, "_queue", []))
+    ages = []
+    oldest_post = None
+    oldest_age = None
+    for item in queued_items:
+        if not isinstance(item, dict):
+            continue
+        enqueued_at = item.get("enqueued_at")
+        if enqueued_at is None:
+            continue
+        try:
+            age = max(0.0, now - float(enqueued_at))
+        except (TypeError, ValueError):
+            continue
+        ages.append(age)
+        if oldest_age is None or age > oldest_age:
+            oldest_age = age
+            oldest_post = item.get("post_num")
+    return ages, oldest_age, oldest_post
 
-    now = time.time()
-    by_board = {}
-    oldest = []
-    for board_id, queue in message_queues.items():
-        queued_items = list(getattr(queue, "_queue", []))
-        ages = []
-        oldest_post = None
-        oldest_age = None
-        for item in queued_items:
-            if not isinstance(item, dict):
-                continue
-            enqueued_at = item.get("enqueued_at")
-            if enqueued_at is None:
-                continue
-            try:
-                age = max(0.0, now - float(enqueued_at))
-            except (TypeError, ValueError):
-                continue
-            ages.append(age)
-            if oldest_age is None or age > oldest_age:
-                oldest_age = age
-                oldest_post = item.get("post_num")
-        if queue_sizes.get(board_id, 0) or ages:
-            info = {"size": queue_sizes.get(board_id, 0)}
-            if ages:
-                info.update({
-                    "oldest_age_sec": round(max(ages), 1),
-                    "avg_age_sec": round(sum(ages) / len(ages), 1),
-                    "oldest_post": oldest_post,
-                })
-                oldest.append((board_id, info["oldest_age_sec"], oldest_post))
-            by_board[board_id] = info
+def _process_in_flight_deliveries(now: float) -> dict:
     in_flight = {}
     for board_id, item in list(current_deliveries.items()):
         started_at = item.get("started_at")
@@ -1678,6 +1597,28 @@ def _summarize_live_queue_ages(queue_sizes: dict) -> dict:
         except (TypeError, ValueError):
             data["age_sec"] = None
         in_flight[board_id] = data
+    return in_flight
+
+def _summarize_live_queue_ages(queue_sizes: dict) -> dict:
+
+    now = time.time()
+    by_board = {}
+    oldest = []
+    for board_id, queue in message_queues.items():
+        ages, oldest_age, oldest_post = _process_board_queue(queue, now)
+        if queue_sizes.get(board_id, 0) or ages:
+            info = {"size": queue_sizes.get(board_id, 0)}
+            if ages:
+                info.update({
+                    "oldest_age_sec": round(max(ages), 1),
+                    "avg_age_sec": round(sum(ages) / len(ages), 1),
+                    "oldest_post": oldest_post,
+                })
+                oldest.append((board_id, info["oldest_age_sec"], oldest_post))
+            by_board[board_id] = info
+
+    in_flight = _process_in_flight_deliveries(now)
+
     return {
         "by_board": by_board,
         "oldest": sorted(oldest, key=lambda item: item[1], reverse=True)[:5],
@@ -2144,29 +2085,6 @@ def _sync_save_threads_data(board_id: str, data_to_save: dict):
     except Exception as e:
         print(f"⛔ [{board_id}] Ошибка в потоке сохранения _threads.json: {e}")
         return False
-def _sync_save_user_states(board_id: str, data_to_save: dict):
-
-    user_states_file = os.path.join(DATA_DIR, f"{board_id}_user_states.json")
-    try:
-        with open(user_states_file, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception as e:
-        print(f"⛔ [{board_id}] Ошибка в потоке сохранения _user_states.json: {e}")
-        return False
-async def save_user_states(board_id: str):
-
-    if board_id not in THREAD_BOARDS:
-        return
-    async with storage_lock:
-        data_to_save = board_data[board_id].get('user_state', {}).copy()
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        save_executor,
-        _sync_save_user_states,
-        board_id,
-        data_to_save
-    )
 async def load_state():
     """
     Загружает состояние бота.
@@ -2218,6 +2136,7 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
     if is_shutting_down:
         return
     is_shutting_down = True
+    shutdown_event.set()
     
     # Импортируем лок для безопасного доступа к БД
     from common.db_pool import get_pool, db_lock, close_pool
@@ -2228,7 +2147,9 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
     try:
         await dp.stop_polling()
         print("⏸ Polling остановлен.")
-    except Exception: pass
+    except Exception as e:
+        print(f"⚠️ Ошибка при остановке polling: {e}")
+        runtime_logger.warning(f"Ошибка при остановке polling: {e}")
 
     # Сброс WAL на диск
     print("💾 Сброс данных из WAL на диск...")
@@ -3810,8 +3731,81 @@ def _build_archive_header(board_id: str, post_num: int, content: dict, lang: str
         header_text = f"<b>/{board_id}/</b> | {raw_header}{reply_suffix}"
     return header_text
 
-async def _send_archive_media(sender_bot, channel_id: int, content: dict, content_type: str, text_to_send: str, header_text: str):
+async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, header_text: str):
+    from aiogram.utils.media_group import MediaGroupBuilder
     from common.database import add_file_mirror
+    builder = MediaGroupBuilder()
+    raw_cap = content.get('caption', '')
+    converted_cap = convert_site_tags_to_telegram(raw_cap)
+    full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
+    if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
+    media_list = content.get('media', [])
+    if not media_list:
+        return None, []
+    for i, media_item in enumerate(media_list):
+        file_id = media_item.get('file_id') or media_item.get('media')
+        m_type = media_item['type']
+        caption = full_caption if i == 0 else None
+        if m_type == 'photo': builder.add_photo(media=file_id, caption=caption, parse_mode="HTML")
+        elif m_type == 'video': builder.add_video(media=file_id, caption=caption, parse_mode="HTML")
+        elif m_type == 'document': builder.add_document(media=file_id, caption=caption, parse_mode="HTML")
+        elif m_type == 'audio': builder.add_audio(media=file_id, caption=caption, parse_mode="HTML")
+    sent_msgs = await sender_bot.send_media_group(channel_id, media=builder.build())
+    sent_message = None
+    new_files_data = []
+    if sent_msgs:
+        sent_message = sent_msgs[0]
+        for idx, sm in enumerate(sent_msgs):
+            fid = None
+            if sm.photo: fid = sm.photo[-1].file_id
+            elif sm.video: fid = sm.video.file_id
+            elif sm.document: fid = sm.document.file_id
+            elif sm.audio: fid = sm.audio.file_id
+            if fid:
+                new_files_data.append({'type': sm.content_type, 'file_id': fid})
+                orig_fid = media_list[idx].get('file_id') or media_list[idx].get('media')
+                if orig_fid: await add_file_mirror(orig_fid, 'tg_shadow', fid)
+    return sent_message, new_files_data
+
+async def _send_archive_single_media(sender_bot, channel_id: int, content: dict, content_type: str, header_text: str):
+    from common.database import add_file_mirror
+    orig_fid = content.get('file_id')
+    if not orig_fid:
+        return None, []
+    raw_cap = content.get('caption', '')
+    converted_cap = convert_site_tags_to_telegram(raw_cap)
+    caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
+    if len(caption) > 1024: caption = caption[:1021] + "..."
+    ct_str = str(content_type).split('.')[-1].lower()
+    common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
+    sent_message = None
+    if ct_str == 'photo': sent_message = await sender_bot.send_photo(photo=orig_fid, **common_args)
+    elif ct_str == 'video': sent_message = await sender_bot.send_video(video=orig_fid, **common_args)
+    elif ct_str == 'animation': sent_message = await sender_bot.send_animation(animation=orig_fid, **common_args)
+    elif ct_str == 'document': sent_message = await sender_bot.send_document(document=orig_fid, **common_args)
+    elif ct_str == 'audio': sent_message = await sender_bot.send_audio(audio=orig_fid, **common_args)
+    elif ct_str == 'voice': sent_message = await sender_bot.send_voice(voice=orig_fid, **common_args)
+    elif ct_str == 'sticker':
+        await sender_bot.send_sticker(channel_id, sticker=orig_fid)
+        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+    elif ct_str == 'video_note':
+        await sender_bot.send_video_note(channel_id, video_note=orig_fid)
+        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+    new_files_data = []
+    if sent_message:
+        fid = None
+        if sent_message.photo: fid = sent_message.photo[-1].file_id
+        elif sent_message.video: fid = sent_message.video.file_id
+        elif sent_message.animation: fid = sent_message.animation.file_id
+        elif sent_message.document: fid = sent_message.document.file_id
+        elif sent_message.audio: fid = sent_message.audio.file_id
+        elif sent_message.voice: fid = sent_message.voice.file_id
+        if fid:
+            new_files_data.append(fid)
+            await add_file_mirror(orig_fid, 'tg_shadow', fid)
+    return sent_message, new_files_data
+
+async def _send_archive_media(sender_bot, channel_id: int, content: dict, content_type: str, text_to_send: str, header_text: str):
     for attempt in range(3):
         try:
             sent_message = None
@@ -3824,67 +3818,11 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
                     disable_web_page_preview=True
                 )
             elif content_type == 'media_group':
-                from aiogram.utils.media_group import MediaGroupBuilder
-                builder = MediaGroupBuilder()
-                raw_cap = content.get('caption', '')
-                converted_cap = convert_site_tags_to_telegram(raw_cap)
-                full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
-                if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
-                media_list = content.get('media',[])
-                if not media_list: break
-                for i, media_item in enumerate(media_list):
-                    file_id = media_item.get('file_id') or media_item.get('media')
-                    m_type = media_item['type']
-                    caption = full_caption if i == 0 else None
-                    if m_type == 'photo': builder.add_photo(media=file_id, caption=caption, parse_mode="HTML")
-                    elif m_type == 'video': builder.add_video(media=file_id, caption=caption, parse_mode="HTML")
-                    elif m_type == 'document': builder.add_document(media=file_id, caption=caption, parse_mode="HTML")
-                    elif m_type == 'audio': builder.add_audio(media=file_id, caption=caption, parse_mode="HTML")
-                sent_msgs = await sender_bot.send_media_group(channel_id, media=builder.build())
-                if sent_msgs:
-                    sent_message = sent_msgs[0]
-                    for idx, sm in enumerate(sent_msgs):
-                        fid = None
-                        if sm.photo: fid = sm.photo[-1].file_id
-                        elif sm.video: fid = sm.video.file_id
-                        elif sm.document: fid = sm.document.file_id
-                        elif sm.audio: fid = sm.audio.file_id
-                        if fid:
-                            new_files_data.append({'type': sm.content_type, 'file_id': fid})
-                            orig_fid = media_list[idx].get('file_id') or media_list[idx].get('media')
-                            if orig_fid: await add_file_mirror(orig_fid, 'tg_shadow', fid)
+                sent_message, new_files_data = await _send_archive_media_group(sender_bot, channel_id, content, header_text)
+                if sent_message is None and not new_files_data:
+                    break
             else:
-                orig_fid = content.get('file_id')
-                if orig_fid:
-                    raw_cap = content.get('caption', '')
-                    converted_cap = convert_site_tags_to_telegram(raw_cap)
-                    caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
-                    if len(caption) > 1024: caption = caption[:1021] + "..."
-                    ct_str = str(content_type).split('.')[-1].lower()
-                    common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
-                    if ct_str == 'photo': sent_message = await sender_bot.send_photo(photo=orig_fid, **common_args)
-                    elif ct_str == 'video': sent_message = await sender_bot.send_video(video=orig_fid, **common_args)
-                    elif ct_str == 'animation': sent_message = await sender_bot.send_animation(animation=orig_fid, **common_args)
-                    elif ct_str == 'document': sent_message = await sender_bot.send_document(document=orig_fid, **common_args)
-                    elif ct_str == 'audio': sent_message = await sender_bot.send_audio(audio=orig_fid, **common_args)
-                    elif ct_str == 'voice': sent_message = await sender_bot.send_voice(voice=orig_fid, **common_args)
-                    elif ct_str == 'sticker':
-                        await sender_bot.send_sticker(channel_id, sticker=orig_fid)
-                        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
-                    elif ct_str == 'video_note':
-                        await sender_bot.send_video_note(channel_id, video_note=orig_fid)
-                        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
-                    if sent_message:
-                        fid = None
-                        if sent_message.photo: fid = sent_message.photo[-1].file_id
-                        elif sent_message.video: fid = sent_message.video.file_id
-                        elif sent_message.animation: fid = sent_message.animation.file_id
-                        elif sent_message.document: fid = sent_message.document.file_id
-                        elif sent_message.audio: fid = sent_message.audio.file_id
-                        elif sent_message.voice: fid = sent_message.voice.file_id
-                        if fid:
-                            new_files_data.append(fid)
-                            await add_file_mirror(orig_fid, 'tg_shadow', fid)
+                sent_message, new_files_data = await _send_archive_single_media(sender_bot, channel_id, content, content_type, header_text)
             return sent_message, new_files_data
         except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
             if attempt < 2: await asyncio.sleep(2)
@@ -3893,6 +3831,33 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
         except Exception:
             break
     return None, []
+
+def _format_archive_text_content(content: dict, header_text: str) -> str | None:
+    content_type = content.get("type", "text")
+    if content_type != 'text':
+        return None
+
+    text_content = convert_site_tags_to_telegram(content.get('text', ''))
+    if 'poll_data' in content:
+        poll_text = generate_poll_text_display(content['poll_data'])
+        text_content = f"{text_content}\n\n{poll_text}".strip()
+
+    final_text = f"{header_text}\n\n{text_content}"
+    if len(final_text) > 4096:
+        final_text = final_text[:4093] + "..."
+    return final_text
+
+async def _update_archive_post_content(post_num: int, content: dict, content_type: str, new_files_data: list, sender_bot_id: int):
+    from common.database import register_file_owner, update_post_content
+    new_content = content.copy()
+    if content_type == 'media_group':
+        new_content['media'] = new_files_data
+        for f_info in new_files_data:
+            await register_file_owner(f_info['file_id'], sender_bot_id)
+    else:
+        new_content['file_id'] = new_files_data[0]
+        await register_file_owner(new_files_data[0], sender_bot_id)
+    await update_post_content(post_num, new_content)
 
 async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, post_num: int, content: dict, is_shadow_muted: bool, stream: str = 'ru'):
     if is_shadow_muted:
@@ -3911,16 +3876,7 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
     header_text = _build_archive_header(board_id, post_num, content, lang)
     
     content_type = content.get("type", "text")
-    text_to_send = None
-    if content_type == 'text':
-        text_content = convert_site_tags_to_telegram(content.get('text', ''))
-        if 'poll_data' in content:
-            poll_text = generate_poll_text_display(content['poll_data'])
-            text_content = f"{text_content}\n\n{poll_text}".strip()
-        final_text = f"{header_text}\n\n{text_content}"
-        if len(final_text) > 4096: 
-            final_text = final_text[:4093] + "..."
-        text_to_send = final_text
+    text_to_send = _format_archive_text_content(content, header_text)
     
     db_updated = False
     for channel_id in MIRROR_CHANNELS:
@@ -3931,15 +3887,7 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
             try:
                 await add_channel_copy(post_num, channel_id, sent_message.message_id)
                 if not db_updated and new_files_data:
-                    new_content = content.copy()
-                    if content_type == 'media_group':
-                        new_content['media'] = new_files_data
-                        for f_info in new_files_data:
-                            await register_file_owner(f_info['file_id'], sender_bot_id)
-                    else:
-                        new_content['file_id'] = new_files_data[0]
-                        await register_file_owner(new_files_data[0], sender_bot_id)
-                    await update_post_content(post_num, new_content)
+                    await _update_archive_post_content(post_num, content, content_type, new_files_data, sender_bot_id)
                     db_updated = True
             except Exception:
                 pass
@@ -7960,7 +7908,7 @@ async def cb_support_prank(callback: types.CallbackQuery):
 async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     user_id = message.from_user.id
     username = message.from_user.username or message.from_user.first_name or "Аноним"
@@ -8141,13 +8089,13 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
 
     try:
         await message.reply(passport_text, parse_mode="HTML")
-    except Exception:
+    except (TelegramBadRequest, TelegramForbiddenError):
         try:
             await message.answer(passport_text, parse_mode="HTML")
-        except Exception:
+        except (TelegramBadRequest, TelegramForbiddenError):
             pass
     try: await message.delete()
-    except Exception: pass
+    except (TelegramBadRequest, TelegramForbiddenError): pass
 @dp.message(Command("ans"))
 async def cmd_admin_answer(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -8270,7 +8218,8 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
                 await add_or_activate_user(target_id, b_id)
                 await update_shadow_mute(target_id, b_id, 0)
                 count += 1
-        except Exception: pass
+        except Exception as e:
+            runtime_logger.error(f"Error during global unban on board {b_id} for user {target_id}: {e}")
     await log_global_event('bot', f"🕊️ GUNBAN: Админ {message.from_user.id} ГЛОБАЛЬНО РАЗБАНИЛ {target_id} на {count} досках")
     if lang == 'en': final = f"✅ User <code>{target_id}</code> unbanned/unmuted on {count} boards."
     elif lang == 'jp': final = f"✅ ユーザー <code>{target_id}</code> を {count} 個の板でBAN/ミュート解除しました。"
@@ -8663,7 +8612,7 @@ def format_timestamp(ts: float) -> str:
 
     try:
         return datetime.fromtimestamp(ts, tz=UTC).strftime('%d.%m.%y %H:%M')
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError, OSError):
         return ""
 async def dvach_thread_poster():
     """
@@ -8876,6 +8825,68 @@ async def graph_data_collector():
         except Exception as e:
             print(f"⛔ Ошибка в сборщике статистики для графика (graph_data_collector): {e}")
             await asyncio.sleep(300)
+def _prepare_graph_data(board_id: str, days: int):
+    """Подготавливает DataFrame для графика, фильтруя и ресемплируя данные."""
+    board_data_for_graph = graph_stats.get(board_id)
+    if not board_data_for_graph:
+        return None
+    df = pd.DataFrame.from_dict(board_data_for_graph, orient='index', columns=['posts'])
+    df.index = pd.to_datetime(df.index, utc=True)
+    start_date_utc = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=days)
+    df_filtered = df[df.index >= start_date_utc].copy()
+    if df_filtered.empty:
+        return None
+    resample_period = '1H' if days <= 1 else '3H'
+    end_date_utc = df_filtered.index.max()
+    if pd.isna(end_date_utc):
+        return None
+    date_range_utc = pd.date_range(start=start_date_utc, end=end_date_utc, freq=resample_period, tz='UTC')
+    df_resampled = df_filtered.resample(resample_period).sum().reindex(date_range_utc).fillna(0)
+    if df_resampled.empty or df_resampled['posts'].max() == 0:
+        return None
+    return df_resampled
+
+
+def _setup_graph_axes(ax, days: int, df_resampled, board_id: str):
+    """Настраивает оси, сетку и подписи графика."""
+    board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
+    period_str = f"{days} day(s)" if board_id == 'int' else f"{days} дн."
+    ax.set_title(f"Активность доски {board_name} за {period_str}", fontsize=16, color='white', pad=20)
+
+    max_val = df_resampled['posts'].max()
+    if max_val < 5:
+        nice_max = 5
+    else:
+        power = 10 ** math.floor(math.log10(max_val)) if max_val > 0 else 1
+        nice_max = math.ceil(max_val / power) * power
+        if nice_max * 0.8 > max_val:
+             nice_max = math.ceil(max_val / (power/2)) * (power/2)
+    ax.set_ylim(0, nice_max * 1.05)
+    ax.set_yticks(np.linspace(0, nice_max, 6, dtype=int))
+    ax.set_ylabel("Постов в час" if days <= 1 else "Постов за 3 часа", fontsize=12, color='white')
+
+    MSK = timezone(timedelta(hours=3))
+    if days <= 1:
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=4, tz=MSK))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H', tz=MSK))
+        ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1, tz=MSK))
+        ax.set_xlabel("Время (МСК)", fontsize=12, color='white')
+    else:
+        day_interval = max(1, days // 7)
+        ax.xaxis.set_major_locator(mdates.DayLocator(interval=day_interval, tz=MSK))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b', tz=MSK))
+        ax.xaxis.set_minor_locator(mdates.HourLocator(interval=3, tz=MSK))
+
+    ax.set_facecolor('#0d1117')
+    ax.grid(True, which='major', linestyle='--', linewidth=0.4, color='#30363d')
+    ax.grid(True, which='minor', linestyle=':', linewidth=0.2, color='#21262d')
+    for spine in ax.spines.values():
+        spine.set_color('#30363d')
+    ax.tick_params(axis='x', which='major', labelsize=10, length=6, width=1.5, colors='white', rotation=0, ha="center")
+    ax.tick_params(axis='y', which='major', labelsize=10, colors='white')
+    ax.tick_params(axis='both', which='minor', length=4, width=0.5)
+
+
 def generate_statistics_graph(board_id: str, days: int) -> bytes | None:
     """
     Генерирует изображение графика статистики постов для указанной доски за заданный период.
@@ -8886,75 +8897,36 @@ def generate_statistics_graph(board_id: str, days: int) -> bytes | None:
         return None
     plt.close('all') 
     try:
-        board_data_for_graph = graph_stats.get(board_id)
-        if not board_data_for_graph:
+        df_resampled = _prepare_graph_data(board_id, days)
+        if df_resampled is None:
             return None
-        df = pd.DataFrame.from_dict(board_data_for_graph, orient='index', columns=['posts'])
-        df.index = pd.to_datetime(df.index, utc=True)
-        start_date_utc = pd.Timestamp.now(tz='UTC') - pd.Timedelta(days=days)
-        df_filtered = df[df.index >= start_date_utc].copy()
-        if df_filtered.empty:
-            return None
-        resample_period = '1H' if days <= 1 else '3H'
-        end_date_utc = df_filtered.index.max()
-        if pd.isna(end_date_utc):
-            return None
-        date_range_utc = pd.date_range(start=start_date_utc, end=end_date_utc, freq=resample_period, tz='UTC')
-        df_resampled = df_filtered.resample(resample_period).sum().reindex(date_range_utc).fillna(0)
-        if df_resampled.empty or df_resampled['posts'].max() == 0:
-            return None
+
         plt.style.use('dark_background')
         num_points = len(df_resampled)
         width = max(10, min(20, num_points * 0.3))
         height = 6 if width <= 12 else 7
+
         fig, ax = plt.subplots(figsize=(width, height), dpi=110)
         line_color = '#00ffff'
         ax.plot(df_resampled.index, df_resampled['posts'], color=line_color, linewidth=2.5, marker='o', markersize=4, markeredgecolor='white', markerfacecolor=line_color, zorder=10)
         ax.fill_between(df_resampled.index, df_resampled['posts'], color=line_color, alpha=0.1, zorder=5)
-        board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
-        period_str = f"{days} day(s)" if board_id == 'int' else f"{days} дн."
-        ax.set_title(f"Активность доски {board_name} за {period_str}", fontsize=16, color='white', pad=20)
-        max_val = df_resampled['posts'].max()
-        if max_val < 5:
-            nice_max = 5
-        else:
-            power = 10 ** math.floor(math.log10(max_val)) if max_val > 0 else 1
-            nice_max = math.ceil(max_val / power) * power
-            if nice_max * 0.8 > max_val:
-                 nice_max = math.ceil(max_val / (power/2)) * (power/2)
-        ax.set_ylim(0, nice_max * 1.05)
-        ax.set_yticks(np.linspace(0, nice_max, 6, dtype=int))
-        ax.set_ylabel("Постов в час" if days <= 1 else "Постов за 3 часа", fontsize=12, color='white')
-        MSK = timezone(timedelta(hours=3))
-        if days <= 1:
-            ax.xaxis.set_major_locator(mdates.HourLocator(interval=4, tz=MSK))
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%H', tz=MSK))
-            ax.xaxis.set_minor_locator(mdates.HourLocator(interval=1, tz=MSK))
-            ax.set_xlabel("Время (МСК)", fontsize=12, color='white')
-        else:
-            day_interval = max(1, days // 7)
-            ax.xaxis.set_major_locator(mdates.DayLocator(interval=day_interval, tz=MSK))
-            ax.xaxis.set_major_formatter(mdates.DateFormatter('%d %b', tz=MSK))
-            ax.xaxis.set_minor_locator(mdates.HourLocator(interval=3, tz=MSK))
+
+        _setup_graph_axes(ax, days, df_resampled, board_id)
+
         fig.patch.set_facecolor('#0d1117')
-        ax.set_facecolor('#0d1117')
-        ax.grid(True, which='major', linestyle='--', linewidth=0.4, color='#30363d')
-        ax.grid(True, which='minor', linestyle=':', linewidth=0.2, color='#21262d')
-        for spine in ax.spines.values():
-            spine.set_color('#30363d')
-        ax.tick_params(axis='x', which='major', labelsize=10, length=6, width=1.5, colors='white', rotation=0, ha="center")
-        ax.tick_params(axis='y', which='major', labelsize=10, colors='white')
-        ax.tick_params(axis='both', which='minor', length=4, width=0.5)
         fig.tight_layout(pad=1.5)
+
         buf = io.BytesIO()
         fig.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none')
         buf.seek(0)
+
         plt.close(fig)
         plt.close('all') # Закрываем вообще всё
         fig = None
         ax = None
         import gc
         gc.collect()
+
         return buf.getvalue()
     except Exception as e:
         import traceback
@@ -9851,63 +9823,89 @@ def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
         
     return prompt
 
-@dp.message(Command("summarize", "sum", "summary", "samamri", "sammary"))
-async def cmd_summarize(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id:
-        print("[summarize] Board ID not found")
-        await message.answer("Ошибка: не удалось определить доску.")
-        return
-    b_data = board_data[board_id]
-    user_id = message.from_user.id
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    now_ts = time.time()
-    async with storage_lock:
-        last_usage = b_data.get('last_summarize_time', 0)
-        if now_ts - last_usage < SUMMARIZE_COOLDOWN:
-            remaining = SUMMARIZE_COOLDOWN - (now_ts - last_usage)
-            if lang == 'en':
-                cooldown_text = f"⏳ Command is on cooldown. Please wait {int(remaining)} seconds."
-            elif lang == 'jp':
-                cooldown_text = f"⏳ コマンドはクールダウン中です。あと {int(remaining)} 秒お待ちください。"
-            else:
-                cooldown_text = f"⏳ Команда на кулдауне. Подождите еще {int(remaining)} сек."
-            try:
-                await message.answer(cooldown_text)
-                await message.delete()
-            except Exception:
-                pass
-            return
-        b_data['last_summarize_time'] = time.time()
-    thread_id = None
-    
-    board_name = escape_html(BOARD_CONFIG[board_id]['name'])
-    if lang == 'en':
-        context_name = f"board {board_name}"
-    elif lang == 'jp':
-        context_name = f"板 {board_name}"
+async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, thread_info: dict, lang: str, paragraph_count: int) -> tuple[str, str, str]:
+    if thread_id:
+        if lang == 'en':
+            prompt = random.choice([
+                # Short style
+                f"You are a toxic 4chan anon. Give an ultra-short, cynical roast (1-2 sentences) of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Highlight only the biggest fail or topic. Use board slang. Output ONLY plain text or basic HTML. DO NOT use Markdown.",
+                # Long style
+                f"You are a paranoid 4chan archivist. Write a crazy long, extremely detailed, and structured chronicle of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Write a massive text, analyzing every single discussion topic in detail. Highlight specific participants by their IDs (e.g. Anon #1234, Anon #5678) and lay out the chronology of their arguments with mock quotes and savage analysis. Your report must be a structured long-read with bold subheadings (use <b>, <i>, <u>, <s> for formatting) consisting of at least 6-8 heavy, informative paragraphs. Use board slang and pure toxicity. Output ONLY plain text or basic HTML. DO NOT use Markdown.",
+                # Medium style
+                f"You are a toxic 4chan anon. Write a detailed and cynical summary of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Describe the main discussion topics, who took what stance, and who got roasted or seethed. Use board slang, profanity, be cynical and rude. Output a structured breakdown with funny headings. Output ONLY plain text or basic HTML. DO NOT use Markdown."
+            ])
+            info_text = "For the last 6 hours in the thread"
+        elif lang == 'jp':
+            prompt = (
+                f"お前は2chねらーだ。スレ「{escape_html(thread_info.get('title', ''))}」（「|」で区切られた投稿）の流れを3行で解説しろ。"
+                "毒舌で, ネットスラング（草、ｗ、～だろ）を多用しろ。丁寧語禁止。煽り全開で。"
+            )
+            info_text = "スレッドでの過去6時間の間に"
+        else:
+            prompt = random.choice([
+                # Short style
+                f"Ты — токсичный битард с Двача. Выдай ультра-короткую, циничную прожарку (1-2 предложения) за последние 6 часов обсуждения в треде «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). Опиши только самый главный обосрач или тему. Пиши нагло, со сленгом. Output ONLY plain text or basic HTML. DO NOT use Markdown.",
+                # Long style
+                f"Ты — поехавший летописец-архивариус Двача. Твоя задача — составить ебануто длинный, подробнейший и глубокий отчет о спорах в треде «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). Пиши очень подробно, расписывай каждую замеченную тему обсуждения (даже мелкую), выдели участников по их ID (например, Анон #1234, Анон #5678) и покажи детальную хронологию их споров с цитатами и едким анализом. Твой отчет должен быть структурированным, с разметкой подзаголовков (используй <b>, <i>, <u>, <s> для форматирования) и состоять из огромного лонгрида (не менее 6-8 крупных, содержательных абзацев с подробностями). Пиши нагло, используй двачерский сленг и мат. Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags.",
+                # Medium style
+                f"Ты — Анон с имиджборды (Двач). Твоя задача: написать подробный, циничный и едкий разбор треда «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). Детально опиши главные темы спора, кто какую позицию отстаивал, кто сильнее всего сгорел или обосрался. Пиши грязно, используй сленг, мат, будь веселым, токсичным и циничным ублюдком. Оформи структурированный разбор с забавными подзаголовками, подробно раскрывая суть. Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags."
+            ])
+            info_text = "За последние 6 часов в треде"
+        chunk = await get_board_chunk(board_id, thread_id=thread_id, lang=lang)
     else:
-        context_name = f"доски {board_name}"
+        if lang == 'en':
+            all_en_prompts = SUMMARIZE_PROMPTS_BOARD_SHORT_EN + SUMMARIZE_PROMPTS_BOARD_EN + SUMMARIZE_PROMPTS_BOARD_LONG_EN
+            prompt = random.choice(all_en_prompts)
+            info_text = "For the last 6 hours on the board"
+        elif lang == 'jp':
+            prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_JP)
+            info_text = "板での過去6時間の間に"
+        else:
+            all_ru_prompts = SUMMARIZE_PROMPTS_BOARD_SHORT + SUMMARIZE_PROMPTS_BOARD + SUMMARIZE_PROMPTS_BOARD_LONG
+            prompt = random.choice(all_ru_prompts)
+            info_text = "За последние 6 часов на доске"
+        chunk = await get_board_chunk(board_id, hours=6, lang=lang)
 
-    if board_id in THREAD_BOARDS:
-        user_location = b_data.get('user_state', {}).get(user_id, {}).get('location', 'main')
-        if user_location != 'main':
-            thread_id = user_location
-            thread_info = b_data.get('threads_data', {}).get(thread_id, {})
-            thread_title = thread_info.get('title', '...')
-            if lang == 'en':
-                context_name = f"thread \"{thread_title}\""
-            elif lang == 'jp':
-                context_name = f"スレッド「{thread_title}」"
-            else:
-                context_name = f"треда «{thread_title}»"
+    # Dynamically inject exact paragraph count constraint into the selected prompt
+    prompt = adjust_prompt_paragraphs(prompt, paragraph_count, lang=lang)
+    
+    return prompt, info_text, chunk
 
-    # Parse length, paragraph count and model arguments from message text if available
+def _get_summarize_status_text(lang: str, length_choice: str, paragraph_count: int) -> str:
+    if lang == 'en':
+        if length_choice == 'short':
+            status_text = f"⏳ Generating a quick summary ({paragraph_count} paragraph{'s' if paragraph_count > 1 else ''})..."
+        elif paragraph_count >= 6:
+            status_text = f"⏳ Preparing a detailed long-read for Telegraph ({paragraph_count} paragraphs)..."
+        else:
+            status_text = f"⏳ Generating summary, please wait ~30 seconds ({paragraph_count} paragraphs)..."
+    elif lang == 'jp':
+        status_text = f"⏳ サマリーを生成中 ({paragraph_count}段落)、30秒ほどお待ちください..."
+    else:
+        # Russian plural endings: 1 абзац, 2-4 абзаца, 5+ абзацев
+        if paragraph_count % 10 == 1 and paragraph_count % 100 != 11:
+            p_word = "абзац"
+        elif paragraph_count % 10 in [2, 3, 4] and paragraph_count % 100 not in [12, 13, 14]:
+            p_word = "абзаца"
+        else:
+            p_word = "абзацев"
+
+        if length_choice == 'short':
+            status_text = f"⏳ Генерирую быстрое саммари ({paragraph_count} {p_word})..."
+        elif paragraph_count >= 6:
+            status_text = f"⏳ Готовлю ебануто длинный лонгрид для Telegraph ({paragraph_count} {p_word})..."
+        else:
+            status_text = f"⏳ Генерирую среднее саммари ({paragraph_count} {p_word})..."
+
+    return status_text
+
+def _parse_summarize_args(text: str | None) -> tuple[int | None, str, str, str]:
     paragraph_count = None
     model_preference = 'groq' # Default to free/unlimited models (qwen, llama)
     chosen_tier = None
     
-    if message.text:
-        args = message.text.lower().split()
+    if text:
+        args = text.lower().split()
         if len(args) > 1:
             for arg in args[1:]:
                 # Check if it's an exact number of paragraphs
@@ -9966,54 +9964,67 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     else:
         length_choice = 'long'
 
-    if thread_id:
-        if lang == 'en':
-            prompt = random.choice([
-                # Short style
-                f"You are a toxic 4chan anon. Give an ultra-short, cynical roast (1-2 sentences) of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Highlight only the biggest fail or topic. Use board slang. Output ONLY plain text or basic HTML. DO NOT use Markdown.",
-                # Long style
-                f"You are a paranoid 4chan archivist. Write a crazy long, extremely detailed, and structured chronicle of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Write a massive text, analyzing every single discussion topic in detail. Highlight specific participants by their IDs (e.g. Anon #1234, Anon #5678) and lay out the chronology of their arguments with mock quotes and savage analysis. Your report must be a structured long-read with bold subheadings (use <b>, <i>, <u>, <s> for formatting) consisting of at least 6-8 heavy, informative paragraphs. Use board slang and pure toxicity. Output ONLY plain text or basic HTML. DO NOT use Markdown.",
-                # Medium style
-                f"You are a toxic 4chan anon. Write a detailed and cynical summary of this thread \"{escape_html(thread_info.get('title', ''))}\" (posts split by '|'). Describe the main discussion topics, who took what stance, and who got roasted or seethed. Use board slang, profanity, be cynical and rude. Output a structured breakdown with funny headings. Output ONLY plain text or basic HTML. DO NOT use Markdown."
-            ])
-            info_text = "For the last 6 hours in the thread"
-        elif lang == 'jp':
-            prompt = (
-                f"お前は2chねらーだ。スレ「{escape_html(thread_info.get('title', ''))}」（「|」で区切られた投稿）の流れを3行で解説しろ。"
-                "毒舌で, ネットスラング（草、ｗ、～だろ）を多用しろ。丁寧語禁止。煽り全開で。"
-            )
-            info_text = "スレッドでの過去6時間の間に"
-        else:
-            prompt = random.choice([
-                # Short style
-                f"Ты — токсичный битард с Двача. Выдай ультра-короткую, циничную прожарку (1-2 предложения) за последние 6 часов обсуждения в треде «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). Опиши только самый главный обосрач или тему. Пиши нагло, со сленгом. Output ONLY plain text or basic HTML. DO NOT use Markdown.",
-                # Long style
-                f"Ты — поехавший летописец-архивариус Двача. Твоя задача — составить ебануто длинный, подробнейший и глубокий отчет о спорах в треде «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). Пиши очень подробно, расписывай каждую замеченную тему обсуждения (даже мелкую), выдели участников по их ID (например, Анон #1234, Анон #5678) и покажи детальную хронологию их споров с цитатами и едким анализом. Твой отчет должен быть структурированным, с разметкой подзаголовков (используй <b>, <i>, <u>, <s> для форматирования) и состоять из огромного лонгрида (не менее 6-8 крупных, содержательных абзацев с подробностями). Пиши нагло, используй двачерский сленг и мат. Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags.",
-                # Medium style
-                f"Ты — Анон с имиджборды (Двач). Твоя задача: написать подробный, циничный и едкий разбор треда «{escape_html(thread_info.get('title', ''))}» (посты разделены '|'). Детально опиши главные темы спора, кто какую позицию отстаивал, кто сильнее всего сгорел или обосрался. Пиши грязно, используй сленг, мат, будь веселым, токсичным и циничным ублюдком. Оформи структурированный разбор с забавными подзаголовками, подробно раскрывая суть. Output ONLY plain text or basic HTML (<b>, <i>, <u>, <s>, <code>, <pre>). DO NOT use Markdown. DO NOT use unclosed HTML tags."
-            ])
-            info_text = "За последние 6 часов в треде"
-        chunk = await get_board_chunk(board_id, thread_id=thread_id, lang=lang)
-    else:
-        if lang == 'en':
-            all_en_prompts = SUMMARIZE_PROMPTS_BOARD_SHORT_EN + SUMMARIZE_PROMPTS_BOARD_EN + SUMMARIZE_PROMPTS_BOARD_LONG_EN
-            prompt = random.choice(all_en_prompts)
-            info_text = "For the last 6 hours on the board"
-        elif lang == 'jp':
-            prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_JP)
-            info_text = "板での過去6時間の間に"
-        else:
-            all_ru_prompts = SUMMARIZE_PROMPTS_BOARD_SHORT + SUMMARIZE_PROMPTS_BOARD + SUMMARIZE_PROMPTS_BOARD_LONG
-            prompt = random.choice(all_ru_prompts)
-            info_text = "За последние 6 часов на доске"
-        chunk = await get_board_chunk(board_id, hours=6, lang=lang)
+    return paragraph_count, length_choice, model_preference, chosen_tier
 
-    # Dynamically inject exact paragraph count constraint into the selected prompt
-    prompt = adjust_prompt_paragraphs(prompt, paragraph_count, lang=lang)
+@dp.message(Command("summarize", "sum", "summary", "samamri", "sammary"))
+async def cmd_summarize(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id:
+        print("[summarize] Board ID not found")
+        await message.answer("Ошибка: не удалось определить доску.")
+        return
+    b_data = board_data[board_id]
+    user_id = message.from_user.id
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    now_ts = time.time()
+    async with storage_lock:
+        last_usage = b_data.get('last_summarize_time', 0)
+        if now_ts - last_usage < SUMMARIZE_COOLDOWN:
+            remaining = SUMMARIZE_COOLDOWN - (now_ts - last_usage)
+            if lang == 'en':
+                cooldown_text = f"⏳ Command is on cooldown. Please wait {int(remaining)} seconds."
+            elif lang == 'jp':
+                cooldown_text = f"⏳ コマンドはクールダウン中です。あと {int(remaining)} 秒お待ちください。"
+            else:
+                cooldown_text = f"⏳ Команда на кулдауне. Подождите еще {int(remaining)} сек."
+            try:
+                await message.answer(cooldown_text)
+                await message.delete()
+            except Exception:
+                pass
+            return
+        b_data['last_summarize_time'] = time.time()
+    thread_id = None
+    thread_info = {}
+
+    board_name = escape_html(BOARD_CONFIG[board_id]['name'])
+    if lang == 'en':
+        context_name = f"board {board_name}"
+    elif lang == 'jp':
+        context_name = f"板 {board_name}"
+    else:
+        context_name = f"доски {board_name}"
+
+    if board_id in THREAD_BOARDS:
+        user_location = b_data.get('user_state', {}).get(user_id, {}).get('location', 'main')
+        if user_location != 'main':
+            thread_id = user_location
+            thread_info = b_data.get('threads_data', {}).get(thread_id, {})
+            thread_title = thread_info.get('title', '...')
+            if lang == 'en':
+                context_name = f"thread \"{thread_title}\""
+            elif lang == 'jp':
+                context_name = f"スレッド「{thread_title}」"
+            else:
+                context_name = f"треда «{thread_title}»"
+
+    paragraph_count, length_choice, model_preference, chosen_tier = _parse_summarize_args(message.text)
+
+    # Generate prompt and retrieve chat chunk
+    prompt, info_text, chunk = await _get_summarize_prompt_and_chunk(board_id, thread_id, thread_info, lang, paragraph_count)
 
     hf_token = os.getenv("HF_TOKEN")
     if not chunk or len(chunk) < 100:
-        print(f"[summarize] Мало сообщений для summarize (len={len(chunk)})")
+        print(f"[summarize] Мало сообщений для summarize (len={len(chunk) if chunk else 0})")
         if lang == 'en':
             err_msg = f"{info_text} there were too few messages to summarize."
         elif lang == 'jp':
@@ -10023,31 +10034,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         await message.answer(err_msg)
         return
 
-    if lang == 'en':
-        if length_choice == 'short':
-            status_text = f"⏳ Generating a quick summary ({paragraph_count} paragraph{'s' if paragraph_count > 1 else ''})..."
-        elif paragraph_count >= 6:
-            status_text = f"⏳ Preparing a detailed long-read for Telegraph ({paragraph_count} paragraphs)..."
-        else:
-            status_text = f"⏳ Generating summary, please wait ~30 seconds ({paragraph_count} paragraphs)..."
-    elif lang == 'jp':
-        status_text = f"⏳ サマリーを生成中 ({paragraph_count}段落)、30秒ほどお待ちください..."
-    else:
-        # Russian plural endings: 1 абзац, 2-4 абзаца, 5+ абзацев
-        if paragraph_count % 10 == 1 and paragraph_count % 100 != 11:
-            p_word = "абзац"
-        elif paragraph_count % 10 in [2, 3, 4] and paragraph_count % 100 not in [12, 13, 14]:
-            p_word = "абзаца"
-        else:
-            p_word = "абзацев"
-            
-        if length_choice == 'short':
-            status_text = f"⏳ Генерирую быстрое саммари ({paragraph_count} {p_word})..."
-        elif paragraph_count >= 6:
-            status_text = f"⏳ Готовлю ебануто длинный лонгрид для Telegraph ({paragraph_count} {p_word})..."
-        else:
-            status_text = f"⏳ Генерирую среднее саммари ({paragraph_count} {p_word})..."
-            
+    status_text = _get_summarize_status_text(lang, length_choice, paragraph_count)
     await message.answer(status_text)
 
     try:
@@ -10408,7 +10395,7 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
 async def cmd_roll(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     result = random.randint(1, 100)
@@ -10502,7 +10489,7 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
 async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     if board_id == 'int':
@@ -10583,7 +10570,7 @@ async def cmd_slavaukraine(message: types.Message, board_id: str | None, stream:
 async def cmd_gopnik(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     if board_id == 'int': # Отключаем на int
@@ -10630,7 +10617,7 @@ async def cmd_gopnik(message: types.Message, board_id: str | None, stream: str =
 async def cmd_schizo(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     if board_id == 'int':
@@ -10854,7 +10841,7 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
 async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     if board_id == 'int':
@@ -10905,7 +10892,7 @@ async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 
 async def cmd_wh40k(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     b_data = board_data[board_id]
@@ -11645,24 +11632,8 @@ async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | No
             await callback.answer()
         except TelegramBadRequest:
             pass
-@dp.callback_query(F.data == "create_thread_confirm", ThreadCreateStates.waiting_for_confirmation)
-async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
-    """
-    Финальный шаг создания треда.
-    Исправлено: Защита от TelegramBadRequest и гарантия очистки состояния.
-    """
-    if not board_id: return
-    try:
-        await callback.answer()
-    except TelegramBadRequest:
-        pass # Игнорируем, если запрос устарел, продолжаем выполнение
-    if not isinstance(callback.message, types.Message):
-        return
-    user_id = callback.from_user.id
-    b_data = board_data[board_id]
-    lang = 'en' if board_id == 'int' else 'ru'
-    user_s = b_data['user_state'].setdefault(user_id, {})
-    now_ts = time.time()
+async def _check_create_thread_cooldown(callback: types.CallbackQuery, user_s: dict, lang: str, now_ts: float) -> bool:
+    """Checks if the user is on cooldown for creating a thread."""
     last_creation_ts = user_s.get('last_thread_creation', 0)
     if now_ts - last_creation_ts < THREAD_CREATE_COOLDOWN_USER:
         remaining = THREAD_CREATE_COOLDOWN_USER - (now_ts - last_creation_ts)
@@ -11681,47 +11652,11 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
             try:
                 await callback.message.answer(cooldown_text)
             except Exception: pass
-        return
-    fsm_data = await state.get_data()
-    op_post_text = fsm_data.get('op_post_text')
-    await state.clear()
-    if not op_post_text:
-        try:
-            await callback.message.answer("Error: Post data not found. Please start over.")
-            await callback.message.delete()
-        except TelegramBadRequest:
-            pass
-        return
-    try:
-        await callback.message.delete()
-    except TelegramBadRequest:
-        pass
-    threads_data = b_data.get('threads_data', {})
-    thread_id = secrets.token_hex(4)
-    now_dt = datetime.now(UTC)
-    title = escape_html(clean_html_tags(op_post_text).split('\n')[0][:60])
-    success = await create_thread(
-        thread_id=thread_id,
-        board_id=board_id,
-        op_id=user_id,
-        title=title,
-        created_at=now_ts,
-        stream=stream
-    )
-    if not success:
-        error_text = "Database error: Could not create thread." if lang == 'en' else "Ошибка БД: не удалось создать тред."
-        try:
-            await callback.message.answer(error_text)
-        except Exception: pass
-        return
-    thread_info = {
-        'op_id': user_id, 'title': title, 'created_at': now_dt.isoformat(),
-        'last_activity_at': now_ts, 'posts': [], 'subscribers': {user_id},
-        'local_mutes': {}, 'local_shadow_mutes': {}, 'is_archived': False,
-        'announced_milestones': [], 'activity_notified': False, 'stream': stream
-    }
-    threads_data[thread_id] = thread_info
-    user_s['last_thread_creation'] = now_ts
+        return True
+    return False
+
+async def _notify_new_thread_public(board_id: str, b_data: dict, title: str, thread_id: str, lang: str, now_dt: datetime, stream: str) -> None:
+    """Notifies the board that a new thread has been created."""
     notification_phrases = thread_messages.get(lang, {}).get('new_thread_public_notification', [])
     if lang == 'en':
         default_notification_text = f"New thread created: «<b>{title}</b>»"
@@ -11753,8 +11688,9 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
             'recipients': b_data['users']['active'], 'content': content_notify, 
             'post_num': pnum_notify, 'board_id': board_id, 'keyboard': keyboard
         })
-    user_s['location'] = thread_id
-    user_s['last_location_switch'] = now_ts
+
+async def _process_op_post_and_enter(callback: types.CallbackQuery, user_id: int, board_id: str, op_post_text: str, title: str, thread_id: str, lang: str, stream: str, thread_info: dict) -> None:
+    """Processes the OP post content, enters the user into the thread, and handles notifications."""
     if lang == 'en':
         formatted_op_text = f"<b>OP-POST</b>\n_______________________________\n{op_post_text}"
     elif lang == 'jp':
@@ -11784,6 +11720,81 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
         thread_info=thread_info, event_type='new_thread'
     ))
     await _send_op_commands_info(callback.bot, user_id, board_id)
+
+@dp.callback_query(F.data == "create_thread_confirm", ThreadCreateStates.waiting_for_confirmation)
+async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
+    """
+    Финальный шаг создания треда.
+    Исправлено: Защита от TelegramBadRequest и гарантия очистки состояния.
+    """
+    if not board_id: return
+    try:
+        await callback.answer()
+    except TelegramBadRequest:
+        pass # Игнорируем, если запрос устарел, продолжаем выполнение
+    if not isinstance(callback.message, types.Message):
+        return
+    user_id = callback.from_user.id
+    b_data = board_data[board_id]
+    lang = 'en' if board_id == 'int' else 'ru'
+    user_s = b_data['user_state'].setdefault(user_id, {})
+    now_ts = time.time()
+
+    if await _check_create_thread_cooldown(callback, user_s, lang, now_ts):
+        return
+
+    fsm_data = await state.get_data()
+    op_post_text = fsm_data.get('op_post_text')
+    await state.clear()
+
+    if not op_post_text:
+        try:
+            await callback.message.answer("Error: Post data not found. Please start over.")
+            await callback.message.delete()
+        except TelegramBadRequest:
+            pass
+        return
+
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest:
+        pass
+
+    threads_data = b_data.get('threads_data', {})
+    thread_id = secrets.token_hex(4)
+    now_dt = datetime.now(UTC)
+    title = escape_html(clean_html_tags(op_post_text).split('\n')[0][:60])
+
+    success = await create_thread(
+        thread_id=thread_id,
+        board_id=board_id,
+        op_id=user_id,
+        title=title,
+        created_at=now_ts,
+        stream=stream
+    )
+    if not success:
+        error_text = "Database error: Could not create thread." if lang == 'en' else "Ошибка БД: не удалось создать тред."
+        try:
+            await callback.message.answer(error_text)
+        except Exception: pass
+        return
+
+    thread_info = {
+        'op_id': user_id, 'title': title, 'created_at': now_dt.isoformat(),
+        'last_activity_at': now_ts, 'posts': [], 'subscribers': {user_id},
+        'local_mutes': {}, 'local_shadow_mutes': {}, 'is_archived': False,
+        'announced_milestones': [], 'activity_notified': False, 'stream': stream
+    }
+    threads_data[thread_id] = thread_info
+    user_s['last_thread_creation'] = now_ts
+
+    await _notify_new_thread_public(board_id, b_data, title, thread_id, lang, now_dt, stream)
+
+    user_s['location'] = thread_id
+    user_s['last_location_switch'] = now_ts
+
+    await _process_op_post_and_enter(callback, user_id, board_id, op_post_text, title, thread_id, lang, stream, thread_info)
 @dp.message(Command("togglegif"))
 async def cmd_toggle_gif(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -14274,7 +14285,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
 async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     user_id = message.from_user.id
@@ -14337,7 +14348,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
 @dp.message(Command("top"))
 async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     from common.db_pool import get_pool, db_lock
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -14402,7 +14413,7 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
 async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: return
     b_data = board_data[board_id]
@@ -14752,6 +14763,62 @@ async def _collect_stacked_anime_downloads(
             print(f"[{board_id}] Добираю картинки: готово {len(successful_by_slot)}/{len(fetcher_tasks)}, осталось {len(retry_slots)}.")
 
     return [successful_by_slot[slot] for slot in sorted(successful_by_slot)]
+
+def _prepare_anime_content(successful_downloads: list, caption: str) -> dict:
+    from aiogram.types import BufferedInputFile
+    content = {}
+    if len(successful_downloads) == 1:
+        ibytes, mtype, ext = successful_downloads[0]
+        input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
+        content = {'type': mtype, 'media': input_file, 'caption': caption}
+        if mtype == 'video' or mtype == 'animation':
+             content = {'type': mtype, 'file_id': input_file, 'caption': caption}
+        else:
+             content = {'type': mtype, 'image_bytes': ibytes, 'caption': caption}
+    else:
+        media_items = []
+        for ibytes, mtype, ext in successful_downloads:
+            tg_type = 'video' if mtype in ['video', 'animation'] else 'photo'
+            input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
+            media_items.append({'type': tg_type, 'media': input_file})
+
+        content = {'type': 'media_group', 'media': media_items, 'caption': caption}
+    return content
+
+async def _publish_anime_post(message: types.Message, board_id: str, user_id: int, content: dict, stream: str, num_downloads: int):
+    b_data = board_data[board_id]
+    is_shadow_muted = (user_id in b_data['shadow_mutes'] and
+                       b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+
+    if is_shadow_muted:
+        await process_shadow_reject(ShadowRejectContext(
+            bot=message.bot,
+            board_id=board_id,
+            user_id=user_id,
+            content=content,
+            reply_to_post=None,
+            stream=stream
+        ))
+        post_num = 0
+    else:
+        post_num = await process_new_post(
+            bot_instance=message.bot,
+            board_id=board_id,
+            user_id=user_id,
+            content=content,
+            reply_to_post=None,
+            is_shadow_muted=False,
+            stream=stream
+        )
+
+    if post_num is not None:
+        success_phrase = random.choice(ANIME_CMD_SUCCESS_PHRASES)
+        sent_notification = await message.bot.send_message(
+            chat_id=message.chat.id,
+            text=f"{success_phrase} (+{num_downloads})"
+        )
+        spawn_task(delete_message_after_delay(sent_notification, 15))
+
 async def _process_stacked_anime_command(
     message: types.Message,
     board_id: str,
@@ -14801,56 +14868,10 @@ async def _process_stacked_anime_command(
         successful_downloads = await _collect_stacked_anime_downloads(fetcher_tasks, board_id, user_id, "command")
         if not successful_downloads:
             raise ValueError("Не удалось скачать ни одного изображения.")
-        content = {}
-        if len(successful_downloads) == 1:
-            ibytes, mtype, ext = successful_downloads[0]
-            from aiogram.types import BufferedInputFile
-            input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
-            content = {'type': mtype, 'media': input_file, 'caption': caption}
-            if mtype == 'video' or mtype == 'animation':
-                 content = {'type': mtype, 'file_id': input_file, 'caption': caption} 
-            else:
-                 content = {'type': mtype, 'image_bytes': ibytes, 'caption': caption}
-        else:
-            media_items = []
-            from aiogram.types import BufferedInputFile
-            for ibytes, mtype, ext in successful_downloads:
-                tg_type = 'video' if mtype in ['video', 'animation'] else 'photo'
-                input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
-                media_items.append({'type': tg_type, 'media': input_file})
-                
-            content = {'type': 'media_group', 'media': media_items, 'caption': caption}
-        is_shadow_muted = (user_id in b_data['shadow_mutes'] and
-                           b_data['shadow_mutes'][user_id] > datetime.now(UTC))
-                           
-        if is_shadow_muted:
-            await process_shadow_reject(ShadowRejectContext(
-                bot=message.bot,
-                board_id=board_id,
-                user_id=user_id,
-                content=content,
-                reply_to_post=None,
-                stream=stream
-            ))
-            post_num = 0 
-        else:
-            post_num = await process_new_post(
-                bot_instance=message.bot,
-                board_id=board_id,
-                user_id=user_id,
-                content=content,
-                reply_to_post=None,
-                is_shadow_muted=False,
-                stream=stream
-            )
             
-        if post_num is not None:
-            success_phrase = random.choice(ANIME_CMD_SUCCESS_PHRASES)
-            sent_notification = await message.bot.send_message(
-                chat_id=message.chat.id,
-                text=f"{success_phrase} (+{len(successful_downloads)})"
-            )
-            spawn_task(delete_message_after_delay(sent_notification, 15))
+        content = _prepare_anime_content(successful_downloads, caption)
+
+        await _publish_anime_post(message, board_id, user_id, content, stream, len(successful_downloads))
     except ValueError as e:
         print(f"[{board_id}] Не удалось обработать команду для user {user_id}: {e}")
         fail_text = "Не удалось получить контент. API недоступны или лимит исчерпан."
@@ -14862,6 +14883,13 @@ async def _process_stacked_anime_command(
         if working_msg:
             try: await working_msg.delete()
             except TelegramBadRequest: pass
+async def _safe_delete_user_message(message: types.Message):
+    try:
+        if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
+            await message.delete()
+    except TelegramBadRequest:
+        pass
+
 @dp.message(Command("deanon"))
 async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -14875,22 +14903,14 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
                     sent_msg = await message.answer(cooldown_msg)
                     spawn_task(delete_message_after_delay(sent_msg, 5))
                 except Exception: pass
-                try:
-                    if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-                        await message.delete()
-                except TelegramBadRequest:
-                    pass
+                await _safe_delete_user_message(message)
                 return
             b_data['last_deanon_time'] = current_time
     lang = 'en' if board_id == 'int' else 'ru'
     if not message.reply_to_message:
         reply_text = "👀 Reply to a message to de-anonymize!" if lang == 'en' else "⚠️ Ответьте на анонимное сообщение юзера, чтобы попытаться узнать автора: <code>/deanon</code>"
         await message.answer(reply_text, parse_mode="HTML")
-        try:
-            if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-                await message.delete()
-        except TelegramBadRequest:
-            pass
+        await _safe_delete_user_message(message)
         return
     user_id = message.from_user.id
     b_data = board_data[board_id] # Переопределение b_data для ясности
@@ -14907,20 +14927,12 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
     if not original_author_id:
         reply_text = "🚫 Could not find the post to de-anonymize..." if lang == 'en' else "🚫 Не удалось найти пост для деанона..."
         await message.answer(reply_text)
-        try:
-            if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-                await message.delete()
-        except TelegramBadRequest:
-            pass
+        await _safe_delete_user_message(message)
         return
     if original_author_id == 0:
         reply_text = "⚠️ System messages cannot be de-anonymized." if lang == 'en' else "⚠️ Системные сообщения нельзя деанонить."
         await message.answer(reply_text)
-        try:
-            if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-                await message.delete()
-        except TelegramBadRequest:
-            pass
+        await _safe_delete_user_message(message)
         return
     deanon_text = generate_deanon_info(lang=lang)
     header_text_prefix = "### DEANON ###" if lang == 'en' else "### ДЕАНОН ###"
@@ -14969,11 +14981,7 @@ async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru')
              await create_and_send_deanon_post()
     else:
         await create_and_send_deanon_post()
-    try:
-        if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-            await message.delete()
-    except TelegramBadRequest:
-        pass
+    await _safe_delete_user_message(message)
 async def delete_message_after_delay(message: types.Message, delay: int):
 
     try:
@@ -15360,11 +15368,7 @@ async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 
         [InlineKeyboardButton(text="💾 Сохранить Бэкап", callback_data="save_all")],
     ])
     await message.answer(final_text, reply_markup=keyboard, parse_mode="HTML")
-    try:
-        if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
-            await message.delete()
-    except TelegramBadRequest:
-        pass
+    await _safe_delete_user_message(message)
 @dp.message(Command("lockdown"))
 async def cmd_bot_lockdown(message: Message, board_id: str | None):
     if not board_id or not is_admin(message.from_user.id, board_id):
@@ -16770,7 +16774,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
 async def cmd_roll(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not board_id: 
         try: await message.delete()
@@ -18651,7 +18655,7 @@ async def wait_for_delivery_queues_to_drain(timeout_sec: float, log_interval_sec
 
 def _event_loop_stall_watchdog_loop():
     last_dump_at = 0.0
-    while not is_shutting_down:
+    while not shutdown_event.is_set():
         now = time.time()
         lag_sec = max(0.0, now - event_loop_last_tick)
         if (
@@ -18684,7 +18688,7 @@ def _event_loop_stall_watchdog_loop():
                     print(f"⚠️ [WATCHDOG] Failed to write event-loop stall dump: {type(exc).__name__}: {exc}")
                 except Exception:
                     pass
-        time.sleep(5)
+        shutdown_event.wait(5)
 
 def start_event_loop_stall_watchdog():
     global event_loop_stall_watchdog_started
@@ -19013,7 +19017,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not message.reply_to_message:
         msg = "⚠️ Ответьте на подозрительное сообщение командой <code>/report</code>, чтобы позвать модераторов."
@@ -19031,7 +19035,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     
     sent_confirm = await message.answer(confirm_msg)
     try: spawn_task(delete_message_after_delay(sent_confirm, 10))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     # Get author id of reported message
     author_id = None
@@ -19268,7 +19272,7 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     
     try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception: pass
+    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
     
     if not HAS_WORDCLOUD or not GRAPH_LIBS_AVAILABLE:
         await message.answer("❌ Компоненты WordCloud или Matplotlib не установлены.")
@@ -19293,28 +19297,30 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
         )
         posts = await rows.fetchall()
         
-        text_corpus = ""
-        for row in posts:
-            try:
-                content_dict = json.loads(row[0])
-                text = ""
-                if content_dict.get('type') == 'text':
-                    text = content_dict.get('text', '')
-                elif content_dict.get('type') in ['photo', 'video', 'animation', 'document']:
-                    text = content_dict.get('caption', '')
-                
-                if text:
-                    # Remove HTML tags
-                    text = re.sub(r'<[^>]+>', ' ', text)
-                    # Remove URLs
-                    text = re.sub(r'http[s]?://\S+', ' ', text)
-                    text_corpus += text + " "
-            except Exception:
-                continue
-                
-        words = re.findall(r'[а-яА-Яa-zA-Z]{3,}', text_corpus.lower())
-        filtered_words = [w for w in words if w not in STOP_WORDS]
-        final_text = " ".join(filtered_words)
+        def process_posts(posts_list):
+            text_corpus = ""
+            for row in posts_list:
+                try:
+                    content_dict = json.loads(row[0])
+                    text = ""
+                    if content_dict.get('type') == 'text':
+                        text = content_dict.get('text', '')
+                    elif content_dict.get('type') in ['photo', 'video', 'animation', 'document']:
+                        text = content_dict.get('caption', '')
+
+                    if text:
+                        # Remove HTML tags
+                        text = re.sub(r'<[^>]+>', ' ', text)
+                        # Remove URLs
+                        text = re.sub(r'http[s]?://\S+', ' ', text)
+                        text_corpus += text + " "
+                except Exception:
+                    continue
+
+            words = re.findall(r'[а-яА-Яa-zA-Z]{3,}', text_corpus.lower())
+            return " ".join([w for w in words if w not in STOP_WORDS])
+
+        final_text = await asyncio.to_thread(process_posts, posts)
         
         if not final_text.strip():
             await status_message.edit_text("❌ Хуй там плавал, а не облако слов. Вы нафлудили слишком мало текста за сутки.")

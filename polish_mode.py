@@ -798,6 +798,11 @@ _REPLACEMENT_PATTERN = re.compile(
 )
 _COMMA_PATTERN = re.compile(r',')
 _ENDING_DOT_PATTERN = re.compile(r'\.\s*$')
+_ADJ_YY_PATTERN = re.compile(r'ый$')
+_ADJ_IY_PATTERN = re.compile(r'ий$')
+_ADJ_OV_PATTERN = re.compile(r'ов$')
+_ADJ_EV_PATTERN = re.compile(r'ев$')
+_POLONIZE_WORD_PATTERN = re.compile(r'\b[А-Яа-яЁёA-Za-z]{4,}\b')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -876,14 +881,14 @@ def _stage_pseudo_polish(text: str) -> str:
         w = word.replace('ш', 'sz').replace('ч', 'čz').replace('ц', 'č').replace('в', 'w')
         w = w.replace('Ш', 'Sz').replace('Ч', 'Čz').replace('Ц', 'Č').replace('В', 'W')
         # Замена окончаний прилагательных
-        w = re.sub(r'ый$', 'ỹ', w)
-        w = re.sub(r'ий$', 'i', w)
-        w = re.sub(r'ов$', 'ów', w)
-        w = re.sub(r'ев$', 'ów', w)
+        w = _ADJ_YY_PATTERN.sub('ỹ', w)
+        w = _ADJ_IY_PATTERN.sub('i', w)
+        w = _ADJ_OV_PATTERN.sub('ów', w)
+        w = _ADJ_EV_PATTERN.sub('ów', w)
         return w
 
     # Применяем только к словам длиннее 3 символов, чтобы не сломать предлоги (в, с)
-    return re.sub(r'\b[А-Яа-яЁёA-Za-z]{4,}\b', _polonize, text)
+    return _POLONIZE_WORD_PATTERN.sub(_polonize, text)
 # ═══════════════════════════════════════════════════════════════════════════════
 # MAIN TRANSFORM FUNCTION
 # ═══════════════════════════════════════════════════════════════════════════════

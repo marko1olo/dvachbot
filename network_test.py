@@ -1,18 +1,18 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import asyncio
 import os
 import sys
 
+# Ensure the root directory is in sys.path to allow imports from common
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+
 import aiohttp
 from dotenv import load_dotenv
 
-# Allow importing from common when script is run directly
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+from common.secret_redaction import redact_secrets
 
-try:
-    from common.secret_redaction import redact_secrets
-except ImportError:
-    def redact_secrets(value: object) -> str:
-        return str(value)
 
 load_dotenv()
 
