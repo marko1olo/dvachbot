@@ -319,7 +319,11 @@ async def tagging_loop():
                 # 1. СКАЧИВАНИЕ
                 try:
                     f_info = await bot.get_file(file_id)
-                    f_obj = await bot.download_file(f_info.file_path)
+                    file_path = getattr(f_info, "file_path", None)
+                    if not file_path:
+                        logger.error(f"⚠️ No file_path for {file_id}. Skipping.")
+                        continue
+                    f_obj = await bot.download_file(file_path)
                     img_bytes = f_obj.read() if hasattr(f_obj, 'read') else f_obj
                 except TelegramBadRequest:
                     logger.error(f"🗑️ File {file_id} deleted. Marking error.")
