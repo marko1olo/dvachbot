@@ -141,6 +141,67 @@ class SecretRedactionTests(unittest.TestCase):
         self.assertNotIn(SYNTHETIC_TELEGRAM_TOKEN[:8], first)
 
 
+
+    def test_logging_filter_redacts_tuple_args(self) -> None:
+        from common.secret_redaction import SecretRedactionFilter
+
+        record = logging.LogRecord(
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="test msg",
+            args=(SYNTHETIC_TELEGRAM_TOKEN, 123, True),
+            exc_info=None
+        )
+
+        filter_inst = SecretRedactionFilter()
+        filter_inst.filter(record)
+
+        self.assertEqual(len(record.args), 3)
+        self.assertNotIn(SYNTHETIC_TELEGRAM_TOKEN, record.args)
+        self.assertIn("<telegram-token-redacted>", record.args)
+        self.assertEqual(record.args[1], 123)
+        self.assertEqual(record.args[2], True)
+
+    def test_logging_filter_redacts_dict_args(self) -> None:
+        from common.secret_redaction import SecretRedactionFilter
+
+        record = logging.LogRecord(
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="test msg",
+            args={"token": SYNTHETIC_TELEGRAM_TOKEN, "count": 123},
+            exc_info=None
+        )
+
+        filter_inst = SecretRedactionFilter()
+        filter_inst.filter(record)
+
+        self.assertNotIn(SYNTHETIC_TELEGRAM_TOKEN, record.args.values())
+        self.assertEqual(record.args["token"], "<telegram-token-redacted>")
+        self.assertEqual(record.args["count"], 123)
+
+    def test_logging_filter_redacts_single_arg(self) -> None:
+        from common.secret_redaction import SecretRedactionFilter
+
+        record = logging.LogRecord(
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="test msg",
+            args=SYNTHETIC_TELEGRAM_TOKEN,
+            exc_info=None
+        )
+
+        filter_inst = SecretRedactionFilter()
+        filter_inst.filter(record)
+
+        self.assertNotEqual(record.args, SYNTHETIC_TELEGRAM_TOKEN)
+        self.assertEqual(record.args, "<telegram-token-redacted>")
 class SecretScanTests(unittest.TestCase):
     def test_token_pattern_matches_embedded_telegram_urls(self) -> None:
         line = f"url=https://api.telegram.org/file/bot{SYNTHETIC_TELEGRAM_TOKEN}/x"
@@ -641,9 +702,9 @@ class SecurityReportWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "worker.py").write_text(
-                "import time\n"
+                "import subprocess\n"
                 "async def run():\n"
-                "    time.sleep(1)\n",
+                "    subprocess.run(['ls', '-l'])\n",
                 encoding="utf-8",
             )
 
@@ -652,7 +713,23 @@ class SecurityReportWorkflowTests(unittest.TestCase):
             self.assertFalse(report["contains_secret_values"])
             self.assertEqual(report["checked_count"], 1)
             self.assertEqual(report["high_count"], 1)
-            self.assertEqual(report["findings"][0]["call"], "time.sleep")
+            self.assertEqual(report["findings"][0]["call"], "subprocess.run")
+
+    def test_async_blocking_audit_accepts_asyncio_sleep(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "worker.py").write_text(
+                "import asyncio\n"
+                "async def run():\n"
+                "    await asyncio.sleep(1)\n",
+                encoding="utf-8",
+            )
+
+            report = build_async_blocking_report(root)
+
+            self.assertFalse(report["contains_secret_values"])
+            self.assertEqual(report["checked_count"], 1)
+            self.assertEqual(report["high_count"], 0)
 
     def test_status_builder_reports_not_strict_ready_when_actions_exist(self) -> None:
         status = build_status(include_summary_validation=False)
