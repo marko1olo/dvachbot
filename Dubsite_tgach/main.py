@@ -473,7 +473,7 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                             if response.status == 200:
                                 data = await response.read()
                                 return data, len(data)
-        except Exception:
+        except:
             continue
     return None
 class BottleSendRequest(BaseModel):
@@ -838,7 +838,7 @@ class ConnectionManager:
                     self.active_connections[key].discard(connection)
                     if not self.active_connections[key]:
                         del self.active_connections[key]
-            except Exception: pass
+            except: pass
 
     async def broadcast_post(self, post_data: dict, board_id: str):
         stream = post_data.get('stream', 'ru')
@@ -900,7 +900,7 @@ async def lifespan(app: FastAPI):
                 if bid in BOARD_CONFIG and bdata:
                     try:
                         BOARD_CONFIG[bid]['banner_data'] = json.loads(bdata)
-                    except Exception: pass
+                    except: pass
     if not FILE_UPLOADER_BOT_TOKEN or not FILE_STORAGE_CHANNEL_ID:
         raise ValueError("Missing FILE_UPLOADER_BOT_TOKEN or FILE_STORAGE_CHANNEL_ID in .env")
     try:
@@ -1354,11 +1354,11 @@ async def global_data_middleware(request: Request, call_next):
         try:
             announcement = await get_setting_cached('global_announcement')
             request.state.global_announcement = announcement
-        except Exception: request.state.global_announcement = ""
+        except: request.state.global_announcement = ""
         try:
             lock = await get_setting_cached('lockdown_enabled')
             request.state.is_lockdown = (lock == "true")
-        except Exception: request.state.is_lockdown = False
+        except: request.state.is_lockdown = False
         user = request.session.get('user')
         if user:
             request.state.user_hash = get_user_hash(user['id'])
@@ -1370,7 +1370,7 @@ async def global_data_middleware(request: Request, call_next):
                     try:
                         token_uns = signer.unsign(raw_token, max_age=31536000).decode()
                         guest_id = generate_negative_id(token_uns)
-                    except Exception: pass
+                    except: pass
             request.state.user_hash = get_user_hash(guest_id) if guest_id else ""
     return await call_next(request)
 @app.get("/.env", include_in_schema=False)
@@ -1664,7 +1664,7 @@ def format_post_text(text: str) -> str:
             s = int(match.group(1))
             s = max(10, min(30, s)) 
             return f'<span style="font-size: {s}px;">{match.group(2)}</span>'
-        except Exception: return match.group(2)
+        except: return match.group(2)
     processed_text = re.sub(r'\[size=(\d+)\](.*?)\[/size\]', size_replacer, processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[s\](.*?)\[/s\]', r'<s>\1</s>', processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[u\](.*?)\[/u\]', r'<u>\1</u>', processed_text, flags=re.DOTALL)
@@ -1733,12 +1733,12 @@ def format_iso_time(ts: float) -> str:
 
     try:
         return datetime.fromtimestamp(ts).isoformat()
-    except Exception:
+    except:
         return ""
 def format_timestamp(ts: float) -> str:
     try:
         return datetime.fromtimestamp(ts).strftime('%d.%m.%Y %H:%M:%S')
-    except (ValueError, TypeError, OverflowError, OSError):
+    except (ValueError, TypeError):
         return ""
 def format_poll_for_html(poll_data: dict) -> str:
     if not poll_data or 'question' not in poll_data:
@@ -1908,6 +1908,113 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
         if p.get('latest_replies'):
             for r in p['latest_replies']:
                 apply_votes(r)
+def _process_media_group(content: dict) -> None:
+    file_list = []
+    found_caption = None
+    for item in content.get('media', []):
+        f_type = item.get('type')
+        f_id = item.get('file_id') or item.get('media')
+        if not found_caption and item.get('caption'):
+            found_caption = item.get('caption')
+        if f_id and isinstance(f_id, str) and not f_id.startswith("<"):
+            clean_type = 'image' if f_type == 'photo' else f_type
+            file_list.append({
+                'type': clean_type,
+                'original_file_id': f_id,
+                'thumbnail_file_id': f_id,
+                'filename': f"media_{f_id[:8]}.jpg" if clean_type == 'image' else f"media_{f_id[:8]}.mp4"
+            })
+    content['files'] = file_list
+    if not content.get('text') and found_caption:
+        content['text'] = found_caption
+
+def _process_single_media(content: dict) -> None:
+    file_info = {'type': content['type']}
+    ctype = content['type']
+    if ctype == 'photo' and content.get('photo') and isinstance(content['photo'], list):
+        try:
+            file_info['original_file_id'] = content['photo'][-1].get('file_id')
+            file_info['thumbnail_file_id'] = content['photo'][0].get('file_id')
+            file_info['type'] = 'image'
+        except: pass
+    else:
+        f_obj = content.get(ctype) or content
+        f_id = f_obj.get('file_id')
+        thumb_source = f_obj.get('thumb') or f_obj.get('thumbnail')
+        if thumb_source and isinstance(thumb_source, dict):
+            file_info['thumbnail_file_id'] = thumb_source.get('file_id')
+        mime = f_obj.get('mime_type', '')
+        if ctype == 'document' and mime.startswith('video/'):
+            file_info['type'] = 'video'
+        if f_id:
+            file_info['original_file_id'] = f_id
+    if file_info.get('original_file_id'):
+        content['files'] = [file_info]
+
+def _process_files_list(content: dict) -> None:
+    from urllib.parse import quote
+    import time
+    valid_files = []
+    for file_info in content['files']:
+        file_info.setdefault('dupe_count', 0)
+        orig_url = file_info.get('original_url', '')
+        if orig_url and 'local_file://' in orig_url:
+            clean_id = orig_url.split('local_file://')[1]
+            file_info['original_file_id'] = clean_id
+            file_info['original_url'] = f"/files/{clean_id}"
+        oid = file_info.get('original_file_id')
+        if not oid or oid.startswith('<'):
+            continue
+        fname = file_info.get('filename', '').lower()
+        if fname.endswith(('.mp4', '.webm', '.mov', '.mkv')) and file_info.get('type') not in ['voice', 'audio']:
+            file_info['type'] = 'video'
+        if fname.endswith('.webm') and file_info.get('type') == 'sticker':
+            file_info['type'] = 'video'
+        ftype = file_info.get('type', 'file')
+        ext_map = {
+            'video': 'mp4',
+            'photo': 'jpg',
+            'image': 'jpg',
+            'audio': 'mp3',
+            'voice': 'ogg',
+            'sticker': 'webp',
+            'video_note': 'mp4',
+            'animation': 'mp4',
+            'gif': 'mp4'
+        }
+
+        if not fname or fname.startswith('.') or fname == 'file' or '.' not in fname:
+            ext = ext_map.get(ftype, 'dat')
+            prefix = "vid" if ftype in ['video', 'animation', 'video_note', 'gif'] else ("aud" if ftype in ['audio', 'voice'] else "img")
+            short_id = oid[:8] if oid else str(int(time.time()))
+            file_info['filename'] = f"{prefix}_{short_id}.{ext}"
+        elif '.' not in fname and ftype in ext_map:
+            file_info['filename'] = f"{fname}.{ext_map[ftype]}"
+
+        safe_name = quote(str(file_info.get('filename', 'file')).strip('/'))
+
+        oid_str = str(oid) if oid else ""
+        if oid_str.startswith(('http://', 'https://')):
+            file_info['original_url'] = oid_str
+        else:
+            clean_oid = oid_str.strip('/')
+            if clean_oid:
+                file_info['original_url'] = f"/files/{clean_oid}/{safe_name}"
+            else:
+                file_info['original_url'] = f"/files/{safe_name}"
+
+        tid = file_info.get('thumbnail_file_id')
+        if tid:
+            tid_str = str(tid)
+            if tid_str.startswith(('http://', 'https://')):
+                file_info['thumbnail_url'] = tid_str
+            else:
+                file_info['thumbnail_url'] = f"/files/{tid_str.strip('/')}"
+        else:
+            file_info['thumbnail_url'] = ""
+        valid_files.append(file_info)
+    content['files'] = valid_files
+
 def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
     if not posts:
         return []
@@ -1918,7 +2025,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
         if isinstance(post.get('content'), str):
             try:
                 post['content'] = json.loads(post['content'])
-            except Exception:
+            except:
                 post['content'] = {"text": str(post.get('content', '')), "type": "text"}
         
         if not isinstance(post.get('content'), dict):
@@ -1928,108 +2035,13 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
             
         content = post['content']
         if content.get('type') == 'media_group' and 'media' in content:
-            file_list = []
-            found_caption = None
-            for item in content['media']:
-                f_type = item.get('type')
-                f_id = item.get('file_id') or item.get('media')
-                if not found_caption and item.get('caption'): 
-                    found_caption = item.get('caption')
-                if f_id and isinstance(f_id, str) and not f_id.startswith("<"):
-                     clean_type = 'image' if f_type == 'photo' else f_type
-                     file_list.append({
-                        'type': clean_type,
-                        'original_file_id': f_id,
-                        'thumbnail_file_id': f_id,
-                        'filename': f"media_{f_id[:8]}.jpg" if clean_type == 'image' else f"media_{f_id[:8]}.mp4"
-                     })
-            content['files'] = file_list
-            if not content.get('text') and found_caption: 
-                content['text'] = found_caption
+            _process_media_group(content)
         elif content.get('type') in {'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'} and 'files' not in content:
-            file_info = {'type': content['type']}
-            ctype = content['type']
-            if ctype == 'photo' and content.get('photo') and isinstance(content['photo'], list):
-                try:
-                    file_info['original_file_id'] = content['photo'][-1].get('file_id')
-                    file_info['thumbnail_file_id'] = content['photo'][0].get('file_id')
-                    file_info['type'] = 'image'
-                except Exception: pass
-            else:
-                f_obj = content.get(ctype) or content
-                f_id = f_obj.get('file_id')
-                thumb_source = f_obj.get('thumb') or f_obj.get('thumbnail')
-                if thumb_source and isinstance(thumb_source, dict):
-                    file_info['thumbnail_file_id'] = thumb_source.get('file_id')
-                mime = f_obj.get('mime_type', '')
-                if ctype == 'document' and mime.startswith('video/'):
-                     file_info['type'] = 'video'
-                if f_id: 
-                    file_info['original_file_id'] = f_id
-            if file_info.get('original_file_id'):
-                content['files'] = [file_info]
-        if 'files' in content and isinstance(content['files'], list):
-            valid_files = []
-            for file_info in content['files']:
-                file_info.setdefault('dupe_count', 0)
-                orig_url = file_info.get('original_url', '')
-                if orig_url and 'local_file://' in orig_url:
-                    clean_id = orig_url.split('local_file://')[1]
-                    file_info['original_file_id'] = clean_id
-                    file_info['original_url'] = f"/files/{clean_id}"
-                oid = file_info.get('original_file_id')
-                if not oid or oid.startswith('<'): 
-                    continue
-                fname = file_info.get('filename', '').lower()
-                if fname.endswith(('.mp4', '.webm', '.mov', '.mkv')) and file_info.get('type') not in ['voice', 'audio']:
-                    file_info['type'] = 'video'
-                if fname.endswith('.webm') and file_info.get('type') == 'sticker':
-                    file_info['type'] = 'video'
-                ftype = file_info.get('type', 'file')
-                ext_map = {
-                    'video': 'mp4', 
-                    'photo': 'jpg', 
-                    'image': 'jpg',
-                    'audio': 'mp3', 
-                    'voice': 'ogg', 
-                    'sticker': 'webp', 
-                    'video_note': 'mp4',
-                    'animation': 'mp4', 
-                    'gif': 'mp4'
-                }
-                
-                if not fname or fname.startswith('.') or fname == 'file' or '.' not in fname:
-                    ext = ext_map.get(ftype, 'dat')
-                    prefix = "vid" if ftype in ['video', 'animation', 'video_note', 'gif'] else ("aud" if ftype in ['audio', 'voice'] else "img")
-                    short_id = oid[:8] if oid else str(int(time.time()))
-                    file_info['filename'] = f"{prefix}_{short_id}.{ext}"
-                elif '.' not in fname and ftype in ext_map:
-                     file_info['filename'] = f"{fname}.{ext_map[ftype]}"
-                
-                from urllib.parse import quote
-                safe_name = quote(str(file_info.get('filename', 'file')).strip('/'))
-                
-                oid_str = str(oid) if oid else ""
-                if oid_str.startswith(('http://', 'https://')):
-                    file_info['original_url'] = oid_str
-                else:
-                    clean_oid = oid_str.strip('/')
-                    if clean_oid:
-                        file_info['original_url'] = f"/files/{clean_oid}/{safe_name}"
-                    else:
-                        file_info['original_url'] = f"/files/{safe_name}"
+            _process_single_media(content)
 
-                tid = file_info.get('thumbnail_file_id')
-                if tid:
-                    tid_str = str(tid)
-                    if tid_str.startswith(('http://', 'https://')):
-                        file_info['thumbnail_url'] = tid_str
-                    else:
-                        file_info['thumbnail_url'] = f"/files/{tid_str.strip('/')}"
-                else:
-                    file_info['thumbnail_url'] = ""
-                valid_files.append(file_info)
-            content['files'] = valid_files
+        if 'files' in content and isinstance(content['files'], list):
+            _process_files_list(content)
+
         current_type = content.get('type')
         has_files = bool(content.get('files'))
         if current_type != 'poll':
@@ -2041,6 +2053,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
         if 'author_id' in post:
             post['author_id'] = get_user_hash(post['author_id'])
     return posts
+
 def clean_title_text(text: str) -> str:
     if not text: return ""
     text = re.sub(r'<[^>]+>', '', text)
@@ -2156,7 +2169,7 @@ async def db_maintenance_task():
                         
                 except Exception as e:
                     try: await db.execute("ROLLBACK")
-                    except Exception: pass
+                    except: pass
                     logger.error(f"⚠️ FTS Maintenance error: {e}")
             
             logger.info("✅ [DB] Maintenance complete.")
@@ -2240,7 +2253,7 @@ async def enrich_heavy_data(posts: List[dict]):
                     async for row in cursor:
                         res[row[0]] = json.loads(row[1])
                 return res
-            except Exception: return {}
+            except: return {}
         tasks.append(fetch_backlinks_task(all_post_ids))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -2586,7 +2599,7 @@ async def api_makaba_index(request: Request, board_id: str, page: str = "index")
     if page != "index":
         try:
             page_num = int(page)
-        except Exception:
+        except:
             if page == "catalog": return await api_makaba_catalog(board_id)
             raise HTTPException(404)
     threads = await get_op_posts_for_board(board_id, page=page_num + 1, page_size=20)
@@ -3294,7 +3307,7 @@ async def api_random_image_next(request: Request, boards: Optional[str] = None):
         if isinstance(post_data['content'], str):
             try:
                 post_data['content'] = json.loads(post_data['content'])
-            except Exception:
+            except:
                 # Если сбой парсинга, пробуем еще раз (рекурсия с теми же параметрами)
                 # Чтобы не зациклилось, можно ограничить, но для простоты вернем ошибку или ретрай
                 return JSONResponse({"error": "Content parse error"}, status_code=500)
@@ -4121,7 +4134,7 @@ async def api_get_scanner_status(user: dict = Depends(get_required_user)):
     interval = await get_system_setting('neuro_scanner_interval')
     try:
         interval = int(interval)
-    except Exception:
+    except:
         interval = 60
     return {"enabled": enabled, "interval": interval}
 
@@ -4216,7 +4229,7 @@ async def api_server_pulse():
             if name.lower() in ['coretemp', 'cpu_thermal', 'k10temp', 'zenpower']:
                 stats["temp"] = entries[0].current
                 break
-    except Exception:
+    except:
         pass 
     return stats
 @app.post("/api/settings/stream")
@@ -4413,7 +4426,7 @@ async def api_admin_set_banner(data: BoardBannerRequest, user: dict = Depends(ge
             await db.execute("COMMIT")
         except Exception as e:
             try: await db.execute("ROLLBACK")
-            except Exception: pass
+            except: pass
             logger.error(f"Banner update error: {e}")
             raise HTTPException(status_code=500, detail="DB Error")
 
@@ -4691,7 +4704,7 @@ async def api_create_post(
                         return min(diff, 360 - diff)
                     if angle_diff(user_h, target_h) > 15 or angle_diff(user_m, target_m) > 15:
                         raise HTTPException(400, t('err_cap_clock'))
-                except Exception:
+                except:
                     raise HTTPException(400, t('err_cap_clock'))
             elif mode == 'can':
                 if str(captcha_value) != "opened":
@@ -4816,7 +4829,7 @@ async def api_create_post(
                     match = re.search(r'/res/(\d+)\.html', referer)
                     if match:
                         reply_to = int(match.group(1))
-                except Exception: pass
+                except: pass
         if not reply_to:
             raise HTTPException(status_code=400, detail="Не удалось определить тред. Обновите страницу.")
 
@@ -4847,7 +4860,7 @@ async def api_create_post(
                     count_str = num1 or num2 or "1"
                     try:
                         req_count = int(count_str)
-                    except Exception: req_count = 1
+                    except: req_count = 1
                     
                     to_take = min(req_count, files_to_generate_count)
                     
@@ -5128,7 +5141,7 @@ async def api_create_post(
             if current_captcha != 'true':
                 await set_system_setting('captcha_enabled', 'true')
                 log_system_event(f"🚨 ANTI-RAID: Captcha AUTO-ENABLED (Rate: {len(POST_RATE_LIMITER)} posts/min)")
-        except Exception: pass
+        except: pass
 
     if post_mode == 'new_thread':
         title = sanitized_text[:255]
@@ -5153,7 +5166,7 @@ async def api_create_post(
                         logger.error(f"Delayed bump failed: {e}")
 
                 spawn_task(delayed_bump(board_id, final_thread_id, stream, nm))
-        except Exception: pass
+        except: pass
     elif post_mode == 'reply' and thread_op_num:
         async with get_db_connection() as conn:
             row = await (await conn.execute("SELECT is_endless FROM Threads WHERE thread_id = ?", (str(thread_op_num),))).fetchone()
@@ -5222,14 +5235,16 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     count = 0
-    from bs4 import BeautifulSoup
-    import json
+    import re
+
+    img_regex = re.compile(r'<img[^>]*>', re.IGNORECASE)
     
     # Используем отдельное соединение для тяжелой задачи
     async with get_db_connection() as conn:
         # 1. Находим посты, где в тексте есть тег <img
         # LIKE '%<img%' работает быстро
-        query = "SELECT post_num, content FROM Posts WHERE content LIKE '%<img%'"
+        # Оптимизация: Используем json_extract для избегания парсинга JSON в Python
+        query = "SELECT post_num, json_extract(content, '$.text') FROM Posts WHERE json_extract(content, '$.text') LIKE '%<img%'"
         
         async with conn.execute(query) as cursor:
             rows = await cursor.fetchall()
@@ -5240,23 +5255,12 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
         # 2. Проходимся и чистим
         updates = []
         for row in rows:
-            post_num, raw_content = row
+            post_num, text = row
             try:
-                content = json.loads(raw_content)
-                text = content.get('text', '')
-                
-                if '<img' in text or '<IMG' in text:
-                    soup = BeautifulSoup(text, "html.parser")
-                    images = soup.find_all('img')
-                    
-                    if images:
-                        for img in images:
-                            img.decompose()
-                    
-                        content['text'] = str(soup)
-                        new_json = json.dumps(content)
-                        
-                        updates.append((new_json, post_num))
+                if text:
+                    new_text, num_subs = img_regex.subn('', text)
+                    if num_subs > 0:
+                        updates.append((new_text, post_num))
                         count += 1
             except Exception:
                 continue
@@ -5265,7 +5269,7 @@ async def api_admin_cleanup_html(user: dict = Depends(get_required_user)):
 
         if updates:
             await conn.executemany(
-                "UPDATE Posts SET content = ? WHERE post_num = ?",
+                "UPDATE Posts SET content = json_set(content, '$.text', ?) WHERE post_num = ?",
                 updates
             )
 
@@ -5616,7 +5620,7 @@ async def api_get_thread(
     if cached_data:
         try:
             posts_flat = orjson.loads(cached_data)
-        except Exception:
+        except:
             posts_flat = []
     
     if not posts_flat:
@@ -5670,7 +5674,7 @@ async def api_thread_summary(thread_id: int, request: Request):
             cached_count = cached_data.get('count', 0)
             if (current_count - cached_count) < 8:
                 return {"summary": cached_data.get('text')}
-        except Exception: pass
+        except: pass
     thread_data = await get_thread_by_op_post(thread_id)
     if not thread_data:
         raise HTTPException(404, "Thread not found")
@@ -5704,7 +5708,7 @@ async def api_thread_vibe(thread_id: int, request: Request):
             cached_count = cached_data.get('count', 0)
             if (current_count - cached_count) < 10:
                 return {"vibe": cached_data.get('vibe'), "icon": cached_data.get('icon')}
-        except Exception: pass
+        except: pass
     thread_data = await get_thread_by_op_post(thread_id)
     if not thread_data: 
         raise HTTPException(404, "Thread not found")
@@ -5795,7 +5799,7 @@ async def api_get_threads(
         # CACHE HIT
         try:
             posts_container = orjson.loads(cached_data)
-        except Exception:
+        except:
             posts_container = []
     
     if not posts_container:
@@ -5955,7 +5959,7 @@ async def api_admin_delete_post(data: AdminAction, request: Request, user: dict 
                     await db.execute("COMMIT")
                 except Exception as e:
                     try: await db.execute("ROLLBACK")
-                    except Exception: pass
+                    except: pass
                     logger.error(f"Counter decrement error: {e}")
         
         log_system_event(f"🗑️ DEL: Post #{data.post_num} deleted by {user.get('id')} ({user.get('role')})")
@@ -6104,7 +6108,7 @@ async def _fetch_telegram_path(file_id: str, bot_token: str):
                 if resp.status != 200: return None
                 data = await resp.json()
                 return data["result"]["file_path"] if data.get("ok") else None
-        except Exception: return None
+        except: return None
 async def get_cached_file_path(file_id: str) -> tuple[str, str] | None:
     backend = FastAPICache.get_backend()
     if await backend.get(f"dead_file:{file_id}"):
@@ -6159,7 +6163,7 @@ async def check_url_alive(url: str) -> bool:
             is_alive = resp.status_code == 200
             URL_STATUS_CACHE[url] = (is_alive, now)
             return is_alive
-    except Exception:
+    except:
         URL_STATUS_CACHE[url] = (False, now)
         return False
 @app.get("/files/{file_id:path}")
@@ -6295,7 +6299,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
             for r in rows:
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
-                except Exception:
+                except:
                     content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
@@ -6364,7 +6368,7 @@ async def api_admin_wipe(data: dict = Body(...), user: dict | None = Depends(get
             raise
         except Exception as e:
             try: await db.execute("ROLLBACK")
-            except Exception: pass
+            except: pass
             logger.error(f"Wipe error: {e}")
             raise HTTPException(status_code=500, detail="DB Error")
 @app.get("/api/admin/alerts_history")
