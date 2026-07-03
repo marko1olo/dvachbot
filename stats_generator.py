@@ -1,6 +1,7 @@
 import sqlite3
 import time
 import json
+from dataclasses import dataclass
 import io
 import random
 import re
@@ -1570,42 +1571,29 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
         'total_users': len(all_users)
     }
 
-def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
-    stats_data = fetch_user_stats_data(user_id, board_id)
 
-    balance = stats_data['balance']
-    role = stats_data['role']
-    lie_media = stats_data['lie_media']
-    custom_prefix = stats_data['custom_prefix']
-    posts_count = stats_data['posts_count']
-    rx_received = stats_data['rx_received']
-    rx_given = stats_data['rx_given']
-    mutes_count = stats_data['mutes_count']
-    rank = stats_data['rank']
-    total_users = stats_data['total_users']
-
-    schizo_name = generate_schizo_name(user_id)
-
-    role_name = {
+def _get_role_name(role: str) -> str:
+    return {
         'admin': 'Админ',
         'mod': 'Модератор',
         'janitor': 'Дворник',
         'user': 'Анон'
     }.get(role, 'Анон')
 
-    # Slang comment based on rank and posts
+def _get_slang_comment(posts_count: int, rank: int, balance: float) -> str:
     if posts_count == 0:
-        slang_comment = "Ньюфаг детектед. Иди читай правила борды, анон."
+        return "Ньюфаг детектед. Иди читай правила борды, анон."
     elif rank <= 3:
-        slang_comment = "ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц."
+        return "ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц."
     elif posts_count > 300:
-        slang_comment = "Почетный Скуф борды. Запах подпиваса и базированных мыслей за версту."
+        return "Почетный Скуф борды. Запах подпиваса и базированных мыслей за версту."
     elif balance < 10:
-        slang_comment = "Нищук детектед. Проиграл все коины в рулетку или забанен за сажу."
+        return "Нищук детектед. Проиграл все коины в рулетку или забанен за сажу."
     else:
-        slang_comment = "Обычный сыч. Бамп в тред, сажу в комменты."
+        return "Обычный сыч. Бамп в тред, сажу в комменты."
 
-    text_report = (
+def _format_text_report(schizo_name: str, board_id: str, role_name: str, custom_prefix: str, rank: int, total_users: int, posts_count: int, rx_received: int, rx_given: int, balance: float, mutes_count: int, lie_media: float, slang_comment: str) -> str:
+    return (
         f"☘️ <b>Статистика пользователя {schizo_name}</b> (/${board_id}/)\n\n"
         f"👤 <b>Статус:</b> {role_name} {f'({custom_prefix})' if custom_prefix else ''}\n"
         f"🏅 <b>Ранг борды:</b> #{rank} из {total_users}\n"
@@ -1617,30 +1605,71 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         f"🌀 <b>Кринж-фактор:</b> {lie_media}%\n\n"
         f"💬 <i>\"{slang_comment}\"</i>"
     )
+
+def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
+    stats_data = fetch_user_stats_data(user_id, board_id)
+
+    schizo_name = generate_schizo_name(user_id)
+    role_name = _get_role_name(stats_data['role'])
+    slang_comment = _get_slang_comment(stats_data['posts_count'], stats_data['rank'], stats_data['balance'])
+
+    text_report = _format_text_report(
+        schizo_name=schizo_name,
+        board_id=board_id,
+        role_name=role_name,
+        custom_prefix=stats_data['custom_prefix'],
+        rank=stats_data['rank'],
+        total_users=stats_data['total_users'],
+        posts_count=stats_data['posts_count'],
+        rx_received=stats_data['rx_received'],
+        rx_given=stats_data['rx_given'],
+        balance=stats_data['balance'],
+        mutes_count=stats_data['mutes_count'],
+        lie_media=stats_data['lie_media'],
+        slang_comment=slang_comment
+    )
     
-    buf = draw_user_stats_card(
+    card_data = UserStatsCardData(
         user_id=user_id,
         board_id=board_id,
         schizo_name=schizo_name,
         role_name=role_name,
-        custom_prefix=custom_prefix,
-        role=role,
-        posts_count=posts_count,
-        rx_received=rx_received,
-        rx_given=rx_given,
-        mutes_count=mutes_count,
-        balance=balance,
-        lie_media=lie_media,
-        rank=rank,
-        total_users=total_users,
+        custom_prefix=stats_data['custom_prefix'],
+        role=stats_data['role'],
+        posts_count=stats_data['posts_count'],
+        rx_received=stats_data['rx_received'],
+        rx_given=stats_data['rx_given'],
+        mutes_count=stats_data['mutes_count'],
+        balance=stats_data['balance'],
+        lie_media=stats_data['lie_media'],
+        rank=stats_data['rank'],
+        total_users=stats_data['total_users'],
         slang_comment=slang_comment
     )
+    buf = draw_user_stats_card(card_data)
     return buf, text_report
 
+
+@dataclass
+class UserStatsCardData:
+    user_id: int
+    board_id: str
+    schizo_name: str
+    role_name: str
+    custom_prefix: str
+    role: str
+    posts_count: int
+    rx_received: int
+    rx_given: int
+    mutes_count: int
+    balance: float
+    lie_media: float
+    rank: int
+    total_users: int
+    slang_comment: str
+
 def draw_user_stats_card(
-    user_id: int, board_id: str, schizo_name: str, role_name: str, custom_prefix: str,
-    role: str, posts_count: int, rx_received: int, rx_given: int, mutes_count: int,
-    balance: float, lie_media: float, rank: int, total_users: int, slang_comment: str
+    data: UserStatsCardData
 ) -> io.BytesIO:
     import os
     from PIL import Image, ImageDraw, ImageFont
@@ -1664,14 +1693,14 @@ def draw_user_stats_card(
     draw.line([0, 95, width, 95], fill='#252932', width=2)
     
     # Title & Info
-    draw.text((30, 22), schizo_name, fill='#ff9900', font=font_title)
-    status_text = f"ID: {user_id}  |  Раздел: /{board_id}/  |  Статус: {role_name} {f'({custom_prefix})' if custom_prefix else ''}"
+    draw.text((30, 22), data.schizo_name, fill='#ff9900', font=font_title)
+    status_text = f"ID: {data.user_id}  |  Раздел: /{data.board_id}/  |  Статус: {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}"
     draw.text((30, 60), status_text, fill='#8abeb7', font=font_subtitle)
     
     # Certified badge (top right)
     draw.rounded_rectangle([610, 15, 770, 80], radius=6, fill='#1b1f28', outline='#ff9900', width=2)
     draw.text((690, 33), "ТГАЧ CERTIFIED", fill='#ff9900', font=font_subtitle, anchor="mm")
-    sub_cert = "APPROVED BITYARD" if role != 'admin' else "ADMINISTRATOR"
+    sub_cert = "APPROVED BITYARD" if data.role != 'admin' else "ADMINISTRATOR"
     draw.text((690, 58), sub_cert, fill='#00ffcc', font=ImageFont.truetype(font_path, 10) if os.path.exists(font_path) else font_subtitle, anchor="mm")
     
     # Helper to draw cards
@@ -1683,13 +1712,13 @@ def draw_user_stats_card(
 
     # Cards grid
     cards = [
-        (30, 115, 175, 80, str(posts_count), "Написано постов", "#00ffcc"),
-        (220, 115, 175, 80, f"#{rank} / {total_users}", "Ранг на борде", "#ffcc00"),
-        (410, 115, 175, 80, f"{int(balance)} RUB", "Баланс коинов", "#00ff66"),
+        (30, 115, 175, 80, str(data.posts_count), "Написано постов", "#00ffcc"),
+        (220, 115, 175, 80, f"#{data.rank} / {data.total_users}", "Ранг на борде", "#ffcc00"),
+        (410, 115, 175, 80, f"{int(data.balance)} RUB", "Баланс коинов", "#00ff66"),
         
-        (30, 210, 175, 80, f"+{rx_received}", "Получено реакций", "#ff3399"),
-        (220, 210, 175, 80, str(rx_given), "Поставлено реакций", "#859900"),
-        (410, 210, 175, 80, f"{lie_media}%", "Кринж-фактор", "#cc00ff"),
+        (30, 210, 175, 80, f"+{data.rx_received}", "Получено реакций", "#ff3399"),
+        (220, 210, 175, 80, str(data.rx_given), "Поставлено реакций", "#859900"),
+        (410, 210, 175, 80, f"{data.lie_media}%", "Кринж-фактор", "#cc00ff"),
     ]
     
     for x, y, w, h, val, label, color in cards:
@@ -1699,12 +1728,12 @@ def draw_user_stats_card(
     draw.rounded_rectangle([600, 115, 770, 175], radius=6, fill='#1d1315', outline='#ff3333', width=1)
     draw.ellipse([600+15, 115+16, 600+23, 115+24], fill="#ff3333")
     draw.text((600+33, 115+20), "Схвачено мутов", fill='#969896', font=font_card_lbl, anchor="lm")
-    draw.text((600+15, 115+48), f"{mutes_count} шт", fill="#ff3339", font=font_card_num, anchor="lm")
+    draw.text((600+15, 115+48), f"{data.mutes_count} шт", fill="#ff3339", font=font_card_num, anchor="lm")
     
     # Activity Level Card (below mutes)
     draw.rounded_rectangle([600, 210, 770, 290], radius=6, fill='#13171f', outline='#252932', width=1)
     draw.text((615, 230), "Уровень деградации", fill='#969896', font=font_card_lbl)
-    activity_pct = min(1.0, posts_count / 500.0)
+    activity_pct = min(1.0, data.posts_count / 500.0)
     draw.rounded_rectangle([615, 255, 755, 267], radius=3, fill='#1b1f28')
     draw.rounded_rectangle([615, 255, 615 + int(140 * activity_pct), 267], radius=3, fill='#ff9900')
     draw.text((755, 230), f"{int(activity_pct*100)}%", fill='#ff9900', font=font_card_lbl, anchor="ra")
@@ -1715,7 +1744,7 @@ def draw_user_stats_card(
     
     # Wrap comment safely
     import textwrap
-    wrapped_lines = textwrap.wrap(f'"{slang_comment}"', width=90)
+    wrapped_lines = textwrap.wrap(f'"{data.slang_comment}"', width=90)
     y_comm = 360
     for line in wrapped_lines[:2]:
         draw.text((50, y_comm), line, fill='#e6edf3', font=font_comment)
