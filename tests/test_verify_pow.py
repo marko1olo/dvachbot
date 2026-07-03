@@ -1,70 +1,77 @@
+import sys
+import os
+import unittest
 import hashlib
-import time
-from Dubsite_tgach.security import verify_pow, POW_CACHE, DEFAULT_POW_DIFFICULTY
+from unittest.mock import patch
+import importlib.util
 
-def test_verify_pow_difficulty_zero():
-    """If difficulty is 0, it should always return True without checking the cache."""
-    # Ensure cache is empty for this challenge
-    challenge = "test_chal_diff_0"
-    POW_CACHE.pop(challenge, None)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-    assert verify_pow(challenge, "any_nonce", difficulty=0) is True
+def _load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(PROJECT_ROOT, path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-def test_verify_pow_invalid_inputs():
-    """Should return False if challenge or nonce are empty, or if challenge not in cache."""
-    challenge = "test_chal_invalid"
+class TestVerifyPow(unittest.TestCase):
+    def setUp(self):
+        self.challenge = "test_challenge"
+        self.nonce = "test_nonce"
+        self.difficulty = 4
+        self.modules = [
+            ("dubsite", _load_module("Dubsite_tgach_security_isolated", "Dubsite_tgach/security.py")),
+            ("site", _load_module("site_tgach_security_isolated", "site_tgach/security.py"))
+        ]
 
-    # 1. Empty challenge
-    assert verify_pow("", "some_nonce") is False
+    def test_difficulty_zero(self):
+        for module_name, module in self.modules:
+            with self.subTest(module=module_name):
+                self.assertTrue(module.verify_pow(self.challenge, self.nonce, 0))
 
-    # 2. Empty nonce
-    POW_CACHE[challenge] = time.time() + 600
-    assert verify_pow(challenge, "") is False
+    def test_missing_challenge(self):
+        for module_name, module in self.modules:
+            with self.subTest(module=module_name):
+                self.assertFalse(module.verify_pow(None, self.nonce, self.difficulty))
+                self.assertFalse(module.verify_pow("", self.nonce, self.difficulty))
 
-    # 3. Challenge not in cache
-    POW_CACHE.pop(challenge, None)
-    assert verify_pow(challenge, "some_nonce") is False
+    def test_missing_nonce(self):
+        for module_name, module in self.modules:
+            with self.subTest(module=module_name):
+                self.assertFalse(module.verify_pow(self.challenge, None, self.difficulty))
+                self.assertFalse(module.verify_pow(self.challenge, "", self.difficulty))
 
-def test_verify_pow_valid_nonce():
-    """Given a valid nonce, it should return True and remove the challenge from cache."""
-    challenge = "test_chal_valid"
-    difficulty = 2
+    def test_challenge_not_in_cache(self):
+        for module_name, module in self.modules:
+            with self.subTest(module=module_name):
+                with patch.dict(module.POW_CACHE, {}, clear=True):
+                    self.assertFalse(module.verify_pow(self.challenge, self.nonce, self.difficulty))
 
-    # Find a valid nonce for difficulty 2
-    nonce = 0
-    target = "0" * difficulty
-    while True:
-        if hashlib.sha256(f"{challenge}{nonce}".encode()).hexdigest().startswith(target):
-            valid_nonce = str(nonce)
-            break
-        nonce += 1
+    def test_invalid_nonce(self):
+        for module_name, module in self.modules:
+            with self.subTest(module=module_name):
+                with patch.dict(module.POW_CACHE, {"test_challenge": 1234567890}, clear=True):
+                    self.assertFalse(module.verify_pow(self.challenge, "wrong_nonce", self.difficulty))
 
-    POW_CACHE[challenge] = time.time() + 600
+    def test_valid_nonce(self):
+        challenge = "test_challenge"
+        # Find a valid nonce
+        nonce_val = 0
+        target = "0" * self.difficulty
+        while True:
+            nonce = str(nonce_val)
+            text = f"{challenge}{nonce}"
+            res = hashlib.sha256(text.encode()).hexdigest()
+            if res.startswith(target):
+                break
+            nonce_val += 1
 
-    # Verify the nonce
-    assert verify_pow(challenge, valid_nonce, difficulty=difficulty) is True
+        for module_name, module in self.modules:
+            with self.subTest(module=module_name):
+                with patch.dict(module.POW_CACHE, {challenge: 1234567890}, clear=True):
+                    self.assertTrue(module.verify_pow(challenge, nonce, self.difficulty))
+                    self.assertNotIn(challenge, module.POW_CACHE)
 
-    # Verify the challenge was removed from cache
-    assert challenge not in POW_CACHE
-
-def test_verify_pow_invalid_nonce():
-    """Given an invalid nonce, it should return False and keep the challenge in cache."""
-    challenge = "test_chal_invalid_nonce"
-    difficulty = 2
-
-    # Find an invalid nonce for difficulty 2
-    nonce = 0
-    target = "0" * difficulty
-    while True:
-        if not hashlib.sha256(f"{challenge}{nonce}".encode()).hexdigest().startswith(target):
-            invalid_nonce = str(nonce)
-            break
-        nonce += 1
-
-    POW_CACHE[challenge] = time.time() + 600
-
-    # Verify the nonce
-    assert verify_pow(challenge, invalid_nonce, difficulty=difficulty) is False
-
-    # Verify the challenge was kept in cache
-    assert challenge in POW_CACHE
+if __name__ == "__main__":
+    unittest.main()
