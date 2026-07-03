@@ -1791,12 +1791,10 @@ async def sitemap_xml(request: Request):
     db = await get_pool()
     try:
         # Берем треды, сортируя по последнему ответу
-        query = "SELECT board_id, thread_id, last_updated_at FROM Threads ORDER BY last_updated_at DESC LIMIT 15000"
+        query = "SELECT board_id, thread_id, date(last_updated_at, 'unixepoch') FROM Threads ORDER BY last_updated_at DESC LIMIT 15000"
         async with db.execute(query) as cursor:
             async for row in cursor:
-                bid, tid, ts = row
-                # Превращаем timestamp в 2026-01-26
-                mod_date = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
+                bid, tid, mod_date = row
                 xml_content.append(f'  <url><loc>{base_url}/{bid}/res/{tid}.html</loc><lastmod>{mod_date}</lastmod><changefreq>hourly</changefreq></url>')
     except Exception as e:
         logger.error(f"Sitemap threads error: {e}")
