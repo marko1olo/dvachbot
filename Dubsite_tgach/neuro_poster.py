@@ -3,7 +3,6 @@ from common.http_utils import api_retry
 import logging
 import random
 import time
-import os
 import httpx
 from openai import AsyncOpenAI
 from common.token_pool import groq_pool

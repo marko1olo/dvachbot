@@ -41,7 +41,7 @@ def test_add_blocker_negative_count():
     blockers = []
     add_blocker(blockers, "test_code", -1, "test detail")
     assert len(blockers) == 0
-||||||| parent of 77bbf47 (🧪 Add tests and fix Pytest discovery for load_json)
+||||||| parent of f489b59 (🧪 Add tests and fix Pytest discovery for load_json)
 =======
 
 def test_load_json_empty_file(tmp_path: Path):
@@ -57,4 +57,4 @@ def test_load_json_is_directory(tmp_path: Path):
     dir_path.mkdir()
     with pytest.raises((IsADirectoryError, PermissionError)):
         load_json(dir_path)
->>>>>>> 77bbf47 (🧪 Add tests and fix Pytest discovery for load_json)
+>>>>>>> f489b59 (🧪 Add tests and fix Pytest discovery for load_json)
