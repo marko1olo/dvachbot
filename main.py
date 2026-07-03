@@ -1934,6 +1934,7 @@ def _collect_runtime_snapshot() -> dict:
             "peak_mb": round(tracemalloc.get_traced_memory()[1] / 1024 / 1024, 2) if tracemalloc.is_tracing() else 0.0,
         },
     }
+    }
 def _format_runtime_snapshot(snapshot: dict) -> str:
 
     memory = snapshot.get("memory", {})

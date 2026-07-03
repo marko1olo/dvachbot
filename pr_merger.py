@@ -2,7 +2,6 @@ import subprocess
 
 def run_cmd(cmd, check=True):
     try:
-        # Added a generous timeout here to avoid hanging on git log when there are a lot of commits/branches or the machine is slow
         return subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT, timeout=60).decode('utf-8').strip()
     except subprocess.CalledProcessError as e:
         if check:
