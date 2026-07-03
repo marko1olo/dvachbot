@@ -10,12 +10,14 @@ CATBOX_HASH = os.getenv("CATBOX_USER_HASH", None)
 CATBOX_HASH_DISABLE_SECONDS = 3600
 _CATBOX_HASH_DISABLED_UNTIL = 0.0
 
-# Очистка прокси от схемы (socks5:// и т.д.), чтобы httpx не ругался
+# Настройка прокси с сохранением схемы (socks5, http и т.д.)
 raw_proxy = os.getenv("CATBOX_PROXY") or os.getenv("PROXY_URL")
 PROXY_URL = None
 if raw_proxy:
-    clean_addr = raw_proxy.split("://")[-1]
-    PROXY_URL = f"http://{clean_addr}"
+    if "://" not in raw_proxy:
+        PROXY_URL = f"http://{raw_proxy}"
+    else:
+        PROXY_URL = raw_proxy
 
 logger = logging.getLogger("catbox")
 
@@ -45,7 +47,8 @@ def _build_data(req_type: str, file_source):
 
 
 def _is_invalid_uploader(resp: httpx.Response) -> bool:
-    return resp.status_code == 412 and "invalid uploader" in resp.text.lower()
+    text = resp.text.lower()
+    return "invalid uploader" in text or "banned" in text
 
 
 def _disable_bad_catbox_hash():
