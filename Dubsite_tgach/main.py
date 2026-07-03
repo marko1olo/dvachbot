@@ -60,7 +60,7 @@ from common.config import ENABLE_MULTILANG
 from common.database import create_report, get_active_reports, set_user_stream, resolve_report, get_detailed_statistics, get_all_feedback, get_board_media_posts, get_updates_since, get_activity_history, get_poll_results
 from collections import deque, defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Union
 from async_lru import alru_cache
 from functools import lru_cache
@@ -1739,7 +1739,7 @@ def format_iso_time(ts: float) -> str:
         return ""
 def format_timestamp(ts: float) -> str:
     try:
-        return datetime.fromtimestamp(ts).strftime('%d.%m.%Y %H:%M:%S')
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%d.%m.%Y %H:%M:%S')
     except (ValueError, TypeError, OverflowError, OSError):
         return ""
 def format_poll_for_html(poll_data: dict) -> str:
@@ -3824,7 +3824,7 @@ async def export_thread_html(board_id: str, post_num: int):
     
     import datetime
     def format_ts(ts):
-        return datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+        return datetime.datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         
     html = []
     html.append("<!DOCTYPE html>")
