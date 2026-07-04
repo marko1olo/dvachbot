@@ -1,4 +1,4 @@
-from collections.abc import Sequence, Mapping
+from collections.abc import Sequence
 ReplacementValue = str | Sequence[str]
 
 MODE_PUNCHUP_PROFILES: dict[str, dict] = {
