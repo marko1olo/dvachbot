@@ -3246,6 +3246,40 @@ const BoardStyleManager = {
                 this.apply(grid, styleNameLabel);
             };
         }
+        const filterInput = document.getElementById('board-search-input');
+        if (filterInput) {
+            filterInput.addEventListener('input', (e) => {
+                const query = e.target.value.toLowerCase().trim();
+                const headers = document.querySelectorAll('.board-group-header');
+                cards.forEach(card => {
+                    const name = card.querySelector('.board-card-name').textContent.toLowerCase();
+                    const desc = card.querySelector('.board-card-description').textContent.toLowerCase();
+                    if (name.includes(query) || desc.includes(query)) {
+                        card.style.removeProperty('display');
+                    } else {
+                        card.style.setProperty('display', 'none', 'important');
+                    }
+                });
+                headers.forEach(header => {
+                    let nextEl = header.nextElementSibling;
+                    let allHidden = true;
+                    while (nextEl && !nextEl.classList.contains('board-group-header')) {
+                        if (nextEl.classList.contains('board-card')) {
+                            if (nextEl.style.display !== 'none') {
+                                allHidden = false;
+                                break;
+                            }
+                        }
+                        nextEl = nextEl.nextElementSibling;
+                    }
+                    if (allHidden) {
+                        header.style.setProperty('display', 'none', 'important');
+                    } else {
+                        header.style.removeProperty('display');
+                    }
+                });
+            });
+        }
     },
 
     apply(grid, label) {
@@ -9870,6 +9904,9 @@ const AudioManager = {
         const time = wrapper.querySelector('.cap-time');
         const speed = wrapper.querySelector('.cap-speed-btn');
         const prog = wrapper.querySelector('.cap-progress-container');
+        if (bar && !bar.querySelector('.cap-wave-played')) {
+            bar.innerHTML = '<div class="cap-wave-base cap-wave-played"></div>';
+        }
         if (!audio || !btn) return;
         if (!btn.textContent.trim()) btn.textContent = '▶';
         const setIcon = (state) => {
@@ -10025,7 +10062,7 @@ const AudioManager = {
                 </div>
                 <div class="cap-controls-row">
                     <div class="cap-info"><span class="cap-time">00:00</span></div>
-                    <div class="cap-progress-container" data-target="${uid}"><div class="cap-wave-base"></div><div class="cap-wave-progress"></div></div>
+                    <div class="cap-progress-container" data-target="${uid}"><div class="cap-wave-base"></div><div class="cap-wave-progress"><div class="cap-wave-base cap-wave-played"></div></div></div>
                     <div class="cap-info"><button class="cap-speed-btn" data-target="${uid}" type="button">1x</button></div>
                     <a href="${src}" download="${safeName}" class="cap-download-btn" title="${t('download_title', 'Скачать')}">⬇</a>
                 </div>
@@ -10939,7 +10976,7 @@ const PostRenderer = {
                             </div>
                             <div class="cap-controls-row">
                                 <div class="cap-info"><span class="cap-time">00:00</span></div>
-                                <div class="cap-progress-container" data-target="${uniqueId}"><div class="cap-wave-base"></div><div class="cap-wave-progress"></div></div>
+                                <div class="cap-progress-container" data-target="${uniqueId}"><div class="cap-wave-base"></div><div class="cap-wave-progress"><div class="cap-wave-base cap-wave-played"></div></div></div>
                                 <div class="cap-info"><button class="cap-speed-btn" data-target="${uniqueId}" type="button">1x</button></div>
                                 <a href="${safeUrl}" download="${filename}" class="cap-download-btn" title="${t('download_title', 'Скачать')}">⬇</a>
                             </div>
@@ -14752,3 +14789,48 @@ document.addEventListener("DOMContentLoaded", function() {
         })
         .catch(err => console.error("Error checking ru status:", err));
 });
+
+// Preserve view mode (threads, chat, catalog) across board navigation
+(function() {
+    const path = window.location.pathname;
+    let mode = localStorage.getItem('tgach_view_mode') || 'threads';
+
+    if (path.includes('/chat/')) {
+        mode = 'chat';
+        localStorage.setItem('tgach_view_mode', 'chat');
+    } else if (path.includes('/catalog/')) {
+        mode = 'catalog';
+        localStorage.setItem('tgach_view_mode', 'catalog');
+    } else if (path.includes('/threads/')) {
+        mode = 'threads';
+        localStorage.setItem('tgach_view_mode', 'threads');
+    }
+
+    if (mode !== 'threads') {
+        const boardLinkRegex = /^\/([a-zA-Z0-9_-]+)\/(threads|chat|catalog)?\/?$/;
+        const updateLinks = () => {
+            document.querySelectorAll('a').forEach(link => {
+                if (link.closest('.board-header-nav')) {
+                    return;
+                }
+                const href = link.getAttribute('href');
+                if (href) {
+                    const match = href.match(boardLinkRegex);
+                    if (match) {
+                        const boardId = match[1];
+                        if (boardId !== 'overboard' && boardId !== 'archive' && boardId !== 'search' && boardId !== 'static') {
+                            link.setAttribute('href', `/${boardId}/${mode}/`);
+                        }
+                    }
+                }
+            });
+        };
+        updateLinks();
+        if (document.readyState === 'loading') {
+            window.addEventListener('DOMContentLoaded', updateLinks);
+        }
+        const observer = new MutationObserver(updateLinks);
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+})();
+

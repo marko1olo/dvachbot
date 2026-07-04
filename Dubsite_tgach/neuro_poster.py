@@ -502,22 +502,33 @@ class NeuroManager:
     async def generate_summary(self, text_dump: str, stream: str) -> str:        
         prompts = {
             "ru": (
-                "Ты — Анон с имиджборды (Двач). Твоя задача: прочитать этот срач (посты разделены '|') "
-                "и кратко пояснить, чё там происходит. "
+                "Ты — Анон с имиджборды (Двач). Твоя задача: написать подробную, циничную и смешную суть (summary) этого треда (посты разделены '|'). "
+                "Опиши главные темы обсуждения, кто занял какую позицию, кто порвался или слился. "
                 "Пиши грязно, используй сленг, мат, будь веселым, ебанутым, токсичным и циничным ублюдком. "
                 "Высмей участников, если они тупят. Не используй возвышенных слов. "
-                "Формат: 2-3 предложения по сути. Без цензуры."
+                "Разбивай текст на абзацы. Используй BBCode-теги [b]жирный[/b] для выделения ключевых мыслей/ников и знак '>' в начале строки для гринтекста. "
+                "Формат: детальный структурированный разбор с забавными заголовками. Без цензуры."
             ),
             "en": (
-                "You are a toxic 4chan anon. Summarize this thread (posts split by '|'). "
-                "Use internet slang, profanity, be cynical and rude. "
-                "Roast the participants if they are stupid. Keep it short (2-3 sentences). No filters."
+                "You are a toxic 4chan anon. Write a detailed, cynical and funny summary of this thread (posts split by '|'). "
+                "Describe the main topics of discussion, who took what stance, and who got seethed or roasted. "
+                "Use board slang, profanity, be cynical and rude. "
+                "Split text into paragraphs. Use BBCode [b]bold[/b] to highlight key points/usernames and '>' at the start of a line for greentext. "
+                "Format: detailed structured breakdown with funny headings. No filters."
             ),
-            "jp": "お前は2chねらーだ。「|」で区切られたスレの流れを3行で解説しろ。毒舌で、ネットスラング（草、ｗ、～だろ）を多用しろ。丁寧語禁止。煽り全開で。"
+            "jp": "お前は2chねらーだ。「|」で区切られたスレの流れを毒舌で、ネットスラング（草、ｗ、～だろ）を多用して解説しろ。丁寧語禁止。煽り全開で。段落を分けて、[b]強調[/b]や、行頭の'>'（レス引用）を自由に使え。"
         }
         
         system_msg = prompts.get(stream, prompts['ru'])
         
+        try:
+            from summarize import summarize_text_with_hf
+            result = await summarize_text_with_hf(system_msg, text_dump)
+            if result and "Нейронка сдохла" not in result:
+                return result
+        except Exception as e:
+            logger.error(f"Fallback to summarize_text_with_hf failed: {e}")
+
         messages = [
             {"role": "system", "content": system_msg},
             {"role": "user", "content": text_dump}

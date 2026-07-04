@@ -4302,6 +4302,19 @@ async def about_page(request: Request, user: dict | None = Depends(get_optional_
 async def my_posts_page(
     request: Request, user: dict | None = Depends(get_optional_user)
 ):
+    user_stats = None
+    if user:
+        try:
+            from stats_generator import fetch_user_stats_data, _get_slang_comment, generate_schizo_name
+            u_id = int(user["id"])
+            user_stats = fetch_user_stats_data(u_id, "b")
+            user_stats["schizo_name"] = generate_schizo_name(u_id)
+            user_stats["comment"] = _get_slang_comment(
+                user_stats["posts_count"], user_stats["rank"], user_stats["balance"]
+            )
+        except Exception as e:
+            logger.warning(f"Failed to fetch user stats for my_posts: {e}")
+
     return templates.TemplateResponse(
         request=request,
         name="my_posts.jinja2",
@@ -4311,6 +4324,7 @@ async def my_posts_page(
             "site_mode": SITE_ACCESS_MODE,
             "session": {"user": user},
             "BOT_USERNAME": BOT_USERNAME,
+            "user_stats": user_stats,
         },
     )
 
@@ -5520,6 +5534,12 @@ async def api_get_media_feed(
     is_ru = await is_request_from_ru(request)
     await enrich_extra_data(posts, is_ru=is_ru)
     return posts
+
+
+@app.get("/roulette")
+@app.get("/roulette/")
+async def roulette_redirect_alias():
+    return RedirectResponse(url="/tv/random", status_code=301)
 
 
 @app.get("/{board_id}/")
@@ -9076,6 +9096,138 @@ async def api_thread_summary(thread_id: int, request: Request):
     return {"summary": summary}
 
 
+@app.get("/api/voice/{file_id:path}/transcribe")
+@limiter.limit("20/minute", key_func=get_user_id_from_session)
+async def api_transcribe_voice(file_id: str, request: Request):
+    file_id = file_id.lstrip('/')
+    if '/' in file_id:
+        file_id = file_id.split('/')[0]
+
+    # 1. Проверяем кэш в БД
+    transcription = None
+    try:
+        async with get_db_connection() as conn:
+            # Создаем таблицу, если ее нет
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS VoiceTranscriptions (
+                    file_id TEXT PRIMARY KEY,
+                    transcription TEXT,
+                    created_at REAL
+                )
+            """)
+            await conn.commit()
+            
+            async with conn.execute(
+                "SELECT transcription FROM VoiceTranscriptions WHERE file_id = ? LIMIT 1",
+                (file_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    transcription = row[0]
+    except Exception as e:
+        logger.error(f"DB error in VoiceTranscriptions lookup: {e}")
+
+    if transcription:
+        return {"transcription": transcription}
+
+    # 2. Скачиваем аудиофайл
+    audio_bytes = None
+    
+    # Сначала проверяем зеркала
+    mirrors = await get_file_mirrors(file_id)
+    catbox = mirrors.get("catbox")
+    if catbox:
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                resp = await client.get(catbox)
+                if resp.status_code == 200:
+                    audio_bytes = resp.content
+        except Exception as e:
+            logger.warning(f"Failed to download audio from catbox mirror: {e}")
+
+    # Если не зазеркалено, скачиваем из телеграма
+    if not audio_bytes:
+        info = await get_cached_file_path(file_id, allow_protected_tokens=True)
+        if info:
+            path, token = info
+            url = f"https://api.telegram.org/file/bot{token}/{path}"
+            try:
+                async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        audio_bytes = resp.content
+            except Exception as e:
+                logger.warning(f"Failed to download audio from telegram path: {e}")
+
+    if not audio_bytes:
+        raise HTTPException(status_code=404, detail="Audio file not found or unavailable.")
+
+    # 3. Вызываем Gemini API
+    import base64
+    from summarize import _load_google_keys, PROXY_URL
+    import time
+    
+    keys = _load_google_keys()
+    if not keys:
+        raise HTTPException(status_code=500, detail="Gemini API config missing.")
+
+    b64_data = base64.b64encode(audio_bytes).decode('utf-8')
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "inlineData": {
+                            "mimeType": "audio/ogg",
+                            "data": b64_data
+                        }
+                    },
+                    {
+                        "text": "Пожалуйста, расшифруй эту аудиозапись дословно на русском языке. Запиши только расшифрованный текст, без комментариев и вступлений. Если аудиозапись пустая или там только тишина/шум, напиши '[Тишина]'"
+                    }
+                ]
+            }
+        ]
+    }
+
+    transcription_text = None
+    # Пробуем по очереди все ключи
+    for key in keys:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key}"
+        for proxy in [None, PROXY_URL]:
+            try:
+                async with httpx.AsyncClient(proxy=proxy, verify=False, timeout=30.0) as client:
+                    resp = await client.post(url, json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        transcription_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
+                        break
+                    elif resp.status_code == 429:
+                        logger.warning("Gemini API rate limit exceeded during transcription. Trying next key...")
+                        break
+            except Exception as e:
+                logger.warning(f"Gemini API call failed with proxy={proxy}: {e}")
+                continue
+        if transcription_text:
+            break
+
+    if not transcription_text:
+        raise HTTPException(status_code=500, detail="Transcription service unavailable.")
+
+    # 4. Сохраняем в кэш БД
+    try:
+        async with get_db_connection() as conn:
+            await conn.execute(
+                "INSERT OR REPLACE INTO VoiceTranscriptions (file_id, transcription, created_at) VALUES (?, ?, ?)",
+                (file_id, transcription_text, time.time()),
+            )
+            await conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to save transcription to DB: {e}")
+
+    return {"transcription": transcription_text}
+
+
 @app.get("/random/thread")
 async def random_thread_redirect():
     res = await get_random_active_thread()
@@ -10234,6 +10386,25 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
         return RedirectResponse(
             url=zeroxzero_link, status_code=307, headers=no_cache_headers
         )
+
+    # Fallback для превью (миниатюр): если не удалось найти превью, пробуем оригинальный файл
+    if file_id.startswith("AgAC"):
+        orig_fid = None
+        try:
+            async with get_db_connection() as conn:
+                async with conn.execute(
+                    "SELECT file_id FROM FileRegistry WHERE thumbnail_id = ? LIMIT 1",
+                    (file_id,),
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        orig_fid = row[0]
+        except Exception as e:
+            logger.error(f"Error querying original file for thumbnail fallback: {e}")
+            
+        if orig_fid and orig_fid != file_id:
+            logger.info(f"Fallback thumbnail {file_id[:10]} -> original {orig_fid[:10]}")
+            return await get_telegram_file(orig_fid, request, filename)
 
     # Если совсем всё плохо
     _mark_random_dead_file(file_id)

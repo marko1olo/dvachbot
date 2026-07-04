@@ -28,6 +28,21 @@
             display: none !important;
         }
     </style>
+    <script>
+        (function() {
+            try {
+                var savedMode = localStorage.getItem('tgach_view_mode');
+                if (savedMode && (savedMode === 'chat' || savedMode === 'threads' || savedMode === 'catalog')) {
+                    var urlParams = new URLSearchParams(window.location.search);
+                    if (!urlParams.has('nohub')) {
+                        var base = window.location.pathname;
+                        if (!base.endsWith('/')) base += '/';
+                        window.location.replace(base + savedMode + '/' + window.location.search);
+                    }
+                }
+            } catch (e) { console.error(e); }
+        })();
+    </script>
 </head>
 <body {% if session.user %}data-user-id="{{ request.state.user_hash }}"{% endif %} data-site-mode="{{ site_mode }}">
     <div id="app-loader">

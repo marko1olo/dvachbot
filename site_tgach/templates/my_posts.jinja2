@@ -24,6 +24,111 @@
             font-size: 1.2em;
         }
         .loader-spinner { margin: 0 auto 10px auto; }
+        .user-stats-card {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--border-primary);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 25px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            transition: all 0.3s ease;
+        }
+        .user-stats-card:hover {
+            border-color: var(--accent-primary);
+            box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.45);
+        }
+        .usc-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            border-bottom: 1px dashed var(--border-primary);
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+        }
+        .usc-prefix {
+            font-family: var(--font-headings);
+            font-weight: bold;
+            color: var(--accent-primary);
+            font-size: 1.2em;
+        }
+        .usc-schizo {
+            font-style: italic;
+            opacity: 0.8;
+            font-size: 0.95em;
+        }
+        .usc-role {
+            font-weight: bold;
+            font-size: 0.85em;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        .usc-role-admin { background: #d32f2f; color: white; }
+        .usc-role-moderator { background: #f57c00; color: white; }
+        .usc-role-user { background: var(--bg-input); color: var(--text-primary); }
+        .usc-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .usc-item {
+            background: var(--bg-post);
+            border: 1px solid var(--border-separator);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+        .usc-item:hover {
+            transform: translateY(-2px);
+            border-color: var(--accent-primary);
+        }
+        .usc-label {
+            font-size: 0.85em;
+            opacity: 0.6;
+        }
+        .usc-value {
+            font-size: 1.15em;
+            font-weight: bold;
+            color: var(--text-primary);
+        }
+        .usc-comment {
+            background: rgba(100, 181, 246, 0.08);
+            border-left: 4px solid var(--accent-primary);
+            border-radius: 0 8px 8px 0;
+            padding: 12px 16px;
+            font-size: 0.95em;
+            line-height: 1.5;
+            display: flex;
+            gap: 10px;
+            text-align: left;
+        }
+        .usc-comment-quote {
+            font-size: 1.5em;
+            color: var(--accent-primary);
+            line-height: 1;
+        }
+        .login-cta-card {
+            background: var(--bg-post);
+            border: 1px dashed var(--accent-primary);
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
+            margin-bottom: 25px;
+            box-shadow: var(--shadow-main);
+        }
+        .login-cta-card p {
+            margin: 0 0 15px 0;
+            font-size: 1.05em;
+            color: var(--text-secondary);
+        }
     </style>
 </head>
 <body class="page-my-posts" 
@@ -112,6 +217,53 @@
                 Всего постов: <span id="mp-total-count" class="mp-stat-val">...</span>
             </div>
         </div>
+
+        {% if user_stats %}
+        <div class="user-stats-card">
+            <div class="usc-header">
+                <span class="usc-prefix">{{ user_stats.custom_prefix or '[АНОНИМ]' }}</span>
+                <span class="usc-schizo">🤖 {{ user_stats.schizo_name }}</span>
+                <span class="usc-role usc-role-{{ user_stats.role }}">{{ user_stats.role | upper }}</span>
+            </div>
+            <div class="usc-grid">
+                <div class="usc-item">
+                    <span class="usc-label">Ранг на доске:</span>
+                    <span class="usc-value">#{{ user_stats.rank }} / {{ user_stats.total_users }}</span>
+                </div>
+                <div class="usc-item">
+                    <span class="usc-label">Баланс:</span>
+                    <span class="usc-value">🪙 {{ "%.2f"|format(user_stats.balance) }}</span>
+                </div>
+                <div class="usc-item">
+                    <span class="usc-label">Всего постов:</span>
+                    <span class="usc-value">✍️ {{ user_stats.posts_count }}</span>
+                </div>
+                <div class="usc-item">
+                    <span class="usc-label">Реакций получено/дано:</span>
+                    <span class="usc-value">🔥 {{ user_stats.rx_received }} / {{ user_stats.rx_given }}</span>
+                </div>
+                <div class="usc-item">
+                    <span class="usc-label">Мутов получено:</span>
+                    <span class="usc-value">🔇 {{ user_stats.mutes_count }}</span>
+                </div>
+                <div class="usc-item">
+                    <span class="usc-label">Детектор лжи (медиа):</span>
+                    <span class="usc-value">📸 {{ "%.1f"|format(user_stats.lie_media * 100) }}%</span>
+                </div>
+            </div>
+            {% if user_stats.comment %}
+            <div class="usc-comment">
+                <span class="usc-comment-quote">💬</span>
+                <div>{{ user_stats.comment }}</div>
+            </div>
+            {% endif %}
+        </div>
+        {% elif not session.user %}
+        <div class="login-cta-card">
+            <p>🔑 Войдите через Telegram, чтобы отслеживать свой баланс, ранг на борде и получать комментарии от ИИ!</p>
+            <a href="/login" class="btn btn-primary" style="display: inline-block; text-decoration: none;">Авторизоваться</a>
+        </div>
+        {% endif %}
 
         <div id="my-posts-feed" class="thread-list">
             <div id="mp-loader" style="text-align: center; padding: 50px; color: var(--text-secondary);">

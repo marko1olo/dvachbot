@@ -112,8 +112,12 @@
         </div>
     </header>
     <main>
-        <div class="view-controls" style="display:flex; justify-content:space-between; align-items:center;">
-            <div style="font-weight:bold; color:var(--text-secondary);">Каталог досок</div>
+        <div class="view-controls" style="display:flex; justify-content:space-between; align-items:center; gap:15px; flex-wrap:wrap;">
+            <div style="font-weight:bold; color:var(--text-secondary); flex-grow:1;">Каталог досок</div>
+            <div class="board-search-wrapper" style="position:relative; display:flex; align-items:center; max-width:280px; width:100%;">
+                <input type="text" id="board-search-input" placeholder="Быстрый поиск доски..." style="padding:6px 12px 6px 32px; width:100%; border-radius:6px; font-size:0.95em;">
+                <span style="position:absolute; left:10px; color:var(--text-secondary); pointer-events:none; opacity:0.7;">🔍</span>
+            </div>
             <button id="style-switch-btn" class="btn btn-secondary" style="min-width:120px;">
                 <span id="style-name-display">Плитка</span>
             </button>

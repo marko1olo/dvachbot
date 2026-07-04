@@ -802,6 +802,8 @@ class ThreadImporter:
             for f in p_data["files"]:
                 if f.get("original_file_id"):
                     all_files_for_queue.append(f["original_file_id"])
+                if f.get("thumbnail_file_id"):
+                    all_files_for_queue.append(f["thumbnail_file_id"])
 
         async with db_lock, get_db_connection() as conn:
             try:
