@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Избранное - {{ request.state.t('site_name') }}</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9.0">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.5">
     <link rel="icon" href="/static/favicon.ico">
 </head>
 <body {% if session.user %}data-user-id="{{ session.user.id }}"{% endif %} data-site-mode="{{ site_mode }}">
@@ -255,6 +255,6 @@
         <div id="iv-loader" class="iv-loader" style="display: none;"></div>
     </div>
     <div id="loading-indicator" class="loading-indicator">Отправка...</div>
-    <script src="/static/js/main.js?v=9.0" defer></script>
+    <script src="/static/js/main.js?v=9.5" defer></script>
 </body>
 </html>

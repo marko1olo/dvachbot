@@ -1279,6 +1279,7 @@ const MediaStreamManager = {
         
         try {
             const res = await fetch(`/api/media-feed/${this.boardId}?page=${this.page}`);
+            if (!res.ok) throw new Error(res.status);
             const posts = await res.json();
             if (posts.length === 0) {
                 showToast(t('media_stream_end'));
@@ -3124,6 +3125,7 @@ const AdminUtils = {
         if (document.body.dataset.isAdmin !== 'true') return;
         try {
             const res = await fetch('/api/admin/feedback/count');
+            if (!res.ok) throw new Error(res.status);
             const data = await res.json();
             const badge = document.getElementById('inbox-badge');
             if (badge) {
@@ -6109,6 +6111,7 @@ const CaptchaManager = {
         if (this.checkedStatus === undefined) {
             try {
                 const res = await fetch('/api/captcha/status');
+                if (!res.ok) throw new Error(res.status);
                 const d = await res.json();
                 globalEnabled = d.enabled;
                 this.checkedStatus = true;
@@ -9818,6 +9821,7 @@ const GalleryManager = {
 
         try {
             const res = await fetch(`/api/file/tags?file_id=${fileId}`);
+            if (!res.ok) throw new Error(res.status);
             const data = await res.json();
 
             container.innerHTML = '';
@@ -13623,6 +13627,7 @@ const TagSearchManager = {
             const res = await fetch(`/search/tags?tags=${encodeURIComponent(this.tags)}&page=${this.page}`, {
                 headers: { 'Accept': 'application/json' }
             });
+            if (!res.ok) throw new Error(res.status);
             const images = await res.json();
 
             if (!images || images.length === 0) {
