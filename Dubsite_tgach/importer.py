@@ -550,7 +550,7 @@ class ThreadImporter:
 
         # Configured Transport from New Version
         transport = httpx.AsyncHTTPTransport(
-            local_address=BIND_IPV4,  # Принудительный IPv4 (Fix для OpenVPN)
+            local_address=BIND_IPV4,  # Принудительный IPv4 для OpenVPN
             retries=3,
             verify=False,
             http2=False,  # Строго HTTP/1.1
