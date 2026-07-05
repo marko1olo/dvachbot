@@ -73,7 +73,29 @@ class MemoryUploadFile:
         pass
 
 
+
+# Предкомпилированные регулярные выражения для оптимизации _normalize_html_sync
+HTML_REPLACEMENTS = [
+    (re.compile(pattern, flags=re.IGNORECASE), replacement)
+    for pattern, replacement in {
+        r"двач": "тгач",
+        r"харкач": "тгач",
+        r"сосач": "тгач",
+        r"двачер": "тгачер",
+        r"двощ": "тгач",
+        r"абу": "админ",
+        r"mailru": "tganon",
+        r"2ch": "tgach",
+        r"2ch.su": "tgach.site",
+        r"2ch.org": "tgach.site",
+        r"2chan": "tgach",
+        r"4chan": "tgach",
+        r"4chan.org": "tgach.site",
+    }.items()
+]
+
 class ThreadImporter:
+
     MEDIA_CONCURRENCY_LIMIT = 5
 
     def __init__(self, bot, file_storage_channel_id: int):
@@ -118,23 +140,8 @@ class ThreadImporter:
         if not raw_html:
             return ""
 
-        replacements = {
-            r"двач": "тгач",
-            r"харкач": "тгач",
-            r"сосач": "тгач",
-            r"двачер": "тгачер",
-            r"двощ": "тгач",
-            r"абу": "админ",
-            r"mailru": "tganon",
-            r"2ch": "tgach",
-            r"2ch.su": "tgach.site",
-            r"2ch.org": "tgach.site",
-            r"2chan": "tgach",
-            r"4chan": "tgach",
-            r"4chan.org": "tgach.site",
-        }
-        for pattern, replacement in replacements.items():
-            raw_html = re.sub(pattern, replacement, raw_html, flags=re.IGNORECASE)
+        for pattern, replacement in HTML_REPLACEMENTS:
+            raw_html = pattern.sub(replacement, raw_html)
 
         import warnings
 
