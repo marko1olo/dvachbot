@@ -23,7 +23,7 @@ except RuntimeError:
 mocked_deps = [
     'pyrogram',
     'site_tgach.mtproto_client',
-    'imagehash',
+    'imagehash', 'httpx',
 ]
 for mod in mocked_deps:
     if mod not in sys.modules:
