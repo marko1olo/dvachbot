@@ -3690,8 +3690,8 @@ async def db_maintenance_task():
         try:
             logger.info("🧹 [DB] Starting cleanup & maintenance...")
 
-            # Запускаем тяжелую синхронную очистку в отдельном потоке
-            await asyncio.to_thread(cleanup_old_posts_from_db)
+            # Асинхронная очистка
+            await cleanup_old_posts_from_db()
 
             # Асинхронные очистки очередей
             try:
