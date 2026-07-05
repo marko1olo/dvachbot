@@ -12357,6 +12357,8 @@ def _get_leave_thread_keyboard(board_id: str, stream: str = 'ru') -> InlineKeybo
         [InlineKeyboardButton(text=button_text, callback_data="show_active_threads")]
     ])
     return keyboard
+RE_MULTI_REPLY_LOCAL = re.compile(r'>>(\d+)')
+
 def _parse_and_split_multi_replies(text: str) -> tuple[list[tuple[int, str]], bool]:
     """
     Парсит текст на предмет мультиответов (>>post_num) и разбивает его на блоки.
@@ -12371,8 +12373,7 @@ def _parse_and_split_multi_replies(text: str) -> tuple[list[tuple[int, str]], bo
     """
     if not text:
         return [], False
-    reply_pattern = re.compile(r'>>(\d+)')
-    matches = list(reply_pattern.finditer(text))
+    matches = list(RE_MULTI_REPLY_LOCAL.finditer(text))
     limit_hit = False
     if len(matches) < 2:
         return [], False
