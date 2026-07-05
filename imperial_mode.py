@@ -40,6 +40,17 @@ IMPERIAL_PHRASES_START = [
     "Монокли протерты, перчатки надѣты, брегеты сверены! Начинаемъ сеансъ высокой словесности!"
 ]
 
+FRENCH_REPLACEMENTS_COMPILED = [
+    (re.compile(r'\bочень\b', flags=re.IGNORECASE), ['très', 'infiniment']),
+    (re.compile(r'\bмой друг\b', flags=re.IGNORECASE), ['mon cher ami', 'mon cher']),
+    (re.compile(r'\bконечно\b', flags=re.IGNORECASE), ['bien sûr', 'naturellement', 'sans doute']),
+    (re.compile(r'\bпочему\b', flags=re.IGNORECASE), ['pourquoi', 'mon Dieu, pourquoi']),
+    (re.compile(r'\bпрекрасно\b', flags=re.IGNORECASE), ['magnifique', 'charmant', 'c’est parfait']),
+    (re.compile(r'\bя люблю\b', flags=re.IGNORECASE), ['j’aime', 'je t’aime']),
+    (re.compile(r'\bсогласен\b', flags=re.IGNORECASE), ['d’accord', 'absolument']),
+    (re.compile(r'\bжизнь\b', flags=re.IGNORECASE), ['c’est la vie', 'la vie']),
+]
+
 IMPERIAL_PHRASES_END = [
     "ГОСПОДА, ВЪ ПЕТРОГРАДѢ БУНТЪ!\n\nСамодержавiе пало! Режимъ 'Имперскiй' отмѣняется... Россiя, которую мы потеряли...",
     "Внимание, господа! Поступила депеша о низверженiи государя-императора! Возвращаемся къ богомерзкой совѣтской орѳографiи.",
@@ -845,20 +856,9 @@ def _apply_slovoers_and_french(text: str) -> str:
     text = re.sub(r'([а-яА-ЯёЁa-zA-Z]+)([\.!?;,])', _add_s, text)
     
     # 2. Дворянские французские вкрапления (с сохранением контекста)
-    french_replacements =[
-        (r'\bочень\b', ['très', 'infiniment']),
-        (r'\bмой друг\b',['mon cher ami', 'mon cher']),
-        (r'\bконечно\b',['bien sûr', 'naturellement', 'sans doute']),
-        (r'\bпочему\b', ['pourquoi', 'mon Dieu, pourquoi']),
-        (r'\bпрекрасно\b', ['magnifique', 'charmant', 'c’est parfait']),
-        (r'\bя люблю\b', ['j’aime', 'je t’aime']),
-        (r'\bсогласен\b',['d’accord', 'absolument']),
-        (r'\bжизнь\b',['c’est la vie', 'la vie']),
-    ]
-    
-    for pattern, replacements in french_replacements:
+    for pattern, replacements in FRENCH_REPLACEMENTS_COMPILED:
         if random.random() < 0.25:
-            text = re.sub(pattern, lambda m: random.choice(replacements), text, flags=re.IGNORECASE)
+            text = pattern.sub(lambda m: random.choice(replacements), text)
 
     # 3. Визуальная дореформенная буква "і" перед гласными
     text = re.sub(r'и([аеёоуыэюя])', r'i\1', text, flags=re.IGNORECASE)
