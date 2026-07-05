@@ -1,0 +1,6 @@
+{
+  "learnings": [
+    "When doing code health refactoring to remove unused imports in `main.py`, I found that removing multiple unneeded constants from the `common.text_utils` import is safe.",
+    "Removing unused imports (e.g., `RE_HTML_TAGS`, `RE_SCRIPT_TAG`, `RE_SCRIPT_SINGLE`, `RE_DANGEROUS_TAGS`, `RE_DANGEROUS_SINGLE`, `RE_EVENT_HANDLERS`) correctly resolves linting errors while keeping required logic intact."
+  ]
+}
