@@ -30,3 +30,21 @@ def sanitize_html(text: str) -> str:
     text = RE_DANGEROUS_SINGLE.sub('', text)
     text = RE_EVENT_HANDLERS.sub('', text)
     return text
+
+def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, int]) -> str:
+    """Улучшенная версия: не использует замок, работает с переданным словарем авторов."""
+    if not text or ">>" not in text:
+        return text
+
+    matches = RE_YOU_PATTERN.findall(text)
+    for post_str in matches:
+        try:
+            p_num = int(post_str)
+            if post_authors.get(p_num) == user_id:
+                target = f">>{p_num}"
+                replacement = f">>{p_num} (You)"
+                if target in text and replacement not in text:
+                    text = text.replace(target, replacement)
+        except ValueError:
+            continue
+    return text

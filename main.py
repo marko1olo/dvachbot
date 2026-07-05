@@ -244,7 +244,7 @@ ANIME_COMMAND_MAP = {
     "LOLICON": get_loli_image,
     "LOLIS": get_loli_image,
 }
-from common.text_utils import clean_html_tags, sanitize_html, RE_HTML_TAGS, RE_YOU_PATTERN, RE_SCRIPT_TAG, RE_SCRIPT_SINGLE, RE_DANGEROUS_TAGS, RE_DANGEROUS_SINGLE, RE_EVENT_HANDLERS
+from common.text_utils import clean_html_tags, sanitize_html, RE_HTML_TAGS, RE_YOU_PATTERN, RE_SCRIPT_TAG, RE_SCRIPT_SINGLE, RE_DANGEROUS_TAGS, RE_DANGEROUS_SINGLE, RE_EVENT_HANDLERS, add_you_to_my_posts_fast
 RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
 RE_SYSTEM_HEADER_CLEAN = re.compile(r'^(###.*?###|<i>.*?</i>)\s*\n?', flags=re.MULTILINE)
 RE_NEWLINES = re.compile(r'\n{2,}')
@@ -946,23 +946,6 @@ aiohttp_log = logging.getLogger('aiohttp')
 aiohttp_log.setLevel(logging.CRITICAL) 
 aiogram_log = logging.getLogger('aiogram')
 aiogram_log.setLevel(logging.CRITICAL) # <--- ИЗМЕНЕНО НА CRITICAL, чтобы не видеть ошибки апдейтов
-def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, int]) -> str:
-    """Улучшенная версия: не использует замок, работает с переданным словарем авторов."""
-    if not text or ">>" not in text:
-        return text
-    
-    matches = RE_YOU_PATTERN.findall(text)
-    for post_str in matches:
-        try:
-            p_num = int(post_str)
-            if post_authors.get(p_num) == user_id:
-                target = f">>{p_num}"
-                replacement = f">>{p_num} (You)"
-                if target in text and replacement not in text:
-                    text = text.replace(target, replacement)
-        except ValueError:
-            continue
-    return text
 gc.set_threshold(
     600, 6, 6)  # Оптимальные настройки для баланса памяти/производительности
 SPAM_LIMIT = 14
