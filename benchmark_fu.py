@@ -31,11 +31,9 @@ async def run_baseline():
 async def run_optimized():
     async with aiosqlite.connect(DB_NAME) as db:
         start_time = time.perf_counter()
-        patterns = ['AgAC%', 'BQAC%', 'CQAC%']
-        query_mirror = "DELETE FROM MirrorQueue WHERE file_id LIKE ? OR file_id LIKE ? OR file_id LIKE ?"
-        await db.execute(query_mirror, patterns)
-        query_hf = "DELETE FROM PendingHF WHERE file_id LIKE ? OR file_id LIKE ? OR file_id LIKE ?"
-        await db.execute(query_hf, patterns)
+        patterns = [('AgAC%',), ('BQAC%',), ('CQAC%',)]
+        await db.executemany("DELETE FROM MirrorQueue WHERE file_id LIKE ?", patterns)
+        await db.executemany("DELETE FROM PendingHF WHERE file_id LIKE ?", patterns)
         await db.commit()
         return time.perf_counter() - start_time
 
