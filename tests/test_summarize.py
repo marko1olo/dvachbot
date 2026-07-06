@@ -156,7 +156,6 @@ async def test_summarize_empty_result(
 
 def test_load_google_keys(tmp_path, monkeypatch):
     from summarize import _load_google_keys
-    import os
 
     # 1. No .envgoogle, no env var
     monkeypatch.chdir(tmp_path)
@@ -171,3 +170,98 @@ def test_load_google_keys(tmp_path, monkeypatch):
     envgoogle = tmp_path / ".envgoogle"
     envgoogle.write_text("GOOGLE_API_KEYS=file-key1, file-key2")
     assert _load_google_keys() == ["file-key1", "file-key2"]
+
+
+@pytest.fixture(autouse=True)
+def reset_telegraph_token_cache():
+    import summarize
+    original_cache = summarize._telegraph_token_cache
+    summarize._telegraph_token_cache = None
+    yield
+    summarize._telegraph_token_cache = original_cache
+
+def test_get_telegraph_token_cached(monkeypatch):
+    import summarize
+    summarize._telegraph_token_cache = "cached_token"
+    token = summarize.get_telegraph_token()
+    assert token == "cached_token"
+
+def test_get_telegraph_token_env_var(monkeypatch):
+    import summarize
+    monkeypatch.setenv("TELEGRAPH_TOKEN", "env_token")
+    token = summarize.get_telegraph_token()
+    assert token == "env_token"
+    assert summarize._telegraph_token_cache == "env_token"
+
+def test_get_telegraph_token_file(monkeypatch, tmp_path):
+    import summarize
+
+    token_file = tmp_path / "telegraph_token.txt"
+    token_file.write_text("file_token")
+
+    monkeypatch.setattr(summarize, "TELEGRAPH_TOKEN_FILE", str(token_file))
+    monkeypatch.delenv("TELEGRAPH_TOKEN", raising=False)
+
+    token = summarize.get_telegraph_token()
+    assert token == "file_token"
+    assert summarize._telegraph_token_cache == "file_token"
+
+def test_get_telegraph_token_generation_success(monkeypatch, tmp_path):
+    import summarize
+    from unittest.mock import MagicMock
+
+    mock_logger_error = MagicMock()
+    monkeypatch.setattr("summarize.logger.error", mock_logger_error)
+
+    mock_makedirs = MagicMock()
+    monkeypatch.setattr("summarize.os.makedirs", mock_makedirs)
+
+    token_file = tmp_path / "telegraph_token.txt"
+    monkeypatch.setattr(summarize, "TELEGRAPH_TOKEN_FILE", str(token_file))
+    monkeypatch.delenv("TELEGRAPH_TOKEN", raising=False)
+
+    class MockTelegraphPoster:
+        def __init__(self, *args, **kwargs):
+            self.access_token = None
+
+        def create_api_token(self, short_name, author_name):
+            self.access_token = "generated_token"
+
+    # Because summarize.py performs local import:
+    # try:
+    #     from html_telegraph_poster import TelegraphPoster
+    monkeypatch.setattr("html_telegraph_poster.TelegraphPoster", MockTelegraphPoster)
+
+    token = summarize.get_telegraph_token()
+
+    assert token == "generated_token"
+    assert summarize._telegraph_token_cache == "generated_token"
+    mock_makedirs.assert_called_once_with("data", exist_ok=True)
+    assert token_file.read_text(encoding="utf-8") == "generated_token"
+    mock_logger_error.assert_not_called()
+
+def test_get_telegraph_token_generation_failure(monkeypatch, tmp_path):
+    import summarize
+    from unittest.mock import MagicMock
+
+    mock_logger_error = MagicMock()
+    monkeypatch.setattr("summarize.logger.error", mock_logger_error)
+
+    token_file = tmp_path / "telegraph_token.txt"
+    monkeypatch.setattr(summarize, "TELEGRAPH_TOKEN_FILE", str(token_file))
+    monkeypatch.delenv("TELEGRAPH_TOKEN", raising=False)
+
+    class MockTelegraphPoster:
+        def __init__(self, *args, **kwargs):
+            pass
+        def create_api_token(self, short_name, author_name):
+            raise Exception("Telegraph API error")
+
+    monkeypatch.setattr("html_telegraph_poster.TelegraphPoster", MockTelegraphPoster)
+
+    token = summarize.get_telegraph_token()
+
+    assert token == ""
+    assert summarize._telegraph_token_cache is None
+    mock_logger_error.assert_called_once()
+    assert "Failed to generate Telegraph token" in mock_logger_error.call_args[0][0]
