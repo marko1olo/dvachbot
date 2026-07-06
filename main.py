@@ -510,6 +510,23 @@ def clean_html_for_tg(text: str) -> str:
 
     return "".join(out)
 
+def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
+    """Truncate text to fit Telegram's UTF-16 code unit limit.
+    
+    Telegram counts message length in UTF-16 code units:
+    - ASCII chars: 1 unit each
+    - Cyrillic/CJK/most Unicode > U+FFFF: 2 units each
+    - Emoji/surrogate pairs: 2 units each
+    max_utf16=4000 gives ~96 unit headroom under Telegram's 4096 hard limit.
+    """
+    units = 0
+    for i, ch in enumerate(text):
+        cp = ord(ch)
+        units += 2 if cp > 0xFFFF or 0x0400 <= cp <= 0x04FF or 0x4E00 <= cp <= 0x9FFF else 1
+        if units > max_utf16:
+            return text[:i] + "…"
+    return text
+
 DB_POST_LIMIT = CONFIG_DB_POST_LIMIT  # Максимальное количество постов, которое будет храниться в БД
 DB_CLEANUP_INTERVAL = timedelta(hours=2) # Как часто проводить очистку БД
 MEMORY_LIMIT_GB = 3.2
@@ -2418,12 +2435,46 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
             if post.get('author_id') == 0: # Игнорируем системные сообщения
                 continue
             content = post.get('content', {})
-            text = content.get('text', '')
+            msg_type = content.get('type', 'text')
             
-            text = clean_html_tags(text)
+            raw_text = content.get('text') or content.get('caption') or ""
+            text = clean_html_tags(raw_text)
             text = re.sub(r'^(Ответ на \d+.*?\n|Post No\.\d+.*?\n)', '', text, flags=re.MULTILINE)
             text = re.sub(r'^(###.*?###|<i>.*?</i>)\s*\n?', '', text, flags=re.MULTILINE)
             text = text.strip()
+            
+            # Если текста нет, но это медиа/стикер, вставляем факт его отправки в контекст
+            if not text:
+                if msg_type == 'photo':
+                    text = "[Отправил изображение]"
+                elif msg_type == 'video':
+                    text = "[Отправил видео]"
+                elif msg_type == 'animation':
+                    text = "[Отправил GIF-анимацию]"
+                elif msg_type == 'sticker':
+                    text = "[Отправил стикер]"
+                elif msg_type == 'video_note':
+                    text = "[Отправил видеосообщение]"
+                elif msg_type == 'voice':
+                    text = "[Отправил голосовое сообщение]"
+                elif msg_type == 'audio':
+                    text = "[Отправил аудиозапись]"
+                elif msg_type == 'document':
+                    filename = content.get('filename')
+                    text = f"[Отправил файл: {filename}]" if filename else "[Отправил файл]"
+            else:
+                # Если подпись к файлу есть, добавляем к ней тип медиа
+                if msg_type == 'photo':
+                    text = f"[Изображение] {text}"
+                elif msg_type == 'video':
+                    text = f"[Видео] {text}"
+                elif msg_type == 'animation':
+                    text = f"[GIF] {text}"
+                elif msg_type == 'document':
+                    filename = content.get('filename')
+                    file_label = f" файл {filename}" if filename else " файл"
+                    text = f"[Отправил{file_label}] {text}"
+            
             if text:
                 author_id = post.get('author_id')
                 name = content.get('username') or content.get('name') or content.get('author_name')
@@ -2463,7 +2514,7 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
     cleaned_chunk = re.sub(r'\n{2,}', '\n', full_text).strip()
     context_name = f"thread {thread_id}" if thread_id else f"board {board_id}"
     print(f"[summarize] Chunk for {context_name} built, len={len(cleaned_chunk)}")
-    return cleaned_chunk[:35000]
+    return cleaned_chunk[-35000:]
 from typing import Tuple, Optional
 
 def _get_msg_content_and_type(msg: Message) -> Tuple[Optional[str], Optional[str]]:
@@ -5297,7 +5348,7 @@ class MessageBroadcaster:
                     reply_to_message_id=reply_to_mid if i == 0 else None,
                     reply_markup=self.final_keyboard if i == len(parts) - 1 else None,
                     disable_notification=is_sage,
-                    disable_web_page_preview=True,
+                    disable_web_page_preview=False if "telegra.ph/" in part else True,
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
@@ -5359,7 +5410,7 @@ class MessageBroadcaster:
                     reply_to_message_id=target_reply_id if i == 0 else None,
                     reply_markup=self.final_keyboard if include_keyboard and i == len(parts) - 1 else None,
                     disable_notification=is_sage,
-                    disable_web_page_preview=True,
+                    disable_web_page_preview=False if "telegra.ph/" in part else True,
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
@@ -5492,7 +5543,7 @@ class MessageBroadcaster:
                             reply_to_message_id=reply_to_mid if i == 0 else None,
                             reply_markup=self.final_keyboard if i == len(parts)-1 else None,
                             disable_notification=is_sage,
-                            disable_web_page_preview=True,
+                            disable_web_page_preview=False if "telegra.ph/" in part else True,
                             request_timeout=request_timeout,
                         )
                         sent_msgs.append(m)
@@ -5530,7 +5581,7 @@ class MessageBroadcaster:
                                     chat_id=uid, text=part, parse_mode="HTML",
                                     reply_to_message_id=media_msg.message_id,
                                     disable_notification=is_sage,
-                                    disable_web_page_preview=True,
+                                    disable_web_page_preview=False if "telegra.ph/" in part else True,
                                     request_timeout=request_timeout,
                                 )
                         except TelegramBadRequest as e:
@@ -9230,7 +9281,6 @@ async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str,
             except Exception:
                 pass
     print(f"[THREAD DELETE] [{board_id}] Тред {thread_id} удалён. Пользователей переведено: {len(users_in_thread)}. Инициатор: {initiator_id}")
-@dp.message(F.text.regexp(rf"^/({'|'.join(ANIME_COMMAND_MAP.keys())})"))
 class StackedAnimeHandler:
     def __init__(self, message: types.Message, board_id: str, stream: str):
         self.message = message
@@ -9463,6 +9513,7 @@ class StackedAnimeHandler:
         return final_caption
 
 
+@dp.message(F.text.regexp(rf"^/({'|'.join(ANIME_COMMAND_MAP.keys())})"))
 async def handle_stacked_anime_commands(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
     Универсальный обработчик для всех аниме-команд.
@@ -10084,9 +10135,11 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
                 summary = f"📝 <b>ЕБАНУТЫЙ ЛОНГРИД ({context_name})</b>\n\nНе осилил прочитать чат? Старый анон расписал всё по полочкам в этой статье:\n🔗 <a href=\"{telegraph_url}\">Читать на Telegraph</a>"
         else:
             print("[summarize] Telegraph creation failed, falling back to direct message")
-            summary = summary[:4000]
+            # Telegram counts chars in UTF-16 code units: Cyrillic/CJK = 2 units each.
+            # Hard limit = 4096 UTF-16 units. Safe budget = 3500 (prefix takes ~100-200 more).
+            summary = _tg_safe_truncate(summary, max_utf16=3500)
     else:
-        summary = summary[:4000]
+        summary = _tg_safe_truncate(summary, max_utf16=3500)
 
     print(f"[summarize] Final summary length: {len(summary)}")
     now_dt = datetime.now(UTC)
@@ -10100,6 +10153,8 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             post_text = f"{context_name} の要約:\n\n{summary}"
         else:
             post_text = f"Саммари {context_name}:\n\n{summary}"
+        # Final safety clamp on post_text
+        post_text = _tg_safe_truncate(post_text, max_utf16=4000)
 
     content = {
         'type': 'text',
@@ -12216,7 +12271,10 @@ def get_quick_menu_keyboard(board_id: str, stream: str = 'ru') -> InlineKeyboard
         [InlineKeyboardButton(text=btn_wallet, callback_data="menu_wallet")],
         [InlineKeyboardButton(text=btn_profile, callback_data="menu_profile"), InlineKeyboardButton(text=btn_personal, callback_data="menu_personal")],
         [InlineKeyboardButton(text=btn_roll, callback_data="menu_roll"), InlineKeyboardButton(text=btn_stats, callback_data="menu_stats")],
-        [InlineKeyboardButton(text=btn_hent, callback_data="menu_hent"), InlineKeyboardButton(text=btn_loli, callback_data="menu_loli")],
+        [
+            InlineKeyboardButton(text=btn_hent, switch_inline_query_current_chat="hent "),
+            InlineKeyboardButton(text=btn_loli, switch_inline_query_current_chat="loli ")
+        ],
         [InlineKeyboardButton(text=btn_invite, callback_data="menu_invite"), InlineKeyboardButton(text=btn_token, callback_data="menu_token")],
         [InlineKeyboardButton(text=btn_admin, callback_data="menu_admin"), InlineKeyboardButton(text=btn_help, callback_data="menu_help")]
     ])
@@ -18959,7 +19017,11 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="nsfw", description="Включить/выключить NSFW"),
         BotCommand(command="hide", description="Скрыть конкретный пост"),
         BotCommand(command="invite", description="Пригласить на доску"),
-        BotCommand(command="whisper", description="Анонимное сообщение")
+        BotCommand(command="whisper", description="Анонимное сообщение"),
+        BotCommand(command="fap", description="Случайная аниме-картинка"),
+        BotCommand(command="hent", description="Случайная хентай-картинка"),
+        BotCommand(command="loli", description="Случайная лоли-картинка"),
+        BotCommand(command="gatari", description="Картинка Monogatari Series")
     ]
     
     admin_commands = user_commands.copy() + [
@@ -19357,6 +19419,76 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
         import traceback
         traceback.print_exc()
         await status_message.edit_text(f"Произошла ошибка при генерации облака слов: {e}", parse_mode=None)
+
+@dp.inline_query()
+async def handle_inline_query(inline_query: types.InlineQuery):
+    query = inline_query.query.strip().lower()
+    parts = query.split()
+    results = []
+    
+    available_cmds = {
+        "fap": ("Случайная аниме-картинка", "fap"),
+        "hent": ("Хентай-картинка", "hent"),
+        "hentai": ("Хентай-картинка", "hent"),
+        "loli": ("Лоли-картинка", "loli"),
+        "lolicon": ("Лоли-картинка", "loli"),
+        "gatari": ("Серия Monogatari", "gatari"),
+        "monogatari": ("Серия Monogatari", "gatari"),
+        "nsfw": ("NSFW-картинка", "nsfw"),
+    }
+    
+    if not query:
+        for cmd, (desc, canonical) in available_cmds.items():
+            if cmd in ["fap", "hent", "loli", "gatari", "nsfw"]:
+                results.append(
+                    types.InlineQueryResultArticle(
+                        id=f"inline_{cmd}_1",
+                        title=f"{desc} (1 шт)",
+                        description=f"Отправить /{canonical}",
+                        input_message_content=types.InputTextMessageContent(
+                            message_text=f"/{canonical}"
+                        )
+                    )
+                )
+    else:
+        cmd = parts[0]
+        if cmd in available_cmds:
+            desc, canonical = available_cmds[cmd]
+            count = 1
+            if len(parts) > 1 and parts[1].isdigit():
+                count = int(parts[1])
+            
+            counts_to_show = [count]
+            if len(parts) == 1:
+                counts_to_show = [1, 5, 10]
+            
+            for c in counts_to_show:
+                results.append(
+                    types.InlineQueryResultArticle(
+                        id=f"inline_{canonical}_{c}",
+                        title=f"{desc} ({c} шт)",
+                        description=f"Отправить /{canonical} {c}",
+                        input_message_content=types.InputTextMessageContent(
+                            message_text=f"/{canonical} {c}"
+                        )
+                    )
+                )
+        else:
+            results.append(
+                types.InlineQueryResultArticle(
+                    id="inline_help_anime",
+                    title="Аниме картинки",
+                    description="Примеры: fap 5, hent 3, loli 10",
+                    input_message_content=types.InputTextMessageContent(
+                        message_text="/help"
+                    )
+                )
+            )
+            
+    try:
+        await inline_query.answer(results, is_personal=True, cache_time=5)
+    except Exception as e:
+        print(f"Error answering inline query: {e}")
 
 async def main():
 

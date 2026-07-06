@@ -172,7 +172,7 @@ window.safeInit = (name, fn) => {
     }
 };
 window.alert = showToast;
-window.globalVideoVolume = parseFloat(localStorage.getItem('user_volume') || '0.5');
+window.globalVideoVolume = parseFloat((() => { try { return localStorage.getItem('user_volume'); } catch(e) { return null; } })() || '0.5');
 let _volSaveTimer;
 window.saveVolume = (vol) => {
     window.globalVideoVolume = vol;
@@ -276,7 +276,8 @@ async function loadTranslations() {
     }
 }
 window.t = function(key, defaultText = "") {
-    const lang = document.documentElement.lang || localStorage.getItem('lang') || 'ru';
+    let lang;
+    try { lang = document.documentElement.lang || localStorage.getItem('lang') || 'ru'; } catch(e) { lang = 'ru'; }
     return UI_TRANSLATIONS[lang]?.[key] || UI_TRANSLATIONS['ru'][key] || defaultText || key;
 };
 const vibrate = (pattern = 10) => {
@@ -284,8 +285,8 @@ const vibrate = (pattern = 10) => {
 };
 const UserState = {
     userId: document.body.dataset.userId || null,
-    postIds: new Set(JSON.parse(localStorage.getItem('my_post_ids') || '[]')),
-    hiddenPosts: new Set(JSON.parse(localStorage.getItem(CONSTANTS.HIDDEN_POSTS_KEY) || '[]'))
+    postIds: new Set((() => { try { return JSON.parse(localStorage.getItem('my_post_ids') || '[]'); } catch(e) { return []; } })()),
+    hiddenPosts: new Set((() => { try { return JSON.parse(localStorage.getItem(CONSTANTS.HIDDEN_POSTS_KEY) || '[]'); } catch(e) { return []; } })())
 };
 const applyAdaptiveFontSize = (postElement) => {
     const textContainer = postElement.querySelector('.post-text-content .post-text');
@@ -446,13 +447,7 @@ function showToast(message, duration = CONSTANTS.TOAST_DURATION) {
         return;
     }
 
-    while (container.children.length >= 4) {
-        container.id = 'toast-container';
-        document.body.appendChild(container);
-    }
-    while (container.children.length >= 4) {
-        container.removeChild(container.firstChild);
-    }
+
     const toast = document.createElement('div');
     toast.className = 'toast';
     toast.textContent = message;
@@ -519,10 +514,12 @@ const ReadTracker = {
                 break;
             }
         }
-        if (lastVisibleId) {
-            localStorage.setItem(this.storageKey, lastVisibleId);
-        }
-        localStorage.setItem(this.scrollKey, window.scrollY);
+        try {
+            if (lastVisibleId) {
+                localStorage.setItem(this.storageKey, lastVisibleId);
+            }
+            localStorage.setItem(this.scrollKey, window.scrollY);
+        } catch(e) { /* Private/Incognito quota guard */ }
     },
     restorePosition() {
         this.isLocked = false;
@@ -640,7 +637,7 @@ const AlertManager = {
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ alert_id: alert.id })
                 });
-            } catch(e) {}
+            } catch(e) { console.warn('[AlertManager] Failed to mark alert as read:', e); }
             document.getElementById('system-alert-modal').remove();
             document.getElementById('system-alert-overlay').remove();
             document.body.style.overflow = '';
@@ -729,7 +726,7 @@ const StealthEditor = {
             return;
         }
         textInput.value = t('loading');
-        fileContainer.innerHTML = '';
+        if (fileContainer) fileContainer.innerHTML = '';
         if (overlay) {
             overlay.style.display = 'block';
             overlay.style.zIndex = '10050';
@@ -986,7 +983,7 @@ const FavouritesManager = {
                         document.getElementById('favourites-container').innerHTML = '';
                         this.renderPage();
                     }
-                } catch(err) {}
+                } catch(err) { console.warn('[FavouritesManager] Storage sync error:', err); }
             }
         });
     },
@@ -1672,7 +1669,9 @@ const BookManager = {
             let count = 0;
             for (const post of posts) {
                 const num = post.id.replace('post-', '');
-                const headerEl = post.querySelector('.post-header').cloneNode(true);
+                const headerQs = post.querySelector('.post-header');
+                if (!headerQs) continue;
+                const headerEl = headerQs.cloneNode(true);
                 const adminSpan = headerEl.querySelector('span[style*="ff00ff"]');
                 if(adminSpan) adminSpan.remove();
                 const headerText = headerEl.textContent.replace(/\s+/g, ' ').trim();
@@ -1816,16 +1815,19 @@ const OfflineManager = {
             try {
                 if (sheet.href) {
                     const r = await fetch(sheet.href);
-                    css += await r.text();
+                    if (r.ok) css += await r.text();
                 } else {
                     for (const rule of Array.from(sheet.cssRules)) css += rule.cssText;
                 }
-            } catch(e) {}
+            } catch(e) { /* Cross-origin or unavailable stylesheet, skip */ }
         }
         const style = document.createElement('style');
         style.textContent = css;
-        clone.querySelector('head').innerHTML = '';
-        clone.querySelector('head').appendChild(style);
+        const headEl = clone.querySelector('head');
+        if (headEl) {
+            headEl.innerHTML = '';
+            headEl.appendChild(style);
+        }
         const imgs = clone.querySelectorAll('img.post-image, img.post-sticker');
         let count = 0;
         const toBase64 = async (url) => {
@@ -2074,8 +2076,11 @@ const PreviewManager = {
         try {
             const existing = document.getElementById(`post-${num}`);
             if (existing) {
-                this.render(popup, num, existing.querySelector('.post-content').innerHTML, true);
-                this.recalcPosition(popup, targetLink);
+                const postContentEl = existing.querySelector('.post-content');
+                if (postContentEl) {
+                    this.render(popup, num, postContentEl.innerHTML, true);
+                    this.recalcPosition(popup, targetLink);
+                }
                 return;
             }
             let data = this.cache.get(num);
@@ -2971,8 +2976,7 @@ const BottleManager = {
                     btn.classList.remove('shake-anim');
                 }
             }
-        } catch (e) {
-        }
+        } catch (e) { console.warn('[BottleManager] Network error checking messages:', e); }
     }
 };
 const CooldownManager = {
@@ -3391,7 +3395,7 @@ const FilterManager = {
                     const pattern = line.slice(1, lastSlash);
                     const flags = line.slice(lastSlash + 1);
                     this.settings.regex.push(new RegExp(pattern, flags));
-                } catch(e) {}
+                } catch(e) { console.warn('[FilterManager] Invalid regex pattern:', line, e); }
             } else {
                 this.settings.words.push(line.toLowerCase());
             }
@@ -14770,7 +14774,7 @@ document.addEventListener("DOMContentLoaded", function() {
         .then(data => {
             if (data.is_ru) {
                 const alertDiv = document.createElement('div');
-                alertDiv.innerHTML = "путин хуйло, включи ВПН, иначе не загрузятся картинки! кек";
+                alertDiv.innerHTML = Включи ВПН, иначе не загрузятся картинки!";
                 alertDiv.style.position = "fixed";
                 alertDiv.style.top = "10px";
                 alertDiv.style.left = "10px";

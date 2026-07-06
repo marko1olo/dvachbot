@@ -1825,7 +1825,6 @@ class BlockBadBots:
         self.blocked_agents = [
             "bytespider",
             "claudebot",
-            "amazonbot",
             "semrushbot",
             "dotbot",
             "mj12bot",
@@ -2301,6 +2300,8 @@ User-agent: DuckDuckBot
 Allow: /
 User-agent: Applebot
 Allow: /
+User-agent: Amazonbot
+Allow: /
 
 # --- BAD BOTS ---
 User-agent: GPTBot
@@ -2318,8 +2319,6 @@ Disallow: /
 User-agent: FacebookBot
 Disallow: /
 User-agent: Bytespider
-Disallow: /
-User-agent: Amazonbot
 Disallow: /
 User-agent: MJ12bot
 Disallow: /
@@ -10089,7 +10088,7 @@ async def _proxy_protected_telegram_file(
 
     timeout = aiohttp.ClientTimeout(total=180, sock_connect=10, sock_read=30)
     connector = aiohttp.TCPConnector(limit=1, ttl_dns_cache=300, family=socket.AF_INET)
-    session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+    session = aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=False)
     url = f"https://api.telegram.org/file/bot{token}/{file_path}"
     try:
         request_headers = {}
@@ -10135,6 +10134,14 @@ async def _proxy_protected_telegram_file(
         await close_upstream()
         raise
 
+    if request and request.method == "HEAD":
+        await close_upstream()
+        return Response(
+            status_code=resp.status,
+            media_type=media_type,
+            headers=headers,
+        )
+
     async def body_iter():
         try:
             async for chunk in resp.content.iter_chunked(64 * 1024):
@@ -10159,9 +10166,11 @@ async def _proxy_external_url(
 ):
     timeout = aiohttp.ClientTimeout(total=90, sock_connect=10, sock_read=25)
     connector = aiohttp.TCPConnector(limit=1, ttl_dns_cache=300, family=socket.AF_INET)
-    session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+    session = aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=False)
     try:
-        request_headers = {}
+        request_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        }
         if request:
             range_header = request.headers.get("range")
             if range_header:
@@ -10204,6 +10213,14 @@ async def _proxy_external_url(
     except Exception:
         await close_upstream()
         raise
+
+    if request and request.method == "HEAD":
+        await close_upstream()
+        return Response(
+            status_code=resp.status,
+            media_type=media_type,
+            headers=headers,
+        )
 
     async def body_iter():
         try:
@@ -10255,7 +10272,7 @@ async def check_url_alive(url: str) -> bool:
         return False
 
 
-@app.get("/files/{file_id:path}")
+@app.api_route("/files/{file_id:path}", methods=["GET", "HEAD"])
 async def get_telegram_file(file_id: str, request: Request, filename: str = None):
     # Очистка file_id от лишних слешей и сегментов пути
     file_id = file_id.lstrip("/")

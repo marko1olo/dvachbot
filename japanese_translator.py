@@ -2102,8 +2102,8 @@ def to_kana(text: str, kana_map: dict) -> str:
 async def _fetch_image_from_apis(api_definitions: List[Dict], fail_message: str, timeout: int = 25) -> Optional[str]:
     timeout = float(os.getenv("BOT_ANIME_API_SESSION_TIMEOUT_SEC", str(timeout)))
     per_api_timeout = float(os.getenv("BOT_ANIME_SINGLE_API_TIMEOUT_SEC", "8"))
-    # 1. Определяем прокси вручную
-    current_proxy = get_dynamic_proxy_url()
+    # 1. Определяем прокси вручную (принудительно None для прямой работы через WireGuard, как в summarize)
+    current_proxy = None
     status_msg = f"✅ HIDDIFY ({current_proxy})" if current_proxy else "⚠️ DIRECT/OPENVPN (System)"
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False

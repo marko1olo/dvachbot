@@ -6332,7 +6332,7 @@ async def check_url_alive(url: str) -> bool:
     except:
         URL_STATUS_CACHE[url] = (False, now)
         return False
-@app.get("/files/{file_id:path}")
+@app.api_route("/files/{file_id:path}", methods=["GET", "HEAD"])
 async def get_telegram_file(file_id: str, request: Request, filename: str = None):
     file_id = file_id.lstrip('/')
     if '/' in file_id:
