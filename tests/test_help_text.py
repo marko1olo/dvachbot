@@ -81,3 +81,67 @@ def test_generate_boards_list_jp(board_configs):
     assert "<b>/b/</b> ランダム - @b_board" in result
     assert "<b>/d/</b> アニメ - @d_board" in result
     assert "<b>/c/</b> Только русский - @c_board" in result  # First available if no jp and no en
+
+def test_string_constants_types():
+    from help_text import (
+        HELP_TEXT_COMMANDS,
+        HELP_TEXT_EN_COMMANDS,
+        HELP_TEXT_JP_COMMANDS,
+        BOARD_LIST_HEADERS_RU,
+        BOARD_LIST_HEADERS_EN,
+        BOARD_LIST_HEADERS_JP,
+        THREAD_PROMO_TEXT_RU,
+        THREAD_PROMO_TEXT_EN,
+        THREAD_PROMO_TEXT_JP,
+        MODE_INFO_TEXT_RU,
+        MODE_INFO_TEXT_EN,
+        MODE_INFO_TEXT_JP,
+        CHANNEL_PROMO_TEXT_RU,
+        CHANNEL_PROMO_TEXT_EN,
+        CHANNEL_PROMO_TEXT_JP,
+        MECHANICS_INFO_TEXT_RU,
+        MECHANICS_INFO_TEXT_EN,
+        MECHANICS_INFO_TEXT_JP
+    )
+
+    lists_to_check = [
+        HELP_TEXT_COMMANDS,
+        HELP_TEXT_EN_COMMANDS,
+        HELP_TEXT_JP_COMMANDS,
+        BOARD_LIST_HEADERS_RU,
+        BOARD_LIST_HEADERS_EN,
+        BOARD_LIST_HEADERS_JP,
+        THREAD_PROMO_TEXT_RU,
+        THREAD_PROMO_TEXT_EN,
+        THREAD_PROMO_TEXT_JP,
+        MODE_INFO_TEXT_RU,
+        MODE_INFO_TEXT_EN,
+        MODE_INFO_TEXT_JP,
+        CHANNEL_PROMO_TEXT_RU,
+        CHANNEL_PROMO_TEXT_EN,
+        CHANNEL_PROMO_TEXT_JP,
+        MECHANICS_INFO_TEXT_RU,
+        MECHANICS_INFO_TEXT_EN,
+        MECHANICS_INFO_TEXT_JP
+    ]
+
+    for string_list in lists_to_check:
+        assert isinstance(string_list, list)
+        assert len(string_list) > 0
+        for item in string_list:
+            assert isinstance(item, str)
+            assert len(item) > 0
+
+def test_specific_constants_content():
+    from help_text import (
+        HELP_TEXT_COMMANDS,
+        BOARD_LIST_HEADERS_RU
+    )
+
+    # Check that SOME essential keywords are in the Russian help text
+    assert "/start" in HELP_TEXT_COMMANDS[0]
+    assert "/help" in HELP_TEXT_COMMANDS[0]
+    assert "ТГАЧ" in HELP_TEXT_COMMANDS[0]
+
+    # Check board headers
+    assert any("доск" in header.lower() for header in BOARD_LIST_HEADERS_RU)
