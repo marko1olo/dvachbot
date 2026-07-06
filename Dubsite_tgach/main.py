@@ -6324,7 +6324,7 @@ async def check_url_alive(url: str) -> bool:
         if now - ts < 600:
             return is_alive
     try:
-        async with httpx.AsyncClient(timeout=1.5, verify=False) as client: 
+        async with httpx.AsyncClient(timeout=1.5, verify=False) as client:
             resp = await client.head(url)
             is_alive = resp.status_code == 200
             URL_STATUS_CACHE[url] = (is_alive, now)
