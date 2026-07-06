@@ -171,3 +171,17 @@ def test_load_google_keys(tmp_path, monkeypatch):
     envgoogle = tmp_path / ".envgoogle"
     envgoogle.write_text("GOOGLE_API_KEYS=file-key1, file-key2")
     assert _load_google_keys() == ["file-key1", "file-key2"]
+
+@pytest.mark.asyncio
+@patch("summarize.asyncio.to_thread")
+@patch("summarize.logger")
+async def test_create_telegraph_page_async_error(mock_logger, mock_to_thread):
+    from summarize import create_telegraph_page_async
+
+    mock_to_thread.side_effect = Exception("Simulated network error")
+
+    result = await create_telegraph_page_async("Test Title", "<p>Test Content</p>")
+
+    assert result is None
+    mock_logger.error.assert_called_once()
+    assert "Failed to create Telegraph page: Simulated network error" in mock_logger.error.call_args[0][0]
