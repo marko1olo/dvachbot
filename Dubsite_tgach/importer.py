@@ -6,7 +6,6 @@ import os
 import json
 import time
 import logging
-import traceback
 from io import BytesIO
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -216,15 +215,13 @@ class ThreadImporter:
                     logger.warning(f"⚠️ 404 Not Found: {url}")
                     return None
                 if resp.status_code in [403, 503, 429]:
-                    logger.warning(
-                        f"⚠️ Server returned {resp.status_code}. Retrying..."
-                    )
+                    logger.warning(f"⚠️ Server returned {resp.status_code}. Retrying...")
                     await asyncio.sleep(2 * (i + 1))
                     continue
                 resp.raise_for_status()
                 return resp
             except httpx.TimeoutException:
-                logger.error(f"⏰ TIMEOUT reading {url} (Attempt {i+1})")
+                logger.error(f"⏰ TIMEOUT reading {url} (Attempt {i + 1})")
                 if i == retries - 1:
                     logger.error("❌ Giving up on timeout.")
                 await asyncio.sleep(1)
@@ -629,7 +626,7 @@ class ThreadImporter:
                     current_pct = (i + 1) / total_posts * 100
                     if current_pct >= next_log_threshold or i == total_posts - 1:
                         logger.info(
-                            f"   ...Processed {i+1}/{total_posts} posts ({int(current_pct)}%)"
+                            f"   ...Processed {i + 1}/{total_posts} posts ({int(current_pct)}%)"
                         )
                         next_log_threshold += 10
 
@@ -832,19 +829,30 @@ class ThreadImporter:
                         values_placeholders = []
                         params = []
                         for p_data in chunk:
-                            content = json.dumps({
-                                "text": p_data["text"],
-                                "files": p_data["files"],
-                                "type": "files" if p_data["files"] else "text"
-                            })
+                            content = json.dumps(
+                                {
+                                    "text": p_data["text"],
+                                    "files": p_data["files"],
+                                    "type": "files" if p_data["files"] else "text",
+                                }
+                            )
                             values_placeholders.append("(?, ?, ?, ?, ?, NULL, ?)")
-                            params.extend((target_board, new_thread_id, content, p_data["timestamp"], p_data["author_id"], stream))
+                            params.extend(
+                                (
+                                    target_board,
+                                    new_thread_id,
+                                    content,
+                                    p_data["timestamp"],
+                                    p_data["author_id"],
+                                    stream,
+                                )
+                            )
 
                         cur = await conn.execute(
                             f"""INSERT INTO posts
                                (board_id, thread_id, content, timestamp, author_id, reply_to_post_num, stream) 
-                               VALUES {','.join(values_placeholders)} RETURNING post_num""",
-                            params
+                               VALUES {",".join(values_placeholders)} RETURNING post_num""",
+                            params,
                         )
                         rows = await cur.fetchall()
                         for idx, (new_id,) in enumerate(rows):
@@ -890,10 +898,11 @@ class ThreadImporter:
                         original_text = p_data["text"]
                         if not original_text:
                             continue
-                        fixed_text, reply_to_id = (
-                            await self._fix_content_links_and_find_reply(
-                                original_text, id_map
-                            )
+                        (
+                            fixed_text,
+                            reply_to_id,
+                        ) = await self._fix_content_links_and_find_reply(
+                            original_text, id_map
                         )
                         if fixed_text != original_text or reply_to_id is not None:
                             new_content_obj = {
@@ -963,6 +972,15 @@ async def process_import_queue(app_state_broadcast_queue):
 
                 processed_ids = []
 
+                task_ids_not_op = list(set(row[1] for row in rows if not row[8]))
+                op_cache = {}
+                if task_ids_not_op:
+                    placeholders = ",".join(["?"] * len(task_ids_not_op))
+                    q_op = f"SELECT task_id, MIN(rowid), real_post_num FROM ImportRefMap WHERE task_id IN ({placeholders}) GROUP BY task_id"
+                    async with conn.execute(q_op, task_ids_not_op) as op_cur:
+                        async for op_row in op_cur:
+                            op_cache[op_row[0]] = str(op_row[2])
+
                 for row in rows:
                     (
                         q_id,
@@ -1003,13 +1021,7 @@ async def process_import_queue(app_state_broadcast_queue):
 
                         final_thread_id_db = None
                         if not is_op:
-                            async with conn.execute(
-                                "SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1",
-                                (task_id,),
-                            ) as op_cur:
-                                op_row = await op_cur.fetchone()
-                                if op_row:
-                                    final_thread_id_db = str(op_row[0])
+                            final_thread_id_db = op_cache.get(task_id)
 
                         post_mode = "new_thread" if is_op else "reply"
                         new_post_num = await create_post(
@@ -1067,7 +1079,7 @@ async def process_import_queue(app_state_broadcast_queue):
                             )
                             processed_ids.append(q_id)
 
-                    except Exception as e:
+                    except Exception:
                         processed_ids.append(q_id)
 
                 if processed_ids:
