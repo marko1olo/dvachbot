@@ -49,7 +49,6 @@ import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from asyncio import Semaphore
 from collections import deque, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
