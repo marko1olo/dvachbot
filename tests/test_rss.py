@@ -4,10 +4,16 @@ import json
 import sys
 from contextlib import asynccontextmanager
 
-# In some test suite runs, test_main.py heavily pollutes sys.modules by mocking all site_tgach.* modules.
-# We must ensure we get the REAL module to test it.
-if 'site_tgach.rss' in sys.modules and not hasattr(sys.modules['site_tgach.rss'], '__file__'):
-    del sys.modules['site_tgach.rss']
+# In some test suite runs, test_main.py heavily pollutes sys.modules by mocking all site_tgach.* modules
+# and attaching __getattr__ = lambda: MagicMock() to them. The hasattr(__file__) check is unreliable
+# because __getattr__ returns MagicMock for any attribute including __file__.
+# Unconditionally evict all site_tgach.* mocks so we get the real module.
+import types
+for _key in [k for k in sys.modules if k.startswith('site_tgach')]:
+    _mod = sys.modules[_key]
+    # It's a mock if it has no real __spec__ or is a bare ModuleType without a file
+    if isinstance(_mod, types.ModuleType) and getattr(_mod, '__spec__', None) is None:
+        del sys.modules[_key]
 
 from site_tgach.rss import generate_rss
 

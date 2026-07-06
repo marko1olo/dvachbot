@@ -8,6 +8,14 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# test_main.py mocks warhammer_mode and sets __getattr__ = MagicMock on it.
+# Evict the mock so we import the real module.
+import types
+if 'warhammer_mode' in sys.modules:
+    _wm = sys.modules['warhammer_mode']
+    if isinstance(_wm, types.ModuleType) and getattr(_wm, '__spec__', None) is None:
+        del sys.modules['warhammer_mode']
+
 from warhammer_mode import orkify, necronify
 
 class TestWarhammerMode(unittest.TestCase):
