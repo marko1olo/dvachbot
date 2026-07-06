@@ -963,6 +963,59 @@ async def process_import_queue(app_state_broadcast_queue):
 
                 processed_ids = []
 
+                # --- Batch Data Pre-fetching ---
+                tasks = set()
+                needed_refs_by_task = {}
+                for row in rows:
+                    task_id = row[1]
+                    reply_to_orig = row[4]
+                    content_str = row[5]
+
+                    tasks.add(task_id)
+
+                    try:
+                        parsed_content = json.loads(content_str)
+                        text = parsed_content.get("text", "")
+                        refs = re.findall(r"(?:>>|&gt;&gt;)(\d+)", text)
+
+                        if refs:
+                            if task_id not in needed_refs_by_task:
+                                needed_refs_by_task[task_id] = set()
+                            needed_refs_by_task[task_id].update(refs)
+
+                        if reply_to_orig:
+                            if task_id not in needed_refs_by_task:
+                                needed_refs_by_task[task_id] = set()
+                            needed_refs_by_task[task_id].add(reply_to_orig)
+                    except json.JSONDecodeError:
+                        pass
+
+                op_mappings = {}
+                if tasks:
+                    task_list = list(tasks)
+                    placeholders = ",".join(["?"] * len(task_list))
+                    q_op = f"SELECT task_id, real_post_num FROM ImportRefMap WHERE rowid IN (SELECT MIN(rowid) FROM ImportRefMap WHERE task_id IN ({placeholders}) GROUP BY task_id)"
+                    async with conn.execute(q_op, task_list) as op_cur:
+                        rows_op = await op_cur.fetchall()
+                        for op_row in rows_op:
+                            op_mappings[op_row[0]] = str(op_row[1])
+
+                ref_mappings = {}
+                for task_id, refs in needed_refs_by_task.items():
+                    if not refs:
+                        continue
+                    refs_list = list(refs)
+                    chunk_size = 900
+                    for i in range(0, len(refs_list), chunk_size):
+                        chunk = refs_list[i:i+chunk_size]
+                        placeholders = ",".join(["?"] * len(chunk))
+                        q_map = f"SELECT original_post_num, real_post_num FROM ImportRefMap WHERE task_id = ? AND original_post_num IN ({placeholders})"
+                        async with conn.execute(q_map, [task_id] + chunk) as map_cur:
+                            rows_map = await map_cur.fetchall()
+                            for m_row in rows_map:
+                                ref_mappings[(task_id, str(m_row[0]))] = m_row[1]
+                # -----------------------------
+
                 for row in rows:
                     (
                         q_id,
@@ -985,11 +1038,9 @@ async def process_import_queue(app_state_broadcast_queue):
                         real_reply_to = None
 
                         if refs:
-                            placeholders = ",".join(["?"] * len(refs))
-                            q_map = f"SELECT original_post_num, real_post_num FROM ImportRefMap WHERE task_id = ? AND original_post_num IN ({placeholders})"
-                            async with conn.execute(q_map, [task_id] + refs) as map_cur:
-                                async for m_row in map_cur:
-                                    replacements[m_row[0]] = m_row[1]
+                            for ref in refs:
+                                if (task_id, str(ref)) in ref_mappings:
+                                    replacements[ref] = ref_mappings[(task_id, str(ref))]
 
                         for old_ref, new_ref in replacements.items():
                             text = text.replace(f">>{old_ref}", f">>{new_ref}")
@@ -998,18 +1049,12 @@ async def process_import_queue(app_state_broadcast_queue):
                             )
                         content["text"] = text
 
-                        if reply_to_orig and reply_to_orig in replacements:
-                            real_reply_to = replacements[reply_to_orig]
+                        if reply_to_orig and (task_id, str(reply_to_orig)) in ref_mappings:
+                            real_reply_to = ref_mappings[(task_id, str(reply_to_orig))]
 
                         final_thread_id_db = None
                         if not is_op:
-                            async with conn.execute(
-                                "SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1",
-                                (task_id,),
-                            ) as op_cur:
-                                op_row = await op_cur.fetchone()
-                                if op_row:
-                                    final_thread_id_db = str(op_row[0])
+                            final_thread_id_db = op_mappings.get(task_id)
 
                         post_mode = "new_thread" if is_op else "reply"
                         new_post_num = await create_post(
