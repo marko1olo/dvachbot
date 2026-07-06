@@ -5942,21 +5942,26 @@ async def get_detailed_statistics() -> dict:
                         stats[bid]["threads_24h"] = row[2] or 0
                         stats[bid]["threads_7d"] = row[3] or 0
             
-            for bid in stats.keys():
-                async with db.execute("""
-                    SELECT thread_id, title, last_updated_at 
-                    FROM Threads 
-                    WHERE board_id = ? AND is_archived = 0
-                    ORDER BY last_updated_at DESC 
-                    LIMIT 5
-                """, (bid,)) as cursor:
-                    async for row in cursor:
-                        title = row[1] if row[1] else "Без названия"
+            # N+1 Optimized Using Window Functions
+            async with db.execute("""
+                SELECT board_id, thread_id, title, last_updated_at
+                FROM (
+                    SELECT board_id, thread_id, title, last_updated_at,
+                           ROW_NUMBER() OVER (PARTITION BY board_id ORDER BY last_updated_at DESC) as rn
+                    FROM Threads
+                    WHERE is_archived = 0
+                )
+                WHERE rn <= 5
+            """) as cursor:
+                async for row in cursor:
+                    bid = row[0]
+                    if bid in stats:
+                        title = row[2] if row[2] else "Без названия"
                         short_title = (title[:28] + '..') if len(title) > 30 else title
                         stats[bid]["top_threads"].append({
-                            "id": row[0],
+                            "id": row[1],
                             "title": short_title,
-                            "ts": row[2]
+                            "ts": row[3]
                         })
             return stats
         except Exception as e:
