@@ -170,7 +170,6 @@ class WithdrawalStates(StatesGroup):
     processing = State() # Фейковое состояние для анимации
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 time.sleep(2)
-import deanonymizer
 from deanonymizer import (
     generate_deanon_info,
 )
