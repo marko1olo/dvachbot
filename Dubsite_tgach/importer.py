@@ -6,7 +6,6 @@ import os
 import json
 import time
 import logging
-import traceback
 from io import BytesIO
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -216,15 +215,13 @@ class ThreadImporter:
                     logger.warning(f"⚠️ 404 Not Found: {url}")
                     return None
                 if resp.status_code in [403, 503, 429]:
-                    logger.warning(
-                        f"⚠️ Server returned {resp.status_code}. Retrying..."
-                    )
+                    logger.warning(f"⚠️ Server returned {resp.status_code}. Retrying...")
                     await asyncio.sleep(2 * (i + 1))
                     continue
                 resp.raise_for_status()
                 return resp
             except httpx.TimeoutException:
-                logger.error(f"⏰ TIMEOUT reading {url} (Attempt {i+1})")
+                logger.error(f"⏰ TIMEOUT reading {url} (Attempt {i + 1})")
                 if i == retries - 1:
                     logger.error("❌ Giving up on timeout.")
                 await asyncio.sleep(1)
@@ -629,7 +626,7 @@ class ThreadImporter:
                     current_pct = (i + 1) / total_posts * 100
                     if current_pct >= next_log_threshold or i == total_posts - 1:
                         logger.info(
-                            f"   ...Processed {i+1}/{total_posts} posts ({int(current_pct)}%)"
+                            f"   ...Processed {i + 1}/{total_posts} posts ({int(current_pct)}%)"
                         )
                         next_log_threshold += 10
 
@@ -832,19 +829,30 @@ class ThreadImporter:
                         values_placeholders = []
                         params = []
                         for p_data in chunk:
-                            content = json.dumps({
-                                "text": p_data["text"],
-                                "files": p_data["files"],
-                                "type": "files" if p_data["files"] else "text"
-                            })
+                            content = json.dumps(
+                                {
+                                    "text": p_data["text"],
+                                    "files": p_data["files"],
+                                    "type": "files" if p_data["files"] else "text",
+                                }
+                            )
                             values_placeholders.append("(?, ?, ?, ?, ?, NULL, ?)")
-                            params.extend((target_board, new_thread_id, content, p_data["timestamp"], p_data["author_id"], stream))
+                            params.extend(
+                                (
+                                    target_board,
+                                    new_thread_id,
+                                    content,
+                                    p_data["timestamp"],
+                                    p_data["author_id"],
+                                    stream,
+                                )
+                            )
 
                         cur = await conn.execute(
                             f"""INSERT INTO posts
                                (board_id, thread_id, content, timestamp, author_id, reply_to_post_num, stream) 
-                               VALUES {','.join(values_placeholders)} RETURNING post_num""",
-                            params
+                               VALUES {",".join(values_placeholders)} RETURNING post_num""",
+                            params,
                         )
                         rows = await cur.fetchall()
                         for idx, (new_id,) in enumerate(rows):
@@ -885,15 +893,18 @@ class ThreadImporter:
                 for i in range(0, len(prepared_posts), chunk_size):
                     await conn.execute("BEGIN")
                     chunk = prepared_posts[i : i + chunk_size]
+                    update_posts_params = []
+                    all_backlink_pairs = []
                     for p_data in chunk:
                         new_id = id_map[p_data["old_id"]]
                         original_text = p_data["text"]
                         if not original_text:
                             continue
-                        fixed_text, reply_to_id = (
-                            await self._fix_content_links_and_find_reply(
-                                original_text, id_map
-                            )
+                        (
+                            fixed_text,
+                            reply_to_id,
+                        ) = await self._fix_content_links_and_find_reply(
+                            original_text, id_map
                         )
                         if fixed_text != original_text or reply_to_id is not None:
                             new_content_obj = {
@@ -901,29 +912,33 @@ class ThreadImporter:
                                 "files": p_data["files"],
                                 "type": "files" if p_data["files"] else "text",
                             }
-                            await conn.execute(
-                                "UPDATE posts SET content = ?, reply_to_post_num = ? WHERE post_num = ?",
-                                (json.dumps(new_content_obj), reply_to_id, new_id),
+                            update_posts_params.append(
+                                (json.dumps(new_content_obj), reply_to_id, new_id)
                             )
 
-                            backlink_pairs = []
                             if reply_to_id:
-                                backlink_pairs.append((reply_to_id, new_id))
+                                all_backlink_pairs.append((reply_to_id, new_id))
 
                             refs = set(re.findall(r">>(\d+)", fixed_text))
                             for ref in refs:
                                 try:
                                     target_id = int(ref)
                                     if target_id != new_id:
-                                        backlink_pairs.append((target_id, new_id))
+                                        all_backlink_pairs.append((target_id, new_id))
                                 except:
                                     pass
 
-                            if backlink_pairs:
-                                await conn.executemany(
-                                    "INSERT OR IGNORE INTO Backlinks (target_post_num, source_post_num) VALUES (?, ?)",
-                                    backlink_pairs,
-                                )
+                    if update_posts_params:
+                        await conn.executemany(
+                            "UPDATE posts SET content = ?, reply_to_post_num = ? WHERE post_num = ?",
+                            update_posts_params,
+                        )
+
+                    if all_backlink_pairs:
+                        await conn.executemany(
+                            "INSERT OR IGNORE INTO Backlinks (target_post_num, source_post_num) VALUES (?, ?)",
+                            all_backlink_pairs,
+                        )
 
                     await conn.commit()
 
@@ -1067,7 +1082,7 @@ async def process_import_queue(app_state_broadcast_queue):
                             )
                             processed_ids.append(q_id)
 
-                    except Exception as e:
+                    except Exception:
                         processed_ids.append(q_id)
 
                 if processed_ids:
