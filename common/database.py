@@ -4554,7 +4554,8 @@ async def get_weekly_active_users(board_id: str, days: int = 7) -> set[int]:
     for idx, query in enumerate(queries):
         try:
             async with db.execute(query, (board_id, cutoff)) as cursor:
-                async for row in cursor:
+                rows = await cursor.fetchall()
+                for row in rows:
                     uid = row[0]
                     if isinstance(uid, int) and uid > 0:
                         users.add(uid)
