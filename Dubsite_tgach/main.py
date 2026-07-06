@@ -363,7 +363,7 @@ ANIME_COMMAND_MAP = {
     "LOLIS": get_loli_image,
 }
 
-RE_ANIME_STACK = re.compile(rf"/({'|'.join(ANIME_COMMAND_MAP.keys())})(?:(\d+)|(?:\s+(\d+)))?", re.IGNORECASE)
+RE_ANIME_STACK = re.compile(rf"/({'|'.join(re.escape(k) for k in ANIME_COMMAND_MAP.keys())})(?:(\d+)|(?:\s+(\d+)))?", re.IGNORECASE)
 
 def _resize_image_if_needed(image_bytes: bytes) -> bytes:
     MAX_DIMENSION_SUM = 10000
@@ -5038,8 +5038,7 @@ async def api_create_post(
             sanitized_text += f'<span class="magic-8ball">{prediction}</span>'
 
     if anime_tasks:
-        command_keys_raw = '|'.join(re.escape(k) for k in ANIME_COMMAND_MAP.keys())
-        sanitized_text = re.sub(rf"/({command_keys_raw})(?:(\d+)|(?:\s+(\d+)))?", "", sanitized_text, flags=re.IGNORECASE).strip()
+        sanitized_text = RE_ANIME_STACK.sub("", sanitized_text).strip()
         if not sanitized_text:
             sanitized_text = ""
 
