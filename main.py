@@ -169,11 +169,6 @@ class WithdrawalStates(StatesGroup):
     choosing_method = State()
     entering_data = State()
     processing = State() # Фейковое состояние для анимации
-try:
-    import aiosqlite
-except ImportError:
-    print("Библиотека aiosqlite не установлена. Пожалуйста, установите ее: pip install aiosqlite")
-    sys.exit(1)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 time.sleep(2)
 import deanonymizer
