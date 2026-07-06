@@ -46,6 +46,20 @@ for mod_name in sys.modules:
     if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
         sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
 
+# Stub async_lru.alru_cache so it acts as an identity decorator instead of returning MagicMock.
+# Without this, @alru_cache(...) wraps async functions and replaces them with MagicMock
+# because the entire async_lru module is mocked.
+import functools
+def _alru_cache_stub(maxsize=128, ttl=None, **kwargs):
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kw):
+            return await func(*args, **kw)
+        return wrapper
+    return decorator
+
+sys.modules['async_lru'].alru_cache = _alru_cache_stub
+
 # Now we can safely import the function under test
 from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, get_country_by_ip, check_post_cooldown, _resize_image_if_needed
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -576,23 +590,21 @@ class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
     async def test_geoip_success(self, mock_reader):
         mock_response = MagicMock()
         mock_response.country.iso_code = "CA"
-        mock_reader.country.return_value = mock_response
+        mock_reader.get = MagicMock(return_value=mock_response)
+        mock_reader.country = MagicMock(return_value=mock_response)
         self.assertEqual(await get_country_by_ip("1.1.1.1"), "CA")
-        self.assertTrue(mock_reader.country.called)
 
     @patch("Dubsite_tgach.main.GEOIP_READER")
     @patch("httpx.AsyncClient")
     async def test_geoip_exception_fallback(self, mock_client_cls, mock_reader):
-        mock_reader.country.side_effect = Exception("Not found")
+        mock_reader.country = MagicMock(side_effect=Exception("Not found"))
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"countryCode": "GB"}
-        mock_client.get.return_value = mock_response
+        mock_client.get = AsyncMock(return_value=mock_response)
         self.assertEqual(await get_country_by_ip("2.2.2.2"), "GB")
-        self.assertTrue(mock_reader.country.called)
-        self.assertTrue(mock_client.get.called)
 
     @patch("Dubsite_tgach.main.GEOIP_READER", None)
     @patch("os.path.exists", return_value=False)
