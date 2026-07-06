@@ -16,6 +16,8 @@ os.environ["OPENAI_API_KEY"] = "dummy_openai_key"
 class TestImporter(unittest.TestCase):
     def setUp(self):
         # We need an event loop for Pyrogram to import
+        import uvloop
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
 
