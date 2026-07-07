@@ -3,6 +3,12 @@ import os
 import re
 import subprocess
 import sys
+try:
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
 import threading
 import time
 import urllib.error
@@ -41,8 +47,11 @@ def log(message: str) -> None:
     LOG_DIR.mkdir(exist_ok=True)
     line = f"[{_now()}] {message}"
     print(line, flush=True)
-    with SUPERVISOR_LOG.open("a", encoding="utf-8") as fh:
-        fh.write(line + "\n")
+    try:
+        with SUPERVISOR_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError as e:
+        sys.stderr.write(f"[Watchdog] Warning: cannot write to bot_supervisor.log: {e}\n")
 
 
 def _file_age_sec(path: Path) -> float | None:
