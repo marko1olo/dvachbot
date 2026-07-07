@@ -7306,6 +7306,33 @@ async def save_poll_vote_db(post_num: int, user_id: int, option_index: int) -> b
             
     return False
 
+
+async def get_poll_results_batch(post_nums: list[int]) -> dict:
+    """Собирает результаты голосования для списка постов."""
+    if not post_nums:
+        return {}
+
+    db = await get_pool()
+    results = {pid: {} for pid in post_nums}
+    try:
+        # SQLite limitation: max variables is usually 999. We should chunk it if it's large, but usually it shouldn't be.
+        # However, to be safe, we will chunk.
+        chunk_size = 900
+        for i in range(0, len(post_nums), chunk_size):
+            chunk = post_nums[i:i + chunk_size]
+            placeholders = ','.join('?' for _ in chunk)
+            query = f"SELECT post_num, option_index, COUNT(*) FROM PollVotes WHERE post_num IN ({placeholders}) GROUP BY post_num, option_index"
+            async with db.execute(query, chunk) as cursor:
+                async for row in cursor:
+                    post_num, opt_idx, count = row
+                    if post_num not in results:
+                        results[post_num] = {}
+                    results[post_num][str(opt_idx)] = count
+    except Exception as e:
+        print(f"Poll batch error: {e}")
+        pass
+    return results
+
 async def get_poll_results(post_num: int) -> dict:
     """Собирает результаты голосования."""
     db = await get_pool()
