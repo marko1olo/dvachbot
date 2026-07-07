@@ -2502,11 +2502,25 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
                 lines.append(f"{name}{reply_suffix}: {text}")
         except Exception as e:
             print(f"[summarize] Error while chunking post: {e}, post: {post}")
-    full_text = "\n".join(lines)
-    cleaned_chunk = re.sub(r'\n{2,}', '\n', full_text).strip()
+    # Accumulate lines from newest to oldest up to 35000 characters to avoid split lines
+    total_len = 0
+    limited_lines = []
+    for line in reversed(lines):
+        # We also collapse multiple newlines if any, but our lines are single messages anyway
+        line_clean = re.sub(r'\n{2,}', '\n', line).strip()
+        if not line_clean:
+            continue
+        if total_len + len(line_clean) + 1 > 35000:
+            break
+        limited_lines.append(line_clean)
+        total_len += len(line_clean) + 1
+    
+    limited_lines.reverse()
+    cleaned_chunk = "\n".join(limited_lines)
+    
     context_name = f"thread {thread_id}" if thread_id else f"board {board_id}"
     print(f"[summarize] Chunk for {context_name} built, len={len(cleaned_chunk)}")
-    return cleaned_chunk[-35000:]
+    return cleaned_chunk
 from typing import Tuple, Optional
 
 def _get_msg_content_and_type(msg: Message) -> Tuple[Optional[str], Optional[str]]:
@@ -9908,8 +9922,10 @@ async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, 
             info_text = "За последние 6 часов на доске"
         chunk = await get_board_chunk(board_id, hours=6, lang=lang)
 
-    # Dynamically inject exact paragraph count constraint into the selected prompt
-    prompt = adjust_prompt_paragraphs(prompt, paragraph_count, lang=lang)
+    # Dynamically inject exact paragraph count constraint only if the prompt does not enforce a rigid template structure
+    is_templated = any(x in prompt.lower() for x in ["шаблон", "template", "•"]) or "1. <b>" in prompt
+    if not is_templated:
+        prompt = adjust_prompt_paragraphs(prompt, paragraph_count, lang=lang)
     
     return prompt, info_text, chunk
 
