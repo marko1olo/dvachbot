@@ -931,13 +931,22 @@ logging.basicConfig(
     datefmt="%H:%M:%S"
 )
 install_logging_redaction()
+class WindowsSafeRotatingFileHandler(RotatingFileHandler):
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except PermissionError as e:
+            sys.stderr.write(f"[Logging] Warning: bot_runtime.log rollover deferred: {e}\n")
+            if self.stream is None:
+                self.stream = self._open()
+
 def _setup_runtime_logger() -> logging.Logger:
 
     logger = logging.getLogger("tgach.runtime")
     logger.setLevel(logging.INFO)
     logger.propagate = False
     if not logger.handlers:
-        handler = RotatingFileHandler(
+        handler = WindowsSafeRotatingFileHandler(
             os.path.join(LOG_DIR, "bot_runtime.log"),
             maxBytes=10 * 1024 * 1024,
             backupCount=7,
