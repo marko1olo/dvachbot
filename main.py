@@ -714,8 +714,8 @@ SPAM_RULES = {
     },
     'animation': {
         'max_repeats': 2,
-        'max_per_window': 4,
-        'window_sec': 24
+        'max_per_window': 6,
+        'window_sec': 20
     }
 }
 TOKEN_TO_BOARD_MAP = {
