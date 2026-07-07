@@ -3007,9 +3007,6 @@ def _delete_in_chunks(con, table, where_clause, params, chunk_size=100):
             if count < chunk_size:
                 break
 
-            # Даем передышку другим процессам
-            time.sleep(0.1)
-
         except sqlite3.OperationalError as e:
             try: con.execute("ROLLBACK")
             except: pass
@@ -3111,7 +3108,6 @@ def _cleanup_archived_threads(con, archive_lifetime):
                 con.execute(f"DELETE FROM Posts WHERE thread_id IN ({placeholders})", chunk)
                 con.execute(f"DELETE FROM Threads WHERE thread_id IN ({placeholders})", chunk)
                 con.execute("COMMIT")
-                time.sleep(0.05)
             except:
                 try: con.execute("ROLLBACK")
                 except: pass
