@@ -33,6 +33,28 @@ import html
 import ipaddress
 import socket
 from fastapi import BackgroundTasks
+
+from async_lru import alru_cache
+
+@alru_cache(maxsize=1024)
+async def get_user_created_at_cached(guest_id: int) -> float | None:
+    async with get_db_connection() as conn:
+        row = await (await conn.execute("SELECT created_at FROM Users WHERE user_id = ?", (guest_id,))).fetchone()
+        if row and row[0]:
+            return float(row[0])
+    return None
+
+async def check_is_trusted(user: dict) -> bool:
+    if not user.get('is_guest'):
+        return True
+
+    created_at = await get_user_created_at_cached(int(user['id']))
+    if created_at:
+        age = time.time() - created_at
+        if age > 3600:
+            return True
+    return False
+
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi import Form
 import httpx
@@ -2692,17 +2714,7 @@ async def api_public_pow_challenge(request: Request, user: dict = Depends(get_cu
     is_enabled = (await get_system_setting('pow_enabled')) == "true"
     if not is_enabled:
         return {"challenge": "", "difficulty": 0}
-    is_trusted = False
-    if not user.get('is_guest'):
-        is_trusted = True
-    else:
-        guest_id = int(user['id'])
-        async with get_db_connection() as conn:
-            row = await (await conn.execute("SELECT created_at FROM Users WHERE user_id = ?", (guest_id,))).fetchone()
-            if row and row[0]:
-                age = time.time() - row[0]
-                if age > 3600:
-                    is_trusted = True
+    is_trusted = await check_is_trusted(user)
     if is_trusted:
         return {"challenge": "", "difficulty": 0}
     from site_tgach.security import get_pow_challenge_data
@@ -4646,17 +4658,7 @@ async def api_create_post(
         return {"Status": "OK", "Num": 0} 
     captcha_enabled = (await get_system_setting('captcha_enabled')) == "true"
     is_guest = user.get('is_guest', False)
-    user_is_trusted = False
-    if not is_guest:
-        user_is_trusted = True
-    else:
-        guest_id = int(user['id'])
-        async with get_db_connection() as conn:
-            row = await (await conn.execute("SELECT created_at FROM Users WHERE user_id = ?", (guest_id,))).fetchone()
-            if row and row[0]:
-                age = time.time() - row[0]
-                if age > 3600:
-                    user_is_trusted = True
+    user_is_trusted = await check_is_trusted(user)
     pow_enabled = (await get_system_setting('pow_enabled')) == "true"
     if pow_enabled and not user_is_trusted:
         is_pow_valid = False
