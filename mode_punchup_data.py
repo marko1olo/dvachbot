@@ -1,5 +1,3 @@
-from collections.abc import Sequence
-ReplacementValue = str | Sequence[str]
 
 MODE_PUNCHUP_PROFILES: dict[str, dict] = {
     "anime_mode": {
