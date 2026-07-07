@@ -291,6 +291,7 @@ from common.database import (
     get_thread_op_by_post_num,
     apply_regular_mute,
     get_user_by_token,
+    get_user_creation_time,
     toggle_op_hidden,
     get_user_posts_from_list,
     create_thread_entry,
@@ -5769,14 +5770,8 @@ async def api_makaba_posting(
     lockdown_val = await get_system_setting("lockdown_enabled")
     if lockdown_val == "true" and not user.get("is_admin"):
         logger.info(f"🛡️ Lockdown check triggered for {author_id}")
-        async with get_db_connection() as conn:
-            row = await (
-                await conn.execute(
-                    "SELECT MIN(created_at) FROM Users WHERE user_id = ?", (author_id,)
-                )
-            ).fetchone()
-            created_at = row[0] if row and row[0] is not None else time.time()
-            if (time.time() - created_at) < 86400 and not user.get("is_admin"):
+        created_at = await get_user_creation_time(author_id)
+        if (time.time() - created_at) < 86400 and not user.get("is_admin"):
                 return JSONResponse(
                     {
                         "Error": "Lockdown mode active. New users restricted.",
@@ -7575,15 +7570,9 @@ async def api_create_post(
     lockdown_val = await get_system_setting("lockdown_enabled")
     if lockdown_val == "true" and not user.get("is_admin"):
         logger.info(f"🛡️ Lockdown check triggered for {author_id}")
-        async with get_db_connection() as conn:
-            row = await (
-                await conn.execute(
-                    "SELECT MIN(created_at) FROM Users WHERE user_id = ?", (author_id,)
-                )
-            ).fetchone()
-            created_at = row[0] if row and row[0] is not None else time.time()
-            age_seconds = time.time() - created_at
-            if age_seconds < 86400:
+        created_at = await get_user_creation_time(author_id)
+        age_seconds = time.time() - created_at
+        if age_seconds < 86400:
                 if not user.get("is_admin"):
                     hours_left = int((86400 - age_seconds) / 3600)
                     raise HTTPException(

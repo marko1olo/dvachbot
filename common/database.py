@@ -27,6 +27,7 @@ import re
 from enum import Enum
 from datetime import datetime, UTC
 from typing import Optional, Dict, Any, Tuple, List, Union
+from async_lru import alru_cache
 from aiogram.types import BufferedInputFile, InputFile
 from common.db_pool import get_pool
 from common.config import (
@@ -7669,3 +7670,26 @@ def get_db_connection():
                 await self.conn.close()
             
     return SafeConnection()
+
+
+@alru_cache(maxsize=10000, ttl=86400)
+async def get_user_creation_time(user_id: int) -> float:
+    """
+    Получает время создания пользователя с кэшированием (1 день)
+    для оптимизации lockdown-проверок.
+    """
+    from common.db_pool import get_pool
+    for attempt in range(10):
+        try:
+            db = await get_pool()
+            async with db.execute("SELECT MIN(created_at) FROM Users WHERE user_id = ?", (user_id,)) as cursor:
+                row = await cursor.fetchone()
+                return float(row[0]) if row and row[0] is not None else time.time()
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower() or "busy" in str(e).lower():
+                await asyncio.sleep(0.1 * (attempt + 1))
+                continue
+            break
+        except Exception:
+            break
+    return time.time()
