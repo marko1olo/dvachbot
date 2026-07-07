@@ -969,6 +969,7 @@ async def process_import_queue(app_state_broadcast_queue):
                     continue
 
                 processed_ids = []
+                ref_map_inserts = []
 
                 for row in rows:
                     (
@@ -1049,12 +1050,7 @@ async def process_import_queue(app_state_broadcast_queue):
                                 new_post_num, content["text"], real_reply_to
                             )
 
-                            async with db_lock:
-                                await conn.execute(
-                                    "INSERT INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)",
-                                    (task_id, orig_num, new_post_num),
-                                )
-                                await conn.commit()
+                            ref_map_inserts.append((task_id, orig_num, new_post_num))
                             processed_ids.append(q_id)
 
                             if app_state_broadcast_queue:
@@ -1077,14 +1073,20 @@ async def process_import_queue(app_state_broadcast_queue):
                     except Exception as e:
                         processed_ids.append(q_id)
 
-                if processed_ids:
+                if ref_map_inserts or processed_ids:
                     try:
                         async with db_lock:
-                            placeholders = ",".join(["?"] * len(processed_ids))
-                            await conn.execute(
-                                f"DELETE FROM ImportQueue WHERE id IN ({placeholders})",
-                                processed_ids,
-                            )
+                            if ref_map_inserts:
+                                await conn.executemany(
+                                    "INSERT INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)",
+                                    ref_map_inserts,
+                                )
+                            if processed_ids:
+                                placeholders = ",".join(["?"] * len(processed_ids))
+                                await conn.execute(
+                                    f"DELETE FROM ImportQueue WHERE id IN ({placeholders})",
+                                    processed_ids,
+                                )
                             await conn.commit()
                     except:
                         pass
