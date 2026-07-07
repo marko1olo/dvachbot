@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pathlib import Path
 
 import asyncio
 import json
@@ -70,3 +71,14 @@ def remove_files_best_effort(paths: Iterable[str]) -> None:
 
 async def remove_files_best_effort_async(paths: Iterable[str]) -> None:
     await asyncio.to_thread(remove_files_best_effort, tuple(paths))
+
+
+def read_tail(path: Path, max_bytes: int = 512 * 1024) -> str:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            if size > max_bytes:
+                fh.seek(size - max_bytes)
+            return fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""

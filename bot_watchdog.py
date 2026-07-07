@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from common.async_file_io import read_tail
 
 
 ROOT = Path(__file__).resolve().parent
@@ -52,15 +53,6 @@ def _file_age_sec(path: Path) -> float | None:
         return None
 
 
-def _read_tail(path: Path, max_bytes: int = TAIL_READ_BYTES) -> str:
-    try:
-        size = path.stat().st_size
-        with path.open("rb") as fh:
-            if size > max_bytes:
-                fh.seek(size - max_bytes)
-            return fh.read().decode("utf-8", errors="replace")
-    except OSError:
-        return ""
 
 
 def _read_heartbeat() -> dict | None:
@@ -172,7 +164,7 @@ def _extract_queue_total_from_log_text(text: str) -> int | None:
 def _extract_queue_total_from_logs() -> int | None:
     latest: int | None = None
     for path in (LOG_DIR / "bot_runtime.log", STDOUT_LOG):
-        text = _read_tail(path)
+        text = read_tail(path, max_bytes=TAIL_READ_BYTES)
         if not text:
             continue
 
