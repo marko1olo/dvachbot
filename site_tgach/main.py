@@ -4700,6 +4700,21 @@ async def api_captcha_status():
     return {"enabled": val == "true"}
 
 
+
+
+
+@alru_cache(maxsize=10000)
+async def get_guest_created_at(guest_id: int) -> float:
+    async with get_db_connection() as conn:
+        row = await (await conn.execute("SELECT created_at FROM Users WHERE user_id = ?", (guest_id,))).fetchone()
+        return row[0] if row and row[0] else 0.0
+
+async def check_guest_is_trusted(guest_id: int) -> bool:
+    created_at = await get_guest_created_at(guest_id)
+    if created_at:
+        return (time.time() - created_at) > 3600
+    return False
+
 @app.get("/api/pow/challenge")
 async def api_public_pow_challenge(
     request: Request, user: dict = Depends(get_current_user_or_guest)
@@ -4719,16 +4734,7 @@ async def api_public_pow_challenge(
         is_trusted = True
     else:
         guest_id = int(user["id"])
-        async with get_db_connection() as conn:
-            row = await (
-                await conn.execute(
-                    "SELECT created_at FROM Users WHERE user_id = ?", (guest_id,)
-                )
-            ).fetchone()
-            if row and row[0]:
-                age = time.time() - row[0]
-                if age > 3600:
-                    is_trusted = True
+        is_trusted = await check_guest_is_trusted(guest_id)
     if is_trusted:
         return {"challenge": "", "difficulty": 0}
     from site_tgach.security import get_pow_challenge_data
@@ -7457,16 +7463,7 @@ async def api_create_post(
         user_is_trusted = True
     else:
         guest_id = int(user["id"])
-        async with get_db_connection() as conn:
-            row = await (
-                await conn.execute(
-                    "SELECT created_at FROM Users WHERE user_id = ?", (guest_id,)
-                )
-            ).fetchone()
-            if row and row[0]:
-                age = time.time() - row[0]
-                if age > 3600:
-                    user_is_trusted = True
+        user_is_trusted = await check_guest_is_trusted(guest_id)
     pow_enabled = (await get_system_setting("pow_enabled")) == "true"
     if pow_enabled and not user_is_trusted:
         is_pow_valid = False
