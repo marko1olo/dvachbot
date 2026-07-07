@@ -26,8 +26,6 @@ import os
 import json
 import time
 import logging
-import traceback
-from datetime import datetime
 from io import BytesIO
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -53,7 +51,6 @@ from common.database import (
     add_to_hf_queue,
     create_post,
     create_thread_entry,
-    update_post_content,
     get_post_for_broadcast,
     update_thread_last_updated,
     process_backlinks,
@@ -532,7 +529,7 @@ class ThreadImporter:
         stream: str = "ru",
         sim_settings: dict = None,
     ):
-        start_time = time.time()
+        time.time()
         use_sim = sim_settings and sim_settings.get("enabled", False)
         task_id = str(uuid.uuid4()) if use_sim else None
         logger.info(
@@ -902,7 +899,7 @@ class ThreadImporter:
                     await asyncio.sleep(0.05)
 
                 await conn.execute("BEGIN")
-                unique_authors = set(p["author_id"] for p in prepared_posts)
+                set(p["author_id"] for p in prepared_posts)
                 # for uid in unique_authors:
                 #     await conn.execute("INSERT OR IGNORE INTO Users (user_id, board_id, stream) VALUES (?, ?, ?)", (uid, target_board, stream))
 
@@ -1009,6 +1006,48 @@ async def process_import_queue(app_state_broadcast_queue):
                     await asyncio.sleep(5)
                     continue
 
+                # --- OPTIMIZATION: Pre-fetch replacements and OP final_thread_id_db in bulk ---
+                all_refs_by_task = {}
+                for row in rows:
+                    task_id = row[1]
+                    content_str = row[5]
+                    is_op = row[8]
+
+                    try:
+                        content_json = json.loads(content_str)
+                        text = content_json.get("text", "")
+                        refs = re.findall(r"(?:>>|&gt;&gt;)(\d+)", text)
+                        if refs:
+                            if task_id not in all_refs_by_task:
+                                all_refs_by_task[task_id] = set()
+                            all_refs_by_task[task_id].update(refs)
+                    except json.JSONDecodeError:
+                        pass
+
+                global_replacements = {}
+                for t_id, refs in all_refs_by_task.items():
+                    refs_list = list(refs)
+                    if refs_list:
+                        placeholders = ",".join(["?"] * len(refs_list))
+                        q_map = f"SELECT original_post_num, real_post_num FROM ImportRefMap WHERE task_id = ? AND original_post_num IN ({placeholders})"
+                        async with conn.execute(q_map, [t_id] + refs_list) as map_cur:
+                            async for m_row in map_cur:
+                                if t_id not in global_replacements:
+                                    global_replacements[t_id] = {}
+                                global_replacements[t_id][str(m_row[0])] = m_row[1]
+
+                op_rows_by_task = {}
+                task_ids_to_fetch_op = set(row[1] for row in rows if not row[8])
+                for t_id in task_ids_to_fetch_op:
+                    async with conn.execute(
+                        "SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1",
+                        (t_id,),
+                    ) as op_cur:
+                        op_row = await op_cur.fetchone()
+                        if op_row:
+                            op_rows_by_task[t_id] = str(op_row[0])
+                # --- END OPTIMIZATION ---
+
                 processed_ids = []
 
                 for row in rows:
@@ -1032,12 +1071,10 @@ async def process_import_queue(app_state_broadcast_queue):
                         replacements = {}
                         real_reply_to = None
 
-                        if refs:
-                            placeholders = ",".join(["?"] * len(refs))
-                            q_map = f"SELECT original_post_num, real_post_num FROM ImportRefMap WHERE task_id = ? AND original_post_num IN ({placeholders})"
-                            async with conn.execute(q_map, [task_id] + refs) as map_cur:
-                                async for m_row in map_cur:
-                                    replacements[str(m_row[0])] = m_row[1]
+                        if refs and task_id in global_replacements:
+                            for ref in refs:
+                                if ref in global_replacements[task_id]:
+                                    replacements[ref] = global_replacements[task_id][ref]
 
                         if replacements:
 
@@ -1056,13 +1093,7 @@ async def process_import_queue(app_state_broadcast_queue):
 
                         final_thread_id_db = None
                         if not is_op:
-                            async with conn.execute(
-                                "SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1",
-                                (task_id,),
-                            ) as op_cur:
-                                op_row = await op_cur.fetchone()
-                                if op_row:
-                                    final_thread_id_db = str(op_row[0])
+                            final_thread_id_db = op_rows_by_task.get(task_id)
 
                         post_mode = "new_thread" if is_op else "reply"
                         new_post_num = await create_post(
@@ -1101,6 +1132,13 @@ async def process_import_queue(app_state_broadcast_queue):
                                     (task_id, orig_num, new_post_num),
                                 )
                                 await conn.commit()
+
+                            if task_id not in global_replacements:
+                                global_replacements[task_id] = {}
+                            global_replacements[task_id][str(orig_num)] = new_post_num
+
+                            if is_op:
+                                op_rows_by_task[task_id] = str(new_post_num)
                             processed_ids.append(q_id)
 
                             if app_state_broadcast_queue:
@@ -1120,7 +1158,7 @@ async def process_import_queue(app_state_broadcast_queue):
                             )
                             processed_ids.append(q_id)
 
-                    except Exception as e:
+                    except Exception:
                         processed_ids.append(q_id)
 
                 if processed_ids:
