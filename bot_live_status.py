@@ -4,9 +4,9 @@ import json
 import sqlite3
 import sys
 import time
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+from common.async_file_io import read_tail
 
 
 ROOT = Path(__file__).resolve().parent
@@ -76,19 +76,10 @@ def _health() -> tuple[str, dict | str]:
     return ("ok", db)
 
 
-def _read_tail(path: Path, max_bytes: int = 512 * 1024) -> str:
-    try:
-        size = path.stat().st_size
-        with path.open("rb") as fh:
-            if size > max_bytes:
-                fh.seek(size - max_bytes)
-            return fh.read().decode("utf-8", errors="replace")
-    except OSError:
-        return ""
 
 
 def _latest_runtime_snapshot() -> dict:
-    text = _read_tail(RUNTIME_LOG)
+    text = read_tail(RUNTIME_LOG)
     for line in reversed(text.splitlines()):
         marker = "runtime_snapshot "
         if marker not in line:
@@ -103,7 +94,7 @@ def _latest_runtime_snapshot() -> dict:
 
 
 def _latest_delivery_lines(limit: int = 5) -> list[str]:
-    text = _read_tail(RUNTIME_LOG)
+    text = read_tail(RUNTIME_LOG)
     lines = [
         line
         for line in text.splitlines()
