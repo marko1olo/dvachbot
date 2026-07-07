@@ -1570,6 +1570,175 @@ def _process_site_db_row(row):
     except Exception as e:
         print(f"⚠️ Ошибка обработки строки (Post): {e}")
         return None
+
+async def _get_op_posts_target_ids(db, board_id, stream, observer_id, ignore_pin, page_size, offset, sort_by):
+    import time
+    import random
+    pin_clause = "MAX(IFNULL(t.is_pinned, 0)) DESC," if not ignore_pin else ""
+    params = []
+    viewer_id = observer_id if observer_id else -1
+    where_clause = f"""
+        WHERE p.reply_to_post_num IS NULL
+        AND t.thread_id IS NOT NULL
+        AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
+    """
+    if board_id:
+        if isinstance(board_id, list):
+            placeholders = ','.join('?' for _ in board_id)
+            where_clause += f" AND p.board_id IN ({placeholders})"
+            params.extend(board_id)
+        else:
+            where_clause += " AND p.board_id = ?"
+            params.append(board_id)
+
+    check_board_str = board_id[0] if isinstance(board_id, list) and board_id else board_id
+    if check_board_str != 'int':
+        where_clause += " AND (p.stream = ? OR p.stream IS NULL)"
+        params.append(stream)
+
+    if sort_by == "random":
+        ids_query = f"""
+            SELECT p.post_num
+            FROM Posts p
+            LEFT JOIN Threads t ON p.post_num = t.thread_num
+            {where_clause}
+            GROUP BY p.post_num
+        """
+        target_ids_pool = []
+        async with db.execute(ids_query, params) as cursor:
+            async for row in cursor:
+                target_ids_pool.append(row[0])
+        if not target_ids_pool: return []
+        seed_val = int(time.time() / 600)
+        rng = random.Random(seed_val)
+        rng.shuffle(target_ids_pool)
+        return target_ids_pool[offset : offset + page_size]
+    else:
+        if sort_by == "bump":
+            order_clause = f"ORDER BY {pin_clause} MIN(IFNULL(t.is_archived, 0)) ASC, MAX(IFNULL(t.last_updated_at, p.timestamp)) DESC, p.post_num DESC"
+        else:
+            order_clause = f"ORDER BY {pin_clause} p.timestamp DESC, p.post_num DESC"
+        limit_params = [page_size, offset]
+        ids_query = f"""
+            SELECT p.post_num
+            FROM Posts p
+            LEFT JOIN Threads t ON p.post_num = t.thread_num
+            {where_clause}
+            GROUP BY p.post_num
+            {order_clause}
+            LIMIT ? OFFSET ?
+        """
+        target_ids = []
+        async with db.execute(ids_query, params + limit_params) as cursor:
+            async for row in cursor:
+                val = row['post_num'] if hasattr(row, 'keys') else row[0]
+                target_ids.append(val)
+        return target_ids
+
+async def _fetch_op_posts_data(db, target_ids):
+    import json
+    id_placeholders = ','.join('?' for _ in target_ids)
+    data_query = f"""
+        SELECT
+            p.post_num, p.board_id, p.thread_id, p.content, p.timestamp, p.author_id, p.stream, p.is_shadow,
+            MAX(t.is_archived) as is_archived,
+            MAX(t.is_pinned) as is_pinned,
+            MAX(t.thread_type) as thread_type,
+            MAX(t.is_endless) as is_endless
+        FROM Posts p
+        LEFT JOIN Threads t ON p.post_num = t.thread_num
+        WHERE p.post_num IN ({id_placeholders})
+        GROUP BY p.post_num
+    """
+    posts_map = {}
+    real_thread_id_map = {}
+
+    async with db.execute(data_query, target_ids) as cursor:
+        columns = [desc[0] for desc in cursor.description]
+        async for row in cursor:
+            if hasattr(row, 'keys'):
+                pd = dict(row)
+            else:
+                pd = dict(zip(columns, row))
+            pid = int(pd.pop('post_num'))
+            raw_tid = pd.get('thread_id')
+            if raw_tid:
+                clean_tid_str = str(raw_tid).strip()
+                real_thread_id_map[clean_tid_str] = pid
+                if clean_tid_str.isdigit():
+                    real_thread_id_map[int(clean_tid_str)] = pid
+
+            try:
+                pd['id'] = pid
+                pd['content'] = json.loads(pd['content'])
+                pd['is_archived'] = bool(pd.get('is_archived', 0))
+                pd['is_pinned'] = bool(pd.get('is_pinned', 0))
+                pd['is_endless'] = bool(pd.get('is_endless', 0))
+                pd['reply_count'] = 0
+                pd['anon_count'] = 1
+                pd['latest_replies'] = []
+                posts_map[pid] = pd
+            except:
+                continue
+    return posts_map, real_thread_id_map
+
+async def _fetch_and_attach_replies(db, target_ids, posts_map, real_thread_id_map, viewer_id):
+    import json
+    all_possible_thread_ids = list(real_thread_id_map.keys())
+    all_possible_thread_ids.extend(target_ids)
+    valid_tids_str = [f"'{str(x)}'" for x in all_possible_thread_ids if x]
+    id_placeholders = ','.join('?' for _ in target_ids)
+
+    if valid_tids_str:
+        in_clause = ",".join(valid_tids_str)
+        replies_fetch_query = f"""
+            SELECT post_num, board_id, thread_id, reply_to_post_num, author_id, content, timestamp
+            FROM Posts
+            WHERE (
+                thread_id IN ({in_clause})
+                OR reply_to_post_num IN ({id_placeholders})
+            )
+            AND (IFNULL(is_shadow, 0) = 0 OR author_id = {viewer_id})
+            ORDER BY post_num ASC
+        """
+        async with db.execute(replies_fetch_query, target_ids) as cursor:
+            rep_columns = [desc[0] for desc in cursor.description]
+            async for row in cursor:
+                try:
+                    if hasattr(row, 'keys'): r_data = row
+                    else: r_data = dict(zip(rep_columns, row))
+                    p_num = int(r_data['post_num'])
+                    if p_num in posts_map: continue
+                    t_id_raw = r_data['thread_id']
+                    r_to_raw = r_data['reply_to_post_num']
+                    parent_id = None
+                    if t_id_raw:
+                        if t_id_raw in real_thread_id_map: parent_id = real_thread_id_map[t_id_raw]
+                        else:
+                            t_str = str(t_id_raw).strip()
+                            if t_str in real_thread_id_map: parent_id = real_thread_id_map[t_str]
+                    if parent_id is None and r_to_raw:
+                        try:
+                            rid = int(str(r_to_raw).strip())
+                            if rid in posts_map: parent_id = rid
+                        except: pass
+                    if parent_id is not None:
+                        target = posts_map[parent_id]
+                        target['reply_count'] += 1
+                        if '_authors' not in target: target['_authors'] = {target['author_id']}
+                        target['_authors'].add(r_data['author_id'])
+                        reply_obj = {
+                            'id': p_num,
+                            'board_id': r_data['board_id'],
+                            'thread_id': r_data['thread_id'],
+                            'content': json.loads(r_data['content']),
+                            'timestamp': r_data['timestamp'],
+                            'author_id': r_data['author_id']
+                        }
+                        if '_all_replies' not in target: target['_all_replies'] = []
+                        target['_all_replies'].append(reply_obj)
+                except Exception: continue
+
 async def get_op_posts_for_board(
     board_id: Union[str, List[str]], 
     sort_by: str = "new", 
@@ -1587,180 +1756,20 @@ async def get_op_posts_for_board(
         for attempt in range(3):
             try:
                 db = await get_pool()
-                op_posts = []
-                pin_clause = "MAX(IFNULL(t.is_pinned, 0)) DESC," if not ignore_pin else ""
                 
-                # Общая часть для WHERE
-                params = []
-                viewer_id = observer_id if observer_id else -1
-                where_clause = f"""
-                    WHERE p.reply_to_post_num IS NULL 
-                    AND t.thread_id IS NOT NULL 
-                    AND (IFNULL(p.is_shadow, 0) = 0 OR p.author_id = {viewer_id})
-                """
-                if board_id:
-                    if isinstance(board_id, list):
-                        placeholders = ','.join('?' for _ in board_id)
-                        where_clause += f" AND p.board_id IN ({placeholders})"
-                        params.extend(board_id)
-                    else:
-                        where_clause += " AND p.board_id = ?"
-                        params.append(board_id)
-                
-                check_board_str = board_id[0] if isinstance(board_id, list) and board_id else board_id
-                if check_board_str != 'int':
-                    where_clause += " AND (p.stream = ? OR p.stream IS NULL)"
-                    params.append(stream)
-
-                if sort_by == "random":
-                    ids_query = f"""
-                        SELECT p.post_num
-                        FROM Posts p
-                        LEFT JOIN Threads t ON p.post_num = t.thread_num
-                        {where_clause}
-                        GROUP BY p.post_num
-                    """
-                    
-                    target_ids_pool = []
-                    async with db.execute(ids_query, params) as cursor:
-                        async for row in cursor:
-                            target_ids_pool.append(row[0])
-                    
-                    if not target_ids_pool: return []
-                    
-                    seed_val = int(time.time() / 600)
-                    rng = random.Random(seed_val)
-                    rng.shuffle(target_ids_pool)
-                    
-                    target_ids = target_ids_pool[offset : offset + page_size]
-                
-                else: # bump или new
-                    if sort_by == "bump":
-                        order_clause = f"ORDER BY {pin_clause} MIN(IFNULL(t.is_archived, 0)) ASC, MAX(IFNULL(t.last_updated_at, p.timestamp)) DESC, p.post_num DESC"
-                    else:
-                        order_clause = f"ORDER BY {pin_clause} p.timestamp DESC, p.post_num DESC"
-                    
-                    limit_params = [page_size, offset]
-                    ids_query = f"""
-                        SELECT p.post_num
-                        FROM Posts p
-                        LEFT JOIN Threads t ON p.post_num = t.thread_num
-                        {where_clause}
-                        GROUP BY p.post_num
-                        {order_clause}
-                        LIMIT ? OFFSET ?
-                    """
-                    
-                    target_ids = []
-                    async with db.execute(ids_query, params + limit_params) as cursor:
-                        async for row in cursor:
-                            val = row['post_num'] if hasattr(row, 'keys') else row[0]
-                            target_ids.append(val)
-                
+                target_ids = await _get_op_posts_target_ids(db, board_id, stream, observer_id, ignore_pin, page_size, offset, sort_by)
                 if not target_ids:
                     return []
                 
-                id_placeholders = ','.join('?' for _ in target_ids)
-                data_query = f"""
-                    SELECT 
-                        p.post_num, p.board_id, p.thread_id, p.content, p.timestamp, p.author_id, p.stream, p.is_shadow,
-                        MAX(t.is_archived) as is_archived, 
-                        MAX(t.is_pinned) as is_pinned,
-                        MAX(t.thread_type) as thread_type,
-                        MAX(t.is_endless) as is_endless
-                    FROM Posts p
-                    LEFT JOIN Threads t ON p.post_num = t.thread_num
-                    WHERE p.post_num IN ({id_placeholders})
-                    GROUP BY p.post_num
-                """
-                posts_map = {} 
-                real_thread_id_map = {} 
+                posts_map, real_thread_id_map = await _fetch_op_posts_data(db, target_ids)
                 
-                async with db.execute(data_query, target_ids) as cursor:
-                    columns = [desc[0] for desc in cursor.description]
-                    async for row in cursor:
-                        if hasattr(row, 'keys'):
-                            pd = dict(row)
-                        else:
-                            pd = dict(zip(columns, row))
-                        pid = int(pd.pop('post_num'))
-                        raw_tid = pd.get('thread_id')
-                        if raw_tid:
-                            clean_tid_str = str(raw_tid).strip()
-                            real_thread_id_map[clean_tid_str] = pid
-                            if clean_tid_str.isdigit():
-                                real_thread_id_map[int(clean_tid_str)] = pid
-                        
-                        try:
-                            pd['id'] = pid
-                            pd['content'] = json.loads(pd['content'])
-                            pd['is_archived'] = bool(pd.get('is_archived', 0))
-                            pd['is_pinned'] = bool(pd.get('is_pinned', 0))
-                            pd['is_endless'] = bool(pd.get('is_endless', 0))
-                            pd['reply_count'] = 0
-                            pd['anon_count'] = 1
-                            pd['latest_replies'] = []
-                            posts_map[pid] = pd
-                        except: 
-                            continue
-                            
+                op_posts = []
                 for pid in target_ids:
                     if pid in posts_map:
                         op_posts.append(posts_map[pid])
                         
-                all_possible_thread_ids = list(real_thread_id_map.keys())
-                all_possible_thread_ids.extend(target_ids)
-                valid_tids_str = [f"'{str(x)}'" for x in all_possible_thread_ids if x]
-                
-                if valid_tids_str:
-                    in_clause = ",".join(valid_tids_str)
-                    replies_fetch_query = f"""
-                        SELECT post_num, board_id, thread_id, reply_to_post_num, author_id, content, timestamp
-                        FROM Posts
-                        WHERE (
-                            thread_id IN ({in_clause}) 
-                            OR reply_to_post_num IN ({id_placeholders})
-                        )
-                        AND (IFNULL(is_shadow, 0) = 0 OR author_id = {viewer_id})
-                        ORDER BY post_num ASC
-                    """
-                    async with db.execute(replies_fetch_query, target_ids) as cursor:
-                        rep_columns = [desc[0] for desc in cursor.description]
-                        async for row in cursor:
-                            try:
-                                if hasattr(row, 'keys'): r_data = row
-                                else: r_data = dict(zip(rep_columns, row))
-                                p_num = int(r_data['post_num'])
-                                if p_num in posts_map: continue
-                                t_id_raw = r_data['thread_id']
-                                r_to_raw = r_data['reply_to_post_num']
-                                parent_id = None
-                                if t_id_raw:
-                                    if t_id_raw in real_thread_id_map: parent_id = real_thread_id_map[t_id_raw]
-                                    else:
-                                        t_str = str(t_id_raw).strip()
-                                        if t_str in real_thread_id_map: parent_id = real_thread_id_map[t_str]
-                                if parent_id is None and r_to_raw:
-                                    try:
-                                        rid = int(str(r_to_raw).strip())
-                                        if rid in posts_map: parent_id = rid
-                                    except: pass
-                                if parent_id is not None:
-                                    target = posts_map[parent_id]
-                                    target['reply_count'] += 1
-                                    if '_authors' not in target: target['_authors'] = {target['author_id']}
-                                    target['_authors'].add(r_data['author_id'])
-                                    reply_obj = {
-                                        'id': p_num,
-                                        'board_id': r_data['board_id'],
-                                        'thread_id': r_data['thread_id'],
-                                        'content': json.loads(r_data['content']),
-                                        'timestamp': r_data['timestamp'],
-                                        'author_id': r_data['author_id']
-                                    }
-                                    if '_all_replies' not in target: target['_all_replies'] = []
-                                    target['_all_replies'].append(reply_obj)
-                            except Exception: continue
+                viewer_id = observer_id if observer_id else -1
+                await _fetch_and_attach_replies(db, target_ids, posts_map, real_thread_id_map, viewer_id)
                             
                 for post in op_posts:
                     if '_authors' in post: post['anon_count'] = len(post.pop('_authors'))
@@ -1771,12 +1780,14 @@ async def get_op_posts_for_board(
                 
             except Exception as e:
                 if attempt < 2:
+                    import asyncio
                     await asyncio.sleep(0.2 * (attempt + 1))
                     continue
                 else:
                     print(f"⛔ Error in get_op_posts_for_board after 3 attempts: {e}")
                     return []
     return []
+
 async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
     from common.db_pool import get_pool, db_lock
     
