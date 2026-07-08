@@ -9687,6 +9687,7 @@ async def api_admin_ban_image(
     banned_count = 0
     db = await get_pool()
     try:
+        hashes_to_ban = []
         for f in files:
             fid = f.get("original_file_id")
             if fid:
@@ -9697,12 +9698,13 @@ async def api_admin_ban_image(
                     if row:
                         sha, phash = row
                         if sha:
-                            from common.database import ban_hash
-
-                            await ban_hash(sha, "sha256", data.reason)
+                            hashes_to_ban.append((sha, "sha256", data.reason))
                             banned_count += 1
                         if phash:
-                            await ban_hash(phash, "phash", data.reason)
+                            hashes_to_ban.append((phash, "phash", data.reason))
+        if hashes_to_ban:
+            from common.database import ban_hashes
+            await ban_hashes(hashes_to_ban)
         await delete_post_by_num(data.post_num)
     except Exception as e:
         logger.error(f"Image Ban Error: {e}")
