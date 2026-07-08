@@ -2151,60 +2151,32 @@ async def load_state():
                   f"tg_banned = {banned_tg_count}, "
                   f"banned_total = {banned_count}")
 async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | None = None, emergency: bool = False):
-    """
-    Корректное завершение работы.
-    Адаптировано под архитектуру WAL + isolation_level=None + db_lock.
-    """
+    from common.shutdown import _graceful_shutdown_impl
     global is_shutting_down
-    if is_shutting_down:
-        return
-    is_shutting_down = True
-    shutdown_event.set()
     
-    # Импортируем лок для безопасного доступа к БД
+    def set_shutting_down(val):
+        global is_shutting_down
+        is_shutting_down = val
+
     from common.db_pool import get_pool, db_lock, close_pool
     
-    reason = "АВАРИЙНЫЙ (OOM)" if emergency else "ШТАТНЫЙ"
-    print(f"🛑 [{reason}] Начинаем процедуру остановки...")
-    
-    try:
-        await dp.stop_polling()
-        print("⏸ Polling остановлен.")
-    except Exception as e:
-        print(f"⚠️ Ошибка при остановке polling: {e}")
-        runtime_logger.warning(f"Ошибка при остановке polling: {e}")
-
-    # Сброс WAL на диск
-    print("💾 Сброс данных из WAL на диск...")
-    try:
-        # Используем лок, чтобы не прервать активную транзакцию
-        async with db_lock:
-            db = await get_pool()
-            # В режиме isolation_level=None PRAGMA выполняется сразу. Commit не нужен.
-            # Используем TRUNCATE для полной очистки WAL перед выходом
-            await db.execute("PRAGMA wal_checkpoint(TRUNCATE);")
-            print("✅ Данные успешно сохранены на диск (WAL Truncated).")
-    except Exception as e:
-        print(f"⛔ Ошибка сохранения WAL: {e}")
-
-    try:
-        print("🛑 Отмена фоновых задач перед закрытием БД...")
-        async with pending_edit_lock:
-            for task in pending_edit_tasks.values():
-                task.cancel()
-        
-        if healthcheck_site: await healthcheck_site.stop()
-        await asyncio.sleep(2.0)
-        
-        # Закрываем пул (внутри db_pool.py тоже есть защита)
-        await close_pool()
-        
-        git_executor.shutdown(wait=False, cancel_futures=True)
-        save_executor.shutdown(wait=False, cancel_futures=True)
-    except Exception as e:
-        print(f"⚠️ Ошибка при shutdown: {e}")
-        
-    print("✅ Готово к выходу.")
+    await _graceful_shutdown_impl(
+        is_shutting_down,
+        set_shutting_down,
+        shutdown_event,
+        dp,
+        runtime_logger,
+        pending_edit_lock,
+        pending_edit_tasks,
+        git_executor,
+        save_executor,
+        get_pool,
+        db_lock,
+        close_pool,
+        bots,
+        healthcheck_site,
+        emergency
+    )
 async def log_memory_summary():
     """
     Максимально подробный анализ и логгирование состояния памяти, размеров структур,
