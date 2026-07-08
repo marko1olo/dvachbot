@@ -2990,16 +2990,13 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                         t_ids.append(str(t_id_int))
 
                     t_ids = list(set(t_ids))
-                    chunk_size = 900
+                    t_ids_json = json.dumps(t_ids)
 
-                    for i in range(0, len(t_ids), chunk_size):
-                        chunk = t_ids[i:i+chunk_size]
-                        placeholders = ','.join(['?'] * len(chunk))
-                        query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders})"
-                        async with db.execute(query, chunk) as cursor:
-                            p_rows = await cursor.fetchall()
-                            for pr in p_rows:
-                                posts_to_delete_set.add(pr[0])
+                    query = "SELECT post_num FROM Posts WHERE thread_id IN (SELECT value FROM json_each(?))"
+                    async with db.execute(query, (t_ids_json,)) as cursor:
+                        p_rows = await cursor.fetchall()
+                        for pr in p_rows:
+                            posts_to_delete_set.add(pr[0])
 
                 posts_to_delete_nums = list(posts_to_delete_set)
                 placeholders = ','.join('?' for _ in posts_to_delete_nums)
