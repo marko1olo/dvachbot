@@ -1,5 +1,3 @@
-import re
-
 with open('japanese_translator.py', 'r', encoding='utf-8') as f:
     content = f.read()
 
