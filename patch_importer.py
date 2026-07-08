@@ -1,5 +1,3 @@
-import re
-
 with open('Dubsite_tgach/importer.py', 'r', encoding='utf-8') as f:
     content = f.read()
 
