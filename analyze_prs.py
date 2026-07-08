@@ -1,5 +1,4 @@
 import subprocess
-import re
 
 # Get all remote branches
 output = subprocess.check_output(['git', 'branch', '-r']).decode('utf-8')
