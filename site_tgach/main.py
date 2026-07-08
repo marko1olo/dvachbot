@@ -1819,19 +1819,20 @@ async def country_cookie_middleware(request: Request, call_next):
     return response
 
 
+BLOCKED_BOTS_PATTERN = re.compile('|'.join(map(re.escape, [
+    "bytespider",
+    "claudebot",
+    "semrushbot",
+    "dotbot",
+    "mj12bot",
+    "ahrefsbot",
+    "gptbot",
+    "ccbot",
+])))
+
 class BlockBadBots:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
-        self.blocked_agents = [
-            "bytespider",
-            "claudebot",
-            "semrushbot",
-            "dotbot",
-            "mj12bot",
-            "ahrefsbot",
-            "gptbot",
-            "ccbot",
-        ]
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -1840,7 +1841,7 @@ class BlockBadBots:
 
         headers = dict(scope.get("headers", []))
         user_agent = headers.get(b"user-agent", b"").decode("latin-1").lower()
-        if any(bot in user_agent for bot in self.blocked_agents):
+        if bool(BLOCKED_BOTS_PATTERN.search(user_agent)):
             response = Response("Go away, bot.", status_code=403)
             await response(scope, receive, send)
             return
