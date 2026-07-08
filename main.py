@@ -38,6 +38,7 @@ import math
 import random
 import re
 import secrets
+from common.pinned_messages import setup_pinned_messages
 import html
 import signal
 import sys
@@ -2376,47 +2377,6 @@ async def _activate_mode(board_id: str, mode_to_enable: str):
     settings_updates = {mode: (mode == mode_to_enable) for mode in all_modes}
     await update_board_settings(board_id, settings_updates)
     print(f"DB: [{board_id}] Режим {mode_to_enable} активирован.")
-async def setup_pinned_messages(bots: dict[str, Bot]):
-
-    for board_id, bot_instance in bots.items():
-        b_data = board_data[board_id]
-        languages = ['ru', 'en', 'jp']
-        start_messages = {}
-        for lang in languages:
-            board_links = generate_boards_list(BOARD_CONFIG, lang)
-            if lang == 'en':
-                base_help = random.choice(HELP_TEXT_EN_COMMANDS)
-                boards_head = "🌐 <b>All boards:</b>"
-                thread_info = (
-                    "\n\n<b>This board supports threads!</b>\n"
-                    "/create &lt;title&gt; - Create a new thread\n"
-                    "/threads - View active threads\n"
-                    "/leave - Return to the main board from a thread"
-                ) if board_id in THREAD_BOARDS else ""
-            elif lang == 'jp':
-                base_help = random.choice(HELP_TEXT_JP_COMMANDS)
-                boards_head = "🌐 <b>全板一覧:</b>"
-                thread_info = (
-                    "\n\n<b>この板はスレッドに対応しています！</b>\n"
-                    "/create &lt;タイトル&gt; - 新規スレ作成\n"
-                    "/threads - スレ一覧を見る\n"
-                    "/leave - スレから板に戻る"
-                ) if board_id in THREAD_BOARDS else ""
-            else: # ru
-                base_help = random.choice(HELP_TEXT_COMMANDS)
-                boards_head = "🌐 <b>Все доски:</b>"
-                thread_info = (
-                    "\n\n<b>На этой доске есть треды!</b>\n"
-                    "/create &lt;заголовок&gt; - Создать новый тред\n"
-                    "/threads - Посмотреть активные треды\n"
-                    "/leave - Вернуться на доску из треда"
-                ) if board_id in THREAD_BOARDS else ""
-            full_text = f"{base_help}\n{thread_info}\n\n{board_links}"
-            start_messages[lang] = full_text
-        b_data['start_message_map'] = start_messages
-        default_lang = 'en' if board_id == 'int' else 'ru'
-        b_data['start_message_text'] = start_messages[default_lang]
-        print(f"📌 [{board_id}] Тексты помощи (RU/EN/JP) подготовлены.")
 async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None = None, lang: str | None = None) -> str:
 
     now = datetime.now(UTC)
@@ -19568,7 +19528,7 @@ async def main():
             return
         active_bots_list = list(GLOBAL_BOTS.values())
         print(f"✅ Инициализировано {len(active_bots_list)} ботов.")
-        await setup_pinned_messages(GLOBAL_BOTS)
+        await setup_pinned_messages(GLOBAL_BOTS, board_data, BOARD_CONFIG, THREAD_BOARDS)
         try:
             healthcheck_site = await start_healthcheck()
         except Exception as e:
