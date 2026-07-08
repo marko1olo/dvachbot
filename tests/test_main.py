@@ -11,6 +11,13 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+
+import unittest.mock
+def infinite_iter(self):
+    while True:
+        yield unittest.mock.MagicMock()
+unittest.mock.MagicMock.__iter__ = infinite_iter
+
 def mock_module(name):
     mod = types.ModuleType(name)
     mod.__path__ = [] # makes it a package
@@ -42,6 +49,11 @@ for dep in mocked_deps:
     mock_module(dep)
 
 # Return MagicMock for any attribute access on our mocked modules
+
+
+
+
+
 for mod_name in sys.modules:
     if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
         sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
