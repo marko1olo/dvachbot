@@ -1,6 +1,5 @@
 # Is there another loop?
 import ast
-from pprint import pprint
 
 tree = ast.parse(open('ukrainian_mode.py').read())
 for node in ast.walk(tree):
