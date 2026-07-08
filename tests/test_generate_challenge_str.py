@@ -109,3 +109,24 @@ class TestGenerateChallengeStr:
         assert len(security_module.POW_CACHE) == expected_size
         assert challenge in security_module.POW_CACHE
         assert mock_sample.called
+
+    @patch("time.time")
+    @patch("random.random")
+    def test_challenge_constraints(self, mock_random, mock_time, security_module):
+        mock_time.return_value = 1000.0
+        mock_random.return_value = 0.5
+
+        challenge = security_module.generate_challenge_str()
+
+        # Length constraint: token_hex(16) returns 32 characters
+        assert len(challenge) == 32
+
+        # Character set constraint: should only contain lowercase hex characters
+        import string
+        assert all(c in string.hexdigits for c in challenge)
+        assert challenge.islower() or challenge.isdigit()
+
+    def test_challenge_uniqueness(self, security_module):
+        # Generates multiple challenges to ensure they are distinct (randomness)
+        challenges = set(security_module.generate_challenge_str() for _ in range(100))
+        assert len(challenges) == 100
