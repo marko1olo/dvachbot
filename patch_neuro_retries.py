@@ -1,5 +1,4 @@
 import os
-import re
 
 def patch_neuro_poster(path):
     with open(path, 'r', encoding='utf-8') as f:
