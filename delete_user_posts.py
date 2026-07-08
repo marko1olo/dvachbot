@@ -1,4 +1,4 @@
-  async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
+async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
       """
       Массовое удаление постов пользователя за период.
       Удаляет из БД (с защитой транзакции), RAM, ЛС и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
@@ -32,20 +32,21 @@
 
                       posts_to_delete_set = set(user_posts)
 
-                      # Проверяем, какие из этих постов являются ОП-постами тредов
                       if user_posts:
-                          chunk_size = 400
-                          for i in range(0, len(user_posts), chunk_size):
-                              chunk = user_posts[i:i + chunk_size]
-                              chunk_str = [str(p) for p in chunk]
-                              placeholders = ','.join('?' for _ in chunk)
-                              query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders}) OR thread_num IN ({placeholders})"
-                              async with db.execute(query, chunk_str + chunk) as cursor:
-                                  t_rows = await cursor.fetchall()
-                                  for t_row in t_rows:
-                                      threads_to_delete.append(t_row[0])
+                          await db.execute("CREATE TEMP TABLE _TempUserPosts (post_num INTEGER PRIMARY KEY)")
+                          await db.executemany("INSERT OR IGNORE INTO _TempUserPosts (post_num) VALUES (?)", [(p,) for p in user_posts])
 
-                      # Если есть удаляемые треды, выбираем ВСЕ посты этих тредов, чтобы снести их тоже
+                          query = """
+                              SELECT thread_id FROM Threads
+                              WHERE thread_id IN (SELECT CAST(post_num AS TEXT) FROM _TempUserPosts)
+                                 OR thread_num IN (SELECT post_num FROM _TempUserPosts)
+                          """
+                          async with db.execute(query) as cursor:
+                              t_rows = await cursor.fetchall()
+                              for t_row in t_rows:
+                                  threads_to_delete.append(t_row[0])
+                          await db.execute("DROP TABLE _TempUserPosts")
+
                       if threads_to_delete:
                           t_ids = []
                           for t_id in threads_to_delete:
@@ -53,58 +54,53 @@
                               try: t_id_int = int(t_id)
                               except ValueError: t_id_int = 0
                               t_ids.append(str(t_id_int))
-
                           t_ids = list(set(t_ids))
-                          chunk_size = 400
 
-                          for i in range(0, len(t_ids), chunk_size):
-                              chunk = t_ids[i:i+chunk_size]
-                              placeholders_threads = ','.join(['?'] * len(chunk))
-                              query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders_threads})"
-                              async with db.execute(query, chunk) as cursor:
-                                  p_rows = await cursor.fetchall()
-                                  for pr in p_rows:
-                                      posts_to_delete_set.add(pr[0])
+                          await db.execute("CREATE TEMP TABLE _TempThreadsToDel (thread_id TEXT PRIMARY KEY)")
+                          await db.executemany("INSERT OR IGNORE INTO _TempThreadsToDel (thread_id) VALUES (?)", [(t,) for t in t_ids])
+
+                          query = "SELECT post_num FROM Posts INNER JOIN _TempThreadsToDel ON Posts.thread_id = _TempThreadsToDel.thread_id"
+                          async with db.execute(query) as cursor:
+                              p_rows = await cursor.fetchall()
+                              for pr in p_rows:
+                                  posts_to_delete_set.add(pr[0])
 
                       posts_to_delete_nums = list(posts_to_delete_set)
-                      placeholders = ','.join('?' for _ in posts_to_delete_nums)
+                      messages_to_delete_from_api = []
+                      channel_messages_to_delete = []
 
-                      # Читаем копии для API с получением board_id
-                      query_copies = f"""
-                          SELECT pc.recipient_id, pc.message_id, p.board_id
-                          FROM PostCopies pc
-                          JOIN Posts p ON pc.post_num = p.post_num
-                          WHERE pc.post_num IN ({placeholders})
-                      """
-                      async with db.execute(query_copies, posts_to_delete_nums) as cursor:
-                          messages_to_delete_from_api = await cursor.fetchall()
+                      if posts_to_delete_nums:
+                          await db.execute("CREATE TEMP TABLE _TempPostsToDel (post_num INTEGER PRIMARY KEY)")
+                          await db.executemany("INSERT OR IGNORE INTO _TempPostsToDel (post_num) VALUES (?)", [(p,) for p in posts_to_delete_nums])
 
-                      # Читаем копии каналов с получением board_id
-                      query_channels = f"""
-                          SELECT cc.channel_id, cc.message_id, p.board_id
-                          FROM ChannelCopies cc
-                          JOIN Posts p ON cc.post_num = p.post_num
-                          WHERE cc.post_num IN ({placeholders})
-                      """
-                      async with db.execute(query_channels, posts_to_delete_nums) as cursor:
-                          channel_messages_to_delete = await cursor.fetchall()
+                          query_copies = """
+                              SELECT pc.recipient_id, pc.message_id, p.board_id
+                              FROM PostCopies pc
+                              JOIN Posts p ON pc.post_num = p.post_num
+                              INNER JOIN _TempPostsToDel t ON pc.post_num = t.post_num
+                          """
+                          async with db.execute(query_copies) as cursor:
+                              messages_to_delete_from_api = await cursor.fetchall()
 
-                      # Удаляем из Posts
-                      await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                          query_channels = """
+                              SELECT cc.channel_id, cc.message_id, p.board_id
+                              FROM ChannelCopies cc
+                              JOIN Posts p ON cc.post_num = p.post_num
+                              INNER JOIN _TempPostsToDel t ON cc.post_num = t.post_num
+                          """
+                          async with db.execute(query_channels) as cursor:
+                              channel_messages_to_delete = await cursor.fetchall()
 
-                      # Удаляем из PostCopies
-                      await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                          await db.execute("DELETE FROM Posts WHERE post_num IN (SELECT post_num FROM _TempPostsToDel)")
+                          await db.execute("DELETE FROM PostCopies WHERE post_num IN (SELECT post_num FROM _TempPostsToDel)")
+                          await db.execute("DELETE FROM ChannelCopies WHERE post_num IN (SELECT post_num FROM _TempPostsToDel)")
+                          await db.execute("DELETE FROM UserReplies WHERE post_num IN (SELECT post_num FROM _TempPostsToDel) OR parent_num IN (SELECT post_num FROM _TempPostsToDel)")
 
-                      # Удаляем из ChannelCopies
-                      await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                          await db.execute("DROP TABLE _TempPostsToDel")
 
-                      # Удаляем из UserReplies
-                      await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders})", posts_to_delete_nums + posts_to_delete_nums)
-
-                      # Удаляем из Threads
                       if threads_to_delete:
-                          t_placeholders = ','.join('?' for _ in threads_to_delete)
-                          await db.execute(f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})", threads_to_delete)
+                          await db.execute("DELETE FROM Threads WHERE thread_id IN (SELECT thread_id FROM _TempThreadsToDel)")
+                          await db.execute("DROP TABLE _TempThreadsToDel")
 
                       await db.execute("COMMIT")
                       break # Успех
