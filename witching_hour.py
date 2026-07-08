@@ -87,7 +87,7 @@ async def witching_hour_ghost_worker(bot_instance):
     """
     from summarize import summarize_text_with_hf
     from common.database import get_board_chunk
-    from main import board_data, format_header, send_message_to_users, state, shadow_fake_post_counters
+    from main import board_data, format_header, send_message_to_users, state
     
     while True:
         await asyncio.sleep(60) # Check every minute
