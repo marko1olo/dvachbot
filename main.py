@@ -2217,7 +2217,6 @@ async def log_memory_summary():
     current_stats = {}
     import sys
     import gc
-    from collections import Counter
     print(f"\n--- 📝 Запуск анализа памяти в {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')} ---")
     gc_count = gc.collect()
     print(f"GC.collect() завершён, удалено объектов: {gc_count}")
