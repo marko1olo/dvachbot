@@ -10,6 +10,6 @@
 import time
 
 start = time.perf_counter()
-import ukrainian_mode
+import ukrainian_mode  # noqa: F401, E402
 end = time.perf_counter()
 print(f"Import time: {end - start:.4f} seconds")
