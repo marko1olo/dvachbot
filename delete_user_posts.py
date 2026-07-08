@@ -34,7 +34,7 @@
 
                       # Проверяем, какие из этих постов являются ОП-постами тредов
                       if user_posts:
-                          chunk_size = 400
+                          chunk_size = 450
                           for i in range(0, len(user_posts), chunk_size):
                               chunk = user_posts[i:i + chunk_size]
                               chunk_str = [str(p) for p in chunk]
@@ -42,20 +42,19 @@
                               query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders}) OR thread_num IN ({placeholders})"
                               async with db.execute(query, chunk_str + chunk) as cursor:
                                   t_rows = await cursor.fetchall()
-                                  for t_row in t_rows:
-                                      threads_to_delete.append(t_row[0])
+                                  threads_to_delete.extend(t_row[0] for t_row in t_rows)
 
                       # Если есть удаляемые треды, выбираем ВСЕ посты этих тредов, чтобы снести их тоже
                       if threads_to_delete:
-                          t_ids = []
+                          t_ids_set = set(threads_to_delete)
                           for t_id in threads_to_delete:
-                              t_ids.append(t_id)
-                              try: t_id_int = int(t_id)
-                              except ValueError: t_id_int = 0
-                              t_ids.append(str(t_id_int))
+                              try:
+                                  t_ids_set.add(str(int(t_id)))
+                              except ValueError:
+                                  t_ids_set.add("0")
 
-                          t_ids = list(set(t_ids))
-                          chunk_size = 400
+                          t_ids = list(t_ids_set)
+                          chunk_size = 900
 
                           for i in range(0, len(t_ids), chunk_size):
                               chunk = t_ids[i:i+chunk_size]
@@ -63,8 +62,7 @@
                               query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders_threads})"
                               async with db.execute(query, chunk) as cursor:
                                   p_rows = await cursor.fetchall()
-                                  for pr in p_rows:
-                                      posts_to_delete_set.add(pr[0])
+                                  posts_to_delete_set.update(pr[0] for pr in p_rows)
 
                       posts_to_delete_nums = list(posts_to_delete_set)
                       placeholders = ','.join('?' for _ in posts_to_delete_nums)
