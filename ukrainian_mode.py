@@ -765,22 +765,23 @@ def _stage1_dict_replace(text: str) -> tuple[str, set]:
             continue
 
         pattern = _COMPILED_DICT[key]
-        matches = list(pattern.finditer(result))
-        if not matches:
+        if not pattern.search(result):
             continue
+
         offset = 0
-        for m in matches:
-            start = m.start() + offset
-            end = m.end() + offset
+        def repl(m):
+            nonlocal offset
             original = m.group(0)
             replacement = _get_replacement(key)
             replacement = _match_case(original, replacement)
-            result = result[:start] + replacement + result[end:]
-            diff = len(replacement) - len(original)
-            offset += diff
-            for i in range(start, start + len(replacement)):
-                replaced_spans.add(i)
 
+            start = m.start() + offset
+            replaced_spans.update(range(start, start + len(replacement)))
+
+            offset += len(replacement) - len(original)
+            return replacement
+
+        result = pattern.sub(repl, result)
         result_lower = result.lower()
 
     return result, replaced_spans
