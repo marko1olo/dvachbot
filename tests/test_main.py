@@ -107,6 +107,22 @@ class TestGetRealIp(unittest.TestCase):
         )
         self.assertEqual(get_real_ip(request), "9.10.11.12")
 
+    def test_x_forwarded_for_whitespace(self):
+        """Test that x-forwarded-for strips whitespace."""
+        request = StubRequest(
+            headers={"x-forwarded-for": "  1.2.3.4  , 5.6.7.8"},
+            client_host="9.10.11.12"
+        )
+        self.assertEqual(get_real_ip(request), "1.2.3.4")
+
+    def test_empty_x_real_ip_with_valid_x_forwarded_for(self):
+        """Test empty x-real-ip header falls back to x-forwarded-for."""
+        request = StubRequest(
+            headers={"x-real-ip": "", "x-forwarded-for": "5.6.7.8"},
+            client_host="9.10.11.12"
+        )
+        self.assertEqual(get_real_ip(request), "5.6.7.8")
+
     def test_client_none_fallback(self):
         """Test that a missing client correctly falls back to 127.0.0.1."""
         request = StubRequest(
