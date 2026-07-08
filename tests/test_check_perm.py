@@ -1,36 +1,19 @@
-import asyncio
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
-
-import sys
-import os
 import unittest
-import asyncio
-
-# Setup event loop for async imports if not present
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
+import os
+import sys
 
 # Setup required env var
 os.environ["SECRET_KEY"] = "test-secret-key-12345"
+os.environ["BOT_TOKEN"] = "test-token"
+os.environ["OPENAI_API_KEY"] = "test-key"
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-try:
-    import asyncio
-    asyncio.set_event_loop(asyncio.new_event_loop())
-    import Dubsite_tgach.main
-    Dubsite_tgach.main.ADMIN_IDS = [12345, 67890]
-    from Dubsite_tgach.main import check_perm
-except ImportError as e:
-    print(f"ImportError: {e}")
-    pass
+import Dubsite_tgach.main
+Dubsite_tgach.main.ADMIN_IDS = [12345, 67890]
+from Dubsite_tgach.main import check_perm
 
 class TestCheckPerm(unittest.TestCase):
     def test_empty_user(self):
@@ -41,6 +24,7 @@ class TestCheckPerm(unittest.TestCase):
         # Even with no role, an admin ID should always return True
         self.assertTrue(check_perm({'id': 12345}, 'admin'))
         self.assertTrue(check_perm({'id': 67890}, 'admin'))
+        self.assertTrue(check_perm({'id': 12345, 'role': 'user'}, 'admin'))
 
     def test_role_hierarchy_admin(self):
         user = {'id': 1, 'role': 'admin'}
