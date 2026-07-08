@@ -22,33 +22,44 @@ if str(PROJECT_ROOT) not in sys.path:
 from Dubsite_tgach.image_processing import clean_tags_string
 
 class TestCleanTagsString(unittest.TestCase):
-    def test_none_or_empty(self):
-        """Test that None and empty string return None."""
-        self.assertIsNone(clean_tags_string(None))
-        self.assertIsNone(clean_tags_string(""))
+    def test_clean_tags_string_parameterized(self):
+        """Test clean_tags_string with various inputs using self.subTest()."""
+        test_cases = [
+            # None or empty
+            (None, None),
+            ("", None),
 
-    def test_normal_tags(self):
-        """Test that normal tags are returned as is."""
-        self.assertEqual(clean_tags_string("tag1, tag2, tag3"), "tag1, tag2, tag3")
-        self.assertEqual(clean_tags_string("anime, girl"), "anime, girl")
+            # Whitespace-only strings
+            ("   ", ""),
+            ("\t\n", ""),
 
-    def test_whitespace_removal(self):
-        """Test that extra whitespace is compressed into a single space."""
-        self.assertEqual(clean_tags_string("  tag1   tag2  "), "tag1 tag2")
-        self.assertEqual(clean_tags_string("tag1\n\ttag2"), "tag1 tag2")
+            # Normal tags
+            ("tag1, tag2, tag3", "tag1, tag2, tag3"),
+            ("anime, girl", "anime, girl"),
 
-    def test_consecutive_commas(self):
-        """Test that consecutive commas are reduced."""
-        self.assertEqual(clean_tags_string("tag1,,tag2"), "tag1,tag2")
-        self.assertEqual(clean_tags_string("tag1,,,tag2"), "tag1,,tag2")
+            # Whitespace removal
+            ("  tag1   tag2  ", "tag1 tag2"),
+            ("tag1\n\ttag2", "tag1 tag2"),
 
-    def test_spaced_commas(self):
-        """Test that spaced commas are properly cleaned."""
-        # split: ["tag1,", ",tag2"] -> join: "tag1, ,tag2" -> replace(", ,", ",") -> "tag1,,tag2" -> replace(",,", ",") -> "tag1,tag2"
-        self.assertEqual(clean_tags_string("tag1, ,tag2"), "tag1,tag2")
+            # Consecutive commas
+            ("tag1,,tag2", "tag1,tag2"),
+            ("tag1,,,tag2", "tag1,,tag2"),
 
-        # split: ["tag1", ",", ",", "tag2"] -> join: "tag1 , , tag2" -> replace ", ," -> "tag1 ,, tag2" -> replace ",," -> "tag1 , tag2"
-        self.assertEqual(clean_tags_string("tag1 , , tag2"), "tag1 , tag2")
+            # Spaced commas
+            ("tag1, ,tag2", "tag1,tag2"),
+            ("tag1 , , tag2", "tag1 , tag2"),
+            ("tag1 ,  , tag2", "tag1 , tag2"),
+            ("tag1,   ,tag2", "tag1,tag2"),
+
+            # Leading/trailing commas and spaces
+            (" ,tag1, ", ",tag1,"),
+            (", tag1 , ", ", tag1 ,"),
+            (" , , , ", ", ,")
+        ]
+
+        for input_text, expected_output in test_cases:
+            with self.subTest(input_text=input_text, expected_output=expected_output):
+                self.assertEqual(clean_tags_string(input_text), expected_output)
 
 if __name__ == '__main__':
     unittest.main()
