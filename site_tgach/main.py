@@ -5793,12 +5793,10 @@ async def api_makaba_posting(
         return JSONResponse({"Error": msg, "Status": "Error"})
 
     form_data = await request.form()
-    files_to_process = []
-    for key in form_data:
-        if key.startswith("image") or key.startswith("file") or key.startswith("video"):
-            file_obj = form_data[key]
-            if getattr(file_obj, "filename", None):
-                files_to_process.append(file_obj)
+    files_to_process = [
+        v for k, v in form_data.multi_items()
+        if k.startswith(("image", "file", "video")) and getattr(v, "filename", None)
+    ]
 
     file_sig = [(f.filename, f.size) for f in files_to_process]
     content_hash = hashlib.md5(
@@ -7677,11 +7675,7 @@ async def api_create_post(
                 status_code=403, detail=t("err_mute_remaining").format(remaining)
             )
     is_shadow_muted = await get_shadow_mute_status(author_id, board_id)
-    files_to_process = []
-    if images:
-        for img in images:
-            if getattr(img, "filename", None):
-                files_to_process.append(img)
+    files_to_process = [img for img in images if getattr(img, "filename", None)] if images else []
     if not is_shadow_muted:
         await check_and_punish_site_spam(
             board_id, author_id, text or "", files_to_process, t
