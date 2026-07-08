@@ -1,5 +1,4 @@
 import random
-from aiogram.types import Message
 import secrets
 from common.html_utils import escape_html
 
