@@ -1700,31 +1700,50 @@ def _collect_board_map_totals() -> dict:
         "anime_daily_tracker": 0,
         "image_spam_items": 0,
     }
+
+    keys_to_sum = (
+        "last_reaction_process_time", "last_roll_time", "last_info_command_time",
+        "single_photo_counter", "last_photo_group_id", "message_counter",
+        "last_user_msgs", "user_settings", "thread_locks", "anime_daily_tracker",
+    )
+
     for board_id in BOARDS:
-        b_data = board_data.get(board_id, {})
-        totals["last_texts"] += _safe_len(b_data.get("last_texts", {}))
-        totals["last_stickers"] += _safe_len(b_data.get("last_stickers", {}))
-        totals["last_animations"] += _safe_len(b_data.get("last_animations", {}))
-        totals["last_audios"] += _safe_len(b_data.get("last_audios", {}))
-        totals["spam_violations"] += _safe_len(b_data.get("spam_violations", {}))
-        spam_tracker = b_data.get("spam_tracker", {})
+        b_data = board_data.get(board_id)
+        if not b_data:
+            continue
+
+        for key in ("last_texts", "last_stickers", "last_animations", "last_audios", "spam_violations"):
+            if key in b_data:
+                totals[key] += _safe_len(b_data[key])
+
+        spam_tracker = b_data.get("spam_tracker")
         if isinstance(spam_tracker, dict):
             totals["spam_tracker_users"] += len(spam_tracker)
-            totals["spam_tracker_items"] += sum(_safe_len(items) for items in spam_tracker.values())
-        reaction_tracker = b_data.get("reaction_rate_tracker", {})
+            c = 0
+            for items in spam_tracker.values():
+                c += _safe_len(items)
+            totals["spam_tracker_items"] += c
+
+        reaction_tracker = b_data.get("reaction_rate_tracker")
         if isinstance(reaction_tracker, dict):
             totals["reaction_rate_users"] += len(reaction_tracker)
-            totals["reaction_rate_items"] += sum(_safe_len(items) for items in reaction_tracker.values())
-        reaction_queue = b_data.get("reaction_queue", {})
+            c = 0
+            for items in reaction_tracker.values():
+                c += _safe_len(items)
+            totals["reaction_rate_items"] += c
+
+        reaction_queue = b_data.get("reaction_queue")
         if isinstance(reaction_queue, dict):
             totals["reaction_queue_users"] += len(reaction_queue)
-            totals["reaction_queue_items"] += sum(_safe_len(items) for items in reaction_queue.values())
-        for key in (
-            "last_reaction_process_time", "last_roll_time", "last_info_command_time",
-            "single_photo_counter", "last_photo_group_id", "message_counter",
-            "last_user_msgs", "user_settings", "thread_locks", "anime_daily_tracker",
-        ):
-            totals[key] += _safe_len(b_data.get(key, {}))
+            c = 0
+            for items in reaction_queue.values():
+                c += _safe_len(items)
+            totals["reaction_queue_items"] += c
+
+        for key in keys_to_sum:
+            if key in b_data:
+                totals[key] += _safe_len(b_data[key])
+
     for timestamps in image_spam_tracker.values():
         totals["image_spam_items"] += _safe_len(timestamps)
     return totals
