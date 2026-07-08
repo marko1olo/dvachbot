@@ -37,37 +37,47 @@ except ImportError as e:
     sys.exit(1)
 
 class TestGenerateNegativeId(unittest.TestCase):
-    def test_deterministic_output(self):
-        token = "test_token"
-        res1 = generate_negative_id_dub(token)
-        res2 = generate_negative_id_dub(token)
-        self.assertEqual(res1, res2)
+    def test_generate_negative_id_various_cases(self):
+        cases = [
+            ("test_token",),
+            ("",),
+            ("токена_тест_😊",),
+            ("a" * 1000,),
+            ("!@#$%^&*()_+",),
+            ("    ",)
+        ]
 
-        res3 = generate_negative_id_site(token)
-        res4 = generate_negative_id_site(token)
-        self.assertEqual(res3, res4)
+        previous_results = set()
+        for (token,) in cases:
+            with self.subTest(token=token):
+                # Test determinism
+                res1 = generate_negative_id_dub(token)
+                res2 = generate_negative_id_dub(token)
+                self.assertEqual(res1, res2)
 
-        self.assertEqual(res1, res3)
+                res3 = generate_negative_id_site(token)
+                res4 = generate_negative_id_site(token)
+                self.assertEqual(res3, res4)
 
-    def test_negative_value(self):
-        token = "test_token_2"
-        res = generate_negative_id_dub(token)
-        self.assertTrue(res < 0)
+                self.assertEqual(res1, res3)
 
-    def test_different_tokens(self):
-        token1 = "test_token_1"
-        token2 = "test_token_2"
-        self.assertNotEqual(generate_negative_id_dub(token1), generate_negative_id_dub(token2))
+                # Test bounds
+                self.assertTrue(res1 < 0)
+                self.assertTrue(res1 >= -2147483648)
+                self.assertIsInstance(res1, int)
 
-    def test_empty_string(self):
-        res = generate_negative_id_dub("")
-        self.assertTrue(res < 0)
+                # Test uniqueness
+                self.assertNotIn(res1, previous_results)
+                previous_results.add(res1)
 
-    def test_unicode_string(self):
-        token = "токена_тест_😊"
-        res = generate_negative_id_dub(token)
-        self.assertTrue(res < 0)
-        self.assertIsInstance(res, int)
+    def test_generate_negative_id_invalid_input(self):
+        cases = [None, 123, [], {}]
+        for invalid_input in cases:
+            with self.subTest(invalid_input=invalid_input):
+                with self.assertRaises(AttributeError):
+                    generate_negative_id_dub(invalid_input)
+                with self.assertRaises(AttributeError):
+                    generate_negative_id_site(invalid_input)
 
 if __name__ == '__main__':
     unittest.main()
