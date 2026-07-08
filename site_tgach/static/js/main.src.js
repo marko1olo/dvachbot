@@ -3854,7 +3854,7 @@ window.showThreadSummary = async (threadId) => {
             modal.innerHTML = `
                 <div style="background:var(--bg-main); padding:20px; border-radius:8px; border:1px solid var(--accent-primary); max-width:500px; margin: 10% auto; position:relative; box-shadow:0 10px 40px rgba(0,0,0,0.5);">
                     <h3 style="margin-top:0;">${t('summary_title', 'Summary:')}</h3>
-                    <!-- FIX: Использование formatTextGlobal для защиты от XSS в ответе нейросети -->
+                    <!-- Использование formatTextGlobal для защиты от XSS в ответе нейросети -->
                     <div style="font-size:1.1em; line-height:1.6; margin-bottom:20px;">${window.formatTextGlobal(data.summary)}</div>
                     <button class="btn btn-primary" onclick="this.closest('.modal').remove()" style="width:100%">${t('btn_understood', 'OK')}</button>
                 </div>
@@ -14774,7 +14774,7 @@ document.addEventListener("DOMContentLoaded", function() {
         .then(data => {
             if (data.is_ru) {
                 const alertDiv = document.createElement('div');
-                alertDiv.innerHTML = Включи ВПН, иначе не загрузятся картинки!";
+                alertDiv.innerHTML = "Включи ВПН, иначе не загрузятся картинки!";
                 alertDiv.style.position = "fixed";
                 alertDiv.style.top = "10px";
                 alertDiv.style.left = "10px";
