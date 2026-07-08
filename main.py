@@ -7043,11 +7043,11 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     # Обычный мут цели
     await _handle_shoot_success(message, db, db_lock, board_id, user_id, target_id, active_items)
 
+from common.cmd_curse_utils import cmd_curse_logic
+
 @dp.message(Command("curse", "vomit"))
 async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    await message.answer(
-        "⚠️ Проклятие Хуесоса было признано слишком кринжовым и убрано из Теневого Магазина."
-    )
+    await cmd_curse_logic(message, board_id, stream)
 
 # ── /stats cache ──────────────────────────────────────────────────────────────
 import time as _time_module
