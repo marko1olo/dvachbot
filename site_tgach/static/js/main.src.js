@@ -14774,7 +14774,7 @@ document.addEventListener("DOMContentLoaded", function() {
         .then(data => {
             if (data.is_ru) {
                 const alertDiv = document.createElement('div');
-                alertDiv.innerHTML = Включи ВПН, иначе не загрузятся картинки!";
+                alertDiv.innerHTML = "Включи ВПН, иначе не загрузятся картинки!";
                 alertDiv.style.position = "fixed";
                 alertDiv.style.top = "10px";
                 alertDiv.style.left = "10px";

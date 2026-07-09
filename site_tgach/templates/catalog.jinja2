@@ -21,7 +21,7 @@
     <meta property="og:description" content="Каталог тредов раздела /{{ board_id }}/ — {{ board_info.description }}">
     <meta property="og:url" content="{{ request.url }}">
     <meta property="og:image" content="{{ request.base_url }}static/logo.png">
-    <link rel="stylesheet" href="/static/css/style.css?v=9.6">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
     <link rel="icon" href="/static/favicon.ico">
     <link rel="alternate" type="application/rss+xml" title="RSS ТГАЧ - {{ board_info.name }}" href="/{{ board_id }}/rss.xml">
     <link rel="preconnect" href="https://api.telegram.org" crossorigin>
@@ -69,7 +69,8 @@
                     if (window.innerWidth <= 768) fontSize = 'small';
                     else fontSize = 'medium';
                 }
-                document.body.classList.add('font-size-' + fontSize);
+                if (document.body) document.body.classList.add('font-size-' + fontSize);
+                else window.addEventListener('DOMContentLoaded', function() { document.body.classList.add('font-size-' + fontSize); });
             } catch (e) { console.error(e); }
         })();
     </script>
@@ -396,6 +397,6 @@
         </form>
     </div>
     <div id="new-posts-indicator" style="display: none;"></div>
-    <script src="/static/js/main.js?v=9.6" defer></script>
+    <script src="/static/js/main.js?v=9.7" defer></script>
 </body>
 </html>

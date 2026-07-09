@@ -27,7 +27,8 @@
                     if (window.innerWidth <= 768) fontSize = 'small';
                     else fontSize = 'medium';
                 }
-                document.body.classList.add('font-size-' + fontSize);
+                if (document.body) document.body.classList.add('font-size-' + fontSize);
+                else window.addEventListener('DOMContentLoaded', function() { document.body.classList.add('font-size-' + fontSize); });
 
             } catch (e) { console.error(e); }
         })();
@@ -208,6 +209,6 @@
     
     <div id="image-viewer" class="image-viewer-overlay" style="display: none;"></div>
     <div id="loading-indicator" class="loading-indicator">Отправка...</div>
-    <script src="/static/js/main.js?v=9.6" defer></script>
+    <script src="/static/js/main.js?v=9.7" defer></script>
 </body>
 </html>

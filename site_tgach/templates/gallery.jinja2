@@ -10,7 +10,7 @@
     <meta property="og:title" content="Галерея треда #{{ op_post_num }} — ТГАЧ">
     <meta property="og:description" content="Галерея медиафайлов треда #{{ op_post_num }} на анонимной имиджборде ТГАЧ. Все изображения и видео в одном месте.">
     <meta property="og:image" content="/static/logo.png">
-    <link rel="stylesheet" href="/static/css/style.css?v=9.6">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
     <link rel="icon" href="/static/favicon.ico">
     <style>
         .gallery-grid {
@@ -80,7 +80,8 @@
                     if (window.innerWidth <= 768) fontSize = 'small';
                     else fontSize = 'medium';
                 }
-                document.body.classList.add('font-size-' + fontSize);
+                if (document.body) document.body.classList.add('font-size-' + fontSize);
+                else window.addEventListener('DOMContentLoaded', function() { document.body.classList.add('font-size-' + fontSize); });
             } catch (e) { console.error(e); }
         })();
     </script>
@@ -183,6 +184,6 @@
         <div id="iv-loader" class="iv-loader" style="display: none;"></div>
     </div>
     
-    <script src="/static/js/main.js?v=9.6" defer></script>
+    <script src="/static/js/main.js?v=9.7" defer></script>
 </body>
 </html>

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ request.state.t('dock_my', 'Мои посты') }} - {{ request.state.t('site_name') }}</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9.6">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
     <link rel="icon" href="/static/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
     <meta name="theme-color" content="#212121">    
@@ -153,7 +153,8 @@
                     if (window.innerWidth <= 768) fontSize = 'small';
                     else fontSize = 'medium';
                 }
-                document.body.classList.add('font-size-' + fontSize);
+                if (document.body) document.body.classList.add('font-size-' + fontSize);
+                else window.addEventListener('DOMContentLoaded', function() { document.body.classList.add('font-size-' + fontSize); });
             } catch (e) { console.error(e); }
         })();
     </script>
@@ -350,7 +351,7 @@
         </button>
     </nav>
 
-    <script src="/static/js/main.js?v=9.6"></script>
+    <script src="/static/js/main.js?v=9.7"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             if(window.MyPostsPage) {

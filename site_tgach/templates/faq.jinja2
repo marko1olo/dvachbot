@@ -10,7 +10,7 @@
     <meta property="og:title" content="Поясняю за ТГАЧ (FAQ)">
     <meta property="og:description" content="Часто задаваемые вопросы (FAQ) по использованию ТГАЧ — новой анонимной имиджборды и архива.">
     <meta property="og:image" content="/static/logo.png">
-    <link rel="stylesheet" href="/static/css/style.css?v=9.6">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
     <link rel="icon" href="/static/favicon.ico">
 </head>
 <body {% if session.user %}data-user-id="{{ request.state.user_hash }}"{% endif %} data-site-mode="{{ site_mode }}">
@@ -33,7 +33,8 @@
                     if (window.innerWidth <= 768) fontSize = 'small';
                     else fontSize = 'medium';
                 }
-                document.body.classList.add('font-size-' + fontSize);
+                if (document.body) document.body.classList.add('font-size-' + fontSize);
+                else window.addEventListener('DOMContentLoaded', function() { document.body.classList.add('font-size-' + fontSize); });
             } catch (e) { console.error(e); }
         })();
     </script>
@@ -406,6 +407,6 @@
             </div>
         </form>
     </div>
-    <script src="/static/js/main.js?v=9.6" defer></script>
+    <script src="/static/js/main.js?v=9.7" defer></script>
 </body>
 </html>
