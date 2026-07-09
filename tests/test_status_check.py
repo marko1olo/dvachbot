@@ -1,5 +1,3 @@
-import os
-import pytest
 from unittest.mock import patch, mock_open
 
 from status_check import get_last_errors

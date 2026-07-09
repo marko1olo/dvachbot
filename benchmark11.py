@@ -1,6 +1,5 @@
 import re
-import time
-from ukrainian_mode import _stage1_dict_replace, _SORTED_KEYS, _COMPILED_DICT, _get_replacement, _match_case
+from ukrainian_mode import _SORTED_KEYS
 
 text = "Привет, как дела? Я русский солдат, иду домой, мне нравится борщ и пельмени. Россия вперед! Москва столица!" * 10
 
@@ -10,8 +9,7 @@ _BIG_REGEX_PATTERN = r'(?i)\b(' + '|'.join(re.escape(k) for k in _SORTED_KEYS) +
 _BIG_REGEX = re.compile(_BIG_REGEX_PATTERN)
 
 def _stage1_dict_replace_optimized3(text: str) -> tuple[str, set]:
-    replaced_spans = set()
-    result = text
+    pass
 
     # Pre-filter: find which keys are actually in the string
     # We must do this iteratively if replacements add new keys.

@@ -1,5 +1,4 @@
 import time
-import random
 import re
 
 # Mocking the context for benchmark

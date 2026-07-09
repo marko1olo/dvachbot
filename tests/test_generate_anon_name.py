@@ -1,4 +1,3 @@
-import pytest
 import os
 
 # Setting up environment variables

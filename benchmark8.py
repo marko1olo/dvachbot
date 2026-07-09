@@ -1,4 +1,3 @@
-import re
 import time
 from ukrainian_mode import _stage1_dict_replace, _SORTED_KEYS, _COMPILED_DICT, _get_replacement, _match_case
 

@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch, MagicMock, call, mock_open
+from unittest.mock import patch, MagicMock, call
 import os
 import sqlite3
 import asyncio

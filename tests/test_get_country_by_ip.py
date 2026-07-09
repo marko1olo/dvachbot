@@ -2,7 +2,6 @@ import sys
 import os
 import unittest
 from unittest.mock import patch, MagicMock, AsyncMock
-from httpx import AsyncHTTPTransport
 
 # Setup required env var
 os.environ["SECRET_KEY"] = "test-secret-key-12345"

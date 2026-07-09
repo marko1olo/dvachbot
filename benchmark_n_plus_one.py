@@ -2,7 +2,6 @@ import asyncio
 import time
 import sqlite3
 import random
-import sys
 
 # Create a mock database implementation for benchmarking
 

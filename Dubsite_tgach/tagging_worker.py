@@ -1,5 +1,4 @@
 import asyncio
-from common.http_utils import api_retry
 import logging
 import base64
 import time
@@ -117,7 +116,7 @@ def process_image_cpu(image_bytes):
         try:
             small_blur = img.resize((32, 32), Image.Resampling.BILINEAR)
             b_hash = encode_blurhash_internal(small_blur, 4, 3)
-        except Exception as e:
+        except Exception:
             b_hash = None
 
         # 5. ПОДГОТОВКА ДЛЯ НЕЙРОНКИ (Ресайз)
@@ -153,7 +152,7 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
         # Картинка уже сжата в process_image_cpu, так что 413 быть не должно
         b64 = base64.b64encode(resized_image_bytes).decode('utf-8')
         url = f"data:image/jpeg;base64,{b64}"
-    except Exception as e:
+    except Exception:
         return None
     
     prompt = (

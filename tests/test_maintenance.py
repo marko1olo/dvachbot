@@ -1,7 +1,5 @@
 import unittest
 from unittest.mock import patch, MagicMock
-import sqlite3
-import os
 import runpy
 
 from maintenance import run_maintenance

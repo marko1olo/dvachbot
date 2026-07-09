@@ -1,6 +1,6 @@
 import time
 import re
-from ukrainian_mode import _stage1_dict_replace, UKRAINIAN_WORD_REPLACEMENTS, _SORTED_KEYS, _get_replacement, _match_case
+from ukrainian_mode import _stage1_dict_replace, _SORTED_KEYS, _get_replacement, _match_case
 
 # Create the single big regex
 _BIG_REGEX = re.compile(r'\b(' + '|'.join(re.escape(k) for k in _SORTED_KEYS) + r')\b', re.IGNORECASE)

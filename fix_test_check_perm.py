@@ -1,4 +1,3 @@
-import re
 
 with open("tests/test_check_perm.py", "r", encoding="utf-8") as f:
     content = f.read()

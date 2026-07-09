@@ -30,7 +30,6 @@ try:
     from Dubsite_tgach.main import check_perm
 except ImportError as e:
     print(f"ImportError: {e}")
-    pass
 
 class TestCheckPerm(unittest.TestCase):
     def test_empty_user(self):

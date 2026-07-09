@@ -1,4 +1,3 @@
-import os
 
 content = """
 @app.get("/api/is-ru")

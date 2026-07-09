@@ -15,7 +15,7 @@ def search_weak_spots():
                         for i, line in enumerate(src):
                             if re.search(patterns, line, re.IGNORECASE):
                                 out.write(f"{path}:{i+1}:{line.strip()}\n")
-                except Exception as e:
+                except Exception:
                     pass
 
 if __name__ == '__main__':

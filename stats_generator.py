@@ -1232,7 +1232,6 @@ def generate_all_charts():
             authors = [row['authors'] for row in data]
             freshness = [(time.time() - row['last_ts']) / 3600 for row in data]  # hours ago
             labels  = [f"#{row['thread_id']}" for row in data]
-            import numpy as _np3
             sizes   = [max(30, p * 1.5) for p in posts]
             colors  = [1 - min(f / (7 * 24), 1) for f in freshness]  # freshness → 0..1
             cmap    = plt.get_cmap('RdYlGn')

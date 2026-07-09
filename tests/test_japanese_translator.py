@@ -1,4 +1,3 @@
-import pytest
 from japanese_translator import _tag_token_is_blocked, _normalize_tag_token
 import japanese_translator
 

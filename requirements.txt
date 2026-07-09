@@ -39,3 +39,5 @@ tenacity>=8.2.0
 # fastapi-cache
 # aiosqlite
 # Pillow
+
+networkx

@@ -1,5 +1,4 @@
 import re
-from ukrainian_mode import _stage1_dict_replace
 
 UKRAINIAN_WORD_REPLACEMENTS = {
     "A B": "C D",

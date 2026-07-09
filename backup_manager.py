@@ -4,7 +4,7 @@
 import sqlite3
 import gzip
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 import glob
 DB_NAME = "dvach_bot.db"
 BACKUP_DIR = "data"

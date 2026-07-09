@@ -1,11 +1,9 @@
 import asyncio
 from common.task_manager import spawn_task
-import logging
 import os
 import sys
-import time
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter, TelegramForbiddenError, TelegramNetworkError
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter, TelegramForbiddenError
 from dotenv import load_dotenv
 
 
@@ -75,7 +73,6 @@ async def worker(bot_token, worker_id):
             # Сообщение удалено или не существует
             stats['skip'] += 1
             # Не спамим в лог, просто счетчик крутится
-            pass
             
         except TelegramRetryAfter as e:
             print(f"\n⏳ Бот {worker_id} словил лимит. Спит {e.retry_after} сек.")

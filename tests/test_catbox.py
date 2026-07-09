@@ -1,4 +1,3 @@
-import pytest
 import httpx
 from site_tgach.catbox import _is_invalid_uploader
 

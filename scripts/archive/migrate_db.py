@@ -1,6 +1,5 @@
 import asyncio
 import aiosqlite
-import json
 
 DB_NAME = "dvach_bot.db"
 

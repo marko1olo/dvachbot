@@ -4,7 +4,6 @@ import aiosqlite
 import logging
 import time
 import sys
-import os
 import signal
 import hashlib
 import imagehash
@@ -12,8 +11,6 @@ import math
 import argparse
 from io import BytesIO
 from PIL import Image
-from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 # --- ИМПОРТЫ ПРОЕКТА ---
 from common.config import DB_NAME

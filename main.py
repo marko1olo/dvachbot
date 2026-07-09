@@ -78,7 +78,7 @@ from common.database import (
     get_random_video_post, get_random_image_post
 )
 from site_tgach.admin_config import ADMIN_IDS
-from common.db_pool import create_pool, close_pool, get_pool
+from common.db_pool import create_pool, get_pool
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from text_assets import (
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP,
@@ -166,7 +166,6 @@ from aiogram.exceptions import (
 )
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile, InputFile
-from aiogram.utils.media_group import MediaGroupBuilder
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 # Определяем состояния для машины состояний
@@ -242,7 +241,7 @@ ANIME_COMMAND_MAP = {
     "LOLICON": get_loli_image,
     "LOLIS": get_loli_image,
 }
-from common.text_utils import clean_html_tags, sanitize_html, RE_HTML_TAGS, RE_YOU_PATTERN, RE_SCRIPT_TAG, RE_DANGEROUS_TAGS, RE_DANGEROUS_SINGLE, RE_EVENT_HANDLERS
+from common.text_utils import clean_html_tags, sanitize_html, RE_YOU_PATTERN
 RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
 RE_SYSTEM_HEADER_CLEAN = re.compile(r'^(###.*?###|<i>.*?</i>)\s*\n?', flags=re.MULTILINE)
 RE_NEWLINES = re.compile(r'\n{2,}')
@@ -924,6 +923,8 @@ GITHUB_REPO = "https://github.com/shlomapetia/dvachbot-backup.git"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Проверь, что переменная есть в Railway!
 last_gc_time = time.time()
 dp = Dispatcher()
+from economy_extension import economy_router
+dp.include_router(economy_router)
 dp.message.middleware(DeduplicationMiddleware())
 dp.message.middleware(BoardMiddleware())
 dp.callback_query.middleware(BoardMiddleware())
@@ -2213,11 +2214,9 @@ async def log_memory_summary():
     """
     if not hasattr(log_memory_summary, "previous_stats"):
         log_memory_summary.previous_stats = {}
-    previous_stats = log_memory_summary.previous_stats
+    log_memory_summary.previous_stats
     current_stats = {}
-    import sys
     import gc
-    from collections import Counter
     print(f"\n--- 📝 Запуск анализа памяти в {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')} ---")
     gc_count = gc.collect()
     print(f"GC.collect() завершён, удалено объектов: {gc_count}")
@@ -3652,7 +3651,7 @@ class NewPostProcessor:
             
             if chain_depth > 0 and chain_depth % 15 == 0:
                 try:
-                    bot_for_roast = get_bot_for_board(self.board_id)
+                    bot_for_roast = GLOBAL_BOTS.get(self.board_id)
                     stream_to_pass = self.stream if self.stream else 'ru'
                     spawn_task(execute_auto_roast(self.board_id, stream_to_pass, bot_for_roast))
                 except Exception as e:
@@ -3933,7 +3932,7 @@ async def _update_archive_post_content(post_num: int, content: dict, content_typ
 async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, post_num: int, content: dict, is_shadow_muted: bool, stream: str = 'ru'):
     if is_shadow_muted:
         return
-    from common.database import get_post_by_num, register_file_owner, update_post_content, add_file_mirror
+    from common.database import get_post_by_num
     check_post = await get_post_by_num(post_num)
     if not check_post:
         return
@@ -5336,7 +5335,6 @@ class MessageBroadcaster:
         is_sage = send_content.get('is_sage', False)
         has_spoiler = u_set['nsfw']
         max_attempts = 5
-        attempt_delay = 1.5
 
         async def _send_text_fallback(reason: str):
             fallback_text = full_text
@@ -5554,7 +5552,6 @@ class MessageBroadcaster:
                     'disable_notification': is_sage,
                     'request_timeout': request_timeout,
                 }
-                result_msg = None
                 if ct == 'text':
                     parts = split_text(full_text, 4096)
                     sent_msgs = []
@@ -6808,22 +6805,28 @@ async def cmd_shop(message: types.Message, board_id: str | None, stream: str = '
         balance = row[0] if row and row[0] is not None else 0
     text = (
         f"🛒 <b>Теневой Магазин (Black Market)</b>\n"
-        f"Твой баланс: <code>{int(balance)}.00 RUB</code>\n\n"
-        f"Трать свои фейк-рубли на грязь и власть:\n"
-        f"1. 🧹 <b>Билет Дворника (6 часов)</b> — <i>700 RUB</i>\n"
-        f"   (Временные права удалять спам через /del. Лимит: 10 удалений)\n"
-        f"2. 🔇 <b>Мут-Ган (1 час)</b> — <i>500 RUB</i>\n"
-        f"   (Выстрели в анона реплаем с /shoot — он улетает в мут)\n"
-        f"3. 🛡️ <b>Зеркальный Щит (24ч)</b> — <i>400 RUB</i>\n"
-        f"   (Автоматический рикошет Мут-Гана обратно в стрелка)\n"
-        f"4. 👑 <b>VIP Префикс (24ч)</b> — <i>300 RUB</i>\n"
-        f"   (Случайный префикс к твоему ID: от позора до элиты)\n"
+        f"Твой баланс: <code>{int(balance)}.00 Шекелей</code>\n\n"
+        f"Трать свои шекели на грязь и власть:\n"
+        f"1. 🧹 <b>Билет Дворника (6ч)</b> — <i>700 Шек</i> (Права /del)\n"
+        f"2. 🔇 <b>Мут-Ган (1ч)</b> — <i>500 Шек</i> (Кикнуть реплаем /shoot)\n"
+        f"3. 🛡️ <b>Зеркальный Щит (24ч)</b> — <i>400 Шек</i> (Рикошет Мут-Гана)\n"
+        f"4. 👑 <b>VIP Префикс (24ч)</b> — <i>300 Шек</i> (Кастомный префикс)\n"
+        f"5. 🚔 <b>Пативэн-Ган</b> — <i>1000 Шек</i> (Вызов ОМОНа через /partyvan)\n"
+        f"6. 🐒 <b>Кусок говна</b> — <i>10 Шек</i> (Кинуть /shit, дебафф на час)\n"
+        f"7. 💊 <b>Аминазин</b> — <i>50 Шек</i> (Снять дебаффы)\n"
+        f"8. 🔪 <b>Заточка</b> — <i>300 Шек</i> (Ограбить анона на 10-30% через /rob)\n"
+        f"9. 👽 <b>Шапочка из фольги (24ч)</b> — <i>200 Шек</i> (Защита от /shit и /rob)\n"
+        f"10. 📜 <b>Взятка (Индульгенция)</b> — <i>5000 Шек</i> (Снимает мут)\n"
+        f"11. 🚽 <b>Слабительное</b> — <i>600 Шек</i> (Проклятие: посты до 50 симв. через /curse)\n"
+        f"12. 📣 <b>Мегафон</b> — <i>1500 Шек</i> (Закрепить свой пост через /mega)\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🧹 Билет Дворника (700)", callback_data="shop_buy_janitor")],
-        [InlineKeyboardButton(text="🔇 Купить Мут-Ган (500)", callback_data="shop_buy_mute")],
-        [InlineKeyboardButton(text="🛡️ Зеркальный Щит (400)", callback_data="shop_buy_shield")],
-        [InlineKeyboardButton(text="👑 Ролл Префикса (300)", callback_data="shop_buy_prefix")]
+        [InlineKeyboardButton(text="🧹 Дворник (700)", callback_data="shop_buy_janitor"), InlineKeyboardButton(text="🔇 Мут-Ган (500)", callback_data="shop_buy_mute")],
+        [InlineKeyboardButton(text="🛡️ Щит (400)", callback_data="shop_buy_shield"), InlineKeyboardButton(text="👑 Префикс (300)", callback_data="shop_buy_prefix")],
+        [InlineKeyboardButton(text="🚔 Пативэн (1000)", callback_data="shop_buy_partyvan"), InlineKeyboardButton(text="🐒 Кусок говна (10)", callback_data="shop_buy_shit")],
+        [InlineKeyboardButton(text="💊 Аминазин (50)", callback_data="shop_buy_pills"), InlineKeyboardButton(text="🔪 Заточка (300)", callback_data="shop_buy_knife")],
+        [InlineKeyboardButton(text="👽 Фольга (200)", callback_data="shop_buy_tinfoil"), InlineKeyboardButton(text="📜 Взятка (5000)", callback_data="shop_buy_bribe")],
+        [InlineKeyboardButton(text="🚽 Слабительное (600)", callback_data="shop_buy_laxative"), InlineKeyboardButton(text="📣 Мегафон (1500)", callback_data="shop_buy_megaphone")],
     ])
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
@@ -6832,7 +6835,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     user_id = callback.from_user.id
     item = callback.data.split("_")[2]  # janitor, mute, shield, prefix
-    costs = {"janitor": 700, "mute": 500, "shield": 400, "prefix": 300}
+    costs = {"janitor": 700, "mute": 500, "shield": 400, "prefix": 300, "partyvan": 1000, "shit": 10, "pills": 50, "knife": 300, "tinfoil": 200, "bribe": 5000, "laxative": 600, "megaphone": 1500}
     price = costs.get(item, 999999)
     from common.db_pool import get_pool, db_lock
     db = await get_pool()
@@ -6841,7 +6844,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         balance = row[0] if row and row[0] is not None else 0
         active_items_str = row[1] if row and len(row) > 1 and row[1] else "{}"
     if balance < price:
-        await callback.answer(f"❌ Не хватает бабок! Нужно {price} RUB, у тебя {int(balance)} RUB.", show_alert=True)
+        await callback.answer(f"❌ Не хватает бабок! Нужно {price} Шекелей, у тебя {int(balance)} Шекелей.", show_alert=True)
         return
     import json
     import time
@@ -6906,6 +6909,86 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
             f"Тебе выпал префикс: {chosen}\n"
             f"Виден в /passport и заголовках постов 24 часа."
         )
+
+    # 4. Partyvan
+    elif item == "partyvan":
+        if active_items.get("partyvan_gun"):
+            await callback.answer("Ты уже купил вызов Пативэна! Сделай Reply на пост с командой /partyvan", show_alert=True)
+            return
+        active_items["partyvan_gun"] = True
+        msg = (
+            f"🚔 Ты оплатил вызов Пативэна!\n"
+            f"Сделай Reply на пост жертвы с командой /partyvan.\n"
+            f"Нарушитель отлетит в мут на 12 часов с анимацией бобика."
+        )
+    # 5. Shit
+    elif item == "shit":
+        if active_items.get("shit_gun"):
+            await callback.answer("Полные карманы говна! Сделай Reply на пост с командой /shit", show_alert=True)
+            return
+        active_items["shit_gun"] = True
+        msg = (
+            f"🐒 Ты подобрал кусок говна!\n"
+            f"Сделай Reply на пост жертвы с командой /shit.\n"
+            f"Жертва будет обмазана говном на 1 час. Осторожно, ветер может сдуть обратно (20% шанс)."
+        )
+    # 6. Pills
+    elif item == "pills":
+        active_items.pop("shit_until", None)
+        async with db_lock:
+            await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            await db.commit()
+        msg = "💊 Ты выпил Аминазин. Шизофрения, говно и проклятия сняты. Разум ясен."
+    # 7. Knife
+    elif item == "knife":
+        if active_items.get("knife_gun"):
+            await callback.answer("У тебя уже есть заточка! Сделай Reply на пост с командой /rob", show_alert=True)
+            return
+        active_items["knife_gun"] = True
+        msg = (
+            f"🔪 Ты купил заточку!\n"
+            f"Сделай Reply на пост жертвы с командой /rob.\n"
+            f"Ты сможешь ограбить анона на 10-30% его шекелей (до 1000).\n"
+            f"Осторожно: если у жертвы шапочка из фольги, ты порежешься сам."
+        )
+    # 8. Tinfoil
+    elif item == "tinfoil":
+        current_time = int(time.time())
+        base_time = max(current_time, active_items.get("tinfoil_hat", 0))
+        active_items["tinfoil_hat"] = base_time + 24 * 3600
+        msg = (
+            f"👽 Ты надел Шапочку из фольги на 24 часа!\n"
+            f"Защищает от говна (/shit) и ограблений (/rob).\n"
+            f"Нападающие обмажутся говном сами или порежутся своей заточкой!"
+        )
+    # 9. Bribe
+    elif item == "bribe":
+        from main import apply_regular_mute
+        await apply_regular_mute(user_id, board_id, 0) # Clear mute
+        msg = "📜 Ты дал взятку модератору! Твой мут снят, ты снова можешь шитпостить."
+    # 10. Laxative
+    elif item == "laxative":
+        if active_items.get("laxative_gun"):
+            await callback.answer("У тебя уже есть слабительное! Сделай Reply на пост с командой /curse", show_alert=True)
+            return
+        active_items["laxative_gun"] = True
+        msg = (
+            f"🚽 Ты купил слабительное!\n"
+            f"Сделай Reply на пост жертвы с командой /curse.\n"
+            f"Цель проклинается на 1 час: она не сможет писать посты длиннее 50 символов."
+        )
+    # 11. Megaphone
+    elif item == "megaphone":
+        if active_items.get("megaphone_gun"):
+            await callback.answer("У тебя уже есть мегафон! Сделай Reply на свой пост с командой /mega", show_alert=True)
+            return
+        active_items["megaphone_gun"] = True
+        msg = (
+            f"📣 Ты арендовал Мегафон!\n"
+            f"Сделай Reply на СВОЙ пост с командой /mega.\n"
+            f"Твой пост будет закреплен на 24 часа для всех на борде."
+        )
+
     # Списываем баланс
     async with db_lock:
         await db.execute(
@@ -7477,11 +7560,11 @@ _duel_cooldowns: dict = {} # user_id -> timestamp
 _DUEL_TIMEOUT = 120       # секунд на принятие
 
 async def accept_duel_logic(message: types.Message, challenger_id: int, board_id: str):
-    import time, json
+    import time
     from common.db_pool import get_pool, db_lock
     db = await get_pool()
     user_id = message.from_user.id
-    now = time.time()
+    time.time()
     
     if challenger_id == user_id:
         await message.answer("Нельзя принять собственный вызов, трус.")
@@ -7619,7 +7702,7 @@ async def _handle_duel_accept(message: types.Message, board_id: str):
 
 async def _handle_duel_create(message: types.Message, board_id: str, args: list, stream: str = 'ru'):
     user_id  = message.from_user.id
-    import time, json
+    import time
     from common.db_pool import get_pool, db_lock
     db = await get_pool()
 
@@ -7941,7 +8024,7 @@ async def process_withdrawal_data(message: types.Message, state: FSMContext, boa
     data = await state.get_data()
     method = data.get('wd_method', 'sber')
     
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool
     db = await get_pool()
     
     async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
@@ -8094,7 +8177,8 @@ async def _get_passport_stats(user_id: int) -> tuple[int, float, int] | None:
         return None
     return post_count, balance, is_verified
 
-def _generate_passport_text(user_id: int, lang: str, board_id: str, post_count: int, balance: float, is_verified: int, rank: str, role: str) -> str:
+def _generate_passport_text(user_id: int, lang: str, board_id: str, post_count: int, balance: float, is_verified: int, rank: str, role: str, active_items: dict = None) -> str:
+    if active_items is None: active_items = {}
     import random
     from datetime import datetime, UTC
     current_data = _PASSPORT_DATA.get(lang, _PASSPORT_DATA['ru'])
@@ -8154,9 +8238,20 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     if stats is None:
         return
     post_count, balance, is_verified = stats
+    
+    from common.db_pool import get_pool
+    db = await get_pool()
+    async with db.execute("SELECT active_items FROM Users WHERE user_id = ?", (user_id,)) as c:
+        row = await c.fetchone()
+        active_items_str = row[0] if row and row[0] else "{}"
+    try:
+        import json
+        active_items = json.loads(active_items_str)
+    except:
+        active_items = {}
 
     rank, role = _get_passport_rank_and_role(lang, post_count)
-    passport_text = _generate_passport_text(user_id, lang, board_id, post_count, balance, is_verified, rank, role)
+    passport_text = _generate_passport_text(user_id, lang, board_id, post_count, balance, is_verified, rank, role, active_items)
 
     try:
         await message.reply(passport_text, parse_mode="HTML")
@@ -10348,7 +10443,7 @@ async def cmd_search(message: types.Message, board_id: str | None, stream: str =
     Выполняет поиск по всем постам.
     """
     if not board_id: return
-    b_data = board_data[board_id]
+    board_data[board_id]
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     query = message.text.split(maxsplit=1)
     if len(query) < 2 or not query[1].strip():
@@ -11216,7 +11311,7 @@ async def cmd_nuke_pins_surgical(message: types.Message, board_id: str | None, s
         parse_mode="HTML"
     )
     stats = {'ok': 0, 'error': 0, 'block': 0}
-    start_time = time.time()
+    time.time()
     BATCH_SIZE = 20
     for i, chat_id in enumerate(users):
         if i % 100 == 0 and i > 0:
@@ -13336,7 +13431,7 @@ async def cq_threads_page(callback: types.CallbackQuery, board_id: str | None, s
         return
     user_last_thread_action[user_id] = now
     try:
-        page = int(callback.data.split("_")[-1])
+        int(callback.data.split("_")[-1])
         text, keyboard = await generate_threads_page(board_id, user_id, page=0, stream=stream)
         if not text:
             try:
@@ -14402,24 +14497,18 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
                       f"👥 Total anons in TGACH: {total_users_global}\n"
                       f"📨 Posts on this board: {total_posts_on_board}\n"
                       f"📈 Total posts in TGACH: {state['post_counter']}")
-        pm_sent = "✅ Stats sent to PM."
-        unlock = "❌ Unblock the bot."
     elif lang == 'jp':
         stats_text = (f"📊 {board_name} の統計:\n\n"
                       f"👥 この板のアノン: {total_users_on_board}\n"
                       f"👥 全アノン数: {total_users_global}\n"
                       f"📨 この板のレス数: {total_posts_on_board}\n"
                       f"📈 総レス数: {state['post_counter']}")
-        pm_sent = "✅ 統計をDMで送信しました。"
-        unlock = "❌ ボットのブロックを解除してください。"
     else:
         stats_text = (f"📊 Статистика доски {board_name}:\n\n"
                       f"👥 Анонимов на доске: {total_users_on_board}\n"
                       f"👥 Всего анонов в Тгаче: {total_users_global}\n"
                       f"📨 Постов на доске: {total_posts_on_board}\n"
                       f"📈 Всего постов в тгаче: {state['post_counter']}")
-        pm_sent = "✅ Статистика отправлена вам в личные сообщения."
-        unlock = "❌ Разблокируйте бота, чтобы получить статистику в ЛС."
     try:
         await message.answer(stats_text, parse_mode="HTML")
     except Exception: pass
@@ -15672,7 +15761,7 @@ async def git_commit_and_push_db() -> bool:
     if not GITHUB_TOKEN:
         print("⚠️ GITHUB_TOKEN не настроен, бэкап в облако невозможен.")
         return False
-    loop = asyncio.get_running_loop()
+    asyncio.get_running_loop()
     return False # await loop.run_in_executor(git_executor, sync_git_operations_db, GITHUB_TOKEN)
 @dp.callback_query(F.data == "save_all")
 async def admin_save_all(callback: types.CallbackQuery):
@@ -17688,7 +17777,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             return
     b_data = board_data[board_id]
     if message.content_type in ['photo', 'video', 'document']:
-        counter = b_data['single_photo_counter'][user_id]
+        b_data['single_photo_counter'][user_id]
         if not message.media_group_id:
             b_data['single_photo_counter'][user_id] += 1
             current_count = b_data['single_photo_counter'][user_id]
@@ -19042,6 +19131,13 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="hide", description="Скрыть конкретный пост"),
         BotCommand(command="invite", description="Пригласить на доску"),
         BotCommand(command="whisper", description="Анонимное сообщение"),
+        BotCommand(command="work", description="Биржа труда (Заработок Шекелей)"),
+        BotCommand(command="partyvan", description="Вызвать пативэн (реплай)"),
+        BotCommand(command="shit", description="Кинуть говно (реплай)"),
+        BotCommand(command="rob", description="Ограбить анона (реплай)"),
+        BotCommand(command="curse", description="Подсыпать слабительное (реплай)"),
+        BotCommand(command="mega", description="Закрепить свой пост (реплай)"),
+        BotCommand(command="shoot", description="Выстрелить из мут-гана (реплай)"),
         BotCommand(command="fap", description="Случайная аниме-картинка"),
         BotCommand(command="hent", description="Случайная хентай-картинка"),
         BotCommand(command="loli", description="Случайная лоли-картинка"),
@@ -19132,6 +19228,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     msg_id = reported_msg.message_id
     
     # Build inline keyboard for admins
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
     builder = InlineKeyboardBuilder()
     builder.button(text="Удалить пост", callback_data=f"rep:del:{author_id}:{chat_id}:{msg_id}")
     builder.button(text="Бан 1ч", callback_data=f"rep:ban1:{author_id}:{chat_id}:{msg_id}")

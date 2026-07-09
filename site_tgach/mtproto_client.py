@@ -19,7 +19,7 @@ logger = logging.getLogger("mtproto")
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
 try:
-    import tgcrypto
+    pass
 except ImportError:
     logger.warning("⚠️ TGCRYPTO NOT INSTALLED! Download speed will be very slow. Run: pip install tgcrypto")
 

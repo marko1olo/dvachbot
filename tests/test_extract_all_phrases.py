@@ -1,4 +1,3 @@
-import pytest
 import os
 import tempfile
 from extract_all_phrases import extract_strings_from_file

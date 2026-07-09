@@ -6,10 +6,9 @@ def run_cmd(cmd):
 
 def main():
     try:
-        branch = "optimize-notification-queue-deletion"
         log = run_cmd(["git", "branch"])
         print(log)
-    except Exception as e:
+    except Exception:
         print(traceback.format_exc())
 
 main()

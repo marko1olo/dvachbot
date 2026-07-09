@@ -1,8 +1,6 @@
 import sqlite3
 import json
 import time
-import re
-from collections import defaultdict
 
 # --- НАСТРОЙКИ ---
 # Убедитесь, что имя файла базы данных правильное

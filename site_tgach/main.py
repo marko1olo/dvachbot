@@ -1,3 +1,6 @@
+from urllib.parse import urlparse
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
+from common.database import update_thread_last_updated, create_board, approve_board, delete_board
 import sys
 
 """
@@ -38,7 +41,6 @@ import time
 import re
 import faulthandler
 
-import hmac
 import hashlib
 import io
 import mimetypes
@@ -79,10 +81,8 @@ from site_tgach.security import (
     check_ddos,
     DEFAULT_POW_DIFFICULTY,
 )
-from common.database import add_file_mirror, ban_hash
 from warhammer_mode import warhammer_transform
 from site_tgach.image_processing import (
-    apply_grimdark_filter_async,
     shutdown_image_executors,
 )
 from site_tgach.mtproto_client import _cleanup_idle_clients, close_all_mtproto_clients
@@ -98,10 +98,8 @@ except ImportError:
     print(
         "⚠️ Не удалось импортировать japanese_translator. Проверь наличие файла в корне."
     )
-from site_tgach.catbox import upload_url_to_catbox
 from common.database import initialize_database
 from bs4 import BeautifulSoup
-from site_tgach.neuro_poster import NeuroManager
 from site_tgach.rss import generate_rss
 from slowapi.util import get_remote_address
 from common.config import ENABLE_MULTILANG
@@ -173,7 +171,7 @@ from starlette.background import BackgroundTask
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.inmemory import InMemoryBackend
 from fastapi_cache.decorator import cache
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 
 faulthandler.enable()
@@ -254,7 +252,6 @@ from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 from aiogram import Bot
 from itsdangerous import TimestampSigner, BadSignature
-from common.config import STORAGE_CHANNELS
 from common.bot_pool import global_bot_pool
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -265,7 +262,6 @@ from common.board_config import (
     BOT_USERNAME,
     FILE_STORAGE_CHANNEL_ID,
     FILE_UPLOADER_BOT_TOKEN,
-    THREAD_MEDIA_CHANNEL_ID,
 )
 from site_tgach.security import IP_BAN_LIST
 from fastapi.responses import ORJSONResponse
@@ -273,7 +269,6 @@ from common.database import (
     get_op_posts_for_board,
     create_post,
     get_thread_by_op_post,
-    update_shadow_mute,
     get_banned_users,
     get_shadow_muted_users,
     lift_ban,
@@ -301,7 +296,6 @@ from common.database import (
     delete_post_by_num,
     ban_user_on_board,
     get_chat_posts_for_board,
-    get_post_copies,
     get_global_chat_posts,
     log_global_event,
     get_db_connection,
@@ -327,7 +321,6 @@ from common.database import (
     get_blurhashes_batch,
     get_duplicate_counts,
     cleanup_old_posts_from_db,
-    get_random_video_post,
     get_random_image_post,
     get_random_active_thread,
     refresh_random_indexes,
@@ -637,7 +630,7 @@ MAX_TROLL_CONNS = 128
 from common.database import get_archived_threads, get_chat_posts_for_board
 from common.database import restore_thread_from_archive
 from common.database import toggle_thread_pin
-from common.database import load_all_spam_words, add_spam_word, remove_spam_word
+from common.database import add_spam_word, remove_spam_word
 
 try:
     import psutil

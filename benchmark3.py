@@ -1,4 +1,3 @@
-import re
 from ukrainian_mode import _stage1_dict_replace
 from benchmark2 import _stage1_dict_replace_optimized
 

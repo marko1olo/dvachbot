@@ -3,13 +3,12 @@ from common.task_manager import spawn_task
 import logging
 import httpx
 import time
-import json
 import random
 from common.config import STORAGE_CHANNELS, ADMIN_IDS
 from common.database import get_db_connection, get_system_setting, log_global_event
 from common.db_pool import db_lock
 from site_tgach.importer import ThreadImporter
-from site_tgach.neuro_poster import NeuroManager, AI_CONFIG
+from site_tgach.neuro_poster import NeuroManager
 
 logger = logging.getLogger("neuro_scanner")
 

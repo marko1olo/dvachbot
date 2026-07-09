@@ -1,6 +1,3 @@
-import re
-import time
-from ukrainian_mode import _stage1_dict_replace, _SORTED_KEYS, UKRAINIAN_WORD_REPLACEMENTS, _get_replacement, _match_case
 
 # What if the user meant that we could compile a single regex for ALL replacements,
 # but using `re.sub`?

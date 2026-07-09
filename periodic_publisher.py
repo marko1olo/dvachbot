@@ -1,10 +1,7 @@
 import asyncio
-import io
-import time
 from datetime import datetime, timezone, timedelta
-from aiogram import Bot, types
+from aiogram import Bot
 from aiogram.types import BufferedInputFile, InputMediaPhoto
-from aiogram.exceptions import TelegramAPIError
 
 # We will run the generator in a separate thread so it doesn't block the async loop
 from stats_generator import generate_all_charts

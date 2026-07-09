@@ -1,4 +1,3 @@
-import os
 
 INPUT_FILE = "backup.sql"
 

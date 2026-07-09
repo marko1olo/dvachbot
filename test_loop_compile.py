@@ -1,4 +1,3 @@
-import re
 import ast
 
 def find_regex_in_loop(filename):

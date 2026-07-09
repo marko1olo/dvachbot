@@ -4,7 +4,6 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from security_paths import ROOT, SECURITY_CHECK_SUMMARY

@@ -1,5 +1,5 @@
 import asyncio
-from typing import Coroutine, Set, Any
+from typing import Coroutine, Set
 
 _background_tasks: Set[asyncio.Task] = set()
 

@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import io
 
-from stats_generator import fetch_user_stats_data, generate_user_stats_card, draw_user_stats_card, UserStatsCardData
+from stats_generator import fetch_user_stats_data, generate_user_stats_card, UserStatsCardData
 
 class TestStatsGenerator(unittest.TestCase):
 

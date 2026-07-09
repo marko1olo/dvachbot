@@ -3,7 +3,6 @@ from common.task_manager import spawn_task
 import logging
 import httpx
 import time
-import json
 import random
 from common.config import STORAGE_CHANNELS, ADMIN_IDS
 from common.database import get_db_connection, get_system_setting, log_global_event

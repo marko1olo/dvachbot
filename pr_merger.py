@@ -71,7 +71,7 @@ def main():
                 print(f"  [SUCCESS]")
                 success.append(branch)
                 
-        except Exception as e:
+        except Exception:
             print(f"  [FAILED] with exception. Aborting...")
             run_cmd(["git", "merge", "--abort"], check=False)
             failed.append((branch, "Error"))

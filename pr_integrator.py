@@ -117,7 +117,7 @@ def classify_branch(branch, cwd="."):
     if is_test_branch or all_test_files:
         return "ACCEPT", "Testing: Addition or improvement of unit tests.", files, add_count, del_count
         
-    is_cleanup_branch = any(c in short_name for c in ["remove-unused", "cleanup", "chore", "clean"])
+    any(c in short_name for c in ["remove-unused", "cleanup", "chore", "clean"])
     only_imports_or_comments = True
     for line in added_lines:
         stripped = line.strip()

@@ -2,7 +2,6 @@ import hashlib
 import secrets
 import time
 import logging
-from collections import defaultdict
 import random
 logger = logging.getLogger("security")
 

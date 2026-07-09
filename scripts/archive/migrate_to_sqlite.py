@@ -1,6 +1,5 @@
 import asyncio
 import json
-import glob
 import gzip
 import os
 from datetime import datetime, UTC

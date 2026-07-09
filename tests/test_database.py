@@ -1,6 +1,4 @@
 import unittest
-import asyncio
-import sqlite3
 
 class TestDatabaseFallback(unittest.IsolatedAsyncioTestCase):
     async def test_placeholder(self):

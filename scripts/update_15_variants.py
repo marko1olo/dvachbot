@@ -1,5 +1,4 @@
 import json
-import os
 
 data = json.load(open('../data/text_assets.json', encoding='utf-8'))
 replies = data.setdefault('CONTEXTUAL_REPLIES', {})

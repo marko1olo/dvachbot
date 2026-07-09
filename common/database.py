@@ -3551,7 +3551,7 @@ async def refresh_random_indexes():
 
     async with db_lock:
         try:
-            start_time = time.time()
+            time.time()
             db = await get_pool()
             
             new_video_cache = defaultdict(list)
@@ -4007,7 +4007,7 @@ async def get_recent_tags_summary(limit_files: int = 2000, top_n: int = 100) -> 
     Собирает статистику по тегам из последних limit_files файлов.
     Нужно для SEO-облака тегов. Не грузит всю БД.
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool
     from collections import Counter
     
     # Кэшируем результат на уровне базы или приложения, чтобы не дергать часто

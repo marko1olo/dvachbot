@@ -3,7 +3,7 @@ import io
 import os
 import glob
 from dataclasses import dataclass
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 
 @dataclass
 class FontFitConfig:
@@ -232,5 +232,5 @@ def create_visual_post(mode, text, header=None):
         buf.seek(0)
         return buf.getvalue()
 
-    except Exception as e:
+    except Exception:
         return None

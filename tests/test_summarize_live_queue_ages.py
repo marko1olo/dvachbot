@@ -1,6 +1,5 @@
 import unittest
 import time
-import asyncio
 
 # Mock necessary globals in main before importing
 import main

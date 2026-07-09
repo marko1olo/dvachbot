@@ -1,5 +1,3 @@
-import benchmark5
-from benchmark5 import _stage1_dict_replace, _stage1_dict_replace_optimized
 from ukrainian_mode import UKRAINIAN_WORD_REPLACEMENTS, _SORTED_KEYS, _COMPILED_DICT
 
 # Do we have cascaded replaces in real data?

@@ -7,7 +7,6 @@ def cascade_trace(word):
         import re
         pattern = re.compile(r'\b' + re.escape(key) + r'\b', re.IGNORECASE)
         if pattern.search(text):
-            old = text
             text = pattern.sub(UKRAINIAN_WORD_REPLACEMENTS[key][0] if isinstance(UKRAINIAN_WORD_REPLACEMENTS[key], list) else UKRAINIAN_WORD_REPLACEMENTS[key], text)
             print(f"  Matched '{key}' -> '{text}'")
 

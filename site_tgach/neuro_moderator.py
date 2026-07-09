@@ -1,4 +1,5 @@
-import base64
+from site_tgach.neuro_poster import _execute_groq_post
+from common.database import set_system_setting
 
 """
 This module provides functionality for analyzing images for content safety using a neural network model.
@@ -22,11 +23,10 @@ from common.task_manager import spawn_task
 import httpx
 import json
 import re
-import time
 from httpx import AsyncHTTPTransport
 
 from common.token_pool import groq_pool
-from common.database import get_pool, add_to_mod_queue, apply_auto_censure
+from common.database import apply_auto_censure
 from common.db_pool import db_lock
 
 logger = logging.getLogger("neuro_mod")
@@ -165,7 +165,6 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
     from site_tgach.security import IP_BAN_LIST
     import base64
     import time
-    import asyncio
 
     logger.info(f"🔍 [DeepCheck] Starting analysis for file_id: {file_id}")
 

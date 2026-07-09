@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import shutil
 import zipfile
 import time
 from datetime import datetime

@@ -202,7 +202,7 @@ def analyze_content(cur):
                 break
             
             for row in rows:
-                post_num = row['post_num']
+                row['post_num']
                 raw_content = row['content']
                 counter += 1
 

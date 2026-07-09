@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
-import json
 
 import bot_live_status
 

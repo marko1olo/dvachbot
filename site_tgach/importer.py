@@ -26,8 +26,6 @@ import os
 import json
 import time
 import logging
-import traceback
-from datetime import datetime
 from io import BytesIO
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -53,7 +51,6 @@ from common.database import (
     add_to_hf_queue,
     create_post,
     create_thread_entry,
-    update_post_content,
     get_post_for_broadcast,
     update_thread_last_updated,
     process_backlinks,
@@ -837,7 +834,7 @@ class ThreadImporter:
                     "UPDATE posts SET thread_id = ? WHERE post_num = ?",
                     (new_thread_id, new_op_id),
                 )
-                raw_subject = posts[0].get("subject") or posts[0].get("sub") or ""
+                raw_subject = op_data.get("subject") or op_data.get("sub") or ""
                 title = (
                     raw_subject
                     if raw_subject

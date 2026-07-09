@@ -10,6 +10,5 @@
 import time
 
 start = time.perf_counter()
-import ukrainian_mode
 end = time.perf_counter()
 print(f"Import time: {end - start:.4f} seconds")

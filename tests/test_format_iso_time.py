@@ -2,7 +2,6 @@ import os
 import sys
 import unittest
 import time
-from datetime import datetime
 
 # Set timezone to UTC for deterministic testing
 os.environ['TZ'] = 'UTC'

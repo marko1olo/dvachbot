@@ -13,7 +13,6 @@ from common.bot_pool import global_bot_pool
 from common.board_config import BOARD_CONFIG
 from aiogram import Bot
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.exceptions import TelegramBadRequest
 from site_tgach.mtproto_client import download_file_mtproto
 from site_tgach.zeroxzero import is_0x0_available, upload_url_to_0x0, upload_file_to_0x0
 

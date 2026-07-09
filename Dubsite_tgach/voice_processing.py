@@ -1,4 +1,3 @@
-import asyncio
 from common.task_manager import spawn_task
 import hashlib
 from aiogram import Bot

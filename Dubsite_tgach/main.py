@@ -5,9 +5,7 @@ from common.task_manager import spawn_task
 import json
 import time
 import re
-import hmac
 import hashlib
-import tracemalloc
 import io
 import random
 import secrets
@@ -38,9 +36,7 @@ from fastapi import Form
 import httpx
 from httpx import AsyncHTTPTransport
 from site_tgach.security import get_pow_challenge_data, verify_pow, check_ddos, DEFAULT_POW_DIFFICULTY
-from common.database import add_file_mirror, ban_hash
 from warhammer_mode import warhammer_transform
-from site_tgach.image_processing import apply_grimdark_filter_async
 try:
     from japanese_translator import (
         get_random_anime_image, 
@@ -50,10 +46,8 @@ try:
     )
 except ImportError:
     print("⚠️ Не удалось импортировать japanese_translator. Проверь наличие файла в корне.")
-from site_tgach.catbox import upload_url_to_catbox
 from common.database import initialize_database
 from bs4 import BeautifulSoup
-from site_tgach.neuro_poster import NeuroManager
 from site_tgach.rss import generate_rss
 from slowapi.util import get_remote_address
 from common.config import ENABLE_MULTILANG
@@ -61,7 +55,7 @@ from common.database import create_report, get_active_reports, set_user_stream, 
 from collections import deque, defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Union
 from async_lru import alru_cache
 from functools import lru_cache
 from pydantic import BaseModel, Field
@@ -85,7 +79,7 @@ from fastapi.responses import (
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.inmemory import InMemoryBackend
 from fastapi_cache.decorator import cache
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 def get_real_ip(request: Request) -> str:
     real_ip = request.headers.get("x-real-ip")
@@ -146,36 +140,34 @@ from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 from aiogram import Bot
 from itsdangerous import TimestampSigner, BadSignature
-from common.config import STORAGE_CHANNELS
 from common.bot_pool import global_bot_pool
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 import unicodedata
 from common.board_config import (
     BOARD_CONFIG, BOT_USERNAME, FILE_STORAGE_CHANNEL_ID,
-    FILE_UPLOADER_BOT_TOKEN, THREAD_MEDIA_CHANNEL_ID
+    FILE_UPLOADER_BOT_TOKEN
 )
 from site_tgach.security import IP_BAN_LIST
 from fastapi.responses import ORJSONResponse
 from common.database import (
-    get_op_posts_for_board, create_post, get_thread_by_op_post, update_shadow_mute,
-    get_banned_users, get_shadow_muted_users, lift_ban, lift_shadow_ban,
-    process_mentions_and_notify, get_post_by_num, update_post_content,
-    get_post_for_broadcast, create_bottle, get_unread_bottle_count, read_and_delete_bottle,
-    get_posts_from_broadcast_queue, get_user_status, get_shadow_mute_status,
-    get_thread_op_by_post_num, apply_regular_mute, get_user_by_token, toggle_op_hidden,
-    get_user_posts_from_list, create_thread_entry, get_post_count_in_thread,
-    is_thread_archived, archive_thread_in_db, search_posts, delete_post_by_num,
-    ban_user_on_board, get_chat_posts_for_board, get_post_copies, get_global_chat_posts, log_global_event,
-    get_db_connection, get_all_media_from_thread, sync_boards_with_config,
-    get_thread_ids_for_posts, create_alert, get_pending_alerts, mark_alert_read, get_all_boards_for_admin,
-    set_user_role, get_user_role, get_all_alerts_for_admin, register_file_owner, get_file_owner_id, create_feedback, process_cross_links,
-    get_unread_feedback_count, mark_feedback_read,
-    get_file_mirrors, get_banned_files_list, unban_hash, get_blurhashes_batch, get_duplicate_counts, cleanup_old_posts_from_db,
-    get_random_video_post, get_random_image_post, get_random_active_thread, refresh_random_indexes, add_post_to_random_cache,
-    get_recent_posts_global, get_full_user_info, get_global_feed_posts, process_backlinks,
-    get_mod_queue, resolve_mod_queue,
-    get_unread_replies_count, get_user_replies, mark_replies_read,
+    get_op_posts_for_board, create_post, get_thread_by_op_post, get_banned_users,
+    get_shadow_muted_users, lift_ban, lift_shadow_ban, process_mentions_and_notify,
+    get_post_by_num, update_post_content, get_post_for_broadcast,
+    create_bottle, get_unread_bottle_count, read_and_delete_bottle, get_posts_from_broadcast_queue,
+    get_user_status, get_shadow_mute_status, get_thread_op_by_post_num,
+    apply_regular_mute, get_user_by_token, toggle_op_hidden, get_user_posts_from_list,
+    create_thread_entry, get_post_count_in_thread, is_thread_archived,
+    archive_thread_in_db, search_posts, delete_post_by_num, ban_user_on_board,
+    get_chat_posts_for_board, get_global_chat_posts, log_global_event, get_db_connection, get_all_media_from_thread,
+    sync_boards_with_config, get_thread_ids_for_posts, create_alert,
+    get_pending_alerts, mark_alert_read, get_all_boards_for_admin, set_user_role, get_user_role,
+    get_all_alerts_for_admin, register_file_owner, get_file_owner_id, create_feedback, process_cross_links, get_unread_feedback_count, mark_feedback_read,
+    get_file_mirrors, get_banned_files_list,
+    unban_hash, get_blurhashes_batch, get_duplicate_counts, cleanup_old_posts_from_db, get_random_image_post, get_random_active_thread,
+    refresh_random_indexes, add_post_to_random_cache, get_recent_posts_global, get_full_user_info, get_global_feed_posts,
+    process_backlinks, get_mod_queue, resolve_mod_queue, get_unread_replies_count,
+    get_user_replies, mark_replies_read,
     get_newspaper_data
 )
 from site_tgach.backup import backup_loop
@@ -3107,10 +3099,9 @@ async def api_captcha_generate(request: Request):
         log_x = random.randint(50, container_w - 50)
         log_y = random.randint(20, container_h - 100)
         monkey_x = 0
-        monkey_y = 0
         for _ in range(10):
             monkey_x = random.randint(10, container_w - 40)
-            monkey_y = random.randint(10, container_h - 40)
+            random.randint(10, container_h - 40)
             if abs(monkey_x - log_x) > 60:
                 break
         session_data.update({"target_x": log_x, "target_y": log_y})
@@ -4770,13 +4761,12 @@ async def api_create_post(
          raise HTTPException(status_code=403, detail=t('err_read_only_mode'))
     if post_mode == 'new_thread':
         limit_seconds = 600 if is_guest else 300
-        limit_desc = f"{limit_seconds // 60} мин"
+        f"{limit_seconds // 60} мин"
     elif post_mode == 'chat_post':
         limit_seconds = 5
-        limit_desc = "5 сек"
     else:
         limit_seconds = 10
-        limit_desc = f"{limit_seconds} сек"
+        f"{limit_seconds} сек"
 
     action_key = "thread" if post_mode == 'new_thread' else "post"
     key = f"cooldown_{board_id}_{author_id}_{action_key}"
@@ -4798,7 +4788,7 @@ async def api_create_post(
         except (ValueError, TypeError):
             pass
     stop_words = SPAM_WORDS_CACHE.get('all', set()) | SPAM_WORDS_CACHE.get(board_id, set())
-    text_safe = text or ""
+    text or ""
     if text is None:
         text = ""
     if images is None:

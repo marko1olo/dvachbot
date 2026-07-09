@@ -5,7 +5,7 @@ shizo_mode.py — Extreme Schizophasia Engine v6.0
 
 import random
 import re
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional
 
 # ==============================================================================
 # Ленивый импорт визуального движка

@@ -8,13 +8,12 @@ from urllib.parse import urlparse, urlunparse, quote, unquote
 import aiohttp
 import socket
 from dotenv import load_dotenv
-from typing import Optional, List, Dict, Awaitable
+from typing import Optional, List, Dict
 from aiohttp import ClientTimeout
 import json
 import time
 import hashlib
 
-from common.html_utils import escape_html
 
 PROXY_STATE = {'is_working': True}
 PROXY_STATE_LAST_FAILURE = 0
@@ -2104,7 +2103,7 @@ async def _fetch_image_from_apis(api_definitions: List[Dict], fail_message: str,
     per_api_timeout = float(os.getenv("BOT_ANIME_SINGLE_API_TIMEOUT_SEC", "8"))
     # 1. Определяем прокси вручную (принудительно None для прямой работы через WireGuard, как в summarize)
     current_proxy = None
-    status_msg = f"✅ HIDDIFY ({current_proxy})" if current_proxy else "⚠️ DIRECT/OPENVPN (System)"
+    f"✅ HIDDIFY ({current_proxy})" if current_proxy else "⚠️ DIRECT/OPENVPN (System)"
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
@@ -2151,7 +2150,7 @@ async def _fetch_image_from_apis(api_definitions: List[Dict], fail_message: str,
                 except asyncio.TimeoutError:
                     print(f"  ⚠️ [DEBUG_ANIME] Таймаут источника '{source_name}' ({per_api_timeout}s).")
                     continue
-                except Exception as e:
+                except Exception:
                     # Раскомментируйте, если нужно видеть ошибки в консоли
                     # print(f"  ❌ Ошибка '{source_name}': {e}")
                     continue
