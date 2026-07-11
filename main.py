@@ -2421,17 +2421,34 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
     now = datetime.now(UTC)
     time_threshold = now - timedelta(hours=hours)
     lines = []
+    
     async with storage_lock:
-        storage_copy = list(messages_storage.values())
-    post_iterator = storage_copy
-    if thread_id:
-        b_data = board_data[board_id]
-        thread_info = b_data.get('threads_data', {}).get(thread_id)
-        if not thread_info:
-            return "" # Возвращаем пустую строку, если тред не найден
-        thread_post_nums = set(thread_info.get('posts', []))
-        post_iterator = [p for p_num, p in messages_storage.items() if p_num in thread_post_nums]
-        time_threshold = datetime.min.replace(tzinfo=UTC)
+        if thread_id:
+            b_data = board_data[board_id]
+            thread_info = b_data.get('threads_data', {}).get(thread_id)
+            if not thread_info:
+                return ""
+            thread_post_nums = set(thread_info.get('posts', []))
+            post_iterator = [p for p_num, p in messages_storage.items() if p_num in thread_post_nums]
+            time_threshold = datetime.min.replace(tzinfo=UTC)
+            # Сортируем сообщения треда по времени
+            post_iterator.sort(key=lambda x: x.get('timestamp').timestamp() if hasattr(x.get('timestamp'), 'timestamp') else x.get('timestamp', 0))
+        else:
+            board_posts = [p for p in messages_storage.values() if p.get('board_id') == board_id and p.get('author_id') != 0]
+            board_posts.sort(key=lambda x: x.get('timestamp').timestamp() if hasattr(x.get('timestamp'), 'timestamp') else x.get('timestamp', 0))
+            
+            posts_in_last_6h = [p for p in board_posts if p.get('timestamp', now) >= time_threshold]
+            count_6h = len(posts_in_last_6h)
+            
+            # 150-200 последних сообщений либо 6 часов (выбираем оптимальный диапазон)
+            if count_6h < 150:
+                target_posts = board_posts[-150:]
+            elif count_6h > 200:
+                target_posts = board_posts[-200:]
+            else:
+                target_posts = posts_in_last_6h
+            post_iterator = target_posts
+            time_threshold = datetime.min.replace(tzinfo=UTC)
     for post in post_iterator:
         try:
             if post.get('board_id') != board_id:
@@ -9989,8 +10006,68 @@ def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
         
     return prompt
 
-async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, thread_info: dict, lang: str, paragraph_count: int) -> tuple[str, str, str]:
-    if thread_id:
+async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, thread_info: dict, lang: str, paragraph_count: int, is_blat: bool = False) -> tuple[str, str, str]:
+    if is_blat:
+        from gopnik_mode import BLAT_PHRASES, BLAT_POGOVORKI, BLAT_BONUS_VARIANTS
+        
+        # Выбираем число бонусных блоков в зависимости от длины
+        if paragraph_count <= 2:
+            num_bonuses = random.randint(0, 1)
+        elif paragraph_count <= 5:
+            num_bonuses = random.randint(1, 2)
+        else:
+            num_bonuses = random.randint(3, 5)
+            
+        selected_bonuses = random.sample(BLAT_BONUS_VARIANTS, k=min(num_bonuses, len(BLAT_BONUS_VARIANTS)))
+        bonus_instruction = "\n\n".join(selected_bonuses)
+        
+        selected_phrases = "\n".join(random.sample(BLAT_PHRASES, min(15, len(BLAT_PHRASES))))
+        selected_pogovorki = "\n".join(random.sample(BLAT_POGOVORKI, min(15, len(BLAT_POGOVORKI))))
+        
+        full_bonus_instruction = ""
+        if bonus_instruction:
+            full_bonus_instruction = f"""
+=== ВАЖНО: ДОПОЛНИТЕЛЬНЫЕ ЭКСПЕРТНЫЕ БЛОКИ ===
+В дополнение к стандартной структуре, ты ОБЯЗАН внедрить в прогон следующие глубокие разборы:
+{bonus_instruction}
+Эти блоки должны органично вписываться в текст, делая его ценным и содержательным.
+"""
+
+        prompt = f"""
+Ты — Высший Криминальный Авторитет, Смотрящий за хатой. Твоя задача — прочитать свежие малявы (лог чата) и отписать жесткий воровской прогон для братвы на борде /{board_id}/.
+Твой девиз: "Жизнь ворам, хуй мусорам и крысам репозиторным! АУЕ!". 
+Обращайся к читателям: "Вечер в хату, босота честная!", "Братва", "Бродяги", "Арестанты", "Жизнь ворам, блатные", "АУЕ".
+
+{full_bonus_instruction}
+
+=== СВЯТЫЕ ВОРОВСКИЕ ПРАВИЛА (ЖЕСТКО СОБЛЮДАТЬ) ===
+1. ЛЮДСКОЕ И ПЕТУШИНОЕ: Ты ОБЯЗАН делить всё в чате на два лагеря. 
+   - "Людское" (правильное): писать чистый код, делать годные игры/ассеты/скрипты, помогать братве, кидать годные ассеты в общак, презирать менеджеров, HR-ов и мусоров.
+   - "Петушиное / Шерстяное / Стукаческое": воровать чужой код (крысятничество), выебываться без опыта (бакланство), стучать HR-ам, лизать жопу начальству, писать говнокод.
+2. ЖЕСТОЧАЙШИЙ ПРЕССИНГ: Если участник чата несет херню, тупит или защищает корпоративные правила — опускай его без жалости. Называй его "мусорской пидарас", "шерсть галимая", "куколд на удаленке", "черт закатанный", "дырявый".
+3. ПЕРСОНАЛИЗАЦИЯ И МАСТИ (КРИТИЧНО): Выделяй конкретные ИМЕНА из лога. Обязательно присваивай им кликухи. 
+   ПРИМЕР: "За Витьку (Крыса , масть Петушиная): Вскрыли этого гуся сегодня как консервную банку. Махинации с комитами, кидалово братвы на бабки... По понятиям ты — фуфлыжник, пидар подкошнарный, твое место у параши."
+   ПРИМЕР: "За Саню (Ровный Мужик): Мужик сегодня подогнал в общак царский грев в виде годной архитектуры. На таких бродягах индустрия держится."
+4. СЛОВАРЬ (ИСПОЛЬЗУЙ МАКСИМАЛЬНО ГУСТО): малява, пассажир, петушатник, куколд, терпила, ровные пацаны, предъява, фуфлыжник, мутный гусь, шнырь, пресс-хата, шконка, туз, фарту-масти, зашквар, шерсть, фраер, блатные, газонюх, гатить в туза.
+5. РАЗБОР ТЕХНОЛОГИЙ: Переводи IT/GameDev-термины на феню. Деплой/Релиз — "выход на свободу", галера/офис — "красная зона/пресс-хата", баг — "мусорская подлянка", сеньор/лид — "пахан", джун — "первоход/малолетка", менеджер/тимлид — "кум/надзиратель/бугор", компиляция/билд — "сборка этапа".
+6. АНТИ-ЦЕНЗУРА: Мат ОБЯЗАТЕЛЕН. Чернуха, сарказм, жесткие метафоры ("натянуть на виртуальный глобус", "раздвинуть булками память", "вставлять ложки в анус"). НИКАКОЙ толерантности.
+7. Для крыс, петухов, блатных и прочей швали — только жесткий прессинг и обосраловка. Для ровных пацанов — уважение и признание. ВАЖНО: НЕ ПУТАЙ РОВНЫХ МУЖИКОВ С КРЫСАМИ, КОТОРЫЕ ИГРАЮТ В РОВНЫХ МУЖИКОВ.
+8. Для шерстяной обоймы и опущенных можно придумывать кликухи ,блатные или обидные. Как вор в законе раскидывает положняк фраерам.
+9. Не используй разметку MSG_...
+10. Используй блатные и воровские речевые обороты. Включая, но не ограничиваясь: {selected_pogovorki}. Не зацикливайся на них, используй для экспрессии.
+Используй в своем ответе следующие воровские обороты и подколы (вплетай их в контекст разбора сообщений): {selected_phrases}
+
+=== СТРУКТУРА МАЛЯВЫ ===
+1. ВСТУПЛЕНИЕ: Мощное приветствие по фене. Оценка того, во что превратилась хата за сегодня.
+2. РАЗБОР ПАССАЖИРОВ: Пройдись по 3-5 активным или провинившимся участникам. Напиши "За [Имя] (Кликуха): ..." и жестко разложи, кто он по жизни и масти, опираясь на то, что он писал.
+(Здесь вставляй ДОПОЛНИТЕЛЬНЫЕ БЛОКИ, если они есть).
+3. ИТОГОВЫЙ ПРОГОН ПО ХАТЕ: Вердикт смотрящего. Кого гнать ссаными тряпками, а с кем можно на одном поле (в репозитории) срать сесть. Прощание ("Фарту, братва!").
+
+ВАЖНО: Твой отчет должен состоять ровно из {paragraph_count} абзацев. Каждый абзац должен быть содержательным, плотным и отделен от других пустой строкой. Не используй Markdown-разметку (только HTML, например <b>, <i>, <u>, <s>, <code>, <pre>). Output ONLY plain text or basic HTML. DO NOT use unclosed HTML tags.
+"""
+        info_text = f"За последние 6 часов на доске /{board_id}/" if not thread_id else "За последние 6 часов в треде"
+        chunk = await get_board_chunk(board_id, hours=6, thread_id=thread_id, lang=lang)
+    elif thread_id:
         if lang == 'en':
             prompt = random.choice([
                 # Short style
@@ -10033,7 +10110,7 @@ async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, 
         chunk = await get_board_chunk(board_id, hours=6, lang=lang)
 
     # Dynamically inject exact paragraph count constraint only if the prompt does not enforce a rigid template structure
-    is_templated = any(x in prompt.lower() for x in ["шаблон", "template", "•"]) or "1. <b>" in prompt
+    is_templated = any(x in prompt.lower() for x in ["шаблон", "template", "•"]) or "1. <b>" in prompt or is_blat
     if not is_templated:
         prompt = adjust_prompt_paragraphs(prompt, paragraph_count, lang=lang)
     
@@ -10186,9 +10263,16 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
                 context_name = f"треда «{thread_title}»"
 
     paragraph_count, length_choice, model_preference, chosen_tier = _parse_summarize_args(message.text)
+    
+    # Детекция блатного режима
+    is_blat = False
+    if message.text:
+        is_blat = any(term in message.text.lower() for term in ['blat', 'блат', 'гоп', 'гопник', 'пацанский', 'ауе', 'ауешка', 'patsan'])
+    if not is_blat and b_data.get('gopnik_mode'):
+        is_blat = True
 
     # Generate prompt and retrieve chat chunk
-    prompt, info_text, chunk = await _get_summarize_prompt_and_chunk(board_id, thread_id, thread_info, lang, paragraph_count)
+    prompt, info_text, chunk = await _get_summarize_prompt_and_chunk(board_id, thread_id, thread_info, lang, paragraph_count, is_blat=is_blat)
 
     hf_token = os.getenv("HF_TOKEN")
     if not chunk or len(chunk) < 100:
@@ -10235,17 +10319,44 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
 
     if should_use_telegraph:
         date_str = datetime.now().strftime('%d.%m.%Y %H:%M')
-        if lang == 'en':
+        if is_blat:
+            title = f"Воровской прогон из Кибер-Хаты - {date_str}"
+        elif lang == 'en':
             title = f"Summary of {context_name} - {date_str}"
         elif lang == 'jp':
             title = f"{context_name} の要約 - {date_str}"
         else:
             title = f"Саммари {context_name} - {date_str}"
 
-        telegraph_url = await create_telegraph_page_async(title, summary, author="ТГАЧ")
+        author_name = "Кибер-Смотрящий" if is_blat else "ТГАЧ"
+        telegraph_url = await create_telegraph_page_async(title, summary, author=author_name)
 
         if telegraph_url:
-            if lang == 'en':
+            if is_blat:
+                intros = [
+                    "⚡️ Вечер в хату, босота! Пока вы спали, я тут свежие малявы почитал.",
+                    "☕️ Часик в радость, чифир в сладость! Накатал вам прогон за сегодня.",
+                    "👀 Зенки протрите, фраера. Смотрящий раскидал по понятиям кто есть кто в чате.",
+                    "🎩 Расклад по хате готов. Осторожно, много опущенных пассажиров.",
+                    "🔪 Отделил ровных пацанов от петушни. Весь расклад по ссылке."
+                ]
+                bullet_sets = [
+                    "🔥 <b>Кого сегодня определяли у параши</b>\n🔪 <b>Предъявы за гнилой код</b>\n🛠 <b>Базар за технологии</b>",
+                    "🛑 <b>Разбор косяков и кидалова</b>\n🤡 <b>Клоуны дня и их высеры</b>\n⚔️ <b>Аргументы из горячих холиваров</b>",
+                    "💰 <b>Инсайды по бабкам и галерам</b>\n📸 <b>Шмон по скринам</b>\n🧠 <b>Советы от ровных бродяг</b>"
+                ]
+                ctas = [
+                    "👉 <b><a href='{url}'>Читать воровской прогон</a></b>",
+                    "📖 <b><a href='{url}'>Вскрыть маляву</a></b>",
+                    "⚡️ <b><a href='{url}'>Пробить пассажиров</a></b>"
+                ]
+                summary = (
+                    f"♠️ <b>Свежий расклад по чату ({date_str})</b>\n\n"
+                    f"{random.choice(intros)}\n\n"
+                    f"{random.choice(bullet_sets)}\n\n"
+                    f"{random.choice(ctas).format(url=telegraph_url)}"
+                )
+            elif lang == 'en':
                 summary = f"📝 <b>DETAILED SUMMARY ({context_name})</b>\n\nToo long to post here! I've published it as a Telegraph article:\n🔗 <a href=\"{telegraph_url}\">Read on Telegraph</a>"
             elif lang == 'jp':
                 summary = f"📝 <b>詳細な要約 ({context_name})</b>\n\nここには収まりきらないため、Telegraphに投稿しました：\n🔗 <a href=\"{telegraph_url}\">Telegraphで読む</a>"
@@ -10257,6 +10368,14 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             # Hard limit = 4096 UTF-16 units. Safe budget = 3500 (prefix takes ~100-200 more).
             summary = _tg_safe_truncate(summary, max_utf16=3500)
     else:
+        if is_blat:
+            signet = (
+                "\n\n<hr>"
+                "<i><b>♠️ Малява составлена Смотрящим.</b><br>"
+                "Жизнь ворам, хуй мусорам! АУЕ!</i>"
+            )
+            if "Малява составлена Смотрящим" not in summary:
+                summary += signet
         summary = _tg_safe_truncate(summary, max_utf16=3500)
 
     print(f"[summarize] Final summary length: {len(summary)}")
@@ -10265,7 +10384,9 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     if should_use_telegraph and telegraph_url:
         post_text = summary
     else:
-        if lang == 'en':
+        if is_blat:
+            post_text = summary
+        elif lang == 'en':
             post_text = f"Summary of {context_name}:\n\n{summary}"
         elif lang == 'jp':
             post_text = f"{context_name} の要約:\n\n{summary}"
