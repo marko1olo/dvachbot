@@ -9156,49 +9156,7 @@ async def _send_thread_info_if_applicable(message: types.Message, board_id: str,
         await message.answer(info_text, reply_markup=keyboard, parse_mode="HTML")
     except (TelegramForbiddenError, TelegramBadRequest):
         pass
-async def send_active_pin_to_new_user(bot: Bot, user_id: int, board_id: str):
-    """
-    Проверяет, есть ли на доске активный глобальный закреп.
-    Если есть — отправляет копию этого поста юзеру и закрепляет её.
-    """
-    b_data = board_data[board_id]
-    pinned_post_num = b_data.get('active_pin')
-    if not pinned_post_num:
-        return
-    post_content = None
-    async with storage_lock:
-        if pinned_post_num in messages_storage:
-            post_content = messages_storage[pinned_post_num].get('content')
-    if not post_content:
-        post_data_db = await get_post_by_num(pinned_post_num)
-        if post_data_db:
-            post_content = post_data_db.get('content')
-    if not post_content:
-        b_data['active_pin'] = None
-        return
-    await asyncio.sleep(1.5)
-    try:
-        recipients = {user_id}
-        results = await send_message_to_users(
-            bot_instance=bot,
-            board_id=board_id,
-            recipients=recipients,
-            content=post_content,
-            reply_info=None
-        )
-        if results and results[0][1]:
-            sent_messages = results[0][1]
-            msg_to_pin = sent_messages[0] if isinstance(sent_messages, list) else sent_messages
-            try:
-                await bot.pin_chat_message(
-                    chat_id=user_id,
-                    message_id=msg_to_pin.message_id,
-                    disable_notification=True
-                )
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"❌ Ошибка в send_active_pin_to_new_user: {e}")
+
 def detect_suggested_stream(lang_code: str | None) -> str:
     """
     Определяет рекомендуемый поток на основе language_code из Telegram.
@@ -10696,8 +10654,8 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
         await message.delete()
     except TelegramBadRequest:
         pass
-@dp.message(Command("roll"))
-async def cmd_roll(message: types.Message, board_id: str | None, stream: str = 'ru'):
+@dp.message(Command("dice", "roll100", "d100"))
+async def cmd_dice(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
@@ -14590,8 +14548,8 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
     try: await st_msg.delete()
     except Exception: pass
 
-@dp.message(Command("stats"))
-async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
+@dp.message(Command("board_stats", "board_info", "bstats"))
+async def cmd_board_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
@@ -14648,8 +14606,8 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
     try: await wait_msg.delete()
     except Exception: pass
 
-@dp.message(Command("top"))
-async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
+@dp.message(Command("global_top", "gtop"))
+async def cmd_global_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
