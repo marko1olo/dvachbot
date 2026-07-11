@@ -10006,7 +10006,15 @@ def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
         
     return prompt
 
-async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, thread_info: dict, lang: str, paragraph_count: int, is_blat: bool = False) -> tuple[str, str, str]:
+async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, thread_info: dict, lang: str, paragraph_count: int, is_blat: bool | None = None) -> tuple[str, str, str, bool]:
+    if is_blat is None:
+        b_data = board_data.get(board_id, {})
+        if b_data.get('gopnik_mode'):
+            is_blat = True
+        else:
+            # 50% chance of blat summary in normal mode
+            is_blat = (random.random() < 0.5)
+
     if is_blat:
         from gopnik_mode import BLAT_PHRASES, BLAT_POGOVORKI, BLAT_BONUS_VARIANTS
         
@@ -10114,7 +10122,7 @@ async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, 
     if not is_templated:
         prompt = adjust_prompt_paragraphs(prompt, paragraph_count, lang=lang)
     
-    return prompt, info_text, chunk
+    return prompt, info_text, chunk, is_blat
 
 def _get_summarize_status_text(lang: str, length_choice: str, paragraph_count: int) -> str:
     if lang == 'en':
@@ -10184,15 +10192,16 @@ def _parse_summarize_args(text: str | None) -> tuple[int | None, str, str, str]:
                 elif arg in ['groq', 'грок', 'free', 'шара']:
                     model_preference = 'groq'
 
-    # If neither paragraph_count nor chosen_tier is specified, pick a random tier
+    # If neither paragraph_count nor chosen_tier is specified, pick a random tier (no 'short')
     if paragraph_count is None and chosen_tier is None:
-        chosen_tier = random.choice(['short', 'medium', 'long', 'extra_long', 'huge'])
+        chosen_tier = random.choice(['medium', 'long', 'extra_long', 'huge'])
 
     # Map tier to paragraph count range if not explicitly set
     if paragraph_count is None:
         if chosen_tier == 'short':
-            paragraph_count = random.randint(1, 2)
-        elif chosen_tier == 'medium':
+            chosen_tier = 'medium'  # Convert short requests to medium
+            
+        if chosen_tier == 'medium':
             paragraph_count = random.randint(3, 5)
         elif chosen_tier == 'long':
             paragraph_count = random.randint(6, 9)
@@ -10201,10 +10210,13 @@ def _parse_summarize_args(text: str | None) -> tuple[int | None, str, str, str]:
         elif chosen_tier == 'huge':
             paragraph_count = random.randint(15, 20)
 
+    # Force paragraph count to be at least 3
+    if paragraph_count < 3:
+        paragraph_count = 3
+        chosen_tier = 'medium'
+
     # Determine length_choice for prompts and status messages
-    if paragraph_count <= 2:
-        length_choice = 'short'
-    elif paragraph_count <= 5:
+    if paragraph_count <= 5:
         length_choice = 'medium'
     else:
         length_choice = 'long'
@@ -10265,14 +10277,14 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     paragraph_count, length_choice, model_preference, chosen_tier = _parse_summarize_args(message.text)
     
     # Детекция блатного режима
-    is_blat = False
+    is_blat = None
     if message.text:
-        is_blat = any(term in message.text.lower() for term in ['blat', 'блат', 'гоп', 'гопник', 'пацанский', 'ауе', 'ауешка', 'patsan'])
-    if not is_blat and b_data.get('gopnik_mode'):
-        is_blat = True
+        has_blat_kw = any(term in message.text.lower() for term in ['blat', 'блат', 'гоп', 'гопник', 'пацанский', 'ауе', 'ауешка', 'patsan'])
+        if has_blat_kw:
+            is_blat = True
 
     # Generate prompt and retrieve chat chunk
-    prompt, info_text, chunk = await _get_summarize_prompt_and_chunk(board_id, thread_id, thread_info, lang, paragraph_count, is_blat=is_blat)
+    prompt, info_text, chunk, is_blat = await _get_summarize_prompt_and_chunk(board_id, thread_id, thread_info, lang, paragraph_count, is_blat=is_blat)
 
     hf_token = os.getenv("HF_TOKEN")
     if not chunk or len(chunk) < 100:
@@ -18391,7 +18403,7 @@ async def periodic_board_summary():
                 continue
                 
             # Используем ту же логику, что и /summary (3 абзаца)
-            prompt, info_text, chunk = await _get_summarize_prompt_and_chunk(board_id, None, {}, 'ru', 3)
+            prompt, info_text, chunk, is_blat = await _get_summarize_prompt_and_chunk(board_id, None, {}, 'ru', 3)
             
             if not chunk or len(chunk) < 100:
                 print("❌ [PERIODIC SUMMARY] Слишком мало сообщений.")
@@ -18406,13 +18418,31 @@ async def periodic_board_summary():
                 continue
                 
             date_str = datetime.now().strftime('%d.%m %H:%M')
-            title = f"Саммари доски /b/ - {date_str}"
-            telegraph_url = await create_telegraph_page_async(title, summary, author="ТГАЧ")
+            
+            if is_blat:
+                title = f"Воровской прогон из Кибер-Хаты - {date_str}"
+                author_name = "Кибер-Смотрящий"
+            else:
+                title = f"Саммари доски /b/ - {date_str}"
+                author_name = "ТГАЧ"
+                
+            telegraph_url = await create_telegraph_page_async(title, summary, author=author_name)
             
             if telegraph_url:
-                final_text = f"☕️ <b>Авто-саммари палаты</b> ☕️\n\nПока вы спали, тут произошло следующее:\n🔗 <a href='{telegraph_url}'>Читать выжимку</a>"
+                if is_blat:
+                    final_text = f"♠️ <b>Свежий расклад по палате</b> ♠️\n\nКибер-Смотрящий раскидал по понятиям, что произошло за последние часы:\n🔗 <a href='{telegraph_url}'>Вскрыть маляву</a>"
+                else:
+                    final_text = f"☕️ <b>Авто-саммари палаты</b> ☕️\n\nПока вы спали, тут произошло следующее:\n🔗 <a href='{telegraph_url}'>Читать выжимку</a>"
             else:
-                final_text = f"☕️ <b>Авто-саммари палаты</b> ☕️\n\n{summary}"
+                if is_blat:
+                    signet = (
+                        "\n\n<hr>"
+                        "<i><b>♠️ Малява составлена Смотрящим.</b><br>"
+                        "Жизнь ворам, хуй мусорам! АУЕ!</i>"
+                    )
+                    final_text = f"♠️ <b>Расклад по палате</b> ♠️\n\n{summary}{signet}"
+                else:
+                    final_text = f"☕️ <b>Авто-саммари палаты</b> ☕️\n\n{summary}"
                 
             # Постим прямо в борду как системное сообщение
             b_data = board_data[board_id]
