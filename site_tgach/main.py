@@ -10357,6 +10357,9 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     catbox_link = mirrors.get("catbox")
     zeroxzero_link = mirrors.get("0x0")
     shadow_file_id = mirrors.get("tg_shadow")
+    freeimage_link = mirrors.get("freeimage")
+    imgbb_link = mirrors.get("imgbb")
+    pixhost_link = mirrors.get("pixhost")
 
     # 1. Telegram Direct — ПРИОРИТЕТ №1 (Если путь закеширован)
     info = await get_cached_file_path(file_id, allow_protected_tokens=True)
@@ -10386,6 +10389,30 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
                 status_code=307,
                 headers={"Cache-Control": "public, max-age=3600"},
             )
+
+    # 3.1. FreeImage (работает везде, включая РФ)
+    if freeimage_link:
+        return RedirectResponse(
+            url=freeimage_link,
+            status_code=307,
+            headers={"Cache-Control": "public, max-age=86400"}
+        )
+
+    # 3.2. ImgBB (работает везде, включая РФ)
+    if imgbb_link:
+        return RedirectResponse(
+            url=imgbb_link,
+            status_code=307,
+            headers={"Cache-Control": "public, max-age=86400"}
+        )
+
+    # 3.3. PixHost (работает везде, включая РФ)
+    if pixhost_link:
+        return RedirectResponse(
+            url=pixhost_link,
+            status_code=307,
+            headers={"Cache-Control": "public, max-age=86400"}
+        )
 
     # 4. Catbox
     if catbox_link:

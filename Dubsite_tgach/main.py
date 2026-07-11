@@ -6344,6 +6344,9 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     hf_link = mirrors.get('huggingface')
     catbox_link = mirrors.get('catbox')
     shadow_file_id = mirrors.get('tg_shadow')
+    freeimage_link = mirrors.get('freeimage')
+    imgbb_link = mirrors.get('imgbb')
+    pixhost_link = mirrors.get('pixhost')
     
     user_country = request.cookies.get("user_country", "XX")
     is_ru = (user_country == "RU")
@@ -6370,18 +6373,27 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     # if hf_link:
     #     return RedirectResponse(url=hf_link, status_code=307)
     
+    if freeimage_link:
+        return RedirectResponse(url=freeimage_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"})
+
+    if imgbb_link:
+        return RedirectResponse(url=imgbb_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"})
+
+    if pixhost_link:
+        return RedirectResponse(url=pixhost_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"})
+
     if catbox_link and not is_ru:
-        return RedirectResponse(url=catbox_link, status_code=307)
+        return RedirectResponse(url=catbox_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"})
 
     if shadow_file_id:
         info_shadow = await get_cached_file_path(shadow_file_id)
         if info_shadow:
             path, token = info_shadow
             url = f"https://api.telegram.org/file/bot{token}/{path}"
-            return RedirectResponse(url=url, status_code=307)
+            return RedirectResponse(url=url, status_code=307, headers={"Cache-Control": "public, max-age=3600"})
 
     if catbox_link:
-        return RedirectResponse(url=catbox_link, status_code=307)
+        return RedirectResponse(url=catbox_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"})
 
     # Fallback для превью (миниатюр): если не удалось найти превью, пробуем оригинальный файл
     if file_id.startswith("AgAC"):
