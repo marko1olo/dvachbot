@@ -4242,7 +4242,7 @@ async def admin_action_sync_worker():
                             board_data[b]['users']['banned'].discard(uid)
                             board_data[b]['users']['active'].add(uid)
                         elif act['type'] == 'shadow_mute':
-                            from datetime import datetime, timezone
+                            from datetime import datetime
                             board_data[b]['shadow_mutes'][uid] = datetime.fromtimestamp(act['expires'], timezone.utc)
             await asyncio.sleep(5)
         except Exception as e:
@@ -18250,6 +18250,86 @@ async def _run_background_task(task_factory: Callable[[], Awaitable[Any]], task_
             print(f"🔁 Перезапуск задачи '{task_name}' через {current_delay} секунд...")
             await asyncio.sleep(current_delay)
             current_delay = min(current_delay * 2, MAX_RESTART_DELAY)
+
+async def periodic_board_summary():
+    """
+    Автоматическое саммари для борды /b/, которое вызывает ровно ту же логику,
+    что и команда /summary, каждые 8-12 часов.
+    """
+    import random
+    from datetime import datetime
+    while True:
+        sleep_seconds = random.randint(8 * 3600, 12 * 3600)
+        print(f"📝 [PERIODIC SUMMARY] Сплю {sleep_seconds} секунд...")
+        await asyncio.sleep(sleep_seconds)
+        
+        try:
+            print("📝 [PERIODIC SUMMARY] Начинаю генерацию авто-саммари для /b/...")
+            board_id = 'b'
+            if board_id not in board_data:
+                continue
+                
+            # Используем ту же логику, что и /summary (3 абзаца)
+            prompt, info_text, chunk = await _get_summarize_prompt_and_chunk(board_id, None, {}, 'ru', 3)
+            
+            if not chunk or len(chunk) < 100:
+                print("❌ [PERIODIC SUMMARY] Слишком мало сообщений.")
+                continue
+                
+            hf_token = os.getenv("HF_TOKEN")
+            summary = await summarize_text_with_hf(prompt, chunk, hf_token)
+            summary = clean_html_for_tg(summary)
+            
+            if not summary:
+                print("❌ [PERIODIC SUMMARY] Ошибка генерации саммари.")
+                continue
+                
+            date_str = datetime.now().strftime('%d.%m %H:%M')
+            title = f"Саммари доски /b/ - {date_str}"
+            telegraph_url = await create_telegraph_page_async(title, summary, author="ТГАЧ")
+            
+            if telegraph_url:
+                final_text = f"☕️ <b>Авто-саммари палаты</b> ☕️\n\nПока вы спали, тут произошло следующее:\n🔗 <a href='{telegraph_url}'>Читать выжимку</a>"
+            else:
+                final_text = f"☕️ <b>Авто-саммари палаты</b> ☕️\n\n{summary}"
+                
+            # Постим прямо в борду как системное сообщение
+            b_data = board_data[board_id]
+            recipients = b_data['users']['active'] - b_data['users']['banned']
+            if not recipients:
+                continue
+                
+            content_obj = {
+                'type': 'text',
+                'text': final_text,
+                'is_system_message': True,
+                'archive_allowed': True
+            }
+            pnum = await create_post(board_id=board_id, author_id=0, content=content_obj, timestamp=time.time())
+            if pnum:
+                header_base = await format_header(board_id, pnum)
+                content_obj['header'] = f"### SUMMARY ###\n{header_base}"
+                await update_post_content(pnum, content_obj)
+                
+                async with storage_lock:
+                    messages_storage[pnum] = {
+                        'author_id': 0, 
+                        'timestamp': datetime.now(UTC), 
+                        'content': content_obj, 
+                        'board_id': board_id
+                    }
+                    
+                await enqueue_board_message(board_id, {
+                    "recipients": recipients,
+                    "content": content_obj,
+                    "post_num": pnum,
+                    "board_id": board_id
+                })
+                
+            print("✅ [PERIODIC SUMMARY] Авто-саммари успешно опубликовано в /b/")
+        except Exception as e:
+            print(f"❌ [PERIODIC SUMMARY] Ошибка: {e}")
+
 async def periodic_thread_digest():
     while True:
         await asyncio.sleep(28800) # 8 часов (8 * 3600)
@@ -18905,6 +18985,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "site_reaction_processor": lambda: site_reaction_processor(),
         "mode_auto_disabler": lambda: mode_auto_disabler(),
         "periodic_thread_digest": lambda: periodic_thread_digest(),
+        "periodic_board_summary": lambda: periodic_board_summary(),
         "periodic_newspaper_broadcast": lambda: periodic_newspaper_broadcast(),
         "admin_action_sync_worker": lambda: admin_action_sync_worker(),
     }
