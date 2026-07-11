@@ -166,6 +166,10 @@ async def _execute_completion(client, model, messages, max_tokens, temperature):
         temperature=temperature
     )
 
+async def _execute_groq_post(client, url: str, headers: dict, json_data: dict):
+    """httpx POST helper used by neuro_moderator for direct Groq API calls."""
+    return await client.post(url, headers=headers, json=json_data)
+
 logger = logging.getLogger("neuro_poster")
 
 class NeuroManager:

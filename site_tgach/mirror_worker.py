@@ -15,6 +15,7 @@ from aiogram import Bot
 from aiogram.client.session.aiohttp import AiohttpSession
 from site_tgach.mtproto_client import download_file_mtproto
 from site_tgach.zeroxzero import is_0x0_available, upload_url_to_0x0, upload_file_to_0x0
+from site_tgach.pixhost import upload_file_to_pixhost, PIXHOST_SUPPORTED_EXT, PIXHOST_MAX_MB
 
 logger = logging.getLogger("mirror_worker")
 _INTERNAL_FILE_BOTS: dict[int, Bot] = {}
@@ -238,11 +239,23 @@ async def _process_single_task(task):
                         logger.warning(f"⚠️ File {file_id[:10]} is too large for 0x0 ({fsize / 1024 / 1024:.1f} MB). Skipping upload and removing task.")
                         await remove_mirror_task(task_id)
                         return
+                    elif mirror_type == 'pixhost' and fsize > PIXHOST_MAX_MB * 1024 * 1024:
+                        logger.warning(f"⚠️ File {file_id[:10]} is too large for Pixhost ({fsize / 1024 / 1024:.1f} MB). Removing task.")
+                        await remove_mirror_task(task_id)
+                        return
 
                     if mirror_type == 'catbox':
                         success_link = await upload_file_to_catbox(lpath)
                     elif mirror_type == '0x0':
                         success_link = await upload_file_to_0x0(lpath)
+                    elif mirror_type == 'pixhost':
+                        _, fext = os.path.splitext(lpath)
+                        if fext.lower() in PIXHOST_SUPPORTED_EXT:
+                            success_link = await upload_file_to_pixhost(lpath)
+                        else:
+                            logger.info(f"⏭️ Pixhost: unsupported ext {fext} for {file_id[:10]}. Removing task.")
+                            await remove_mirror_task(task_id)
+                            return
                 else:
                     logger.warning(f"⛔ All download methods failed for {file_id[:10]}. Rescheduling.")
                     await reschedule_mirror_task(task_id, attempt)
@@ -278,7 +291,7 @@ async def process_mirror_queue():
     try:
         while True:
             try:
-                allowed_types = ['catbox']
+                allowed_types = ['catbox', 'pixhost']
                 if is_0x0_available():
                     allowed_types.append('0x0')
 
