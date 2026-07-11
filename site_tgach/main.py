@@ -10383,19 +10383,29 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
                 headers={"Cache-Control": "public, max-age=3600"},
             )
 
-    # 4. Catbox (через прокси, так как напрямую он часто лежит)
+    # 4. Catbox
     if catbox_link:
+        if not is_ru:
+            # Для не-RU пользователей и краулеров отдаем прямой редирект для экономии трафика
+            return RedirectResponse(
+                url=catbox_link,
+                status_code=307,
+                headers={"Cache-Control": "public, max-age=86400"}
+            )
         try:
             return await _proxy_external_url(catbox_link, filename, request)
         except HTTPException:
             pass # Если кетбокс лежит, идем дальше
 
     if zeroxzero_link:
-        if is_ru:
+        if not is_ru:
+            return RedirectResponse(
+                url=zeroxzero_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"}
+            )
+        try:
             return await _proxy_external_url(zeroxzero_link, filename, request)
-        return RedirectResponse(
-            url=zeroxzero_link, status_code=307, headers=no_cache_headers
-        )
+        except HTTPException:
+            pass
 
     # Fallback для превью (миниатюр): если не удалось найти превью, пробуем оригинальный файл
     if file_id.startswith("AgAC"):

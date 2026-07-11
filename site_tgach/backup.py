@@ -14,8 +14,8 @@ import aiosqlite
 
 logger = logging.getLogger("backup_daemon")
 
-# Интервал: 12 часов
-BACKUP_INTERVAL = 12 * 3600 
+# Интервал: 7 дней (раз в неделю)
+BACKUP_INTERVAL = 7 * 24 * 3600 
 
 def _pack_and_split_sync(backup_db_path: str, zip_name_base: str):
     """
@@ -116,7 +116,7 @@ async def create_db_backup(bot) -> bool:
 
 async def backup_loop(bot):
     """Фоновая задача"""
-    logger.info("🛡️ Backup Daemon started (12h interval).")
+    logger.info("🛡️ Backup Daemon started (7d interval).")
     
     last_backup_str = await get_system_setting("last_backup_time")
     try:
