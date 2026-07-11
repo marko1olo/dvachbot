@@ -10368,13 +10368,13 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
             headers={"Cache-Control": "public, max-age=3600"},
         )
 
-    # 2. HuggingFace — ПРИОРИТЕТ №2 (Для РФ и ИНО, если доступен)
-    if is_hf_link_allowed(hf_link, VALID_HF_REPOS):
-        return RedirectResponse(
-            url=hf_link,
-            status_code=307,
-            headers={"Cache-Control": "public, max-age=86400"}
-        )
+    # 2. HuggingFace — ПРИОРИТЕТ №2 (ОТКЛЮЧЕН - HF сдох)
+    # if is_hf_link_allowed(hf_link, VALID_HF_REPOS):
+    #     return RedirectResponse(
+    #         url=hf_link,
+    #         status_code=307,
+    #         headers={"Cache-Control": "public, max-age=86400"}
+    #     )
 
     # 3. Shadow Telegram (Прямой редирект для теневого файла с защищенными токенами)
     if shadow_file_id:

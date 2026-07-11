@@ -6367,8 +6367,8 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
             headers={"Cache-Control": "public, max-age=3600"}
         )
 
-    if hf_link:
-        return RedirectResponse(url=hf_link, status_code=307)
+    # if hf_link:
+    #     return RedirectResponse(url=hf_link, status_code=307)
     
     if catbox_link and not is_ru:
         return RedirectResponse(url=catbox_link, status_code=307)

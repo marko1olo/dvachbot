@@ -1,5 +1,4 @@
 import os
-import asyncio
 import logging
 from io import BytesIO
 from huggingface_hub import HfApi
@@ -49,5 +48,5 @@ def _upload_sync(file_bytes: bytes, filename: str) -> str | None:
     return None
 
 async def upload_to_hf(file_bytes: bytes, filename: str) -> str | None:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _upload_sync, file_bytes, filename)
+    # HuggingFace is disabled/dead
+    return None
