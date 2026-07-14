@@ -1362,6 +1362,76 @@ async def _get_thread_id_for_post(db: aiosqlite.Connection, parent_post_num: int
     async with db.execute(query, (parent_post_num,)) as cursor:
         row = await cursor.fetchone()
     return row[0] if row else None
+async def _execute_create_post_queries(
+    db,
+    board_id: str,
+    author_id: int,
+    content_json: str,
+    timestamp: float,
+    reply_to: Optional[int],
+    is_shadow_muted: bool,
+    is_from_site: bool,
+    post_mode: Optional[str],
+    stream: str,
+    thread_id_from_bot: Optional[str],
+    file_owners: Optional[List[Tuple[str, int]]],
+    ip: Optional[str]
+) -> int:
+    # Проверка доски (чтение внутри транзакции безопасно)
+    async with db.execute("SELECT 1 FROM Boards WHERE board_id = ?", (board_id,)) as c:
+        if not await c.fetchone():
+            await db.execute("INSERT OR IGNORE INTO Boards (board_id, name) VALUES (?, ?)", (board_id, board_id))
+
+    valid_reply_to = None
+    inherited_thread_id = None
+    if reply_to:
+        async with db.execute("SELECT post_num, thread_id FROM Posts WHERE post_num = ?", (reply_to,)) as c:
+            row = await c.fetchone()
+            if row:
+                valid_reply_to = row[0]
+                inherited_thread_id = row[1]
+
+    await db.execute(
+        """INSERT OR IGNORE INTO Users
+           (user_id, board_id, status, location, stream, created_at)
+           VALUES (?, ?, 'active', 'main', ?, ?)""",
+        (author_id, board_id, stream, time.time())
+    )
+
+    final_thread_id = thread_id_from_bot
+    if is_from_site:
+        if post_mode == 'new_thread':
+            final_thread_id = None
+        elif post_mode == 'reply' and not final_thread_id:
+            final_thread_id = inherited_thread_id
+    else:
+        if not final_thread_id and valid_reply_to:
+            final_thread_id = inherited_thread_id
+
+    post_query = """
+        INSERT INTO Posts (board_id, author_id, content, timestamp, thread_id, reply_to_post_num, stream, is_shadow, ip)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    cursor = await db.execute(
+        post_query,
+        (board_id, author_id, content_json, timestamp, final_thread_id, valid_reply_to, stream, 1 if is_shadow_muted else 0, ip)
+    )
+    post_num = cursor.lastrowid
+
+    if file_owners:
+        await db.executemany(
+            "INSERT OR IGNORE INTO FileOwners (file_id, bot_id) VALUES (?, ?)",
+            file_owners
+        )
+
+    if is_from_site and post_mode == 'new_thread':
+        await db.execute("UPDATE Posts SET thread_id = ? WHERE post_num = ?", (post_num, post_num))
+
+    if not is_shadow_muted:
+        await db.execute("INSERT INTO BroadcastQueue (post_num, created_at, is_sent_to_tg) VALUES (?, ?, 0)", (post_num, timestamp))
+
+    return post_num
+
 async def create_post(
     author_id: int, 
     board_id: str, 
@@ -1399,58 +1469,11 @@ async def create_post(
                 # Это предотвращает Deadlock (ситуацию, когда оба процесса прочли и оба ждут записи).
                 await db.execute("BEGIN IMMEDIATE")
                 
-                # Проверка доски (чтение внутри транзакции безопасно)
-                async with db.execute("SELECT 1 FROM Boards WHERE board_id = ?", (board_id,)) as c:
-                    if not await c.fetchone():
-                        await db.execute("INSERT OR IGNORE INTO Boards (board_id, name) VALUES (?, ?)", (board_id, board_id))
-                
-                valid_reply_to = None
-                inherited_thread_id = None
-                if reply_to:
-                    async with db.execute("SELECT post_num, thread_id FROM Posts WHERE post_num = ?", (reply_to,)) as c:
-                        row = await c.fetchone()
-                        if row:
-                            valid_reply_to = row[0]
-                            inherited_thread_id = row[1]
-                
-                await db.execute(
-                    """INSERT OR IGNORE INTO Users 
-                       (user_id, board_id, status, location, stream, created_at) 
-                       VALUES (?, ?, 'active', 'main', ?, ?)""",
-                    (author_id, board_id, stream, time.time())
+                post_num = await _execute_create_post_queries(
+                    db, board_id, author_id, content_json, timestamp, reply_to,
+                    is_shadow_muted, is_from_site, post_mode, stream,
+                    thread_id_from_bot, file_owners, ip
                 )
-                
-                final_thread_id = thread_id_from_bot
-                if is_from_site:
-                    if post_mode == 'new_thread':
-                        final_thread_id = None
-                    elif post_mode == 'reply' and not final_thread_id:
-                        final_thread_id = inherited_thread_id
-                else:
-                    if not final_thread_id and valid_reply_to:
-                        final_thread_id = inherited_thread_id
-                
-                post_query = """
-                    INSERT INTO Posts (board_id, author_id, content, timestamp, thread_id, reply_to_post_num, stream, is_shadow, ip)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                cursor = await db.execute(
-                    post_query,
-                    (board_id, author_id, content_json, timestamp, final_thread_id, valid_reply_to, stream, 1 if is_shadow_muted else 0, ip)
-                )
-                post_num = cursor.lastrowid
-
-                if file_owners:
-                    await db.executemany(
-                        "INSERT OR IGNORE INTO FileOwners (file_id, bot_id) VALUES (?, ?)",
-                        file_owners
-                    )
-
-                if is_from_site and post_mode == 'new_thread':
-                    await db.execute("UPDATE Posts SET thread_id = ? WHERE post_num = ?", (post_num, post_num))
-
-                if not is_shadow_muted:
-                    await db.execute("INSERT INTO BroadcastQueue (post_num, created_at, is_sent_to_tg) VALUES (?, ?, 0)", (post_num, timestamp))
 
                 # Явный коммит транзакции
                 await db.execute("COMMIT")
