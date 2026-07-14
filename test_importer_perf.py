@@ -23,16 +23,20 @@ async def run_benchmark():
 
         # Current implementation (Individual executes)
         start_time = time.time()
+        channel_copies_params = []
         for p_data in prepared_posts:
             p_num = id_map.get(p_data["old_id"])
             if not p_num:
                 continue
             for f in p_data["files"]:
                 if f.get("channel_message_id"):
-                    await conn.execute(
-                        "INSERT OR IGNORE INTO ChannelCopies (post_num, channel_id, message_id) VALUES (?, ?, ?)",
-                        (p_num, current_channel, f["channel_message_id"]),
-                    )
+                    channel_copies_params.append((p_num, current_channel, f["channel_message_id"]))
+
+        if channel_copies_params:
+            await conn.executemany(
+                "INSERT OR IGNORE INTO ChannelCopies (post_num, channel_id, message_id) VALUES (?, ?, ?)",
+                channel_copies_params
+            )
         await conn.commit()
         time_individual = time.time() - start_time
         print(f"Individual executes took {time_individual:.4f} seconds")
