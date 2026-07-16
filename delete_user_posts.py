@@ -1,4 +1,6 @@
-  async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
+import json
+
+async def delete_user_posts(bot_instance: 'Bot', user_id: int, time_period_minutes: int, board_id: str) -> int:
       """
       Массовое удаление постов пользователя за период.
       Удаляет из БД (с защитой транзакции), RAM, ЛС и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
@@ -34,16 +36,18 @@
 
                       # Проверяем, какие из этих постов являются ОП-постами тредов
                       if user_posts:
-                          chunk_size = 400
-                          for i in range(0, len(user_posts), chunk_size):
-                              chunk = user_posts[i:i + chunk_size]
-                              chunk_str = [str(p) for p in chunk]
-                              placeholders = ','.join('?' for _ in chunk)
-                              query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders}) OR thread_num IN ({placeholders})"
-                              async with db.execute(query, chunk_str + chunk) as cursor:
-                                  t_rows = await cursor.fetchall()
-                                  for t_row in t_rows:
-                                      threads_to_delete.append(t_row[0])
+                          user_posts_str_json = json.dumps([str(p) for p in user_posts])
+                          user_posts_json = json.dumps(user_posts)
+                          query = """
+                              SELECT thread_id
+                              FROM Threads
+                              WHERE thread_id IN (SELECT value FROM json_each(?))
+                                 OR thread_num IN (SELECT value FROM json_each(?))
+                          """
+                          async with db.execute(query, (user_posts_str_json, user_posts_json)) as cursor:
+                              t_rows = await cursor.fetchall()
+                              for t_row in t_rows:
+                                  threads_to_delete.append(t_row[0])
 
                       # Если есть удаляемые треды, выбираем ВСЕ посты этих тредов, чтобы снести их тоже
                       if threads_to_delete:
@@ -55,56 +59,53 @@
                               t_ids.append(str(t_id_int))
 
                           t_ids = list(set(t_ids))
-                          chunk_size = 400
+                          t_ids_json = json.dumps(t_ids)
 
-                          for i in range(0, len(t_ids), chunk_size):
-                              chunk = t_ids[i:i+chunk_size]
-                              placeholders_threads = ','.join(['?'] * len(chunk))
-                              query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders_threads})"
-                              async with db.execute(query, chunk) as cursor:
-                                  p_rows = await cursor.fetchall()
-                                  for pr in p_rows:
-                                      posts_to_delete_set.add(pr[0])
+                          query = "SELECT post_num FROM Posts WHERE thread_id IN (SELECT value FROM json_each(?))"
+                          async with db.execute(query, (t_ids_json,)) as cursor:
+                              p_rows = await cursor.fetchall()
+                              for pr in p_rows:
+                                  posts_to_delete_set.add(pr[0])
 
                       posts_to_delete_nums = list(posts_to_delete_set)
-                      placeholders = ','.join('?' for _ in posts_to_delete_nums)
+                      posts_to_delete_json = json.dumps(posts_to_delete_nums)
 
                       # Читаем копии для API с получением board_id
-                      query_copies = f"""
+                      query_copies = """
                           SELECT pc.recipient_id, pc.message_id, p.board_id
                           FROM PostCopies pc
                           JOIN Posts p ON pc.post_num = p.post_num
-                          WHERE pc.post_num IN ({placeholders})
+                          WHERE pc.post_num IN (SELECT value FROM json_each(?))
                       """
-                      async with db.execute(query_copies, posts_to_delete_nums) as cursor:
+                      async with db.execute(query_copies, (posts_to_delete_json,)) as cursor:
                           messages_to_delete_from_api = await cursor.fetchall()
 
                       # Читаем копии каналов с получением board_id
-                      query_channels = f"""
+                      query_channels = """
                           SELECT cc.channel_id, cc.message_id, p.board_id
                           FROM ChannelCopies cc
                           JOIN Posts p ON cc.post_num = p.post_num
-                          WHERE cc.post_num IN ({placeholders})
+                          WHERE cc.post_num IN (SELECT value FROM json_each(?))
                       """
-                      async with db.execute(query_channels, posts_to_delete_nums) as cursor:
+                      async with db.execute(query_channels, (posts_to_delete_json,)) as cursor:
                           channel_messages_to_delete = await cursor.fetchall()
 
                       # Удаляем из Posts
-                      await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                      await db.execute("DELETE FROM Posts WHERE post_num IN (SELECT value FROM json_each(?))", (posts_to_delete_json,))
 
                       # Удаляем из PostCopies
-                      await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                      await db.execute("DELETE FROM PostCopies WHERE post_num IN (SELECT value FROM json_each(?))", (posts_to_delete_json,))
 
                       # Удаляем из ChannelCopies
-                      await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                      await db.execute("DELETE FROM ChannelCopies WHERE post_num IN (SELECT value FROM json_each(?))", (posts_to_delete_json,))
 
                       # Удаляем из UserReplies
-                      await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders})", posts_to_delete_nums + posts_to_delete_nums)
+                      await db.execute("DELETE FROM UserReplies WHERE post_num IN (SELECT value FROM json_each(?)) OR parent_num IN (SELECT value FROM json_each(?))", (posts_to_delete_json, posts_to_delete_json))
 
                       # Удаляем из Threads
                       if threads_to_delete:
-                          t_placeholders = ','.join('?' for _ in threads_to_delete)
-                          await db.execute(f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})", threads_to_delete)
+                          threads_to_delete_json = json.dumps(threads_to_delete)
+                          await db.execute("DELETE FROM Threads WHERE thread_id IN (SELECT value FROM json_each(?))", (threads_to_delete_json,))
 
                       await db.execute("COMMIT")
                       break # Успех
