@@ -2985,17 +2985,17 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                 threads_to_delete = []
 
                 if user_posts:
-                    chunk_size = 400
-                    for i in range(0, len(user_posts), chunk_size):
-                        chunk = user_posts[i:i + chunk_size]
-                        p_strs = [str(p) for p in chunk]
-                        placeholders_str = ','.join('?' for _ in p_strs)
-                        placeholders_num = ','.join('?' for _ in chunk)
-                        query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders_str}) OR thread_num IN ({placeholders_num})"
-                        async with db.execute(query, p_strs + chunk) as cursor:
-                            t_rows = await cursor.fetchall()
-                            for tr in t_rows:
-                                threads_to_delete.append(tr[0])
+                    import json
+                    p_strs = [str(p) for p in user_posts]
+                    query = """
+                        SELECT thread_id FROM Threads
+                        WHERE thread_id IN (SELECT value FROM json_each(?))
+                        OR thread_num IN (SELECT value FROM json_each(?))
+                    """
+                    async with db.execute(query, (json.dumps(p_strs), json.dumps(user_posts))) as cursor:
+                        t_rows = await cursor.fetchall()
+                        for tr in t_rows:
+                            threads_to_delete.append(tr[0])
 
                 if threads_to_delete:
                     t_ids = []
@@ -3006,16 +3006,16 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                         t_ids.append(str(t_id_int))
 
                     t_ids = list(set(t_ids))
-                    chunk_size = 900
 
-                    for i in range(0, len(t_ids), chunk_size):
-                        chunk = t_ids[i:i+chunk_size]
-                        placeholders = ','.join(['?'] * len(chunk))
-                        query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders})"
-                        async with db.execute(query, chunk) as cursor:
-                            p_rows = await cursor.fetchall()
-                            for pr in p_rows:
-                                posts_to_delete_set.add(pr[0])
+                    import json
+                    query = """
+                        SELECT post_num FROM Posts
+                        WHERE thread_id IN (SELECT value FROM json_each(?))
+                    """
+                    async with db.execute(query, (json.dumps(t_ids),)) as cursor:
+                        p_rows = await cursor.fetchall()
+                        for pr in p_rows:
+                            posts_to_delete_set.add(pr[0])
 
                 posts_to_delete_nums = list(posts_to_delete_set)
                 placeholders = ','.join('?' for _ in posts_to_delete_nums)
