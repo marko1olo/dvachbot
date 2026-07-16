@@ -734,7 +734,14 @@ _VOWELS = set('аеёиоуыэюяАЕЁИОУЫЭЮЯ')
 _WORD_BOUNDARY_RE = re.compile(r'(\b\w+\b)([^\w]*)')
 
 _SORTED_KEYS = sorted(UKRAINIAN_WORD_REPLACEMENTS.keys(), key=len, reverse=True)
-_COMPILED_DICT = {k: re.compile(r'\b' + re.escape(k) + r'\b', re.IGNORECASE) for k in _SORTED_KEYS}
+_DICT_PATTERN = r'\b(' + '|'.join(re.escape(key) for key in _SORTED_KEYS) + r')\b'
+_dict_regex = re.compile(_DICT_PATTERN, flags=re.IGNORECASE)
+
+_KEY_LOOKUP = {}
+for _k in _SORTED_KEYS:
+    _k_lower = _k.lower()
+    if _k_lower not in _KEY_LOOKUP:
+        _KEY_LOOKUP[_k_lower] = _k
 
 
 def _get_replacement(key):
@@ -756,33 +763,28 @@ def _match_case(original: str, replacement: str) -> str:
 
 def _stage1_dict_replace(text: str) -> tuple[str, set]:
     replaced_spans = set()
-    result = text
+    offset = 0
 
-    result_lower = result.lower()
+    def replacer(match: re.Match) -> str:
+        nonlocal offset
+        original = match.group(0)
 
-    for key in _SORTED_KEYS:
-        if key.lower() not in result_lower:
-            continue
+        original_key = _KEY_LOOKUP.get(original.lower())
+        if not original_key:
+            return original
 
-        pattern = _COMPILED_DICT[key]
-        matches = list(pattern.finditer(result))
-        if not matches:
-            continue
-        offset = 0
-        for m in matches:
-            start = m.start() + offset
-            end = m.end() + offset
-            original = m.group(0)
-            replacement = _get_replacement(key)
-            replacement = _match_case(original, replacement)
-            result = result[:start] + replacement + result[end:]
-            diff = len(replacement) - len(original)
-            offset += diff
-            for i in range(start, start + len(replacement)):
-                replaced_spans.add(i)
+        replacement = _get_replacement(original_key)
+        replacement = _match_case(original, replacement)
 
-        result_lower = result.lower()
+        start = match.start() + offset
+        end = start + len(replacement)
+        for i in range(start, end):
+            replaced_spans.add(i)
 
+        offset += len(replacement) - len(original)
+        return replacement
+
+    result = _dict_regex.sub(replacer, text)
     return result, replaced_spans
 
 
