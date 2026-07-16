@@ -12,7 +12,7 @@ except Exception:
 import threading
 import time
 import urllib.error
-import urllib.request
+from urllib.request import urlopen
 from datetime import datetime
 from pathlib import Path
 
@@ -204,7 +204,7 @@ def _extract_latest_queue_total() -> int | None:
 
 def _health_probe() -> tuple[bool, str]:
     try:
-        with urllib.request.urlopen(HEALTH_URL, timeout=HEALTH_TIMEOUT_SEC) as response:
+        with urlopen(HEALTH_URL, timeout=HEALTH_TIMEOUT_SEC) as response:
             body = response.read(4096).decode("utf-8", errors="replace")
             status_code = getattr(response, "status", 200)
             if status_code != 200:
