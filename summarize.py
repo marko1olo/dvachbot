@@ -145,30 +145,29 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
 TELEGRAPH_TOKEN_FILE = os.path.join("data", "telegraph_token.txt")
 _telegraph_token_cache = None
 
-def _telegraph_request_sync(method: str, params: dict) -> dict:
-    """Make a direct (no proxy) HTTP request to Telegraph API."""
-    import requests
+async def _telegraph_request_async(method: str, params: dict) -> dict:
+    """Make a direct (no proxy) HTTP request to Telegraph API asynchronously."""
     url = f"https://api.telegra.ph/{method}"
     # Explicitly bypass proxy for Telegraph - SOCKS on 10808 is not for external APIs
-    resp = requests.get(url, params=params, timeout=15, proxies={"http": None, "https": None})
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("ok"):
-        raise RuntimeError(f"Telegraph API error: {data.get('error', 'unknown')}")
-    return data["result"]
+    async with httpx.AsyncClient(proxy=None) as client:
+        resp = await client.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"Telegraph API error: {data.get('error', 'unknown')}")
+        return data["result"]
 
-def _telegraph_create_account_sync() -> str:
+async def _telegraph_create_account_async() -> str:
     """Create a Telegraph account and return the access token."""
-    result = _telegraph_request_sync("createAccount", {
+    result = await _telegraph_request_async("createAccount", {
         "short_name": "tgach_bot",
         "author_name": "ТГАЧ"
     })
     return result.get("access_token", "")
 
-def _telegraph_create_page_sync(token: str, title: str, content_nodes: list) -> str:
+async def _telegraph_create_page_async_impl(token: str, title: str, content_nodes: list) -> str:
     """Create a Telegraph page and return its URL."""
     import json
-    import requests
     url = "https://api.telegra.ph/createPage"
     payload = {
         "access_token": token,
@@ -176,14 +175,15 @@ def _telegraph_create_page_sync(token: str, title: str, content_nodes: list) -> 
         "content": json.dumps(content_nodes),
         "return_content": "false"
     }
-    resp = requests.post(url, data=payload, timeout=20, proxies={"http": None, "https": None})
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("ok"):
-        raise RuntimeError(f"Telegraph createPage error: {data.get('error', 'unknown')}")
-    return data["result"]["url"]
+    async with httpx.AsyncClient(proxy=None) as client:
+        resp = await client.post(url, data=payload, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"Telegraph createPage error: {data.get('error', 'unknown')}")
+        return data["result"]["url"]
 
-def get_telegraph_token() -> str:
+async def get_telegraph_token_async() -> str:
     global _telegraph_token_cache
     if _telegraph_token_cache:
         return _telegraph_token_cache
@@ -204,7 +204,7 @@ def get_telegraph_token() -> str:
         except Exception:
             pass
     try:
-        token = _telegraph_create_account_sync()
+        token = await _telegraph_create_account_async()
         if token:
             os.makedirs("data", exist_ok=True)
             with open(TELEGRAPH_TOKEN_FILE, "w", encoding="utf-8") as f:
@@ -288,16 +288,13 @@ def _text_to_telegraph_nodes(html_content: str) -> list:
         nodes = [{"tag": "p", "children": [""]}]
     return nodes
 
-def _create_telegraph_page_blocking(title: str, html_content: str, author: str = "ТГАЧ") -> str:
-    token = get_telegraph_token()
-    if not token:
-        raise RuntimeError("API token is required")
-    nodes = _text_to_telegraph_nodes(html_content)
-    return _telegraph_create_page_sync(token, title, nodes)
-
 async def create_telegraph_page_async(title: str, html_content: str, author: str = "ТГАЧ") -> str | None:
     try:
-        url = await asyncio.to_thread(_create_telegraph_page_blocking, title, html_content, author)
+        token = await get_telegraph_token_async()
+        if not token:
+            raise RuntimeError("API token is required")
+        nodes = _text_to_telegraph_nodes(html_content)
+        url = await _telegraph_create_page_async_impl(token, title, nodes)
         return url
     except Exception as e:
         logger.error(f"Failed to create Telegraph page: {e}")
