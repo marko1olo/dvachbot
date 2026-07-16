@@ -180,20 +180,23 @@ def reset_telegraph_token_cache():
     yield
     summarize._telegraph_token_cache = original_cache
 
-def test_get_telegraph_token_cached(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_telegraph_token_cached(monkeypatch):
     import summarize
     summarize._telegraph_token_cache = "cached_token"
-    token = summarize.get_telegraph_token()
+    token = await summarize.get_telegraph_token_async()
     assert token == "cached_token"
 
-def test_get_telegraph_token_env_var(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_telegraph_token_env_var(monkeypatch):
     import summarize
     monkeypatch.setenv("TELEGRAPH_TOKEN", "env_token")
-    token = summarize.get_telegraph_token()
+    token = await summarize.get_telegraph_token_async()
     assert token == "env_token"
     assert summarize._telegraph_token_cache == "env_token"
 
-def test_get_telegraph_token_file(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+async def test_get_telegraph_token_file(monkeypatch, tmp_path):
     import summarize
 
     token_file = tmp_path / "telegraph_token.txt"
@@ -202,11 +205,13 @@ def test_get_telegraph_token_file(monkeypatch, tmp_path):
     monkeypatch.setattr(summarize, "TELEGRAPH_TOKEN_FILE", str(token_file))
     monkeypatch.delenv("TELEGRAPH_TOKEN", raising=False)
 
-    token = summarize.get_telegraph_token()
+    token = await summarize.get_telegraph_token_async()
     assert token == "file_token"
     assert summarize._telegraph_token_cache == "file_token"
 
-def test_get_telegraph_token_generation_success(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+@patch("summarize._telegraph_create_account_async", new_callable=AsyncMock)
+async def test_get_telegraph_token_generation_success(mock_create_account, monkeypatch, tmp_path):
     import summarize
     from unittest.mock import MagicMock
 
@@ -220,19 +225,9 @@ def test_get_telegraph_token_generation_success(monkeypatch, tmp_path):
     monkeypatch.setattr(summarize, "TELEGRAPH_TOKEN_FILE", str(token_file))
     monkeypatch.delenv("TELEGRAPH_TOKEN", raising=False)
 
-    class MockTelegraphPoster:
-        def __init__(self, *args, **kwargs):
-            self.access_token = None
+    mock_create_account.return_value = "generated_token"
 
-        def create_api_token(self, short_name, author_name):
-            self.access_token = "generated_token"
-
-    # Because summarize.py performs local import:
-    # try:
-    #     from html_telegraph_poster import TelegraphPoster
-    monkeypatch.setattr("html_telegraph_poster.TelegraphPoster", MockTelegraphPoster)
-
-    token = summarize.get_telegraph_token()
+    token = await summarize.get_telegraph_token_async()
 
     assert token == "generated_token"
     assert summarize._telegraph_token_cache == "generated_token"
@@ -240,7 +235,9 @@ def test_get_telegraph_token_generation_success(monkeypatch, tmp_path):
     assert token_file.read_text(encoding="utf-8") == "generated_token"
     mock_logger_error.assert_not_called()
 
-def test_get_telegraph_token_generation_failure(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+@patch("summarize._telegraph_create_account_async", new_callable=AsyncMock)
+async def test_get_telegraph_token_generation_failure(mock_create_account, monkeypatch, tmp_path):
     import summarize
     from unittest.mock import MagicMock
 
@@ -251,15 +248,9 @@ def test_get_telegraph_token_generation_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(summarize, "TELEGRAPH_TOKEN_FILE", str(token_file))
     monkeypatch.delenv("TELEGRAPH_TOKEN", raising=False)
 
-    class MockTelegraphPoster:
-        def __init__(self, *args, **kwargs):
-            pass
-        def create_api_token(self, short_name, author_name):
-            raise Exception("Telegraph API error")
+    mock_create_account.side_effect = Exception("Telegraph API error")
 
-    monkeypatch.setattr("html_telegraph_poster.TelegraphPoster", MockTelegraphPoster)
-
-    token = summarize.get_telegraph_token()
+    token = await summarize.get_telegraph_token_async()
 
     assert token == ""
     assert summarize._telegraph_token_cache is None
