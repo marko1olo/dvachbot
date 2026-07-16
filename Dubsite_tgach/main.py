@@ -99,10 +99,10 @@ async def get_country_by_ip(ip: str) -> str:
     
     if GEOIP_READER is None:
         try:
-            import geoip2.database
+            from geoip2.database import Reader
             db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
             if os.path.exists(db_full_path):
-                GEOIP_READER = geoip2.database.Reader(db_full_path)
+                GEOIP_READER = Reader(db_full_path)
         except Exception:
             pass
 
