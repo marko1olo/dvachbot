@@ -1468,7 +1468,7 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
         WHERE board_id = ? 
         ORDER BY posts_count DESC, balance DESC;
     """, (board_id,))
-    all_users = [r[0] for r in c.fetchall()]
+    all_users = [r[0] for r in c]
     try:
         rank = all_users.index(user_id) + 1
     except ValueError:

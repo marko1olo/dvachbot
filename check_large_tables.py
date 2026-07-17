@@ -7,7 +7,7 @@ def check_indexes():
     
     # Analyze table sizes
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-    tables = [row[0] for row in cursor.fetchall()]
+    tables = [row[0] for row in cursor]
     
     for table in tables:
         if not re.match(r"^\w+$", table):
@@ -21,7 +21,7 @@ def check_indexes():
             print(f"Table {table}: {count} rows")
             for idx in indexes:
                 cursor.execute("SELECT * FROM pragma_index_info(?)", (idx[1],))
-                cols = [row[2] for row in cursor.fetchall()]
+                cols = [row[2] for row in cursor]
                 print(f"  Index: {idx[1]} -> Columns: {cols}")
 
 if __name__ == '__main__':

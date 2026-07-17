@@ -310,7 +310,7 @@ def run_analysis(cur, db_path):
     check_integrity(cur)
 
     cur.execute("SELECT name FROM sqlite_master WHERE type='table';")
-    tables = [row[0] for row in cur.fetchall()]
+    tables = [row[0] for row in cur]
 
     get_table_statistics(cur, tables)
 
