@@ -11918,8 +11918,19 @@ async def _check_create_thread_cooldown(callback: types.CallbackQuery, user_s: d
         return True
     return False
 
-async def _notify_new_thread_public(board_id: str, b_data: dict, title: str, thread_id: str, lang: str, now_dt: datetime, stream: str) -> None:
+@dataclass
+class NewThreadPublicContext:
+    board_id: str
+    b_data: dict
+    title: str
+    thread_id: str
+    lang: str
+    now_dt: datetime
+    stream: str
+
+async def _notify_new_thread_public(ctx: NewThreadPublicContext) -> None:
     """Notifies the board that a new thread has been created."""
+    board_id, b_data, title, thread_id, lang, now_dt, stream = ctx.board_id, ctx.b_data, ctx.title, ctx.thread_id, ctx.lang, ctx.now_dt, ctx.stream
     notification_phrases = thread_messages.get(lang, {}).get('new_thread_public_notification', [])
     if lang == 'en':
         default_notification_text = f"New thread created: «<b>{title}</b>»"
@@ -12052,7 +12063,7 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
     threads_data[thread_id] = thread_info
     user_s['last_thread_creation'] = now_ts
 
-    await _notify_new_thread_public(board_id, b_data, title, thread_id, lang, now_dt, stream)
+    await _notify_new_thread_public(NewThreadPublicContext(board_id, b_data, title, thread_id, lang, now_dt, stream))
 
     user_s['location'] = thread_id
     user_s['last_location_switch'] = now_ts
