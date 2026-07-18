@@ -107,15 +107,11 @@ async def get_activity(conn):
     period_values = [periods[name] for name in period_names]
     min_ts = min(period_values) if period_values else 0
 
-    post_cases = ", ".join(["COUNT(CASE WHEN timestamp > ? THEN 1 END)"] * len(periods))
-    thread_cases = ", ".join(["COUNT(CASE WHEN created_at > ? THEN 1 END)"] * len(periods))
-    user_cases = ", ".join(["COUNT(DISTINCT CASE WHEN created_at > ? THEN user_id END)"] * len(periods))
-
     try:
         p_cursor, t_cursor, u_cursor = await asyncio.gather(
-            conn.execute(f"SELECT {post_cases} FROM Posts WHERE timestamp > ?", (*period_values, min_ts)),  # nosec B608
-            conn.execute(f"SELECT {thread_cases} FROM Threads WHERE created_at > ?", (*period_values, min_ts)),  # nosec B608
-            conn.execute(f"SELECT {user_cases} FROM Users WHERE created_at > ?", (*period_values, min_ts))  # nosec B608
+            conn.execute("SELECT COUNT(CASE WHEN timestamp > ? THEN 1 END), COUNT(CASE WHEN timestamp > ? THEN 1 END) FROM Posts WHERE timestamp > ?", (*period_values, min_ts)),
+            conn.execute("SELECT COUNT(CASE WHEN created_at > ? THEN 1 END), COUNT(CASE WHEN created_at > ? THEN 1 END) FROM Threads WHERE created_at > ?", (*period_values, min_ts)),
+            conn.execute("SELECT COUNT(DISTINCT CASE WHEN created_at > ? THEN user_id END), COUNT(DISTINCT CASE WHEN created_at > ? THEN user_id END) FROM Users WHERE created_at > ?", (*period_values, min_ts))
         )
         p_res = await p_cursor.fetchone()
         t_res = await t_cursor.fetchone()
