@@ -8194,12 +8194,24 @@ async def _get_passport_stats(user_id: int) -> tuple[int, float, int] | None:
         return None
     return post_count, balance, is_verified
 
-def _generate_passport_text(user_id: int, lang: str, board_id: str, post_count: int, balance: float, is_verified: int, rank: str, role: str, active_items: dict = None) -> str:
-    if active_items is None: active_items = {}
+@dataclass
+class PassportContext:
+    user_id: int
+    lang: str
+    board_id: str
+    post_count: int
+    balance: float
+    is_verified: int
+    rank: str
+    role: str
+    active_items: dict = None
+
+def _generate_passport_text(ctx: PassportContext) -> str:
+    if ctx.active_items is None: ctx.active_items = {}
     import random
     from datetime import datetime, UTC
-    current_data = _PASSPORT_DATA.get(lang, _PASSPORT_DATA['ru'])
-    seed_val = f"{user_id}_{datetime.now(UTC).date()}"
+    current_data = _PASSPORT_DATA.get(ctx.lang, _PASSPORT_DATA['ru'])
+    seed_val = f"{ctx.user_id}_{datetime.now(UTC).date()}"
     rng = random.Random(seed_val)
     social_credit = rng.randint(-1488, 1337)
     if social_credit < -500: sc_emoji = "👎"
@@ -8209,26 +8221,26 @@ def _generate_passport_text(user_id: int, lang: str, board_id: str, post_count: 
     inv_val = rng.choice(current_data['inv'])
     secret_val = rng.choice(current_data['sec'])
     flag = "🏴‍☠️"
-    if board_id == 'po': flag = "🤡"
-    elif board_id == 'int': flag = "🏳️‍🌈"
-    elif board_id == 'sex': flag = "🍆"
-    if lang == 'en':
+    if ctx.board_id == 'po': flag = "🤡"
+    elif ctx.board_id == 'int': flag = "🏳️‍🌈"
+    elif ctx.board_id == 'sex': flag = "🍆"
+    if ctx.lang == 'en':
         labels = ["TGACH PASSPORT", "ID", "Rank", "Role", "Posts", "Diagnosis", "Inventory", "Kompromat", "Social Credit"]
-        anon_tag = f"Anon-{user_id % 10000:04d}"
-    elif lang == 'jp':
+        anon_tag = f"Anon-{ctx.user_id % 10000:04d}"
+    elif ctx.lang == 'jp':
         labels = ["TGちゃんパスポート", "ID", "ランク", "役割", "レス数", "診断", "持ち物", "秘密", "社会的信用"]
-        anon_tag = f"アノン-{user_id % 10000:04d}"
+        anon_tag = f"アノン-{ctx.user_id % 10000:04d}"
     else:
         labels = ["ПАСПОРТ ТГАЧЕРА", "ID", "Ранг", "Роль", "Постов", "Диагноз", "Инвентарь", "Компромат", "Соц. рейтинг"]
-        anon_tag = f"Анон-{user_id % 10000:04d}"
+        anon_tag = f"Анон-{ctx.user_id % 10000:04d}"
     return (
         f"🪪 <b>{labels[0]} {flag}</b>\n"
         f"<code>{'—'*22}</code>\n"
         f"🆔 <b>{labels[1]}:</b> <code>{anon_tag}</code>\n"
-        f"🏷 <b>{labels[2]}:</b> {rank}\n"
-        f"💼 <b>{labels[3]}:</b> {role}\n"
-        f"💩 <b>{labels[4]}:</b> {post_count}\n"
-        f"💸 <b>Баланс:</b> {int(balance)} RUB ({'Verified B' if is_verified else 'Limited A'})\n"
+        f"🏷 <b>{labels[2]}:</b> {ctx.rank}\n"
+        f"💼 <b>{labels[3]}:</b> {ctx.role}\n"
+        f"💩 <b>{labels[4]}:</b> {ctx.post_count}\n"
+        f"💸 <b>Баланс:</b> {int(ctx.balance)} RUB ({'Verified B' if ctx.is_verified else 'Limited A'})\n"
         f"<code>{'—'*22}</code>\n"
         f"🧠 <b>{labels[5]}:</b> <i>{state_val}</i>\n"
         f"🎒 <b>{labels[6]}:</b> <i>{inv_val}</i>\n"
@@ -8268,7 +8280,18 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
         active_items = {}
 
     rank, role = _get_passport_rank_and_role(lang, post_count)
-    passport_text = _generate_passport_text(user_id, lang, board_id, post_count, balance, is_verified, rank, role, active_items)
+    ctx = PassportContext(
+        user_id=user_id,
+        lang=lang,
+        board_id=board_id,
+        post_count=post_count,
+        balance=balance,
+        is_verified=is_verified,
+        rank=rank,
+        role=role,
+        active_items=active_items
+    )
+    passport_text = _generate_passport_text(ctx)
 
     try:
         await message.reply(passport_text, parse_mode="HTML")
