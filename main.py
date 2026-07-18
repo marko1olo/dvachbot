@@ -4816,34 +4816,39 @@ async def _build_lie_media_content(content: dict, board_id: str) -> dict:
     return lie_content
 
 
+from dataclasses import dataclass
+
+@dataclass
+class BroadcasterConfig:
+    bot_instance: "Bot"
+    board_id: str
+    recipients: set[int]
+    content: dict
+    reply_info: dict | None = None
+    keyboard: "InlineKeyboardMarkup | None" = None
+    verbose: bool = False
+    queue_enqueued_at: float | None = None
+    queue_wait_sec: float | None = None
+    delivery_phase: str = "full"
+    delivery_original_recipients: int | None = None
+    delivery_deferred_recipients: int = 0
+
+
 class MessageBroadcaster:
-    def __init__(
-        self,
-        bot_instance,
-        board_id,
-        recipients,
-        content,
-        reply_info=None,
-        keyboard=None,
-        verbose=False,
-        queue_enqueued_at=None,
-        queue_wait_sec=None,
-        delivery_phase="full",
-        delivery_original_recipients=None,
-        delivery_deferred_recipients=0,
-    ):
-        self.bot_instance = bot_instance
-        self.board_id = board_id
-        self.recipients = recipients
-        self.content = content
-        self.reply_info = reply_info
-        self.keyboard = keyboard
-        self.verbose = verbose
-        self.queue_enqueued_at = queue_enqueued_at
-        self.queue_wait_sec = queue_wait_sec
-        self.delivery_phase = delivery_phase
-        self.delivery_original_recipients = delivery_original_recipients
-        self.delivery_deferred_recipients = delivery_deferred_recipients
+    def __init__(self, config: BroadcasterConfig):
+        self.config = config
+        self.bot_instance = config.bot_instance
+        self.board_id = config.board_id
+        self.recipients = config.recipients
+        self.content = config.content
+        self.reply_info = config.reply_info
+        self.keyboard = config.keyboard
+        self.verbose = config.verbose
+        self.queue_enqueued_at = config.queue_enqueued_at
+        self.queue_wait_sec = config.queue_wait_sec
+        self.delivery_phase = config.delivery_phase
+        self.delivery_original_recipients = config.delivery_original_recipients
+        self.delivery_deferred_recipients = config.delivery_deferred_recipients
 
         # Instance state
         self.b_data = board_data.get(self.board_id) if self.board_id else None
@@ -5820,7 +5825,7 @@ async def send_message_to_users(
     verbose=False -> тихий режим (для отправки автору).
     verbose=True -> пишет отчет в консоль (для массовой).
     """
-    broadcaster = MessageBroadcaster(
+    config = BroadcasterConfig(
         bot_instance=bot_instance,
         board_id=board_id,
         recipients=recipients,
@@ -5834,6 +5839,7 @@ async def send_message_to_users(
         delivery_original_recipients=delivery_original_recipients,
         delivery_deferred_recipients=delivery_deferred_recipients,
     )
+    broadcaster = MessageBroadcaster(config=config)
     return await broadcaster.broadcast()
 async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
     """
