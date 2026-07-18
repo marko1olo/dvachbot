@@ -2221,16 +2221,21 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                                 current_time
                             ))
                 if notifications_to_insert:
+                    # FIX: Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
+                    notifications_to_insert_fixed = [
+                        (r_id, src_num, rep_num, b_id, str(t_id) if t_id else str(rep_num), c_time)
+                        for (r_id, src_num, rep_num, b_id, t_id, c_time) in notifications_to_insert
+                    ]
                     await db.executemany(
                         """INSERT INTO NotificationQueue 
                            (recipient_id, source_post_num, reply_post_num, board_id, thread_id, created_at) 
                            VALUES (?, ?, ?, ?, ?, ?)""",
-                        notifications_to_insert
+                        notifications_to_insert_fixed
                     )
-                    # FIX: Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
+
                     site_notifs = [
-                        (r_id, board_id, str(t_id) if t_id else str(rep_num), src_num, rep_num, 0, current_time)
-                        for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert
+                        (r_id, board_id, t_id, src_num, rep_num, 0, current_time)
+                        for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert_fixed
                     ]
                     await db.executemany(
                         """INSERT INTO UserReplies 
