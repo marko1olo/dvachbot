@@ -223,9 +223,6 @@ class TestCleanTitleText(unittest.TestCase):
         self.assertEqual(clean_title_text("<h1>Привет мир! 🌍</h1>"), "Привет мир! 🌍")
         self.assertEqual(clean_title_text("[Спойлер] Секрет 🤫"), "Секрет 🤫")
 
-if __name__ == "__main__":
-    unittest.main()
-
 from Dubsite_tgach.main import format_bayan_label
 from unittest.mock import patch
 
@@ -678,6 +675,33 @@ class TestCheckPostCooldown(unittest.IsolatedAsyncioTestCase):
              patch('time.time', return_value=100.0):
             await check_post_cooldown(request, user)
             mock_backend.set.assert_called_once_with('cooldown_user_123', '100.0', expire=5)
+
+class TestDownloadImageWithProxy(unittest.IsolatedAsyncioTestCase):
+    async def test_download_image_proxy_import_error(self):
+        """Test that if japanese_translator fails to import, the download continues with proxy=None."""
+        from Dubsite_tgach.main import _download_image_with_proxy
+
+        with patch.dict('sys.modules', {'japanese_translator': None}):
+            with patch('aiohttp.ClientSession') as mock_session_class:
+                mock_session = MagicMock()
+                mock_session_class.return_value.__aenter__.return_value = mock_session
+
+                # Setup mock response
+                mock_response = MagicMock()
+                mock_response.status = 200
+                mock_response.read = AsyncMock(return_value=b"test")
+                mock_response.content.read = AsyncMock(return_value=b"test")
+                mock_response.headers = {"Content-Length": "4"}
+                mock_session.get.return_value.__aenter__.return_value = mock_response
+
+                result = await _download_image_with_proxy("http://example.com/image.jpg")
+
+                # Check that aiohttp.ClientSession.get was called
+                self.assertTrue(mock_session.get.called)
+
+                # Verify proxy is None
+                call_kwargs = mock_session.get.call_args[1]
+                self.assertIsNone(call_kwargs.get('proxy'))
 
 if __name__ == "__main__":
     unittest.main()
