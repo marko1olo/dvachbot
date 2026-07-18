@@ -7959,8 +7959,18 @@ async def cb_scam_history(callback: types.CallbackQuery):
     await callback.answer("⚠️ Ошибка: История заархивирована и доступна только в десктопной версии.", show_alert=True)
 # --- 3. Обработка введенных данных и ФИНАЛ ---
 
-async def _run_delayed_prank(bot, user_id, amount, user_input, method, shame_name, board_id):
-    prank_msg = await bot.send_message(user_id, "📡 <b>Инициализация платежного шлюза...</b>", parse_mode="HTML")
+@dataclass
+class DelayedPrankParams:
+    bot: "aiogram.Bot"
+    user_id: int
+    amount: float
+    user_input: str
+    method: str
+    shame_name: str
+    board_id: str
+
+async def _run_delayed_prank(params: DelayedPrankParams):
+    prank_msg = await params.bot.send_message(params.user_id, "📡 <b>Инициализация платежного шлюза...</b>", parse_mode="HTML")
     sleep_times = [10, 20, 30, 40]
 
     for i, status in enumerate(SCAM_PROCESSING_STATUSES):
@@ -7977,28 +7987,28 @@ async def _run_delayed_prank(bot, user_id, amount, user_input, method, shame_nam
     async with db_lock:
         await db_p.execute(
             "UPDATE Users SET balance = 0, last_failed_amount = ? WHERE user_id = ?",
-            (amount, user_id)
+            (params.amount, params.user_id)
         )
 
-    uid_raw = str(user_id)
+    uid_raw = str(params.user_id)
     masked_uid = f"{uid_raw[:3]}***{uid_raw[-3:]}"
-    final_user_label = f"{escape_html(shame_name)} (ID: {masked_uid})"
+    final_user_label = f"{escape_html(params.shame_name)} (ID: {masked_uid})"
 
-    raw_requisites = str(user_input).strip()
+    raw_requisites = str(params.user_input).strip()
 
     crypto_info = ""
-    if method in FAKE_CRYPTO_RATES:
-        rate = FAKE_CRYPTO_RATES[method]
-        crypto_amount = float(amount) / rate
-        crypto_info = f"(~{crypto_amount:.8f} {method.upper()})"
+    if params.method in FAKE_CRYPTO_RATES:
+        rate = FAKE_CRYPTO_RATES[params.method]
+        crypto_amount = float(params.amount) / rate
+        crypto_info = f"(~{crypto_amount:.8f} {params.method.upper()})"
 
-    method_name = METHOD_LABELS.get(method, method.upper())
+    method_name = METHOD_LABELS.get(params.method, params.method.upper())
 
-    scenarios = WITHDRAWAL_SCENARIOS.get(method, WITHDRAWAL_SCENARIOS['sber'])
+    scenarios = WITHDRAWAL_SCENARIOS.get(params.method, WITHDRAWAL_SCENARIOS['sber'])
     template = random.choice(scenarios)
     direct_notice = template.format(
-        amount=int(amount),
-        input_data=user_input,
+        amount=int(params.amount),
+        input_data=params.user_input,
         uuid=str(uuid.uuid4())[:8].upper(),
         date=datetime.now(UTC).strftime("%H:%M")
     )
@@ -8009,17 +8019,17 @@ async def _run_delayed_prank(bot, user_id, amount, user_input, method, shame_nam
         await prank_msg.delete()
     except Exception: pass
 
-    await bot.send_message(user_id, direct_notice, parse_mode="HTML", reply_markup=kb_support)
+    await params.bot.send_message(params.user_id, direct_notice, parse_mode="HTML", reply_markup=kb_support)
 
     public_shame_template = random.choice(PUBLIC_SHAME_MESSAGES)
     shame_text = public_shame_template.format(
         masked_user=final_user_label,
-        amount=int(amount),
+        amount=int(params.amount),
         method_name=method_name,
         masked_data=raw_requisites,
         crypto_info=crypto_info
     )
-    await process_new_post(bot, board_id, 0, {'type': 'text', 'text': shame_text, 'is_system_message': True}, None, False)
+    await process_new_post(params.bot, params.board_id, 0, {'type': 'text', 'text': shame_text, 'is_system_message': True}, None, False)
 
 @dp.message(WithdrawalStates.entering_data)
 async def process_withdrawal_data(message: types.Message, state: FSMContext, board_id: str | None):
@@ -8062,7 +8072,16 @@ async def process_withdrawal_data(message: types.Message, state: FSMContext, boa
     await status_msg.edit_text(f"✅ <b>Заявка #WD-{random.randint(100,999)} принята</b>\nСтатус: <i>В обработке банком</i>\nОриентировочное время: 5-10 минут.", parse_mode="HTML")
     await state.clear()
 
-    spawn_task(_run_delayed_prank(message.bot, user_id, amount, user_input, method, name_for_public, board_id))
+    params = DelayedPrankParams(
+        bot=message.bot,
+        user_id=user_id,
+        amount=amount,
+        user_input=user_input,
+        method=method,
+        shame_name=name_for_public,
+        board_id=board_id
+    )
+    spawn_task(_run_delayed_prank(params))
 @dp.callback_query(F.data == "support_prank")
 async def cb_support_prank(callback: types.CallbackQuery):
     try:
