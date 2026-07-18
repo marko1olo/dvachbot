@@ -1511,64 +1511,6 @@ def _get_slang_comment(posts_count: int, rank: int, balance: float) -> str:
     else:
         return "Обычный сыч. Бамп в тред, сажу в комменты."
 
-def _format_text_report(schizo_name: str, board_id: str, role_name: str, custom_prefix: str, rank: int, total_users: int, posts_count: int, rx_received: int, rx_given: int, balance: float, mutes_count: int, lie_media: float, slang_comment: str) -> str:
-    return (
-        f"☘️ <b>Статистика пользователя {schizo_name}</b> (/${board_id}/)\n\n"
-        f"👤 <b>Статус:</b> {role_name} {f'({custom_prefix})' if custom_prefix else ''}\n"
-        f"🏅 <b>Ранг борды:</b> #{rank} из {total_users}\n"
-        f"📝 <b>Написано постов:</b> {posts_count}\n"
-        f"🎭 <b>Получено реакций:</b> +{rx_received}\n"
-        f"⚡ <b>Поставлено реакций:</b> {rx_given}\n"
-        f"💰 <b>Баланс:</b> {int(balance)} RUB\n"
-        f"🔇 <b>Схвачено мутов:</b> {mutes_count}\n"
-        f"🌀 <b>Кринж-фактор:</b> {lie_media}%\n\n"
-        f"💬 <i>\"{slang_comment}\"</i>"
-    )
-
-def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
-    stats_data = fetch_user_stats_data(user_id, board_id)
-
-    schizo_name = generate_schizo_name(user_id)
-    role_name = _get_role_name(stats_data['role'])
-    slang_comment = _get_slang_comment(stats_data['posts_count'], stats_data['rank'], stats_data['balance'])
-
-    text_report = _format_text_report(
-        schizo_name=schizo_name,
-        board_id=board_id,
-        role_name=role_name,
-        custom_prefix=stats_data['custom_prefix'],
-        rank=stats_data['rank'],
-        total_users=stats_data['total_users'],
-        posts_count=stats_data['posts_count'],
-        rx_received=stats_data['rx_received'],
-        rx_given=stats_data['rx_given'],
-        balance=stats_data['balance'],
-        mutes_count=stats_data['mutes_count'],
-        lie_media=stats_data['lie_media'],
-        slang_comment=slang_comment
-    )
-    
-    card_data = UserStatsCardData(
-        user_id=user_id,
-        board_id=board_id,
-        schizo_name=schizo_name,
-        role_name=role_name,
-        custom_prefix=stats_data['custom_prefix'],
-        role=stats_data['role'],
-        posts_count=stats_data['posts_count'],
-        rx_received=stats_data['rx_received'],
-        rx_given=stats_data['rx_given'],
-        mutes_count=stats_data['mutes_count'],
-        balance=stats_data['balance'],
-        lie_media=stats_data['lie_media'],
-        rank=stats_data['rank'],
-        total_users=stats_data['total_users'],
-        slang_comment=slang_comment
-    )
-    buf = draw_user_stats_card(card_data)
-    return buf, text_report
-
-
 @dataclass
 class UserStatsCardData:
     user_id: int
@@ -1586,6 +1528,52 @@ class UserStatsCardData:
     rank: int
     total_users: int
     slang_comment: str
+
+
+def _format_text_report(data: UserStatsCardData) -> str:
+    return (
+        f"☘️ <b>Статистика пользователя {data.schizo_name}</b> (/${data.board_id}/)\n\n"
+        f"👤 <b>Статус:</b> {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}\n"
+        f"🏅 <b>Ранг борды:</b> #{data.rank} из {data.total_users}\n"
+        f"📝 <b>Написано постов:</b> {data.posts_count}\n"
+        f"🎭 <b>Получено реакций:</b> +{data.rx_received}\n"
+        f"⚡ <b>Поставлено реакций:</b> {data.rx_given}\n"
+        f"💰 <b>Баланс:</b> {int(data.balance)} RUB\n"
+        f"🔇 <b>Схвачено мутов:</b> {data.mutes_count}\n"
+        f"🌀 <b>Кринж-фактор:</b> {data.lie_media}%\n\n"
+        f"💬 <i>\"{data.slang_comment}\"</i>"
+    )
+
+def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
+    stats_data = fetch_user_stats_data(user_id, board_id)
+
+    schizo_name = generate_schizo_name(user_id)
+    role_name = _get_role_name(stats_data['role'])
+    slang_comment = _get_slang_comment(stats_data['posts_count'], stats_data['rank'], stats_data['balance'])
+
+    card_data = UserStatsCardData(
+        user_id=user_id,
+        board_id=board_id,
+        schizo_name=schizo_name,
+        role_name=role_name,
+        custom_prefix=stats_data['custom_prefix'],
+        role=stats_data['role'],
+        posts_count=stats_data['posts_count'],
+        rx_received=stats_data['rx_received'],
+        rx_given=stats_data['rx_given'],
+        mutes_count=stats_data['mutes_count'],
+        balance=stats_data['balance'],
+        lie_media=stats_data['lie_media'],
+        rank=stats_data['rank'],
+        total_users=stats_data['total_users'],
+        slang_comment=slang_comment
+    )
+
+    text_report = _format_text_report(card_data)
+    buf = draw_user_stats_card(card_data)
+    return buf, text_report
+
+
 
 def draw_user_stats_card(
     data: UserStatsCardData
