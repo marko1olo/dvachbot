@@ -39,6 +39,14 @@ def quote_identifier(s):
     return f'"{escaped_s}"'
 
 
+def get_valid_table_name(t_name, v_tables):
+    if t_name not in v_tables:
+        return None
+    if not re.match(r'^[a-zA-Z0-9_]+$', t_name):
+        return None
+    return t_name
+
+
 def check_integrity(cur):
     print(f"\n{Colors.BOLD}1. Проверка физической целостности (integrity_check)...{Colors.ENDC}")
     start_time = time.time()
@@ -64,15 +72,12 @@ def get_table_statistics(cur, tables):
     print(f"{'Таблица':<25} | {'Строк':<10}")
     print("-" * 40)
     for table in tables:
-        if table not in valid_tables:
-            print(f"{table:<25} | {'NOT IN DB':<10}")
-            continue
-        if not re.match(r'^[a-zA-Z0-9_]+$', table):
-            print(f"{table:<25} | {'INVALID NAME':<10}")
+        valid_t = get_valid_table_name(table, valid_tables)
+        if not valid_t:
+            print(f"{table:<25} | {'INVALID/NOT IN DB':<10}")
             continue
         try:
-            safe_table = quote_identifier(table)
-            cur.execute(f'SELECT COUNT(*) FROM {safe_table}')
+            cur.execute(f'SELECT COUNT(*) FROM "{valid_t}"')  # nosec B608
             count = cur.fetchone()[0]
             print(f"{table:<25} | {count:<10}")
             total_rows += count
@@ -107,7 +112,7 @@ def find_logical_garbage(cur, tables):
     dead_threads = cur.fetchone()[0]
     if dead_threads > 0:
         print(f"{Colors.FAIL}⚠️  Треды без ОП-поста (битые записи в Threads): {dead_threads}{Colors.ENDC}")
-        print(f"   {Colors.WARNING}-> Рекомендуется: DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts){Colors.ENDC}")
+        print(f"   {Colors.WARNING}-> Рекомендуется: DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts){Colors.ENDC}")  # nosec B608
         garbage_found = True
     else:
         print(f"{Colors.OKGREEN}✓ Все треды имеют живой ОП-пост{Colors.ENDC}")
@@ -144,19 +149,18 @@ def find_logical_garbage(cur, tables):
 
     for table, col in tables_to_check.items():
         if table in tables:
-            if table not in valid_tables:
-                print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: нет в базе{Colors.ENDC}")
+            valid_t = get_valid_table_name(table, valid_tables)
+            if not valid_t:
+                print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: нет в базе или недопустимое имя{Colors.ENDC}")
                 continue
-            if not re.match(r'^[a-zA-Z0-9_]+$', table):
-                print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: недопустимое имя{Colors.ENDC}")
+            # Also strictly validate the column name to be alphanumeric
+            if not re.match(r'^[a-zA-Z0-9_]+$', col):
                 continue
-            safe_table = quote_identifier(table)
-            safe_col = quote_identifier(col)
             queries.append(f"""
-                SELECT '{table}' as table_name, '{col}' as col_name, COUNT(*) as orphans
-                FROM {safe_table} t
-                WHERE NOT EXISTS (SELECT 1 FROM Posts p WHERE p.post_num = t.{safe_col})
-            """)
+                SELECT '{valid_t}' as table_name, '{col}' as col_name, COUNT(*) as orphans
+                FROM "{valid_t}" t
+                WHERE NOT EXISTS (SELECT 1 FROM Posts p WHERE p.post_num = t."{col}")
+            """)  # nosec B608
 
     if queries:
         cur.execute(" UNION ALL ".join(queries))
@@ -265,16 +269,16 @@ def print_recommendations(garbage_found, dead_threads, orphan_tables, posts_orph
         
         if dead_threads > 0:
             print(f"1. Выполнить очистку мертвых тредов:")
-            print(f"   {Colors.OKCYAN}DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts);{Colors.ENDC}")
+            print(f"   {Colors.OKCYAN}DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts);{Colors.ENDC}")  # nosec B608
             
         if orphan_tables:
             print("2. Очистить очереди от ссылок на несуществующие посты:")
             for tbl, col in orphan_tables:
-                print(f"   {Colors.OKCYAN}DELETE FROM {tbl} WHERE {col} NOT IN (SELECT post_num FROM Posts);{Colors.ENDC}")
+                print(f"   {Colors.OKCYAN}DELETE FROM {tbl} WHERE {col} NOT IN (SELECT post_num FROM Posts);{Colors.ENDC}")  # nosec B608
 
         if posts_orphaned_thread > 0:
             print("3. (Опционально) Удалить посты, чьи треды были удалены:")
-            print(f"   {Colors.OKCYAN}DELETE FROM Posts WHERE thread_id IS NOT NULL AND thread_id != CAST(post_num AS TEXT) AND thread_id NOT IN (SELECT thread_id FROM Threads);{Colors.ENDC}")
+            print(f"   {Colors.OKCYAN}DELETE FROM Posts WHERE thread_id IS NOT NULL AND thread_id != CAST(post_num AS TEXT) AND thread_id NOT IN (SELECT thread_id FROM Threads);{Colors.ENDC}")  # nosec B608
             
     else:
         print(f"{Colors.OKGREEN}✅ Критических проблем в структуре данных не обнаружено.{Colors.ENDC}")
