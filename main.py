@@ -1,3 +1,5 @@
+import dataclasses
+from typing import Any
 from dataclasses import dataclass
 """
 This module contains the main functionality for a Telegram bot that interacts with a specific board system.
@@ -7154,7 +7156,26 @@ import time as _time_module
 _stats_cache: dict = {}   # board_id -> {ts: float, photos: list[bytes]}
 _STATS_TTL = 3600         # seconds
 
-def _generate_activity_clock(cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl):
+import dataclasses
+from typing import Any
+
+@dataclasses.dataclass
+class StatsContext:
+    cur: Any
+    board_id: str
+    since_ts: int
+    BG: str
+    FG: str
+    _np: Any
+    _plt: Any
+    _io: Any
+    _mpl: Any = None
+    defaultdict: Any = None
+    HEAT: Any = None
+    _dt: Any = None
+
+def _generate_activity_clock(ctx: StatsContext):
+    cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx._mpl
     cur.execute("""
         SELECT CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
                COUNT(*) as cnt
@@ -7201,7 +7222,8 @@ def _generate_activity_clock(cur, board_id, since_90, BG, FG, _np, _plt, _io, _m
     _plt.close()
     return buf.getvalue()
 
-def _generate_ridge_plot(cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict):
+def _generate_ridge_plot(ctx: StatsContext):
+    cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx.defaultdict
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER),
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER),
@@ -7250,7 +7272,8 @@ def _generate_ridge_plot(cur, board_id, since_90, BG, FG, _np, _plt, _io, defaul
     _plt.close()
     return buf2.getvalue()
 
-def _generate_weekday_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io):
+def _generate_weekday_heatmap(ctx: StatsContext):
+    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER) as dow,
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
@@ -7284,7 +7307,8 @@ def _generate_weekday_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt,
     _plt.close()
     return buf3.getvalue()
 
-def _generate_calendar_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt):
+def _generate_calendar_heatmap(ctx: StatsContext):
+    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io, ctx._dt
     cur.execute("""
         SELECT date(timestamp,'unixepoch','localtime') as day, COUNT(*)
         FROM Posts WHERE board_id=? AND timestamp > ?
@@ -7369,21 +7393,29 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
 
     HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
 
-    activity_clock = _generate_activity_clock(cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl)
+    ctx_90 = StatsContext(
+        cur=cur, board_id=board_id, since_ts=since_90, BG=BG, FG=FG,
+        _np=_np, _plt=_plt, _io=_io, _mpl=_mpl, defaultdict=defaultdict
+    )
+    activity_clock = _generate_activity_clock(ctx_90)
     if not activity_clock:
         con.close()
         return []
     bufs.append(activity_clock)
 
-    ridge_plot = _generate_ridge_plot(cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict)
+    ridge_plot = _generate_ridge_plot(ctx_90)
     if ridge_plot:
         bufs.append(ridge_plot)
 
-    heatmap = _generate_weekday_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io)
+    ctx_180 = StatsContext(
+        cur=cur, board_id=board_id, since_ts=since_180, BG=BG, FG=FG,
+        _np=_np, _plt=_plt, _io=_io, HEAT=HEAT, _dt=_dt
+    )
+    heatmap = _generate_weekday_heatmap(ctx_180)
     if heatmap:
         bufs.append(heatmap)
 
-    calendar = _generate_calendar_heatmap(cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt)
+    calendar = _generate_calendar_heatmap(ctx_180)
     if calendar:
         bufs.append(calendar)
 
