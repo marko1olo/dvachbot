@@ -3373,13 +3373,13 @@ async def process_shadow_reject(ctx: ShadowRejectContext):
     user_content['is_shadow_reject'] = True
     user_content['reply_to_post'] = ctx.reply_to_post
     await asyncio.sleep(random.uniform(0.5, 1.5))
-    await send_message_to_users(
+    await send_message_to_users(BroadcastConfig(
         bot_instance=ctx.bot,
         board_id=ctx.board_id,
         recipients={ctx.user_id}, # Только автор!
         content=user_content,
         reply_info=None
-    )
+    ))
     print(f"👻 [SHADOW] Теневой отброс медиа от {ctx.user_id} на доске {ctx.board_id}")
 
 SHADOW_REPLACEMENTS = [
@@ -3605,10 +3605,10 @@ class NewPostProcessor:
                 fallback_content = self.author_content.copy()
                 fallback_content.pop('image_url', None)
                 fallback_content['image_bytes'] = processed_bytes
-                self.author_results = await send_message_to_users(
+                self.author_results = await send_message_to_users(BroadcastConfig(
                     bot_instance=self.bot_instance, board_id=self.board_id, recipients={self.user_id},
                     content=fallback_content, reply_info=self.reply_info_for_author
-                )
+                ))
                 if self.author_results:
                     self.final_content.pop('image_url', None)
                     self.final_content['image_bytes'] = processed_bytes
@@ -3625,14 +3625,14 @@ class NewPostProcessor:
 
     async def _send_to_author_with_fallback(self):
         try:
-            self.author_results = await send_message_to_users(
+            self.author_results = await send_message_to_users(BroadcastConfig(
                 bot_instance=self.bot_instance,
                 board_id=self.board_id,
                 recipients={self.user_id},
                 content=self.author_content,
                 reply_info=self.reply_info_for_author,
                 verbose=False
-            )
+            ))
         except TelegramBadRequest as e:
             if 'image_url' in self.final_content:
                 await self._execute_fallback_rescue(e)
@@ -4816,34 +4816,37 @@ async def _build_lie_media_content(content: dict, board_id: str) -> dict:
     return lie_content
 
 
+
+@dataclass
+class BroadcastConfig:
+    bot_instance: Bot
+    board_id: str
+    recipients: set[int]
+    content: dict
+    reply_info: dict | None = None
+    keyboard: InlineKeyboardMarkup | None = None
+    verbose: bool = False
+    queue_enqueued_at: float | None = None
+    queue_wait_sec: float | None = None
+    delivery_phase: str = "full"
+    delivery_original_recipients: int | None = None
+    delivery_deferred_recipients: int = 0
+
 class MessageBroadcaster:
-    def __init__(
-        self,
-        bot_instance,
-        board_id,
-        recipients,
-        content,
-        reply_info=None,
-        keyboard=None,
-        verbose=False,
-        queue_enqueued_at=None,
-        queue_wait_sec=None,
-        delivery_phase="full",
-        delivery_original_recipients=None,
-        delivery_deferred_recipients=0,
-    ):
-        self.bot_instance = bot_instance
-        self.board_id = board_id
-        self.recipients = recipients
-        self.content = content
-        self.reply_info = reply_info
-        self.keyboard = keyboard
-        self.verbose = verbose
-        self.queue_enqueued_at = queue_enqueued_at
-        self.queue_wait_sec = queue_wait_sec
-        self.delivery_phase = delivery_phase
-        self.delivery_original_recipients = delivery_original_recipients
-        self.delivery_deferred_recipients = delivery_deferred_recipients
+    def __init__(self, config: BroadcastConfig):
+        self.config = config
+        self.bot_instance = config.bot_instance
+        self.board_id = config.board_id
+        self.recipients = config.recipients
+        self.content = config.content
+        self.reply_info = config.reply_info
+        self.keyboard = config.keyboard
+        self.verbose = config.verbose
+        self.queue_enqueued_at = config.queue_enqueued_at
+        self.queue_wait_sec = config.queue_wait_sec
+        self.delivery_phase = config.delivery_phase
+        self.delivery_original_recipients = config.delivery_original_recipients
+        self.delivery_deferred_recipients = config.delivery_deferred_recipients
 
         # Instance state
         self.b_data = board_data.get(self.board_id) if self.board_id else None
@@ -5798,20 +5801,7 @@ class MessageBroadcaster:
                 return None
         return None
 
-async def send_message_to_users(
-    bot_instance: Bot,
-    board_id: str,
-    recipients: set[int],
-    content: dict,
-    reply_info: dict | None = None,
-    keyboard: InlineKeyboardMarkup | None = None,
-    verbose: bool = False,
-    queue_enqueued_at: float | None = None,
-    queue_wait_sec: float | None = None,
-    delivery_phase: str = "full",
-    delivery_original_recipients: int | None = None,
-    delivery_deferred_recipients: int = 0,
-) -> list:
+async def send_message_to_users(config: BroadcastConfig) -> list:
     """
     Оптимизированная функция массовой рассылки.
     Сложность снижена с O(N*M) до O(N + M) за счет выноса форматирования.
@@ -5820,20 +5810,7 @@ async def send_message_to_users(
     verbose=False -> тихий режим (для отправки автору).
     verbose=True -> пишет отчет в консоль (для массовой).
     """
-    broadcaster = MessageBroadcaster(
-        bot_instance=bot_instance,
-        board_id=board_id,
-        recipients=recipients,
-        content=content,
-        reply_info=reply_info,
-        keyboard=keyboard,
-        verbose=verbose,
-        queue_enqueued_at=queue_enqueued_at,
-        queue_wait_sec=queue_wait_sec,
-        delivery_phase=delivery_phase,
-        delivery_original_recipients=delivery_original_recipients,
-        delivery_deferred_recipients=delivery_deferred_recipients,
-    )
+    broadcaster = MessageBroadcaster(config)
     return await broadcaster.broadcast()
 async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
     """
@@ -6153,7 +6130,7 @@ class MessageDeliveryTask:
         budget_deferred_count = 0
         delivered_now_count = 0
         try:
-            delivery_results = await send_message_to_users(
+            delivery_results = await send_message_to_users(BroadcastConfig(
                 bot_instance=self.bot_instance,
                 board_id=self.board_id,
                 recipients=recipients_to_send,
@@ -6166,7 +6143,7 @@ class MessageDeliveryTask:
                 delivery_phase=delivery_phase_for_send,
                 delivery_original_recipients=original_recipients_for_post,
                 delivery_deferred_recipients=len(passive_recipients_for_later),
-            )
+            ))
             delivered_now_count = len(delivery_results)
             budget_deferred = getattr(delivery_results, "remaining_recipients", set())
             if budget_deferred:
@@ -6402,14 +6379,14 @@ async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_loc
         op_post_data = next((p for p in posts_to_send_data if p['content'].get('post_num') == op_post_num), None)
         if op_post_data:
             try:
-                await send_message_to_users(bot, board_id, {user_id}, op_post_data['content'], op_post_data['reply_info'])
+                await send_message_to_users(BroadcastConfig(bot, board_id, {user_id}, op_post_data['content'], op_post_data['reply_info']))
                 await asyncio.sleep(0.1)
             except Exception as e:
                 print(f"Ошибка отправки ОП-поста #{op_post_num} юзеру {user_id}: {e}")
     for post_bundle in posts_to_send_data:
         if post_bundle['content'].get('post_num') != op_post_num:
             try:
-                await send_message_to_users(bot, board_id, {user_id}, post_bundle['content'], post_bundle['reply_info'])
+                await send_message_to_users(BroadcastConfig(bot, board_id, {user_id}, post_bundle['content'], post_bundle['reply_info']))
                 await asyncio.sleep(0.1)
             except Exception as e:
                 print(f"Ошибка отправки пропущенного сообщения #{post_bundle['content'].get('post_num')} юзеру {user_id}: {e}")
@@ -6600,13 +6577,13 @@ async def send_active_pin_to_new_user(bot: Bot, user_id: int, board_id: str):
     await asyncio.sleep(1.5)
     try:
         recipients = {user_id}
-        results = await send_message_to_users(
+        results = await send_message_to_users(BroadcastConfig(
             bot_instance=bot,
             board_id=board_id,
             recipients=recipients,
             content=post_content,
             reply_info=None # Без реплая, так как это чистая копия
-        )
+        ))
         if results and results[0][1]:
             sent_messages = results[0][1]
             msg_to_pin = sent_messages[0] if isinstance(sent_messages, list) else sent_messages
