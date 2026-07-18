@@ -7024,6 +7024,16 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
 import json
 import time
 
+@dataclass
+class ShootContext:
+    message: types.Message
+    db: Any
+    db_lock: Any
+    board_id: str
+    user_id: int
+    target_id: int
+    active_items: dict
+
 async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
         row = await c.fetchone()
@@ -7033,7 +7043,9 @@ async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
     except:
         return {}
 
-async def _handle_shoot_bounce(message: types.Message, db, db_lock, board_id: str, user_id: int, target_id: int, active_items: dict, t_items: dict):
+async def _handle_shoot_bounce(ctx: ShootContext, t_items: dict):
+    message, db, db_lock = ctx.message, ctx.db, ctx.db_lock
+    board_id, user_id, target_id, active_items = ctx.board_id, ctx.user_id, ctx.target_id, ctx.active_items
     t_items["reflect_shield_until"] = 0
     active_items["mute_gun"] = False
     async with db_lock:
@@ -7071,7 +7083,9 @@ async def _handle_shoot_bounce(message: types.Message, db, db_lock, board_id: st
     except:
         pass
 
-async def _handle_shoot_success(message: types.Message, db, db_lock, board_id: str, user_id: int, target_id: int, active_items: dict):
+async def _handle_shoot_success(ctx: ShootContext):
+    message, db, db_lock = ctx.message, ctx.db, ctx.db_lock
+    board_id, user_id, target_id, active_items = ctx.board_id, ctx.user_id, ctx.target_id, ctx.active_items
     async with storage_lock:
         board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=3600)
     await apply_regular_mute(target_id, board_id, 3600)
@@ -7137,11 +7151,11 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
 
     if t_items.get("reflect_shield_until", 0) > current_time:
         # Рикошет!
-        await _handle_shoot_bounce(message, db, db_lock, board_id, user_id, target_id, active_items, t_items)
+        await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items), t_items)
         return
 
     # Обычный мут цели
-    await _handle_shoot_success(message, db, db_lock, board_id, user_id, target_id, active_items)
+    await _handle_shoot_success(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items))
 
 @dp.message(Command("curse", "vomit"))
 async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
