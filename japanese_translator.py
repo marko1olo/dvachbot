@@ -9,11 +9,19 @@ import aiohttp
 import socket
 from dotenv import load_dotenv
 from typing import Optional, List, Dict
+from dataclasses import dataclass
 from aiohttp import ClientTimeout
 import json
 import time
 import hashlib
 
+
+@dataclass
+class BooruAPIParams:
+    api_type: str
+    base_tags: str
+    rating_tag: str
+    apply_negative_tags: bool = True
 
 PROXY_STATE = {'is_working': True}
 PROXY_STATE_LAST_FAILURE = 0
@@ -2265,13 +2273,13 @@ async def get_random_anime_image() -> Optional[str]:
             # Waifu.im (NSFW)
             {"source": "waifu.im", "fetch_func": fetch_waifu_im, "params": {"tags": WAIFUIM_NSFW_TAGS, "is_nsfw": True}},
             # Gelbooru (Explicit)
-            {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:explicit"}},
+            {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:explicit"})}},
             # Danbooru (Explicit)
-            {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "danbooru", "base_tags": "1girl", "rating_tag": "rating:explicit"}},
+            {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "danbooru", "base_tags": "1girl", "rating_tag": "rating:explicit"})}},
             # Waifu.pics (NSFW)
             {"source": "waifu.pics", "fetch_func": fetch_waifu_pics, "params": {"category": random.choice(WAIFUPICS_NSFW_CATEGORIES), "is_nsfw": True}},
             # Aibooru (Explicit)
-            {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "aibooru", "base_tags": "1girl", "rating_tag": "rating:explicit"}},
+            {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "1girl", "rating_tag": "rating:explicit"})}},
             # Nekos.best (Lewd)
             {"source": "nekos.best", "fetch_func": fetch_nekos_best, "params": {"category": random.choice(['pussy', 'feet', 'yuri', 'cum', 'blowjob', 'lewd'])}}
         ])
@@ -2306,11 +2314,11 @@ async def get_random_anime_image() -> Optional[str]:
             # Nekos.best (SFW)
             {"source": "nekos.best", "fetch_func": fetch_nekos_best, "params": {"category": random.choice(NEKOSBEST_SFW_CATEGORIES)}},
             # Aibooru (Questionable)
-            {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "aibooru", "base_tags": "1girl", "rating_tag": "rating:questionable"}},
+            {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "1girl", "rating_tag": "rating:questionable"})}},
             # Gelbooru (Questionable)
-            {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:questionable"}},
+            {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:questionable"})}},
             # Danbooru (Questionable)
-            {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "danbooru", "base_tags": "1girl", "rating_tag": "rating:questionable"}},
+            {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "danbooru", "base_tags": "1girl", "rating_tag": "rating:questionable"})}},
         ])
     return await _fetch_image_from_apis(apis, "Все SFW/NSFW API не смогли предоставить изображение.")
 
@@ -2326,8 +2334,8 @@ async def get_nsfw_anime_image() -> Optional[str]:
 
     apis = [
         # Aibooru
-        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "aibooru", "base_tags": "1girl", "rating_tag": "rating:explicit"}},
-        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "aibooru", "base_tags": "1girl", "rating_tag": "rating:questionable"}},
+        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "1girl", "rating_tag": "rating:explicit"})}},
+        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "1girl", "rating_tag": "rating:questionable"})}},
         
         # Yande.re (Explicit)
         {
@@ -2375,11 +2383,11 @@ async def get_nsfw_anime_image() -> Optional[str]:
         },
         
         # Gelbooru
-        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:explicit"}},
-        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:questionable"}},
+        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:explicit"})}},
+        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:questionable"})}},
         
         # Danbooru
-        {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "danbooru", "base_tags": "1girl", "rating_tag": "rating:explicit"}},
+        {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "danbooru", "base_tags": "1girl", "rating_tag": "rating:explicit"})}},
         
         # Waifu.pics
         {"source": "waifu.pics", "fetch_func": fetch_waifu_pics, "params": {"category": random.choice(WAIFUPICS_NSFW_CATEGORIES), "is_nsfw": True}},
@@ -2391,13 +2399,13 @@ async def get_nsfw_anime_image() -> Optional[str]:
 
 async def get_monogatari_image() -> Optional[str]:
     apis = [
-        {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "danbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"}},
-        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "gelbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"}},
-        {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "danbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"}},
-        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "gelbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"}},
-        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "aibooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"}},
-        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "aibooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:explicit"}},
-        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "aibooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:safe"}},
+        {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "danbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"})}},
+        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"})}},
+        {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "danbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"})}},
+        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"})}},
+        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"})}},
+        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:explicit"})}},
+        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:safe"})}},
         
         # Yande.re (Questionable)
         {
@@ -2451,9 +2459,9 @@ async def get_loli_image() -> Optional[str]:
     """Legacy /loli image command: loli tag, non-explicit ratings, no shota."""
     loli_query = "loli " + " ".join(LOLI_IMAGE_NEGATIVE_TAGS)
     apis = [
-        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "aibooru", "base_tags": loli_query, "rating_tag": "rating:questionable"}},
-        {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "danbooru", "base_tags": loli_query, "rating_tag": "rating:questionable"}},
-        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"api_type": "gelbooru", "base_tags": loli_query, "rating_tag": "rating:questionable"}},
+        {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": loli_query, "rating_tag": "rating:questionable"})}},
+        {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "danbooru", "base_tags": loli_query, "rating_tag": "rating:questionable"})}},
+        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": loli_query, "rating_tag": "rating:questionable"})}},
         {"source": "yande.re", "fetch_func": _fetch_from_yandere_paginated, "params": {"base_tags": "loli", "rating_tag": "rating:q", "max_page": 332, "site_url": "https://yande.re/post.json", "negative_tags": LOLI_IMAGE_NEGATIVE_TAGS}},
         {"source": "konachan", "fetch_func": _fetch_from_yandere_paginated, "params": {"base_tags": "loli", "rating_tag": "rating:q", "max_page": 44, "site_url": "https://konachan.com/post.json", "negative_tags": LOLI_IMAGE_NEGATIVE_TAGS}},
         {"source": "waifu.pics", "fetch_func": fetch_waifu_pics, "params": {"category": random.choice(["shinobu", "megumin"]), "is_nsfw": False}},
@@ -2509,7 +2517,11 @@ async def _fetch_from_yandere_paginated(session, headers, base_tags, rating_tag,
             
     return None
 
-async def _fetch_from_booru_api(session, api_type, base_tags, rating_tag, headers, proxy=None, apply_negative_tags=True) -> Optional[str]:
+async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, proxy=None) -> Optional[str]:
+    api_type = booru_params.api_type
+    base_tags = booru_params.base_tags
+    rating_tag = booru_params.rating_tag
+    apply_negative_tags = booru_params.apply_negative_tags
     config = BOORU_API_CONFIGS.get(api_type)
     if not config: return None
 
