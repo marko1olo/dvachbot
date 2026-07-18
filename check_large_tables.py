@@ -1,5 +1,6 @@
 import re
 import sqlite3
+import json
 
 def check_indexes():
     conn = sqlite3.connect('dvach_bot.db')
@@ -19,10 +20,19 @@ def check_indexes():
         count = cursor.fetchone()[0]
         if count > 10000:
             print(f"Table {table}: {count} rows")
-            for idx in indexes:
-                cursor.execute("SELECT * FROM pragma_index_info(?)", (idx[1],))
-                cols = [row[2] for row in cursor.fetchall()]
-                print(f"  Index: {idx[1]} -> Columns: {cols}")
+            if indexes:
+                index_names = [idx[1] for idx in indexes]
+                cursor.execute(
+                    "SELECT j.value, p.name FROM json_each(?) j CROSS JOIN pragma_index_info(j.value) p",
+                    (json.dumps(index_names),)
+                )
+                index_cols = {name: [] for name in index_names}
+                for row in cursor.fetchall():
+                    if row[1] is not None:
+                        index_cols[row[0]].append(row[1])
+                for idx in indexes:
+                    cols = index_cols.get(idx[1], [])
+                    print(f"  Index: {idx[1]} -> Columns: {cols}")
 
 if __name__ == '__main__':
     check_indexes()
