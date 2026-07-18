@@ -3765,27 +3765,29 @@ class NewPostProcessor:
             return None
 
 
-async def process_new_post(
-    bot_instance: Bot,
-    board_id: str,
-    user_id: int,
-    content: dict,
-    reply_to_post: int | None,
-    is_shadow_muted: bool,
+@dataclass
+class NewPostParams:
+    bot_instance: Bot
+    board_id: str
+    user_id: int
+    content: dict
+    reply_to_post: int | None
+    is_shadow_muted: bool
     stream: str = 'ru'
-) -> int | None:
+
+async def process_new_post(params: NewPostParams) -> int | None:
     """
     Унифицированная функция для обработки, сохранения и постановки в очередь нового поста.
     Версия 8.0: Гарантирует регистрацию поста в памяти даже при сбое отправки. НИКАКИХ УДАЛЕНИЙ.
     """
     processor = NewPostProcessor(
-        bot_instance=bot_instance,
-        board_id=board_id,
-        user_id=user_id,
-        content=content,
-        reply_to_post=reply_to_post,
-        is_shadow_muted=is_shadow_muted,
-        stream=stream
+        bot_instance=params.bot_instance,
+        board_id=params.board_id,
+        user_id=params.user_id,
+        content=params.content,
+        reply_to_post=params.reply_to_post,
+        is_shadow_muted=params.is_shadow_muted,
+        stream=params.stream
     )
     return await processor.execute()
 def _build_archive_header(board_id: str, post_num: int, content: dict, lang: str) -> str:
@@ -8019,7 +8021,7 @@ async def _run_delayed_prank(bot, user_id, amount, user_input, method, shame_nam
         masked_data=raw_requisites,
         crypto_info=crypto_info
     )
-    await process_new_post(bot, board_id, 0, {'type': 'text', 'text': shame_text, 'is_system_message': True}, None, False)
+    await process_new_post(NewPostParams(bot, board_id, 0, {'type': 'text', 'text': shame_text, 'is_system_message': True}, None, False))
 
 @dp.message(WithdrawalStates.entering_data)
 async def process_withdrawal_data(message: types.Message, state: FSMContext, board_id: str | None):
@@ -11742,14 +11744,14 @@ async def _handle_quick_menu_anime(callback, board_id: str, action: str, lang: s
             content = {'type': 'media_group', 'media': media_items, 'caption': caption}
         b_data = board_data[board_id]
         is_shadow = (user_id in b_data['shadow_mutes'] and b_data['shadow_mutes'][user_id] > datetime.now(UTC))
-        await process_new_post(
+        await process_new_post(NewPostParams(
             bot_instance=callback.bot,
             board_id=board_id,
             user_id=user_id,
             content=content,
             reply_to_post=None,
             is_shadow_muted=is_shadow
-        )
+        ))
         await search_msg.delete()
     except Exception as e:
         print(f"Error in menu anime: {e}")
@@ -11961,10 +11963,10 @@ async def _process_op_post_and_enter(callback: types.CallbackQuery, user_id: int
     else:
         formatted_op_text = f"<b>ОП-ПОСТ</b>\n_______________________________\n{op_post_text}"
     op_post_content = {'type': 'text', 'text': formatted_op_text}
-    await process_new_post(
+    await process_new_post(NewPostParams(
         bot_instance=callback.bot, board_id=board_id, user_id=user_id, content=op_post_content,
         reply_to_post=None, is_shadow_muted=False, stream=stream
-    )
+    ))
     enter_phrases = thread_messages.get(lang, {}).get('enter_thread_prompt', [])
     if lang == 'en':
         default_enter_text = f"You have entered the thread: {title}"
@@ -15062,7 +15064,7 @@ async def _publish_anime_post(message: types.Message, board_id: str, user_id: in
         ))
         post_num = 0
     else:
-        post_num = await process_new_post(
+        post_num = await process_new_post(NewPostParams(
             bot_instance=message.bot,
             board_id=board_id,
             user_id=user_id,
@@ -15070,7 +15072,7 @@ async def _publish_anime_post(message: types.Message, board_id: str, user_id: in
             reply_to_post=None,
             is_shadow_muted=False,
             stream=stream
-        )
+        ))
 
     if post_num is not None:
         success_phrase = random.choice(ANIME_CMD_SUCCESS_PHRASES)
@@ -16913,7 +16915,7 @@ async def cq_poll_confirm_create(callback: types.CallbackQuery, state: FSMContex
         final_content['type'] = attached_media['type']
         final_content['file_id'] = attached_media['file_id']
         final_content['caption'] = '' 
-    await process_new_post(
+    await process_new_post(NewPostParams(
         bot_instance=callback.bot,
         board_id=board_id,
         user_id=user_id,
@@ -16921,7 +16923,7 @@ async def cq_poll_confirm_create(callback: types.CallbackQuery, state: FSMContex
         reply_to_post=None,
         is_shadow_muted=False, 
         stream=stream
-    )
+    ))
 @dp.callback_query(F.data.startswith("poll_vote_"))
 async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     """
@@ -17209,7 +17211,7 @@ async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru
             stream=stream
         ))
     else:
-        await process_new_post(
+        await process_new_post(NewPostParams(
             bot_instance=message.bot,
             board_id=board_id,
             user_id=user_id,
@@ -17217,7 +17219,7 @@ async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru
             reply_to_post=reply_to_post,
             is_shadow_muted=False,
             stream=stream
-        )
+        ))
 @dp.message(F.voice, ~F.media_group_id)
 async def handle_voice(message: Message, board_id: str | None, stream: str = 'ru'): 
     user_id = message.from_user.id
@@ -17268,7 +17270,7 @@ async def handle_voice(message: Message, board_id: str | None, stream: str = 'ru
             content=content, reply_to_post=reply_to_post, stream=stream
         ))
     else:
-        await process_new_post(
+        await process_new_post(NewPostParams(
             bot_instance=message.bot,
             board_id=board_id,
             user_id=user_id,
@@ -17276,7 +17278,7 @@ async def handle_voice(message: Message, board_id: str | None, stream: str = 'ru
             reply_to_post=reply_to_post,
             is_shadow_muted=False,
             stream=stream
-        )
+        ))
 
 @dp.message(F.video_note, ~F.media_group_id)
 async def handle_video_note(message: Message, board_id: str | None, stream: str = 'ru'): 
@@ -17329,7 +17331,7 @@ async def handle_video_note(message: Message, board_id: str | None, stream: str 
             content=content, reply_to_post=reply_to_post, stream=stream
         ))
     else:
-        await process_new_post(
+        await process_new_post(NewPostParams(
             bot_instance=message.bot,
             board_id=board_id,
             user_id=user_id,
@@ -17337,7 +17339,7 @@ async def handle_video_note(message: Message, board_id: str | None, stream: str 
             reply_to_post=reply_to_post,
             is_shadow_muted=False,
             stream=stream
-        )
+        ))
 @dp.message(F.media_group_id)
 async def handle_media_group_init(message: Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -17542,7 +17544,7 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
             ))
             if is_large_group: await asyncio.sleep(1)
             continue
-        post_num = await process_new_post(
+        post_num = await process_new_post(NewPostParams(
             bot_instance=bot_instance,
             board_id=board_id,
             user_id=user_id,
@@ -17550,7 +17552,7 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
             reply_to_post=reply_to_post,
             is_shadow_muted=False,
             stream=stream
-        )
+        ))
         if i == 0:
             first_post_num = post_num
         if is_large_group:
@@ -17568,14 +17570,14 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
                 stream=stream
             ))
         elif first_post_num:
-            await process_new_post(
+            await process_new_post(NewPostParams(
                 bot_instance=bot_instance,
                 board_id=board_id,
                 user_id=user_id,
                 content=text_content,
                 reply_to_post=first_post_num,
                 is_shadow_muted=False, stream=stream
-            )
+            ))
 def apply_greentext_formatting(text: str) -> str:
     """
     Применяет форматирование 'Greentext'.
@@ -18024,7 +18026,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     stream=stream
                 ))
             else:
-                await process_new_post(
+                await process_new_post(NewPostParams(
                     bot_instance=message.bot,
                     board_id=board_id,
                     user_id=user_id,
@@ -18032,7 +18034,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     reply_to_post=post_num_to_reply,
                     is_shadow_muted=False,
                     stream=stream
-                )
+                ))
             await asyncio.sleep(0.33)
             
         if limit_hit:
@@ -18145,7 +18147,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             stream=stream
         ))
     else:
-        await process_new_post(
+        await process_new_post(NewPostParams(
             bot_instance=message.bot,
             board_id=board_id,
             user_id=user_id,
@@ -18153,7 +18155,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             reply_to_post=reply_to_post,
             is_shadow_muted=False,
             stream=stream
-        )
+        ))
 async def database_cleanup_task():
     """
     Периодически очищает таблицы-очереди от старых записей (Broadcast и Notifications).
