@@ -16,9 +16,30 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from site_tgach.mtproto_client import download_file_mtproto
 from site_tgach.zeroxzero import is_0x0_available, upload_url_to_0x0, upload_file_to_0x0
 from site_tgach.pixhost import upload_file_to_pixhost, PIXHOST_SUPPORTED_EXT, PIXHOST_MAX_MB
+from site_tgach.imgbb import upload_file_to_imgbb, IMGBB_SUPPORTED_EXT
 
 logger = logging.getLogger("mirror_worker")
 _INTERNAL_FILE_BOTS: dict[int, Bot] = {}
+
+
+def _detect_real_ext(filepath: str) -> str:
+    """Detect real file extension from magic bytes. Returns e.g. '.jpg' or '' if unknown."""
+    try:
+        with open(filepath, "rb") as f:
+            header = f.read(12)
+        if header[:3] == b'\xFF\xD8\xFF':
+            return ".jpg"
+        if header[:8] == b'\x89PNG\r\n\x1a\n':
+            return ".png"
+        if header[:6] in (b'GIF87a', b'GIF89a'):
+            return ".gif"
+        if header[:4] == b'RIFF' and header[8:12] == b'WEBP':
+            return ".webp"
+        if header[:2] == b'BM':
+            return ".bmp"
+    except Exception:
+        pass
+    return ""
 
 def _bot_id_from_token(token: str | None) -> int | None:
     if not token or ':' not in str(token):
@@ -243,6 +264,10 @@ async def _process_single_task(task):
                         logger.warning(f"⚠️ File {file_id[:10]} is too large for Pixhost ({fsize / 1024 / 1024:.1f} MB). Removing task.")
                         await remove_mirror_task(task_id)
                         return
+                    elif mirror_type == 'imgbb' and fsize > 32 * 1024 * 1024:
+                        logger.warning(f"⚠️ File {file_id[:10]} is too large for ImgBB ({fsize / 1024 / 1024:.1f} MB). Removing task.")
+                        await remove_mirror_task(task_id)
+                        return
 
                     if mirror_type == 'catbox':
                         success_link = await upload_file_to_catbox(lpath)
@@ -250,12 +275,34 @@ async def _process_single_task(task):
                         success_link = await upload_file_to_0x0(lpath)
                     elif mirror_type == 'pixhost':
                         _, fext = os.path.splitext(lpath)
-                        if fext.lower() in PIXHOST_SUPPORTED_EXT:
-                            success_link = await upload_file_to_pixhost(lpath)
-                        else:
-                            logger.info(f"⏭️ Pixhost: unsupported ext {fext} for {file_id[:10]}. Removing task.")
-                            await remove_mirror_task(task_id)
-                            return
+                        if fext.lower() not in PIXHOST_SUPPORTED_EXT:
+                            real_ext = _detect_real_ext(lpath)
+                            if real_ext and real_ext in PIXHOST_SUPPORTED_EXT:
+                                new_lpath = lpath + real_ext
+                                os.rename(lpath, new_lpath)
+                                lpath = new_lpath
+                                fext = real_ext
+                                logger.debug(f"🔍 Pixhost: detected {fext} from magic bytes for {file_id[:10]}")
+                            else:
+                                logger.info(f"⏭️ Pixhost: cannot detect image type for {file_id[:10]} (ext={fext}). Removing task.")
+                                await remove_mirror_task(task_id)
+                                return
+                        success_link = await upload_file_to_pixhost(lpath)
+                    elif mirror_type == 'imgbb':
+                        _, fext = os.path.splitext(lpath)
+                        if fext.lower() not in IMGBB_SUPPORTED_EXT:
+                            real_ext = _detect_real_ext(lpath)
+                            if real_ext and real_ext in IMGBB_SUPPORTED_EXT:
+                                new_lpath = lpath + real_ext
+                                os.rename(lpath, new_lpath)
+                                lpath = new_lpath
+                                fext = real_ext
+                                logger.debug(f"🔍 ImgBB: detected {fext} from magic bytes for {file_id[:10]}")
+                            else:
+                                logger.info(f"⏭️ ImgBB: cannot detect image type for {file_id[:10]} (ext={fext}). Removing task.")
+                                await remove_mirror_task(task_id)
+                                return
+                        success_link = await upload_file_to_imgbb(lpath)
                 else:
                     logger.warning(f"⛔ All download methods failed for {file_id[:10]}. Rescheduling.")
                     await reschedule_mirror_task(task_id, attempt)
@@ -294,6 +341,8 @@ async def process_mirror_queue():
                 allowed_types = ['catbox', 'pixhost']
                 if is_0x0_available():
                     allowed_types.append('0x0')
+                if os.getenv("IMGBB_API_KEY"):
+                    allowed_types.append('imgbb')
 
                 tasks = await get_pending_mirror_tasks(limit=20, allowed_types=allowed_types)
                 if not tasks:

@@ -88,17 +88,23 @@ async def create_db_backup(bot) -> bool:
                     f"📦 <b>Auto-Backup</b> (Part {i+1}/{len(parts_to_send)})\n"
                     f"📅 {datetime.now().strftime('%d.%m.%Y %H:%M')}"
                 )
-                try:
-                    input_file = FSInputFile(part_path, filename=os.path.basename(part_path))
-                    await bot.send_document(chat_id=admin_id, document=input_file, caption=caption, parse_mode="HTML", request_timeout=300)
-                    await asyncio.sleep(2) 
-                except TelegramRetryAfter as e:
-                    logger.warning(f"FloodWait sending backup to {admin_id}, waiting {e.retry_after}s...")
-                    await asyncio.sleep(e.retry_after + 2)
-                    input_file = FSInputFile(part_path, filename=os.path.basename(part_path))
-                    await bot.send_document(chat_id=admin_id, document=input_file, caption=caption, parse_mode="HTML", request_timeout=300)
-                except Exception as e:
-                    logger.error(f"Failed to send {part_path} to {admin_id}: {e}")
+                max_retries = 3
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        input_file = FSInputFile(part_path, filename=os.path.basename(part_path))
+                        await bot.send_document(chat_id=admin_id, document=input_file, caption=caption, parse_mode="HTML", request_timeout=300)
+                        await asyncio.sleep(2)
+                        break
+                    except TelegramRetryAfter as e:
+                        logger.warning(f"FloodWait sending backup to {admin_id}, waiting {e.retry_after}s...")
+                        await asyncio.sleep(e.retry_after + 2)
+                    except Exception as e:
+                        if attempt == max_retries:
+                            logger.error(f"Failed to send {part_path} to {admin_id} after {max_retries} attempts: {e}")
+                        else:
+                            backoff = attempt * 10
+                            logger.warning(f"Attempt {attempt} failed to send {part_path} to {admin_id}: {e}. Retrying in {backoff}s...")
+                            await asyncio.sleep(backoff)
 
         logger.info("✅ Backup broadcast completed.")
         return True

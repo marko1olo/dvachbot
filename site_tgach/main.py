@@ -5213,19 +5213,6 @@ async def api_get_pow_status(user: dict = Depends(get_required_user)):
     return {"enabled": val == "true"}
 
 
-@app.get("/api/pow/challenge")
-async def api_public_pow_challenge():
-    """
-    Отдает задачу клиенту.
-    Если PoW выключен глобально, можно отдавать difficulty=0,
-    но лучше проверять настройку.
-    """
-    val = await get_system_setting("pow_enabled")
-    if val != "true":
-        return {"challenge": "", "difficulty": 0}
-    return get_pow_challenge_data()
-
-
 @app.post("/api/admin/toggle_captcha")
 async def api_toggle_captcha(
     data: dict = Body(...), user: dict = Depends(get_required_user)
@@ -10266,7 +10253,9 @@ async def check_url_alive(url: str) -> bool:
 
 
 @app.api_route("/files/{file_id:path}", methods=["GET", "HEAD"])
-async def get_telegram_file(file_id: str, request: Request, filename: str = None):
+async def get_telegram_file(
+    file_id: str, request: Request, filename: str = None, skip: str = None
+):
     # Очистка file_id от лишних слешей и сегментов пути
     file_id = file_id.lstrip("/")
     if "/" in file_id:
@@ -10361,15 +10350,18 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     imgbb_link = mirrors.get("imgbb")
     pixhost_link = mirrors.get("pixhost")
 
+    skipped_types = set(skip.split(",")) if skip else set()
+
     # 1. Telegram Direct — ПРИОРИТЕТ №1 (Если путь закеширован)
-    info = await get_cached_file_path(file_id, allow_protected_tokens=True)
-    if info:
-        path, token = info
-        return RedirectResponse(
-            url=f"https://api.telegram.org/file/bot{token}/{path}",
-            status_code=307,
-            headers={"Cache-Control": "public, max-age=3600"},
-        )
+    if "telegram" not in skipped_types:
+        info = await get_cached_file_path(file_id, allow_protected_tokens=True)
+        if info:
+            path, token = info
+            return RedirectResponse(
+                url=f"https://api.telegram.org/file/bot{token}/{path}",
+                status_code=307,
+                headers={"Cache-Control": "public, max-age=3600"},
+            )
 
     # 2. HuggingFace — ПРИОРИТЕТ №2 (ОТКЛЮЧЕН - HF сдох)
     # if is_hf_link_allowed(hf_link, VALID_HF_REPOS):
@@ -10380,7 +10372,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     #     )
 
     # 3. Shadow Telegram (Прямой редирект для теневого файла с защищенными токенами)
-    if shadow_file_id:
+    if shadow_file_id and "telegram" not in skipped_types:
         info_shadow = await get_cached_file_path(shadow_file_id, allow_protected_tokens=True)
         if info_shadow:
             path, token = info_shadow
@@ -10391,7 +10383,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
             )
 
     # 3.1. FreeImage (работает везде, включая РФ)
-    if freeimage_link:
+    if freeimage_link and "freeimage" not in skipped_types:
         return RedirectResponse(
             url=freeimage_link,
             status_code=307,
@@ -10399,7 +10391,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
         )
 
     # 3.2. ImgBB (работает везде, включая РФ)
-    if imgbb_link:
+    if imgbb_link and "imgbb" not in skipped_types:
         return RedirectResponse(
             url=imgbb_link,
             status_code=307,
@@ -10407,7 +10399,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
         )
 
     # 3.3. PixHost (работает везде, включая РФ)
-    if pixhost_link:
+    if pixhost_link and "pixhost" not in skipped_types:
         return RedirectResponse(
             url=pixhost_link,
             status_code=307,
@@ -10415,7 +10407,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
         )
 
     # 4. Catbox
-    if catbox_link:
+    if catbox_link and "catbox" not in skipped_types:
         if not is_ru:
             # Для не-RU пользователей и краулеров отдаем прямой редирект для экономии трафика
             return RedirectResponse(
@@ -10428,7 +10420,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
         except HTTPException:
             pass # Если кетбокс лежит, идем дальше
 
-    if zeroxzero_link:
+    if zeroxzero_link and "0x0" not in skipped_types:
         if not is_ru:
             return RedirectResponse(
                 url=zeroxzero_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"}
@@ -10455,7 +10447,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
             
         if orig_fid and orig_fid != file_id:
             logger.info(f"Fallback thumbnail {file_id[:10]} -> original {orig_fid[:10]}")
-            return await get_telegram_file(orig_fid, request, filename)
+            return await get_telegram_file(orig_fid, request, filename, skip)
 
     # Если совсем всё плохо
     _mark_random_dead_file(file_id)

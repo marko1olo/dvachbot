@@ -6322,7 +6322,7 @@ async def check_url_alive(url: str) -> bool:
         URL_STATUS_CACHE[url] = (False, now)
         return False
 @app.api_route("/files/{file_id:path}", methods=["GET", "HEAD"])
-async def get_telegram_file(file_id: str, request: Request, filename: str = None):
+async def get_telegram_file(file_id: str, request: Request, filename: str = None, skip: str = None):
     file_id = file_id.lstrip('/')
     if '/' in file_id:
         file_id = file_id.split('/')[0]
@@ -6356,12 +6356,14 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
         if 'ru' in accept_lang or not accept_lang:
             is_ru = True
 
+    skipped_types = set(skip.split(",")) if skip else set()
+
     tg_url = None
-    info = await get_cached_file_path(file_id)
-    
-    if info:
-        path, token = info
-        tg_url = f"https://api.telegram.org/file/bot{token}/{path}"
+    if "telegram" not in skipped_types:
+        info = await get_cached_file_path(file_id)
+        if info:
+            path, token = info
+            tg_url = f"https://api.telegram.org/file/bot{token}/{path}"
     
     if tg_url:
         return RedirectResponse(
@@ -6373,26 +6375,26 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
     # if hf_link:
     #     return RedirectResponse(url=hf_link, status_code=307)
     
-    if freeimage_link:
+    if freeimage_link and "freeimage" not in skipped_types:
         return RedirectResponse(url=freeimage_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"})
 
-    if imgbb_link:
+    if imgbb_link and "imgbb" not in skipped_types:
         return RedirectResponse(url=imgbb_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"})
 
-    if pixhost_link:
+    if pixhost_link and "pixhost" not in skipped_types:
         return RedirectResponse(url=pixhost_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"})
 
-    if catbox_link and not is_ru:
+    if catbox_link and not is_ru and "catbox" not in skipped_types:
         return RedirectResponse(url=catbox_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"})
 
-    if shadow_file_id:
+    if shadow_file_id and "telegram" not in skipped_types:
         info_shadow = await get_cached_file_path(shadow_file_id)
         if info_shadow:
             path, token = info_shadow
             url = f"https://api.telegram.org/file/bot{token}/{path}"
             return RedirectResponse(url=url, status_code=307, headers={"Cache-Control": "public, max-age=3600"})
 
-    if catbox_link:
+    if catbox_link and "catbox" not in skipped_types:
         return RedirectResponse(url=catbox_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"})
 
     # Fallback для превью (миниатюр): если не удалось найти превью, пробуем оригинальный файл
@@ -6412,7 +6414,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
             
         if orig_fid and orig_fid != file_id:
             logger.info(f"Fallback thumbnail {file_id[:10]} -> original {orig_fid[:10]}")
-            return await get_telegram_file(orig_fid, request, filename)
+            return await get_telegram_file(orig_fid, request, filename, skip)
 
     raise HTTPException(status_code=404, detail="File too big and no mirrors.")
 @app.post("/api/react")

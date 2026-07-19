@@ -11379,15 +11379,44 @@ function handleImageError(img) {
         return;
     }
 
-    // 3. Защита от зацикливания: если мы уже пытались загрузить оригинал и он тоже сдох
-    if (img.src === originalUrl || img.dataset.triedOriginal === "true") {
+    // 3. Извлекаем сбойный хост из текущего src
+    let failedType = null;
+    const currentSrc = img.src || "";
+    if (currentSrc.includes("iili.io")) failedType = "freeimage";
+    else if (currentSrc.includes("ibb.co")) failedType = "imgbb";
+    else if (currentSrc.includes("pixhost.to")) failedType = "pixhost";
+    else if (currentSrc.includes("catbox.moe")) failedType = "catbox";
+    else if (currentSrc.includes("0x0.st")) failedType = "0x0";
+    else if (currentSrc.includes("telegram.org")) failedType = "telegram";
+
+    // Инициализируем/обновляем список пропущенных хостов
+    let skipped = img.dataset.skippedHosts ? img.dataset.skippedHosts.split(",") : [];
+    if (failedType && !skipped.includes(failedType)) {
+        skipped.push(failedType);
+    }
+    img.dataset.skippedHosts = skipped.join(",");
+
+    // Если перебрали слишком много попыток, сдаемся
+    if (skipped.length >= 6) {
         img.classList.add('broken-final');
         img.style.display = 'none';
         if (parent) {
             parent.classList.add('broken-media');
-            // Показываем кнопку скачивания или иконку
             parent.innerHTML = `<div class="broken-media" title="Media failed"><a href="${originalUrl}" target="_blank" style="color:#fff;text-decoration:none;">📂 Скачать</a></div>`;
         }
+        return;
+    }
+
+    // Формируем URL с параметром skip
+    const urlObj = new URL(originalUrl, window.location.href);
+    urlObj.searchParams.set("skip", img.dataset.skippedHosts);
+    const newUrl = urlObj.toString();
+
+    console.log(`[MediaRescue] Redirect failed for type: ${failedType}. Swapping to skip parameter: ${img.dataset.skippedHosts}`);
+
+    if (img.tagName === 'VIDEO') {
+        img.src = newUrl;
+        img.load();
         return;
     }
 
@@ -11399,36 +11428,29 @@ function handleImageError(img) {
         parent.dataset.type === 'animation'
     ));
 
-    // 5. Логика восстановления (Rescue Logic)
-    console.log(`[MediaRescue] Fixing broken thumb for: ${originalUrl}`);
-    img.dataset.triedOriginal = "true"; // Ставим флаг "мы пытались"
-
     if (isVideo) {
         // === ВАРИАНТ А: ЭТО ВИДЕО ===
         // Заменяем IMG на VIDEO с автоплеем
         const vid = document.createElement('video');
         vid.className = img.className;
-        vid.src = originalUrl; // Ссылка на оригинал!
+        vid.src = newUrl; // Ссылка на оригинал с параметром skip!
         vid.autoplay = true;
         vid.loop = true;
         vid.muted = true;
         vid.playsInline = true;
         vid.dataset.src = originalUrl;
+        vid.dataset.skippedHosts = img.dataset.skippedHosts;
         
-        // Обработчик ошибок уже для самого видео (если и оригинал 404)
+        // Обработчик ошибок уже для самого видео
         vid.onerror = () => {
-            const errDiv = document.createElement('div');
-            errDiv.className = 'broken-media';
-            errDiv.innerHTML = `<a href="${originalUrl}" target="_blank">📂 Open File</a>`;
-            vid.replaceWith(errDiv);
+            handleImageError(vid);
         };
         
         img.replaceWith(vid);
         
     } else {
         // === ВАРИАНТ Б: ЭТО КАРТИНКА ===
-        // Просто подменяем src на оригинал (фулл-сайз)
-        img.src = originalUrl;
+        img.src = newUrl;
     }
     
     // Убираем спиннер загрузки у родителя

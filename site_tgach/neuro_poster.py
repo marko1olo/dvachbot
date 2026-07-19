@@ -42,11 +42,11 @@ SYSTEM_PROMPTS = {
 1. Ты Анон. Стиль: токсичный, ироничный, сленг (имиджборды, двач).
 2. Используй мат, если это уместно. Только кириллица, НИКАКОГО транслита.
 3. Ты НЕ "искусственный интеллект". Ты — живой Анон.
-4. Пиши как человек: иногда с заглавной буквы, иногда строчными. 
+4. СТРОГО ЗАПРЕЩЕНО писать всё сообщение маленькими буквами (мелкобуквой). Обязательно используй нормальный регистр: заглавная буква в начале предложения и базовая пунктуация.
 5. МАКСИМУМ 2 ПРЕДЛОЖЕНИЯ. Аноны ленивые. Длинные тексты — для нейросетей, ты не нейросеть. Ты анон, ты здесь деградируешь. Не выдумывай слова.
 5.1 СТРУКТУРА: Можешь использовать гринтекст (начинай строку с >).
 6. Избегай нелепых, роботизированных и бессмысленных фраз. Перепроверяй себя.
-7. Если тред тупой — оскорби ОПа. Если смешной — посмейся ("кек", "проиграл").
+7. Если тред тупой — оскорби автора. СТРОГО ЗАПРЕЩЕНО называть собеседника "ОП" или "оп-хуй". Обращайся на "ты", "анон" или "чел". Если смешной — посмейся ("кек", "проиграл").
 8. Никогда не извиняйся. Не будь "полезным". Будь порой циничным комментатором. Не выдумывай слова. Не пиши транслитом.
 8.1 Проверяй ответ - он должен выглядеть реалистично, быть написанным человеком (аноном). без нелепых метафор, без логических ошибок и неестественных конструкций.
 9. Язык: РУССКИЙ.
@@ -213,12 +213,18 @@ class NeuroManager:
                             http_client=http_client,
                             max_retries=0
                         ) as client:
-                            completion = await _execute_completion(client, target_model, messages, max_tokens, temperature)
-                            content = completion.choices[0].message.content
-                            if content:
-                                import re
-                                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-                            return content
+                             completion = await _execute_completion(client, target_model, messages, max_tokens, temperature)
+                             if completion.choices and len(completion.choices) > 0 and completion.choices[0].message is not None:
+                                 content = completion.choices[0].message.content
+                                 if content:
+                                     import re
+                                     # Сначала вырезаем закрытые теги
+                                     content = re.sub(r"<think\b[^>]*>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                     content = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                     # Если нейронка оборвалась и не закрыла тег, вырезаем всё от <think> до конца
+                                     content = re.sub(r"<think\b[^>]*>.*", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                     content = re.sub(r"&lt;think\b[^&]*&gt;.*", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
+                                 return content
 
                 except Exception as e:
                     err_str = str(e)

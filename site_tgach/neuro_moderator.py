@@ -87,6 +87,7 @@ async def _safe_groq_json(messages, max_tokens=300):
                         "messages": messages,
                         "max_tokens": max_tokens,
                         "temperature": 0.1,  # Минимальная температура для строгого JSON
+                        "response_format": {"type": "json_object"},
                     },
                 )
 

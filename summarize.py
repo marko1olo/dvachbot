@@ -38,10 +38,7 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
     """
     if model_preference == "gemini":
         models_cascade = [
-            ("gemini-3.5-flash", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-3.1-pro", "gemini"),
-            ("gemini-2.5-flash", "gemini"),  # fallback if 3.x not on key
         ]
     elif model_preference == "qwen":
         models_cascade = [
@@ -52,11 +49,8 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
             ("llama-3.3-70b-versatile", "groq")
         ]
     else:
-        # Default: Gemini 3.x first, Groq as fallback
         models_cascade = [
-            ("gemini-3.5-flash", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash", "gemini"),  # fallback if 3.x not on key
             ("qwen/qwen3.6-27b", "groq"),
             ("llama-3.3-70b-versatile", "groq"),
         ]
@@ -114,12 +108,19 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
                             temperature=0.8
                         )
                         if completion.choices and len(completion.choices) > 0:
-                            result = completion.choices[0].message.content
-                            if result:
-                                import re
-                                result = re.sub(r"<think>.*?</think>", "", result, flags=re.DOTALL).strip()
-                                logger.info(f"Success using model {model_name} via {provider} (Direct VPN)")
-                                return result.strip()
+                            choice = completion.choices[0]
+                            if choice.message is not None:
+                                result = choice.message.content
+                                if result:
+                                    import re
+                                    # Сначала вырезаем закрытые теги (как в виде HTML, так и escaped)
+                                    result = re.sub(r"<think\b[^>]*>.*?</think>", "", result, flags=re.DOTALL | re.IGNORECASE)
+                                    result = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", result, flags=re.DOTALL | re.IGNORECASE)
+                                    # Если нейронка оборвалась и не закрыла тег, вырезаем всё от <think>/&lt;think&gt; до конца
+                                    result = re.sub(r"<think\b[^>]*>.*", "", result, flags=re.DOTALL | re.IGNORECASE)
+                                    result = re.sub(r"&lt;think\b[^&]*&gt;.*", "", result, flags=re.DOTALL | re.IGNORECASE).strip()
+                                    logger.info(f"Success using model {model_name} via {provider} (Direct VPN)")
+                                    return result.strip()
             except Exception as e:
                 err_str = f"{type(e).__name__}: {e}"
                 logger.warning(f"⚠️ {provider} call failed ({model_name}): {err_str[:120]}")

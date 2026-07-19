@@ -20,6 +20,11 @@ def sanitize_html(text: str) -> str:
         content = match.group(2)
         clean_url = re.sub(r'^https?://', '', url, flags=re.IGNORECASE)
         clean_url = re.sub(r'^www\.', '', clean_url, flags=re.IGNORECASE)
+        
+        lower_url = url.lower()
+        if "t.me/" in lower_url or "telegram.me/" in lower_url or "telegra.ph/" in lower_url:
+            return f'<a href="{url}">{content}</a>'
+            
         return f"{content} <i>({clean_url})</i>"
 
     text = re.sub(r'<\s*a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)<\s*/\s*a\s*>', link_replacer, text, flags=re.IGNORECASE | re.DOTALL)

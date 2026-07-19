@@ -208,8 +208,19 @@ class NeuroManager:
                             http_client=http_client,
                             max_retries=0
                         ) as client:
-                            completion = await _execute_completion(client, target_model, messages, max_tokens, temperature)
-                            return completion.choices[0].message.content.strip()
+                             completion = await _execute_completion(client, target_model, messages, max_tokens, temperature)
+                             if completion.choices and len(completion.choices) > 0 and completion.choices[0].message is not None:
+                                 content = completion.choices[0].message.content
+                                 if content:
+                                     import re
+                                     # Сначала вырезаем закрытые теги
+                                     content = re.sub(r"<think\b[^>]*>.*?</think>", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                     content = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                     # Если нейронка оборвалась и не закрыла тег, вырезаем всё от <think> до конца
+                                     content = re.sub(r"<think\b[^>]*>.*", "", content, flags=re.DOTALL | re.IGNORECASE)
+                                     content = re.sub(r"&lt;think\b[^&]*&gt;.*", "", content, flags=re.DOTALL | re.IGNORECASE).strip()
+                                 return content
+                             return None
 
                 except Exception as e:
                     err_str = str(e)

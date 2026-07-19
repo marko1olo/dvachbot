@@ -10661,7 +10661,27 @@ function handleImageError(img) {
         img.replaceWith(vid);
         return;
     }
-    if (img.classList.contains('broken-final') || img.dataset.retried === "2") {
+
+    // Извлекаем сбойный хост из текущего src
+    let failedType = null;
+    const currentSrc = img.src || "";
+    if (currentSrc.includes("iili.io")) failedType = "freeimage";
+    else if (currentSrc.includes("ibb.co")) failedType = "imgbb";
+    else if (currentSrc.includes("pixhost.to")) failedType = "pixhost";
+    else if (currentSrc.includes("catbox.moe")) failedType = "catbox";
+    else if (currentSrc.includes("0x0.st")) failedType = "0x0";
+    else if (currentSrc.includes("telegram.org")) failedType = "telegram";
+
+    let skipped = img.dataset.skippedHosts ? img.dataset.skippedHosts.split(",") : [];
+    if (failedType && !skipped.includes(failedType)) {
+        skipped.push(failedType);
+    }
+    img.dataset.skippedHosts = skipped.join(",");
+
+    const parentThumb = img.closest('a.file-thumb, a.gallery-item');
+    const originalUrl = parentThumb ? parentThumb.href : (img.dataset.src || img.src);
+
+    if (skipped.length >= 6 || !originalUrl) {
         img.classList.add('broken-final');
         img.style.display = 'none';
         if (parent) {
@@ -10670,29 +10690,10 @@ function handleImageError(img) {
         }
         return;
     }
-    img.dataset.retried = (parseInt(img.dataset.retried) || 0) + 1;
-    const parentThumb = img.closest('a.file-thumb, a.gallery-item');
-    if (parentThumb && parentThumb.tagName === 'A' && parentThumb.href && !img.src.endsWith(parentThumb.href)) {
-        if (img.tagName === 'IMG') {
-            img.src = parentThumb.href;
-            return;
-        }
-    }
-    img._retryCount = (img._retryCount || 0) + 1;
-    if (img._retryCount <= 5) {
-        setTimeout(() => {
-            if (!img.isConnected) return;
-            const src = img.src;
-            if (src && !src.startsWith('data:')) {
-                const url = new URL(src);
-                url.searchParams.set('retry', Date.now());
-                img.src = url.toString();
-            }
-        }, 3000 * img._retryCount);
-    } else {
-        img.classList.add('broken-final');
-        if (parent) parent.innerHTML = `<div class="broken-media"><span>RIP</span></div>`;
-    }
+
+    const urlObj = new URL(originalUrl, window.location.href);
+    urlObj.searchParams.set("skip", img.dataset.skippedHosts);
+    img.src = urlObj.toString();
 }
 function checkPostGet(el) {
     const id = el.id.replace('post-', '');

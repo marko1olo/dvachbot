@@ -19,7 +19,7 @@ logger = logging.getLogger("mtproto")
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
 try:
-    pass
+    import tgcrypto
 except ImportError:
     logger.warning("⚠️ TGCRYPTO NOT INSTALLED! Download speed will be very slow. Run: pip install tgcrypto")
 
@@ -195,7 +195,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
                 message=target_to_download,
                 file_name=output_path,
             ),
-            timeout=20
+            timeout=300
         )
         
         return bool(path and os.path.exists(output_path))

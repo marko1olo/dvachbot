@@ -4004,7 +4004,7 @@ class ModeTransformer:
                    'caption' if 'caption' in self.modified_content and self.modified_content['caption'] else None
         if not self.text_key:
             return False
-        self.plain_text = clean_html_tags(self.modified_content.get(self.text_key, ''))
+        self.plain_text = clean_html_tags(self.modified_content.get(self.text_key, '')) or ""
         self.allow_visual = (self.modified_content.get('type') == 'text') and (len(self.plain_text) < 180)
         return True
 
@@ -6642,7 +6642,7 @@ def throttle(rate: int):
 @dp.message(Command("random", "randpic", "randvid", "rand"))
 @throttle(rate=5)
 async def cmd_random_media(message: types.Message):
-    args = message.text.split()
+    args = (message.text or message.caption or "").split()
     count = 1
     if len(args) > 1 and args[1].isdigit():
         count = int(args[1])
@@ -7787,7 +7787,7 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
 @dp.message(Command("duel"))
 async def cmd_duel(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
-    args = message.text.split()[1:]
+    args = (message.text or message.caption or "").split()[1:]
 
     if args and args[0].lower() in ("accept", "принять", "+"):
         await _handle_duel_accept(message, board_id)
@@ -8024,7 +8024,7 @@ async def _run_delayed_prank(bot, user_id, amount, user_input, method, shame_nam
 @dp.message(WithdrawalStates.entering_data)
 async def process_withdrawal_data(message: types.Message, state: FSMContext, board_id: str | None):
     if not board_id: return
-    user_input = message.text
+    user_input = message.text or message.caption or ""
     user_id = message.from_user.id
     
     # Извлекаем все слова от 2-х букв
@@ -8279,6 +8279,130 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
             pass
     try: await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError): pass
+async def schedule_persona_reply(bot, board_id: str, target_post_num: int, context_text: str, stream: str, is_admin_trigger: bool = False, photo_file_id: str = None):
+    try:
+        from site_tgach.persona_bot import generate_anon_reply, is_valid_for_persona
+        if not is_admin_trigger and not is_valid_for_persona(context_text):
+            return
+            
+        await asyncio.sleep(random.uniform(6.0, 15.0) if not is_admin_trigger else 0)
+        
+        replies = await generate_anon_reply(context_text, context_text)
+        if not replies:
+            return
+            
+        for i, text in enumerate(replies):
+            now_dt = datetime.now(UTC)
+            content = {
+                'type': 'photo' if photo_file_id and i == 0 else 'text',
+                'is_system_message': True,
+                'archive_allowed': True
+            }
+            if content['type'] == 'photo':
+                content['caption'] = text
+                content['file_id'] = photo_file_id
+            else:
+                content['text'] = text
+                
+            pnum = await create_post(
+                board_id=board_id,
+                author_id=0,
+                content=content,
+                timestamp=now_dt.timestamp(),
+                is_from_site=False, stream=stream,
+                reply_to=target_post_num if target_post_num else None
+            )
+            if pnum:
+                header = await format_header(board_id, pnum, 0)
+                content['header'] = f"### АНОН ###\n{header}" if stream == 'ru' else f"### ANON ###\n{header}"
+                await update_post_content(pnum, content)
+                async with storage_lock:
+                    messages_storage[pnum] = {
+                        'author_id': 0, 'timestamp': now_dt, 
+                        'content': content, 'board_id': board_id
+                    }
+                if target_post_num:
+                    target_author_id = None
+                    post_data = messages_storage.get(target_post_num)
+                    if post_data:
+                        target_author_id = post_data.get('author_id')
+                    if target_author_id:
+                        user_copy = post_to_messages.get(target_post_num, {}).get(target_author_id)
+                        if user_copy:
+                            reply_info[target_author_id] = user_copy
+            if len(replies) > 1:
+                await asyncio.sleep(random.uniform(1.0, 3.0))
+    except Exception as e:
+        print(f"Error in schedule_persona_reply: {e}")
+
+@dp.message(Command("trigger"))
+async def cmd_admin_trigger(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Принудительно триггерит персона-бота (админская команда).
+    Если не указано сообщение для реплая, выбирает случайного пользователя.
+    """
+    if not board_id or not is_admin(message.from_user.id, board_id): return
+    
+    text_chunk = ""
+    target_post_num = 0
+
+    if message.reply_to_message:
+        target_post_num = None
+        async with storage_lock:
+            key = (message.chat.id, message.reply_to_message.message_id)
+            target_post_num = message_to_post.get(key)
+        
+        if not target_post_num and message.chat.type == 'private':
+            text_chunk = message.reply_to_message.text or message.reply_to_message.caption or ""
+            if not text_chunk:
+                await message.answer("У этого поста нет текста для ответа.")
+                return
+            await message.answer("🤖 [АДМИН ЛС] Пост не найден в БД, но текст получен. Запускаю генерацию...")
+            photo_id = message.reply_to_message.photo[-1].file_id if message.reply_to_message.photo else None
+            spawn_task(schedule_persona_reply(message.bot, board_id, 0, text_chunk, stream, is_admin_trigger=True, photo_file_id=photo_id))
+            return
+            
+        if not target_post_num:
+            await message.answer("Пост не найден в маппинге.")
+            return
+
+        post_data = messages_storage.get(target_post_num)
+        if post_data:
+            c = post_data.get('content', {})
+            text_chunk = c.get('text', '') or c.get('caption', '')
+            
+        if not text_chunk:
+            await message.answer("У этого поста нет текста для ответа.")
+            return
+            
+        await message.answer("🤖 [АДМИН] Нейроанон принудительно разбужен. Запускаю генерацию...")
+        spawn_task(schedule_persona_reply(message.bot, board_id, target_post_num, text_chunk, stream, is_admin_trigger=True))
+    else:
+        candidates = []
+        fav_candidates = []
+        now_dt = datetime.now(UTC)
+        async with storage_lock:
+            b_data = board_data.get(board_id, {})
+            for pnum, data in list(messages_storage.items())[-500:]:
+                if data.get('board_id') == board_id and data.get('author_id', 0) != 0:
+                    c = data.get('content', {})
+                    t = c.get('text') or c.get('caption') or ''
+                    if len(t) > 5:
+                        candidates.append((pnum, t))
+                        if data.get('author_id') in b_data.get('persona_favorites', {}):
+                            fav_candidates.append((pnum, t))
+        
+        if fav_candidates and random.random() < 0.75:
+            candidates = fav_candidates
+
+        if not candidates:
+            await message.answer("⚠️ Нет подходящих постов для триггера на этой доске.")
+            return
+            
+        target_post_num, text_chunk = random.choice(candidates)
+        await message.answer(f"🤖 [АДМИН] Выбран случайный пост #{target_post_num} для атаки. Запускаю генерацию...")
+        spawn_task(schedule_persona_reply(message.bot, board_id, target_post_num, text_chunk, stream, is_admin_trigger=True))
+
 @dp.message(Command("ans"))
 async def cmd_admin_answer(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -8369,8 +8493,8 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    elif len(message.text.split()) > 1:
-        try: target_id = int(message.text.split()[1])
+    elif len((message.text or message.caption or "").split()) > 1:
+        try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
@@ -8436,8 +8560,8 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    elif len(message.text.split()) > 1:
-        try: target_id = int(message.text.split()[1])
+    elif len((message.text or message.caption or "").split()) > 1:
+        try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
@@ -9176,7 +9300,7 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
     user_id = message.from_user.id
     if not board_id: return
     if board_id in THREAD_BOARDS:
-        command_payload = message.text.split()[1] if len(message.text.split()) > 1 else None
+        command_payload = (message.text or message.caption or "").split()[1] if len((message.text or message.caption or "").split()) > 1 else None
         if command_payload and command_payload.startswith("thread_"):
             thread_id = command_payload.split('_')[-1]
             b_data = board_data[board_id]
@@ -9209,7 +9333,7 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
 
     # 2. Если пользователя нет в БД — он считается "новым" для реферальной системы
     if not user_exists_globally:
-        args = message.text.split()
+        args = (message.text or message.caption or "").split()
         if len(args) > 1 and args[1].startswith("ref_"):
             try:
                 referrer_id = int(args[1].replace("ref_", ""))
@@ -9286,7 +9410,7 @@ async def cmd_show_board_info(message: types.Message, board_id: str | None, stre
     """
     if not board_id: return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    requested_board_alias = message.text.lstrip('/')
+    requested_board_alias = (message.text or message.caption or "").lstrip('/')
     if requested_board_alias == 'pol': requested_board_alias = 'po'
     if requested_board_alias not in BOARD_CONFIG:
         await message.delete()
@@ -10232,7 +10356,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             else:
                 context_name = f"треда «{thread_title}»"
 
-    paragraph_count, length_choice, model_preference, chosen_tier = _parse_summarize_args(message.text)
+    paragraph_count, length_choice, model_preference, chosen_tier = _parse_summarize_args(message.text or message.caption or "")
     
     # Детекция блатного режима
     is_blat = None
@@ -10428,8 +10552,8 @@ async def cmd_gban(message: types.Message, board_id: str | None, stream: str = '
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    elif len(message.text.split()) > 1:
-        try: target_id = int(message.text.split()[1])
+    elif len((message.text or message.caption or "").split()) > 1:
+        try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
@@ -10470,7 +10594,7 @@ async def cmd_gshadowmute(message: types.Message, board_id: str | None, stream: 
     Выдает ТЕНЕВОЙ МУТ пользователю СРАЗУ НА ВСЕХ досках.
     """
     if not board_id or not is_admin(message.from_user.id, board_id): return
-    args = message.text.split()[1:]
+    args = (message.text or message.caption or "").split()[1:]
     target_id = None
     duration_str = "24h"
     if message.reply_to_message:
@@ -10725,7 +10849,7 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
     try: await message.delete()
     except Exception: pass
     
-    args = message.text.split()
+    args = (message.text or message.caption or "").split()
     if len(args) < 3:
         await message.answer("Юзай: /addmoney &lt;ID&gt; &lt;сумма&gt;")
         return
@@ -11470,7 +11594,7 @@ async def cmd_graph(message: types.Message, board_id: str | None, stream: str = 
                 except Exception: pass
                 return
             b_data.setdefault('last_info_command_time', {})[user_id] = current_time
-    args = message.text.split()
+    args = (message.text or message.caption or "").split()
     days = 7  # По умолчанию 7 дней
     if len(args) > 1:
         arg = args[1].lower()
@@ -12065,8 +12189,8 @@ async def cmd_toggle_gif(message: types.Message, board_id: str | None, stream: s
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    elif len(message.text.split()) > 1:
-        try: target_id = int(message.text.split()[1])
+    elif len((message.text or message.caption or "").split()) > 1:
+        try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
@@ -12100,8 +12224,8 @@ async def cmd_toggle_stickers(message: types.Message, board_id: str | None, stre
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    elif len(message.text.split()) > 1:
-        try: target_id = int(message.text.split()[1])
+    elif len((message.text or message.caption or "").split()) > 1:
+        try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
@@ -12135,8 +12259,8 @@ async def cmd_toggle_media(message: types.Message, board_id: str | None, stream:
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    elif len(message.text.split()) > 1:
-        try: target_id = int(message.text.split()[1])
+    elif len((message.text or message.caption or "").split()) > 1:
+        try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
@@ -12173,8 +12297,8 @@ async def cmd_lie_media(message: types.Message, board_id: str | None, stream: st
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    elif len(message.text.split()) > 1:
-        try: target_id = int(message.text.split()[1])
+    elif len((message.text or message.caption or "").split()) > 1:
+        try: target_id = int((message.text or message.caption or "").split()[1])
         except Exception: pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
@@ -13865,7 +13989,7 @@ async def cmd_mute(message: Message, board_id: str | None, stream: str = 'ru'):
         resp = random.choice(thread_messages[lang]['op_mute_success'])
         await message.answer(f"🔇 {resp}", parse_mode=None); await message.delete()
         return
-    args = message.text.split()[1:]
+    args = (message.text or message.caption or "").split()[1:]
     target_id = None
     duration_str = "24h"
     if message.reply_to_message:
@@ -13948,7 +14072,7 @@ async def cmd_unmute(message: types.Message, board_id: str | None, stream: str =
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
     else:
-        parts = message.text.split()
+        parts = (message.text or message.caption or "").split()
         if len(parts) == 2:
             try: target_id = int(parts[1])
             except ValueError: pass
@@ -13975,7 +14099,7 @@ async def cmd_unmute(message: types.Message, board_id: str | None, stream: str =
 async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id):
         return
-    args = message.text.split()[1:]
+    args = (message.text or message.caption or "").split()[1:]
     target_id = None
     duration_str = "24h"
     if message.reply_to_message:
@@ -14028,7 +14152,7 @@ async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = '
 async def cmd_nsfw(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     if not board_id: return
-    args = message.text.split()
+    args = (message.text or message.caption or "").split()
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     b_data = board_data[board_id]
@@ -14069,7 +14193,7 @@ async def cmd_nsfw(message: types.Message, board_id: str | None, stream: str = '
 async def cmd_hide(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     if not board_id: return
-    args = message.text.split()
+    args = (message.text or message.caption or "").split()
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     b_data = board_data[board_id]
@@ -14207,7 +14331,7 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
     else:
-        parts = message.text.split()
+        parts = (message.text or message.caption or "").split()
         if len(parts) == 2:
             try: target_id = int(parts[1])
             except ValueError: pass
@@ -15523,7 +15647,7 @@ async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str =
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
     
-    parts = message.text.split()
+    parts = (message.text or message.caption or "").split()
     if not target_id and len(parts) > 1:
         try:
             target_id = int(parts[1])
@@ -15634,7 +15758,7 @@ async def cmd_admin(message: types.Message, board_id: str | None, stream: str = 
 async def cmd_bot_lockdown(message: Message, board_id: str | None):
     if not board_id or not is_admin(message.from_user.id, board_id):
         return
-    args = message.text.split()
+    args = (message.text or message.caption or "").split()
     if len(args) < 2:
         await message.answer("Использование: `/lockdown on` или `/lockdown off`", parse_mode="Markdown")
         return
@@ -15655,7 +15779,7 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
     else:
-        parts = message.text.split()
+        parts = (message.text or message.caption or "").split()
         if len(parts) == 2:
             try: target_id = int(parts[1])
             except ValueError: pass
@@ -16268,7 +16392,7 @@ async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'r
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    parts = message.text.split()
+    parts = (message.text or message.caption or "").split()
     if len(parts) == 2:
         try: target_id = int(parts[1])
         except ValueError: pass
@@ -16318,7 +16442,7 @@ async def execute_ban(bot, message, target_id: int, board_id: str, admin_id: int
 @dp.message(Command("wipe"))
 async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id): return
-    command_args = message.text.split()[1:]
+    command_args = (message.text or message.caption or "").split()[1:]
     target_id = None
     duration_str = "1h" 
     if message.reply_to_message:
@@ -16403,7 +16527,7 @@ async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str
         return
 
     target_id = None
-    args = message.text.split()
+    args = (message.text or message.caption or "").split()
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
     elif len(args) > 1 and args[1].isdigit():
@@ -16449,7 +16573,7 @@ async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream:
     if not board_id or not is_admin(message.from_user.id, board_id) or board_id not in THREAD_BOARDS:
         await message.delete()
         return
-    args = message.text.split()[1:]
+    args = (message.text or message.caption or "").split()[1:]
     target_id = None
     duration_str = "10m" 
     if message.reply_to_message:
@@ -16555,7 +16679,7 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
     
-    args = message.text.split()
+    args = (message.text or message.caption or "").split()
     if len(args) >= 2:
         try:
             target_id = int(args[1])
@@ -17867,6 +17991,24 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             except TelegramBadRequest: pass
             return
     b_data = board_data[board_id]
+    
+    is_reply_to_bot = False
+    if message.reply_to_message and message.reply_to_message.from_user.id == message.bot.id:
+        async with storage_lock:
+            key = (message.chat.id, message.reply_to_message.message_id)
+            target_pnum = message_to_post.get(key)
+        if target_pnum:
+            post_data = messages_storage.get(target_pnum)
+            if not post_data:
+                post_data = await get_post_by_num(target_pnum)
+            if post_data and post_data.get('author_id') in (0, 1488148800):
+                is_reply_to_bot = True
+
+    if is_reply_to_bot:
+        if 'persona_favorites' not in b_data:
+            b_data['persona_favorites'] = {}
+        b_data['persona_favorites'][user_id] = b_data['persona_favorites'].get(user_id, 0) + 1
+
     if message.content_type in ['photo', 'video', 'document']:
         b_data['single_photo_counter'][user_id]
         if not message.media_group_id:
@@ -18024,7 +18166,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     stream=stream
                 ))
             else:
-                await process_new_post(
+                post_num = await process_new_post(
                     bot_instance=message.bot,
                     board_id=board_id,
                     user_id=user_id,
@@ -18033,6 +18175,15 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     is_shadow_muted=False,
                     stream=stream
                 )
+                if post_num:
+                    should_reply = False
+                    if is_reply_to_bot:
+                        should_reply = True
+                    elif user_id in b_data.get('persona_favorites', {}):
+                        if text_chunk and len(text_chunk) > 5 and random.random() < 0.15:
+                            should_reply = True
+                    if should_reply:
+                        spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False))
             await asyncio.sleep(0.33)
             
         if limit_hit:
@@ -18145,7 +18296,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             stream=stream
         ))
     else:
-        await process_new_post(
+        post_num = await process_new_post(
             bot_instance=message.bot,
             board_id=board_id,
             user_id=user_id,
@@ -18154,6 +18305,18 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             is_shadow_muted=False,
             stream=stream
         )
+        if post_num:
+            should_reply = False
+            if is_reply_to_bot:
+                should_reply = True
+            elif user_id in b_data.get('persona_favorites', {}):
+                text_clean = message.text or message.caption
+                if text_clean and len(text_clean) > 5 and random.random() < 0.15:
+                    should_reply = True
+            if should_reply:
+                text_chunk = message.text or message.caption
+                if text_chunk:
+                    spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False))
 async def database_cleanup_task():
     """
     Периодически очищает таблицы-очереди от старых записей (Broadcast и Notifications).
