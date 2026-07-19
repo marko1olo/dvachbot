@@ -61,7 +61,7 @@ def _alru_cache_stub(maxsize=128, ttl=None, **kwargs):
 sys.modules['async_lru'].alru_cache = _alru_cache_stub
 
 # Now we can safely import the function under test
-from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, get_country_by_ip, check_post_cooldown, _resize_image_if_needed
+from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, get_country_by_ip, check_post_cooldown, _resize_image_if_needed, get_user_id_from_session
 from unittest.mock import MagicMock, AsyncMock, patch
 import io
 
@@ -70,9 +70,34 @@ class StubClient:
         self.host = host
 
 class StubRequest:
-    def __init__(self, headers=None, client_host=None, client_is_none=False):
+    def __init__(self, headers=None, client_host=None, client_is_none=False, session=None):
         self.headers = headers or {}
         self.client = None if client_is_none else StubClient(client_host)
+        self.session = session or {}
+
+
+class TestGetUserIdFromSession(unittest.TestCase):
+    def test_with_user_id_in_session(self):
+        request = StubRequest(session={'user': {'id': 12345}})
+        self.assertEqual(get_user_id_from_session(request), '12345')
+
+    def test_with_user_no_id_in_session(self):
+        request = StubRequest(
+            session={'user': {}},
+            headers={"x-real-ip": "1.2.3.4"}
+        )
+        self.assertEqual(get_user_id_from_session(request), "1.2.3.4")
+
+    def test_without_user_in_session(self):
+        request = StubRequest(
+            session={},
+            headers={"x-real-ip": "1.2.3.4"}
+        )
+        self.assertEqual(get_user_id_from_session(request), "1.2.3.4")
+
+    def test_with_user_id_as_string_in_session(self):
+        request = StubRequest(session={'user': {'id': 'user_abc'}})
+        self.assertEqual(get_user_id_from_session(request), 'user_abc')
 
 class TestGetRealIp(unittest.TestCase):
     def test_x_real_ip_preferred(self):
