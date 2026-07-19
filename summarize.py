@@ -221,7 +221,7 @@ class TelegraphHTMLParser(HTMLParser):
         self.stack = [{"tag": "p", "children": []}]
         self.allowed_tags = {"b", "i", "u", "s", "code", "pre", "a", "p", "br", "h3", "h4"}
 
-    def handle_starttag(self, tag, attrs):
+    def handle_starttag(self, tag, attrs):  # noqa
         tag = tag.lower()
         if tag not in self.allowed_tags:
             return
@@ -233,6 +233,7 @@ class TelegraphHTMLParser(HTMLParser):
         
         self.stack[-1]["children"].append(node)
         self.stack.append(node)
+
 
     def handle_endtag(self, tag):
         tag = tag.lower()
