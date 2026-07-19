@@ -24,6 +24,8 @@ import random
 import time
 import logging
 import re
+REF_PATTERN = re.compile(r'(?:>>|&gt;&gt;)(\d+)')
+CROSS_LINK_PATTERN = re.compile(r'(?:>>|&gt;&gt;)/([a-z0-9]+)/(\d+)')
 from enum import Enum
 from datetime import datetime, UTC
 from typing import Optional, Dict, Any, Tuple, List, Union
@@ -1904,7 +1906,7 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
     
             txt = p.get('content', {}).get('text', '')
             if txt:
-                refs = re.findall(r'(?:>>|&gt;&gt;)(\d+)', txt)
+                refs = REF_PATTERN.findall(txt)
                 for ref in refs:
                     rid = int(ref)
                     if rid in thread_ids and rid != p['id']:
@@ -2001,7 +2003,7 @@ async def get_chat_posts_for_board(board_id: str, offset: int = 0, stream: str =
                     refs.add(p['reply_to_post_num'])
                 text = p.get('content', {}).get('text', '')
                 if text:
-                    found = re.findall(r'(?:>>|&gt;&gt;)(\d+)', text)
+                    found = REF_PATTERN.findall(text)
                     for f in found:
                         refs.add(int(f))
                 for ref_id in refs:
@@ -2183,7 +2185,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
     """
     Парсит текст на наличие ссылок >>12345 и создает уведомления.
     """
-    mentions = set(re.findall(r'(?:>>|&gt;&gt;)(\d+)', text))
+    mentions = set(REF_PATTERN.findall(text))
     if reply_to_ui:
         mentions.add(str(reply_to_ui))
     if not mentions:
@@ -4724,7 +4726,7 @@ async def get_global_chat_posts(page: int = 1, page_size: int = 50) -> list:
                     refs.add(p['reply_to_post_num'])
                 text = p.get('content', {}).get('text', '')
                 if text:
-                    found = re.findall(r'(?:>>|&gt;&gt;)(\d+)', text)
+                    found = REF_PATTERN.findall(text)
                     for f in found:
                         refs.add(int(f))
                 for ref_id in refs:
@@ -5964,7 +5966,7 @@ async def get_detailed_statistics() -> dict:
             return {}
 async def process_cross_links(source_board: str, source_post: int, text: str, stream: str = 'ru'):
     import re
-    refs = re.findall(r'(?:>>|&gt;&gt;)/([a-z0-9]+)/(\d+)', text or "")
+    refs = CROSS_LINK_PATTERN.findall(text or "")
     if not refs: return
     
     potential_targets = set()
@@ -6014,7 +6016,7 @@ async def process_cross_links(source_board: str, source_post: int, text: str, st
                 break
 async def process_backlinks(source_post_num: int, text: str, reply_to_int: Optional[int] = None):
     import re
-    refs = set(re.findall(r'(?:>>|&gt;&gt;)(\d+)', text))
+    refs = set(REF_PATTERN.findall(text))
     
     if reply_to_int:
         refs.add(str(reply_to_int))
