@@ -22,6 +22,7 @@ Key Components:ware: Determines the user's language stream and caches it.
 This module is designed to be extensible and maintainable, allowing for future enhancements and modifications.
 """
 import asyncio
+import itertools
 from common.task_manager import spawn_task
 import faulthandler
 import gc
@@ -12640,7 +12641,7 @@ def _parse_and_split_multi_replies(text: str) -> tuple[list[tuple[int, str]], bo
     """
     if not text:
         return [], False
-    matches = list(RE_MULTI_REPLY_LOCAL.finditer(text))
+    matches = list(itertools.islice(RE_MULTI_REPLY_LOCAL.finditer(text), 4))
     limit_hit = False
     if len(matches) < 2:
         return [], False
