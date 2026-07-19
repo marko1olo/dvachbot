@@ -1319,11 +1319,13 @@ async def sitemap_xml(request: Request):
         urls.append(f"{base_url}/{board_id}/catalog/")
     db = await get_pool()
     try:
-        query = "SELECT board_id, thread_id, last_updated_at FROM Threads ORDER BY last_updated_at DESC LIMIT 10000"
-        async with db.execute(query) as cursor:
-            async for row in cursor:
-                bid, tid, ts = row
-                if bid in valid_boards:
+        valid_boards_list = list(valid_boards)
+        if valid_boards_list:
+            placeholders = ",".join(["?"] * len(valid_boards_list))
+            query = f"SELECT board_id, thread_id, last_updated_at FROM Threads WHERE board_id IN ({placeholders}) ORDER BY last_updated_at DESC LIMIT 10000"
+            async with db.execute(query, valid_boards_list) as cursor:
+                async for row in cursor:
+                    bid, tid, ts = row
                     urls.append(f"{base_url}/{bid}/res/{tid}.html")
     except Exception as e:
         print(f"Sitemap error: {e}")
