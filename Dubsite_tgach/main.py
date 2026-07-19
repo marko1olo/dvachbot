@@ -1858,8 +1858,8 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
             placeholders = ','.join('?' for _ in all_post_ids)
             query = f"SELECT target_post_num, source_post_num FROM Backlinks WHERE target_post_num IN ({placeholders})"
             async with db.execute(query, all_post_ids) as cursor:
-                async for row in cursor:
-                    target, source = row
+                rows = await cursor.fetchall()
+                for target, source in rows:
                     backlinks_map[target].append(source)
         except Exception as e:
             print(f"Backlinks fetch error: {e}")
