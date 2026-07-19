@@ -765,11 +765,11 @@ def _stage1_dict_replace(text: str) -> tuple[str, set]:
             continue
 
         pattern = _COMPILED_DICT[key]
-        matches = list(pattern.finditer(result))
-        if not matches:
-            continue
+
+        match_found = False
         offset = 0
-        for m in matches:
+        for m in pattern.finditer(result):
+            match_found = True
             start = m.start() + offset
             end = m.end() + offset
             original = m.group(0)
@@ -781,7 +781,8 @@ def _stage1_dict_replace(text: str) -> tuple[str, set]:
             for i in range(start, start + len(replacement)):
                 replaced_spans.add(i)
 
-        result_lower = result.lower()
+        if match_found:
+            result_lower = result.lower()
 
     return result, replaced_spans
 
