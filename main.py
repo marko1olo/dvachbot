@@ -9496,6 +9496,9 @@ async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str,
             except Exception:
                 pass
     print(f"[THREAD DELETE] [{board_id}] Тред {thread_id} удалён. Пользователей переведено: {len(users_in_thread)}. Инициатор: {initiator_id}")
+
+_RE_ANIME_STACK = RE_ANIME_STACK
+
 class StackedAnimeHandler:
     def __init__(self, message: types.Message, board_id: str, stream: str):
         self.message = message
@@ -9506,9 +9509,7 @@ class StackedAnimeHandler:
         self.b_data = board_data[board_id]
         self.lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
         self.max_images_for_board = B_MAX_STACKED_ANIME_IMAGES if board_id == 'b' else 10
-        self.command_keys = '|'.join(ANIME_COMMAND_MAP.keys())
-        self.pattern = re.compile(rf"/({self.command_keys})(?:(\d+)|(?:\s+(\d+)))?", re.IGNORECASE)
-        self.matches = self.pattern.findall(message.text or "")
+        self.matches = _RE_ANIME_STACK.findall(message.text or "")
 
     async def process(self):
         if not self.matches:
