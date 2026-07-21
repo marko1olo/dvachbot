@@ -10587,10 +10587,6 @@ async def api_admin_wipe(
     if not pid:
         raise HTTPException(status_code=400, detail="No post ID")
 
-    from common.db_pool import (
-        get_db_connection as get_pool_conn,
-    )  # Или просто get_pool, но тут использовался контекст
-
     # В оригинале использовался get_db_connection() который создает новое соединение.
     # Чтобы использовать db_lock эффективно, лучше использовать get_pool().
 
