@@ -10767,15 +10767,13 @@ async def debug_tasks():
     return res
 
 
-if __name__ == "__main__":
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+async def main_serve():
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
     while True:
         try:
             print("🚀 Starting server...")
-            uvicorn.run(
+            config = uvicorn.Config(
                 "main:app",
                 host="0.0.0.0",
                 port=8000,
@@ -10790,13 +10788,20 @@ if __name__ == "__main__":
                 timeout_keep_alive=10,
                 limit_concurrency=1000,
             )
+            server = uvicorn.Server(config)
+            await server.serve()
         except KeyboardInterrupt:
             print("🛑 Server stopped by user.")
             break
         except Exception as e:
             print(f"🔥 Server crashed: {e}")
             print("🔄 Restarting in 3 seconds...")
-            time.sleep(3)
+            await asyncio.sleep(3)
+
+if __name__ == "__main__":
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    asyncio.run(main_serve())
 
 @app.get("/api/is-ru")
 async def check_if_ru(request: Request):
