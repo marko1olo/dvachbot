@@ -103,15 +103,15 @@ async def get_country_by_ip(ip: str) -> str:
             db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
             if os.path.exists(db_full_path):
                 GEOIP_READER = geoip2.database.Reader(db_full_path)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"Failed to initialize GeoIP reader: {e}")
 
     if GEOIP_READER:
         try:
             response = GEOIP_READER.country(ip)
             return response.country.iso_code or "XX"
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"GeoIP reader failed for IP {ip}: {e}")
 
     strategies = [
         {"proxy": PROXY_URL, "name": "Proxy"},
