@@ -244,13 +244,6 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
 # ПОЛУЧЕНИЕ ЗАДАЧ
 # ==========================================
 async def get_tasks(db) -> list[dict]:
-    file_owners = {}
-    try:
-        async with db.execute("SELECT file_id, bot_id FROM FileOwners") as cursor:
-            async for row in cursor:
-                file_owners[row[0]] = row[1]
-    except Exception: pass
-    
     tasks = []
     # 1. Из реестра (только свежие за 24 часа, чтобы не разгребать вечный баклог)
     day_ago = time.time() - 86400
@@ -270,7 +263,7 @@ async def get_tasks(db) -> list[dict]:
                     'fid': row[0], 
                     'type': row[1], 
                     'thumb_id': row[2], 
-                    'bot_id': file_owners.get(row[0])
+                    'bot_id': None
                 })
     except Exception as e:
         logger.error(f"DB Error getting registry tasks: {e}")
@@ -296,11 +289,28 @@ async def get_tasks(db) -> list[dict]:
                             'fid': row[0], 
                             'type': row[1], 
                             'thumb_id': row[2],
-                            'bot_id': file_owners.get(row[0])
+                            'bot_id': None
                         })
         except Exception: pass
 
-    return tasks[:BATCH_SIZE]
+    tasks = tasks[:BATCH_SIZE]
+
+    # 3. Populate bot_id for the tasks
+    if tasks:
+        fids = [t['fid'] for t in tasks]
+        placeholders = ','.join(['?'] * len(fids))
+        try:
+            query_owners = f"SELECT file_id, bot_id FROM FileOwners WHERE file_id IN ({placeholders})"
+            async with db.execute(query_owners, fids) as cursor:
+                owners_map = {}
+                async for row in cursor:
+                    owners_map[row[0]] = row[1]
+                for t in tasks:
+                    t['bot_id'] = owners_map.get(t['fid'])
+        except Exception as e:
+            logger.error(f"DB Error getting file owners: {e}")
+
+    return tasks
 
 # ==========================================
 # ОСНОВНОЙ ЦИКЛ
