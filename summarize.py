@@ -31,29 +31,26 @@ def _load_google_keys() -> list[str]:
         return [k.strip() for k in raw_env.split(",") if k.strip()]
     return []
 
+def _get_models_cascade(model_preference: str | None) -> list[tuple[str, str]]:
+    if model_preference == "gemini":
+        return [("gemini-3.1-flash-lite", "gemini")]
+    if model_preference == "qwen":
+        return [("qwen/qwen3.6-27b", "groq")]
+    if model_preference == "llama":
+        return [("llama-3.3-70b-versatile", "groq")]
+
+    return [
+        ("gemini-3.1-flash-lite", "gemini"),
+        ("qwen/qwen3.6-27b", "groq"),
+        ("llama-3.3-70b-versatile", "groq"),
+    ]
+
 async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     """
     Summarize text using a cascade of OpenAI-compatible endpoints:
     Supports choosing model/provider: gemini, qwen, llama, or default groq (Qwen + Llama + Gemini fallback).
     """
-    if model_preference == "gemini":
-        models_cascade = [
-            ("gemini-3.1-flash-lite", "gemini"),
-        ]
-    elif model_preference == "qwen":
-        models_cascade = [
-            ("qwen/qwen3.6-27b", "groq")
-        ]
-    elif model_preference == "llama":
-        models_cascade = [
-            ("llama-3.3-70b-versatile", "groq")
-        ]
-    else:
-        models_cascade = [
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("qwen/qwen3.6-27b", "groq"),
-            ("llama-3.3-70b-versatile", "groq"),
-        ]
+    models_cascade = _get_models_cascade(model_preference)
     
     system_instruction = prompt + (
         "\n\nCRITICAL REQUIREMENT:\n"
