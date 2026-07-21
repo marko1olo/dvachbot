@@ -141,6 +141,7 @@ def find_logical_garbage(cur, tables):
 
     orphan_tables = []
     queries = []
+    params = []
 
     for table, col in tables_to_check.items():
         if table in tables:
@@ -150,16 +151,20 @@ def find_logical_garbage(cur, tables):
             if not re.match(r'^[a-zA-Z0-9_]+$', table):
                 print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: недопустимое имя{Colors.ENDC}")
                 continue
+            if not re.match(r'^[a-zA-Z0-9_]+$', col):
+                print(f"{Colors.FAIL}⚠️  Пропущена колонка {col}: недопустимое имя{Colors.ENDC}")
+                continue
             safe_table = quote_identifier(table)
             safe_col = quote_identifier(col)
             queries.append(f"""
-                SELECT '{table}' as table_name, '{col}' as col_name, COUNT(*) as orphans
+                SELECT ? as table_name, ? as col_name, COUNT(*) as orphans
                 FROM {safe_table} t
                 WHERE NOT EXISTS (SELECT 1 FROM Posts p WHERE p.post_num = t.{safe_col})
             """)
+            params.extend([table, col])
 
     if queries:
-        cur.execute(" UNION ALL ".join(queries))
+        cur.execute(" UNION ALL ".join(queries), params)
         results = cur.fetchall()
         for row in results:
             table_name = row[0]
