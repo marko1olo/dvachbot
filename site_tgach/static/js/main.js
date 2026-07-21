@@ -3861,7 +3861,7 @@ window.showThreadSummary = async (threadId) => {
             `;
             document.body.appendChild(modal);
         } else {
-            alert(`🧠 Суть треда:\n\n${window.formatTextGlobal(data.summary)}`);
+            alert(`🧠 Суть треда:\n\n${data.summary}`);
         }
     } catch (e) {
         if (typeof showToast === 'function') showToast(t('network_error'));
