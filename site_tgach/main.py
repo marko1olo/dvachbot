@@ -7352,6 +7352,11 @@ async def api_get_lockdown_status(user: dict = Depends(get_required_user)):
     return {"enabled": val == "true"}
 
 
+def angle_diff(a, b):
+    diff = abs(a - b) % 360
+    return min(diff, 360 - diff)
+
+
 @app.post("/api/post/{board_id}")
 @limiter.limit(
     "30/minute",
@@ -7531,10 +7536,6 @@ async def api_create_post(
                     user_h, user_m = map(float, captcha_value.split(":"))
                     target_h = session["target_h"]
                     target_m = session["target_m"]
-
-                    def angle_diff(a, b):
-                        diff = abs(a - b) % 360
-                        return min(diff, 360 - diff)
 
                     if (
                         angle_diff(user_h, target_h) > 15
