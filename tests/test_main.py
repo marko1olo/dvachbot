@@ -750,6 +750,27 @@ class TestFormatPollForHtml(unittest.TestCase):
         self.assertIn("&quot;quote&quot;", result)
         self.assertNotIn("<script>", result)
         self.assertNotIn("<b>", result)
+class TestDownloadImageWithProxy(unittest.IsolatedAsyncioTestCase):
+    async def test_download_image_proxy_import_error(self):
+        """Test that if japanese_translator fails to import, the download continues with proxy=None."""
+        from Dubsite_tgach.main import _download_image_with_proxy
+        with patch.dict('sys.modules', {'japanese_translator': None}):
+            with patch('aiohttp.ClientSession') as mock_session_class:
+                mock_session = MagicMock()
+                mock_session_class.return_value.__aenter__.return_value = mock_session
+                # Setup mock response
+                mock_response = MagicMock()
+                mock_response.status = 200
+                mock_response.read = AsyncMock(return_value=b"test")
+                mock_response.content.read = AsyncMock(return_value=b"test")
+                mock_response.headers = {"Content-Length": "4"}
+                mock_session.get.return_value.__aenter__.return_value = mock_response
+                result = await _download_image_with_proxy("http://example.com/image.jpg")
+                # Check that aiohttp.ClientSession.get was called
+                self.assertTrue(mock_session.get.called)
+                # Verify proxy is None
+                call_kwargs = mock_session.get.call_args[1]
+                self.assertIsNone(call_kwargs.get('proxy'))
 
 if __name__ == "__main__":
     unittest.main()
