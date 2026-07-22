@@ -98,5 +98,22 @@ class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result, "ZZ")
                 self.assertEqual(mock_get.call_count, 2)
 
+
+    @patch('Dubsite_tgach.main.GEOIP_READER', None)
+    @patch('os.path.exists', return_value=True)
+    @patch('geoip2.database.Reader')
+    async def test_geoip_reader_initialization_exception(self, mock_reader, mock_exists):
+        mock_reader.side_effect = Exception("Initialization failed")
+
+        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {'countryCode': 'AA'}
+            mock_get.return_value = mock_response
+
+            with patch('Dubsite_tgach.main.AsyncHTTPTransport'):
+                result = await get_country_by_ip("8.8.4.4")
+                self.assertEqual(result, "AA")
+
 if __name__ == '__main__':
     unittest.main()
