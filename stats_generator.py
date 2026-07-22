@@ -1570,6 +1570,16 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
 
 
 @dataclass
+class CardConfig:
+    x: int
+    y: int
+    w: int
+    h: int
+    val: str
+    label: str
+    color: str
+
+@dataclass
 class UserStatsCardData:
     user_id: int
     board_id: str
@@ -1623,25 +1633,25 @@ def draw_user_stats_card(
     draw.text((690, 58), sub_cert, fill='#00ffcc', font=ImageFont.truetype(font_path, 10) if os.path.exists(font_path) else font_subtitle, anchor="mm")
     
     # Helper to draw cards
-    def draw_card(x, y, w, h, val, label, color):
-        draw.rounded_rectangle([x, y, x+w, y+h], radius=6, fill='#13171f', outline='#252932', width=1)
-        draw.ellipse([x+15, y+16, x+23, y+24], fill=color)
-        draw.text((x+33, y+20), label, fill='#969896', font=font_card_lbl, anchor="lm")
-        draw.text((x+15, y+48), val, fill=color, font=font_card_num, anchor="lm")
+    def draw_card(cfg: CardConfig):
+        draw.rounded_rectangle([cfg.x, cfg.y, cfg.x+cfg.w, cfg.y+cfg.h], radius=6, fill='#13171f', outline='#252932', width=1)
+        draw.ellipse([cfg.x+15, cfg.y+16, cfg.x+23, cfg.y+24], fill=cfg.color)
+        draw.text((cfg.x+33, cfg.y+20), cfg.label, fill='#969896', font=font_card_lbl, anchor="lm")
+        draw.text((cfg.x+15, cfg.y+48), cfg.val, fill=cfg.color, font=font_card_num, anchor="lm")
 
     # Cards grid
     cards = [
-        (30, 115, 175, 80, str(data.posts_count), "Написано постов", "#00ffcc"),
-        (220, 115, 175, 80, f"#{data.rank} / {data.total_users}", "Ранг на борде", "#ffcc00"),
-        (410, 115, 175, 80, f"{int(data.balance)} RUB", "Баланс коинов", "#00ff66"),
+        CardConfig(30, 115, 175, 80, str(data.posts_count), "Написано постов", "#00ffcc"),
+        CardConfig(220, 115, 175, 80, f"#{data.rank} / {data.total_users}", "Ранг на борде", "#ffcc00"),
+        CardConfig(410, 115, 175, 80, f"{int(data.balance)} RUB", "Баланс коинов", "#00ff66"),
         
-        (30, 210, 175, 80, f"+{data.rx_received}", "Получено реакций", "#ff3399"),
-        (220, 210, 175, 80, str(data.rx_given), "Поставлено реакций", "#859900"),
-        (410, 210, 175, 80, f"{data.lie_media}%", "Кринж-фактор", "#cc00ff"),
+        CardConfig(30, 210, 175, 80, f"+{data.rx_received}", "Получено реакций", "#ff3399"),
+        CardConfig(220, 210, 175, 80, str(data.rx_given), "Поставлено реакций", "#859900"),
+        CardConfig(410, 210, 175, 80, f"{data.lie_media}%", "Кринж-фактор", "#cc00ff"),
     ]
     
-    for x, y, w, h, val, label, color in cards:
-        draw_card(x, y, w, h, val, label, color)
+    for card in cards:
+        draw_card(card)
         
     # Mutes Card (top right block)
     draw.rounded_rectangle([600, 115, 770, 175], radius=6, fill='#1d1315', outline='#ff3333', width=1)
