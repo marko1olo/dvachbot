@@ -70,15 +70,7 @@ def save_chart(images: list, filename: str, bbox_inches=None):
     images.append((filename, buf))
     plt.close()
 
-def generate_all_charts():
-    """Generates exactly 10 toxic charts and returns a list of io.BytesIO objects"""
-    conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-    conn.row_factory = dict_factory
-    c = conn.cursor()
-    
-    thirty_days_ago = time.time() - (30 * 24 * 3600)
-    images = []
-    
+def _generate_chart_1(thirty_days_ago, c, images):
     # 1. Объем высеров (Posts per day)
     c.execute('''
         SELECT date(timestamp, 'unixepoch', 'localtime') as d, COUNT(*) as cnt 
@@ -100,7 +92,8 @@ def generate_all_charts():
         plt.xticks(rotation=45)
         plt.tight_layout()
         save_chart(images, '1_posts.png')
-        
+
+def _generate_chart_2(c, images):
     # 2. Уникальные шизы (Weekly Active Users)
     c.execute('''
         SELECT strftime('%Y-%W', datetime(timestamp, 'unixepoch', 'localtime')) as week, COUNT(DISTINCT author_id) as cnt 
@@ -118,6 +111,7 @@ def generate_all_charts():
         plt.tight_layout()
         save_chart(images, '2_wau.png')
 
+def _generate_chart_3(thirty_days_ago, c, images):
     # 3. Матоемкость борды
     c.execute('''
         SELECT date(timestamp, 'unixepoch', 'localtime') as d, content 
@@ -165,6 +159,7 @@ def generate_all_charts():
         plt.tight_layout()
         save_chart(images, '3_toxicity.png')
 
+def _generate_chart_4(thirty_days_ago, c, images):
     # 4. Топ-10 Главных Шизоидов
     c.execute('''
         SELECT author_id, COUNT(*) as cnt 
@@ -188,6 +183,7 @@ def generate_all_charts():
         plt.tight_layout()
         save_chart(images, '4_top_schizos.png')
 
+def _generate_chart_5(thirty_days_ago, c, images):
     # 5. Главные Провокаторы (Топ-5 юзеров, кому больше всего отвечают)
     c.execute('''
         SELECT orig.author_id, COUNT(*) as cnt 
@@ -219,6 +215,7 @@ def generate_all_charts():
         plt.tight_layout()
         save_chart(images, '5_provocateurs.png', bbox_inches='tight')
 
+def _generate_chart_6(thirty_days_ago, c, images):
     # 6. Гистограмма длины постов (Одноклеточные vs Пасты)
     c.execute('''
         SELECT content FROM Posts WHERE timestamp > ?
@@ -250,6 +247,7 @@ def generate_all_charts():
             plt.tight_layout()
             save_chart(images, '6_post_length.png')
 
+def _generate_chart_7(thirty_days_ago, c, images):
     # 7+8+9. Три пирога в одном — Ночники / Медиа / Диалог
     c.execute('''
         SELECT 
@@ -290,6 +288,7 @@ def generate_all_charts():
         plt.tight_layout()
         save_chart(images, '7_8_9_donut_panel.png', bbox_inches='tight')
 
+def _generate_chart_8(thirty_days_ago, c, images):
     # 10. Тепловая карта активности (Heatmap)
     c.execute('''
         SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w, 
@@ -317,6 +316,8 @@ def generate_all_charts():
         plt.tight_layout()
         save_chart(images, '10_heatmap.png')
 
+def _generate_chart_9(thirty_days_ago, c, images):
+    edges_data = None
     # 11. Граф Социального Пузыря (Echo Chambers)
     try:
         c.execute('''
@@ -362,7 +363,9 @@ def generate_all_charts():
                 save_chart(images, '11_echo_chambers.png')
     except Exception as e:
         print(f"Error Chart 11: {e}")
+    return edges_data
 
+def _generate_chart_10(edges_data, images):
     # 12. Топ-10 Хабов Внимания (PageRank Centrality)
     try:
         if edges_data:
@@ -394,6 +397,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 12: {e}")
 
+def _generate_chart_11(edges_data, images):
     # 13. Коэффициент Взаимного Дроча (Circlejerk Index)
     try:
         if edges_data:
@@ -438,6 +442,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 13: {e}")
 
+def _generate_chart_12(thirty_days_ago, c, images):
     # 14. Сессионный Анализ (Длина сессий)
     try:
         c.execute('''
@@ -487,6 +492,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 14: {e}")
 
+def _generate_chart_13(c, images):
     # 15. Мем-Радар: Взлетающие Тренды (Rising Keywords)
     try:
         now_ts = time.time()
@@ -589,6 +595,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 15: {e}")
 
+def _generate_chart_14(thirty_days_ago, c, images):
     # 16. Частотный Шитпост-Словарь (Топ-15 Слов)
     try:
         from collections import Counter
@@ -657,6 +664,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 16: {e}")
 
+def _generate_chart_15(thirty_days_ago, c, images):
     # 17. Индекс Токсичности (Сентимент)
     try:
         c.execute('''
@@ -719,6 +727,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 17: {e}")
 
+def _generate_chart_16(thirty_days_ago, c, images):
     # 18. Лексическое Разнообразие (MSTTR)
     try:
         c.execute('''
@@ -779,6 +788,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 18: {e}")
 
+def _generate_chart_17(thirty_days_ago, c, images):
     # 19. Популярность разделов (Посты по доскам)
     try:
         c.execute('''
@@ -808,6 +818,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 19: {e}")
 
+def _generate_chart_18(thirty_days_ago, c, images):
     # 20. Неравенство богатства битардов (Кривая Лоренца и Индекс Джини)
     # 20. Профиль Чтива (Качество постов по дням)
     try:
@@ -880,6 +891,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 20: {e}")
 
+def _generate_chart_19(c, images):
     # ── 21. Тепловая карта час × день (180д) ──────────────────────────────
     try:
         import numpy as _np
@@ -920,6 +932,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 21: {e}")
 
+def _generate_chart_20(c, images):
     # ── 22. Ритм активности по дням недели (90д) ───────────────────────────
     try:
         import numpy as _np
@@ -978,6 +991,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 22: {e}")
 
+def _generate_chart_21(c, images):
     # ── 23. Часовой циферблат активности (90д) ───────────────────────────
     try:
         import numpy as _np
@@ -1032,6 +1046,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 23: {e}")
 
+def _generate_chart_22(c, images):
     # ── 24. Календарь активности (180д) ──────────────────────────────────
     try:
         import numpy as _np
@@ -1092,7 +1107,8 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 24: {e}")
 
-    conn.close()
+def _generate_chart_23(c, images):
+    pass
 
     # ── 25. Кумулятивный рост постов (всё время) ─────────────────────────────
     try:
@@ -1121,6 +1137,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 25: {e}")
 
+def _generate_chart_24(c, images):
     # ── 26. Глубина цепочек ответов (30д) ────────────────────────────────────
     try:
         conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
@@ -1158,6 +1175,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 26: {e}")
 
+def _generate_chart_25(images):
     # ── 27. Радар здоровья борды ──────────────────────────────────────────────
     try:
         conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
@@ -1210,6 +1228,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 27: {e}")
 
+def _generate_chart_26(c, images):
     # ── 28. Топ тредов — пузырьковая диаграмма ───────────────────────────────
     try:
         conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
@@ -1251,6 +1270,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 28: {e}")
 
+def _generate_chart_27(images):
     # ── 29. Тренд медиа vs текст по дням (30д) ─────────────────────────────
     try:
         conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
@@ -1284,6 +1304,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 29: {e}")
 
+def _generate_chart_28(images):
     # ── 30. Когорты новых авторов по неделям (13 нед) ─────────────────────────
     try:
         conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
@@ -1329,6 +1350,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 30: {e}")
 
+def _generate_chart_29(images):
     # ── 31. Активность борд по неделям (12 нед) stacked area ─────────────────
     try:
         _conn31 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
@@ -1368,6 +1390,7 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 31: {e}")
 
+def _generate_chart_30(images):
     # ── 32. Стрик-чемпионы (60д) Top-20, dual-column ─────────────────────────
     try:
         import datetime as _dt32
@@ -1427,9 +1450,54 @@ def generate_all_charts():
     except Exception as e:
         print(f"Error Chart 32: {e}")
 
+def generate_all_charts():
+    """Generates exactly 10 toxic charts and returns a list of io.BytesIO objects"""
+    conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
+    conn.row_factory = dict_factory
+    c = conn.cursor()
+
+    thirty_days_ago = time.time() - (30 * 24 * 3600)
+    images = []
+
+
+    edges_data = None
+    try:
+            _generate_chart_1(thirty_days_ago, c, images)
+            _generate_chart_2(c, images)
+            _generate_chart_3(thirty_days_ago, c, images)
+            _generate_chart_4(thirty_days_ago, c, images)
+            _generate_chart_5(thirty_days_ago, c, images)
+            _generate_chart_6(thirty_days_ago, c, images)
+            _generate_chart_7(thirty_days_ago, c, images)
+            _generate_chart_8(thirty_days_ago, c, images)
+            edges_data = _generate_chart_9(thirty_days_ago, c, images)
+            _generate_chart_10(edges_data, images)
+            _generate_chart_11(edges_data, images)
+            _generate_chart_12(thirty_days_ago, c, images)
+            _generate_chart_13(c, images)
+            _generate_chart_14(thirty_days_ago, c, images)
+            _generate_chart_15(thirty_days_ago, c, images)
+            _generate_chart_16(thirty_days_ago, c, images)
+            _generate_chart_17(thirty_days_ago, c, images)
+            _generate_chart_18(thirty_days_ago, c, images)
+            _generate_chart_19(c, images)
+            _generate_chart_20(c, images)
+            _generate_chart_21(c, images)
+            _generate_chart_22(c, images)
+            _generate_chart_23(c, images)
+            _generate_chart_24(c, images)
+            _generate_chart_25(images)
+            _generate_chart_26(c, images)
+            _generate_chart_27(images)
+            _generate_chart_28(images)
+            _generate_chart_29(images)
+            _generate_chart_30(images)
+
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
 
     return images
-
 def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
     conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
     c = conn.cursor()
