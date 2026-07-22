@@ -501,26 +501,30 @@ class ThreadImporter:
 
         return uploaded_files
 
+    class _RefReplacer:
+        def __init__(self, id_map: Dict[str, int]):
+            self.id_map = id_map
+            self.reply_to_id = None
+
+        def __call__(self, match) -> str:
+            old_ref = match.group(1)
+            if old_ref in self.id_map:
+                new_id = self.id_map[old_ref]
+                if self.reply_to_id is None:
+                    self.reply_to_id = new_id
+                return f">>{new_id}"
+            # Если ссылки нет в карте переназначения, возвращаем её как есть, а не пустую строку
+            return match.group(0)
+
     async def _fix_content_links_and_find_reply(
         self, text: str, id_map: Dict[str, int]
     ) -> Tuple[str, Optional[int]]:
         if not text:
             return text, None
-        reply_to_id = None
 
-        def replace_ref(match):
-            nonlocal reply_to_id
-            old_ref = match.group(1)
-            if old_ref in id_map:
-                new_id = id_map[old_ref]
-                if reply_to_id is None:
-                    reply_to_id = new_id
-                return f">>{new_id}"
-            # Если ссылки нет в карте переназначения, возвращаем её как есть, а не пустую строку
-            return match.group(0)
-
-        new_text = RE_LINK_REF.sub(replace_ref, text)
-        return new_text, reply_to_id
+        replacer = self._RefReplacer(id_map)
+        new_text = RE_LINK_REF.sub(replacer, text)
+        return new_text, replacer.reply_to_id
 
     async def process_thread(
         self,
