@@ -2460,7 +2460,12 @@ async def get_loli_image() -> Optional[str]:
     ]
     return await _fetch_image_from_apis(apis, "Loli anime APIs failed to provide an image.")
 
-async def _fetch_from_yandere_paginated(session, headers, base_tags, rating_tag, max_page, site_url="https://yande.re/post.json", proxy=None, negative_tags=None) -> Optional[str]:
+async def _fetch_from_yandere_paginated(session, headers, proxy=None, **kwargs) -> Optional[str]:
+    base_tags = kwargs.get('base_tags')
+    rating_tag = kwargs.get('rating_tag')
+    max_page = kwargs.get('max_page')
+    site_url = kwargs.get('site_url', "https://yande.re/post.json")
+    negative_tags = kwargs.get('negative_tags')
     if max_page <= 0: return None
     site_name = "Yande" if "yande" in site_url else "Kona"
     async def request_with_fallback(url, params):
