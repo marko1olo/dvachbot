@@ -133,10 +133,8 @@ class ThreadImporter:
         except Exception as e:
             logger.error(f"❌ CRITICAL ROLLBACK FAIL: {e}", exc_info=True)
 
-    def _normalize_html_sync(self, raw_html: str) -> str:
-        if not raw_html:
-            return ""
-
+    @staticmethod
+    def _apply_text_replacements(raw_html: str) -> str:
         replacements = {
             r"двач": "тгач",
             r"харкач": "тгач",
@@ -154,16 +152,19 @@ class ThreadImporter:
         }
         for pattern, replacement in replacements.items():
             raw_html = re.sub(pattern, replacement, raw_html, flags=re.IGNORECASE)
+        return raw_html
 
+    @staticmethod
+    def _parse_html(raw_html: str) -> BeautifulSoup:
         import warnings
-
         warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
-
         try:
-            soup = BeautifulSoup(raw_html, "lxml")
+            return BeautifulSoup(raw_html, "lxml")
         except Exception:
-            soup = BeautifulSoup(raw_html, "html.parser")
+            return BeautifulSoup(raw_html, "html.parser")
 
+    @staticmethod
+    def _remove_unwanted_tags(soup: BeautifulSoup) -> None:
         for tag in soup.find_all(
             [
                 "script",
@@ -181,6 +182,9 @@ class ThreadImporter:
             ]
         ):
             tag.decompose()
+
+    @staticmethod
+    def _format_html_elements(soup: BeautifulSoup) -> None:
         for br in soup.find_all("br"):
             br.replace_with("\n")
         for block in soup.find_all(["p", "div"]):
@@ -193,11 +197,23 @@ class ThreadImporter:
             href = a.get_text()
             a.replace_with(href)
 
-        clean_text = soup.get_text()
-        clean_text = re.sub(r"\s*\(OP\)", "", clean_text)
+    @staticmethod
+    def _post_process_clean_text(text: str) -> str:
+        clean_text = re.sub(r"\s*\(OP\)", "", text)
         clean_text = re.sub(r" +", " ", clean_text)
         clean_text = re.sub(r"\n\s*\n", "\n\n", clean_text)
         return clean_text.strip()
+
+    def _normalize_html_sync(self, raw_html: str) -> str:
+        if not raw_html:
+            return ""
+
+        raw_html = self._apply_text_replacements(raw_html)
+        soup = self._parse_html(raw_html)
+        self._remove_unwanted_tags(soup)
+        self._format_html_elements(soup)
+        clean_text = soup.get_text()
+        return self._post_process_clean_text(clean_text)
 
     async def normalize_html(self, raw_html: str) -> str:
         loop = asyncio.get_running_loop()
