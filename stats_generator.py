@@ -932,6 +932,46 @@ def _generate_chart_19(c, images):
     except Exception as e:
         print(f"Error Chart 21: {e}")
 
+def _smooth_array(y, w=1):
+    import numpy as _np
+    k = _np.ones(w*2+1)/(w*2+1)
+    return _np.convolve(y, k, mode='same')
+
+def _plot_activity_rhythm(dh, images):
+    import numpy as _np
+    days_ru = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб']
+    day_colors = ['#f78166','#58a6ff','#79c0ff','#d2a8ff','#ffa657','#39d353','#e3b341']
+    hrs = _np.arange(24)
+    global_max = max((dh[d].max() for d in range(7)), default=1) or 1
+
+    fig, axes = plt.subplots(7, 1, figsize=(12, 7), sharex=True)
+    fig.subplots_adjust(hspace=-0.08)
+    for idx, d in enumerate(range(6, -1, -1)):
+        ax2 = axes[idx]
+        ax2.set_facecolor('#121212')
+        y = _smooth_array(dh[d], w=1)
+        y_n = y / global_max
+        color = day_colors[d]
+        ax2.fill_between(hrs, 0, y_n, color=color, alpha=0.42, clip_on=False)
+        ax2.plot(hrs, y_n, color=color, linewidth=2, alpha=0.95, clip_on=False)
+        ax2.set_xlim(-0.5, 23.5)
+        ax2.set_ylim(0, 0.8)
+        ax2.text(-0.5, 0.24, days_ru[d], ha='right', va='center',
+                color=color, fontsize=9, fontweight='bold',
+                transform=ax2.get_yaxis_transform())
+        total_d = int(dh[d].sum())
+        ax2.text(23.4, 0.40, f'{total_d//1000 if total_d>=1000 else total_d}{"k" if total_d>=1000 else ""}',
+                ha='left', va='center', color=color, fontsize=7.5)
+        ax2.set_yticks([])
+        ax2.spines[:].set_visible(False)
+    axes[-1].set_xticks(hrs)
+    axes[-1].set_xticklabels([f'{h:02d}' for h in hrs], fontsize=7.5)
+    axes[-1].set_xlabel('Час суток')
+    fig.suptitle('22. Ритм по дням недели (90д)', fontsize=15, y=0.99, color='#ffffff', fontweight='bold')
+    plt.tight_layout(rect=[0.05, 0, 1, 0.98])
+
+    save_chart(images, '22_ridge_weekday.png')
+
 def _generate_chart_20(c, images):
     # ── 22. Ритм активности по дням недели (90д) ───────────────────────────
     try:
@@ -952,42 +992,7 @@ def _generate_chart_20(c, images):
             for row in data:
                 dh[row['w']][row['h']] = row['cnt']
             
-            days_ru = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб']
-            day_colors = ['#f78166','#58a6ff','#79c0ff','#d2a8ff','#ffa657','#39d353','#e3b341']
-            hrs = _np.arange(24)
-            global_max = max((dh[d].max() for d in range(7)), default=1) or 1
-
-            def _smooth(y, w=1):
-                k = _np.ones(w*2+1)/(w*2+1)
-                return _np.convolve(y, k, mode='same')
-
-            fig, axes = plt.subplots(7, 1, figsize=(12, 7), sharex=True)
-            fig.subplots_adjust(hspace=-0.08)
-            for idx, d in enumerate(range(6, -1, -1)):
-                ax2 = axes[idx]
-                ax2.set_facecolor('#121212')
-                y = _smooth(dh[d], w=1)
-                y_n = y / global_max
-                color = day_colors[d]
-                ax2.fill_between(hrs, 0, y_n, color=color, alpha=0.42, clip_on=False)
-                ax2.plot(hrs, y_n, color=color, linewidth=2, alpha=0.95, clip_on=False)
-                ax2.set_xlim(-0.5, 23.5)
-                ax2.set_ylim(0, 0.8)
-                ax2.text(-0.5, 0.24, days_ru[d], ha='right', va='center',
-                        color=color, fontsize=9, fontweight='bold',
-                        transform=ax2.get_yaxis_transform())
-                total_d = int(dh[d].sum())
-                ax2.text(23.4, 0.40, f'{total_d//1000 if total_d>=1000 else total_d}{"k" if total_d>=1000 else ""}',
-                        ha='left', va='center', color=color, fontsize=7.5)
-                ax2.set_yticks([])
-                ax2.spines[:].set_visible(False)
-            axes[-1].set_xticks(hrs)
-            axes[-1].set_xticklabels([f'{h:02d}' for h in hrs], fontsize=7.5)
-            axes[-1].set_xlabel('Час суток')
-            fig.suptitle('22. Ритм по дням недели (90д)', fontsize=15, y=0.99, color='#ffffff', fontweight='bold')
-            plt.tight_layout(rect=[0.05, 0, 1, 0.98])
-            
-            save_chart(images, '22_ridge_weekday.png')
+            _plot_activity_rhythm(dh, images)
     except Exception as e:
         print(f"Error Chart 22: {e}")
 
