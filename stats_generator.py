@@ -60,6 +60,25 @@ def generate_schizo_name(user_id: int) -> str:
     suffix = rng.choice(NICK_SUFFIXES)
     return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
 
+def _is_valid_word_count_post(author_id, text):
+    # 1. Skip system posts
+    if author_id in (0, 1163970492):
+        return False
+
+    # 2. Skip logs and reports structurally
+    if text.count('|') >= 3:
+        return False
+    if '[INFO]' in text or '[DEBUG]' in text or '[ERROR]' in text:
+        return False
+    if 'ChatGPT Cringe Report' in text or 'нелепых и шаблонных фразах' in text:
+        return False
+
+    return True
+
+def _extract_valid_tokens(text, stop_words):
+    tokens = re.findall(r'[a-zA-Zа-яА-ЯёЁ]{4,}', text.lower())
+    return [t for t in tokens if t not in stop_words]
+
 def save_chart(images: list, filename: str, bbox_inches=None):
     buf = io.BytesIO()
     if bbox_inches:
@@ -530,24 +549,10 @@ def _generate_chart_13(c, images):
             from collections import Counter
             counts = Counter()
             for row in posts_list:
-                # 1. Skip system posts
-                if row.get('author_id') in (0, 1163970492):
-                    continue
-                    
                 text = clean_text_local(row['content'])
-                
-                # 2. Skip logs and reports structurally
-                if text.count('|') >= 3:
+                if not _is_valid_word_count_post(row.get('author_id'), text):
                     continue
-                if '[INFO]' in text or '[DEBUG]' in text or '[ERROR]' in text:
-                    continue
-                if 'ChatGPT Cringe Report' in text or 'нелепых и шаблонных фразах' in text:
-                    continue
-                    
-                tokens = re.findall(r'[a-zA-Zа-яА-ЯёЁ]{4,}', text.lower())
-                for t in tokens:
-                    if t not in radar_stop:
-                        counts[t] += 1
+                counts.update(_extract_valid_tokens(text, radar_stop))
             return counts
 
         this_week_counts = get_word_counts(this_week_posts)
