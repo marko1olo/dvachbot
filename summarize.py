@@ -339,6 +339,8 @@ class TelegraphHTMLParser(HTMLParser):
         self.stack.append(node)
 
     def handle_endtag(self, tag):  # noqa
+
+    def handle_endtag(self, tag):
         tag = tag.lower()
         if tag not in self.allowed_tags:
             return
