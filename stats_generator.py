@@ -194,7 +194,7 @@ def generate_all_charts():
         FROM Posts repl
         JOIN Posts orig ON repl.reply_to_post_num = orig.post_num AND repl.board_id = orig.board_id
         WHERE repl.timestamp > ? AND orig.author_id IS NOT NULL
-        GROUP BY orig.author_id ORDER BY cnt DESC LIMIT 5
+        GROUP BY orig.author_id ORDER BY cnt DESC LIMIT 20
     ''', (thirty_days_ago,))
     data = c.fetchall()
     if data:
@@ -416,7 +416,7 @@ def generate_all_charts():
                     mutual_list.append((u, v, reciprocity))
                     
             if mutual_list:
-                sorted_mutual = sorted(mutual_list, key=lambda x: x[2], reverse=True)[:5]
+                sorted_mutual = sorted(mutual_list, key=lambda x: x[2], reverse=True)[:10]
                 plot_data = []
                 for u, v, rec in sorted_mutual:
                     name_u = generate_schizo_name(u)
@@ -424,9 +424,9 @@ def generate_all_charts():
                     plot_data.append({'pair': f"{name_u} & {name_v}", 'score': rec})
                     
                 df_mut = pd.DataFrame(plot_data)
-                fig, ax = plt.subplots(figsize=(10, 4))
+                fig, ax = plt.subplots(figsize=(12, 8))
                 sns.barplot(data=df_mut, y='pair', x='score', hue='pair', palette="spring", legend=False, ax=ax)
-                plt.title('13. Топ-5 Взаимных Перепихонов (Circlejerk)', fontsize=16, fontweight='bold', color="#00ff66")
+                plt.title('13. Топ-10 Взаимных Перепихонов (Circlejerk)', fontsize=16, fontweight='bold', color="#00ff66")
                 plt.xlabel('Количество взаимных ответов друг другу')
                 plt.ylabel('')
                 ax.set_xlim(0, df_mut['score'].max() * 1.12)
@@ -1108,7 +1108,7 @@ def generate_all_charts():
         if data:
             df = pd.DataFrame(data)
             df['cumsum'] = df['cnt'].cumsum()
-            fig, ax = plt.subplots(figsize=(10, 4))
+            fig, ax = plt.subplots(figsize=(12, 8))
             ax.fill_between(range(len(df)), df['cumsum'], alpha=0.25, color='#58a6ff')
             ax.plot(range(len(df)), df['cumsum'], color='#58a6ff', linewidth=2)
             step = max(1, len(df) // 8)

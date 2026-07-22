@@ -2311,11 +2311,11 @@ def _wh40k_replacer(match: re.Match) -> str:
         return chosen_replacement.capitalize()
     else:
         return chosen_replacement
-def _apply_high_gothic_and_binaric(text: str) -> str:
-    # 1. High Gothic (Псевдо-Латынь)
+def _apply_high_gothic_subtle(text: str) -> str:
+    # 1. High Gothic (Легкая Псевдо-Латынь - только 5% шанс, не коверкать слова массово)
     def _latinize(m):
         word = m.group(0)
-        if random.random() < 0.18:
+        if random.random() < 0.05:
             if word[-1].lower() in 'аяиы':
                 return word[:-1] + ("um" if word.islower() else "UM")
             elif word[-1].lower() in 'ьй':
@@ -2326,23 +2326,23 @@ def _apply_high_gothic_and_binaric(text: str) -> str:
                 return word + ("ius" if word.islower() else "IUS")
         return word
 
-    text = re.sub(r'\b[А-Яа-яЁёa-zA-Z]{6,}\b', _latinize, text)
-    
+    return re.sub(r'\b[А-Яа-яЁёa-zA-Z]{7,}\b', _latinize, text)
+
+def _apply_binaric_cant(text: str) -> str:
     # 2. Binaric cant (Священный бинарный код Адептус Механикус)
     def _insert_binaric(m):
         word = m.group(0)
-        if random.random() < 0.08:
+        if random.random() < 0.06:
             binary_burst = "".join(random.choice(['0', '1']) for _ in range(8))
             return f"{word} [{binary_burst}]"
         return word
         
-    text = re.sub(r'\b[А-Яа-яЁёa-zA-Z]+\b', _insert_binaric, text)
-    
-    return text
+    return re.sub(r'\b[А-Яа-яЁёa-zA-Z]+\b', _insert_binaric, text)
+
 def _apply_thought_of_the_day(text: str) -> str:
     # Шанс 35% прикрепить Мысль Дня (только для Империума)
     if random.random() < 0.35:
-        thoughts =[
+        thoughts = [
             "Знание — сила, скрой его.",
             "Нет невиновных, есть лишь разные степени вины.",
             "Надежда — первый шаг на пути к разочарованию.",
@@ -2365,11 +2365,10 @@ def _apply_thought_of_the_day(text: str) -> str:
 def warhammer_transform(text: str, header: str | None = None, allow_image: bool = True) -> tuple:
     if not text: return ('text', "")
     
-    # Замены словаря и псевдо-латынь
+    # 1. Замены общего словаря Warhammer (рофл -> еретический смех и т.д.)
     text = _wh40k_regex.sub(_wh40k_replacer, text)
-    text = _apply_high_gothic_and_binaric(text)
     
-    # Визуальная часть (картинки)
+    # 2. Визуальная часть (картинки)
     if allow_image and random.random() < 0.20 and len(text) < 250:
         try:
             image_bytes = create_visual_post(mode='warhammer', text=text, header=header)
@@ -2378,39 +2377,47 @@ def warhammer_transform(text: str, header: str | None = None, allow_image: bool 
         except Exception:
             pass
 
-    # Распределение фракций
+    # 3. Строгая привязка к ОДНОЙ фракции в сообщении (стили не мешаются!)
     roll = random.random()
     if roll < 0.30:
-        # ИМПЕРИУМ: Применяем Мысль Дня
+        # ИМПЕРИУМ (Гвардия, Инквизиция, Космодесант, Механикус)
         sub_faction_key = random.choice(list(IMPERIUM_DATA.keys()))
         result_text = generic_transform(text, IMPERIUM_DATA[sub_faction_key])
+        
+        # Бинарный код - ТОЛЬКО для Механикус! Легкая латынь - для остальных имперцев
+        if 'mechanicus' in sub_faction_key.lower():
+            result_text = _apply_binaric_cant(result_text)
+        else:
+            result_text = _apply_high_gothic_subtle(result_text)
+            
         return ('text', _apply_thought_of_the_day(result_text))
         
     elif roll < 0.57:
-        # ХАОС: Без Мысли Дня
+        # ХАОС (Кхорн, Тзинч, Нургл, Слаанеш) - Чистый Хаос без бинарника и латыни!
         sub_faction_key = random.choice(list(CHAOS_DATA.keys()))
         return ('text', generic_transform(text, CHAOS_DATA[sub_faction_key]))
         
     elif roll < 0.71:
-        # ОРКИ: Без Мысли Дня
-        ork_words =["WAAAGH!", "ДАЁШЬ ДАККУ!", "БОЛЬШЕ ДАККИ!", "ЗЕЛЕНЫЙ ЛУЧШИЙ!"]
+        # ОРКИ - Чистый WAAAGH!
+        ork_words = ["WAAAGH!", "ДАЁШЬ ДАККУ!", "БОЛЬШЕ ДАККИ!", "ЗЕЛЕНЫЙ ЛУЧШИЙ!"]
         result_text = orkify(text) + " " + " ".join(random.choices(ork_words, k=random.randint(2,4))) + "!!!"
         return ('text', result_text)
         
     elif roll < 0.80:
-        # НЕКРОНЫ: Без Мысли Дня
+        # НЕКРОНЫ - Чистые Некроны без бинарника и латыни
         return ('text', necronify(text))
         
     elif roll < 0.88:
-        # ТИРАНИДЫ: Без Мысли Дня
+        # ТИРАНИДЫ - Чистые Тираниды
         return ('text', tyranidify(text))
         
     elif roll < 0.94:
-        # КСЕНОСЫ (Эльдары, Тау): Без Мысли Дня
+        # КСЕНОСЫ (Эльдары, Тау) - Чистые Ксеносы
         sub_faction_key = random.choice(list(XENOS_DATA.keys()))
         return ('text', generic_transform(text, XENOS_DATA[sub_faction_key]))
         
     else:
-        # GRIMDARK (Общий фон Империума): Применяем Мысль Дня
+        # GRIMDARK (Общий фон Империума)
         result_text = generic_transform(text, GENERAL_DATA['grimdark'])
+        result_text = _apply_high_gothic_subtle(result_text)
         return ('text', _apply_thought_of_the_day(result_text))

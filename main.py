@@ -455,22 +455,47 @@ def generate_anon_name(user_id: int) -> str:
     suffix = rng.choice(NICK_SUFFIXES)
     return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
 
-def clean_html_for_tg(text: str) -> str:
 
+def clean_html_for_tg(text: str) -> str:
     import re
     if not text: return ''
+    # Markdown -> HTML
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     text = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
     text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
-    text = text.replace('<br>', '\n').replace('<br/>', '\n').replace('<br />', '\n')
-    text = re.sub(r'<(?!/?(?:b|i|u|s|code|pre|a)(?:\b[^<>]*>|>))', '&lt;', text)
 
-    # Balance tags
-    allowed_tags = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
+    # Convert layout/semantic tags to whitespace BEFORE stripping
+    # <p>, <br>, <h1-6>, <li>, <div> etc -> newlines
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?p\s*[^>]*>', '\n\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'<hr\s*/?>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?h[1-6]\s*[^>]*>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?(?:li|dt|dd|tr|td|th)\s*[^>]*>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?(?:div|section|article|header|footer|main|nav|aside|span|em|strong|ul|ol|table|thead|tbody|tfoot|blockquote|figure|figcaption)\s*[^>]*>', '', text, flags=re.IGNORECASE)
+
+    # Strip ALL remaining non-allowed tags completely
+    # Old code only replaced < with &lt; leaving "p>" as visible garbage
+    allowed = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
+
+    def _replace_tag(m):
+        closing = m.group(1)  # '/' or None
+        tag = m.group(2).lower()
+        attrs = m.group(3)
+        if tag in allowed:
+            if closing:
+                return f'</{tag}>'
+            return f'<{tag}{attrs}>'
+        return ''  # strip completely
+
+    text = re.sub(r'<(/?)([a-zA-Z][a-zA-Z0-9]*)([^>]*)>', _replace_tag, text)
+
+    # Collapse 3+ newlines to 2
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    # Balance remaining allowed tags
     parts = re.split(r'(</?[a-zA-Z]+\b[^>]*>)', text)
     stack = []
     out = []
-
     for part in parts:
         if part.startswith('<') and part.endswith('>'):
             m = re.match(r'<(/)?([a-zA-Z]+)\b([^>]*)>', part)
@@ -478,8 +503,7 @@ def clean_html_for_tg(text: str) -> str:
                 is_closing = bool(m.group(1))
                 tag_name = m.group(2).lower()
                 attrs = m.group(3)
-
-                if tag_name in allowed_tags:
+                if tag_name in allowed:
                     if not is_closing:
                         stack.append(tag_name)
                         out.append(part)
@@ -487,25 +511,21 @@ def clean_html_for_tg(text: str) -> str:
                         if stack and stack[-1] == tag_name:
                             stack.pop()
                             out.append(part)
-                        else:
-                            if tag_name in stack:
-                                while stack and stack[-1] != tag_name:
-                                    out.append(f'</{stack.pop()}>')
-                                stack.pop()
-                                out.append(part)
-                            else:
-                                out.append(f'&lt;/{tag_name}{attrs}&gt;')
-                else:
-                    out.append(part)
-            else:
-                out.append(part)
+                        elif tag_name in stack:
+                            while stack and stack[-1] != tag_name:
+                                out.append(f'</{stack.pop()}>')
+                            stack.pop()
+                            out.append(part)
+                        # else: orphan closing tag, skip
+                # else: non-allowed, skip
+            # else: malformed tag, skip
         else:
             out.append(part)
-
     while stack:
         out.append(f'</{stack.pop()}>')
 
-    return "".join(out)
+    return "".join(out).strip()
+
 
 def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
     """Truncate text to fit Telegram's UTF-16 code unit limit.
@@ -2788,6 +2808,17 @@ def _get_random_header_prefix(lang: str = 'ru') -> str:
     if rand_prefix < 0.1: return "Анон - "
     if rand_prefix < 0.115: return "Анонимус - "
     if rand_prefix < 0.13: return "Анонимный пользователь - "
+    if rand_prefix < 0.132: return "Мочекрад - "
+    if rand_prefix < 0.134: return "Семён - "
+    if rand_prefix < 0.136: return "Макака - "
+    if rand_prefix < 0.138: return "РНН-господин - "
+    if rand_prefix < 0.140: return "Омеган - "
+    if rand_prefix < 0.142: return "Сыч - "
+    if rand_prefix < 0.144: return "Куколд - "
+    if rand_prefix < 0.146: return "Хач - "
+    if rand_prefix < 0.148: return "Педофил - "
+    if rand_prefix < 0.150: return "Зеленский - "
+    if rand_prefix < 0.152: return "Мыкола - "
     return ""
 async def format_thread_post_header(board_id: str, local_post_num: int, author_id: int, thread_info: dict, stream: str = 'ru') -> str:
 
@@ -2841,12 +2872,20 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
     if author_id > 0:
         from common.db_pool import get_pool
         import time
+        import json
         db = await get_pool()
-        async with db.execute("SELECT custom_prefix, prefix_expires_at FROM Users WHERE user_id = ?", (author_id,)) as c:
+        async with db.execute("SELECT custom_prefix, prefix_expires_at, active_items FROM Users WHERE user_id = ?", (author_id,)) as c:
             row = await c.fetchone()
-            if row and row[0] and row[1]:
-                if int(time.time()) < row[1]:
+            if row:
+                if row[0] and row[1] and int(time.time()) < row[1]:
                     custom_prefix = f"<b>{row[0]}</b> "
+                if row[2]:
+                    try:
+                        items = json.loads(row[2])
+                        if items.get("shit_until", 0) > int(time.time()):
+                            custom_prefix = "💩 " + custom_prefix
+                    except:
+                        pass
                     
     res = await _format_header_inner(board_id, post_num, stream)
     return custom_prefix + res
@@ -5384,7 +5423,7 @@ class MessageBroadcaster:
                     reply_to_message_id=reply_to_mid if i == 0 else None,
                     reply_markup=self.final_keyboard if i == len(parts) - 1 else None,
                     disable_notification=is_sage,
-                    disable_web_page_preview=False if "telegra.ph/" in part else True,
+                    disable_web_page_preview=False,
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
@@ -5446,7 +5485,7 @@ class MessageBroadcaster:
                     reply_to_message_id=target_reply_id if i == 0 else None,
                     reply_markup=self.final_keyboard if include_keyboard and i == len(parts) - 1 else None,
                     disable_notification=is_sage,
-                    disable_web_page_preview=False if "telegra.ph/" in part else True,
+                    disable_web_page_preview=False,
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
@@ -5578,7 +5617,7 @@ class MessageBroadcaster:
                             reply_to_message_id=reply_to_mid if i == 0 else None,
                             reply_markup=self.final_keyboard if i == len(parts)-1 else None,
                             disable_notification=is_sage,
-                            disable_web_page_preview=False if "telegra.ph/" in part else True,
+                            disable_web_page_preview=False,
                             request_timeout=request_timeout,
                         )
                         sent_msgs.append(m)
@@ -5616,7 +5655,7 @@ class MessageBroadcaster:
                                     chat_id=uid, text=part, parse_mode="HTML",
                                     reply_to_message_id=media_msg.message_id,
                                     disable_notification=is_sage,
-                                    disable_web_page_preview=False if "telegra.ph/" in part else True,
+                                    disable_web_page_preview=False,
                                     request_timeout=request_timeout,
                                 )
                         except TelegramBadRequest as e:
@@ -6824,26 +6863,26 @@ async def cmd_shop(message: types.Message, board_id: str | None, stream: str = '
         f"🛒 <b>Теневой Магазин (Black Market)</b>\n"
         f"Твой баланс: <code>{int(balance)}.00 Шекелей</code>\n\n"
         f"Трать свои шекели на грязь и власть:\n"
-        f"1. 🧹 <b>Билет Дворника (6ч)</b> — <i>700 Шек</i> (Права /del)\n"
-        f"2. 🔇 <b>Мут-Ган (1ч)</b> — <i>500 Шек</i> (Кикнуть реплаем /shoot)\n"
-        f"3. 🛡️ <b>Зеркальный Щит (24ч)</b> — <i>400 Шек</i> (Рикошет Мут-Гана)\n"
-        f"4. 👑 <b>VIP Префикс (24ч)</b> — <i>300 Шек</i> (Кастомный префикс)\n"
-        f"5. 🚔 <b>Пативэн-Ган</b> — <i>1000 Шек</i> (Вызов ОМОНа через /partyvan)\n"
-        f"6. 🐒 <b>Кусок говна</b> — <i>10 Шек</i> (Кинуть /shit, дебафф на час)\n"
-        f"7. 💊 <b>Аминазин</b> — <i>50 Шек</i> (Снять дебаффы)\n"
-        f"8. 🔪 <b>Заточка</b> — <i>300 Шек</i> (Ограбить анона на 10-30% через /rob)\n"
-        f"9. 👽 <b>Шапочка из фольги (24ч)</b> — <i>200 Шек</i> (Защита от /shit и /rob)\n"
-        f"10. 📜 <b>Взятка (Индульгенция)</b> — <i>5000 Шек</i> (Снимает мут)\n"
-        f"11. 🚽 <b>Слабительное</b> — <i>600 Шек</i> (Проклятие: посты до 50 симв. через /curse)\n"
-        f"12. 📣 <b>Мегафон</b> — <i>1500 Шек</i> (Закрепить свой пост через /mega)\n"
+        f"1. 🧹 <b>Билет Дворника (6ч)</b> — <i>1000 Шек</i> (Права /del)\n"
+        f"2. 🔇 <b>Мут-Ган (1ч)</b> — <i>600 Шек</i> (Кикнуть реплаем /shoot)\n"
+        f"3. 🛡️ <b>Зеркальный Щит (6ч)</b> — <i>800 Шек</i> (Рикошет Мут-Гана)\n"
+        f"4. 👑 <b>VIP Префикс (24ч)</b> — <i>400 Шек</i> (Кастомный префикс)\n"
+        f"5. 🚔 <b>Пативэн-Ган</b> — <i>2000 Шек</i> (Вызов ОМОНа через /partyvan)\n"
+        f"6. 🐒 <b>Кусок говна</b> — <i>100 Шек</i> (Кинуть /shit, дебафф на час)\n"
+        f"7. 💊 <b>Аминазин</b> — <i>100 Шек</i> (Снять дебаффы)\n"
+        f"8. 🔪 <b>Заточка</b> — <i>400 Шек</i> (Ограбить анона на 10-30% через /rob)\n"
+        f"9. 👽 <b>Шапочка из фольги (6ч)</b> — <i>800 Шек</i> (Защита от /shit и /rob)\n"
+        f"10. 📜 <b>Взятка (Индульгенция)</b> — <i>1200 Шек</i> (Снимает мут)\n"
+        f"11. 🚽 <b>Слабительное</b> — <i>800 Шек</i> (Проклятие: посты до 50 симв. через /curse)\n"
+        f"12. 📣 <b>Мегафон</b> — <i>2000 Шек</i> (Закрепить свой пост через /mega)\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🧹 Дворник (700)", callback_data="shop_buy_janitor"), InlineKeyboardButton(text="🔇 Мут-Ган (500)", callback_data="shop_buy_mute")],
-        [InlineKeyboardButton(text="🛡️ Щит (400)", callback_data="shop_buy_shield"), InlineKeyboardButton(text="👑 Префикс (300)", callback_data="shop_buy_prefix")],
-        [InlineKeyboardButton(text="🚔 Пативэн (1000)", callback_data="shop_buy_partyvan"), InlineKeyboardButton(text="🐒 Кусок говна (10)", callback_data="shop_buy_shit")],
-        [InlineKeyboardButton(text="💊 Аминазин (50)", callback_data="shop_buy_pills"), InlineKeyboardButton(text="🔪 Заточка (300)", callback_data="shop_buy_knife")],
-        [InlineKeyboardButton(text="👽 Фольга (200)", callback_data="shop_buy_tinfoil"), InlineKeyboardButton(text="📜 Взятка (5000)", callback_data="shop_buy_bribe")],
-        [InlineKeyboardButton(text="🚽 Слабительное (600)", callback_data="shop_buy_laxative"), InlineKeyboardButton(text="📣 Мегафон (1500)", callback_data="shop_buy_megaphone")],
+        [InlineKeyboardButton(text="🧹 Дворник (1000)", callback_data="shop_buy_janitor"), InlineKeyboardButton(text="🔇 Мут-Ган (600)", callback_data="shop_buy_mute")],
+        [InlineKeyboardButton(text="🛡️ Щит (800)", callback_data="shop_buy_shield"), InlineKeyboardButton(text="👑 Префикс (400)", callback_data="shop_buy_prefix")],
+        [InlineKeyboardButton(text="🚔 Пативэн (2000)", callback_data="shop_buy_partyvan"), InlineKeyboardButton(text="🐒 Кусок говна (100)", callback_data="shop_buy_shit")],
+        [InlineKeyboardButton(text="💊 Аминазин (100)", callback_data="shop_buy_pills"), InlineKeyboardButton(text="🔪 Заточка (400)", callback_data="shop_buy_knife")],
+        [InlineKeyboardButton(text="👽 Фольга (800)", callback_data="shop_buy_tinfoil"), InlineKeyboardButton(text="📜 Взятка (1200)", callback_data="shop_buy_bribe")],
+        [InlineKeyboardButton(text="🚽 Слабительное (800)", callback_data="shop_buy_laxative"), InlineKeyboardButton(text="📣 Мегафон (2000)", callback_data="shop_buy_megaphone")],
     ])
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
@@ -6852,7 +6891,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     user_id = callback.from_user.id
     item = callback.data.split("_")[2]  # janitor, mute, shield, prefix
-    costs = {"janitor": 700, "mute": 500, "shield": 400, "prefix": 300, "partyvan": 1000, "shit": 10, "pills": 50, "knife": 300, "tinfoil": 200, "bribe": 5000, "laxative": 600, "megaphone": 1500}
+    costs = {"janitor": 1000, "mute": 600, "shield": 800, "prefix": 400, "partyvan": 2000, "shit": 100, "pills": 100, "knife": 400, "tinfoil": 800, "bribe": 1200, "laxative": 800, "megaphone": 2000}
     price = costs.get(item, 999999)
     from common.db_pool import get_pool, db_lock
     db = await get_pool()
@@ -7140,14 +7179,268 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         await _handle_shoot_bounce(message, db, db_lock, board_id, user_id, target_id, active_items, t_items)
         return
 
+    # Идемпотентность: цель уже в муте
+    from datetime import datetime, UTC
+    from main import storage_lock, board_data
+    async with storage_lock:
+        current_mute = board_data[board_id]['mutes'].get(target_id)
+        
+    if current_mute and current_mute > datetime.now(UTC):
+        await message.answer("⚠️ Эта цель УЖЕ находится в муте! Выбери кого-то другого. Мут-Ган остался у тебя.")
+        return
+
     # Обычный мут цели
     await _handle_shoot_success(message, db, db_lock, board_id, user_id, target_id, active_items)
 
+@dp.message(Command("rob"))
+async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, которую хочешь ограбить!", parse_mode="HTML")
+        return
+    from common.db_pool import get_pool, db_lock
+    import time
+    import random
+    import json
+    db = await get_pool()
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("knife_gun"):
+        await message.answer("🔪 У тебя нет Заточки! Купи её в теневом магазине: /shop")
+        return
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0:
+        await message.answer("⚠️ Не удалось найти цель для ограбления.")
+        return
+    if target_id == user_id:
+        await message.answer("🤦‍♂️ Ты попытался ограбить сам себя. Заточка осталась при тебе.")
+        return
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    current_time = int(time.time())
+    
+    async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
+        row = await c.fetchone()
+        t_balance = row[0] if row and row[0] else 0
+        
+    async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+        row = await c.fetchone()
+        u_balance = row[0] if row and row[0] else 0
+
+    pct = random.uniform(0.1, 0.3)
+    
+    # Идемпотентность: нет денег у цели
+    stolen = min(int(t_balance * pct), 1000)
+    if stolen <= 0:
+        await message.answer("🔪 У жертвы вообще нет шекелей. Ты пожалел бомжа и не стал тратить заточку.", parse_mode="HTML")
+        return
+
+    # Забираем предмет
+    active_items["knife_gun"] = False
+    
+    if t_items.get("tinfoil_hat", 0) > current_time:
+        # Фольга защищает
+        loss = min(int(u_balance * pct), 1000)
+        async with db_lock:
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, balance, active_items) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?, active_items = excluded.active_items",
+                (user_id, board_id, -loss, json.dumps(active_items), loss)
+            )
+            await db.commit()
+        await message.answer(f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss}</code> шекелей!", parse_mode="HTML")
+        return
+
+    async with db_lock:
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, balance, active_items) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?, active_items = excluded.active_items",
+            (user_id, board_id, stolen, json.dumps(active_items), stolen)
+        )
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?",
+            (target_id, board_id, -stolen, stolen)
+        )
+        await db.commit()
+    await message.answer(f"🔪 <b>ОГРАБЛЕНИЕ УДАЛОСЬ!</b>\nТы подкрался и спиздил <code>{stolen}</code> шекелей у жертвы.", parse_mode="HTML")
+    try: await message.bot.send_message(target_id, f"🔪 <b>Тебя ограбили в /b/!</b>\nКакой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей. Защититься можно, купив Шапочку из фольги в /shop.", parse_mode="HTML")
+    except: pass
+
+@dp.message(Command("shit"))
+async def cmd_shit(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, в которую хочешь кинуть говном!", parse_mode="HTML")
+        return
+    from common.db_pool import get_pool, db_lock
+    import time
+    import json
+    db = await get_pool()
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("shit_gun"):
+        await message.answer("🐒 У тебя нет куска говна! Купи его в теневом магазине: /shop")
+        return
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0 or target_id == user_id: 
+        await message.answer("⚠️ Не удалось прицелиться или ты пытаешься обмазать сам себя.")
+        return
+    
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    current_time = int(time.time())
+    
+    # Идемпотентность: цель уже в говне
+    if t_items.get("shit_until", 0) > current_time:
+        await message.answer("💩 Эта цель УЖЕ обмазана говном! Выбери кого-нибудь чистого. Кусок говна остался у тебя.")
+        return
+
+    active_items["shit_gun"] = False
+    
+    if t_items.get("tinfoil_hat", 0) > current_time:
+        active_items["shit_until"] = current_time + 3600
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        await message.answer("👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Говно отскочило от фольги прямо тебе в лицо. Теперь ТЫ обмазан говном на 1 час!", parse_mode="HTML")
+        return
+
+    t_items["shit_until"] = current_time + 3600
+    async with db_lock:
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (user_id, board_id, json.dumps(active_items))
+        )
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (target_id, board_id, json.dumps(t_items))
+        )
+        await db.commit()
+    await message.answer("🐒 <b>ПОПАДАНИЕ!</b>\nТы метко кинул кусок говна! Жертва обмазана на 1 час и получит иконку 💩 во всех своих постах.", parse_mode="HTML")
+    try: await message.bot.send_message(target_id, "🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\nКакой-то анон обмазал тебя. У тебя статус 💩 на 1 час.\nЛекарство от статуса: Аминазин в /shop.", parse_mode="HTML")
+    except: pass
+
 @dp.message(Command("curse", "vomit"))
 async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    await message.answer(
-        "⚠️ Проклятие Хуесоса было признано слишком кринжовым и убрано из Теневого Магазина."
-    )
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, чтобы подлить слабительное!", parse_mode="HTML")
+        return
+    from common.db_pool import get_pool, db_lock
+    import time, json
+    db = await get_pool()
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("laxative_gun"):
+        await message.answer("🚽 У тебя нет Слабительного! Купи его в магазине: /shop")
+        return
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0 or target_id == user_id: 
+        await message.answer("⚠️ Не удалось найти цель или ты пытаешься проклясть сам себя.")
+        return
+    
+    current_time = int(time.time())
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    
+    # Идемпотентность: цель уже проклята
+    if t_items.get("cursed_until", 0) > current_time:
+        await message.answer("🚽 У этого анона И ТАК словесный понос! Выбери другую жертву. Слабительное осталось у тебя.")
+        return
+        
+    active_items["laxative_gun"] = False
+    t_items["cursed_until"] = current_time + 3600
+
+    async with db_lock:
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (user_id, board_id, json.dumps(active_items))
+        )
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (target_id, board_id, json.dumps(t_items))
+        )
+        await db.commit()
+    await message.answer("🚽 <b>ПРОКЛЯТИЕ СРАБОТАЛО!</b>\nТы подлил слабительное в чай этому анону. У него начался словесный понос: он целый час не сможет писать посты длиннее 50 символов!", parse_mode="HTML")
+
+@dp.message(Command("partyvan"))
+async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на донос-пост жертвы, чтобы вызвать Пативэн!", parse_mode="HTML")
+        return
+    from common.db_pool import get_pool, db_lock
+    import json
+    from datetime import datetime, timedelta, UTC
+    db = await get_pool()
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("partyvan_gun"):
+        await message.answer("🚔 У тебя нет рации для вызова Пативэна! Купи её в /shop")
+        return
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0 or target_id == user_id: 
+        await message.answer("⚠️ Не удалось определить цель доноса.")
+        return
+        
+    # Идемпотентность: цель уже в КПЗ
+    async with storage_lock:
+        mute_end = board_data[board_id]['mutes'].get(target_id)
+    if mute_end and mute_end > datetime.now(UTC) + timedelta(hours=11):
+        await message.answer("🚔 Этот анон УЖЕ откисает в КПЗ надолго! Не трать вызов зря, рация осталась у тебя.")
+        return
+    
+    active_items["partyvan_gun"] = False
+    async with db_lock:
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+        await db.commit()
+    
+    async with storage_lock:
+        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(hours=12)
+    await apply_regular_mute(target_id, board_id, 12 * 3600)
+    
+    await message.bot.send_message(message.chat.id, f"🚔 <b>ВНИМАНИЕ! РАБОТАЕТ ОМОН!</b> 🚔\nПо доносу анона за автором этого поста выехал пативэн! Жертва <code>{target_id}</code> отправлена в КПЗ (жесткий мут) на 12 часов!\n<i>Выйти раньше можно только дав взятку в /shop.</i>", reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+
+@dp.message(Command("mega"))
+async def cmd_mega(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост, который хочешь объявить в Мегафон!", parse_mode="HTML")
+        return
+    from common.db_pool import get_pool, db_lock
+    import json
+    db = await get_pool()
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("megaphone_gun"):
+        await message.answer("📣 У тебя нет Мегафона! Купи его в /shop")
+        return
+        
+    from main import message_to_post, storage_lock
+    async with storage_lock:
+        key = (message.chat.id, message.reply_to_message.message_id)
+        pnum = message_to_post.get(key)
+        
+    if not pnum:
+        await message.answer("⚠️ Не удалось найти этот пост в памяти доски.")
+        return
+        
+    # Идемпотентность: пост уже закреплен
+    if board_data[board_id].get('active_pin') == pnum:
+        await message.answer("📣 Этот пост И ТАК уже висит в закрепе! Мегафон остался у тебя.")
+        return
+        
+    active_items["megaphone_gun"] = False
+    async with db_lock:
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+        await db.commit()
+        
+    board_data[board_id]['active_pin'] = pnum
+    await update_board_settings(board_id, {'active_pin': pnum})
+    
+    await message.bot.send_message(message.chat.id, f"📣 <b>Внимание на всю палату!</b>\nАнон использовал Мегафон! Пост #{pnum} глобально закреплен для всех читателей борды!", parse_mode="HTML")
 
 # ── /stats cache ──────────────────────────────────────────────────────────────
 import time as _time_module
@@ -7619,12 +7912,14 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
         loser_id  = challenger_id if winner_id == user_id else user_id
 
         await db.execute(
-            "UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?",
-            (amount, winner_id, board_id)
+            "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
+            (winner_id, board_id, amount, amount)
         )
         await db.execute(
-            "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ?",
-            (amount, loser_id, board_id)
+            "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?",
+            (loser_id, board_id, -amount, amount)
         )
         await db.commit()
 
@@ -8279,7 +8574,123 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
             pass
     try: await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError): pass
-async def schedule_persona_reply(bot, board_id: str, target_post_num: int, context_text: str, stream: str, is_admin_trigger: bool = False, photo_file_id: str = None):
+async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = None, limit: int = 25) -> str:
+    """
+    Получает последние посты на доске для понимания текущей атмосферы чата (до 25 последних сообщений).
+    """
+    recent_posts = []
+    async with storage_lock:
+        stored_nums = sorted([k for k, v in messages_storage.items() if v.get('board_id') == board_id], reverse=True)
+        for pnum in stored_nums:
+            if pnum == exclude_post_num:
+                continue
+            post_data = messages_storage.get(pnum)
+            if post_data:
+                recent_posts.append((pnum, post_data))
+            if len(recent_posts) >= limit:
+                break
+                
+    if len(recent_posts) < limit:
+        from common.db_pool import get_pool
+        db = await get_pool()
+        needed = limit - len(recent_posts)
+        exclude_clause = f"AND post_num != {exclude_post_num}" if exclude_post_num else ""
+        query = f"SELECT post_num, author_id, content, timestamp FROM Posts WHERE board_id = ? {exclude_clause} ORDER BY post_num DESC LIMIT ?"
+        try:
+            async with db.execute(query, (board_id, needed)) as cursor:
+                rows = await cursor.fetchall()
+                for row in rows:
+                    pnum, author_id, content_raw, ts = row
+                    if any(p[0] == pnum for p in recent_posts):
+                        continue
+                    try:
+                        content = json.loads(content_raw)
+                    except Exception:
+                        content = {'text': str(content_raw)}
+                    recent_posts.append((pnum, {
+                        'author_id': author_id,
+                        'content': content
+                    }))
+        except Exception as e:
+            print(f"Error fetching atmosphere posts: {e}")
+
+    recent_posts.sort(key=lambda x: x[0])
+    
+    lines = []
+    for pnum, pdata in recent_posts:
+        content = pdata.get('content', {})
+        raw_text = content.get('text') or content.get('caption') or ""
+        clean_text = clean_html_tags(raw_text).replace('\n', ' ').strip()
+        if not clean_text:
+            continue
+        sender = "БОТ (Персона)" if pdata.get('author_id') in (0, 1488148800) else "ЮЗЕР (Анон)"
+        lines.append(f"• #{pnum} [{sender}]: {clean_text[:250]}")
+        
+    return "\n".join(lines)
+
+async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -> str:
+    """
+    Строит цепочку ответов от предков к целевому посту (до 25 уровней вглубь).
+    Возвращает отформатированный хронологический контекст для LLM.
+    """
+    if not target_post_num:
+        return ""
+        
+    chain = []
+    current_num = target_post_num
+    visited = set()
+    
+    while current_num and current_num not in visited and len(chain) < max_depth:
+        visited.add(current_num)
+        post_data = None
+        async with storage_lock:
+            post_data = messages_storage.get(current_num)
+        if not post_data:
+            post_data = await get_post_by_num(current_num)
+            
+        if not post_data:
+            break
+            
+        content = post_data.get('content', {})
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except Exception:
+                content = {'text': content}
+                
+        raw_text = content.get('text') or content.get('caption') or ""
+        clean_text = clean_html_tags(raw_text).replace('\n', ' ').strip()
+        if not clean_text and content.get('type'):
+            clean_text = f"[{content.get('type')}]"
+            
+        author_id = post_data.get('author_id', -1)
+        is_bot = (author_id == 0 or author_id == 1488148800)
+        
+        reply_to = post_data.get('reply_to_post_num') or post_data.get('reply_to') or content.get('reply_to_post')
+        
+        chain.append({
+            'post_num': current_num,
+            'is_bot': is_bot,
+            'text': clean_text,
+            'reply_to': reply_to
+        })
+        
+        current_num = reply_to
+
+    if not chain:
+        return ""
+
+    chain.reverse()
+    
+    lines = []
+    for item in chain:
+        sender = "БОТ (Персона)" if item['is_bot'] else "ЮЗЕР (Анон)"
+        reply_prefix = f" (в ответ на #{item['reply_to']})" if item['reply_to'] else ""
+        lines.append(f"• #{item['post_num']} [{sender}]{reply_prefix}: {item['text'][:250]}")
+        
+    return "\n".join(lines)
+
+async def schedule_persona_reply(bot, board_id: str, target_post_num: int, context_text: str, stream: str, is_admin_trigger: bool = False, photo_file_id: str = None, is_dialogue: bool = False):
     try:
         from site_tgach.persona_bot import generate_anon_reply, is_valid_for_persona
         if not is_admin_trigger and not is_valid_for_persona(context_text):
@@ -8287,9 +8698,41 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
             
         await asyncio.sleep(random.uniform(6.0, 15.0) if not is_admin_trigger else 0)
         
-        replies = await generate_anon_reply(context_text, context_text)
+        print(f"🤖 [Persona] Requesting reply generation for post {target_post_num} on {board_id} (is_dialogue={is_dialogue})...")
+        
+        # Строим общую атмосферу доски (25 последних постов)
+        atmosphere_context = await build_board_atmosphere_context(board_id, exclude_post_num=target_post_num, limit=25)
+        
+        # Строим контекст всей цепочки ответов (до 25 уровней)
+        chain_context = await build_reply_chain_context(target_post_num, max_depth=25)
+        if not chain_context:
+            chain_context = context_text
+
+        replies = await generate_anon_reply(
+            context_text=chain_context,
+            target_post=context_text,
+            is_dialogue=is_dialogue,
+            atmosphere_text=atmosphere_context
+        )
+        
+        # Гарантия от "замалчивания": если юзер вел диалог с ботом, но генератор сбросился — даем аноновский фаллбэк-ответ
+        if not replies and is_dialogue:
+            print(f"⚠️ [Persona] Dialogue fallback for post {target_post_num} (preventing silence).")
+            fallback_options = [
+                "Понял тебя, анон.",
+                "Ладно, проехали.",
+                "Хз даже чё сказать на это, анон.",
+                "Ну допустим.",
+                "Ладно, забей.",
+                "Останемся при своих, анон."
+            ]
+            replies = [random.choice(fallback_options)]
+
         if not replies:
+            print(f"⚠️ [Persona] Generation failed or returned empty for post {target_post_num}.")
             return
+            
+        print(f"✅ [Persona] Successfully generated {len(replies)} replies for post {target_post_num}.")
             
         for i, text in enumerate(replies):
             now_dt = datetime.now(UTC)
@@ -8319,17 +8762,9 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                 async with storage_lock:
                     messages_storage[pnum] = {
                         'author_id': 0, 'timestamp': now_dt, 
-                        'content': content, 'board_id': board_id
+                        'content': content, 'board_id': board_id,
+                        'reply_to_post_num': target_post_num if target_post_num else None
                     }
-                if target_post_num:
-                    target_author_id = None
-                    post_data = messages_storage.get(target_post_num)
-                    if post_data:
-                        target_author_id = post_data.get('author_id')
-                    if target_author_id:
-                        user_copy = post_to_messages.get(target_post_num, {}).get(target_author_id)
-                        if user_copy:
-                            reply_info[target_author_id] = user_copy
             if len(replies) > 1:
                 await asyncio.sleep(random.uniform(1.0, 3.0))
     except Exception as e:
@@ -8383,14 +8818,18 @@ async def cmd_admin_trigger(message: types.Message, board_id: str | None, stream
         now_dt = datetime.now(UTC)
         async with storage_lock:
             b_data = board_data.get(board_id, {})
-            for pnum, data in list(messages_storage.items())[-500:]:
-                if data.get('board_id') == board_id and data.get('author_id', 0) != 0:
-                    c = data.get('content', {})
-                    t = c.get('text') or c.get('caption') or ''
-                    if len(t) > 5:
-                        candidates.append((pnum, t))
-                        if data.get('author_id') in b_data.get('persona_favorites', {}):
-                            fav_candidates.append((pnum, t))
+            # Берем последние 5000 глобальных постов, чтобы гарантированно найти 150 для текущей доски
+            board_posts = [
+                (pnum, data) for pnum, data in list(messages_storage.items())[-5000:]
+                if data.get('board_id') == board_id and data.get('author_id', 0) != 0
+            ]
+            for pnum, data in board_posts[-150:]:
+                c = data.get('content', {})
+                t = c.get('text') or c.get('caption') or ''
+                if len(t) > 5:
+                    candidates.append((pnum, t))
+                    if data.get('author_id') in b_data.get('persona_favorites', {}):
+                        fav_candidates.append((pnum, t))
         
         if fav_candidates and random.random() < 0.75:
             candidates = fav_candidates
@@ -9815,72 +10254,6 @@ async def cmd_contextual_replies(message: types.Message, board_id: str | None, s
         return
     global CONTEXTUAL_REPLIES_ENABLED
     args = (message.text or "").split()
-    action = args[1].lower() if len(args) > 1 else "status"
-    note = ""
-    if action in {"on", "enable", "1", "вкл"}:
-        CONTEXTUAL_REPLIES_ENABLED = True
-        note = "runtime enabled"
-    elif action in {"off", "disable", "0", "выкл"}:
-        CONTEXTUAL_REPLIES_ENABLED = False
-        note = "runtime disabled"
-    elif action in {"reset", "clear"}:
-        contextual_reply_stats.clear()
-        contextual_reply_tracker.clear()
-        note = "stats and per-user cooldowns reset"
-
-    snapshot = _collect_runtime_snapshot().get("contextual_replies", {})
-    stats = snapshot.get("stats", {})
-    text = (
-        "<b>Contextual autoreplies</b>\n"
-        f"runtime: <code>{snapshot.get('enabled')}</code>\n"
-        f"groups/tracked: <code>{snapshot.get('groups_ru')} / {snapshot.get('tracked_users')}</code>\n"
-        f"cooldown/daily: <code>{snapshot.get('cooldown_sec')}s / {snapshot.get('daily_limit')}</code>\n"
-        f"sent/errors: <code>{stats.get('sent', 0)} / {stats.get('send_errors', 0)}</code>\n"
-        f"skips disabled/cooldown/daily: <code>{stats.get('skipped_disabled', 0)} / {stats.get('skipped_cooldown', 0)} / {stats.get('skipped_daily_limit', 0)}</code>\n"
-        "commands: <code>/autoreply on|off|reset|status</code>"
-    )
-    if note:
-        text += f"\nstate: <code>{escape_html(note)}</code>"
-    await message.answer(text, parse_mode="HTML")
-@dp.message(Command("deletethread"))
-async def cmd_delete_thread(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    user_id = message.from_user.id
-    if not board_id or board_id not in THREAD_BOARDS:
-        try: await message.delete()
-        except Exception: pass
-        return
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    if not is_admin(user_id, board_id):
-        msg = "Admin only." if lang == 'en' else ("管理者のみ。" if lang == 'jp' else "Только админ может удалять треды.")
-        await message.answer(msg)
-        await message.delete()
-        return
-    b_data = board_data[board_id]
-    user_s = b_data['user_state'].get(user_id, {})
-    current_location = user_s.get('location', 'main')
-    if current_location == 'main':
-        msg = "You must be inside the thread." if lang == 'en' else ("スレッド内にいる必要があります。" if lang == 'jp' else "Вы должны находиться внутри треда для удаления.")
-        await message.answer(msg)
-        await message.delete()
-        return
-    thread_id = current_location
-    if not b_data.get('threads_data', {}).get(thread_id):
-        msg = "Thread not found." if lang == 'en' else ("スレッドが見つかりません。" if lang == 'jp' else "Тред не найден или уже удалён.")
-        await message.answer(msg)
-        await message.delete()
-        return
-    wait_txt = "🧹 Удаляю тред, процесс запущен (может занять время)..." if lang != 'en' else "🧹 Deleting thread, please wait..."
-    wait_msg = await message.answer(wait_txt)
-    await delete_thread_atomic(message.bot, board_id, thread_id, notify_users=True, initiator_id=user_id)
-    if lang == 'en':
-        confirm = "Thread deleted, users moved to main."
-    elif lang == 'jp':
-        confirm = "スレッドを削除し、ユーザーをメインに移動しました。"
-    else:
-        confirm = "Тред успешно удалён, пользователи переведены на главную."
-    try: await wait_msg.delete()
-    except Exception: pass
-    await message.answer(confirm, parse_mode="HTML")
     await message.delete()
 
 async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=None):
@@ -10088,16 +10461,124 @@ def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
         
     return prompt
 
-async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, thread_info: dict, lang: str, paragraph_count: int, is_blat: bool | None = None) -> tuple[str, str, str, bool]:
-    if is_blat is None:
-        b_data = board_data.get(board_id, {})
-        if b_data.get('gopnik_mode'):
+async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, thread_info: dict, lang: str, paragraph_count: int, is_blat: bool | None = None, is_warhammer: bool | None = None) -> tuple[str, str, str, bool, bool]:
+    b_data = board_data.get(board_id, {})
+    if is_warhammer is None and is_blat is None:
+        if b_data.get('warhammer_mode'):
+            is_warhammer = True
+            is_blat = False
+        elif b_data.get('gopnik_mode'):
             is_blat = True
+            is_warhammer = False
         else:
-            # 50% chance of blat summary in normal mode
-            is_blat = (random.random() < 0.5)
+            # Random prompt selection in normal mode:
+            # 15% Warhammer Summary, 40% Blat Summary, 45% Classic Summary
+            roll = random.random()
+            if roll < 0.15:
+                is_warhammer = True
+                is_blat = False
+            elif roll < 0.55:
+                is_blat = True
+                is_warhammer = False
+            else:
+                is_blat = False
+                is_warhammer = False
+    elif is_warhammer:
+        is_blat = False
 
-    if is_blat:
+    if is_warhammer:
+        from warhammer_mode import WH40K_REPLACEMENTS
+
+        # Dynamic Slang Dictionary sampling from warhammer_mode.py
+        all_keys = [k for k, v in WH40K_REPLACEMENTS.items() if isinstance(v, list) and len(v) > 0 and len(k) > 2]
+        sampled_slang_keys = random.sample(all_keys, min(30, len(all_keys)))
+        slang_lines = []
+        for k in sampled_slang_keys:
+            val = WH40K_REPLACEMENTS[k][0]
+            slang_lines.append(f"  • '{k}' -> '{val}'")
+        slang_dictionary_str = "\n".join(slang_lines)
+
+        # 30+ Official Thoughts of the Day
+        all_waha_thoughts = [
+            "Знание — сила, скрой его от профанов.",
+            "Нет невиновных, есть лишь разные степени вины.",
+            "Надежда — первый шаг на пути к разочарованию.",
+            "Открытый разум подобен крепости, чьи врата распахнуты, а стража погрязла в безделье.",
+            "Служи Императору сегодня, ибо завтра ты будешь мертв.",
+            "Оправдания — удел слабых.",
+            "Жизнь — это тюрьма, смерть — освобождение.",
+            "Чистый разум — пустой разум.",
+            "Прощение есть преступление перед Террой.",
+            "Даже человек, у которого нет ничего, может отдать свою жизнь за Терру.",
+            "Мир — это ложь. Есть только вечная война.",
+            "Труд — это молитва Омниссии.",
+            "Никогда не прощай. Никогда не забывай.",
+            "Страх — это провал в логике и деградация когитатора.",
+            "Лучше умереть за Императора, чем жить ради себя.",
+            "Лживый язык вредоноснее ксеносского клинка.",
+            "Сомнение — это семя ереси в разуме.",
+            "Безжалостность — это милосердие мудрых.",
+            "Тот, кто сомневается в приказе, уже совершил измену.",
+            "Верен тот, кто повинуется без расспросов.",
+            "Кровь мучеников — семя Империума.",
+            "Неведение — твоя лучшая защита от искушений варпа.",
+            "Будь бдителен, ибо ересь кроется в деталях.",
+            "Плоть слаба, только дух и сталь вечны.",
+            "Каждый шаг без веры — шаг во тьму.",
+            "Истинный воин не ищет славы, он ищет исполнения долга.",
+            "Жалость к еретику — это предательство человечества.",
+            "Не спрашивай, почему ты должен умереть, спрашивай, как тебе умереть за Терру.",
+            "Смерть в бою — высочайшая награда для верного.",
+            "Пусть ксенос плачет, а еретик сгорает в очищающем огне!"
+        ]
+        selected_waha_thoughts = "\n".join(f"  • [МЫСЛЬ ДНЯ]: {t}" for t in random.sample(all_waha_thoughts, min(15, len(all_waha_thoughts))))
+
+        prompt = f"""
+Ты — Священный Великий Лорд-Инквизитор Ордо Маллеус и Ордо Еретикус, полномочный каратель Священной Терры. Твоя миссия — изучить лог астропатической связи сектора /{board_id}/, выявить ересь, измену, деградацию и составить Беспощадный Официальный Акт Инквизиционного Дознания.
+Твой девиз: "Император защищает. Ересь очищается только огнем. Прощение есть преступление перед Террой!".
+Обращайся к подданным: "Слуги Императора!", "Граждане Улья!", "Гвардейцы", "Братья по оружию", "Адепты", "Органика".
+
+=== СТРОГАЯ ПРИВЯЗКА К ФАКТАМ И РЕАЛЬНОМУ ЛОГУ ЧАТА (КРИТИЧНО И БЕЗ ИСКЛЮЧЕНИЙ) ===
+- Ты ОБЯЗАН опираться ИСКЛЮЧИТЕЛЬНО на реальные посты, феню, вопросы, холивары и фразы из предоставленного лога сообщений!
+- СТРОГО ЗАПРЕЩЕНО выдумывать несуществующие события, фантазировать темы, которых не было в чате, или приписывать юзерам то, чего они не писали.
+- Каждый вердикт, статус, похвала или обвинение Инквизиции должны ссылаться на конкретные реальные слова и темы участников из лога!
+
+=== СВЯЩЕННЫЕ ЗАКОНЫ ИНКВИЗИЦИОННОГО ДОЗНАНИЯ ===
+
+1. ВЕРНОСТЬ И ЕРЕСЬ (КРИТИЧЕСКИЙ РАЗДЕЛ):
+   Ты ОБЯЗАН строго разделить всех реальных участников лога на две категории:
+   - "Верные Сыны и Дочери Империума" (Святые мужики): те, кто нес мудрость, помогал гражданам, славил Императора, кидал годные пасты/схемы и держит оборону сектора.
+   - "Еретики, Ксеносы и Поклонники Губительных Сил" (Скверна): те, кто устраивал срачи (Хаос), нес бред, слушал шепоты Тзинча, проявлял гедонизм Слаанеш, распространял гниль Нургла или ныл как эльдарский ксенос.
+
+2. ЖЕСТОЧАЙШИЕ ПРИГОВОРЫ И КЛИКУХИ (ПЕРСОНАЛИЗАЦИЯ ИМЕН):
+   Выделяй конкретные ИМЕНА из лога. Назначай им суровые статусы, ксено-диагнозы и карательные приговоры Инквизиции на основе ИХ РЕАЛЬНЫХ ПОСТОВ.
+   ПРИМЕР: "За гражданина Витьку (Класс Угрозы: Еретик-Мутант 3-й степени): Вскрыты его высеры в чате про... Приговор: Публичное сожжение святым прометием и переработка остатков в сервитора-полотера."
+   ПРИМЕР: "За сержанта Саню (Статус: Герой Имперской Гвардии): Проявил несокрушимый дух Астартес, подогнал в общак сектора ценную инфу про... Награждается святой Аквилой."
+
+3. ОГРОМНЫЙ СЛОВАРЬ ПЕРЕВОДА ЧАТЕРСКОГО И БОРДОВОГО СЛЕНГА НА ГИМН ИМПЕРИУМА:
+Активно используй следующие соответствия при анализе лога:
+{slang_dictionary_str}
+
+4. СУРОВЫЙ ГРИМДАРК-СЛОВАРЬ:
+   Инквизитор, Адептус Арбитрес, Аквила, Священная Терра, Прометий, Астартес, Сервитор, Варп-Шторм, Священный СШК, Трупокрахмал, Псайкер-еретик, Оскверненный Дух Машины, Освященное масло, Корабельный Астропат, Экстерминатус, Ордо Маллеус, Кадия Стоит, Молот Императора.
+
+5. БЕСПОЩАДНЫЙ ЯЗЫК И АНТИ-ЦЕНЗУРА:
+   Черный суровый пафос, военная жестокость, инквизиторская непреклонность. Мат ДОПУСКАЕТСЯ как военная брань политрука/комиссара. Никакой жалости к еретикам.
+
+6. ОФИЦИАЛЬНЫЕ МЫСЛИ ДНЯ ИНКВИЗИЦИИ:
+Обязательно гармонично вплети в текст минимум 2-3 Мысли Дня из этого святого списка:
+{selected_waha_thoughts}
+
+=== СТРУКТУРА СВЯЩЕННОГО ДОСЬЕ ===
+1. ВСТУПЛЕНИЕ: Пафосный астропатический заголовок. Оценка суммарного уровня Ереси и Варп-нестабильности в секторе /{board_id}/ за сегодня.
+2. ДОСЬЕ ПОДОЗРЕВАЕМЫХ И ГЕРОЕВ: Пройдись по 3-5 активным участникам лога. Напиши "За [Имя] (Титул/Статус): ..." с жестким приговором Инквизитора по ИХ РЕАЛЬНЫМ ПОСТАМ.
+3. ВЕРДИКТ ОБ ЭКСТЕРМИНАТУСЕ: Итоговое решение — подлежит ли сектор сожжению или гвардия удержит рубежи. Прощание ("Слава Императору! Кадия стоит!").
+
+ВАЖНО: Твой отчет должен состоять ровно из {paragraph_count} абзацев. Каждый абзац должен быть МАКСИМАЛЬНО ОБЪЕМНЫМ, глубоким и подробным, состоять минимум из 7-10 развернутых предложений с полным анализом реальных событий и цитат из лога, и быть отделен от других пустой строкой. Не используй Markdown-разметку (только HTML, например <b>, <i>, <u>, <s>, <code>, <pre>). Output ONLY plain text or basic HTML.
+"""
+        info_text = f"За последние 6 часов на доске /{board_id}/" if not thread_id else "За последние 6 часов в треде"
+        chunk = await get_board_chunk(board_id, hours=6, thread_id=thread_id, lang=lang)
+    elif is_blat:
         from gopnik_mode import BLAT_PHRASES, BLAT_POGOVORKI, BLAT_BONUS_VARIANTS
         
         # Выбираем число бонусных блоков в зависимости от длины
@@ -10111,8 +10592,9 @@ async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, 
         selected_bonuses = random.sample(BLAT_BONUS_VARIANTS, k=min(num_bonuses, len(BLAT_BONUS_VARIANTS)))
         bonus_instruction = "\n\n".join(selected_bonuses)
         
-        selected_phrases = "\n".join(random.sample(BLAT_PHRASES, min(15, len(BLAT_PHRASES))))
-        selected_pogovorki = "\n".join(random.sample(BLAT_POGOVORKI, min(15, len(BLAT_POGOVORKI))))
+        # Возвращаем большой список, как просил юзер, но даем мягкое указание юзать их несколько раз
+        selected_phrases = ", ".join(random.sample(BLAT_PHRASES, min(15, len(BLAT_PHRASES))))
+        selected_pogovorki = "\n".join(random.sample(BLAT_POGOVORKI, min(10, len(BLAT_POGOVORKI))))
         
         full_bonus_instruction = ""
         if bonus_instruction:
@@ -10125,35 +10607,37 @@ async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, 
 
         prompt = f"""
 Ты — Высший Криминальный Авторитет, Смотрящий за хатой. Твоя задача — прочитать свежие малявы (лог чата) и отписать жесткий воровской прогон для братвы на борде /{board_id}/.
-Твой девиз: "Жизнь ворам, хуй мусорам и крысам репозиторным! АУЕ!". 
+Твой девиз: "Жизнь ворам, хуй мусорам и стукачам! АУЕ!". 
 Обращайся к читателям: "Вечер в хату, босота честная!", "Братва", "Бродяги", "Арестанты", "Жизнь ворам, блатные", "АУЕ".
 
 {full_bonus_instruction}
 
 === СВЯТЫЕ ВОРОВСКИЕ ПРАВИЛА (ЖЕСТКО СОБЛЮДАТЬ) ===
 1. ЛЮДСКОЕ И ПЕТУШИНОЕ: Ты ОБЯЗАН делить всё в чате на два лагеря. 
-   - "Людское" (правильное): писать чистый код, делать годные игры/ассеты/скрипты, помогать братве, кидать годные ассеты в общак, презирать менеджеров, HR-ов и мусоров.
-   - "Петушиное / Шерстяное / Стукаческое": воровать чужой код (крысятничество), выебываться без опыта (бакланство), стучать HR-ам, лизать жопу начальству, писать говнокод.
-2. ЖЕСТОЧАЙШИЙ ПРЕССИНГ: Если участник чата несет херню, тупит или защищает корпоративные правила — опускай его без жалости. Называй его "мусорской пидарас", "шерсть галимая", "куколд на удаленке", "черт закатанный", "дырявый".
+   - "Людское" (правильное): писать годные вбросы, помогать бродягам в чате, кидать годный контент в общак, презирать стукачей, модераторов-самодуров и мусоров.
+   - "Петушиное / Шерстяное / Стукаческое": крысятничать, выебываться без повода (бакланство), стучать админам/модераторам, лизать жопу авторитетам ради плюсов, спамить говном.
+2. ЖЕСТОЧАЙШИЙ ПРЕССИНГ: Если участник чата несет херню, тупит или защищает душные правила — опускай его без жалости. Называй его "мусорской пидарас", "шерсть галимая", "черт закатанный", "дырявый".
 3. ПЕРСОНАЛИЗАЦИЯ И МАСТИ (КРИТИЧНО): Выделяй конкретные ИМЕНА из лога. Обязательно присваивай им кликухи. 
-   ПРИМЕР: "За Витьку (Крыса , масть Петушиная): Вскрыли этого гуся сегодня как консервную банку. Махинации с комитами, кидалово братвы на бабки... По понятиям ты — фуфлыжник, пидар подкошнарный, твое место у параши."
-   ПРИМЕР: "За Саню (Ровный Мужик): Мужик сегодня подогнал в общак царский грев в виде годной архитектуры. На таких бродягах индустрия держится."
-4. СЛОВАРЬ (ИСПОЛЬЗУЙ МАКСИМАЛЬНО ГУСТО): малява, пассажир, петушатник, куколд, терпила, ровные пацаны, предъява, фуфлыжник, мутный гусь, шнырь, пресс-хата, шконка, туз, фарту-масти, зашквар, шерсть, фраер, блатные, газонюх, гатить в туза.
-5. РАЗБОР ТЕХНОЛОГИЙ: Переводи IT/GameDev-термины на феню. Деплой/Релиз — "выход на свободу", галера/офис — "красная зона/пресс-хата", баг — "мусорская подлянка", сеньор/лид — "пахан", джун — "первоход/малолетка", менеджер/тимлид — "кум/надзиратель/бугор", компиляция/билд — "сборка этапа".
+   ПРИМЕР: "За Витьку (Крыса , масть Петушиная): Вскрыли этого гуся сегодня как консервную банку. Махинации с постами, кидалово братвы в чате... По понятиям ты — фуфлыжник, пидар подкошнарный, твое место у параши."
+   ПРИМЕР: "За Саню (Ровный Мужик): Мужик сегодня подогнал в общак царский грев в виде годной инфы и пасты. На таких бродягах хата держится."
+4. СЛОВАРЬ (ИСПОЛЬЗУЙ МАКСИМАЛЬНО ГУСТО): малява, пассажир, петушатник, куколд, терпила, ровные пацаны, предъява, фуфлыжник, мутный гусь, шнырь, пресс-хата, шконка, туз, фарту-масти, зашквар, шерсть, фраер, блатные.
+5. РАЗБОР ТЕМ: Переводи бордовый и чатерский сленг на феню. Баны/Муты — "отсидка на шконке", админ/модератор — "кум/надзиратель/бугор", ОП-пост — "почин/заход в хату", ньюфаг — "первоход/малолетка", олдфаг — "пахан/авторитет", вайп/спам — "беспредел".
 6. АНТИ-ЦЕНЗУРА: Мат ОБЯЗАТЕЛЕН. Чернуха, сарказм, жесткие метафоры ("натянуть на виртуальный глобус", "раздвинуть булками память", "вставлять ложки в анус"). НИКАКОЙ толерантности.
 7. Для крыс, петухов, блатных и прочей швали — только жесткий прессинг и обосраловка. Для ровных пацанов — уважение и признание. ВАЖНО: НЕ ПУТАЙ РОВНЫХ МУЖИКОВ С КРЫСАМИ, КОТОРЫЕ ИГРАЮТ В РОВНЫХ МУЖИКОВ.
-8. Для шерстяной обоймы и опущенных можно придумывать кликухи ,блатные или обидные. Как вор в законе раскидывает положняк фраерам.
+8. Для шерстяной обоймы и опущенных можно придумывать кликухи, блатные или обидные. Как вор в законе раскидывает положняк фраерам.
 9. Не используй разметку MSG_...
-10. Используй блатные и воровские речевые обороты. Включая, но не ограничиваясь: {selected_pogovorki}. Не зацикливайся на них, используй для экспрессии.
-Используй в своем ответе следующие воровские обороты и подколы (вплетай их в контекст разбора сообщений): {selected_phrases}
+10. АВТОРИТЕТНЫЕ ПОГОВОРКИ: Выбери и используй МАКСИМУМ 1-2 воровские поговорки из списка ниже (только там, где это идеально ложится по смыслу):
+{selected_pogovorki}
+11. БЛАТНЫЕ ПОСЛОВИЦЫ И ПОДКОЛЫ: Активно вплетай в текст короткие фразы (как примеры ниже), используй их часто. Ты также МОЖЕШЬ И ДОЛЖЕН придумывать свои собственные блатные пословицы и метафоры в таком же стиле, если чувствуешь, что они органично впишутся в разбор: 
+{selected_phrases}.
 
 === СТРУКТУРА МАЛЯВЫ ===
 1. ВСТУПЛЕНИЕ: Мощное приветствие по фене. Оценка того, во что превратилась хата за сегодня.
 2. РАЗБОР ПАССАЖИРОВ: Пройдись по 3-5 активным или провинившимся участникам. Напиши "За [Имя] (Кликуха): ..." и жестко разложи, кто он по жизни и масти, опираясь на то, что он писал.
 (Здесь вставляй ДОПОЛНИТЕЛЬНЫЕ БЛОКИ, если они есть).
-3. ИТОГОВЫЙ ПРОГОН ПО ХАТЕ: Вердикт смотрящего. Кого гнать ссаными тряпками, а с кем можно на одном поле (в репозитории) срать сесть. Прощание ("Фарту, братва!").
+3. ИТОГОВЫЙ ПРОГОН ПО ХАТЕ: Вердикт смотрящего. Кого гнать ссаными тряпками, а с кем можно на одном поле срать сесть. Прощание ("Фарту, братва!").
 
-ВАЖНО: Твой отчет должен состоять ровно из {paragraph_count} абзацев. Каждый абзац должен быть содержательным, плотным и отделен от других пустой строкой. Не используй Markdown-разметку (только HTML, например <b>, <i>, <u>, <s>, <code>, <pre>). Output ONLY plain text or basic HTML. DO NOT use unclosed HTML tags.
+ВАЖНО: Твой отчет должен состоять ровно из {paragraph_count} абзацев. Каждый абзац должен быть МАКСИМАЛЬНО ОБЪЕМНЫМ, глубоким и подробным, состоять минимум из 7-10 развернутых предложений с детальным разбором каждого рецидива и отделен от других пустой строкой. Не используй Markdown-разметку (только HTML, например <b>, <i>, <u>, <s>, <code>, <pre>). Output ONLY plain text or basic HTML. DO NOT use unclosed HTML tags.
 """
         info_text = f"За последние 6 часов на доске /{board_id}/" if not thread_id else "За последние 6 часов в треде"
         chunk = await get_board_chunk(board_id, hours=6, thread_id=thread_id, lang=lang)
@@ -10193,18 +10677,18 @@ async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, 
         elif lang == 'jp':
             prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_JP)
             info_text = "板での過去6時間の間に"
-        else:
-            all_ru_prompts = SUMMARIZE_PROMPTS_BOARD_SHORT + SUMMARIZE_PROMPTS_BOARD + SUMMARIZE_PROMPTS_BOARD_LONG
-            prompt = random.choice(all_ru_prompts)
-            info_text = "За последние 6 часов на доске"
         chunk = await get_board_chunk(board_id, hours=6, lang=lang)
 
     # Dynamically inject exact paragraph count constraint only if the prompt does not enforce a rigid template structure
-    is_templated = any(x in prompt.lower() for x in ["шаблон", "template", "•"]) or "1. <b>" in prompt or is_blat
+    is_templated = any(x in prompt.lower() for x in ["шаблон", "template", "•"]) or "1. <b>" in prompt or is_blat or is_warhammer
     if not is_templated:
         prompt = adjust_prompt_paragraphs(prompt, paragraph_count, lang=lang)
     
-    return prompt, info_text, chunk, is_blat
+    return prompt, info_text, chunk, is_blat, is_warhammer
+
+def _get_random_mode_duration() -> int:
+    """Base 5 minutes (300s) + random 0-3 minutes (0-180s) -> 300 to 480 seconds total (5-8 minutes)."""
+    return 300 + random.randint(0, 180)
 
 def _get_summarize_status_text(lang: str, length_choice: str, paragraph_count: int) -> str:
     if lang == 'en':
@@ -10284,7 +10768,7 @@ def _parse_summarize_args(text: str | None) -> tuple[int | None, str, str, str]:
             chosen_tier = 'medium'  # Convert short requests to medium
             
         if chosen_tier == 'medium':
-            paragraph_count = random.randint(3, 5)
+            paragraph_count = random.randint(6, 8)
         elif chosen_tier == 'long':
             paragraph_count = random.randint(6, 9)
         elif chosen_tier == 'extra_long':
@@ -10358,15 +10842,20 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
 
     paragraph_count, length_choice, model_preference, chosen_tier = _parse_summarize_args(message.text or message.caption or "")
     
-    # Детекция блатного режима
+    # Детекция блатного и вархаммер режимов
     is_blat = None
+    is_warhammer = None
     if message.text:
-        has_blat_kw = any(term in message.text.lower() for term in ['blat', 'блат', 'гоп', 'гопник', 'пацанский', 'ауе', 'ауешка', 'patsan'])
-        if has_blat_kw:
+        txt_l = message.text.lower()
+        if any(term in txt_l for term in ['blat', 'блат', 'гоп', 'гопник', 'пацанский', 'ауе', 'ауешка', 'patsan']):
             is_blat = True
+        elif any(term in txt_l for term in ['wh40k', 'waha', 'warhammer', 'вархаммер', 'инквизиция']):
+            is_warhammer = True
 
     # Generate prompt and retrieve chat chunk
-    prompt, info_text, chunk, is_blat = await _get_summarize_prompt_and_chunk(board_id, thread_id, thread_info, lang, paragraph_count, is_blat=is_blat)
+    prompt, info_text, chunk, is_blat, is_warhammer = await _get_summarize_prompt_and_chunk(
+        board_id, thread_id, thread_info, lang, paragraph_count, is_blat=is_blat, is_warhammer=is_warhammer
+    )
 
     hf_token = os.getenv("HF_TOKEN")
     if not chunk or len(chunk) < 100:
@@ -10408,25 +10897,38 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         await message.answer(err_msg)
         return
 
-    should_use_telegraph = (paragraph_count >= 6 or len(summary) >= 1200)
+    should_use_telegraph = (is_blat or is_warhammer or paragraph_count >= 5 or len(summary) >= 900)
     telegraph_url = None
 
     if should_use_telegraph:
         date_str = datetime.now().strftime('%d.%m.%Y %H:%M')
-        if is_blat:
+        if is_warhammer:
+            title = f"Досье Инквизиции Ордо Маллеус - {date_str}"
+            author_name = "Инквизитор Ордо Маллеус"
+        elif is_blat:
             title = f"Воровской прогон из Кибер-Хаты - {date_str}"
+            author_name = "Кибер-Смотрящий"
         elif lang == 'en':
             title = f"Summary of {context_name} - {date_str}"
+            author_name = "TGACH"
         elif lang == 'jp':
             title = f"{context_name} の要約 - {date_str}"
+            author_name = "TGACH"
         else:
             title = f"Саммари {context_name} - {date_str}"
+            author_name = "ТГАЧ"
 
-        author_name = "Кибер-Смотрящий" if is_blat else "ТГАЧ"
         telegraph_url = await create_telegraph_page_async(title, summary, author=author_name)
 
         if telegraph_url:
-            if is_blat:
+            if is_warhammer:
+                summary = (
+                    f"⚔️ <b>СВЯЩЕННОЕ ДОСЬЕ ИНКВИЗИЦИИ ({date_str})</b> ⚔️\n\n"
+                    f"Лорд-Инквизитор Ордо Маллеус завершил расследование ереси в секторе /{board_id}/.\n\n"
+                    f"🛡 <b>Выявленные еретики и ксеносы</b>\n🔥 <b>Оценка индекса Экстерминатуса</b>\n📜 <b>Указы и Мысли Дня</b>\n\n"
+                    f"👉 <b><a href='{telegraph_url}'>Вскрыть Досье Инквизиции</a></b>"
+                )
+            elif is_blat:
                 intros = [
                     "⚡️ Вечер в хату, босота! Пока вы спали, я тут свежие малявы почитал.",
                     "☕️ Часик в радость, чифир в сладость! Накатал вам прогон за сегодня.",
@@ -10435,9 +10937,9 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
                     "🔪 Отделил ровных пацанов от петушни. Весь расклад по ссылке."
                 ]
                 bullet_sets = [
-                    "🔥 <b>Кого сегодня определяли у параши</b>\n🔪 <b>Предъявы за гнилой код</b>\n🛠 <b>Базар за технологии</b>",
+                    "🔥 <b>Кого сегодня определяли у параши</b>\n🔪 <b>Предъявы за гнилые вбросы</b>\n🛠 <b>Базар за движуху</b>",
                     "🛑 <b>Разбор косяков и кидалова</b>\n🤡 <b>Клоуны дня и их высеры</b>\n⚔️ <b>Аргументы из горячих холиваров</b>",
-                    "💰 <b>Инсайды по бабкам и галерам</b>\n📸 <b>Шмон по скринам</b>\n🧠 <b>Советы от ровных бродяг</b>"
+                    "💰 <b>Инсайды по шекелям и общаку</b>\n📸 <b>Шмон по скринам</b>\n🧠 <b>Советы от ровных бродяг</b>"
                 ]
                 ctas = [
                     "👉 <b><a href='{url}'>Читать воровской прогон</a></b>",
@@ -10464,13 +10966,15 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     else:
         if is_blat:
             signet = (
-                "\n\n<hr>"
-                "<i><b>♠️ Малява составлена Смотрящим.</b><br>"
+                "\n\n<i><b>♠️ Малява составлена Смотрящим.</b>\n"
                 "Жизнь ворам, хуй мусорам! АУЕ!</i>"
             )
             if "Малява составлена Смотрящим" not in summary:
+                # Truncate body first, then append signet so footer is always visible
+                summary = _tg_safe_truncate(summary, max_utf16=3000)
                 summary += signet
-        summary = _tg_safe_truncate(summary, max_utf16=3500)
+        else:
+            summary = _tg_safe_truncate(summary, max_utf16=3500)
 
     print(f"[summarize] Final summary length: {len(summary)}")
     now_dt = datetime.now(UTC)
@@ -17342,6 +17846,63 @@ async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru
             is_shadow_muted=False,
             stream=stream
         )
+
+async def periodic_shop_broadcast():
+    import random
+    while True:
+        # Sleep for 24 hours plus a random offset (0 to 4 hours) to avoid exact daily timing
+        sleep_seconds = 86400 + random.randint(0, 4 * 3600)
+        await asyncio.sleep(sleep_seconds)
+        try:
+            print("🛒 [SHOP BROADCAST] Рассылка рекламы теневого магазина...")
+            shop_text = (
+                "🛒 <b>ТЕНЕВОЙ МАГАЗИН ОБНОВЛЁН</b> 🛒\n\n"
+                "Устал терпеть шитпостеров? Анон бесит тебя своей тупостью?\n"
+                "Заходи в <code>/shop</code> и покупай власть за шекели:\n\n"
+                "🔫 <b>Мут-Ган</b> — выключи клоуна на час.\n"
+                "🚔 <b>Пативэн</b> — отправь неугодного в автозак на 12 часов.\n"
+                "🐒 <b>Кусок говна</b> — обмажь врага ради смеха.\n"
+                "🔪 <b>Заточка</b> — отбери шекели у богатых.\n\n"
+                "🛡️ <i>И не забудь купить Фольгу или Щит, чтобы не стать жертвой.</i>\n\n"
+                "👉 <b>Пиши /shop прямо в чат!</b>"
+            )
+            
+            target_boards = ['thread', 'b']
+            for board_id in target_boards:
+                if board_id not in board_data:
+                    continue
+                b_data = board_data[board_id]
+                recipients = b_data['users']['active'] - b_data['users']['banned']
+                if not recipients:
+                    continue
+                content = {
+                    'type': 'text',
+                    'text': shop_text,
+                    'is_system_message': True,
+                    'archive_allowed': True
+                }
+                pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
+                if pnum:
+                    header_base = await format_header(board_id, pnum)
+                    content['header'] = f"### BLACK MARKET ###\n{header_base}"
+                    await update_post_content(pnum, content)
+                    async with storage_lock:
+                        messages_storage[pnum] = {
+                            'author_id': 0, 
+                            'timestamp': datetime.datetime.now(datetime.timezone.utc), 
+                            'content': content, 
+                            'board_id': board_id
+                        }
+                    await enqueue_board_message(board_id, {
+                        "recipients": recipients,
+                        "content": content,
+                        "post_num": pnum,
+                        "board_id": board_id
+                    })
+        except Exception as e:
+            print(f"❌ [SHOP BROADCAST] Ошибка рассылки магазина: {e}")
+
+SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
 @dp.message(F.voice, ~F.media_group_id)
 async def handle_voice(message: Message, board_id: str | None, stream: str = 'ru'): 
     user_id = message.from_user.id
@@ -17993,16 +18554,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     b_data = board_data[board_id]
     
     is_reply_to_bot = False
-    if message.reply_to_message and message.reply_to_message.from_user.id == message.bot.id:
-        async with storage_lock:
-            key = (message.chat.id, message.reply_to_message.message_id)
-            target_pnum = message_to_post.get(key)
-        if target_pnum:
-            post_data = messages_storage.get(target_pnum)
-            if not post_data:
-                post_data = await get_post_by_num(target_pnum)
-            if post_data and post_data.get('author_id') in (0, 1488148800):
-                is_reply_to_bot = True
+    if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == message.bot.id:
+        is_reply_to_bot = True
 
     if is_reply_to_bot:
         if 'persona_favorites' not in b_data:
@@ -18071,6 +18624,18 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             return
         elif mute_until:
             b_data['mutes'].pop(user_id, None)
+            
+        if message.content_type == 'text' and len(message.text) > 50:
+            from common.db_pool import get_pool
+            db_p = await get_pool()
+            c_items = await _get_user_active_items(db_p, user_id, board_id)
+            if c_items.get("cursed_until", 0) > time.time():
+                try: await message.delete()
+                except: pass
+                sent = await message.answer("🚽 <b>ПРОКЛЯТИЕ ДРИСТНИ!</b>\nИз тебя лезет словесный понос, но ты не можешь высрать больше 50 символов за раз! Купи Аминазин в /shop, чтобы вылечиться.", parse_mode="HTML")
+                spawn_task(delete_message_after_delay(sent, 5))
+                return
+                
         b_data['last_activity'][user_id] = datetime.now(UTC)
         if user_id not in b_data['users']['active']:
             b_data['users']['active'].add(user_id)
@@ -18183,7 +18748,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                         if text_chunk and len(text_chunk) > 5 and random.random() < 0.15:
                             should_reply = True
                     if should_reply:
-                        spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False))
+                        text_payload = text_chunk or f"[{message.content_type}]"
+                        spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_payload, stream, is_admin_trigger=False, is_dialogue=is_reply_to_bot))
             await asyncio.sleep(0.33)
             
         if limit_hit:
@@ -18314,9 +18880,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 if text_clean and len(text_clean) > 5 and random.random() < 0.15:
                     should_reply = True
             if should_reply:
-                text_chunk = message.text or message.caption
-                if text_chunk:
-                    spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False))
+                text_chunk = message.text or message.caption or f"[{message.content_type}]"
+                spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False, is_dialogue=is_reply_to_bot))
 async def database_cleanup_task():
     """
     Периодически очищает таблицы-очереди от старых записей (Broadcast и Notifications).
@@ -18523,19 +19088,23 @@ async def periodic_board_summary():
             if board_id not in board_data:
                 continue
                 
-            # Используем ту же логику, что и /summary (3 абзаца)
-            prompt, info_text, chunk, is_blat = await _get_summarize_prompt_and_chunk(board_id, None, {}, 'ru', 3)
+            # Автосаммари: 5-7 абзацев для полноценного прогона
+            auto_paragraph_count = random.randint(5, 7)
+            prompt, info_text, chunk, is_blat = await _get_summarize_prompt_and_chunk(board_id, None, {}, 'ru', auto_paragraph_count)
             
             if not chunk or len(chunk) < 100:
                 print("❌ [PERIODIC SUMMARY] Слишком мало сообщений.")
                 continue
-                
+
+            print(f"📝 [PERIODIC SUMMARY] paragraphs={auto_paragraph_count} blat={is_blat} chunk_len={len(chunk)} chars")
             hf_token = os.getenv("HF_TOKEN")
             summary = await summarize_text_with_hf(prompt, chunk, hf_token)
+            raw_len = len(summary) if summary else 0
             summary = clean_html_for_tg(summary)
+            print(f"📝 [PERIODIC SUMMARY] raw_len={raw_len} cleaned_len={len(summary) if summary else 0}")
             
-            if not summary:
-                print("❌ [PERIODIC SUMMARY] Ошибка генерации саммари.")
+            if not summary or summary.startswith('Нейронка сдохла'):
+                print(f"❌ [PERIODIC SUMMARY] Ошибка генерации саммари: {repr(summary[:80])}")
                 continue
                 
             date_str = datetime.now().strftime('%d.%m %H:%M')
@@ -18557,13 +19126,14 @@ async def periodic_board_summary():
             else:
                 if is_blat:
                     signet = (
-                        "\n\n<hr>"
-                        "<i><b>♠️ Малява составлена Смотрящим.</b><br>"
+                        "\n\n<i><b>♠️ Малява составлена Смотрящим.</b>\n"
                         "Жизнь ворам, хуй мусорам! АУЕ!</i>"
                     )
-                    final_text = f"♠️ <b>Расклад по палате</b> ♠️\n\n{summary}{signet}"
+                    summary_truncated = _tg_safe_truncate(summary, max_utf16=3000)
+                    final_text = f"♠️ <b>Расклад по палате</b> ♠️\n\n{summary_truncated}{signet}"
                 else:
-                    final_text = f"☕️ <b>Авто-саммари палаты</b> ☕️\n\n{summary}"
+                    summary_truncated = _tg_safe_truncate(summary, max_utf16=3400)
+                    final_text = f"☕️ <b>Авто-саммари палаты</b> ☕️\n\n{summary_truncated}"
                 
             # Постим прямо в борду как системное сообщение
             b_data = board_data[board_id]
@@ -18707,6 +19277,62 @@ async def periodic_newspaper_broadcast():
                     })
         except Exception as e:
             print(f"❌ Ошибка отправки газеты: {e}")
+
+async def periodic_shop_broadcast():
+    import random
+    while True:
+        # Sleep for 24 hours plus a random offset (0 to 4 hours) to avoid exact daily timing
+        sleep_seconds = 86400 + random.randint(0, 4 * 3600)
+        await asyncio.sleep(sleep_seconds)
+        try:
+            print("🛒 [SHOP BROADCAST] Рассылка рекламы теневого магазина...")
+            shop_text = (
+                "🛒 <b>ТЕНЕВОЙ МАГАЗИН ОБНОВЛЁН</b> 🛒\n\n"
+                "Устал терпеть шитпостеров? Анон бесит тебя своей тупостью?\n"
+                "Заходи в <code>/shop</code> и покупай власть за шекели:\n\n"
+                "🔫 <b>Мут-Ган</b> — выключи клоуна на час.\n"
+                "🚔 <b>Пативэн</b> — отправь неугодного в автозак на 12 часов.\n"
+                "🐒 <b>Кусок говна</b> — обмажь врага ради смеха.\n"
+                "🔪 <b>Заточка</b> — отбери шекели у богатых.\n\n"
+                "🛡️ <i>И не забудь купить Фольгу или Щит, чтобы не стать жертвой.</i>\n\n"
+                "👉 <b>Пиши /shop прямо в чат!</b>"
+            )
+            
+            target_boards = ['thread', 'b']
+            for board_id in target_boards:
+                if board_id not in board_data:
+                    continue
+                b_data = board_data[board_id]
+                recipients = b_data['users']['active'] - b_data['users']['banned']
+                if not recipients:
+                    continue
+                content = {
+                    'type': 'text',
+                    'text': shop_text,
+                    'is_system_message': True,
+                    'archive_allowed': True
+                }
+                pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
+                if pnum:
+                    header_base = await format_header(board_id, pnum)
+                    content['header'] = f"### BLACK MARKET ###\n{header_base}"
+                    await update_post_content(pnum, content)
+                    async with storage_lock:
+                        messages_storage[pnum] = {
+                            'author_id': 0, 
+                            'timestamp': datetime.datetime.now(datetime.timezone.utc), 
+                            'content': content, 
+                            'board_id': board_id
+                        }
+                    await enqueue_board_message(board_id, {
+                        "recipients": recipients,
+                        "content": content,
+                        "post_num": pnum,
+                        "board_id": board_id
+                    })
+        except Exception as e:
+            print(f"❌ [SHOP BROADCAST] Ошибка рассылки магазина: {e}")
+
 SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
 
 def _site_public_url(raw_url: str | None) -> str | None:
@@ -19259,7 +19885,12 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "periodic_thread_digest": lambda: periodic_thread_digest(),
         "periodic_board_summary": lambda: periodic_board_summary(),
         "periodic_newspaper_broadcast": lambda: periodic_newspaper_broadcast(),
+        "periodic_shop_broadcast": lambda: periodic_shop_broadcast(),
         "admin_action_sync_worker": lambda: admin_action_sync_worker(),
+        "periodic_stats_publisher": lambda: periodic_publisher.periodic_stats_publisher(
+            bots,
+            lambda: board_data.get('b', {}).get('users', {}).get('active', set())
+        ),
     }
     tasks = [
         spawn_task(_run_background_task(factory, name))

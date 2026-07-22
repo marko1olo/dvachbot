@@ -44,7 +44,12 @@ async def test_real_data():
     print(target_post)
     
     print("\nГенерация ответа (через generate_anon_reply)...")
-    reply_texts = await generate_anon_reply(context_text, target_post)
+    reply_texts = await generate_anon_reply(
+        context_text=context_text,
+        target_post=target_post,
+        is_dialogue=True,
+        atmosphere_text="• #444101 [ЮЗЕР (Анон)]: Привет, кто здесь?\n• #444105 [ЮЗЕР (Анон)]: Тестируем нового нейроанона на борде."
+    )
     print("\n=== ОТВЕТ НЕЙРОАНОНА RAW ===")
     if reply_texts:
         for i, r in enumerate(reply_texts):

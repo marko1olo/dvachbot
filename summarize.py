@@ -31,41 +31,78 @@ def _load_google_keys() -> list[str]:
         return [k.strip() for k in raw_env.split(",") if k.strip()]
     return []
 
+_key_cooldowns: dict[tuple[str, str], float] = {}
+
 async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     """
     Summarize text using a cascade of OpenAI-compatible endpoints:
     Supports choosing model/provider: gemini, qwen, llama, or default groq (Qwen + Llama + Gemini fallback).
+    Prioritizes 500 RPD Gemini Lite models to maximize free quota.
     """
-    if model_preference == "gemini":
+    if model_preference == "persona" or model_preference == "persona_gemini":
+        # Persona Bot priority: Flash Lite models first for high volume (500 RPD) & fast responses
         models_cascade = [
+            ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
+            ("gemini-3.5-flash", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
+        ]
+    elif model_preference == "summary" or model_preference == "gemini":
+        # Summarization priority: Smart Flash models first for maximum intelligence and deep reasoning
+        models_cascade = [
+            ("gemini-3.6-flash", "gemini"),
+            ("gemini-3.5-flash", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
+            ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
         ]
     elif model_preference == "qwen":
         models_cascade = [
-            ("qwen/qwen3.6-27b", "groq")
+            ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
         ]
     elif model_preference == "llama":
         models_cascade = [
-            ("llama-3.3-70b-versatile", "groq")
+            ("llama-3.3-70b-versatile", "groq"),
+            ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
         ]
     else:
+        # Default summarization cascade: Smart Flash models first, then Lite models
         models_cascade = [
-            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
+            ("gemini-3.5-flash", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
             ("llama-3.3-70b-versatile", "groq"),
         ]
     
     system_instruction = prompt + (
-        "\n\nCRITICAL REQUIREMENT:\n"
-        "You must output ONLY valid HTML using only <b>, <i>, <u>, <s>, <code>, <pre>, <a> tags. "
-        "Strictly avoid any markdown formatting elements (never use asterisks '**', never use raw markdown lists like '* item' or '- item'). "
-        "All output must be parsable by Telegram's HTML parser. If you format lists, use <b>•</b> or regular bullet characters instead of hyphens/asterisks."
+        "\n\nCRITICAL OUTPUT FORMAT RULES:\n"
+        "ALLOWED tags (ONLY these): <b>, <i>, <u>, <s>, <code>, <pre>, <a href=\"...\">.\n"
+        "FORBIDDEN tags (NEVER use): <p>, <div>, <span>, <br>, <hr>, <h1>, <h2>, <h3>, <h4>, <h5>, <h6>, <ul>, <ol>, <li>, <table>, <tr>, <td>, <th>, <em>, <strong>, <section>, <article>, and ANY other HTML tag not listed above.\n"
+        "FORBIDDEN formatting: Never use Markdown (no **bold**, no *italic*, no # headings, no - lists, no * lists).\n"
+        "Separate paragraphs with a blank line (two newlines), NOT with <p> tags.\n"
+        "For bullet lists use • character with a newline, NOT <ul>/<li> tags.\n"
+        "Output must be parseable by Telegram Bot API HTML parser."
     )
     
     messages = [
         {"role": "system", "content": system_instruction},
         {"role": "user", "content": text_dump}
     ]
+
+    import time
+    now_ts = time.time()
 
     for model_name, provider in models_cascade:
         if provider == "gemini":
@@ -83,8 +120,16 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
             logger.warning(f"No keys for provider {provider}. Skipping model {model_name}.")
             continue
             
+        # Filter out keys that are currently in 429 cooldown
+        active_keys = [k for k in keys if _key_cooldowns.get((provider, k), 0) <= now_ts]
+        if not active_keys:
+            logger.info(f"All keys for {provider} are in cooldown. Skipping model {model_name}.")
+            continue
+
+        model_max_tokens = None if provider == "gemini" else 6000
+
         skip_model = False
-        for api_key in keys:
+        for api_key in active_keys:
             if skip_model:
                 break
             try:
@@ -92,7 +137,7 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
                 async with httpx.AsyncClient(
                     proxy=None,
                     verify=False,
-                    timeout=30.0,
+                    timeout=60.0,
                     trust_env=False
                 ) as http_client:
                     
@@ -102,43 +147,49 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
                         http_client=http_client,
                         max_retries=0
                     ) as client:
-                        completion = await client.chat.completions.create(
+                        create_kwargs = dict(
                             model=model_name,
                             messages=messages,
-                            temperature=0.8
+                            temperature=0.8,
                         )
+                        if model_max_tokens is not None:
+                            create_kwargs["max_tokens"] = model_max_tokens
+                        completion = await client.chat.completions.create(**create_kwargs)
                         if completion.choices and len(completion.choices) > 0:
                             choice = completion.choices[0]
                             if choice.message is not None:
                                 result = choice.message.content
                                 if result:
                                     import re
-                                    # Сначала вырезаем закрытые теги (как в виде HTML, так и escaped)
                                     result = re.sub(r"<think\b[^>]*>.*?</think>", "", result, flags=re.DOTALL | re.IGNORECASE)
                                     result = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", result, flags=re.DOTALL | re.IGNORECASE)
-                                    # Если нейронка оборвалась и не закрыла тег, вырезаем всё от <think>/&lt;think&gt; до конца
-                                    result = re.sub(r"<think\b[^>]*>.*", "", result, flags=re.DOTALL | re.IGNORECASE)
-                                    result = re.sub(r"&lt;think\b[^&]*&gt;.*", "", result, flags=re.DOTALL | re.IGNORECASE).strip()
-                                    logger.info(f"Success using model {model_name} via {provider} (Direct VPN)")
-                                    return result.strip()
+                                    result = re.sub(r"^\s*<think\b[^>]*>.*", "", result, flags=re.DOTALL | re.IGNORECASE)
+                                    result = result.strip()
+                                    if result:
+                                        return result
+                                    else:
+                                        logger.warning(f"Model {model_name} returned empty text after <think> stripping")
+                                        raise ValueError("Model returned empty text after <think> stripping")
             except Exception as e:
-                err_str = f"{type(e).__name__}: {e}"
-                logger.warning(f"⚠️ {provider} call failed ({model_name}): {err_str[:120]}")
+                err_str = str(e)
+                logger.warning(f"⚠️ {provider} call failed ({model_name}) key=...{api_key[-6:]}: {err_str[:120]}")
                 if provider == "groq" and ("401" in err_str or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower()):
-                    logger.error(f"❌ Groq key {api_key[:12]}... is unauthorized (401). Removing from rotation pool.")
+                    logger.error(f"❌ Groq key {api_key[:12]}... is unauthorized (401). Removing from pool.")
                     groq_pool.remove_token(api_key)
-                    break
+                    continue  # try next key
                 if "413" in err_str or "too large" in err_str.lower() or "context_length_exceeded" in err_str.lower():
-                    logger.warning(f"⚠️ {model_name}: request too large. Shrinking by 40% and retrying...")
+                    logger.warning(f"\u26a0\ufe0f {model_name}: request too large. Shrinking by 40% and retrying...")
                     half_len = int(len(text_dump) * 0.6)
                     text_dump = text_dump[-half_len:]
                     messages[1]["content"] = text_dump
-                    continue
-                if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower():
-                    logger.warning(f"⚠️ {provider} Rate Limit. Cooling down 1.5s...")
+                    continue  # retry same key with smaller input
+                if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower() or "exhausted" in err_str.lower():
+                    logger.warning(f"\u26a0\ufe0f {provider} Rate Limit on key ...{api_key[-6:]}. Cooling 1.5s, trying next key...")
                     await asyncio.sleep(1.5)
-                    break  # next key
-                break  # any other error — try next key
+                    continue  # try NEXT KEY for same model
+                # Any other error: skip this key, try next
+                logger.warning(f"\u26a0\ufe0f Unhandled error for {model_name}, skipping to next model in cascade...")
+                break
 
     return "Нейронка сдохла. Не удалось сгенерировать саммари."
 
@@ -149,14 +200,23 @@ _telegraph_token_cache = None
 def _telegraph_request_sync(method: str, params: dict) -> dict:
     """Make a direct (no proxy) HTTP request to Telegraph API."""
     import requests
+    import time
     url = f"https://api.telegra.ph/{method}"
     # Explicitly bypass proxy for Telegraph - SOCKS on 10808 is not for external APIs
-    resp = requests.get(url, params=params, timeout=15, proxies={"http": None, "https": None})
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("ok"):
-        raise RuntimeError(f"Telegraph API error: {data.get('error', 'unknown')}")
-    return data["result"]
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, params=params, timeout=15, proxies={"http": None, "https": None})
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("ok"):
+                raise RuntimeError(f"Telegraph API error: {data.get('error', 'unknown')}")
+            return data["result"]
+        except Exception as e:
+            last_err = e
+            time.sleep(2 * (attempt + 1))
+            
+    raise RuntimeError(f"Telegraph request failed after 3 attempts: {last_err}")
 
 def _telegraph_create_account_sync() -> str:
     """Create a Telegraph account and return the access token."""
@@ -170,6 +230,7 @@ def _telegraph_create_page_sync(token: str, title: str, content_nodes: list) -> 
     """Create a Telegraph page and return its URL."""
     import json
     import requests
+    import time
     url = "https://api.telegra.ph/createPage"
     payload = {
         "access_token": token,
@@ -177,12 +238,21 @@ def _telegraph_create_page_sync(token: str, title: str, content_nodes: list) -> 
         "content": json.dumps(content_nodes),
         "return_content": "false"
     }
-    resp = requests.post(url, data=payload, timeout=20, proxies={"http": None, "https": None})
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("ok"):
-        raise RuntimeError(f"Telegraph createPage error: {data.get('error', 'unknown')}")
-    return data["result"]["url"]
+    
+    last_err = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(url, data=payload, timeout=20, proxies={"http": None, "https": None})
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("ok"):
+                raise RuntimeError(f"Telegraph createPage error: {data.get('error', 'unknown')}")
+            return data["result"]["url"]
+        except Exception as e:
+            last_err = e
+            time.sleep(2 * (attempt + 1))
+            
+    raise RuntimeError(f"Telegraph createPage failed after 3 attempts: {last_err}")
 
 def get_telegraph_token() -> str:
     global _telegraph_token_cache
@@ -254,7 +324,8 @@ class TelegraphHTMLParser(HTMLParser):
             self.stack[-1]["children"].append(data)
 
 def _text_to_telegraph_nodes(html_content: str) -> list:
-    """Convert HTML/plain text to Telegraph Node objects by parsing HTML tags correctly."""
+    """Convert HTML/plain text to Telegraph Node objects by parsing HTML tags correctly.
+    Uses a robust flattener to ensure Telegraph API compliance (no nested block tags)."""
     parser = TelegraphHTMLParser()
     try:
         parser.feed(html_content)
@@ -264,26 +335,72 @@ def _text_to_telegraph_nodes(html_content: str) -> list:
         return [{"tag": "p", "children": [html_content]}]
     
     root_children = parser.stack[0]["children"]
-    block_tags = {"p", "pre", "h3", "h4", "br"}
+    
     nodes = []
-    current_paragraph = []
-
-    def flush_paragraph():
-        if current_paragraph:
-            nodes.append({"tag": "p", "children": list(current_paragraph)})
-            current_paragraph.clear()
+    current_block = {"tag": "p", "children": []}
+    
+    block_tags = {"p", "pre", "h3", "h4", "blockquote", "aside"}
+    inline_tags = {"b", "i", "u", "s", "code", "a"}
+    
+    def flush_block():
+        nonlocal current_block
+        if current_block["children"]:
+            nodes.append(current_block)
+        current_block = {"tag": "p", "children": []}
+        
+    def wrap_inlines(text, inline_stack):
+        if not text:
+            return None
+        node = text
+        for inline in reversed(inline_stack):
+            new_node = {"tag": inline["tag"], "children": [node]}
+            if "attrs" in inline:
+                new_node["attrs"] = inline["attrs"]
+            node = new_node
+        return node
+        
+    def walk(child, inline_stack):
+        nonlocal current_block
+        if isinstance(child, str):
+            parts = child.split('\n')
+            for i, part in enumerate(parts):
+                if part:
+                    wrapped = wrap_inlines(part, inline_stack)
+                    if wrapped:
+                        current_block["children"].append(wrapped)
+                if i < len(parts) - 1:
+                    current_block["children"].append({"tag": "br"})
+                    
+        elif isinstance(child, dict):
+            tag = child.get("tag")
+            if tag in block_tags:
+                flush_block()
+                current_block["tag"] = tag
+                for c in child.get("children", []):
+                    walk(c, inline_stack)
+                flush_block()
+                
+            elif tag in inline_tags:
+                new_inline = {"tag": tag}
+                if "attrs" in child:
+                    new_inline["attrs"] = child["attrs"]
+                inline_stack.append(new_inline)
+                for c in child.get("children", []):
+                    walk(c, inline_stack)
+                inline_stack.pop()
+                
+            elif tag == "br":
+                current_block["children"].append({"tag": "br"})
+                
+            else:
+                # Unknown tags just have their children processed transparently
+                for c in child.get("children", []):
+                    walk(c, inline_stack)
 
     for child in root_children:
-        if isinstance(child, dict) and child.get("tag") in block_tags:
-            flush_paragraph()
-            if child["tag"] == "br":
-                nodes.append({"tag": "p", "children": [""]})
-            else:
-                nodes.append(child)
-        else:
-            current_paragraph.append(child)
-            
-    flush_paragraph()
+        walk(child, [])
+        
+    flush_block()
     
     if not nodes:
         nodes = [{"tag": "p", "children": [""]}]
@@ -293,6 +410,18 @@ def _create_telegraph_page_blocking(title: str, html_content: str, author: str =
     token = get_telegraph_token()
     if not token:
         raise RuntimeError("API token is required")
+        
+    # Prevent Telegraph CONTENT_TOO_BIG error (limits at ~64KB of JSON payload)
+    if len(html_content) > 30000:
+        logger.warning(f"Telegraph content too big ({len(html_content)} chars), pre-truncating to 30000...")
+        truncated = html_content[:30000]
+        last_lt = truncated.rfind('<')
+        last_gt = truncated.rfind('>')
+        if last_lt > last_gt:
+            # We cut right in the middle of a tag, truncate before the tag
+            truncated = truncated[:last_lt]
+        html_content = truncated + "\n\n<i>... (Саммари слишком большое, конец текста обрезан)</i>"
+        
     nodes = _text_to_telegraph_nodes(html_content)
     return _telegraph_create_page_sync(token, title, nodes)
 

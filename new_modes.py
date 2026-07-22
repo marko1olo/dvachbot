@@ -1563,18 +1563,22 @@ def _apply_holiday_effects(text: str) -> str:
     return text
 
 _OLDWEB_RULES = [
-    (re.compile(pattern), repl)
+    (re.compile(pattern, flags=re.IGNORECASE), repl)
     for pattern, repl in [
         (r'\bавтор\b', 'афтар'),
         (r'\bавтора\b', 'афтара'),
         (r'\bавтору\b', 'афтару'),
         (r'\bавтором\b', 'афтаром'),
+        (r'\bпривет\b', 'превед'),
+        (r'\bмедведь\b', 'медвед'),
+        (r'\bзачет\b', 'зачот'),
         (r'\bкреатив\b', 'креатифф'),
         (r'\bпиши\b', 'пеши'),
         (r'\bеще\b', 'исчо'),
         (r'\bещё\b', 'исчо'),
         (r'\bчто\b', 'што'),
         (r'\bправда\b', 'прафда'),
+        (r'\bкруто\b', 'аццки'),
         (r'ться\b', 'ццо'),
         (r'тся\b', 'ццо'),
         (r'кого\b', 'каво'),

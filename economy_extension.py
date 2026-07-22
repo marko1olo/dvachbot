@@ -97,13 +97,15 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
 async def get_reply_target(message: types.Message):
     if not message.reply_to_message:
         return None
-    import aiosqlite
     try:
-        async with aiosqlite.connect("file::memory:?cache=shared", uri=True) as mdb:
-            async with mdb.execute("SELECT author_id FROM PostCopies JOIN Posts ON PostCopies.post_num = Posts.post_num WHERE recipient_id = ? AND message_id = ?", (message.chat.id, message.reply_to_message.message_id)) as c:
-                row = await c.fetchone()
-                if row:
-                    return row[0]
+        db = await get_pool()
+        async with db.execute(
+            "SELECT author_id FROM PostCopies JOIN Posts ON PostCopies.post_num = Posts.post_num WHERE recipient_id = ? AND message_id = ?",
+            (message.chat.id, message.reply_to_message.message_id)
+        ) as c:
+            row = await c.fetchone()
+            if row:
+                return row[0]
     except:
         pass
     return None

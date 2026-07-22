@@ -2432,11 +2432,16 @@ async def add_post_copies(post_num: int, copies_data: list[tuple[int, int]]):
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await asyncio.sleep(0.1 * (attempt + 1))
                     continue
+                if "foreign key constraint failed" in str(e).lower():
+                    # Post was deleted before delivery finished, ignore safely
+                    break
                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
                 break
             except Exception as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
+                if "foreign key constraint failed" in str(e).lower():
+                    break
                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
                 break
 async def get_post_author_by_copy(recipient_id: int, message_id: int) -> int | None:
@@ -2939,7 +2944,6 @@ async def search_posts(query: str, board_id: Optional[str] = None, limit: int = 
     async with db_lock:
         try:
             db = await get_pool()
-            db.row_factory = aiosqlite.Row
             sanitized_query = query.replace('"', '""')
             final_query = f'"{sanitized_query}"'
 
