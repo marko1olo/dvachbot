@@ -19,19 +19,22 @@ class NeuroScanner:
     def __init__(self, bot, neuro_manager: NeuroManager):
         self.bot = bot
         self.neuro = neuro_manager
+        self.client = self._create_http_client()
+        self.seen_threads = set()
+
+    def _create_http_client(self) -> httpx.AsyncClient:
         transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=3)
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json"
         }
-        self.client = httpx.AsyncClient(
+        return httpx.AsyncClient(
             transport=transport,
             timeout=30.0, 
             headers=headers, 
             follow_redirects=True,
             verify=False
         )
-        self.seen_threads = set()
 
     async def scan_and_schedule(self, board_source='b', target_board='b', target_stream='ru'):
         logger.info(f"🕵️ [Scanner] Scanning /{board_source}/ for content...")
