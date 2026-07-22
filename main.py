@@ -7137,23 +7137,44 @@ async def _handle_shoot_bounce(ctx: ShootContext, t_items: dict):
         await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                          (json.dumps(active_items), user_id, board_id))
         await db.commit()
+
+@dataclass
+class ShootContext:
+    message: types.Message
+    db: object
+    db_lock: object
+    board_id: str
+    user_id: int
+    target_id: int
+    active_items: dict
+    t_items: dict = None
+
+async def _handle_shoot_bounce(ctx: ShootContext):
+    ctx.t_items["reflect_shield_until"] = 0
+    ctx.active_items["mute_gun"] = False
+    async with ctx.db_lock:
+        await ctx.db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(ctx.t_items), ctx.target_id, ctx.board_id))
+        await ctx.db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(ctx.active_items), ctx.user_id, ctx.board_id))
+        await ctx.db.commit()
     async with storage_lock:
-        board_data[board_id]['mutes'][user_id] = datetime.now(UTC) + timedelta(seconds=3600)
-    await apply_regular_mute(user_id, board_id, 3600)
+        board_data[ctx.board_id]['mutes'][ctx.user_id] = datetime.now(UTC) + timedelta(seconds=3600)
+    await apply_regular_mute(ctx.user_id, ctx.board_id, 3600)
     bounce = (
         f"🛡️ <b>ЗЕРКАЛЬНЫЙ ЩИТ!</b>\n\n"
-        f"Анон попытался выстрелить из Мут-Гана в <code>{target_id}</code>, "
+        f"Анон попытался выстрелить из Мут-Гана в <code>{ctx.target_id}</code>, "
         f"но у цели сработал Зеркальный Щит!\n"
-        f"Выстрел срикошетил. Стрелок <code>{user_id}</code> улетает в мут на 1 час 🤡\n"
+        f"Выстрел срикошетил. Стрелок <code>{ctx.user_id}</code> улетает в мут на 1 час 🤡\n"
         f"<i>(Щит цели израсходован.)</i>"
     )
-    await message.bot.send_message(
-        message.chat.id, bounce,
-        reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML"
+    await ctx.message.bot.send_message(
+        ctx.message.chat.id, bounce,
+        reply_to_message_id=ctx.message.reply_to_message.message_id, parse_mode="HTML"
     )
     try:
-        await message.bot.send_message(
-            user_id,
+        await ctx.message.bot.send_message(
+            ctx.user_id,
             "💥 <b>Твой выстрел срикошетил!</b>\n"
             "Ты попытался выстрелить в анона с Зеркальным Щитом — выстрел отразился обратно. "
             "Ты в муте на 1 час.",
@@ -7162,7 +7183,7 @@ async def _handle_shoot_bounce(ctx: ShootContext, t_items: dict):
     except:
         pass
     try:
-        await message.delete()
+        await ctx.message.delete()
     except:
         pass
 
@@ -7170,26 +7191,26 @@ async def _handle_shoot_success(ctx: ShootContext):
     message, db, db_lock = ctx.message, ctx.db, ctx.db_lock
     board_id, user_id, target_id, active_items = ctx.board_id, ctx.user_id, ctx.target_id, ctx.active_items
     async with storage_lock:
-        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=3600)
-    await apply_regular_mute(target_id, board_id, 3600)
-    active_items["mute_gun"] = False
-    async with db_lock:
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (json.dumps(active_items), user_id, board_id))
-        await db.commit()
+        board_data[ctx.board_id]['mutes'][ctx.target_id] = datetime.now(UTC) + timedelta(seconds=3600)
+    await apply_regular_mute(ctx.target_id, ctx.board_id, 3600)
+    ctx.active_items["mute_gun"] = False
+    async with ctx.db_lock:
+        await ctx.db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(ctx.active_items), ctx.user_id, ctx.board_id))
+        await ctx.db.commit()
     alert = (
         f"💥 <b>ВЫСТРЕЛ ИЗ МУТ-ГАНА!</b>\n\n"
         f"Богатенький анон купил Мут-Ган за 500 RUB и пристрелил автора этого поста!\n"
-        f"Жертва <code>{target_id}</code> отправляется в мут на 1 час.\n"
+        f"Жертва <code>{ctx.target_id}</code> отправляется в мут на 1 час.\n"
         f"<i>(Защита от Мут-Гана — Зеркальный Щит в /shop.)</i>"
     )
-    await message.bot.send_message(
-        message.chat.id, alert,
-        reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML"
+    await ctx.message.bot.send_message(
+        ctx.message.chat.id, alert,
+        reply_to_message_id=ctx.message.reply_to_message.message_id, parse_mode="HTML"
     )
     try:
-        await message.bot.send_message(
-            target_id,
+        await ctx.message.bot.send_message(
+            ctx.target_id,
             "💥 <b>В тебя выстрелили из Мут-Гана!</b>\n"
             "Тебя отправили в мут на 1 час — ты временно не можешь писать на этой доске.\n"
             "Защититься от будущих выстрелов можно купив Зеркальный Щит в /shop.",
@@ -7198,7 +7219,7 @@ async def _handle_shoot_success(ctx: ShootContext):
     except:
         pass
     try:
-        await message.delete()
+        await ctx.message.delete()
     except:
         pass
 
@@ -7245,6 +7266,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         
     if current_mute and current_mute > datetime.now(UTC):
         await message.answer("⚠️ Эта цель УЖЕ находится в муте! Выбери кого-то другого. Мут-Ган остался у тебя.")
+        await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items, t_items))
         return
 
     # Обычный мут цели
