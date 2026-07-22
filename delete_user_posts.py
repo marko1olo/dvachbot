@@ -7,6 +7,21 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
     from common.db_pool import get_pool, db_lock  # Локальный импорт
     try:
         time_threshold_ts = (datetime.now(UTC) - timedelta(minutes=time_period_minutes)).timestamp()
+import json
+from aiogram import Bot
+from datetime import datetime, timedelta, UTC
+import asyncio
+import aiohttp
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError
+
+      """
+      Массовое удаление постов пользователя за период.
+      Удаляет из БД (с защитой транзакции), RAM, ЛС и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
+      Правильно удаляет целые треды из БД/архивов, если удаляется ОП-пост.
+      """
+      from common.db_pool import get_pool, db_lock  # Локальный импорт
+      try:
+          time_threshold_ts = (datetime.now(UTC) - timedelta(minutes=time_period_minutes)).timestamp()
 
         posts_to_delete_nums = []
         messages_to_delete_from_api = []
@@ -45,6 +60,15 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                                 t_rows = await cursor.fetchall()
                                 for t_row in t_rows:
                                     threads_to_delete.append(t_row[0])
+                      # Проверяем, какие из этих постов являются ОП-постами тредов
+                      if user_posts:
+                          user_posts_str_json = json.dumps([str(p) for p in user_posts])
+                          user_posts_int_json = json.dumps(user_posts)
+                          query = "SELECT thread_id FROM Threads WHERE thread_id IN (SELECT value FROM json_each(?)) OR thread_num IN (SELECT value FROM json_each(?))"
+                          async with db.execute(query, (user_posts_str_json, user_posts_int_json)) as cursor:
+                              t_rows = await cursor.fetchall()
+                              for t_row in t_rows:
+                                  threads_to_delete.append(t_row[0])
 
                     # Если есть удаляемые треды, выбираем ВСЕ посты этих тредов, чтобы снести их тоже
                     if threads_to_delete:
@@ -67,6 +91,14 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                                 p_rows = await cursor.fetchall()
                                 for pr in p_rows:
                                     posts_to_delete_set.add(pr[0])
+                          t_ids = list(set(t_ids))
+                          if t_ids:
+                              t_ids_json = json.dumps(t_ids)
+                              query = "SELECT post_num FROM Posts WHERE thread_id IN (SELECT value FROM json_each(?))"
+                              async with db.execute(query, (t_ids_json,)) as cursor:
+                                  p_rows = await cursor.fetchall()
+                                  for pr in p_rows:
+                                      posts_to_delete_set.add(pr[0])
 
                     posts_to_delete_nums = list(posts_to_delete_set)
                     placeholders = ','.join('?' for _ in posts_to_delete_nums)
