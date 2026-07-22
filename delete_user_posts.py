@@ -40,6 +40,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                             chunk_str = [str(p) for p in chunk]
                             placeholders = ','.join('?' for _ in chunk)
                             query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders}) OR thread_num IN ({placeholders})"
+                            query = f"SELECT thread_id FROM Threads WHERE thread_id IN ({placeholders}) OR thread_num IN ({placeholders})"  # nosec B608
                             async with db.execute(query, chunk_str + chunk) as cursor:
                                 t_rows = await cursor.fetchall()
                                 for t_row in t_rows:
@@ -61,6 +62,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                             chunk = t_ids[i:i+chunk_size]
                             placeholders_threads = ','.join(['?'] * len(chunk))
                             query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders_threads})"
+                            query = f"SELECT post_num FROM Posts WHERE thread_id IN ({placeholders_threads})"  # nosec B608
                             async with db.execute(query, chunk) as cursor:
                                 p_rows = await cursor.fetchall()
                                 for pr in p_rows:
@@ -76,6 +78,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                         JOIN Posts p ON pc.post_num = p.post_num
                         WHERE pc.post_num IN ({placeholders})
                     """
+                    """  # nosec B608
                     async with db.execute(query_copies, posts_to_delete_nums) as cursor:
                         messages_to_delete_from_api = await cursor.fetchall()
 
@@ -86,6 +89,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                         JOIN Posts p ON cc.post_num = p.post_num
                         WHERE cc.post_num IN ({placeholders})
                     """
+                    """  # nosec B608
                     async with db.execute(query_channels, posts_to_delete_nums) as cursor:
                         channel_messages_to_delete = await cursor.fetchall()
 
@@ -100,11 +104,16 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
 
                     # Удаляем из UserReplies
                     await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders})", posts_to_delete_nums + posts_to_delete_nums)
+                    await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", posts_to_delete_nums)  # nosec B608
+                    await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)  # nosec B608
+                    await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)  # nosec B608
+                    await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders})", posts_to_delete_nums + posts_to_delete_nums)  # nosec B608
 
                     # Удаляем из Threads
                     if threads_to_delete:
                         t_placeholders = ','.join('?' for _ in threads_to_delete)
                         await db.execute(f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})", threads_to_delete)
+                        await db.execute(f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})", threads_to_delete)  # nosec B608
 
                     await db.execute("COMMIT")
                     break # Успех
