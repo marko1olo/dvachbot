@@ -4875,11 +4875,15 @@ async def _build_lie_media_content(content: dict, board_id: str) -> dict:
 @dataclass
 class BroadcastConfig:
     bot_instance: Bot
+from dataclasses import dataclass
+class BroadcasterConfig:
+    bot_instance: "Bot"
     board_id: str
     recipients: set[int]
     content: dict
     reply_info: dict | None = None
     keyboard: InlineKeyboardMarkup | None = None
+    keyboard: "InlineKeyboardMarkup | None" = None
     verbose: bool = False
     queue_enqueued_at: float | None = None
     queue_wait_sec: float | None = None
@@ -4891,6 +4895,7 @@ class MessageBroadcaster:
     def __init__(self, config: BroadcastConfig):
         self.config = config
 
+    def __init__(self, config: BroadcasterConfig):
         self.bot_instance = config.bot_instance
         self.board_id = config.board_id
         self.recipients = config.recipients
@@ -5895,6 +5900,21 @@ async def send_message_to_users(config: BroadcastConfig) -> list:
     verbose=True -> пишет отчет в консоль (для массовой).
     """
     broadcaster = MessageBroadcaster(config)
+    config = BroadcasterConfig(
+        bot_instance=bot_instance,
+        board_id=board_id,
+        recipients=recipients,
+        content=content,
+        reply_info=reply_info,
+        keyboard=keyboard,
+        verbose=verbose,
+        queue_enqueued_at=queue_enqueued_at,
+        queue_wait_sec=queue_wait_sec,
+        delivery_phase=delivery_phase,
+        delivery_original_recipients=delivery_original_recipients,
+        delivery_deferred_recipients=delivery_deferred_recipients,
+    )
+    broadcaster = MessageBroadcaster(config=config)
     return await broadcaster.broadcast()
 async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
     """
