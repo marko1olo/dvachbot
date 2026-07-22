@@ -7535,6 +7535,7 @@ from dataclasses import dataclass
 class ChartContext:
     cur: Any
     cur: 'Any'
+    cur: object
     board_id: str
     since_90: int
     since_180: int
@@ -7573,6 +7574,14 @@ def _generate_activity_clock(ctx: StatsContext):
 def _generate_activity_clock(ctx):
     cur, board_id, since_90, BG, FG = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG
     _np, _plt, _io, _mpl = ctx._np, ctx._plt, ctx._io, ctx._mpl
+    HEAT: object
+    _np: object
+    _plt: object
+    _io: object
+    _mpl: object
+    _dt: object
+    defaultdict: object
+    cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx._mpl
     cur.execute("""
         SELECT CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
                COUNT(*) as cnt
@@ -7626,6 +7635,7 @@ def _generate_ridge_plot(ctx: StatsContext):
 def _generate_ridge_plot(ctx):
     cur, board_id, since_90, BG, FG = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG
     _np, _plt, _io, defaultdict = ctx._np, ctx._plt, ctx._io, ctx.defaultdict
+    cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx.defaultdict
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER),
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER),
@@ -7681,6 +7691,7 @@ def _generate_weekday_heatmap(ctx: StatsContext):
 def _generate_weekday_heatmap(ctx):
     cur, board_id, since_180, BG, FG, HEAT = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT
     _np, _plt, _io = ctx._np, ctx._plt, ctx._io
+    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER) as dow,
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
@@ -7721,6 +7732,7 @@ def _generate_calendar_heatmap(ctx: StatsContext):
 def _generate_calendar_heatmap(ctx):
     cur, board_id, since_180, BG, FG, HEAT = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT
     _np, _plt, _io, _dt = ctx._np, ctx._plt, ctx._io, ctx._dt
+    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io, ctx._dt
     cur.execute("""
         SELECT date(timestamp,'unixepoch','localtime') as day, COUNT(*)
         FROM Posts WHERE board_id=? AND timestamp > ?
@@ -7829,6 +7841,8 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
         cur=cur, board_id=board_id, since_90=since_90, since_180=since_180,
         BG=BG, FG=FG, HEAT=HEAT, _np=_np, _plt=_plt, _io=_io,
         _mpl=_mpl, defaultdict=defaultdict, _dt=_dt
+        BG=BG, FG=FG, HEAT=HEAT, _np=_np, _plt=_plt, _io=_io, _mpl=_mpl,
+        _dt=_dt, defaultdict=defaultdict
     if not activity_clock:
         con.close()
         return []
