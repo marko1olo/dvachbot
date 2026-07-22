@@ -2436,6 +2436,82 @@ async def setup_pinned_messages(bots: dict[str, Bot]):
         default_lang = 'en' if board_id == 'int' else 'ru'
         b_data['start_message_text'] = start_messages[default_lang]
         print(f"📌 [{board_id}] Тексты помощи (RU/EN/JP) подготовлены.")
+
+def _format_post_text(content: dict, msg_type: str) -> str:
+    raw_text = content.get('text') or content.get('caption') or ""
+    text = clean_html_tags(raw_text)
+    text = re.sub(r'^(Ответ на \d+.*?\n|Post No\.\d+.*?\n)', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^(###.*?###|<i>.*?</i>)\s*\n?', '', text, flags=re.MULTILINE)
+    text = text.strip()
+
+    if not text:
+        if msg_type == 'photo':
+            text = "[Отправил изображение]"
+        elif msg_type == 'video':
+            text = "[Отправил видео]"
+        elif msg_type == 'animation':
+            text = "[Отправил GIF-анимацию]"
+        elif msg_type == 'sticker':
+            text = "[Отправил стикер]"
+        elif msg_type == 'video_note':
+            text = "[Отправил видеосообщение]"
+        elif msg_type == 'voice':
+            text = "[Отправил голосовое сообщение]"
+        elif msg_type == 'audio':
+            text = "[Отправил аудиозапись]"
+        elif msg_type == 'document':
+            filename = content.get('filename')
+            text = f"[Отправил файл: {filename}]" if filename else "[Отправил файл]"
+    else:
+        if msg_type == 'photo':
+            text = f"[Изображение] {text}"
+        elif msg_type == 'video':
+            text = f"[Видео] {text}"
+        elif msg_type == 'animation':
+            text = f"[GIF] {text}"
+        elif msg_type == 'document':
+            filename = content.get('filename')
+            file_label = f" файл {filename}" if filename else " файл"
+            text = f"[Отправил{file_label}] {text}"
+    return text
+
+def _get_author_name(post: dict, content: dict, board_id: str, lang: str | None) -> str:
+    name = content.get('username') or content.get('name') or content.get('author_name')
+    if not name:
+        if not lang:
+            lang = 'en' if board_id == 'int' else 'ru'
+        author_id = post.get('author_id')
+        if author_id and author_id != 0:
+            suffix = str(author_id)[-4:]
+            if lang == 'en':
+                name = f"Anon #{suffix}"
+            elif lang == 'jp':
+                name = f"名無し #{suffix}"
+            else:
+                name = f"Анон #{suffix}"
+        else:
+            if lang == 'en':
+                name = "Anon"
+            elif lang == 'jp':
+                name = "名無し"
+            else:
+                name = "Анон"
+    return name
+
+def _get_reply_suffix(post: dict, content: dict, board_id: str, lang: str | None) -> str:
+    reply_to = content.get('reply_to_post') or post.get('reply_to_post_num')
+    reply_suffix = ""
+    if reply_to:
+        if not lang:
+            lang = 'en' if board_id == 'int' else 'ru'
+        if lang == 'en':
+            reply_suffix = f" (reply to #{reply_to})"
+        elif lang == 'jp':
+            reply_suffix = f" (>>{reply_to})"
+        else:
+            reply_suffix = f" (Ответ на #{reply_to})"
+    return reply_suffix
+
 async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None = None, lang: str | None = None) -> str:
 
     now = datetime.now(UTC)
@@ -2480,76 +2556,10 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
             content = post.get('content', {})
             msg_type = content.get('type', 'text')
             
-            raw_text = content.get('text') or content.get('caption') or ""
-            text = clean_html_tags(raw_text)
-            text = re.sub(r'^(Ответ на \d+.*?\n|Post No\.\d+.*?\n)', '', text, flags=re.MULTILINE)
-            text = re.sub(r'^(###.*?###|<i>.*?</i>)\s*\n?', '', text, flags=re.MULTILINE)
-            text = text.strip()
-            
-            # Если текста нет, но это медиа/стикер, вставляем факт его отправки в контекст
-            if not text:
-                if msg_type == 'photo':
-                    text = "[Отправил изображение]"
-                elif msg_type == 'video':
-                    text = "[Отправил видео]"
-                elif msg_type == 'animation':
-                    text = "[Отправил GIF-анимацию]"
-                elif msg_type == 'sticker':
-                    text = "[Отправил стикер]"
-                elif msg_type == 'video_note':
-                    text = "[Отправил видеосообщение]"
-                elif msg_type == 'voice':
-                    text = "[Отправил голосовое сообщение]"
-                elif msg_type == 'audio':
-                    text = "[Отправил аудиозапись]"
-                elif msg_type == 'document':
-                    filename = content.get('filename')
-                    text = f"[Отправил файл: {filename}]" if filename else "[Отправил файл]"
-            else:
-                # Если подпись к файлу есть, добавляем к ней тип медиа
-                if msg_type == 'photo':
-                    text = f"[Изображение] {text}"
-                elif msg_type == 'video':
-                    text = f"[Видео] {text}"
-                elif msg_type == 'animation':
-                    text = f"[GIF] {text}"
-                elif msg_type == 'document':
-                    filename = content.get('filename')
-                    file_label = f" файл {filename}" if filename else " файл"
-                    text = f"[Отправил{file_label}] {text}"
-            
+            text = _format_post_text(content, msg_type)
             if text:
-                author_id = post.get('author_id')
-                name = content.get('username') or content.get('name') or content.get('author_name')
-                if not name:
-                    if not lang:
-                        lang = 'en' if board_id == 'int' else 'ru'
-                    if author_id and author_id != 0:
-                        suffix = str(author_id)[-4:]
-                        if lang == 'en':
-                            name = f"Anon #{suffix}"
-                        elif lang == 'jp':
-                            name = f"名無し #{suffix}"
-                        else:
-                            name = f"Анон #{suffix}"
-                    else:
-                        if lang == 'en':
-                            name = "Anon"
-                        elif lang == 'jp':
-                            name = "名無し"
-                        else:
-                            name = "Анон"
-                reply_to = content.get('reply_to_post') or post.get('reply_to_post_num')
-                reply_suffix = ""
-                if reply_to:
-                    if not lang:
-                        lang = 'en' if board_id == 'int' else 'ru'
-                    if lang == 'en':
-                        reply_suffix = f" (reply to #{reply_to})"
-                    elif lang == 'jp':
-                        reply_suffix = f" (>>{reply_to})"
-                    else:
-                        reply_suffix = f" (Ответ на #{reply_to})"
+                name = _get_author_name(post, content, board_id, lang)
+                reply_suffix = _get_reply_suffix(post, content, board_id, lang)
                 lines.append(f"{name}{reply_suffix}: {text}")
         except Exception as e:
             print(f"[summarize] Error while chunking post: {e}, post: {post}")
