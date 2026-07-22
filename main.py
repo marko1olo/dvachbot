@@ -3501,15 +3501,28 @@ def apply_shadow_autoreplace(content: dict) -> dict:
     return modified
 
 
+from dataclasses import dataclass
+
+@dataclass
+class NewPostContext:
+    bot_instance: Bot
+    board_id: str
+    user_id: int
+    content: dict
+    reply_to_post: int | None
+    is_shadow_muted: bool
+    stream: str = 'ru'
+
+
 class NewPostProcessor:
-    def __init__(self, bot_instance, board_id, user_id, content, reply_to_post, is_shadow_muted, stream='ru'):
-        self.bot_instance = bot_instance
-        self.board_id = board_id
-        self.user_id = user_id
-        self.content = content.copy()
-        self.reply_to_post = reply_to_post
-        self.is_shadow_muted = is_shadow_muted
-        self.stream = stream
+    def __init__(self, context: NewPostContext):
+        self.bot_instance = context.bot_instance
+        self.board_id = context.board_id
+        self.user_id = context.user_id
+        self.content = context.content.copy()
+        self.reply_to_post = context.reply_to_post
+        self.is_shadow_muted = context.is_shadow_muted
+        self.stream = context.stream
 
         self.b_data = board_data.get(self.board_id, {})
         self.current_post_num = None
@@ -3809,7 +3822,7 @@ async def process_new_post(
     Унифицированная функция для обработки, сохранения и постановки в очередь нового поста.
     Версия 8.0: Гарантирует регистрацию поста в памяти даже при сбое отправки. НИКАКИХ УДАЛЕНИЙ.
     """
-    processor = NewPostProcessor(
+    context = NewPostContext(
         bot_instance=bot_instance,
         board_id=board_id,
         user_id=user_id,
@@ -3818,6 +3831,7 @@ async def process_new_post(
         is_shadow_muted=is_shadow_muted,
         stream=stream
     )
+    processor = NewPostProcessor(context)
     return await processor.execute()
 def _build_archive_header(board_id: str, post_num: int, content: dict, lang: str) -> str:
     raw_header = content.get('header', f"Пост №{post_num}")
