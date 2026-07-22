@@ -6755,7 +6755,7 @@ async def cmd_random_media(message: types.Message):
 
     import hashlib
     import os
-    secret = os.getenv("SECRET_KEY", "")
+    secret = os.environ["SECRET_KEY"]
     user_hash = hashlib.sha256((str(message.from_user.id) + secret).encode()).hexdigest()[:12]
     caption = f"🎲 Рандом (x{len(media_items)}) | #{user_hash}"
     
