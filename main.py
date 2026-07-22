@@ -4890,6 +4890,7 @@ class BroadcastConfig:
 class MessageBroadcaster:
     def __init__(self, config: BroadcastConfig):
         self.config = config
+
         self.bot_instance = config.bot_instance
         self.board_id = config.board_id
         self.recipients = config.recipients
@@ -6463,6 +6464,7 @@ async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_loc
         if op_post_data:
             try:
                 await send_message_to_users(BroadcastConfig(bot, board_id, {user_id}, op_post_data['content'], op_post_data['reply_info']))
+                await send_message_to_users(BroadcastConfig(bot_instance=bot, board_id=board_id, recipients={user_id}, content=op_post_data['content'], reply_info=op_post_data['reply_info']))
                 await asyncio.sleep(0.1)
             except Exception as e:
                 print(f"Ошибка отправки ОП-поста #{op_post_num} юзеру {user_id}: {e}")
@@ -6470,6 +6472,7 @@ async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_loc
         if post_bundle['content'].get('post_num') != op_post_num:
             try:
                 await send_message_to_users(BroadcastConfig(bot, board_id, {user_id}, post_bundle['content'], post_bundle['reply_info']))
+                await send_message_to_users(BroadcastConfig(bot_instance=bot, board_id=board_id, recipients={user_id}, content=post_bundle['content'], reply_info=post_bundle['reply_info']))
                 await asyncio.sleep(0.1)
             except Exception as e:
                 print(f"Ошибка отправки пропущенного сообщения #{post_bundle['content'].get('post_num')} юзеру {user_id}: {e}")

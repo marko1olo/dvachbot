@@ -87,7 +87,7 @@ async def witching_hour_ghost_worker(bot_instance):
     """
     from summarize import summarize_text_with_hf
     from common.database import get_board_chunk
-    from main import board_data, format_header, send_message_to_users, state
+    from main import board_data, format_header, send_message_to_users, state, BroadcastConfig
     
     while True:
         await asyncio.sleep(60) # Check every minute
@@ -137,13 +137,13 @@ async def witching_hour_ghost_worker(bot_instance):
                     # Broadcast ghost message to all board users
                     recipients = board_data[target_board].get('recipients', set()).copy()
                     if recipients:
-                        await send_message_to_users(
+                        await send_message_to_users(BroadcastConfig(
                             bot_instance=bot_instance,
                             board_id=target_board,
                             recipients=recipients,
                             content=content,
                             reply_info=None
-                        )
+                        ))
                         print(f"💀 [WITCHING HOUR] Призрак {ghost_id} высрал пасту на {target_board}")
                         
                 except Exception as e:
