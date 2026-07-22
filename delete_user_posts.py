@@ -223,6 +223,27 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
             if i + CHUNK_SIZE < len(messages_to_delete_from_api):
                 await asyncio.sleep(DELAY_BETWEEN_CHUNKS)
 
+from aiogram import Bot
+from datetime import datetime, timedelta, UTC
+import asyncio
+                        import json
+                        str_posts = json.dumps([str(p) for p in user_posts])
+                        int_posts = json.dumps(list(user_posts))
+                        query = """
+                            SELECT thread_id FROM Threads
+                            WHERE thread_id IN (SELECT value FROM json_each(?))
+                               OR thread_num IN (SELECT value FROM json_each(?))
+                        """
+                        async with db.execute(query, (str_posts, int_posts)) as cursor:
+                            t_rows = await cursor.fetchall()
+                            for t_row in t_rows:
+                                threads_to_delete.append(t_row[0])
+                        t_ids_json = json.dumps(t_ids)
+                        query = "SELECT post_num FROM Posts WHERE thread_id IN (SELECT value FROM json_each(?))"
+                        async with db.execute(query, (t_ids_json,)) as cursor:
+                            p_rows = await cursor.fetchall()
+                            for pr in p_rows:
+                                posts_to_delete_set.add(pr[0])
         return total_deleted_count
     except Exception as e:
         import traceback
