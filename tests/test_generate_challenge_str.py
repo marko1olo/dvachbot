@@ -7,7 +7,7 @@ import Dubsite_tgach.security
 @pytest.mark.parametrize("security_module", [site_tgach.security, Dubsite_tgach.security])
 class TestGenerateChallengeStr:
     @pytest.fixture(autouse=True)
-    def setup_cache(self, security_module):
+    def setup_cache(self, security_module):  # noqa
         # Reset cache before each test
         security_module.POW_CACHE.clear()
         yield
