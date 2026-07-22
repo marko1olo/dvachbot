@@ -106,6 +106,7 @@ async def get_country_by_ip(ip: str) -> str:
         except Exception as e:
             logger.error(f"Failed to load GeoIP DB: {e}")
             logging.warning(f"Failed to initialize GeoIP reader: {e}")
+            logging.warning(f"Failed to load GeoIP database: {e}")
 
     if GEOIP_READER:
         try:
@@ -114,6 +115,7 @@ async def get_country_by_ip(ip: str) -> str:
         except Exception as e:
             logger.error(f"GeoIP country lookup failed for IP {ip}: {e}")
             logging.warning(f"GeoIP reader failed for IP {ip}: {e}")
+            logging.warning(f"Failed to lookup IP {ip} in GeoIP database: {e}")
 
     strategies = [
         {"proxy": PROXY_URL, "name": "Proxy"},
