@@ -135,17 +135,3 @@ def is_hf_link_allowed(url: str | None, valid_repos: set[str]) -> bool:
     return False
 
 
-def get_hf_health_snapshot() -> dict:
-    now = time.time()
-    with _LOCK:
-        return {
-            repo: {
-                "disabled_for_seconds": max(0, int(float(until) - now)),
-                "reason": _STATE["hf_disabled_reason"].get(repo, ""),
-            }
-            for repo, until in _STATE["hf_disabled_until"].items()
-            if float(until) > now
-        }
-
-
-_load_state()
