@@ -81,6 +81,11 @@ from fastapi_cache.backends.inmemory import InMemoryBackend
 from fastapi_cache.decorator import cache
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
+def angle_diff(a: float, b: float) -> float:
+    diff = abs(a - b) % 360
+    return min(diff, 360 - diff)
+
+
 def get_real_ip(request: Request) -> str:
     real_ip = request.headers.get("x-real-ip")
     if real_ip:
@@ -4722,9 +4727,6 @@ async def api_create_post(
                     user_h, user_m = map(float, captcha_value.split(':'))
                     target_h = session['target_h']
                     target_m = session['target_m']
-                    def angle_diff(a, b):
-                        diff = abs(a - b) % 360
-                        return min(diff, 360 - diff)
                     if angle_diff(user_h, target_h) > 15 or angle_diff(user_m, target_m) > 15:
                         raise HTTPException(400, t('err_cap_clock'))
                 except:
