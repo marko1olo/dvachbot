@@ -220,8 +220,8 @@ async def get_country_by_ip(ip: str) -> str:
         try:
             response = await asyncio.to_thread(GEOIP_READER.country, ip)
             return response.country.iso_code or "XX"
-        except:
-            pass
+        except Exception as e:
+            logging.getLogger(__name__).error(f"GeoIP country lookup failed for IP {ip}: {e}")
 
     strategies = [
         {"proxy": PROXY_URL, "name": "Proxy"},
