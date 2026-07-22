@@ -45,6 +45,24 @@ def _get_models_cascade(model_preference: str | None) -> list[tuple[str, str]]:
         ("qwen/qwen3.6-27b", "groq"),
         ("llama-3.3-70b-versatile", "groq"),
     ]
+def get_models_cascade(model_preference: str | None = None) -> list[tuple[str, str]]:
+        return [
+            ("gemini-3.1-flash-lite", "gemini"),
+        ]
+    elif model_preference == "qwen":
+        return [
+            ("qwen/qwen3.6-27b", "groq")
+        ]
+    elif model_preference == "llama":
+        return [
+            ("llama-3.3-70b-versatile", "groq")
+        ]
+    else:
+        return [
+            ("gemini-3.1-flash-lite", "gemini"),
+            ("qwen/qwen3.6-27b", "groq"),
+            ("llama-3.3-70b-versatile", "groq"),
+        ]
 
 async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     """
@@ -99,6 +117,7 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
             ("llama-3.3-70b-versatile", "groq"),
         ]
     models_cascade = _get_models_cascade(model_preference)
+    models_cascade = get_models_cascade(model_preference)
     
     system_instruction = prompt + (
         "\n\nCRITICAL OUTPUT FORMAT RULES:\n"
