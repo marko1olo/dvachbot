@@ -32,9 +32,100 @@ def get_unmerged_branches():
             branches.append(line)
     return branches
 
+def _check_noise(files, diff_text):
+    noise_extensions = {'.log', '.txt', '.png', '.json'}
+    all_noise = True
+    for f in files:
+        path = Path(f)
+        if path.suffix not in noise_extensions and path.name not in ["plan.md", "AUTONOMOUS_PROGRESS.md", "readme.md"]:
+            all_noise = False
+            break
+            
+    if not diff_text.strip() or (files and all_noise):
+        return "REJECT", "Noise: Only non-code/report files modified or empty diff."
+    return None
+
+def _check_reject_criteria(added_lines, deleted_lines, short_name):
+    for line in added_lines:
+        if "execute" in line:
+            if "f\"" in line or "f'" in line:
+                if "{" in line and "}" in line and not any(k in line for k in ["?", "placeholder"]):
+                    return "REJECT", "Security: Possible SQL Injection using f-strings in database execution."
+            if "%" in line and any(sql in line.lower() for sql in ["select", "insert", "update", "delete", "where"]):
+                return "REJECT", "Security: Possible SQL Injection using % operator in SQL query."
+            if ".format(" in line and any(sql in line.lower() for sql in ["select", "insert", "update", "delete", "where"]):
+                return "REJECT", "Security: Possible SQL Injection using .format() in SQL query."
+
+    for line in added_lines:
+        if "subprocess" in line or "os.system" in line or "Popen" in line:
+            if "shell=True" in line:
+                return "REJECT", "Security: Dangerous use of shell=True in subprocess call."
+                
+    for line in added_lines:
+        if any(token_var in line.lower() for token_var in ["token =", "api_key =", "secret =", "password ="]):
+            if '"' in line or "'" in line:
+                if not any(t in short_name for t in ["test", "improve-status-check"]):
+                    return "REJECT", "Security: Hardcoded API token / key detected."
+
+    deleted_test_funcs = 0
+    added_test_funcs = 0
+    for line in deleted_lines:
+        if "def test_" in line:
+            deleted_test_funcs += 1
+    for line in added_lines:
+        if "def test_" in line:
+            added_test_funcs += 1
+    if deleted_test_funcs > 0 and added_test_funcs < deleted_test_funcs:
+        return "REJECT", "Antipattern: Deleting existing test cases without adequate replacements."
+
+    return None
+
+def _check_manual_review(files, total_changes):
+    if total_changes > 150:
+        return "MANUAL_REVIEW", f"Lines count too high ({total_changes} lines changed)."
+        
+    for f in files:
+        if "db_pool.py" in f or "database.py" in f or "bot_pool.py" in f:
+            return "MANUAL_REVIEW", f"Core database/pool logic modified: {f}"
+
+    return None
+
+def _check_accept_criteria(files, added_lines, deleted_lines, total_changes, short_name):
+    is_test_branch = any(t in short_name for t in ["test-", "testing-", "tests-", "improve-status-check"])
+    all_test_files = all("test" in f or f.startswith("tests/") for f in files)
+    if is_test_branch or all_test_files:
+        return "ACCEPT", "Testing: Addition or improvement of unit tests."
+        
+    any(c in short_name for c in ["remove-unused", "cleanup", "chore", "clean"])
+    only_imports_or_comments = True
+    for line in added_lines:
+        stripped = line.strip()
+        if stripped and not (stripped.startswith("import ") or stripped.startswith("from ") or stripped.startswith("#") or stripped == ""):
+            only_imports_or_comments = False
+            break
+    if only_imports_or_comments and len(deleted_lines) > 0:
+        return "ACCEPT", "Cleanup: Removing unused imports, commented code, or dead logic."
+        
+    is_fix_branch = any(f in short_name for f in ["fix-", "security-fix-", "improve-"])
+    if is_fix_branch:
+        safety_patterns = ["is None", "is not None", "len(", "try:", "except", "sanitize", "clean"]
+        has_safety = any(any(p in line for p in safety_patterns) for line in added_lines)
+        if has_safety and total_changes < 50:
+            return "ACCEPT", "Safety: Small safety checks, boundary/null validations or sanitizations."
+
+    if all(f.endswith('.md') or f.endswith('.txt') for f in files):
+        return "ACCEPT", "Documentation: Modifying markdown/text docs."
+
+    if total_changes < 50:
+        if "optimize" in short_name or "perf" in short_name:
+            return "ACCEPT", "Performance: Minor performance optimizations."
+        return "ACCEPT", "Acceptable minor improvements or refactoring."
+
+    return None
+
 def classify_branch(branch, cwd="."):
     short_name = branch.replace("origin/", "")
-    
+
     try:
         files_output = run_git(["diff", "--name-only", "origin/main..." + branch], cwd=cwd)
         files = [f.strip() for f in files_output.split('\n') if f.strip()]
@@ -53,94 +144,26 @@ def classify_branch(branch, cwd="."):
             added_lines.append(line[1:])
         elif line.startswith('-') and not line.startswith('---'):
             deleted_lines.append(line[1:])
-            
+
     add_count = len(added_lines)
     del_count = len(deleted_lines)
     total_changes = add_count + del_count
 
-    # 1. NOISE CHECK
-    noise_extensions = {'.log', '.txt', '.png', '.json'}
-    all_noise = True
-    for f in files:
-        path = Path(f)
-        if path.suffix not in noise_extensions and path.name not in ["plan.md", "AUTONOMOUS_PROGRESS.md", "readme.md"]:
-            all_noise = False
-            break
-            
-    if not diff_text.strip() or (files and all_noise):
-        return "REJECT", "Noise: Only non-code/report files modified or empty diff.", files, add_count, del_count
+    noise_decision = _check_noise(files, diff_text)
+    if noise_decision:
+        return noise_decision[0], noise_decision[1], files, add_count, del_count
 
-    # 2. CRITICAL REJECT CHECKS
-    for line in added_lines:
-        if "execute" in line:
-            if "f\"" in line or "f'" in line:
-                if "{" in line and "}" in line and not any(k in line for k in ["?", "placeholder"]):
-                    return "REJECT", "Security: Possible SQL Injection using f-strings in database execution.", files, add_count, del_count
-            if "%" in line and any(sql in line.lower() for sql in ["select", "insert", "update", "delete", "where"]):
-                return "REJECT", "Security: Possible SQL Injection using % operator in SQL query.", files, add_count, del_count
-            if ".format(" in line and any(sql in line.lower() for sql in ["select", "insert", "update", "delete", "where"]):
-                return "REJECT", "Security: Possible SQL Injection using .format() in SQL query.", files, add_count, del_count
+    reject_decision = _check_reject_criteria(added_lines, deleted_lines, short_name)
+    if reject_decision:
+        return reject_decision[0], reject_decision[1], files, add_count, del_count
 
-    for line in added_lines:
-        if "subprocess" in line or "os.system" in line or "Popen" in line:
-            if "shell=True" in line:
-                return "REJECT", "Security: Dangerous use of shell=True in subprocess call.", files, add_count, del_count
-                
-    for line in added_lines:
-        if any(token_var in line.lower() for token_var in ["token =", "api_key =", "secret =", "password ="]):
-            if '"' in line or "'" in line:
-                if not any(t in short_name for t in ["test", "improve-status-check"]):
-                    return "REJECT", "Security: Hardcoded API token / key detected.", files, add_count, del_count
+    manual_review_decision = _check_manual_review(files, total_changes)
+    if manual_review_decision:
+        return manual_review_decision[0], manual_review_decision[1], files, add_count, del_count
 
-    deleted_test_funcs = 0
-    added_test_funcs = 0
-    for line in deleted_lines:
-        if "def test_" in line:
-            deleted_test_funcs += 1
-    for line in added_lines:
-        if "def test_" in line:
-            added_test_funcs += 1
-    if deleted_test_funcs > 0 and added_test_funcs < deleted_test_funcs:
-        return "REJECT", "Antipattern: Deleting existing test cases without adequate replacements.", files, add_count, del_count
-
-    # 3. MANUAL REVIEW CHECKS
-    if total_changes > 150:
-        return "MANUAL_REVIEW", f"Lines count too high ({total_changes} lines changed).", files, add_count, del_count
-        
-    for f in files:
-        if "db_pool.py" in f or "database.py" in f or "bot_pool.py" in f:
-            return "MANUAL_REVIEW", f"Core database/pool logic modified: {f}", files, add_count, del_count
-
-    # 4. ACCEPT CHECKS
-    is_test_branch = any(t in short_name for t in ["test-", "testing-", "tests-", "improve-status-check"])
-    all_test_files = all("test" in f or f.startswith("tests/") for f in files)
-    if is_test_branch or all_test_files:
-        return "ACCEPT", "Testing: Addition or improvement of unit tests.", files, add_count, del_count
-        
-    any(c in short_name for c in ["remove-unused", "cleanup", "chore", "clean"])
-    only_imports_or_comments = True
-    for line in added_lines:
-        stripped = line.strip()
-        if stripped and not (stripped.startswith("import ") or stripped.startswith("from ") or stripped.startswith("#") or stripped == ""):
-            only_imports_or_comments = False
-            break
-    if only_imports_or_comments and len(deleted_lines) > 0:
-        return "ACCEPT", "Cleanup: Removing unused imports, commented code, or dead logic.", files, add_count, del_count
-        
-    is_fix_branch = any(f in short_name for f in ["fix-", "security-fix-", "improve-"])
-    if is_fix_branch:
-        safety_patterns = ["is None", "is not None", "len(", "try:", "except", "sanitize", "clean"]
-        has_safety = any(any(p in line for p in safety_patterns) for line in added_lines)
-        if has_safety and total_changes < 50:
-            return "ACCEPT", "Safety: Small safety checks, boundary/null validations or sanitizations.", files, add_count, del_count
-
-    if all(f.endswith('.md') or f.endswith('.txt') for f in files):
-        return "ACCEPT", "Documentation: Modifying markdown/text docs.", files, add_count, del_count
-
-    if total_changes < 50:
-        if "optimize" in short_name or "perf" in short_name:
-            return "ACCEPT", "Performance: Minor performance optimizations.", files, add_count, del_count
-        return "ACCEPT", "Acceptable minor improvements or refactoring.", files, add_count, del_count
+    accept_decision = _check_accept_criteria(files, added_lines, deleted_lines, total_changes, short_name)
+    if accept_decision:
+        return accept_decision[0], accept_decision[1], files, add_count, del_count
 
     return "MANUAL_REVIEW", "Does not clearly match auto-accept/auto-reject criteria.", files, add_count, del_count
 
