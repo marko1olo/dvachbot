@@ -47,9 +47,9 @@ class TestStatsGenerator(unittest.TestCase):
         ]
 
         # Mock fetchall for the all_users query
-        mock_cursor.fetchall.return_value = [
+        mock_cursor.__iter__.return_value = iter([
             (101,), (123,), (200,)
-        ]
+        ])
 
         stats_data = fetch_user_stats_data(123, 'test')
 

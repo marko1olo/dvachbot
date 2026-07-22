@@ -3121,7 +3121,7 @@ def _cleanup_ephemeral_boards(con, boards, limit):
 
 def _cleanup_archived_threads(con, archive_lifetime):
     archive_cutoff = time.time() - archive_lifetime
-    tids = [r[0] for r in con.execute("SELECT thread_id FROM Threads WHERE is_archived = 1 AND last_updated_at < ?", (archive_cutoff,)).fetchall()]
+    tids = [r[0] for r in con.execute("SELECT thread_id FROM Threads WHERE is_archived = 1 AND last_updated_at < ?", (archive_cutoff,))]
 
     if tids:
         chunk_size = 50
