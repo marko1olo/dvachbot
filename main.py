@@ -763,47 +763,6 @@ class _ThreadedHealthcheckSite:
         await asyncio.to_thread(self.server.shutdown)
         self.server.server_close()
 
-class _HealthcheckHTTPServer(ThreadingHTTPServer):
-    allow_reuse_address = True
-    daemon_threads = True
-    request_queue_size = 64
-
-class _BotHealthcheckHandler(BaseHTTPRequestHandler):
-    server_version = "TGChanHealth/1.0"
-    protocol_version = "HTTP/1.0"
-
-    def log_message(self, format, *args):
-        return
-
-    def setup(self):
-        super().setup()
-        self.request.settimeout(2.0)
-
-    def finish(self):
-        try:
-            super().finish()
-        except OSError:
-            pass
-        finally:
-            try:
-                self.request.close()
-            except OSError:
-                pass
-
-    def do_GET(self):
-        try:
-            self.close_connection = True
-            status_code, body = _build_healthcheck_body()
-            self.send_response(status_code)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Connection", "close")
-            self.end_headers()
-            self.wfile.write(body)
-            self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
-            return
-
 def _build_healthcheck_body() -> tuple[int, bytes]:
     now = time.time()
     loop_lag_sec = max(0.0, now - event_loop_last_tick)
