@@ -4938,6 +4938,31 @@ class MessageBroadcaster:
 
         start_time = time.time()
 
+        await self._prepare_content_and_mentions()
+
+        remaining_recipients_for_later, interrupted_reason, phase_budget_sec = await self._process_delivery_queue(
+            ordered_recipients, start_time
+        )
+
+        self._log_delivery_metrics(
+            active_recipients,
+            original_recipients_count,
+            start_time,
+            remaining_recipients_for_later,
+            interrupted_reason,
+            phase_budget_sec
+        )
+
+        await self._save_copies_to_db()
+        await self._remove_blocked_users()
+
+        return DeliveryResults(
+            self.all_results,
+            remaining_recipients=remaining_recipients_for_later,
+            interrupted_reason=interrupted_reason,
+        )
+
+    async def _prepare_content_and_mentions(self):
         if self.content.get('poll_data') and not self.final_keyboard:
             poll_options = self.content.get('poll_data', {}).get('options', [])
             if poll_options and self.post_num:
@@ -5021,6 +5046,8 @@ class MessageBroadcaster:
                         if db_post:
                             self.mentioned_authors[m_num] = db_post.get("author_id")
 
+
+    async def _process_delivery_queue(self, ordered_recipients, start_time):
         queue = deque(ordered_recipients)
         recipient_retry_counts = defaultdict(int)
         CHUNK_SIZE = DELIVERY_INITIAL_CHUNK_SIZE
@@ -5138,6 +5165,17 @@ class MessageBroadcaster:
                 if CHUNK_SIZE < DELIVERY_INITIAL_CHUNK_SIZE:
                     CHUNK_SIZE += 1
 
+        return remaining_recipients_for_later, interrupted_reason, phase_budget_sec
+
+    def _log_delivery_metrics(
+        self,
+        active_recipients,
+        original_recipients_count,
+        start_time,
+        remaining_recipients_for_later,
+        interrupted_reason,
+        phase_budget_sec
+    ):
         time_taken = time.time() - start_time
         post_created_at = self.post_data_copy.get("timestamp") if self.post_data_copy else None
         post_age_sec = None
@@ -5208,6 +5246,8 @@ class MessageBroadcaster:
                     json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
                 )
 
+
+    async def _save_copies_to_db(self):
         if self.post_num and self.post_num not in posts_pending_deletion and not self.content.get('is_shadow_reject'):
             copies_for_db = []
             trimmed_copy_posts = 0
@@ -5248,6 +5288,8 @@ class MessageBroadcaster:
                     else:
                         print(f"⚠️ Ошибка сохранения копий для #{self.post_num}: {e}")
                         
+
+    async def _remove_blocked_users(self):
         if self.blocked_users:
             users_to_remove_db = []
             for uid in self.blocked_users:
@@ -5263,12 +5305,6 @@ class MessageBroadcaster:
                 await remove_users_from_board_batch(users_to_remove_db, self.board_id)
 
             print(f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} пользователей (блокировка бота).")
-
-        return DeliveryResults(
-            self.all_results,
-            remaining_recipients=remaining_recipients_for_later,
-            interrupted_reason=interrupted_reason,
-        )
 
     async def _send_one_guarded(self, uid: int, timeout_sec: float):
         request_timeout_sec = min(
