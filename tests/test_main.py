@@ -61,7 +61,7 @@ def _alru_cache_stub(maxsize=128, ttl=None, **kwargs):
 sys.modules['async_lru'].alru_cache = _alru_cache_stub
 
 # Now we can safely import the function under test
-from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, get_country_by_ip, check_post_cooldown, _resize_image_if_needed
+from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, get_country_by_ip, check_post_cooldown, _resize_image_if_needed, format_poll_for_html
 from unittest.mock import MagicMock, AsyncMock, patch
 import io
 
@@ -223,8 +223,6 @@ class TestCleanTitleText(unittest.TestCase):
         self.assertEqual(clean_title_text("<h1>Привет мир! 🌍</h1>"), "Привет мир! 🌍")
         self.assertEqual(clean_title_text("[Спойлер] Секрет 🤫"), "Секрет 🤫")
 
-if __name__ == "__main__":
-    unittest.main()
 
 from Dubsite_tgach.main import format_bayan_label
 from unittest.mock import patch
@@ -678,6 +676,54 @@ class TestCheckPostCooldown(unittest.IsolatedAsyncioTestCase):
              patch('time.time', return_value=100.0):
             await check_post_cooldown(request, user)
             mock_backend.set.assert_called_once_with('cooldown_user_123', '100.0', expire=5)
+
+
+class TestFormatPollForHtml(unittest.TestCase):
+    def test_empty_or_invalid_poll(self):
+        self.assertEqual(format_poll_for_html({}), "")
+        self.assertEqual(format_poll_for_html(None), "")
+        self.assertEqual(format_poll_for_html({"options": ["A"]}), "")
+
+    def test_basic_poll_no_votes(self):
+        poll_data = {
+            "question": "Favorite color?",
+            "options": ["Red", "Blue", "Green"]
+        }
+        result = format_poll_for_html(poll_data)
+        self.assertIn("Favorite color?", result)
+        self.assertIn("Red (0)", result)
+        self.assertIn("width: 0.0%;", result)
+
+    def test_poll_with_votes(self):
+        poll_data = {
+            "question": "Favorite color?",
+            "options": ["Red", "Blue", "Green"],
+            "votes": {
+                "0": ["user1", "user2"],
+                "1": ["user3", "user4", "user5"],
+                "2": []
+            }
+        }
+        result = format_poll_for_html(poll_data)
+        self.assertIn("Red (2)", result)
+        self.assertIn("Blue (3)", result)
+        self.assertIn("Green (0)", result)
+        self.assertIn("width: 40.0%;", result)
+        self.assertIn("width: 60.0%;", result)
+        self.assertIn("width: 0.0%;", result)
+
+    def test_html_escaping(self):
+        poll_data = {
+            "question": "<script>alert('xss')</script>",
+            "options": ["<b>bold</b>", "\"quote\""],
+            "votes": {"0": ["user1"]}
+        }
+        result = format_poll_for_html(poll_data)
+        self.assertIn("&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;", result)
+        self.assertIn("&lt;b&gt;bold&lt;/b&gt;", result)
+        self.assertIn("&quot;quote&quot;", result)
+        self.assertNotIn("<script>", result)
+        self.assertNotIn("<b>", result)
 
 if __name__ == "__main__":
     unittest.main()
