@@ -309,17 +309,24 @@ class ThreadImporter:
             raise Exception("Server returned non-JSON response")
 
     def extract_posts_data(self, json_data: Any) -> List[Dict]:
-        if isinstance(json_data, dict):
-            if "posts" in json_data:
-                return json_data["posts"]
-            if "threads" in json_data and isinstance(json_data["threads"], list):
-                return json_data["threads"][0].get("posts", [])
-            for v in json_data.values():
-                if isinstance(v, list) and v and isinstance(v[0], dict):
-                    if any(k in v[0] for k in ("comment", "no", "num", "com")):
-                        return v
-        elif isinstance(json_data, list):
+        if isinstance(json_data, list):
             return json_data
+
+        if not isinstance(json_data, dict):
+            raise ValueError("Unknown JSON structure: could not find posts list")
+
+        if "posts" in json_data:
+            return json_data["posts"]
+
+        if "threads" in json_data and isinstance(json_data["threads"], list):
+            return json_data["threads"][0].get("posts", [])
+
+        for v in json_data.values():
+            if not isinstance(v, list) or not v or not isinstance(v[0], dict):
+                continue
+            if any(k in v[0] for k in ("comment", "no", "num", "com")):
+                return v
+
         raise ValueError("Unknown JSON structure: could not find posts list")
 
     async def _process_single_post_media(
