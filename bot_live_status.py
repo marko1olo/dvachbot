@@ -1,7 +1,7 @@
-from __future__ import annotations
 
 import json
 import sqlite3
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -57,7 +57,6 @@ def _pid_exists(pid: int | None) -> bool:
         except Exception:
             return False
     try:
-        import os
 
         os.kill(pid, 0)
         return True
