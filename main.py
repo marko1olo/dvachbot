@@ -5494,17 +5494,9 @@ class MessageBroadcaster:
 
         def _plain_media_source(media_type: str):
             if current_content.get("image_bytes"):
-                if media_type == 'photo':
-                    filename = "file.jpg"
-                elif media_type == 'animation':
-                    filename = "file.gif"
-                elif media_type == 'audio':
-                    filename = "file.mp3"
-                elif media_type == 'voice':
-                    filename = "file.ogg"
-                else:
-                    filename = "file.mp4"
-                return BufferedInputFile(current_content["image_bytes"], filename=filename)
+                extensions = {'photo': 'jpg', 'animation': 'gif', 'audio': 'mp3', 'voice': 'ogg'}
+                ext = extensions.get(media_type, 'mp4')
+                return BufferedInputFile(current_content["image_bytes"], filename=f"file.{ext}")
             return current_content.get("file_id") or current_content.get("image_url")
 
         async def _send_plain_media_fallback(reason: str):
