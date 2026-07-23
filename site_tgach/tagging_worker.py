@@ -404,7 +404,7 @@ async def tagging_loop():
                 continue
 
             # Определяем, что качать (для видео предпочтительно превью, иначе сам файл)
-            download_target_id = thumb_id if (thumb_id and file_type in ['video', 'animation', 'gif', 'video_note']) else file_id
+            download_target_id = thumb_id if (thumb_id and file_type in {'video', 'animation', 'gif', 'video_note'}) else file_id
 
             try:
                 # 1. СКАЧИВАНИЕ

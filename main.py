@@ -5578,7 +5578,7 @@ class MessageBroadcaster:
             ct = str(current_content.get("type") or "").split('.')[-1].lower()
             if ct == "text":
                 return await _send_plain_text_parts(reason, plain_text)
-            if ct in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
+            if ct in {'photo', 'video', 'animation', 'document', 'audio', 'voice'}:
                 file_source = _plain_media_source(ct)
                 if not file_source:
                     return await _send_plain_text_parts(reason, plain_text)
@@ -5589,7 +5589,7 @@ class MessageBroadcaster:
                     'disable_notification': is_sage,
                     'request_timeout': request_timeout,
                 }
-                if has_spoiler and ct in ['photo', 'video', 'animation']:
+                if has_spoiler and ct in {'photo', 'video', 'animation'}:
                     common_plain_kwargs['has_spoiler'] = True
                 send_method = getattr(self.bot_instance, f"send_{ct}")
                 if len(plain_text) > 1024:

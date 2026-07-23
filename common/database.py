@@ -1463,7 +1463,7 @@ async def create_post(
                 if isinstance(content_obj, dict):
                     m_type = content_obj.get('type')
                     f_id = content_obj.get('file_id')
-                    if f_id and m_type in ['photo', 'image', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document']:
+                    if f_id and m_type in {'photo', 'image', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
                         sha_temp = hashlib.sha256(f_id.encode('utf-8')).hexdigest()
                         files_to_register.append((sha_temp, f_id, None, m_type, timestamp))
                     elif content_obj.get('media') and isinstance(content_obj['media'], list):
