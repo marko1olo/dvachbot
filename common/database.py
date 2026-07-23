@@ -23,6 +23,7 @@ import json
 import random
 import time
 import logging
+import hashlib
 import re
 REF_PATTERN = re.compile(r'(?:>>|&gt;&gt;)(\d+)')
 CROSS_LINK_PATTERN = re.compile(r'(?:>>|&gt;&gt;)/([a-z0-9]+)/(\d+)')
@@ -1462,22 +1463,27 @@ async def create_post(
                 if isinstance(content_obj, dict):
                     m_type = content_obj.get('type')
                     f_id = content_obj.get('file_id')
-                    if f_id and m_type in ['photo', 'image', 'video', 'animation', 'gif', 'video_note']:
-                        files_to_register.append((f"temp_{f_id[:16]}", f_id, None, m_type, timestamp))
+                    if f_id and m_type in ['photo', 'image', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document']:
+                        sha_temp = hashlib.sha256(f_id.encode('utf-8')).hexdigest()
+                        files_to_register.append((sha_temp, f_id, None, m_type, timestamp))
                     elif content_obj.get('media') and isinstance(content_obj['media'], list):
                         for item in content_obj['media']:
                             if isinstance(item, dict) and item.get('file_id'):
-                                files_to_register.append((f"temp_{item['file_id'][:16]}", item['file_id'], None, item.get('type', 'photo'), timestamp))
+                                fid = item['file_id']
+                                sha_temp = hashlib.sha256(fid.encode('utf-8')).hexdigest()
+                                files_to_register.append((sha_temp, fid, None, item.get('type', 'photo'), timestamp))
                     elif content_obj.get('files') and isinstance(content_obj['files'], list):
                         for item in content_obj['files']:
                             if isinstance(item, dict) and item.get('original_file_id'):
-                                files_to_register.append((f"temp_{item['original_file_id'][:16]}", item['original_file_id'], item.get('thumbnail_file_id'), item.get('type', 'photo'), timestamp))
+                                fid = item['original_file_id']
+                                sha_temp = hashlib.sha256(fid.encode('utf-8')).hexdigest()
+                                files_to_register.append((sha_temp, fid, item.get('thumbnail_file_id'), item.get('type', 'photo'), timestamp))
 
                 if files_to_register:
                     await db.executemany(
                         """
-                        INSERT OR IGNORE INTO FileRegistry (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
-                        VALUES (?, NULL, ?, ?, ?, ?, NULL, NULL)
+                        INSERT OR IGNORE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, created_at)
+                        VALUES (?, ?, ?, ?, ?)
                         """,
                         files_to_register
                     )

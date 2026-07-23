@@ -53,6 +53,13 @@ from site_tgach.neuro_moderator import TAGGING_PROMPT, run_deep_check
 
 # === НАСТРОЙКИ ===
 logger = logging.getLogger("tagger")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _sh = logging.StreamHandler()
+    _sh.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(_sh)
+logger.propagate = True
+
 PROXY_URL = "http://127.0.0.1:10808"
 GROQ_MODEL = "qwen/qwen3.6-27b"
 GROQ_TIMEOUT = 40.0
@@ -250,7 +257,7 @@ async def get_tasks(db) -> list[dict]:
     query_registry = f"""
         SELECT file_id, file_type, thumbnail_id
         FROM FileRegistry
-        WHERE file_type IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note') 
+        WHERE file_type IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document') 
         AND (tags IS NULL OR tags = '')
         AND created_at > {day_ago}
         ORDER BY created_at DESC
@@ -268,7 +275,7 @@ async def get_tasks(db) -> list[dict]:
     except Exception as e:
         logger.error(f"DB Error getting registry tasks: {e}")
 
-    # 2. Поиск пропущенных файлов (Gaps) в последних 250 постах (включая видео, фото и альбомы)
+    # 2. Поиск пропущенных файлов (Gaps) в последних 250 постах (включая видео, фото, стикеры и альбомы)
     if len(tasks) < BATCH_SIZE:
         query_gaps_files = """
             SELECT DISTINCT 
@@ -277,7 +284,7 @@ async def get_tasks(db) -> list[dict]:
                 json_extract(j.value, '$.thumbnail_file_id') as thumb_id
             FROM Posts p, json_each(p.content, '$.files') j
             WHERE p.post_num > (SELECT COALESCE(MAX(post_num), 0) - 250 FROM Posts)
-              AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note')
+              AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document')
               AND fid IS NOT NULL
               AND fid NOT IN (SELECT file_id FROM FileRegistry)
             LIMIT 10
@@ -289,7 +296,7 @@ async def get_tasks(db) -> list[dict]:
                 NULL as thumb_id
             FROM Posts p
             WHERE p.post_num > (SELECT COALESCE(MAX(post_num), 0) - 250 FROM Posts)
-              AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note')
+              AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document')
               AND fid IS NOT NULL
               AND fid NOT IN (SELECT file_id FROM FileRegistry)
             LIMIT 10
@@ -378,16 +385,8 @@ async def tagging_loop():
                 TEMP_FAILED_FILES[file_id] = time.time() + 300
                 continue
 
-            # Определяем, что качать (для видео качаем превью)
-            download_target_id = file_id
-            if file_type in ['video', 'animation', 'gif', 'video_note']:
-                if not thumb_id:
-                    logger.warning(f"⚠️ Video {file_id} has no thumb. Skipping tag.")
-                    async with db_lock:
-                        await db.executemany("UPDATE FileRegistry SET tags='no_thumb' WHERE file_id=?", [(file_id,)])
-                        await db.commit()
-                    continue
-                download_target_id = thumb_id
+            # Определяем, что качать (для видео предпочтительно превью, иначе сам файл)
+            download_target_id = thumb_id if (thumb_id and file_type in ['video', 'animation', 'gif', 'video_note']) else file_id
 
             try:
                 # 1. СКАЧИВАНИЕ
