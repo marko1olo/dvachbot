@@ -501,7 +501,7 @@ async def tagging_loop():
 
                             await db.commit()
                         save_success = True
-                        logger.info(f"🖼 [BG_TAGGER] ✅ {file_type.upper()} {file_id[:12]} | {tag_mark} | Tags: '{tags[:60] if tags else 'none'}...'")
+                        logger.info(f"🖼 [BG_TAGGER] ✅ {file_type.upper()} {file_id[:12]} | {tag_mark} | Tags: '{tags[:200] if tags else 'none'}...'")
                         break
                     except Exception as e:
                         if "locked" in str(e).lower():

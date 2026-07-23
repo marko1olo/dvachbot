@@ -33,7 +33,13 @@ async def prepare_image_for_analysis(file_path: str, timeout: int = 45):
     except Exception as e:
         return None, str(e)
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("site_tgach.vision")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _sh = logging.StreamHandler()
+    _sh.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(_sh)
+logger.propagate = True
 GROQ_COOLDOWN_UNTIL = 0
 _VISION_SEMAPHORE = None
 
@@ -226,7 +232,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                             content = "\n".join(lines)
                                 if content.strip():
                                     result_str = content.strip()
-                                    logger.info(f"✅ [VISION] [{source}] Analysis success via {provider} ({model_name}): '{result_str[:80]}...'")
+                                    logger.info(f"👁️ [VISION] [{source}] ✅ Success via {provider} ({model_name}): '{result_str[:250]}...'")
                                     return result_str
 
                         except Exception as e:
