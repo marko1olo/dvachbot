@@ -144,6 +144,10 @@ def process_image_cpu(image_bytes):
         # 1. SHA256 (всегда)
         sha = hashlib.sha256(image_bytes).hexdigest()
 
+        # 1.1 Проверка сигнатуры Lottie Telegram стикера (.tgs gzipped json)
+        if image_bytes.startswith(b'\x1f\x8b'):
+            return (sha, None, None, None), "lottie_sticker"
+
         # 2. Открываем PIL
         try:
             img = Image.open(io.BytesIO(image_bytes))
@@ -152,7 +156,7 @@ def process_image_cpu(image_bytes):
         except Image.DecompressionBombError:
             return None, "Decompression Bomb Detected"
         except Exception as e:
-            return None, f"PIL Error: {e}"
+            return (sha, None, None, None), f"unsupported_format: {e}"
 
         # 3. pHash
         phash = str(imagehash.phash(img))
@@ -227,7 +231,21 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
                     )
                     content = resp.choices[0].message.content
                     if content:
-                        return content.strip().rstrip('.,')
+                        clean_content = content
+                        if "<think>" in clean_content:
+                            if "</think>" in clean_content:
+                                clean_content = re.sub(r"<think>.*?</think>", "", clean_content, flags=re.DOTALL).strip()
+                            else:
+                                parts = clean_content.split("</think>", 1)
+                                if len(parts) > 1 and parts[1].strip():
+                                    clean_content = parts[1].strip()
+                                else:
+                                    clean_content = clean_content.split("<think>", 1)[0].strip()
+                        # Удаляем английские преамбулы "The user wants me to..."
+                        clean_content = re.sub(r'^(?:The user|I need to|Here is|Below is).*?\n', '', clean_content, flags=re.IGNORECASE | re.DOTALL).strip()
+                        clean_tags = clean_content.strip().rstrip('.,')
+                        if clean_tags:
+                            return clean_tags
             except Exception as e:
                 err_str = str(e).lower()
                 if "401" in err_str or "unauthorized" in err_str or "invalid api key" in err_str:
@@ -418,7 +436,19 @@ async def tagging_loop():
                 # 2. CPU (Хеши + РЕСАЙЗ)
                 res, error_msg = await loop.run_in_executor(None, process_image_cpu, img_bytes)
                 
-                if not res:
+                if error_msg == "lottie_sticker":
+                    logger.info(f"🎨 [BG_TAGGER] Lottie Sticker {file_id[:12]} -> marked as 'sticker_animated'")
+                    async with db_lock:
+                        await db.execute("UPDATE FileRegistry SET tags='sticker_animated' WHERE file_id=?", (file_id,))
+                        await db.commit()
+                    continue
+                elif error_msg and "unsupported_format" in error_msg:
+                    logger.info(f"📁 [BG_TAGGER] Media {file_id[:12]} -> marked as 'format_unsupported'")
+                    async with db_lock:
+                        await db.execute("UPDATE FileRegistry SET tags='format_unsupported' WHERE file_id=?", (file_id,))
+                        await db.commit()
+                    continue
+                elif not res:
                     logger.error(f"⚠️ Bad File {file_id}: {error_msg}")
                     # Сохраняем как ошибку, чтобы не долбить
                     sha_fail = hashlib.sha256(img_bytes).hexdigest()
