@@ -5885,6 +5885,10 @@ class MessageBroadcaster:
                 elif "voice_messages_forbidden" in err_low:
                     self.stats['errors'] += 1
                     return None
+                elif "wrong remote file identifier" in err_low or "unserialize" in err_low:
+                    runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID] Skip bad media for user {uid}: {e}")
+                    self.stats['errors'] += 1
+                    return None
                 else:
                     print(f"⚠️ BadRequest отправки user {uid}: {e}")
                     self.stats['errors'] += 1
