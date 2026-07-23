@@ -20,6 +20,7 @@ import asyncio
 import sqlite3
 from collections import defaultdict
 import json
+from common.json_utils import fast_json_loads, fast_json_dumps
 import random
 import time
 import logging
@@ -1389,7 +1390,7 @@ async def create_post(
     from common.db_pool import get_pool, db_lock
     
     local_logger = logging.LoggerAdapter(logging.getLogger(__name__), {'request_id': request_id_for_log})
-    content_json = json.dumps(content, default=_json_serializer)
+    content_json = fast_json_dumps(content, default=_json_serializer)
     
     # Глобальный Lock: защищает от состояния гонки между задачами внутри одного процесса бота
     async with db_lock:
