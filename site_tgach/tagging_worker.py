@@ -54,7 +54,7 @@ from site_tgach.neuro_moderator import TAGGING_PROMPT, run_deep_check
 # === НАСТРОЙКИ ===
 logger = logging.getLogger("tagger")
 PROXY_URL = "http://127.0.0.1:10808"
-GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_MODEL = "qwen/qwen3.6-27b"
 GROQ_TIMEOUT = 40.0
 BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насиловать ключи
 
@@ -268,30 +268,43 @@ async def get_tasks(db) -> list[dict]:
     except Exception as e:
         logger.error(f"DB Error getting registry tasks: {e}")
 
-    # 2. Поиск пропущенных файлов (Gaps) в последних 250 постах (включая видео)
+    # 2. Поиск пропущенных файлов (Gaps) в последних 250 постах (включая видео, фото и альбомы)
     if len(tasks) < BATCH_SIZE:
-        query_gaps = """
+        query_gaps_files = """
             SELECT DISTINCT 
                 json_extract(j.value, '$.original_file_id') as fid, 
                 json_extract(j.value, '$.type') as ftype,
                 json_extract(j.value, '$.thumbnail_file_id') as thumb_id
             FROM Posts p, json_each(p.content, '$.files') j
-            WHERE p.post_num > (SELECT MAX(post_num) - 250 FROM Posts)
+            WHERE p.post_num > (SELECT COALESCE(MAX(post_num), 0) - 250 FROM Posts)
               AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note')
+              AND fid IS NOT NULL
+              AND fid NOT IN (SELECT file_id FROM FileRegistry)
+            LIMIT 10
+        """
+        query_gaps_single = """
+            SELECT DISTINCT 
+                json_extract(p.content, '$.file_id') as fid, 
+                json_extract(p.content, '$.type') as ftype,
+                NULL as thumb_id
+            FROM Posts p
+            WHERE p.post_num > (SELECT COALESCE(MAX(post_num), 0) - 250 FROM Posts)
+              AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note')
+              AND fid IS NOT NULL
               AND fid NOT IN (SELECT file_id FROM FileRegistry)
             LIMIT 10
         """
         try:
-            async with db.execute(query_gaps) as cursor:
+            async with db.execute(query_gaps_files) as cursor:
                 async for row in cursor:
-                    if not any(t['fid'] == row[0] for t in tasks):
-                        tasks.append({
-                            'fid': row[0], 
-                            'type': row[1], 
-                            'thumb_id': row[2],
-                            'bot_id': None
-                        })
-        except Exception: pass
+                    if row[0] and not any(t['fid'] == row[0] for t in tasks):
+                        tasks.append({'fid': row[0], 'type': row[1] or 'photo', 'thumb_id': row[2], 'bot_id': None})
+            async with db.execute(query_gaps_single) as cursor:
+                async for row in cursor:
+                    if row[0] and not any(t['fid'] == row[0] for t in tasks):
+                        tasks.append({'fid': row[0], 'type': row[1] or 'photo', 'thumb_id': row[2], 'bot_id': None})
+        except Exception as e:
+            logger.error(f"Gaps query error: {e}")
 
     tasks = tasks[:BATCH_SIZE]
 
@@ -459,13 +472,13 @@ async def tagging_loop():
 
                             await db.commit()
                         save_success = True
-                        logger.info(f"✅ {file_type.upper()} {file_id[:8]} | {tag_mark} | Saved")
+                        logger.info(f"🖼 [BG_TAGGER] ✅ {file_type.upper()} {file_id[:12]} | {tag_mark} | Tags: '{tags[:60] if tags else 'none'}...'")
                         break
                     except Exception as e:
                         if "locked" in str(e).lower():
                             await asyncio.sleep(0.5 * (attempt + 1))
                             continue
-                        logger.error(f"❌ DB Save error: {e}")
+                        logger.error(f"❌ [BG_TAGGER] DB Save error for {file_id[:12]}: {e}")
                         break
                 
                 # === МОДЕРАЦИЯ (Deep Check) ===

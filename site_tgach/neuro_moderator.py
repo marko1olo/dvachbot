@@ -19,21 +19,25 @@ Logging:
 """
 import logging
 import asyncio
-from common.task_manager import spawn_task
+import base64
+import time
 import httpx
 import json
 import re
 from httpx import AsyncHTTPTransport
 
+from common.task_manager import spawn_task
 from common.token_pool import groq_pool
-from common.database import apply_auto_censure
-from common.db_pool import db_lock
+from common.database import apply_auto_censure, get_post_by_num, update_shadow_mute, log_global_event, add_to_mod_queue
+from common.db_pool import db_lock, get_pool
+from common.bot_pool import global_bot_pool
+from site_tgach.admin_config import ADMIN_IDS, IP_BAN_LIST
 
 logger = logging.getLogger("neuro_mod")
 
 # === НАСТРОЙКИ ===
 PROXY_URL = "http://127.0.0.1:10808"
-GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_MODEL = "qwen/qwen3.6-27b"
 GROQ_TIMEOUT = 45.0
 
 # === ПРОМПТЫ (Централизованное хранение) ===

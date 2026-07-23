@@ -1117,7 +1117,7 @@ async def update_board_settings(board_id: str, updates: dict):
                             current_settings = {}
                 
                 current_settings.update(updates)
-                settings_json = json.dumps(current_settings)
+                settings_json = json.dumps(current_settings, default=str)
                 
                 # Пишем
                 await db.execute(
@@ -1449,6 +1449,37 @@ async def create_post(
                     await db.executemany(
                         "INSERT OR IGNORE INTO FileOwners (file_id, bot_id) VALUES (?, ?)",
                         file_owners
+                    )
+
+                files_to_register = []
+                content_obj = content
+                if isinstance(content_obj, str):
+                    try:
+                        content_obj = json.loads(content_obj)
+                    except Exception:
+                        content_obj = {}
+
+                if isinstance(content_obj, dict):
+                    m_type = content_obj.get('type')
+                    f_id = content_obj.get('file_id')
+                    if f_id and m_type in ['photo', 'image', 'video', 'animation', 'gif', 'video_note']:
+                        files_to_register.append((f"temp_{f_id[:16]}", f_id, None, m_type, timestamp))
+                    elif content_obj.get('media') and isinstance(content_obj['media'], list):
+                        for item in content_obj['media']:
+                            if isinstance(item, dict) and item.get('file_id'):
+                                files_to_register.append((f"temp_{item['file_id'][:16]}", item['file_id'], None, item.get('type', 'photo'), timestamp))
+                    elif content_obj.get('files') and isinstance(content_obj['files'], list):
+                        for item in content_obj['files']:
+                            if isinstance(item, dict) and item.get('original_file_id'):
+                                files_to_register.append((f"temp_{item['original_file_id'][:16]}", item['original_file_id'], item.get('thumbnail_file_id'), item.get('type', 'photo'), timestamp))
+
+                if files_to_register:
+                    await db.executemany(
+                        """
+                        INSERT OR IGNORE INTO FileRegistry (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
+                        VALUES (?, NULL, ?, ?, ?, ?, NULL, NULL)
+                        """,
+                        files_to_register
                     )
 
                 if is_from_site and post_mode == 'new_thread':

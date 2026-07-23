@@ -50,7 +50,10 @@ def _pack_and_split_sync(backup_db_path: str, zip_name_base: str):
         # Удаляем оригинал большого зипа, чтобы не занимал место,
         # так как мы его уже нарезали
         if os.path.exists(zip_name_base):
-            os.remove(zip_name_base)
+            try:
+                os.remove(zip_name_base)
+            except Exception as e:
+                logger.warning(f"⚠️ Could not remove temporary zip file {zip_name_base}: {e}")
     else:
         parts_to_send.append(zip_name_base)
         

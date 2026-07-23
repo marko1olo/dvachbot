@@ -81,6 +81,7 @@ from common.database import (
     get_random_video_post, get_random_image_post
 )
 from site_tgach.admin_config import ADMIN_IDS
+from site_tgach.tagging_worker import tagging_loop
 from common.db_pool import create_pool, get_pool
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from text_assets import (
@@ -949,6 +950,7 @@ def _setup_runtime_logger() -> logging.Logger:
         logger.addHandler(handler)
     return logger
 runtime_logger = _setup_runtime_logger()
+logger = runtime_logger
 aiohttp_log = logging.getLogger('aiohttp')
 aiohttp_log.setLevel(logging.CRITICAL) 
 aiogram_log = logging.getLogger('aiogram')
@@ -962,7 +964,8 @@ def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, in
     for post_str in matches:
         try:
             p_num = int(post_str)
-            if post_authors.get(p_num) == user_id:
+            author_id = post_authors.get(p_num)
+            if author_id and author_id > 0 and user_id > 0 and author_id == user_id:
                 target = f">>{p_num}"
                 replacement = f">>{p_num} (You)"
                 if target in text and replacement not in text:
@@ -2256,7 +2259,7 @@ def format_board_statistics(stream: str, posts_per_hour: dict, board_data: dict,
         header_title = "### Статистика ###"
         captions = DVACH_STATS_CAPTIONS
     full_stats_text = header_text + "\n".join(stats_lines)
-    if random.random() < 0.76:
+    if random.random() < 0.76 and captions:
         dvach_caption = random.choice(captions)
         full_stats_text = f"{full_stats_text}\n\n<i>{dvach_caption}</i>"
 
@@ -2399,7 +2402,6 @@ async def setup_pinned_messages(bots: dict[str, Bot]):
         b_data['start_message_text'] = start_messages[default_lang]
         print(f"📌 [{board_id}] Тексты помощи (RU/EN/JP) подготовлены.")
 
-def _format_post_text(content: dict, msg_type: str) -> str:
 def _format_post_for_chunk(post: dict, board_id: str, time_threshold: datetime, now: datetime, lang: str | None) -> str | None:
     if post.get('board_id') != board_id:
         return None
@@ -2448,10 +2450,16 @@ def _format_post_for_chunk(post: dict, board_id: str, time_threshold: datetime, 
             text = f"[Отправил{file_label}] {text}"
     return text
 
+def _format_post_text(content: dict, msg_type: str) -> str | None:
+    text = content.get('text') or content.get('caption') or ""
+    text = re.sub(r'<[^>]+>', '', text).strip()
+    if text:
+        return text
+    if msg_type in ('photo', 'video', 'document', 'animation', 'media_group', 'sticker', 'voice', 'video_note'):
+        return f"[{msg_type}]"
+    return None
+
 def _get_author_name(post: dict, content: dict, board_id: str, lang: str | None) -> str:
-    if not text:
-        return None
-    author_id = post.get('author_id')
     name = content.get('username') or content.get('name') or content.get('author_name')
     if not name:
         if not lang:
@@ -2487,8 +2495,6 @@ def _get_reply_suffix(post: dict, content: dict, board_id: str, lang: str | None
         else:
             reply_suffix = f" (Ответ на #{reply_to})"
     return reply_suffix
-
-    return f"{name}{reply_suffix}: {text}"
 
 
 async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None = None, lang: str | None = None) -> str:
@@ -2540,11 +2546,8 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
                 name = _get_author_name(post, content, board_id, lang)
                 reply_suffix = _get_reply_suffix(post, content, board_id, lang)
                 lines.append(f"{name}{reply_suffix}: {text}")
-            formatted_line = _format_post_for_chunk(post, board_id, time_threshold, now, lang)
-            if formatted_line:
-                lines.append(formatted_line)
         except Exception as e:
-            print(f"[summarize] Error while chunking post: {e}, post: {post}")
+            print(f"[summarize] Error while chunking post: {e}")
     # Accumulate lines from newest to oldest up to 35000 characters to avoid split lines
     total_len = 0
     limited_lines = []
@@ -2562,7 +2565,7 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
     cleaned_chunk = "\n".join(limited_lines)
     
     context_name = f"thread {thread_id}" if thread_id else f"board {board_id}"
-    print(f"[summarize] Chunk for {context_name} built, len={len(cleaned_chunk)}")
+    logger.debug(f"[summarize] Chunk for {context_name} built, len={len(cleaned_chunk)}")
     return cleaned_chunk
 from typing import Tuple, Optional
 
@@ -3544,7 +3547,10 @@ class NewPostProcessor:
             if not thread_info or thread_info.get('is_archived'):
                 self.b_data.setdefault('user_state', {}).setdefault(self.user_id, {})['location'] = 'main'
                 lang = 'en' if self.board_id == 'int' else 'ru'
-                await self.bot_instance.send_message(self.user_id, random.choice(thread_messages[lang]['thread_not_found']))
+                try:
+                    await self.bot_instance.send_message(self.user_id, random.choice(thread_messages[lang]['thread_not_found']))
+                except Exception:
+                    pass
                 return False
             if self.user_id in thread_info.get('local_mutes', {}) and time.time() < thread_info['local_mutes'][self.user_id]:
                 return False
@@ -3825,14 +3831,6 @@ async def process_new_post(params: NewPostParams) -> int | None:
     Версия 8.0: Гарантирует регистрацию поста в памяти даже при сбое отправки. НИКАКИХ УДАЛЕНИЙ.
     """
     context = NewPostContext(
-        bot_instance=bot_instance,
-        board_id=board_id,
-        user_id=user_id,
-        content=content,
-        reply_to_post=reply_to_post,
-        is_shadow_muted=is_shadow_muted,
-        stream=stream
-    processor = NewPostProcessor(
         bot_instance=params.bot_instance,
         board_id=params.board_id,
         user_id=params.user_id,
@@ -3892,7 +3890,11 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
         elif m_type == 'video': builder.add_video(media=file_id, caption=caption, parse_mode="HTML")
         elif m_type == 'document': builder.add_document(media=file_id, caption=caption, parse_mode="HTML")
         elif m_type == 'audio': builder.add_audio(media=file_id, caption=caption, parse_mode="HTML")
-    sent_msgs = await sender_bot.send_media_group(channel_id, media=builder.build())
+    try:
+        sent_msgs = await sender_bot.send_media_group(channel_id, media=builder.build())
+    except Exception as e:
+        logger.error(f"⚠️ Failed to send archive media group to channel {channel_id}: {e}")
+        return None, []
     sent_message = None
     new_files_data = []
     if sent_msgs:
@@ -3921,18 +3923,22 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
     ct_str = str(content_type).split('.')[-1].lower()
     common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
     sent_message = None
-    if ct_str == 'photo': sent_message = await sender_bot.send_photo(photo=orig_fid, **common_args)
-    elif ct_str == 'video': sent_message = await sender_bot.send_video(video=orig_fid, **common_args)
-    elif ct_str == 'animation': sent_message = await sender_bot.send_animation(animation=orig_fid, **common_args)
-    elif ct_str == 'document': sent_message = await sender_bot.send_document(document=orig_fid, **common_args)
-    elif ct_str == 'audio': sent_message = await sender_bot.send_audio(audio=orig_fid, **common_args)
-    elif ct_str == 'voice': sent_message = await sender_bot.send_voice(voice=orig_fid, **common_args)
-    elif ct_str == 'sticker':
-        await sender_bot.send_sticker(channel_id, sticker=orig_fid)
-        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
-    elif ct_str == 'video_note':
-        await sender_bot.send_video_note(channel_id, video_note=orig_fid)
-        sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+    try:
+        if ct_str == 'photo': sent_message = await sender_bot.send_photo(photo=orig_fid, **common_args)
+        elif ct_str == 'video': sent_message = await sender_bot.send_video(video=orig_fid, **common_args)
+        elif ct_str == 'animation': sent_message = await sender_bot.send_animation(animation=orig_fid, **common_args)
+        elif ct_str == 'document': sent_message = await sender_bot.send_document(document=orig_fid, **common_args)
+        elif ct_str == 'audio': sent_message = await sender_bot.send_audio(audio=orig_fid, **common_args)
+        elif ct_str == 'voice': sent_message = await sender_bot.send_voice(voice=orig_fid, **common_args)
+        elif ct_str == 'sticker':
+            await sender_bot.send_sticker(channel_id, sticker=orig_fid)
+            sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+        elif ct_str == 'video_note':
+            await sender_bot.send_video_note(channel_id, video_note=orig_fid)
+            sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"⚠️ Failed to send single archive media ({ct_str}) to channel {channel_id}: {e}")
+        return None, []
     new_files_data = []
     if sent_message:
         fid = None
@@ -4262,24 +4268,24 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                                 return None
 
                             if len(data) > 49.5 * 1024 * 1024:
-                                print(f"⚠️ [DEBUG_DL] Файл слишком велик ({len(data)} байт). Пропуск.")
+                                logger.debug(f"⚠️ [DEBUG_DL] Файл слишком велик ({len(data)} байт). Пропуск.")
                                 return None
                                 
                             if len(data) > 0:
-                                print(f"✅ [DEBUG_DL] Скачано {len(data)} байт.")
+                                logger.debug(f"✅ [DEBUG_DL] Скачано {len(data)} байт.")
                                 return data, len(data)
                         else:
-                            print(f"⚠️ [DEBUG_DL] Статус ответа: {response.status} для {url_log}")
+                            logger.debug(f"⚠️ [DEBUG_DL] Статус ответа: {response.status} для {url_log}")
 
                 except (aiohttp.ClientConnectorError, asyncio.TimeoutError, OSError) as e:
                     if current_proxy:
-                        print(f"⚠️ [DEBUG_DL] Сбой прокси ({e}). Пробую DIRECT...")
+                        logger.debug(f"⚠️ [DEBUG_DL] Сбой прокси ({e}). Пробую DIRECT...")
                         # Попытка без прокси
                         async with session.get(url, allow_redirects=True, proxy=None) as response:
                             if response.status == 200:
                                 data = await response.read()
                                 if len(data) > 0 and not (data.strip().startswith(b'<') and b'<html' in data[:200].lower()):
-                                    print(f"✅ [DEBUG_DL] Успех через DIRECT.")
+                                    logger.debug(f"✅ [DEBUG_DL] Успех через DIRECT.")
                                     return data, len(data)
                     raise e
         except asyncio.TimeoutError:
@@ -4287,9 +4293,9 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                 await asyncio.sleep(1)
                 continue
             else:
-                print(f"⛔ [DEBUG_DL] Таймаут соединения.")
+                logger.debug(f"⛔ [DEBUG_DL] Таймаут соединения.")
         except Exception as e:
-            print(f"⛔ [DEBUG_DL] Исключение: {type(e).__name__}: {e}")
+            logger.debug(f"⛔ [DEBUG_DL] Исключение: {type(e).__name__}: {e}")
             break
             
     return None
@@ -4464,7 +4470,13 @@ def _format_reply_line(content: dict, user_id_for_context: int, reply_to_post_au
     reply_to_post = content.get('reply_to_post')
     if not reply_to_post:
         return None
-    you_marker = " (You)" if user_id_for_context == reply_to_post_author_id else ""
+    is_author_match = (
+        reply_to_post_author_id is not None 
+        and reply_to_post_author_id > 0 
+        and user_id_for_context > 0 
+        and user_id_for_context == reply_to_post_author_id
+    )
+    you_marker = " (You)" if is_author_match else ""
     reply_line = f">>{reply_to_post}{you_marker}"
     # Если есть быстрая цитата, не оборачиваем >> в code, чтобы было менее громоздко
     return reply_line if quote_info else f"<code>{escape_html(reply_line)}</code>"
@@ -4875,15 +4887,11 @@ async def _build_lie_media_content(content: dict, board_id: str) -> dict:
 @dataclass
 class BroadcastConfig:
     bot_instance: Bot
-from dataclasses import dataclass
-class BroadcasterConfig:
-    bot_instance: "Bot"
     board_id: str
-    recipients: set[int]
+    recipients: set
     content: dict
     reply_info: dict | None = None
     keyboard: InlineKeyboardMarkup | None = None
-    keyboard: "InlineKeyboardMarkup | None" = None
     verbose: bool = False
     queue_enqueued_at: float | None = None
     queue_wait_sec: float | None = None
@@ -4891,11 +4899,11 @@ class BroadcasterConfig:
     delivery_original_recipients: int | None = None
     delivery_deferred_recipients: int = 0
 
+# Alias for backwards compat
+BroadcasterConfig = BroadcastConfig
+
 class MessageBroadcaster:
     def __init__(self, config: BroadcastConfig):
-        self.config = config
-
-    def __init__(self, config: BroadcasterConfig):
         self.bot_instance = config.bot_instance
         self.board_id = config.board_id
         self.recipients = config.recipients
@@ -5379,9 +5387,14 @@ class MessageBroadcaster:
                     self.stats['errors'] += 1
                     return None
                     
-        head = self.highlight_head_html if uid == self.reply_to_post_author_id else self.base_head_html
+        is_direct_reply = bool(
+            self.reply_to_post_author_id is not None 
+            and self.reply_to_post_author_id > 0 
+            and uid > 0 
+            and uid == self.reply_to_post_author_id
+        )
+        head = self.highlight_head_html if is_direct_reply else self.base_head_html
         body = self.common_formatted_body
-        is_direct_reply = (uid == self.reply_to_post_author_id)
         send_content = self.content_for_common
         if u_set.get('lie_media'):
             try:
@@ -5900,21 +5913,6 @@ async def send_message_to_users(config: BroadcastConfig) -> list:
     verbose=True -> пишет отчет в консоль (для массовой).
     """
     broadcaster = MessageBroadcaster(config)
-    config = BroadcasterConfig(
-        bot_instance=bot_instance,
-        board_id=board_id,
-        recipients=recipients,
-        content=content,
-        reply_info=reply_info,
-        keyboard=keyboard,
-        verbose=verbose,
-        queue_enqueued_at=queue_enqueued_at,
-        queue_wait_sec=queue_wait_sec,
-        delivery_phase=delivery_phase,
-        delivery_original_recipients=delivery_original_recipients,
-        delivery_deferred_recipients=delivery_deferred_recipients,
-    )
-    broadcaster = MessageBroadcaster(config=config)
     return await broadcaster.broadcast()
 async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
     """
@@ -6483,7 +6481,6 @@ async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_loc
         op_post_data = next((p for p in posts_to_send_data if p['content'].get('post_num') == op_post_num), None)
         if op_post_data:
             try:
-                await send_message_to_users(BroadcastConfig(bot, board_id, {user_id}, op_post_data['content'], op_post_data['reply_info']))
                 await send_message_to_users(BroadcastConfig(bot_instance=bot, board_id=board_id, recipients={user_id}, content=op_post_data['content'], reply_info=op_post_data['reply_info']))
                 await asyncio.sleep(0.1)
             except Exception as e:
@@ -6491,7 +6488,6 @@ async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_loc
     for post_bundle in posts_to_send_data:
         if post_bundle['content'].get('post_num') != op_post_num:
             try:
-                await send_message_to_users(BroadcastConfig(bot, board_id, {user_id}, post_bundle['content'], post_bundle['reply_info']))
                 await send_message_to_users(BroadcastConfig(bot_instance=bot, board_id=board_id, recipients={user_id}, content=post_bundle['content'], reply_info=post_bundle['reply_info']))
                 await asyncio.sleep(0.1)
             except Exception as e:
@@ -6934,7 +6930,11 @@ async def cmd_shop(message: types.Message, board_id: str | None, stream: str = '
 async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     user_id = callback.from_user.id
-    item = callback.data.split("_")[2]  # janitor, mute, shield, prefix
+    parts = callback.data.split("_")
+    if len(parts) < 3:
+        await callback.answer("Ошибка в callback данных", show_alert=True)
+        return
+    item = parts[2]  # janitor, mute, shield, prefix
     costs = {"janitor": 1000, "mute": 600, "shield": 800, "prefix": 400, "partyvan": 2000, "shit": 100, "pills": 100, "knife": 400, "tinfoil": 800, "bribe": 1200, "laxative": 800, "megaphone": 2000}
     price = costs.get(item, 999999)
     from common.db_pool import get_pool, db_lock
@@ -7528,14 +7528,9 @@ _stats_cache: dict = {}   # board_id -> {ts: float, photos: list[bytes]}
 _STATS_TTL = 3600         # seconds
 
 
-from typing import Any
-from dataclasses import dataclass
-
 @dataclass
 class ChartContext:
     cur: Any
-    cur: 'Any'
-    cur: object
     board_id: str
     since_90: int
     since_180: int
@@ -7744,8 +7739,12 @@ def _generate_calendar_heatmap(ctx):
         return None
 
     dates_sorted = sorted(day_data.keys())
-    start = _dt.date.fromisoformat(dates_sorted[0])
-    end   = _dt.date.fromisoformat(dates_sorted[-1])
+    try:
+        start = _dt.date.fromisoformat(dates_sorted[0])
+        end   = _dt.date.fromisoformat(dates_sorted[-1])
+    except Exception as e:
+        logger.error(f"⚠️ Failed to parse dates for activity calendar: {e}")
+        return None
     start_mon = start - _dt.timedelta(days=start.weekday())
     end_sun   = end   + _dt.timedelta(days=6 - end.weekday())
     total_days = (end_sun - start_mon).days + 1
@@ -7834,15 +7833,6 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     )
 
     activity_clock = _generate_activity_clock(ctx)
-    ctx_90 = StatsContext(
-        cur=cur, board_id=board_id, since_ts=since_90, BG=BG, FG=FG,
-        _np=_np, _plt=_plt, _io=_io, _mpl=_mpl, defaultdict=defaultdict
-    activity_clock = _generate_activity_clock(ctx_90)
-        cur=cur, board_id=board_id, since_90=since_90, since_180=since_180,
-        BG=BG, FG=FG, HEAT=HEAT, _np=_np, _plt=_plt, _io=_io,
-        _mpl=_mpl, defaultdict=defaultdict, _dt=_dt
-        BG=BG, FG=FG, HEAT=HEAT, _np=_np, _plt=_plt, _io=_io, _mpl=_mpl,
-        _dt=_dt, defaultdict=defaultdict
     if not activity_clock:
         con.close()
         return []
@@ -7857,13 +7847,6 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
         bufs.append(heatmap)
 
     calendar = _generate_calendar_heatmap(ctx)
-    ridge_plot = _generate_ridge_plot(ctx_90)
-    ctx_180 = StatsContext(
-        cur=cur, board_id=board_id, since_ts=since_180, BG=BG, FG=FG,
-        _np=_np, _plt=_plt, _io=_io, HEAT=HEAT, _dt=_dt
-    )
-    heatmap = _generate_weekday_heatmap(ctx_180)
-    calendar = _generate_calendar_heatmap(ctx_180)
     if calendar:
         bufs.append(calendar)
 
@@ -8393,7 +8376,11 @@ async def cb_start_withdrawal(callback: types.CallbackQuery, state: FSMContext, 
 # --- 2. Запрос реквизитов ---
 @dp.callback_query(F.data.startswith("wd_method_"), WithdrawalStates.choosing_method)
 async def cb_select_method(callback: types.CallbackQuery, state: FSMContext):
-    method = callback.data.split("_")[2] # sber, usdt, etc.
+    parts = callback.data.split("_")
+    if len(parts) < 3:
+        await callback.answer("Ошибка в callback данных", show_alert=True)
+        return
+    method = parts[2] # sber, usdt, etc.
     await state.update_data(wd_method=method)
     
     method_names = {
@@ -8511,8 +8498,7 @@ async def _run_delayed_prank(params: DelayedPrankParams):
         masked_data=raw_requisites,
         crypto_info=crypto_info
     )
-    await process_new_post(NewPostParams(bot, board_id, 0, {'type': 'text', 'text': shame_text, 'is_system_message': True}, None, False))
-    await process_new_post(params.bot, params.board_id, 0, {'type': 'text', 'text': shame_text, 'is_system_message': True}, None, False)
+    await process_new_post(NewPostParams(bot_instance=params.bot, board_id=params.board_id, user_id=0, content={'type': 'text', 'text': shame_text, 'is_system_message': True}, reply_to_post=None, is_shadow_muted=False))
 
 @dp.message(WithdrawalStates.entering_data)
 async def process_withdrawal_data(message: types.Message, state: FSMContext, board_id: str | None):
@@ -8920,13 +8906,59 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
         
     return "\n".join(lines)
 
+async def analyze_telegram_photo(bot, photo_file_id: str, caption: str = None) -> str | None:
+    """
+    Скачивает фото из Телеграма и анализирует его через Vision.
+    Возвращает краткое описание содержимого на русском языке.
+    """
+    try:
+        from site_tgach.vision import describe_image
+        import tempfile, os
+        file_info = await bot.get_file(photo_file_id)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp_path = tmp.name
+        await bot.download_file(file_info.file_path, tmp_path)
+        
+        logger.info(f"🖼 [TG_BOT] Downloading Telegram photo file_id='{photo_file_id[:15]}...' for Persona analysis")
+        description = await describe_image(tmp_path, caption=caption, is_passive=False, source="TG_BOT")
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+        if description:
+            logger.info(f"✅ [TG_BOT] Photo analysis complete (desc='{description[:60]}...')")
+        else:
+            logger.warning(f"⚠️ [TG_BOT] Photo analysis produced no description.")
+        return description
+    except Exception as e:
+        logger.error(f"⚠️ [TG_BOT] Telegram Vision Error: {e}")
+        return None
+
+_last_persona_board_ts: dict[str, float] = {}
+_last_persona_dialogue_user_ts: dict[int, float] = {}
+
 async def schedule_persona_reply(bot, board_id: str, target_post_num: int, context_text: str, stream: str, is_admin_trigger: bool = False, photo_file_id: str = None, is_dialogue: bool = False):
     try:
         from site_tgach.persona_bot import generate_anon_reply, is_valid_for_persona
+        now_ts = time.time()
+        if not is_admin_trigger and not is_dialogue:
+            last_ts = _last_persona_board_ts.get(board_id, 0)
+            if now_ts - last_ts < 25.0:
+                print(f"ℹ️ [Persona Debounce] Skipping rapid trigger on board '{board_id}' (cooldown active).")
+                return
+            _last_persona_board_ts[board_id] = now_ts
+
+        vision_desc = None
+        if photo_file_id and not (context_text and "[ИЗОБРАЖЕНИЕ:" in context_text):
+            vision_desc = await analyze_telegram_photo(bot, photo_file_id, caption=context_text)
+            if vision_desc:
+                img_tag = f"\n[ИЗОБРАЖЕНИЕ: {vision_desc}]"
+                context_text = (context_text or "") + img_tag
+
         if not is_admin_trigger and not is_valid_for_persona(context_text):
             return
             
-        await asyncio.sleep(random.uniform(6.0, 15.0) if not is_admin_trigger else 0)
+        await asyncio.sleep(random.uniform(12.0, 35.0) if not is_admin_trigger else 0)
         
         print(f"🤖 [Persona] Requesting reply generation for post {target_post_num} on {board_id} (is_dialogue={is_dialogue})...")
         
@@ -8937,6 +8969,8 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
         chain_context = await build_reply_chain_context(target_post_num, max_depth=25)
         if not chain_context:
             chain_context = context_text
+        elif photo_file_id and vision_desc and "[ИЗОБРАЖЕНИЕ:" not in chain_context:
+            chain_context += f"\n[ИЗОБРАЖЕНИЕ: {vision_desc}]"
 
         replies = await generate_anon_reply(
             context_text=chain_context,
@@ -8995,6 +9029,15 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                         'content': content, 'board_id': board_id,
                         'reply_to_post_num': target_post_num if target_post_num else None
                     }
+                await process_new_post(NewPostParams(
+                    bot_instance=bot,
+                    board_id=board_id,
+                    user_id=0,
+                    content=content,
+                    reply_to_post=target_post_num if target_post_num else None,
+                    is_shadow_muted=False,
+                    stream=stream
+                ))
             if len(replies) > 1:
                 await asyncio.sleep(random.uniform(1.0, 3.0))
     except Exception as e:
@@ -9031,17 +9074,25 @@ async def cmd_admin_trigger(message: types.Message, board_id: str | None, stream
             await message.answer("Пост не найден в маппинге.")
             return
 
+        photo_id = None
         post_data = messages_storage.get(target_post_num)
         if post_data:
             c = post_data.get('content', {})
-            text_chunk = c.get('text', '') or c.get('caption', '')
+            text_chunk = c.get('text', '') or c.get('caption', '') or '[медиа-пост]'
+            if c.get('type') == 'photo':
+                photo_id = c.get('file_id')
+            elif c.get('type') == 'media_group' and c.get('media'):
+                for m in c['media']:
+                    if m.get('type') == 'photo' and m.get('file_id'):
+                        photo_id = m['file_id']
+                        break
             
         if not text_chunk:
-            await message.answer("У этого поста нет текста для ответа.")
+            await message.answer("У этого поста нет текста или медиа для ответа.")
             return
             
         await message.answer("🤖 [АДМИН] Нейроанон принудительно разбужен. Запускаю генерацию...")
-        spawn_task(schedule_persona_reply(message.bot, board_id, target_post_num, text_chunk, stream, is_admin_trigger=True))
+        spawn_task(schedule_persona_reply(message.bot, board_id, target_post_num, text_chunk, stream, is_admin_trigger=True, photo_file_id=photo_id))
     else:
         candidates = []
         fav_candidates = []
@@ -9056,10 +9107,19 @@ async def cmd_admin_trigger(message: types.Message, board_id: str | None, stream
             for pnum, data in board_posts[-150:]:
                 c = data.get('content', {})
                 t = c.get('text') or c.get('caption') or ''
-                if len(t) > 5:
-                    candidates.append((pnum, t))
+                p_id = None
+                if c.get('type') == 'photo':
+                    p_id = c.get('file_id')
+                elif c.get('type') == 'media_group' and c.get('media'):
+                    for m in c['media']:
+                        if m.get('type') == 'photo' and m.get('file_id'):
+                            p_id = m['file_id']
+                            break
+                if len(t) > 5 or p_id:
+                    t_val = t or '[картинка]'
+                    candidates.append((pnum, t_val, p_id))
                     if data.get('author_id') in b_data.get('persona_favorites', {}):
-                        fav_candidates.append((pnum, t))
+                        fav_candidates.append((pnum, t_val, p_id))
         
         if fav_candidates and random.random() < 0.75:
             candidates = fav_candidates
@@ -9068,9 +9128,9 @@ async def cmd_admin_trigger(message: types.Message, board_id: str | None, stream
             await message.answer("⚠️ Нет подходящих постов для триггера на этой доске.")
             return
             
-        target_post_num, text_chunk = random.choice(candidates)
+        target_post_num, text_chunk, photo_id = random.choice(candidates)
         await message.answer(f"🤖 [АДМИН] Выбран случайный пост #{target_post_num} для атаки. Запускаю генерацию...")
-        spawn_task(schedule_persona_reply(message.bot, board_id, target_post_num, text_chunk, stream, is_admin_trigger=True))
+        spawn_task(schedule_persona_reply(message.bot, board_id, target_post_num, text_chunk, stream, is_admin_trigger=True, photo_file_id=photo_id))
 
 @dp.message(Command("ans"))
 async def cmd_admin_answer(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -10178,6 +10238,7 @@ class StackedAnimeHandler:
         self.b_data = board_data[board_id]
         self.lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
         self.max_images_for_board = B_MAX_STACKED_ANIME_IMAGES if board_id == 'b' else 10
+        self.pattern = _RE_ANIME_STACK
         self.matches = _RE_ANIME_STACK.findall(message.text or "")
 
     async def process(self):
@@ -10250,6 +10311,7 @@ class StackedAnimeHandler:
                     },
                     ensure_ascii=False,
                     separators=(",", ":"),
+                    default=str,
                 ),
             )
 
@@ -11090,7 +11152,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
 
     hf_token = os.getenv("HF_TOKEN")
     if not chunk or len(chunk) < 100:
-        print(f"[summarize] Мало сообщений для summarize (len={len(chunk) if chunk else 0})")
+        logger.info(f"[summarize] Мало сообщений для summarize (len={len(chunk) if chunk else 0})")
         if lang == 'en':
             err_msg = f"{info_text} there were too few messages to summarize."
         elif lang == 'jp':
@@ -11207,7 +11269,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         else:
             summary = _tg_safe_truncate(summary, max_utf16=3500)
 
-    print(f"[summarize] Final summary length: {len(summary)}")
+    logger.debug(f"[summarize] Final summary length: {len(summary)}")
     now_dt = datetime.now(UTC)
 
     if should_use_telegraph and telegraph_url:
@@ -11271,7 +11333,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             err_msg = "Не удалось отправить саммари, тред больше не активен."
         await message.answer(err_msg)
         return
-    print(f"[summarize] Саммари успешно отправлено ({context_name}, post_num={pnum})")
+    logger.info(f"[summarize] Саммари успешно отправлено ({context_name}, post_num={pnum})")
 
 @dp.message(Command("bot_stats"))
 async def cmd_bot_stats(message: types.Message):
@@ -11500,6 +11562,141 @@ async def cq_show_active_threads(callback: types.CallbackQuery, board_id: str | 
         pass
     except Exception as e:
         print(f"⛔ Непредвиденная ошибка в cq_show_active_threads: {e}")
+@dp.message(Command("tags", "tagcloud", "теги", "тег"))
+async def cmd_tag_cloud(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
+    """
+    Выводит облако тегов медиафайлов из FileRegistry с кнопками просмотра.
+    """
+    try:
+        args = message.text.split(maxsplit=1)
+        if len(args) > 1 and not args[1].startswith("-"):
+            target_tag = args[1].strip().lower().lstrip("#")
+            await show_tagged_photos_gallery(message, target_tag, offset=0)
+            return
+
+        async with aiosqlite.connect("dvach_bot.db") as db:
+            async with db.execute("SELECT tags FROM FileRegistry WHERE tags IS NOT NULL AND tags != '' ORDER BY created_at DESC LIMIT 500;") as cursor:
+                rows = await cursor.fetchall()
+
+        if not rows:
+            await message.answer("🏷️ Теги медиафайлов пока не сгенерированы. Отправьте несколько картинок в чат!")
+            return
+
+        from collections import Counter
+        tag_counts = Counter()
+        for (tags_str,) in rows:
+            for t in tags_str.split(','):
+                t_clean = t.strip().lower()
+                if t_clean and len(t_clean) > 2 and t_clean not in ('image', 'photo', 'picture', 'file'):
+                    tag_counts[t_clean] += 1
+
+        top_tags = tag_counts.most_common(20)
+        if not top_tags:
+            await message.answer("🏷️ Пока нет достаточно популярных тегов.")
+            return
+
+        lines = ["🏷️ <b>ОБЛАКО ТЕГОВ МЕДИАФАЙЛОВ</b>\n", "Популярные категории пикч из бота и сайта:\n"]
+        keyboard_buttons = []
+        row_btns = []
+        for tag, count in top_tags:
+            lines.append(f"• <code>#{tag}</code> — {count} пикч")
+            row_btns.append(types.InlineKeyboardButton(text=f"#{tag} ({count})", callback_data=f"tagview:{tag[:20]}:0"))
+            if len(row_btns) == 2:
+                keyboard_buttons.append(row_btns)
+                row_btns = []
+        if row_btns:
+            keyboard_buttons.append(row_btns)
+
+        lines.append("\nНажмите на тег ниже или введите <code>/tag название</code> для просмотра картинки!")
+        kb = types.InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+
+        await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        print(f"⚠️ Ошибка в cmd_tag_cloud: {e}")
+        await message.answer("⚠️ Не удалось загрузить облако тегов.")
+
+
+async def show_tagged_photos_gallery(event: types.Message | types.CallbackQuery, tag_name: str, offset: int = 0):
+    try:
+        async with aiosqlite.connect("dvach_bot.db") as db:
+            async with db.execute(
+                "SELECT file_id, thumbnail_id, tags FROM FileRegistry WHERE tags LIKE ? ORDER BY created_at DESC LIMIT 10 OFFSET ?;",
+                (f"%{tag_name}%", offset)
+            ) as cursor:
+                files = await cursor.fetchall()
+            
+            async with db.execute("SELECT COUNT(*) FROM FileRegistry WHERE tags LIKE ?;", (f"%{tag_name}%",)) as cursor:
+                total_row = await cursor.fetchone()
+                total_count = total_row[0] if total_row else 0
+
+        if not files:
+            text = f"🏷️ По тегу <code>#{tag_name}</code> пикчи не найдены."
+            if isinstance(event, types.CallbackQuery):
+                await event.answer("Пикчи не найдены", show_alert=True)
+            else:
+                await event.answer(text, parse_mode="HTML")
+            return
+
+        curr_file_id, thumb_id, file_tags = files[0]
+        target_fid = curr_file_id or thumb_id
+
+        caption = (
+            f"🏷️ <b>Категория:</b> <code>#{tag_name}</code> ({offset + 1} из {total_count})\n"
+            f"📝 <b>Теги:</b> <i>{file_tags}</i>\n\n"
+            f"🌐 <i>Видно в боте и на сайте tgach.top</i>"
+        )
+
+        nav_btns = []
+        if offset > 0:
+            nav_btns.append(types.InlineKeyboardButton(text="⬅️ Назад", callback_data=f"tagview:{tag_name}:{offset - 1}"))
+        if offset + 1 < total_count:
+            nav_btns.append(types.InlineKeyboardButton(text="Вперед ➡️", callback_data=f"tagview:{tag_name}:{offset + 1}"))
+
+        kb_rows = []
+        if nav_btns:
+            kb_rows.append(nav_btns)
+        kb_rows.append([types.InlineKeyboardButton(text="🏷️ Все теги", callback_data="tagcloud_menu")])
+
+        kb = types.InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+        bot = event.bot if isinstance(event, types.CallbackQuery) else event.bot
+        chat_id = event.message.chat.id if isinstance(event, types.CallbackQuery) else event.chat.id
+
+        if isinstance(event, types.CallbackQuery):
+            await event.answer()
+            try:
+                await bot.send_photo(chat_id, photo=target_fid, caption=caption, parse_mode="HTML", reply_markup=kb)
+            except Exception:
+                await bot.send_message(chat_id, text=caption, parse_mode="HTML", reply_markup=kb)
+        else:
+            try:
+                await event.answer_photo(photo=target_fid, caption=caption, parse_mode="HTML", reply_markup=kb)
+            except Exception:
+                await event.answer(caption, parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        print(f"⚠️ Ошибка в show_tagged_photos_gallery: {e}")
+
+
+@dp.callback_query(F.data.startswith("tagview:"))
+async def cq_tag_view(callback: types.CallbackQuery):
+    try:
+        parts = callback.data.split(":")
+        tag_name = parts[1]
+        offset = int(parts[2]) if len(parts) > 2 else 0
+        await show_tagged_photos_gallery(callback, tag_name, offset=offset)
+    except Exception as e:
+        print(f"⚠️ Ошибка в cq_tag_view: {e}")
+        await callback.answer("Ошибка показа тега")
+
+
+@dp.callback_query(F.data == "tagcloud_menu")
+async def cq_tagcloud_menu(callback: types.CallbackQuery):
+    try:
+        await callback.answer()
+        await cmd_tag_cloud(callback.message)
+    except Exception as e:
+        print(f"⚠️ Ошибка в cq_tagcloud_menu: {e}")
+
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -18087,7 +18284,7 @@ async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru
             reply_to_post=reply_to_post,
             is_shadow_muted=False,
             stream=stream
-        )
+        ))
 
 async def periodic_shop_broadcast():
     import random
@@ -18145,7 +18342,7 @@ async def periodic_shop_broadcast():
             print(f"❌ [SHOP BROADCAST] Ошибка рассылки магазина: {e}")
 
 SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
-        ))
+
 @dp.message(F.voice, ~F.media_group_id)
 async def handle_voice(message: Message, board_id: str | None, stream: str = 'ru'): 
     user_id = message.from_user.id
@@ -18504,6 +18701,28 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
                 reply_to_post=first_post_num,
                 is_shadow_muted=False, stream=stream
             ))
+
+    if first_post_num:
+        first_photo_id = None
+        for m in all_media:
+            if m.get('type') == 'photo' and m.get('file_id'):
+                first_photo_id = m['file_id']
+                break
+        is_reply_to_bot = group.get('reply_to_post') is not None
+        should_reply = False
+        if is_reply_to_bot:
+            now_t = time.time()
+            last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
+            if (now_t - last_user_t >= 35.0) and (random.random() < 0.35):
+                should_reply = True
+                _last_persona_dialogue_user_ts[user_id] = now_t
+        elif user_id in b_data.get('persona_favorites', {}):
+            if random.random() < 0.05:
+                should_reply = True
+
+        if should_reply:
+            text_chunk = original_caption or "[альбом изображений]"
+            spawn_task(schedule_persona_reply(bot_instance, board_id, first_post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=first_photo_id, is_dialogue=is_reply_to_bot))
 def apply_greentext_formatting(text: str) -> str:
     """
     Применяет форматирование 'Greentext'.
@@ -18590,7 +18809,7 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                 reactions_storage[user_id] = new_emojis[:2]
             
             # Синхронизируем реакции в content для сохранения в БД
-            if 'content' in post_data:
+            if isinstance(post_data.get('content'), dict):
                 post_data['content']['reactions'] = post_data['reactions']
             
             for u_emojis in reactions_storage.values():
@@ -18974,8 +19193,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     stream=stream
                 ))
             else:
-                post_num = await process_new_post(
-                await process_new_post(NewPostParams(
+                post_num = await process_new_post(NewPostParams(
                     bot_instance=message.bot,
                     board_id=board_id,
                     user_id=user_id,
@@ -18983,18 +19201,22 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     reply_to_post=post_num_to_reply,
                     is_shadow_muted=False,
                     stream=stream
-                )
+                ))
                 if post_num:
                     should_reply = False
                     if is_reply_to_bot:
-                        should_reply = True
+                        now_t = time.time()
+                        last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
+                        if (now_t - last_user_t >= 35.0) and (random.random() < 0.35):
+                            should_reply = True
+                            _last_persona_dialogue_user_ts[user_id] = now_t
                     elif user_id in b_data.get('persona_favorites', {}):
-                        if text_chunk and len(text_chunk) > 5 and random.random() < 0.15:
+                        if text_chunk and len(text_chunk) > 5 and random.random() < 0.05:
                             should_reply = True
                     if should_reply:
                         text_payload = text_chunk or f"[{message.content_type}]"
-                        spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_payload, stream, is_admin_trigger=False, is_dialogue=is_reply_to_bot))
-                ))
+                        photo_id = message.photo[-1].file_id if message.photo else None
+                        spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_payload, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
             await asyncio.sleep(0.33)
             
         if limit_hit:
@@ -19107,8 +19329,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             stream=stream
         ))
     else:
-        post_num = await process_new_post(
-        await process_new_post(NewPostParams(
+        post_num = await process_new_post(NewPostParams(
             bot_instance=message.bot,
             board_id=board_id,
             user_id=user_id,
@@ -19116,19 +19337,26 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             reply_to_post=reply_to_post,
             is_shadow_muted=False,
             stream=stream
-        )
+        ))
         if post_num:
             should_reply = False
+            photo_id = message.photo[-1].file_id if message.photo else (message.reply_to_message.photo[-1].file_id if (message.reply_to_message and message.reply_to_message.photo) else None)
             if is_reply_to_bot:
-                should_reply = True
+                now_t = time.time()
+                last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
+                # 35% chance to reply in dialogue + minimum 35s cooldown per user for stealth realistic conversation
+                if (now_t - last_user_t >= 35.0) and (random.random() < 0.35):
+                    should_reply = True
+                    _last_persona_dialogue_user_ts[user_id] = now_t
+                else:
+                    print(f"ℹ️ [Persona Dialogue] Ignored dialogue trigger for user {user_id} (cooldown or chance check).")
             elif user_id in b_data.get('persona_favorites', {}):
-                text_clean = message.text or message.caption
-                if text_clean and len(text_clean) > 5 and random.random() < 0.15:
+                text_clean = message.text or message.caption or (f"[фотография]" if photo_id else None)
+                if text_clean and len(text_clean) >= 4 and random.random() < 0.05:
                     should_reply = True
             if should_reply:
                 text_chunk = message.text or message.caption or f"[{message.content_type}]"
-                spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False, is_dialogue=is_reply_to_bot))
-        ))
+                spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
 async def database_cleanup_task():
     """
     Периодически очищает таблицы-очереди от старых записей (Broadcast и Notifications).
@@ -19340,15 +19568,15 @@ async def periodic_board_summary():
             prompt, info_text, chunk, is_blat = await _get_summarize_prompt_and_chunk(board_id, None, {}, 'ru', auto_paragraph_count)
             
             if not chunk or len(chunk) < 100:
-                print("❌ [PERIODIC SUMMARY] Слишком мало сообщений.")
+                logger.debug("❌ [PERIODIC SUMMARY] Слишком мало сообщений.")
                 continue
 
-            print(f"📝 [PERIODIC SUMMARY] paragraphs={auto_paragraph_count} blat={is_blat} chunk_len={len(chunk)} chars")
+            logger.debug(f"📝 [PERIODIC SUMMARY] paragraphs={auto_paragraph_count} blat={is_blat} chunk_len={len(chunk)} chars")
             hf_token = os.getenv("HF_TOKEN")
             summary = await summarize_text_with_hf(prompt, chunk, hf_token)
             raw_len = len(summary) if summary else 0
             summary = clean_html_for_tg(summary)
-            print(f"📝 [PERIODIC SUMMARY] raw_len={raw_len} cleaned_len={len(summary) if summary else 0}")
+            logger.debug(f"📝 [PERIODIC SUMMARY] raw_len={raw_len} cleaned_len={len(summary) if summary else 0}")
             
             if not summary or summary.startswith('Нейронка сдохла'):
                 print(f"❌ [PERIODIC SUMMARY] Ошибка генерации саммари: {repr(summary[:80])}")
@@ -20134,6 +20362,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "periodic_newspaper_broadcast": lambda: periodic_newspaper_broadcast(),
         "periodic_shop_broadcast": lambda: periodic_shop_broadcast(),
         "admin_action_sync_worker": lambda: admin_action_sync_worker(),
+        "tagging_worker": lambda: tagging_loop(),
         "periodic_stats_publisher": lambda: periodic_publisher.periodic_stats_publisher(
             bots,
             lambda: board_data.get('b', {}).get('users', {}).get('active', set())

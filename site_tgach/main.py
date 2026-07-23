@@ -392,7 +392,7 @@ async def update_tor_nodes_task():
                 resp = await client.get(url)
                 if resp.status_code == 200:
                     new_nodes = set(
-                        re.findall(r"ExitAddress\s+(\d+\.\d+\.\d+\.\d+)", resp.text)
+                        re.findall(r"ExitAddress\s+(\d+\.\d+\.\d+\.\d+)", resp.text or "")
                     )
                     if new_nodes:
                         TOR_EXIT_NODES = new_nodes
@@ -1856,12 +1856,16 @@ class LimitUploadSize:
 
         content_length = scope.get("headers", [])
         content_length = dict(content_length).get(b"content-length")
-        if content_length is not None and int(content_length) > self.max_upload_size:
-            response = Response(
-                "File too large (Request Entity Too Large)", status_code=413
-            )
-            await response(scope, receive, send)
-            return
+        if content_length is not None:
+            try:
+                if int(content_length) > self.max_upload_size:
+                    response = Response(
+                        "File too large (Request Entity Too Large)", status_code=413
+                    )
+                    await response(scope, receive, send)
+                    return
+            except (ValueError, TypeError):
+                pass
 
         await self.app(scope, receive, send)
 

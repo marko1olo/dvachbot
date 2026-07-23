@@ -46,6 +46,7 @@ def _get_models_cascade(model_preference: str | None) -> list[tuple[str, str]]:
         ("llama-3.3-70b-versatile", "groq"),
     ]
 def get_models_cascade(model_preference: str | None = None) -> list[tuple[str, str]]:
+    if model_preference == "gemini":
         return [
             ("gemini-3.1-flash-lite", "gemini"),
         ]
@@ -71,14 +72,15 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
     Prioritizes 500 RPD Gemini Lite models to maximize free quota.
     """
     if model_preference == "persona" or model_preference == "persona_gemini":
-        # Persona Bot priority: Flash Lite models first for high volume (500 RPD) & fast responses
+        # Persona Bot priority: Gemini Lite -> Llama 70B -> Qwen 27B -> Gemini Flash
         models_cascade = [
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-2.5-flash-lite", "gemini"),
+            ("llama-3.3-70b-versatile", "groq"),
+            ("qwen/qwen3.6-27b", "groq"),
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.5-flash", "gemini"),
-            ("gemini-2.5-flash", "gemini"),
         ]
     elif model_preference == "summary" or model_preference == "gemini":
         # Summarization priority: Smart Flash models first for maximum intelligence and deep reasoning
@@ -116,8 +118,6 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
             ("gemini-2.5-flash-lite", "gemini"),
             ("llama-3.3-70b-versatile", "groq"),
         ]
-    models_cascade = _get_models_cascade(model_preference)
-    models_cascade = get_models_cascade(model_preference)
     
     system_instruction = prompt + (
         "\n\nCRITICAL OUTPUT FORMAT RULES:\n"
@@ -194,9 +194,16 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
                                 result = choice.message.content
                                 if result:
                                     import re
-                                    result = re.sub(r"<think\b[^>]*>.*?</think>", "", result, flags=re.DOTALL | re.IGNORECASE)
-                                    result = re.sub(r"&lt;think\b[^&]*&gt;.*?&lt;/think&gt;", "", result, flags=re.DOTALL | re.IGNORECASE)
-                                    result = re.sub(r"^\s*<think\b[^>]*>.*", "", result, flags=re.DOTALL | re.IGNORECASE)
+                                    if "<think" in result.lower():
+                                        if "</think>" in result.lower():
+                                            result = re.sub(r"<think\b[^>]*>.*?</think>", "", result, flags=re.DOTALL | re.IGNORECASE).strip()
+                                        else:
+                                            parts = re.split(r"</think>", result, flags=re.IGNORECASE)
+                                            if len(parts) > 1 and parts[1].strip():
+                                                result = parts[1].strip()
+                                            else:
+                                                parts2 = re.split(r"<think\b[^>]*>", result, flags=re.IGNORECASE)
+                                                result = (parts2[0].strip() or parts2[1].strip()) if len(parts2) > 1 else result.strip()
                                     result = result.strip()
                                     if result:
                                         return result
@@ -209,16 +216,19 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
                 if provider == "groq" and ("401" in err_str or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower()):
                     logger.error(f"❌ Groq key {api_key[:12]}... is unauthorized (401). Removing from pool.")
                     groq_pool.remove_token(api_key)
+                    await asyncio.sleep(2.5)
                     continue  # try next key
                 if "413" in err_str or "too large" in err_str.lower() or "context_length_exceeded" in err_str.lower():
-                    logger.warning(f"\u26a0\ufe0f {model_name}: request too large. Shrinking by 40% and retrying...")
+                    logger.warning(f"⚠️ {model_name}: request too large. Shrinking by 40% and retrying...")
                     half_len = int(len(text_dump) * 0.6)
                     text_dump = text_dump[-half_len:]
                     messages[1]["content"] = text_dump
+                    await asyncio.sleep(2.5)
                     continue  # retry same key with smaller input
                 if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower() or "exhausted" in err_str.lower():
-                    logger.warning(f"\u26a0\ufe0f {provider} Rate Limit on key ...{api_key[-6:]}. Cooling 1.5s, trying next key...")
-                    await asyncio.sleep(1.5)
+                    _key_cooldowns[(provider, api_key)] = time.time() + 90.0
+                    logger.warning(f"⚠️ {provider} Rate Limit on key ...{api_key[-6:]}. Cooldown set 90s, waiting 3.0s before trying next key...")
+                    await asyncio.sleep(3.0)
                     continue  # try NEXT KEY for same model
                 # Any other error: skip this key, try next
                 logger.warning(f"\u26a0\ufe0f Unhandled error for {model_name}, skipping to next model in cascade...")
@@ -337,8 +347,6 @@ class TelegraphHTMLParser(HTMLParser):
         
         self.stack[-1]["children"].append(node)
         self.stack.append(node)
-
-    def handle_endtag(self, tag):  # noqa
 
     def handle_endtag(self, tag):
         tag = tag.lower()

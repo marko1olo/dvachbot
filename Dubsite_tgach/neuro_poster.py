@@ -606,7 +606,7 @@ class NeuroManager:
             messages=messages,
             max_tokens=300, 
             temperature=0.3,
-            model="meta-llama/llama-4-maverick-17b-128e-instruct" 
+            model="llama-3.3-70b-versatile"
         )
         
         if result:

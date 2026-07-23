@@ -1,4 +1,5 @@
 import asyncio
+import os
 from datetime import datetime, timezone, timedelta
 from aiogram import Bot
 from aiogram.types import BufferedInputFile, InputMediaPhoto
@@ -90,7 +91,6 @@ async def send_stats_to_user(bot: Bot, chat_id: int):
                 await asyncio.sleep(1)
                 
             # Send a copy to the Archive Channel if not already there
-            import os
             archive_channel_id = int(os.getenv("ARCHIVE_CHANNEL_ID", -1002827087363))
             if chat_id != archive_channel_id:
                 try:
@@ -116,7 +116,6 @@ async def periodic_stats_publisher(bots: dict, active_users_getter):
     Runs in the background and publishes stats every Sunday at 20:00 MSK.
     Sends to the archive channel and broadcasts to all active users on board /b/.
     """
-    import os
     ARCHIVE_CHANNEL_ID = int(os.getenv("ARCHIVE_CHANNEL_ID", -1002827087363))
     
     while True:

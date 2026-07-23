@@ -168,10 +168,6 @@ def find_logical_garbage(cur, tables):
                 WHERE NOT EXISTS (SELECT 1 FROM Posts p WHERE p.post_num = t.{safe_col})
             """)
             params.extend([table, col])
-                SELECT '{valid_t}' as table_name, '{col}' as col_name, COUNT(*) as orphans
-                FROM "{valid_t}" t
-                WHERE NOT EXISTS (SELECT 1 FROM Posts p WHERE p.post_num = t."{col}")
-            """)  # nosec B608
 
     if queries:
         cur.execute(" UNION ALL ".join(queries), params)

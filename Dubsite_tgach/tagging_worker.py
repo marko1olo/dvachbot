@@ -19,7 +19,7 @@ from aiogram.exceptions import TelegramBadRequest
 # === НАСТРОЙКИ ===
 logger = logging.getLogger("tagger")
 PROXY_URL = "http://127.0.0.1:10808"
-GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_MODEL = "llama-3.3-70b-versatile"
 GROQ_TIMEOUT = 40.0
 BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насиловать ключи
 
