@@ -14,6 +14,20 @@ GROQ_CONFIG = {
     "temperature": 0.8,
 }
 
+_SHARED_HTTP_CLIENT = None
+
+def get_shared_http_client() -> httpx.AsyncClient:
+    global _SHARED_HTTP_CLIENT
+    if _SHARED_HTTP_CLIENT is None or getattr(_SHARED_HTTP_CLIENT, "is_closed", False):
+        _SHARED_HTTP_CLIENT = httpx.AsyncClient(
+            proxy=None,
+            verify=False,
+            timeout=60.0,
+            trust_env=False,
+            limits=httpx.Limits(max_keepalive_connections=50, max_connections=100)
+        )
+    return _SHARED_HTTP_CLIENT
+
 def _load_google_keys() -> list[str]:
     # Check .envgoogle
     if os.path.exists(".envgoogle"):
@@ -166,50 +180,43 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
             if skip_model:
                 break
             try:
-                # Strictly bypass .env proxies and let OS route directly through WireGuard VPN
-                async with httpx.AsyncClient(
-                    proxy=None,
-                    verify=False,
-                    timeout=60.0,
-                    trust_env=False
-                ) as http_client:
-                    
-                    async with AsyncOpenAI(
-                        api_key=api_key if api_key else "dummy", 
-                        base_url=base_url,
-                        http_client=http_client,
-                        max_retries=0
-                    ) as client:
-                        create_kwargs = dict(
-                            model=model_name,
-                            messages=messages,
-                            temperature=0.8,
-                        )
-                        if model_max_tokens is not None:
-                            create_kwargs["max_tokens"] = model_max_tokens
-                        completion = await client.chat.completions.create(**create_kwargs)
-                        if completion.choices and len(completion.choices) > 0:
-                            choice = completion.choices[0]
-                            if choice.message is not None:
-                                result = choice.message.content
-                                if result:
-                                    import re
-                                    if "<think" in result.lower():
-                                        if "</think>" in result.lower():
-                                            result = re.sub(r"<think\b[^>]*>.*?</think>", "", result, flags=re.DOTALL | re.IGNORECASE).strip()
-                                        else:
-                                            parts = re.split(r"</think>", result, flags=re.IGNORECASE)
-                                            if len(parts) > 1 and parts[1].strip():
-                                                result = parts[1].strip()
-                                            else:
-                                                parts2 = re.split(r"<think\b[^>]*>", result, flags=re.IGNORECASE)
-                                                result = (parts2[0].strip() or parts2[1].strip()) if len(parts2) > 1 else result.strip()
-                                    result = result.strip()
-                                    if result:
-                                        return result
+                http_client = get_shared_http_client()
+                client = AsyncOpenAI(
+                    api_key=api_key if api_key else "dummy", 
+                    base_url=base_url,
+                    http_client=http_client,
+                    max_retries=0
+                )
+                create_kwargs = dict(
+                    model=model_name,
+                    messages=messages,
+                    temperature=0.8,
+                )
+                if model_max_tokens is not None:
+                    create_kwargs["max_tokens"] = model_max_tokens
+                completion = await client.chat.completions.create(**create_kwargs)
+                if completion.choices and len(completion.choices) > 0:
+                    choice = completion.choices[0]
+                    if choice.message is not None:
+                        result = choice.message.content
+                        if result:
+                            import re
+                            if "<think" in result.lower():
+                                if "</think>" in result.lower():
+                                    result = re.sub(r"<think\b[^>]*>.*?</think>", "", result, flags=re.DOTALL | re.IGNORECASE).strip()
+                                else:
+                                    parts = re.split(r"</think>", result, flags=re.IGNORECASE)
+                                    if len(parts) > 1 and parts[1].strip():
+                                        result = parts[1].strip()
                                     else:
-                                        logger.warning(f"Model {model_name} returned empty text after <think> stripping")
-                                        raise ValueError("Model returned empty text after <think> stripping")
+                                        parts2 = re.split(r"<think\b[^>]*>", result, flags=re.IGNORECASE)
+                                        result = (parts2[0].strip() or parts2[1].strip()) if len(parts2) > 1 else result.strip()
+                            result = result.strip()
+                            if result:
+                                return result
+                            else:
+                                logger.warning(f"Model {model_name} returned empty text after <think> stripping")
+                                raise ValueError("Model returned empty text after <think> stripping")
             except Exception as e:
                 err_str = str(e)
                 logger.warning(f"⚠️ {provider} call failed ({model_name}) key=...{api_key[-6:]}: {err_str[:120]}")
