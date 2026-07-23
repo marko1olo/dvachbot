@@ -2278,12 +2278,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                         notifications_to_insert_fixed
                     )
                     # Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
-                    # FIX: Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
-                    # Fix already implemented
                     site_notifs = [
-                        (r_id, board_id, str(t_id) if t_id is not None else str(rep_num), src_num, rep_num, 0, current_time)
-                        for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert
-
                         (r_id, board_id, t_id, src_num, rep_num, 0, current_time)
                         for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert_fixed
                     ]
