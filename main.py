@@ -42,6 +42,7 @@ import random
 import re
 import secrets
 import html
+from site_tgach.media_utils import detect_media_type
 import signal
 import sys
 try:
@@ -15838,21 +15839,6 @@ async def check_anime_cmd_cooldown(message: types.Message, board_id: str) -> boo
                 pass
             return False
         return True
-def detect_media_type(data: bytes, url: str) -> str:
-    """
-    Определяет тип медиа (photo/video/animation) по заголовку файла или URL.
-    """
-    header = data[:12]
-    url_lower = url.lower()
-    if b'ftyp' in header or header.startswith(b'\x1A\x45\xDF\xA3'):
-        return 'video'
-    if header.startswith(b'GIF8'):
-        return 'animation'
-    if url_lower.endswith('.mp4') or url_lower.endswith('.webm') or url_lower.endswith('.mov'):
-        return 'video'
-    if url_lower.endswith('.gif'):
-        return 'animation'
-    return 'photo'
 async def _run_bounded_anime_url_fetches(
     fetcher_tasks: list[Callable[[], Awaitable[Optional[str]]]],
     board_id: str,
