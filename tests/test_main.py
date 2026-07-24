@@ -36,7 +36,7 @@ mocked_deps = [
     'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'orjson', 'pydantic',
     'aiogram.utils', 'aiogram.utils.media_group', 'aiogram.utils.keyboard',
     'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types'
-]
+, 'dotenv', 'jinja2', 'psutil', 'bs4', 'lxml_html_clean', 'telegraph', 'motor', 'matplotlib', 'matplotlib.pyplot', 'imagehash', 'PIL', 'huggingface_hub', 'fastapi_limiter', 'aiohttp', 'redis', 'sqlalchemy', 'authlib', 'pandas', 'scipy', 'numpy', 'pyrogram.enums', 'starlette', 'starlette.middleware', 'starlette.middleware.sessions', 'starlette.responses', 'starlette.requests', 'tenacity', 'starlette.routing', 'starlette.templating', 'itsdangerous', 'tgcrypto', 'ujson', 'starlette.types', 'starlette.datastructures', 'starlette.exceptions', 'seaborn', 'periodic_publisher', 'stats_generator', 'pandas', 'dotenv', 'psutil', 'bs4', 'lxml_html_clean', 'telegraph', 'motor', 'matplotlib', 'matplotlib.pyplot', 'imagehash', 'PIL', 'huggingface_hub', 'fastapi_limiter', 'aiohttp', 'redis', 'sqlalchemy', 'authlib', 'pandas', 'scipy', 'numpy', 'pyrogram.enums', 'starlette', 'starlette.middleware', 'starlette.middleware.sessions', 'starlette.responses', 'starlette.requests', 'tenacity', 'starlette.routing', 'starlette.templating', 'itsdangerous', 'tgcrypto', 'ujson', 'starlette.types', 'starlette.datastructures', 'starlette.exceptions', 'seaborn', 'periodic_publisher', 'stats_generator']
 
 for dep in mocked_deps:
     mock_module(dep)
@@ -774,3 +774,88 @@ class TestDownloadImageWithProxy(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestAdjustPromptParagraphs(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        import ast
+        with open('main.py', 'r', encoding='utf-8') as f:
+            main_code = f.read()
+
+        tree = ast.parse(main_code)
+        adjust_func = None
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == 'adjust_prompt_paragraphs':
+                adjust_func = node
+                break
+
+        if adjust_func:
+            func_code = compile(ast.Module(body=[adjust_func], type_ignores=[]), filename="<ast>", mode="exec")
+            namespace = {}
+            exec(func_code, namespace)
+            cls.adjust_prompt_paragraphs = staticmethod(namespace['adjust_prompt_paragraphs'])
+        else:
+            raise Exception("Could not find adjust_prompt_paragraphs in main.py")
+
+    def test_ru_paragraphs(self):
+
+        adjust_prompt_paragraphs = self.adjust_prompt_paragraphs
+        # 1
+        prompt = "объемом ровно в 1-2 абзаца"
+        res = adjust_prompt_paragraphs(prompt, 1, 'ru')
+        self.assertIn("ровно в 1 абзац", res)
+        self.assertIn("СТРОГО из 1 абзацев", res)
+
+        # 2
+        prompt = "ровно 3-4 абзаца"
+        res = adjust_prompt_paragraphs(prompt, 2, 'ru')
+        self.assertIn("ровно 2 абзаца", res)
+        self.assertIn("СТРОГО из 2 абзацев", res)
+
+        # 5
+        prompt = "строго 6-8 крупных абзацев"
+        res = adjust_prompt_paragraphs(prompt, 5, 'ru')
+        self.assertIn("строго 5 крупных абзацев", res)
+
+        # 11
+        prompt = "не менее 6-8 крупных, содержательных абзацев с подробностями"
+        res = adjust_prompt_paragraphs(prompt, 11, 'ru')
+        self.assertIn("ровно 11 крупных абзацев с подробностями", res)
+
+        # 21
+        prompt = "1-2 предложения"
+        res = adjust_prompt_paragraphs(prompt, 21, 'ru')
+        self.assertIn("ровно 21 абзац", res)
+
+        prompt = "ультра-короткую, циничную прожарку"
+        res = adjust_prompt_paragraphs(prompt, 1, 'ru')
+        self.assertIn("циничную прожарку", res)
+
+    def test_en_paragraphs(self):
+        adjust_prompt_paragraphs = self.adjust_prompt_paragraphs
+        # 1
+        prompt = "1-2 sentences"
+        res = adjust_prompt_paragraphs(prompt, 1, 'en')
+        self.assertIn("1 paragraph", res)
+        self.assertIn("EXACTLY 1 paragraphs", res)
+
+        # 3
+        prompt = "3-4 paragraphs"
+        res = adjust_prompt_paragraphs(prompt, 3, 'en')
+        self.assertIn("exactly 3 paragraphs", res)
+
+        prompt = "at least 6-8 heavy, informative paragraphs"
+        res = adjust_prompt_paragraphs(prompt, 5, 'en')
+        self.assertIn("exactly 5 heavy, informative paragraphs", res)
+
+    def test_jp_paragraphs(self):
+        adjust_prompt_paragraphs = self.adjust_prompt_paragraphs
+        prompt = "3行で"
+        res = adjust_prompt_paragraphs(prompt, 3, 'jp')
+        self.assertIn("3段落で", res)
+        self.assertIn("正確に3段落で", res)
+
+        prompt = "3行で"
+        res = adjust_prompt_paragraphs(prompt, 2, 'jp')
+        self.assertIn("2段落で", res)
