@@ -1,3 +1,4 @@
+import zaputin_mode
 import unittest
 from unittest.mock import patch
 import os
@@ -59,7 +60,7 @@ class TestZaputinMode(unittest.TestCase):
 
         self.assertIn("произвел", result)
         self.assertIn("импортозамещение", result)
-import zaputin_mode
+    def test_empty(self):
         self.assertEqual(zaputin_mode.zaputin_transform(""), "")
         self.assertEqual(zaputin_mode.zaputin_transform(None), None)
     def test_zv_replacement(self):
@@ -99,8 +100,6 @@ import zaputin_mode
         result = zaputin_mode.zaputin_transform("раз два три четыре")
         # Slogan is in PATRIOTIC_PHRASES
         self.assertIn("<b>", result)
-# Ensure import paths work
-from zaputin_mode import zaputin_transform
     def test_zaputin_transform_empty_text(self):
         """Test that empty or None text returns appropriately."""
     def test_ideological_replacements(self, mock_random, mock_choice):
