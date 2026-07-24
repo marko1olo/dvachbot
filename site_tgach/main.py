@@ -2643,7 +2643,14 @@ IS_PRODUCTION = os.getenv("SITE_URL", "").startswith("https")
 app.add_middleware(
     SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=IS_PRODUCTION
 )
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+import urllib.parse
+_site_url = os.getenv("SITE_URL", "")
+_allowed_hosts = ["localhost", "127.0.0.1"]
+if _site_url:
+    _hostname = urllib.parse.urlparse(_site_url).hostname
+    if _hostname:
+        _allowed_hosts.append(_hostname)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
 
 
 @app.exception_handler(404)
