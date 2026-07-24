@@ -76,7 +76,6 @@ from fastapi import Form
 import httpx
 from httpx import AsyncHTTPTransport
 from site_tgach.security import (
-    get_pow_challenge_data,
     verify_pow,
     check_ddos,
     DEFAULT_POW_DIFFICULTY,
