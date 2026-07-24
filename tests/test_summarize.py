@@ -12,12 +12,13 @@ async def test_summarize_success_removes_think_tags(
     mock_get_token, mock_load_google_keys, mock_async_openai, mock_httpx_client, mock_httpx_transport
 ):
     mock_client = AsyncMock()
-    mock_async_openai.return_value.__aenter__.return_value = mock_client
+    mock_client.chat.completions.create = AsyncMock()
+    mock_async_openai.return_value = mock_client
 
     mock_completion = MagicMock()
     mock_completion.choices = [MagicMock()]
     mock_completion.choices[0].message.content = "<think>Thinking...</think>\nActual Summary."
-    mock_client.chat.completions.create.return_value = mock_completion
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
 
     result = await summarize_text_with_hf("Prompt", "Text", model_preference="llama")
 
@@ -35,7 +36,8 @@ async def test_summarize_fails_all_retries(
     mock_get_token, mock_load_google_keys, mock_async_openai, mock_httpx_client, mock_httpx_transport
 ):
     mock_client = AsyncMock()
-    mock_async_openai.return_value.__aenter__.return_value = mock_client
+    mock_client.chat.completions.create = AsyncMock()
+    mock_async_openai.return_value = mock_client
     mock_client.chat.completions.create.side_effect = Exception("API Error")
 
     result = await summarize_text_with_hf("Prompt", "Text", model_preference="llama")
@@ -53,7 +55,8 @@ async def test_summarize_401_removes_token(
     mock_remove_token, mock_get_token, mock_load_google_keys, mock_async_openai, mock_httpx_client, mock_httpx_transport
 ):
     mock_client = AsyncMock()
-    mock_async_openai.return_value.__aenter__.return_value = mock_client
+    mock_client.chat.completions.create = AsyncMock()
+    mock_async_openai.return_value = mock_client
     mock_client.chat.completions.create.side_effect = Exception("401 Unauthorized")
 
     result = await summarize_text_with_hf("Prompt", "Text", model_preference="llama")
@@ -71,7 +74,8 @@ async def test_summarize_413_skips_model(
     mock_get_token, mock_load_google_keys, mock_async_openai, mock_httpx_client, mock_httpx_transport
 ):
     mock_client = AsyncMock()
-    mock_async_openai.return_value.__aenter__.return_value = mock_client
+    mock_client.chat.completions.create = AsyncMock()
+    mock_async_openai.return_value = mock_client
 
     # First call throws 413, second call succeeds
     mock_completion = MagicMock()
@@ -80,10 +84,12 @@ async def test_summarize_413_skips_model(
 
     # We want it to fail on the first model (gemini) and succeed on the second (gemini fallback or groq)
     # The default cascade is: gemini-3-flash-preview, gemini-3.1-flash-lite, qwen, llama
-    mock_client.chat.completions.create.side_effect = [
-        Exception("413 Request Entity Too Large"),
-        mock_completion
-    ]
+    async def _side_effect(*args, **kwargs):
+        if not hasattr(_side_effect, "called"):
+            _side_effect.called = True
+            raise Exception("413 Request Entity Too Large")
+        return mock_completion
+    mock_client.chat.completions.create.side_effect = _side_effect
 
     result = await summarize_text_with_hf("Prompt", "Text") # Default model_preference
 
@@ -99,17 +105,20 @@ async def test_summarize_429_switches_key(
     mock_load_google_keys, mock_async_openai, mock_httpx_client, mock_httpx_transport
 ):
     mock_client = AsyncMock()
-    mock_async_openai.return_value.__aenter__.return_value = mock_client
+    mock_client.chat.completions.create = AsyncMock()
+    mock_async_openai.return_value = mock_client
 
     mock_completion = MagicMock()
     mock_completion.choices = [MagicMock()]
     mock_completion.choices[0].message.content = "Summary after switching key."
 
     # Fail with 429 on key1, then succeed on key2 (gemini)
-    mock_client.chat.completions.create.side_effect = [
-        Exception("429 Too Many Requests"),
-        mock_completion
-    ]
+    async def _side_effect(*args, **kwargs):
+        if not hasattr(_side_effect, "called"):
+            _side_effect.called = True
+            raise Exception("429 Too Many Requests")
+        return mock_completion
+    mock_client.chat.completions.create.side_effect = _side_effect
 
     result = await summarize_text_with_hf("Prompt", "Text", model_preference="gemini")
 
@@ -141,12 +150,13 @@ async def test_summarize_empty_result(
     mock_get_token, mock_load_google_keys, mock_async_openai, mock_httpx_client, mock_httpx_transport
 ):
     mock_client = AsyncMock()
-    mock_async_openai.return_value.__aenter__.return_value = mock_client
+    mock_client.chat.completions.create = AsyncMock()
+    mock_async_openai.return_value = mock_client
 
     mock_completion = MagicMock()
     mock_completion.choices = [MagicMock()]
     mock_completion.choices[0].message.content = ""
-    mock_client.chat.completions.create.return_value = mock_completion
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
 
     result = await summarize_text_with_hf("Prompt", "Text", model_preference="llama")
 
@@ -180,20 +190,23 @@ def reset_telegraph_token_cache():
     yield
     summarize._telegraph_token_cache = original_cache
 
-def test_get_telegraph_token_cached(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_telegraph_token_cached(monkeypatch):
     import summarize
     summarize._telegraph_token_cache = "cached_token"
-    token = summarize.get_telegraph_token()
+    token = await summarize.get_telegraph_token_async()
     assert token == "cached_token"
 
-def test_get_telegraph_token_env_var(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_telegraph_token_env_var(monkeypatch):
     import summarize
     monkeypatch.setenv("TELEGRAPH_TOKEN", "env_token")
-    token = summarize.get_telegraph_token()
+    token = await summarize.get_telegraph_token_async()
     assert token == "env_token"
     assert summarize._telegraph_token_cache == "env_token"
 
-def test_get_telegraph_token_file(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+async def test_get_telegraph_token_file(monkeypatch, tmp_path):
     import summarize
 
     token_file = tmp_path / "telegraph_token.txt"
@@ -202,13 +215,14 @@ def test_get_telegraph_token_file(monkeypatch, tmp_path):
     monkeypatch.setattr(summarize, "TELEGRAPH_TOKEN_FILE", str(token_file))
     monkeypatch.delenv("TELEGRAPH_TOKEN", raising=False)
 
-    token = summarize.get_telegraph_token()
+    token = await summarize.get_telegraph_token_async()
     assert token == "file_token"
     assert summarize._telegraph_token_cache == "file_token"
 
-def test_get_telegraph_token_generation_success(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+async def test_get_telegraph_token_generation_success(monkeypatch, tmp_path):
     import summarize
-    from unittest.mock import MagicMock
+    from unittest.mock import MagicMock, AsyncMock
 
     mock_logger_error = MagicMock()
     monkeypatch.setattr("summarize.logger.error", mock_logger_error)
@@ -220,19 +234,11 @@ def test_get_telegraph_token_generation_success(monkeypatch, tmp_path):
     monkeypatch.setattr(summarize, "TELEGRAPH_TOKEN_FILE", str(token_file))
     monkeypatch.delenv("TELEGRAPH_TOKEN", raising=False)
 
-    class MockTelegraphPoster:
-        def __init__(self, *args, **kwargs):
-            self.access_token = None
+    async def _mock_create_account_async_success():
+        return "generated_token"
+    monkeypatch.setattr("summarize._telegraph_create_account_async", _mock_create_account_async_success)
 
-        def create_api_token(self, short_name, author_name):
-            self.access_token = "generated_token"
-
-    # Because summarize.py performs local import:
-    # try:
-    #     from html_telegraph_poster import TelegraphPoster
-    monkeypatch.setattr("html_telegraph_poster.TelegraphPoster", MockTelegraphPoster)
-
-    token = summarize.get_telegraph_token()
+    token = await summarize.get_telegraph_token_async()
 
     assert token == "generated_token"
     assert summarize._telegraph_token_cache == "generated_token"
@@ -240,7 +246,8 @@ def test_get_telegraph_token_generation_success(monkeypatch, tmp_path):
     assert token_file.read_text(encoding="utf-8") == "generated_token"
     mock_logger_error.assert_not_called()
 
-def test_get_telegraph_token_generation_failure(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+async def test_get_telegraph_token_generation_failure(monkeypatch, tmp_path):
     import summarize
     from unittest.mock import MagicMock
 
@@ -251,15 +258,11 @@ def test_get_telegraph_token_generation_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(summarize, "TELEGRAPH_TOKEN_FILE", str(token_file))
     monkeypatch.delenv("TELEGRAPH_TOKEN", raising=False)
 
-    class MockTelegraphPoster:
-        def __init__(self, *args, **kwargs):
-            pass
-        def create_api_token(self, short_name, author_name):
-            raise Exception("Telegraph API error")
+    async def _mock_create_account_async():
+        raise Exception("Telegraph API error")
+    monkeypatch.setattr("summarize._telegraph_create_account_async", _mock_create_account_async)
 
-    monkeypatch.setattr("html_telegraph_poster.TelegraphPoster", MockTelegraphPoster)
-
-    token = summarize.get_telegraph_token()
+    token = await summarize.get_telegraph_token_async()
 
     assert token == ""
     assert summarize._telegraph_token_cache is None
