@@ -7732,3 +7732,67 @@ def get_db_connection():
                 await self.conn.close()
             
     return SafeConnection()
+
+async def clean_old_postcopies_daily():
+    """
+    Аккуратная ежедневная чистка PostCopies: храним данные ровно 14 дней.
+    """
+    from common.db_pool import get_pool, db_lock
+    days_14_ago = time.time() - (14 * 86400)
+    try:
+        db = await get_pool()
+        if not db:
+            return 0
+        async with db.execute("SELECT MIN(post_num) FROM Posts WHERE timestamp >= ?", (days_14_ago,)) as cursor:
+            row = await cursor.fetchone()
+            threshold_post_num = row[0] if row else None
+            
+        if not threshold_post_num:
+            return 0
+
+        total_deleted = 0
+        batch_size = 100000
+        while True:
+            async with db_lock:
+                await db.execute("BEGIN IMMEDIATE")
+                cursor = await db.execute("""
+                    DELETE FROM PostCopies 
+                    WHERE rowid IN (
+                        SELECT rowid FROM PostCopies 
+                        WHERE post_num < ? 
+                        LIMIT ?
+                    )
+                """, (threshold_post_num, batch_size))
+                deleted = cursor.rowcount
+                await db.execute("COMMIT")
+            total_deleted += deleted
+            if deleted == 0:
+                break
+            await asyncio.sleep(0.5)
+
+        if total_deleted > 0:
+            logging.getLogger("database").info(f"🧹 [POSTCOPIES_CLEANUP] Удалено {total_deleted:,} устаревших записей (post_num < {threshold_post_num}). Храним данные за 14 дней.")
+        return total_deleted
+    except Exception as e:
+        logging.getLogger("database").error(f"⚠️ [POSTCOPIES_CLEANUP] Ошибка ежедневной чистки: {e}")
+        return 0
+
+async def postcopies_daily_cleanup_loop():
+    """
+    Запускает ежедневную очистку PostCopies ровно в 00:00 MSK (UTC+3).
+    """
+    from datetime import datetime, timezone, timedelta
+    MSK = timezone(timedelta(hours=3))
+    while True:
+        try:
+            now_msk = datetime.now(timezone.utc).astimezone(MSK)
+            next_run = (now_msk + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            sleep_sec = (next_run - now_msk).total_seconds()
+            await asyncio.sleep(max(10, sleep_sec))
+            await clean_old_postcopies_daily()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.getLogger("database").error(f"⚠️ [POSTCOPIES_LOOP] Ошибка в цикле чистки: {e}")
+            await asyncio.sleep(3600)
+

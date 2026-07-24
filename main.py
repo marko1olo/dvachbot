@@ -78,7 +78,7 @@ from common.database import (
     get_or_create_api_token, remove_regular_mute, apply_regular_mute,
     get_and_clear_notification_queue, search_posts, update_post_content, remove_user_from_board,
     load_all_spam_words, add_spam_word, remove_spam_word, delete_post_by_num, add_reaction_ban, remove_reaction_ban, load_all_reaction_bans, get_max_post_num, get_weekly_active_users, get_reply_coverage_stats,
-    get_random_video_post, get_random_image_post
+    get_random_video_post, get_random_image_post, postcopies_daily_cleanup_loop
 )
 from site_tgach.admin_config import ADMIN_IDS
 from site_tgach.tagging_worker import tagging_loop
@@ -20367,6 +20367,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "periodic_shop_broadcast": lambda: periodic_shop_broadcast(),
         "admin_action_sync_worker": lambda: admin_action_sync_worker(),
         "tagging_worker": lambda: tagging_loop(),
+        "postcopies_daily_cleanup": lambda: postcopies_daily_cleanup_loop(),
         "periodic_stats_publisher": lambda: periodic_publisher.periodic_stats_publisher(
             bots,
             lambda: board_data.get('b', {}).get('users', {}).get('active', set())
