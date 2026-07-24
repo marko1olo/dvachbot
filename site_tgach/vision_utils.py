@@ -2,9 +2,7 @@ import base64
 import random
 import os
 import io
-import asyncio
 from PIL import Image
-import httpx
 from openai import AsyncOpenAI
 import logging
 
