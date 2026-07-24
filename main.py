@@ -28,6 +28,15 @@ import itertools
 from common.task_manager import spawn_task
 import faulthandler
 import gc
+try:
+    import pandas as pd
+    import matplotlib
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    matplotlib.use('Agg')  # Используем бэкенд, не требующий GUI
+    GRAPH_LIBS_AVAILABLE = True
+except ImportError:
+    GRAPH_LIBS_AVAILABLE = False
 import psutil
 try:
     import ujson as json
@@ -208,15 +217,6 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 from typing import Callable, Dict, Any, Awaitable, Optional
 from roulette_logic import load_roulette_data, get_random_event, ROULETTE_COOLDOWN_PHRASES, ROULETTE_RESULT_PHRASES
-try:
-    import pandas as pd
-    import matplotlib
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-    matplotlib.use('Agg')  # Используем бэкенд, не требующий GUI
-    GRAPH_LIBS_AVAILABLE = True
-except ImportError:
-    GRAPH_LIBS_AVAILABLE = False
 ANIME_COMMAND_MAP = {
     "fap": get_random_anime_image,
     "Fap": get_random_anime_image,
