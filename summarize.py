@@ -1,5 +1,7 @@
 import os
 import httpx
+import aiohttp
+
 import logging
 import asyncio
 from html.parser import HTMLParser
@@ -247,64 +249,52 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
 TELEGRAPH_TOKEN_FILE = os.path.join("data", "telegraph_token.txt")
 _telegraph_token_cache = None
 
-def _telegraph_request_sync(method: str, params: dict) -> dict:
+async def _telegraph_request_async(method: str, data: dict = None, params: dict = None) -> dict:
     """Make a direct (no proxy) HTTP request to Telegraph API."""
-    import requests
-    import time
+    import asyncio
     url = f"https://api.telegra.ph/{method}"
-    # Explicitly bypass proxy for Telegraph - SOCKS on 10808 is not for external APIs
     last_err = None
     for attempt in range(3):
         try:
-            resp = requests.get(url, params=params, timeout=15, proxies={"http": None, "https": None})
-            resp.raise_for_status()
-            data = resp.json()
-            if not data.get("ok"):
-                raise RuntimeError(f"Telegraph API error: {data.get('error', 'unknown')}")
-            return data["result"]
+            async with aiohttp.ClientSession() as session:
+                if data is not None:
+                    async with session.post(url, data=data, timeout=20) as resp:
+                        resp.raise_for_status()
+                        result = await resp.json()
+                else:
+                    async with session.get(url, params=params, timeout=15) as resp:
+                        resp.raise_for_status()
+                        result = await resp.json()
+            if not result.get("ok"):
+                raise RuntimeError(f"Telegraph API error: {result.get('error', 'unknown')}")
+            return result["result"]
         except Exception as e:
             last_err = e
-            time.sleep(2 * (attempt + 1))
+            await asyncio.sleep(2 * (attempt + 1))
             
     raise RuntimeError(f"Telegraph request failed after 3 attempts: {last_err}")
 
-def _telegraph_create_account_sync() -> str:
+async def _telegraph_create_account_async() -> str:
     """Create a Telegraph account and return the access token."""
-    result = _telegraph_request_sync("createAccount", {
+    result = await _telegraph_request_async("createAccount", params={
         "short_name": "tgach_bot",
         "author_name": "ТГАЧ"
     })
     return result.get("access_token", "")
 
-def _telegraph_create_page_sync(token: str, title: str, content_nodes: list) -> str:
+async def _telegraph_create_page_async_impl(token: str, title: str, content_nodes: list) -> str:
     """Create a Telegraph page and return its URL."""
     import json
-    import requests
-    import time
-    url = "https://api.telegra.ph/createPage"
     payload = {
         "access_token": token,
         "title": title[:256],  # Telegraph title limit
         "content": json.dumps(content_nodes),
         "return_content": "false"
     }
-    
-    last_err = None
-    for attempt in range(3):
-        try:
-            resp = requests.post(url, data=payload, timeout=20, proxies={"http": None, "https": None})
-            resp.raise_for_status()
-            data = resp.json()
-            if not data.get("ok"):
-                raise RuntimeError(f"Telegraph createPage error: {data.get('error', 'unknown')}")
-            return data["result"]["url"]
-        except Exception as e:
-            last_err = e
-            time.sleep(2 * (attempt + 1))
-            
-    raise RuntimeError(f"Telegraph createPage failed after 3 attempts: {last_err}")
+    result = await _telegraph_request_async("createPage", data=payload)
+    return result.get("url", "")
 
-def get_telegraph_token() -> str:
+async def get_telegraph_token_async() -> str:
     global _telegraph_token_cache
     if _telegraph_token_cache:
         return _telegraph_token_cache
@@ -325,7 +315,7 @@ def get_telegraph_token() -> str:
         except Exception:
             pass
     try:
-        token = _telegraph_create_account_sync()
+        token = await _telegraph_create_account_async()
         if token:
             os.makedirs("data", exist_ok=True)
             with open(TELEGRAPH_TOKEN_FILE, "w", encoding="utf-8") as f:
@@ -456,30 +446,25 @@ def _text_to_telegraph_nodes(html_content: str) -> list:
         nodes = [{"tag": "p", "children": [""]}]
     return nodes
 
-def _create_telegraph_page_blocking(title: str, html_content: str, author: str = "ТГАЧ") -> str:
-    token = get_telegraph_token()
-    if not token:
-        raise RuntimeError("API token is required")
-        
-    # Prevent Telegraph CONTENT_TOO_BIG error (limits at ~64KB of JSON payload)
-    if len(html_content) > 30000:
-        logger.warning(f"Telegraph content too big ({len(html_content)} chars), pre-truncating to 30000...")
-        truncated = html_content[:30000]
-        last_lt = truncated.rfind('<')
-        last_gt = truncated.rfind('>')
-        if last_lt > last_gt:
-            # We cut right in the middle of a tag, truncate before the tag
-            truncated = truncated[:last_lt]
-        html_content = truncated + "\n\n<i>... (Саммари слишком большое, конец текста обрезан)</i>"
-        
-    nodes = _text_to_telegraph_nodes(html_content)
-    return _telegraph_create_page_sync(token, title, nodes)
-
 async def create_telegraph_page_async(title: str, html_content: str, author: str = "ТГАЧ") -> str | None:
     try:
-        url = await asyncio.to_thread(_create_telegraph_page_blocking, title, html_content, author)
-        return url
+        token = await get_telegraph_token_async()
+        if not token:
+            raise RuntimeError("API token is required")
+
+        # Prevent Telegraph CONTENT_TOO_BIG error (limits at ~64KB of JSON payload)
+        if len(html_content) > 30000:
+            logger.warning(f"Telegraph content too big ({len(html_content)} chars), pre-truncating to 30000...")
+            truncated = html_content[:30000]
+            last_lt = truncated.rfind('<')
+            last_gt = truncated.rfind('>')
+            if last_lt > last_gt:
+                # We cut right in the middle of a tag, truncate before the tag
+                truncated = truncated[:last_lt]
+            html_content = truncated + "\n\n<i>... (Саммари слишком большое, конец текста обрезан)</i>"
+
+        nodes = _text_to_telegraph_nodes(html_content)
+        return await _telegraph_create_page_async_impl(token, title, nodes)
     except Exception as e:
         logger.error(f"Failed to create Telegraph page: {e}")
         return None
-
