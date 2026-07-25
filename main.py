@@ -18745,6 +18745,11 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
             now_t_fav = time.time()
             if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 120.0) and random.random() < 0.04:
                 should_reply = True
+        else:
+            # Глобальный пассивный тригер: 2% на любой пост на борде
+            now_t_glob = time.time()
+            if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and random.random() < 0.02:
+                should_reply = True
 
         if should_reply:
             _last_persona_board_ts[board_id] = time.time()  # заблокировать до spawn чтобы не было race condition
@@ -19241,6 +19246,11 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                         now_t_fav = time.time()
                         if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.04:
                             should_reply = True
+                    else:
+                        # Глобальный пассивный тригер: 2%
+                        now_t_glob = time.time()
+                        if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.02:
+                            should_reply = True
                     if should_reply:
                         _last_persona_board_ts[board_id] = time.time()  # race guard
                         text_payload = text_chunk or f"[{message.content_type}]"
@@ -19383,6 +19393,12 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 text_clean = message.text or message.caption or (f"[фотография]" if photo_id else None)
                 now_t_fav = time.time()
                 if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.04:
+                    should_reply = True
+            else:
+                # Глобальный пассивный тригер: 2%
+                text_clean2 = message.text or message.caption or None
+                now_t_glob = time.time()
+                if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.02:
                     should_reply = True
             if should_reply:
                 _last_persona_board_ts[board_id] = time.time()  # race guard
