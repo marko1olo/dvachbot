@@ -8895,6 +8895,7 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
         chain.append({
             'post_num': current_num,
             'is_bot': is_bot,
+            'author_id': author_id,
             'text': clean_text,
             'reply_to': reply_to
         })
@@ -8908,9 +8909,13 @@ async def build_reply_chain_context(target_post_num: int, max_depth: int = 25) -
     
     lines = []
     for item in chain:
-        sender = "БОТ (Персона)" if item['is_bot'] else "ЮЗЕР (Анон)"
+        if item['is_bot']:
+            sender = "ТЫ (Персона)"
+        else:
+            anon_hash = str(abs(hash(str(item.get('author_id', 'anon')))))[:4]
+            sender = f"Анон #{anon_hash}"
         reply_prefix = f" (в ответ на #{item['reply_to']})" if item['reply_to'] else ""
-        lines.append(f"• #{item['post_num']} [{sender}]{reply_prefix}: {item['text'][:250]}")
+        lines.append(f"• #{item['post_num']} [{sender}]{reply_prefix}: {item['text'][:300]}")
         
     return "\n".join(lines)
 
@@ -8944,10 +8949,20 @@ async def analyze_telegram_photo(bot, photo_file_id: str, caption: str = None) -
 
 _last_persona_board_ts: dict[str, float] = {}
 _last_persona_dialogue_user_ts: dict[int, float] = {}
+_persona_processed_posts: set[int] = set()
 
 async def schedule_persona_reply(bot, board_id: str, target_post_num: int, context_text: str, stream: str, is_admin_trigger: bool = False, photo_file_id: str = None, is_dialogue: bool = False):
     try:
         from site_tgach.persona_bot import generate_anon_reply, is_valid_for_persona
+
+        if target_post_num and target_post_num in _persona_processed_posts:
+            print(f"ℹ️ [Persona Debounce] Reply for post #{target_post_num} already processed, skipping duplicate trigger.")
+            return
+        if target_post_num:
+            _persona_processed_posts.add(target_post_num)
+            if len(_persona_processed_posts) > 3000:
+                _persona_processed_posts.clear()
+
         now_ts = time.time()
         if not is_admin_trigger and not is_dialogue:
             last_ts = _last_persona_board_ts.get(board_id, 0)
