@@ -146,11 +146,11 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 f"Respond directly. Do not use reasoning/thinking blocks. Do not output <think> tags."
             )
             
-            # Valid Vision models pool: Gemini 2.5 Flash, Gemini 2.0 Flash, Groq Llama 3.2 Vision
+            # 33% / 33% / 33% load balancing pool between Qwen 3.6 27B, Gemini 3.5 Flash Lite, Gemini 3.1 Flash Lite
             models_pool = [
-                ("gemini-2.5-flash", "gemini"),
-                ("gemini-2.0-flash", "gemini"),
-                ("llama-3.2-11b-vision-preview", "groq")
+                ("qwen/qwen3.6-27b", "groq"),
+                ("gemini-3.5-flash-lite", "gemini"),
+                ("gemini-3.1-flash-lite", "gemini")
             ]
             start_idx = random.randint(0, 2)
             models_cascade = models_pool[start_idx:] + models_pool[:start_idx]
