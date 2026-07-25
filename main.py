@@ -8966,7 +8966,7 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
         now_ts = time.time()
         if not is_admin_trigger:
             last_ts = _last_persona_board_ts.get(board_id, 0)
-            if now_ts - last_ts < 90.0:
+            if now_ts - last_ts < 120.0:
                 print(f"ℹ️ [Persona Debounce] Skipping rapid trigger on board '{board_id}' (90s cooldown active).")
                 return
             _last_persona_board_ts[board_id] = now_ts
@@ -18738,12 +18738,12 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
         if is_reply_to_bot:
             now_t = time.time()
             last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
-            if (now_t - last_user_t >= 120.0) and (random.random() < 0.08):
+            if (now_t - last_user_t >= 120.0) and (random.random() < 0.15):
                 should_reply = True
                 _last_persona_dialogue_user_ts[user_id] = now_t
         elif user_id in b_data.get('persona_favorites', {}):
             now_t_fav = time.time()
-            if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and random.random() < 0.02:
+            if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 120.0) and random.random() < 0.04:
                 should_reply = True
 
         if should_reply:
@@ -19234,12 +19234,12 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     if is_reply_to_bot:
                         now_t = time.time()
                         last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
-                        if (now_t - last_user_t >= 120.0) and (random.random() < 0.08):
+                        if (now_t - last_user_t >= 120.0) and (random.random() < 0.15):
                             should_reply = True
                             _last_persona_dialogue_user_ts[user_id] = now_t
                     elif user_id in b_data.get('persona_favorites', {}):
                         now_t_fav = time.time()
-                        if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.02:
+                        if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.04:
                             should_reply = True
                     if should_reply:
                         _last_persona_board_ts[board_id] = time.time()  # race guard
@@ -19374,7 +19374,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 now_t = time.time()
                 last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
                 # 15% chance to reply in dialogue + minimum 60s cooldown per user
-                if (now_t - last_user_t >= 120.0) and (random.random() < 0.08):
+                if (now_t - last_user_t >= 120.0) and (random.random() < 0.15):
                     should_reply = True
                     _last_persona_dialogue_user_ts[user_id] = now_t
                 else:
@@ -19382,7 +19382,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             elif user_id in b_data.get('persona_favorites', {}):
                 text_clean = message.text or message.caption or (f"[фотография]" if photo_id else None)
                 now_t_fav = time.time()
-                if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.02:
+                if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.04:
                     should_reply = True
             if should_reply:
                 _last_persona_board_ts[board_id] = time.time()  # race guard
