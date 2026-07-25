@@ -8971,6 +8971,29 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                 return
             _last_persona_board_ts[board_id] = now_ts
 
+        if not photo_file_id and target_post_num and target_post_num in messages_storage:
+            p_data = messages_storage[target_post_num]
+            c = p_data.get('content', {})
+            if c.get('type') == 'photo':
+                photo_file_id = c.get('file_id')
+            elif c.get('type') == 'media_group' and c.get('media'):
+                for m in c.get('media', []):
+                    if m.get('type') == 'photo' and m.get('file_id'):
+                        photo_file_id = m['file_id']
+                        break
+            # Если в самом посте нет картинки, проверим родительский пост, на который отвечают
+            if not photo_file_id:
+                reply_to_num = p_data.get('reply_to_post_num') or p_data.get('reply_to')
+                if reply_to_num and reply_to_num in messages_storage:
+                    parent_c = messages_storage[reply_to_num].get('content', {})
+                    if parent_c.get('type') == 'photo':
+                        photo_file_id = parent_c.get('file_id')
+                    elif parent_c.get('type') == 'media_group' and parent_c.get('media'):
+                        for m in parent_c.get('media', []):
+                            if m.get('type') == 'photo' and m.get('file_id'):
+                                photo_file_id = m['file_id']
+                                break
+
         vision_desc = None
         if photo_file_id and not (context_text and "[ИЗОБРАЖЕНИЕ:" in context_text):
             vision_desc = await analyze_telegram_photo(bot, photo_file_id, caption=context_text)
