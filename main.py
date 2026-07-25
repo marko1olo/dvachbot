@@ -9023,8 +9023,10 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
             
         for i, text in enumerate(replies):
             now_dt = datetime.now(UTC)
+            # Прикрепляем картинку только в 30% случаев чтобы не спамить медиа
+            attach_photo = photo_file_id and i == 0 and random.random() < 0.30
             content = {
-                'type': 'photo' if photo_file_id and i == 0 else 'text',
+                'type': 'photo' if attach_photo else 'text',
                 'is_system_message': True,
                 'archive_allowed': True
             }
@@ -18736,14 +18738,16 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
         if is_reply_to_bot:
             now_t = time.time()
             last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
-            if (now_t - last_user_t >= 35.0) and (random.random() < 0.35):
+            if (now_t - last_user_t >= 60.0) and (random.random() < 0.15):
                 should_reply = True
                 _last_persona_dialogue_user_ts[user_id] = now_t
         elif user_id in b_data.get('persona_favorites', {}):
-            if random.random() < 0.05:
+            now_t_fav = time.time()
+            if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and random.random() < 0.02:
                 should_reply = True
 
         if should_reply:
+            _last_persona_board_ts[board_id] = time.time()  # заблокировать до spawn чтобы не было race condition
             text_chunk = original_caption or "[альбом изображений]"
             spawn_task(schedule_persona_reply(bot_instance, board_id, first_post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=first_photo_id, is_dialogue=is_reply_to_bot))
 def apply_greentext_formatting(text: str) -> str:
@@ -19230,13 +19234,15 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     if is_reply_to_bot:
                         now_t = time.time()
                         last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
-                        if (now_t - last_user_t >= 35.0) and (random.random() < 0.35):
+                        if (now_t - last_user_t >= 60.0) and (random.random() < 0.15):
                             should_reply = True
                             _last_persona_dialogue_user_ts[user_id] = now_t
                     elif user_id in b_data.get('persona_favorites', {}):
-                        if text_chunk and len(text_chunk) > 5 and random.random() < 0.05:
+                        now_t_fav = time.time()
+                        if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.02:
                             should_reply = True
                     if should_reply:
+                        _last_persona_board_ts[board_id] = time.time()  # race guard
                         text_payload = text_chunk or f"[{message.content_type}]"
                         photo_id = message.photo[-1].file_id if message.photo else None
                         spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_payload, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
@@ -19367,17 +19373,19 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             if is_reply_to_bot:
                 now_t = time.time()
                 last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
-                # 35% chance to reply in dialogue + minimum 35s cooldown per user for stealth realistic conversation
-                if (now_t - last_user_t >= 35.0) and (random.random() < 0.35):
+                # 15% chance to reply in dialogue + minimum 60s cooldown per user
+                if (now_t - last_user_t >= 60.0) and (random.random() < 0.15):
                     should_reply = True
                     _last_persona_dialogue_user_ts[user_id] = now_t
                 else:
                     print(f"ℹ️ [Persona Dialogue] Ignored dialogue trigger for user {user_id} (cooldown or chance check).")
             elif user_id in b_data.get('persona_favorites', {}):
                 text_clean = message.text or message.caption or (f"[фотография]" if photo_id else None)
-                if text_clean and len(text_clean) >= 4 and random.random() < 0.05:
+                now_t_fav = time.time()
+                if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.02:
                     should_reply = True
             if should_reply:
+                _last_persona_board_ts[board_id] = time.time()  # race guard
                 text_chunk = message.text or message.caption or f"[{message.content_type}]"
                 spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
 async def database_cleanup_task():
