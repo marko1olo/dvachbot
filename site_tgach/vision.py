@@ -7,6 +7,9 @@ import os
 import re
 import httpx
 import io
+from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent / '.env')
 from PIL import Image
 from openai import AsyncOpenAI
 
