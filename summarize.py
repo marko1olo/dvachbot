@@ -15,6 +15,17 @@ GROQ_CONFIG = {
 }
 
 _SHARED_HTTP_CLIENT = None
+# Ограничиваем параллельные LLM-вызовы Персоны: строго 1 одновременно
+# Иначе 10+ конкурентных горутин дёргают все ключи одновременно и спамят 429
+_PERSONA_SEMAPHORE: asyncio.Semaphore | None = None
+
+def _get_persona_semaphore() -> asyncio.Semaphore:
+    global _PERSONA_SEMAPHORE
+    if _PERSONA_SEMAPHORE is None:
+        _PERSONA_SEMAPHORE = asyncio.Semaphore(1)
+    return _PERSONA_SEMAPHORE
+
+
 
 def get_shared_http_client() -> httpx.AsyncClient:
     global _SHARED_HTTP_CLIENT
@@ -85,6 +96,14 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
     Supports choosing model/provider: gemini, qwen, llama, or default groq (Qwen + Llama + Gemini fallback).
     Prioritizes 500 RPD Gemini Lite models to maximize free quota.
     """
+    if model_preference == "persona" or model_preference == "persona_gemini":
+        # Persona Bot: строго 1 параллельный вызов через семафор
+        async with _get_persona_semaphore():
+            return await _summarize_inner(prompt, text_dump, hf_token, model_preference)
+    return await _summarize_inner(prompt, text_dump, hf_token, model_preference)
+
+
+async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     if model_preference == "persona" or model_preference == "persona_gemini":
         # Persona Bot priority: Gemini Lite -> Qwen 27B -> Llama 70B
         models_cascade = [
