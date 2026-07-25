@@ -59,25 +59,26 @@ def _load_google_keys() -> list[str]:
 _key_cooldowns: dict[tuple[str, str], float] = {}
 def _get_models_cascade(model_preference: str | None) -> list[tuple[str, str]]:
     if model_preference == "gemini":
-        return [("gemini-3.1-flash-lite", "gemini")]
+        return [("gemini-2.5-flash", "gemini"), ("gemini-2.0-flash", "gemini")]
     if model_preference == "qwen":
-        return [("qwen/qwen3.6-27b", "groq")]
+        return [("qwen-2.5-32b", "groq")]
     if model_preference == "llama":
         return [("llama-3.3-70b-versatile", "groq")]
 
     return [
-        ("gemini-3.1-flash-lite", "gemini"),
-        ("qwen/qwen3.6-27b", "groq"),
+        ("gemini-2.5-flash", "gemini"),
+        ("gemini-2.0-flash", "gemini"),
         ("llama-3.3-70b-versatile", "groq"),
     ]
 def get_models_cascade(model_preference: str | None = None) -> list[tuple[str, str]]:
     if model_preference == "gemini":
         return [
-            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
+            ("gemini-2.0-flash", "gemini")
         ]
     elif model_preference == "qwen":
         return [
-            ("qwen/qwen3.6-27b", "groq")
+            ("qwen-2.5-32b", "groq")
         ]
     elif model_preference == "llama":
         return [
@@ -85,16 +86,14 @@ def get_models_cascade(model_preference: str | None = None) -> list[tuple[str, s
         ]
     else:
         return [
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-2.5-flash", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
             ("llama-3.3-70b-versatile", "groq"),
         ]
 
 async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     """
-    Summarize text using a cascade of OpenAI-compatible endpoints:
-    Supports choosing model/provider: gemini, qwen, llama, or default groq (Qwen + Llama + Gemini fallback).
-    Prioritizes 500 RPD Gemini Lite models to maximize free quota.
+    Summarize text using a cascade of OpenAI-compatible endpoints.
     """
     if model_preference == "persona" or model_preference == "persona_gemini":
         # Persona Bot: строго 1 параллельный вызов через семафор
@@ -105,47 +104,33 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
 
 async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     if model_preference == "persona" or model_preference == "persona_gemini":
-        # Persona Bot priority: Gemini Lite -> Qwen 27B -> Llama 70B
         models_cascade = [
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-2.5-flash", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
             ("llama-3.3-70b-versatile", "groq"),
         ]
     elif model_preference == "summary" or model_preference == "gemini":
-        # Summarization priority: Smart Flash models first for maximum intelligence and deep reasoning
         models_cascade = [
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
             ("gemini-2.5-flash", "gemini"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
+            ("gemini-1.5-flash", "gemini"),
         ]
     elif model_preference == "qwen":
         models_cascade = [
-            ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("qwen-2.5-32b", "groq"),
+            ("gemini-2.5-flash", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
         ]
     elif model_preference == "llama":
         models_cascade = [
             ("llama-3.3-70b-versatile", "groq"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
         ]
     else:
-        # Default summarization cascade: Smart Flash models first, then Lite models
         models_cascade = [
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
             ("gemini-2.5-flash", "gemini"),
-            ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
             ("llama-3.3-70b-versatile", "groq"),
         ]
     
