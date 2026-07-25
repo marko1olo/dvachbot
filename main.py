@@ -18738,7 +18738,7 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
         if is_reply_to_bot:
             now_t = time.time()
             last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
-            if (now_t - last_user_t >= 60.0) and (random.random() < 0.15):
+            if (now_t - last_user_t >= 120.0) and (random.random() < 0.08):
                 should_reply = True
                 _last_persona_dialogue_user_ts[user_id] = now_t
         elif user_id in b_data.get('persona_favorites', {}):
@@ -19234,7 +19234,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     if is_reply_to_bot:
                         now_t = time.time()
                         last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
-                        if (now_t - last_user_t >= 60.0) and (random.random() < 0.15):
+                        if (now_t - last_user_t >= 120.0) and (random.random() < 0.08):
                             should_reply = True
                             _last_persona_dialogue_user_ts[user_id] = now_t
                     elif user_id in b_data.get('persona_favorites', {}):
@@ -19374,7 +19374,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 now_t = time.time()
                 last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
                 # 15% chance to reply in dialogue + minimum 60s cooldown per user
-                if (now_t - last_user_t >= 60.0) and (random.random() < 0.15):
+                if (now_t - last_user_t >= 120.0) and (random.random() < 0.08):
                     should_reply = True
                     _last_persona_dialogue_user_ts[user_id] = now_t
                 else:
