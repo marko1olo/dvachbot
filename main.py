@@ -462,7 +462,12 @@ def generate_anon_name(user_id: int) -> str:
 
 def clean_html_for_tg(text: str) -> str:
     import re
+    from common.text_utils import unwrap_tg_emoji
     if not text: return ''
+    
+    # First unwrap custom Telegram emoji tags <tg-emoji emoji-id="...">EMOJI</tg-emoji> -> EMOJI
+    text = unwrap_tg_emoji(text)
+
     # Markdown -> HTML
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
     text = re.sub(r'(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
@@ -478,8 +483,7 @@ def clean_html_for_tg(text: str) -> str:
     text = re.sub(r'</?(?:div|section|article|header|footer|main|nav|aside|span|em|strong|ul|ol|table|thead|tbody|tfoot|blockquote|figure|figcaption)\s*[^>]*>', '', text, flags=re.IGNORECASE)
 
     # Strip ALL remaining non-allowed tags completely
-    # Old code only replaced < with &lt; leaving "p>" as visible garbage
-    allowed = {'b', 'i', 'u', 's', 'code', 'pre', 'a'}
+    allowed = {'b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'tg-emoji'}
 
     def _replace_tag(m):
         closing = m.group(1)  # '/' or None
@@ -491,13 +495,13 @@ def clean_html_for_tg(text: str) -> str:
             return f'<{tag}{attrs}>'
         return ''  # strip completely
 
-    text = re.sub(r'<(/?)([a-zA-Z][a-zA-Z0-9]*)([^>]*)>', _replace_tag, text)
+    text = re.sub(r'<(/?)([a-zA-Z][a-zA-Z0-9_-]*)([^>]*)>', _replace_tag, text)
 
     # Collapse 3+ newlines to 2
     text = re.sub(r'\n{3,}', '\n\n', text)
 
     # Balance remaining allowed tags
-    parts = re.split(r'(</?[a-zA-Z]+\b[^>]*>)', text)
+    parts = re.split(r'(</?[a-zA-Z0-9_-]+\b[^>]*>)', text)
     stack = []
     out = []
     for part in parts:

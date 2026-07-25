@@ -8,8 +8,17 @@ RE_DANGEROUS_TAGS = re.compile(r'<\s*(iframe|svg|form|object|embed|link)\b[^>]*>
 RE_DANGEROUS_SINGLE = re.compile(r'<\s*(iframe|svg|form|object|embed|link)\b[^>]*>', flags=re.IGNORECASE)
 RE_EVENT_HANDLERS = re.compile(r'\s+on\w+\s*=\s*["\'].*?["\']', flags=re.IGNORECASE)
 
+RE_TG_EMOJI_FULL = re.compile(r'<tg-emoji\b[^>]*>(.*?)</tg-emoji>', flags=re.IGNORECASE | re.DOTALL)
+RE_TG_EMOJI_STRIP = re.compile(r'</?tg-emoji\b[^>]*>', flags=re.IGNORECASE)
+
+def unwrap_tg_emoji(text: str) -> str:
+    if not text: return text
+    text = RE_TG_EMOJI_FULL.sub(r'\1', text)
+    text = RE_TG_EMOJI_STRIP.sub('', text)
+    return text
+
 ALLOWED_TAGS_PATTERN = re.compile(
-    r'</?(?:b|i|u|s|code|pre|blockquote|tg-spoiler|em|strong)\b[^>]*>|'
+    r'</?(?:b|i|u|s|code|pre|blockquote|tg-spoiler|tg-emoji|em|strong)\b[^>]*>|'
     r'<\s*a\s+[^>]*href=["\'](?:https?://|tg://)[^"\']+["\'][^>]*>|'
     r'</\s*a\s*>',
     flags=re.IGNORECASE
@@ -17,10 +26,13 @@ ALLOWED_TAGS_PATTERN = re.compile(
 
 def clean_html_tags(text: str) -> str:
     if not text: return text
+    text = unwrap_tg_emoji(text)
     return RE_HTML_TAGS.sub('', text)
 
 def sanitize_html(text: str) -> str:
     if not text: return ""
+
+    text = unwrap_tg_emoji(text)
 
     parts = []
     last_idx = 0

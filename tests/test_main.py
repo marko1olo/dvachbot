@@ -373,8 +373,12 @@ class TestCleanHtmlForTg(unittest.TestCase):
         self.assertEqual(clean_html_for_tg("hello </b>world"), "hello &lt;/b&gt;world")
 
     def test_invalid_tags(self):
-        self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello &lt;script>world&lt;/script>")
-        self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello &lt;unknown>world")
+        self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello world")
+        self.assertEqual(clean_html_for_tg("hello <unknown>world"), "hello world")
+
+    def test_tg_custom_emoji(self):
+        self.assertEqual(clean_html_for_tg('<tg-emoji emoji-id="5222250679371839695">🇺🇦</tg-emoji>Сырский'), '🇺🇦Сырский')
+        self.assertEqual(clean_html_for_tg('генерации мемов <tg-emoji emoji-id="5417906561626430968">😄</tg-emoji>'), 'генерации мемов 😄')
 
 
 from Dubsite_tgach.main import vibe_to_icon
