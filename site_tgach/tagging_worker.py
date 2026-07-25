@@ -193,77 +193,25 @@ async def _execute_tagging(client, model, messages, max_tokens):
     )
 
 async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
-    global GROQ_COOLDOWN_UNTIL
-    
-    if time.time() < GROQ_COOLDOWN_UNTIL:
-        return None
-
-    if not groq_pool.tokens:
-        if time.time() % 60 < 5: logger.warning("⚠️ No Groq tokens available!")
-        return None
-
+    """
+    Получает теги для изображения, используя основной каскад Vision (Gemini / Groq).
+    """
     try:
-        # Картинка уже сжата в process_image_cpu, так что 413 быть не должно
-        b64 = base64.b64encode(resized_image_bytes).decode('utf-8')
-        url = f"data:image/jpeg;base64,{b64}"
-    except Exception:
-        return None
-    
-    strategies = [
-        {"proxy": PROXY_URL, "name": "Proxy"},
-        {"proxy": None, "name": "Direct"}
-    ]
-
-    for _ in range(3): 
-        token = groq_pool.get_token()
-        if not token: break
+        import tempfile, os
+        from site_tgach.vision import describe_image
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp_path = tmp.name
+            tmp.write(resized_image_bytes)
         
-        for strategy in strategies:
-            try:
-                transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
-                async with httpx.AsyncClient(proxy=strategy["proxy"], transport=transport, verify=False, timeout=GROQ_TIMEOUT) as http_client:
-                    client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client, max_retries=0)
-                    resp = await _execute_tagging(
-                        client,
-                        model=GROQ_MODEL,
-                        messages=[{"role": "user", "content": [{"type": "text", "text": TAGGING_PROMPT}, {"type": "image_url", "image_url": {"url": url}}]}],
-                        max_tokens=250
-                    )
-                    content = resp.choices[0].message.content
-                    if content:
-                        clean_content = content
-                        if "<think>" in clean_content:
-                            if "</think>" in clean_content:
-                                clean_content = re.sub(r"<think>.*?</think>", "", clean_content, flags=re.DOTALL).strip()
-                            else:
-                                parts = clean_content.split("</think>", 1)
-                                if len(parts) > 1 and parts[1].strip():
-                                    clean_content = parts[1].strip()
-                                else:
-                                    clean_content = clean_content.split("<think>", 1)[0].strip()
-                        # Удаляем английские преамбулы "The user wants me to..."
-                        clean_content = re.sub(r'^(?:The user|I need to|Here is|Below is).*?\n', '', clean_content, flags=re.IGNORECASE | re.DOTALL).strip()
-                        clean_tags = clean_content.strip().rstrip('.,')
-                        if clean_tags:
-                            return clean_tags
-            except Exception as e:
-                err_str = str(e).lower()
-                if "401" in err_str or "unauthorized" in err_str or "invalid api key" in err_str:
-                    logger.error(f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool.")
-                    groq_pool.remove_token(token)
-                    continue
-                if "413" in err_str:
-                    logger.error("❌ 413 Payload Too Large (Even after resize!). Skipping tags.")
-                    return "error_413" # Возвращаем спец-код, чтобы сохранить хеши, но без тегов
-                if "429" in err_str or "limit" in err_str:
-                    logger.warning(f"Groq Rate Limit. Cooldown 60s.")
-                    GROQ_COOLDOWN_UNTIL = time.time() + 60
-                    return None
-                elif "400" in err_str:
-                    return "error_400"
-                continue
-            
-    return None
+        tags = await describe_image(tmp_path, caption="Generate tags for this image", is_passive=False, source="TAGGER")
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+        return tags
+    except Exception as e:
+        logger.warning(f"⚠️ [TAGGER] Vision analysis error: {e}")
+        return None
 
 # ==========================================
 # ПОЛУЧЕНИЕ ЗАДАЧ
