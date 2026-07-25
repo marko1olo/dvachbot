@@ -8964,10 +8964,10 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                 _persona_processed_posts.clear()
 
         now_ts = time.time()
-        if not is_admin_trigger and not is_dialogue:
+        if not is_admin_trigger:
             last_ts = _last_persona_board_ts.get(board_id, 0)
-            if now_ts - last_ts < 25.0:
-                print(f"ℹ️ [Persona Debounce] Skipping rapid trigger on board '{board_id}' (cooldown active).")
+            if now_ts - last_ts < 90.0:
+                print(f"ℹ️ [Persona Debounce] Skipping rapid trigger on board '{board_id}' (90s cooldown active).")
                 return
             _last_persona_board_ts[board_id] = now_ts
 

@@ -44,8 +44,8 @@ def get_random_persona_prompt(is_dialogue: bool = False):
 Ты гиперактивный, энергичный подстрекатель, который создает движение. Ты подхватываешь любую тему, раздуваешь из мухи слона, призываешь всех подключаться к обсуждению или делаешь из этого шоу. Речь динамичная, броская, с ярким живым сленгом."""
     ]
     
-    multi_msg = random.random() < 0.30
-    multi_instruction = "Если хочешь разбить мысль на 2 сообщения, раздели их символами |||." if multi_msg else "Напиши одно обычное сообщение."
+    multi_msg = False
+    multi_instruction = "Напиши строго ОДНО краткое лаконичное сообщение (максимум 1-2 коротких предложения, до 150 символов)."
 
     selected_archetype = random.choice(archetypes)
 
@@ -112,7 +112,7 @@ async def generate_anon_reply(context_text: str, target_post: str, is_dialogue: 
             )
             
         print(f"📝 [Persona] Raw reply from LLM: '{reply}'", flush=True)
-        if not reply or len(reply) > 400 or "Нейронка" in reply:
+        if not reply or len(reply) > 220 or "Нейронка" in reply:
             print(f"❌ [Persona] Reply discarded by validation (len={len(reply) if reply else 0})", flush=True)
             return None
         

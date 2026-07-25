@@ -86,15 +86,12 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
     Prioritizes 500 RPD Gemini Lite models to maximize free quota.
     """
     if model_preference == "persona" or model_preference == "persona_gemini":
-        # Persona Bot priority: Gemini Lite -> Llama 70B -> Qwen 27B -> Gemini Flash
+        # Persona Bot priority: Gemini Lite -> Qwen 27B -> Llama 70B
         models_cascade = [
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
-            ("llama-3.3-70b-versatile", "groq"),
             ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
+            ("llama-3.3-70b-versatile", "groq"),
         ]
     elif model_preference == "summary" or model_preference == "gemini":
         # Summarization priority: Smart Flash models first for maximum intelligence and deep reasoning
