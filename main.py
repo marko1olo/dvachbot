@@ -3581,11 +3581,23 @@ class NewPostProcessor:
             from common.db_pool import get_pool
             import time
             db = await get_pool()
-            async with db.execute("SELECT cursed_until FROM Users WHERE user_id = ?", (self.user_id,)) as c:
-                row = await c.fetchone()
-                if row and row[0] and int(time.time()) < row[0]:
-                    if 'text' in self.author_content and self.author_content['text']:
-                        self.author_content['text'] += "\n\n<i>[Я ХУЕСОС 🤮]</i>"
+            async with db.execute("SELECT cursed_until, active_items FROM Users WHERE user_id = ?", (self.user_id,)) as c:
+                async for row in c:
+                    is_cursed = False
+                    if row[0] and int(time.time()) < row[0]:
+                        is_cursed = True
+                    if row[1]:
+                        try:
+                            itms = json.loads(row[1])
+                            if itms.get("cursed_until", 0) > int(time.time()):
+                                is_cursed = True
+                        except Exception:
+                            pass
+                    if is_cursed:
+                        if 'text' in self.author_content and self.author_content['text']:
+                            if "[Я ХУЕСОС 🤮]" not in self.author_content['text']:
+                                self.author_content['text'] += "\n\n<i>[Я ХУЕСОС 🤮]</i>"
+                        break
                         
         self.final_content = apply_shadow_autoreplace(self.author_content)
         self.final_content['reply_to_post'] = self.reply_to_post
