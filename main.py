@@ -19455,8 +19455,24 @@ async def database_cleanup_task():
             from common.database import cleanup_broadcast_queue
             await cleanup_broadcast_queue(retention_hours=48)
             from common.database import cleanup_notification_queue
-            await cleanup_notification_queue(retention_hours=24)
             print("✅ [Maintenance] База данных оптимизирована.")
+            
+            # Оптимизация оперативной памяти (RAM): обрезаем кэш постов до 10,000 последних
+            async with storage_lock:
+                if len(messages_storage) > 10000:
+                    print(f"🧹 [Maintenance] Очистка RAM-кэша постов (было {len(messages_storage)})...")
+                    sorted_nums = sorted(messages_storage.keys())
+                    to_delete = set(sorted_nums[:-10000])
+                    for pnum in to_delete:
+                        messages_storage.pop(pnum, None)
+                        post_to_messages.pop(pnum, None)
+                    
+                    valid_nums = set(messages_storage.keys())
+                    for key, pnum in list(message_to_post.items()):
+                        if pnum not in valid_nums:
+                            message_to_post.pop(key, None)
+                    print(f"✅ [Maintenance] RAM-кэш обжат до {len(messages_storage)} постов.")
+
             await asyncio.sleep(43200) 
         except asyncio.CancelledError:
             print("ℹ️ Задача очистки БД остановлена.")
