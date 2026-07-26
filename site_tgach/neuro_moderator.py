@@ -37,7 +37,7 @@ logger = logging.getLogger("neuro_mod")
 
 # === НАСТРОЙКИ ===
 PROXY_URL = "http://127.0.0.1:10808"
-GROQ_MODEL = "qwen/qwen3.6-27b"
+GROQ_MODEL = "llama-3.2-11b-vision-preview"
 GROQ_TIMEOUT = 45.0
 
 # === ПРОМПТЫ (Централизованное хранение) ===
@@ -165,7 +165,7 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
         add_to_mod_queue,
         get_pool,
     )
-    from common.board_config import ADMIN_IDS
+    from site_tgach.admin_config import ADMIN_IDS
     from common.bot_pool import global_bot_pool
     from site_tgach.security import IP_BAN_LIST
     import base64

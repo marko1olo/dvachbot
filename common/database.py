@@ -448,6 +448,10 @@ async def _apply_migrations(db):
         await db.execute("ALTER TABLE Users ADD COLUMN reaction_reward_counter INTEGER DEFAULT 0;")
     except aiosqlite.OperationalError: pass
     try:
+        await db.execute("ALTER TABLE Users ADD COLUMN referrals_count INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added referrals_count to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
         await db.execute("ALTER TABLE Users ADD COLUMN posts_count INTEGER DEFAULT 0;")
         print("✅ Migrated: Added posts_count to Users.")
     except aiosqlite.OperationalError: pass
