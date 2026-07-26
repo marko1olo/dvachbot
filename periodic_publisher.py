@@ -12,6 +12,12 @@ NEWS_CHANNEL_ID = None
 
 MSK_OFFSET = timezone(timedelta(hours=3))
 
+CAPTIONS = [
+    "📊 <b>Еженедельная статистика (Часть 1/3)</b> 📊\n\nКлассическая аналитика из глубин базы данных: активность, уникальные шизы, байтеры и форматы общения.\nСмотри графики в альбоме 👇",
+    "🧠 <b>Продвинутая Аналитика (Часть 2/3)</b> 🧠\n\nГлубокий разбор: граф социального пузыря, хабы внимания, сессии, циркадные ритмы шизофрении, сентимент и лексический запас.\nСмотри продолжение 👇",
+    "🔥 <b>Ритмы и Тепловые Карты (Часть 3/3)</b> 🔥\n\nНовые графики: усредненная тепловая карта час × день за полгода, недельный Ridge-ритм, круговой циферблат активности и GitHub-style календарь за полгода.\nСмотри финал 👇"
+]
+
 def build_stats_media_groups(stats_data: dict) -> list:
     """
     Takes raw stats data and groups them into media items for Telegram.
@@ -47,27 +53,7 @@ async def get_stats_media_groups():
     
     for chunk_idx, chunk in enumerate(image_chunks):
         media_group = []
-        if chunk_idx == 0:
-            caption = (
-                "📊 <b>Статистика Борды (Часть 1/3)</b> 📊\n\n"
-                "Классическая аналитика из глубин базы данных: "
-                "активность, уникальные шизы, байтеры и форматы общения.\n"
-                "Смотри графики в альбоме 👇"
-            )
-        elif chunk_idx == 1:
-            caption = (
-                "🧠 <b>Продвинутая Аналитика (Часть 2/3)</b> 🧠\n\n"
-                "Глубокий разбор: граф социального пузыря, хабы внимания, сессии, "
-                "циркадные ритмы шизофрении, сентимент и лексический запас.\n"
-                "Смотри продолжение 👇"
-            )
-        else:
-            caption = (
-                "🔥 <b>Ритмы и Тепловые Карты (Часть 3/3)</b> 🔥\n\n"
-                "Новые графики: усредненная тепловая карта час × день за полгода, недельный Ridge-ритм, "
-                "круговой циферблат активности и GitHub-style календарь за полгода.\n"
-                "Смотри финал 👇"
-            )
+        caption = CAPTIONS[chunk_idx] if chunk_idx < len(CAPTIONS) else f"📊 <b>Статистика Борды (Часть {chunk_idx+1})</b> 📊"
             
         for i, (name, buf) in enumerate(chunk):
             input_file = BufferedInputFile(buf.read(), filename=name)
@@ -81,12 +67,15 @@ async def get_stats_media_groups():
 
 async def send_stats_to_user(bot: Bot, chat_id: int):
     """Generates and sends stats directly to a user/admin, and copies them to the archive."""
-    await bot.send_message(chat_id, "⏳ <i>Рисую 24 графика вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
+    await bot.send_message(chat_id, "⏳ <i>Рисую 30 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
     try:
         media_groups = await get_stats_media_groups()
         if media_groups:
-            # Send to requesting user/admin
-            for media_group in media_groups:
+            for idx, media_group in enumerate(media_groups):
+                if media_group and len(media_group) > 0:
+                    cap = CAPTIONS[idx] if idx < len(CAPTIONS) else f"📊 <b>Статистика (Часть {idx+1})</b>"
+                    media_group[0].caption = cap
+                    media_group[0].parse_mode = "HTML"
                 await bot.send_media_group(chat_id=chat_id, media=media_group)
                 await asyncio.sleep(1)
                 
@@ -161,20 +150,13 @@ async def periodic_stats_publisher(bots: dict, active_users_getter):
                 if b_bot and active_users and uploaded_groups_file_ids:
                     print(f"📊 [STATS PUBLISHER] Рассылаю графики {len(active_users)} активным пользователям /b/...")
                     
-                    caption_part1 = (
-                        "📊 <b>Еженедельная статистика (Часть 1/2)</b> 📊\n\n"
-                        "Смотри графики в альбоме 👇"
-                    )
-                    caption_part2 = (
-                        "🧠 <b>Еженедельная статистика (Часть 2/2)</b> 🧠\n\n"
-                        "Смотри продолжение 👇"
-                    )
-                    
                     for user_id in active_users:
+                        if not user_id or not isinstance(user_id, int) or user_id <= 0:
+                            continue
                         try:
                             for group_idx, file_ids in enumerate(uploaded_groups_file_ids):
                                 user_media_group = []
-                                caption = caption_part1 if group_idx == 0 else caption_part2
+                                caption = CAPTIONS[group_idx] if group_idx < len(CAPTIONS) else f"📊 <b>Статистика (Часть {group_idx+1})</b>"
                                 for i, file_id in enumerate(file_ids):
                                     if i == 0:
                                         user_media_group.append(InputMediaPhoto(media=file_id, caption=caption, parse_mode="HTML"))

@@ -8991,24 +8991,26 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
         if not photo_file_id and target_post_num and target_post_num in messages_storage:
             p_data = messages_storage[target_post_num]
             c = p_data.get('content', {})
-            if c.get('type') == 'photo':
-                photo_file_id = c.get('file_id')
-            elif c.get('type') == 'media_group' and c.get('media'):
+            m_type = c.get('type')
+            if m_type in {'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
+                photo_file_id = c.get('thumbnail_file_id') or c.get('file_id')
+            elif m_type == 'media_group' and c.get('media'):
                 for m in c.get('media', []):
-                    if m.get('type') == 'photo' and m.get('file_id'):
-                        photo_file_id = m['file_id']
+                    if m.get('file_id'):
+                        photo_file_id = m.get('thumbnail_file_id') or m.get('file_id')
                         break
             # Если в самом посте нет картинки, проверим родительский пост, на который отвечают
             if not photo_file_id:
                 reply_to_num = p_data.get('reply_to_post_num') or p_data.get('reply_to')
                 if reply_to_num and reply_to_num in messages_storage:
                     parent_c = messages_storage[reply_to_num].get('content', {})
-                    if parent_c.get('type') == 'photo':
-                        photo_file_id = parent_c.get('file_id')
-                    elif parent_c.get('type') == 'media_group' and parent_c.get('media'):
+                    pm_type = parent_c.get('type')
+                    if pm_type in {'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
+                        photo_file_id = parent_c.get('thumbnail_file_id') or parent_c.get('file_id')
+                    elif pm_type == 'media_group' and parent_c.get('media'):
                         for m in parent_c.get('media', []):
-                            if m.get('type') == 'photo' and m.get('file_id'):
-                                photo_file_id = m['file_id']
+                            if m.get('file_id'):
+                                photo_file_id = m.get('thumbnail_file_id') or m.get('file_id')
                                 break
 
         vision_desc = None
@@ -19419,7 +19421,24 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         ))
         if post_num:
             should_reply = False
-            photo_id = message.photo[-1].file_id if message.photo else (message.reply_to_message.photo[-1].file_id if (message.reply_to_message and message.reply_to_message.photo) else None)
+            def extract_msg_media_file_id(msg):
+                if not msg: return None
+                if getattr(msg, 'photo', None): return msg.photo[-1].file_id
+                if getattr(msg, 'video', None):
+                    thumb = getattr(msg.video, 'thumbnail', None) or getattr(msg.video, 'thumb', None)
+                    return thumb.file_id if thumb else msg.video.file_id
+                if getattr(msg, 'animation', None):
+                    thumb = getattr(msg.animation, 'thumbnail', None) or getattr(msg.animation, 'thumb', None)
+                    return thumb.file_id if thumb else msg.animation.file_id
+                if getattr(msg, 'video_note', None):
+                    thumb = getattr(msg.video_note, 'thumbnail', None) or getattr(msg.video_note, 'thumb', None)
+                    return thumb.file_id if thumb else msg.video_note.file_id
+                if getattr(msg, 'sticker', None): return msg.sticker.file_id
+                if getattr(msg, 'document', None):
+                    thumb = getattr(msg.document, 'thumbnail', None) or getattr(msg.document, 'thumb', None)
+                    return thumb.file_id if thumb else msg.document.file_id
+                return None
+            photo_id = extract_msg_media_file_id(message) or extract_msg_media_file_id(message.reply_to_message)
             if is_reply_to_bot:
                 now_t = time.time()
                 last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)

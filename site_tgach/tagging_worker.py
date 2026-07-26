@@ -131,10 +131,43 @@ def encode_blurhash_internal(image: Image.Image, components_x: int, components_y
 # ==========================================
 # CPU TASKS (HASHER & RESIZER)
 # ==========================================
+def extract_video_frame_cpu(video_bytes: bytes) -> bytes | None:
+    """
+    Извлекает 1 кадр из видеофайла (MP4, GIF, WebM) с помощью ffmpeg.
+    Возвращает JPEG байты кадра или None при ошибке.
+    """
+    if not video_bytes:
+        return None
+    import tempfile, subprocess, os
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_v:
+            tmp_v_path = tmp_v.name
+            tmp_v.write(video_bytes)
+        
+        cmd = [
+            "ffmpeg", "-y", "-ss", "00:00:00.500",
+            "-i", tmp_v_path,
+            "-vframes", "1",
+            "-f", "image2pipe",
+            "-vcodec", "mjpeg",
+            "-"
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        try:
+            os.remove(tmp_v_path)
+        except Exception:
+            pass
+        if res.returncode == 0 and res.stdout and len(res.stdout) > 100:
+            return res.stdout
+    except Exception as e:
+        logger.warning(f"⚠️ [TAGGER] ffmpeg frame extraction failed: {e}")
+    return None
+
 def process_image_cpu(image_bytes):
     """
     1. Считает хеши (SHA, pHash, Blur).
-    2. Ресайзит картинку для нейронки (чтобы не ловить 413 Payload Too Large).
+    2. Извлекает кадр из видео, если это видеофайл.
+    3. Ресайзит картинку для нейронки.
     """
     try:
         Image.MAX_IMAGE_PIXELS = 49_000_000 
@@ -149,6 +182,7 @@ def process_image_cpu(image_bytes):
             return (sha, None, None, None), "lottie_sticker"
 
         # 2. Открываем PIL
+        img = None
         try:
             img = Image.open(io.BytesIO(image_bytes))
             img.load()
@@ -156,7 +190,17 @@ def process_image_cpu(image_bytes):
         except Image.DecompressionBombError:
             return None, "Decompression Bomb Detected"
         except Exception as e:
-            return (sha, None, None, None), f"unsupported_format: {e}"
+            # Если это видео или неподдерживаемый формат — пробуем извлечь кадр через ffmpeg
+            frame_bytes = extract_video_frame_cpu(image_bytes)
+            if frame_bytes:
+                try:
+                    img = Image.open(io.BytesIO(frame_bytes))
+                    img.load()
+                    if img.mode != 'RGB': img = img.convert('RGB')
+                except Exception as ex:
+                    return (sha, None, None, None), f"unsupported_format: {e}"
+            else:
+                return (sha, None, None, None), f"unsupported_format: {e}"
 
         # 3. pHash
         phash = str(imagehash.phash(img))
@@ -218,14 +262,12 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
 # ==========================================
 async def get_tasks(db) -> list[dict]:
     tasks = []
-    # 1. Из реестра (только свежие за 24 часа, чтобы не разгребать вечный баклог)
-    day_ago = time.time() - 86400
+    # 1. Из реестра (все необработанные файлы без ограничения по времени)
     query_registry = f"""
         SELECT file_id, file_type, thumbnail_id
         FROM FileRegistry
         WHERE file_type IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document') 
         AND (tags IS NULL OR tags = '')
-        AND created_at > {day_ago}
         ORDER BY created_at DESC
         LIMIT {BATCH_SIZE * 5}
     """
@@ -298,6 +340,39 @@ async def get_tasks(db) -> list[dict]:
 
     return tasks
 
+async def download_file_with_fallback(file_id: str, primary_bot=None):
+    bots_to_try = []
+    if primary_bot:
+        bots_to_try.append(primary_bot)
+    
+    main_bot = global_bot_pool.get_main_bot() if global_bot_pool else None
+    if main_bot and main_bot not in bots_to_try:
+        bots_to_try.append(main_bot)
+        
+    all_bots = global_bot_pool.get_all_active_bots() if global_bot_pool else []
+    for b in all_bots:
+        if b not in bots_to_try:
+            bots_to_try.append(b)
+
+    for b in bots_to_try:
+        try:
+            f_info = await b.get_file(file_id)
+            file_path = getattr(f_info, "file_path", None)
+            if not file_path: continue
+            f_obj = await b.download_file(file_path)
+            img_bytes = f_obj.read() if hasattr(f_obj, 'read') else f_obj
+            if img_bytes:
+                return img_bytes, b
+        except TelegramBadRequest:
+            continue
+        except Exception as e:
+            err_str = str(e).lower()
+            if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
+                if global_bot_pool:
+                    global_bot_pool.mark_bot_dead_by_token(b.token)
+            continue
+    return None, None
+
 # ==========================================
 # ОСНОВНОЙ ЦИКЛ
 # ==========================================
@@ -347,38 +422,22 @@ async def tagging_loop():
             thumb_id = valid_task.get('thumb_id')
 
             bot = global_bot_pool.get_bot_by_id(bot_id) if bot_id else global_bot_pool.get_main_bot()
-            if not bot:
-                TEMP_FAILED_FILES[file_id] = time.time() + 300
-                continue
 
             # Определяем, что качать (для видео предпочтительно превью, иначе сам файл)
             download_target_id = thumb_id if (thumb_id and file_type in {'video', 'animation', 'gif', 'video_note'}) else file_id
 
             try:
-                # 1. СКАЧИВАНИЕ
-                try:
-                    f_info = await bot.get_file(download_target_id)
-                    file_path = getattr(f_info, "file_path", None)
-                    if not file_path:
-                        logger.error(f"⚠️ No file_path for {download_target_id}. Skipping.")
-                        continue
-                    f_obj = await bot.download_file(file_path)
-                    img_bytes = f_obj.read() if hasattr(f_obj, 'read') else f_obj
-                except TelegramBadRequest:
-                    logger.error(f"🗑️ File {download_target_id} deleted. Marking error.")
-                    async with db_lock:
-                        await db.executemany("UPDATE FileRegistry SET tags='error' WHERE file_id=?", [(file_id,)])
-                        await db.commit()
-                    continue
-                except Exception as e:
-                    err_str = str(e).lower()
-                    if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
-                        logger.error(f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling.")
-                        if global_bot_pool:
-                            global_bot_pool.mark_bot_dead_by_token(bot.token)
-                    else:
-                        logger.warning(f"❌ DL fail {download_target_id}: {e}")
-                    TEMP_FAILED_FILES[file_id] = time.time() + 120
+                # 1. СКАЧИВАНИЕ С РЕТРАЕМ ПО ВСЕМ БОТАМ
+                img_bytes, active_bot = await download_file_with_fallback(download_target_id, primary_bot=bot)
+                
+                # Если превью не удалось скачать для видео, пробуем скачать сам файл видео
+                if not img_bytes and download_target_id != file_id:
+                    download_target_id = file_id
+                    img_bytes, active_bot = await download_file_with_fallback(download_target_id, primary_bot=bot)
+
+                if not img_bytes:
+                    logger.warning(f"❌ DL fail for {file_id[:15]} across all bots. Skipping temporarily.")
+                    TEMP_FAILED_FILES[file_id] = time.time() + 180
                     continue
 
                 # 2. CPU (Хеши + РЕСАЙЗ)
