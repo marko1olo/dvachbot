@@ -2873,18 +2873,23 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
         import time
         import json
         db = await get_pool()
-        async with db.execute("SELECT custom_prefix, prefix_expires_at, active_items FROM Users WHERE user_id = ?", (author_id,)) as c:
-            row = await c.fetchone()
-            if row:
-                if row[0] and row[1] and int(time.time()) < row[1]:
-                    custom_prefix = f"<b>{row[0]}</b> "
-                if row[2]:
+        has_poop = False
+        prefix_str = ""
+        async with db.execute("SELECT active_items, custom_prefix, prefix_expires_at FROM Users WHERE user_id = ?", (author_id,)) as c:
+            async for row in c:
+                if row[0]:
                     try:
-                        items = json.loads(row[2])
+                        items = json.loads(row[0])
                         if items.get("shit_until", 0) > int(time.time()):
-                            custom_prefix = "💩 " + custom_prefix
-                    except:
+                            has_poop = True
+                    except Exception:
                         pass
+                if row[1] and row[2] and int(time.time()) < row[2]:
+                    prefix_str = f"<b>{row[1]}</b> "
+        if has_poop:
+            custom_prefix = "💩 " + prefix_str
+        else:
+            custom_prefix = prefix_str
                     
     res = await _format_header_inner(board_id, post_num, stream)
     return custom_prefix + res
