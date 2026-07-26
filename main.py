@@ -19473,7 +19473,7 @@ async def database_cleanup_task():
                             message_to_post.pop(key, None)
                     print(f"✅ [Maintenance] RAM-кэш обжат до {len(messages_storage)} постов.")
 
-            await asyncio.sleep(43200) 
+            await asyncio.sleep(21600) 
         except asyncio.CancelledError:
             print("ℹ️ Задача очистки БД остановлена.")
             break
