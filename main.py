@@ -14944,8 +14944,19 @@ async def memory_restarter(bots: list[Bot], healthcheck_site: web.TCPSite | None
             except Exception:
                 private_usage = rss_usage
             mem_usage = max(rss_usage, private_usage)
-        except Exception:
-            break
+        except psutil.NoSuchProcess:
+            # Собственный процесс исчез — мониторить больше нечего.
+            print("ℹ️ Мониторинг памяти остановлен: процесс завершается.")
+            return
+        except Exception as e:
+            # Раньше здесь был `break`: одна транзиентная осечка psutil
+            # (на Windows это регулярные ошибки доступа к хендлу) молча гасила
+            # сторожа. Поднимал его потом _run_background_task, но с
+            # экспоненциальным backoff — до 10 минут без контроля памяти,
+            # то есть без единственного механизма, который успевает сделать
+            # graceful_shutdown с чекпойнтом WAL до того, как процесс убьёт ОС.
+            print(f"⚠️ Не удалось снять метрику памяти ({type(e).__name__}: {e}), повтор через минуту.")
+            continue
         if mem_usage > MEMORY_LIMIT_BYTES:
             print(f"⛔ ПАМЯТЬ ПЕРЕПОЛНЕНА ({mem_usage / 1024**3:.2f} ГБ). АВАРИЙНАЯ ОСТАНОВКА.")
             try:
