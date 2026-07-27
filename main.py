@@ -3078,7 +3078,11 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
     
     from common.db_pool import get_pool, db_lock
     db = await get_pool()
-    
+
+    # Функция спавнится на КАЖДЫЙ пост, а db_lock сериализует весь доступ к базе
+    # в процессе. Поздравление о верификации отправляем уже после выхода из
+    # лока, иначе сетевой вызов Telegram останавливал бы работу с БД во всём боте.
+    should_notify = False
     async with db_lock:
         try:
             await db.execute("BEGIN IMMEDIATE")
@@ -3104,23 +3108,24 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
             )
             
             should_notify = cursor.rowcount > 0
-            
+
             await db.execute("COMMIT")
-            
-            if should_notify:
-                lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-                msg_text = VERIFICATION_SUCCESS_MESSAGES.get(lang, VERIFICATION_SUCCESS_MESSAGES['ru'])
-                try:
-                    await bot.send_message(user_id, msg_text, parse_mode="HTML")
-                except Exception:
-                    pass
-                    
+
         except Exception as e:
+            should_notify = False
             try:
                 await db.execute("ROLLBACK")
             except Exception:
                 pass
             print(f"⚠️ Ошибка верификации для {user_id}: {e}")
+
+    if should_notify:
+        lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+        msg_text = VERIFICATION_SUCCESS_MESSAGES.get(lang, VERIFICATION_SUCCESS_MESSAGES['ru'])
+        try:
+            await bot.send_message(user_id, msg_text, parse_mode="HTML")
+        except Exception:
+            pass
 
 async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str) -> tuple[list[int], list, list]:
     from common.db_pool import get_pool, db_lock
@@ -19510,6 +19515,19 @@ def apply_greentext_formatting(text: str) -> str:
             processed_lines.append(line)
     return '\n'.join(processed_lines)
 @dp.message_reaction()
+async def _send_notification_quietly(bot: Bot, chat_id: int, text: str) -> None:
+    """
+    Необязательное уведомление «в никуда»: юзер мог заблокировать бота.
+
+    Нужна отдельной корутиной, чтобы такую отправку можно было запускать через
+    spawn_task из-под db_lock, не удерживая его на время сетевого вызова.
+    """
+    try:
+        await bot.send_message(chat_id, text, parse_mode="HTML", disable_notification=True)
+    except Exception:
+        pass
+
+
 async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_id: str | None, bot_instance: Optional[Bot] = None):
     """
     Обрабатывает реакции: уведомления автору и репост в канал "Лучшее".
@@ -19701,17 +19719,16 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                             notif_tpl = random.choice(EARNING_NOTIFICATIONS)
                             notif_text = notif_tpl.format(amount=display_reward, balance=int(global_balance))
                             
-                            try:
-                                # Используем bot_instance, переданный в функцию
-                                final_bot = bot_instance if bot_instance else reaction.bot
-                                await final_bot.send_message(
-                                    author_id, 
-                                    notif_text, 
-                                    parse_mode="HTML", 
-                                    disable_notification=True
-                                )
-                            except Exception:
-                                pass # Юзер мог заблочить бота
+                            # Используем bot_instance, переданный в функцию.
+                            # Отправляем отдельной задачей, а не await: этот код
+                            # выполняется ПОД db_lock, который сериализует весь
+                            # доступ к базе в процессе. Ждать здесь сетевой
+                            # вызов — значит остановить работу с БД во всём боте
+                            # ради необязательного уведомления.
+                            final_bot = bot_instance if bot_instance else reaction.bot
+                            spawn_task(_send_notification_quietly(
+                                final_bot, author_id, notif_text
+                            ))
         if should_trigger_edit:
             author_id_for_notify = None
             text_for_notify = None
