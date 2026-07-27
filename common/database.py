@@ -2904,15 +2904,30 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
                     return []
                     
                 post_nums = [row[0] for row in rows]
-                placeholders = ','.join('?' for _ in post_nums)
-                
-                # 2. Читаем контент постов
-                post_query = f"SELECT * FROM Posts WHERE post_num IN ({placeholders})"
-                # Используем execute напрямую, так как мы внутри транзакции
-                async with db.execute(post_query, post_nums) as post_cursor:
-                    columns = [description[0] for description in post_cursor.description]
-                    posts_data = await post_cursor.fetchall()
-                
+
+                # 2. Читаем контент постов ПАЧКАМИ.
+                # Раньше плейсхолдер строился на каждый пост сразу. У SQLite
+                # жёсткий предел SQLITE_LIMIT_VARIABLE_NUMBER (32766 в текущей
+                # сборке): при большем числе непереданных постов запрос падал с
+                # "too many SQL variables". Это OperationalError, но не
+                # locked/busy, поэтому ветка ретраев его не ловила — функция
+                # печатала ошибку и возвращала []. Мост сайт -> бот умирал
+                # НАВСЕГДА: очередь больше не разгребалась ни при одном цикле.
+                # В BroadcastQueue попадает КАЖДЫЙ пост (create_post), так что
+                # после долгого простоя это достижимо.
+                BROADCAST_FETCH_CHUNK = 900
+                columns = []
+                posts_data = []
+                for start in range(0, len(post_nums), BROADCAST_FETCH_CHUNK):
+                    chunk = post_nums[start:start + BROADCAST_FETCH_CHUNK]
+                    placeholders = ','.join('?' for _ in chunk)
+                    post_query = f"SELECT * FROM Posts WHERE post_num IN ({placeholders})"
+                    # Используем execute напрямую, так как мы внутри транзакции
+                    async with db.execute(post_query, chunk) as post_cursor:
+                        if not columns:
+                            columns = [description[0] for description in post_cursor.description]
+                        posts_data.extend(await post_cursor.fetchall())
+
                 await db.execute("COMMIT")
                 
                 # Обработка данных (уже вне транзакции, в памяти)
