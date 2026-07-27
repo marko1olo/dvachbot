@@ -12721,16 +12721,20 @@ async def cmd_active(message: types.Message, board_id: str | None, stream: str =
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     INFO_CMD_COOLDOWN = 30 
+    # storage_lock убран как ложная зависимость: кулдаун лежит в board_data, а
+    # не в messages_storage. Взаимное исключение даёт info_cmd_lock, внутри
+    # которого нет ни одного await — проверка и запись времени атомарны.
     async with info_cmd_lock:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            current_time = time.time()
-            last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
-            if current_time - last_usage < INFO_CMD_COOLDOWN:
-                try: await message.delete()
-                except Exception: pass
-                return
+        b_data = board_data[board_id]
+        current_time = time.time()
+        last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
+        on_cooldown = current_time - last_usage < INFO_CMD_COOLDOWN
+        if not on_cooldown:
             b_data.setdefault('last_info_command_time', {})[user_id] = current_time
+    if on_cooldown:
+        try: await message.delete()
+        except Exception: pass
+        return
     day_ago = datetime.now(UTC) - timedelta(hours=24)
     timestamps_for_analysis = []
     async with storage_lock:
@@ -12901,26 +12905,31 @@ async def cmd_graph(message: types.Message, board_id: str | None, stream: str = 
         except Exception: pass
         return
     INFO_CMD_COOLDOWN = 60
+    # storage_lock убран как ложная зависимость: кулдаун в board_data, а лок
+    # защищает messages_storage. Исключение уже даёт info_cmd_lock.
+    remaining = 0
     async with info_cmd_lock:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            current_time = time.time()
-            last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
-            if current_time - last_usage < INFO_CMD_COOLDOWN:
-                remaining = int(INFO_CMD_COOLDOWN - (current_time - last_usage))
-                if lang == 'en':
-                    cooldown_text = f"⏳ You can use this command in {remaining} seconds."
-                elif lang == 'jp':
-                    cooldown_text = f"⏳ このコマンドはあと {remaining} 秒後に使用できます。"
-                else:
-                    cooldown_text = f"⏳ Команду можно использовать через {remaining} сек."
-                try:
-                    sent_msg = await message.answer(cooldown_text)
-                    spawn_task(delete_message_after_delay(sent_msg, 5))
-                    await message.delete()
-                except Exception: pass
-                return
+        b_data = board_data[board_id]
+        current_time = time.time()
+        last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
+        on_cooldown = current_time - last_usage < INFO_CMD_COOLDOWN
+        if on_cooldown:
+            remaining = int(INFO_CMD_COOLDOWN - (current_time - last_usage))
+        else:
             b_data.setdefault('last_info_command_time', {})[user_id] = current_time
+    if on_cooldown:
+        if lang == 'en':
+            cooldown_text = f"⏳ You can use this command in {remaining} seconds."
+        elif lang == 'jp':
+            cooldown_text = f"⏳ このコマンドはあと {remaining} 秒後に使用できます。"
+        else:
+            cooldown_text = f"⏳ Команду можно использовать через {remaining} сек."
+        try:
+            sent_msg = await message.answer(cooldown_text)
+            spawn_task(delete_message_after_delay(sent_msg, 5))
+            await message.delete()
+        except Exception: pass
+        return
     args = (message.text or message.caption or "").split()
     days = 7  # По умолчанию 7 дней
     if len(args) > 1:
@@ -18758,23 +18767,30 @@ async def cmd_roll(message: types.Message, board_id: str | None, stream: str = '
         return
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    # storage_lock здесь был ложной зависимостью: он защищает messages_storage /
+    # post_to_messages / message_to_post, а кулдаун лежит в board_data, к
+    # которому 111 из 146 обращений в этом файле идут вообще без него.
+    # Взаимное исключение уже даёт roulette_lock. Внутри лока нет ни одного
+    # await, поэтому проверка и запись времени атомарны; ответ юзеру ушёл
+    # наружу, чтобы flood-wait не держал лок рулетки.
     async with roulette_lock:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            current_time = time.time()
-            last_usage = b_data.get('last_roll_time', {}).get(user_id, 0)
-            if current_time - last_usage < 60:
-                if lang == 'en': cooldown_msg = "⏳ Roulette is on cooldown!"
-                elif lang == 'jp': cooldown_msg = "⏳ ルーレットはクールダウン中です！"
-                else: cooldown_msg = random.choice(ROULETTE_COOLDOWN_PHRASES)
-                try:
-                    sent_msg = await message.answer(cooldown_msg)
-                    spawn_task(delete_message_after_delay(sent_msg, 5))
-                except (TelegramBadRequest, TelegramForbiddenError): pass
-                try: await message.delete()
-                except TelegramBadRequest: pass
-                return
+        b_data = board_data[board_id]
+        current_time = time.time()
+        last_usage = b_data.get('last_roll_time', {}).get(user_id, 0)
+        on_cooldown = current_time - last_usage < 60
+        if not on_cooldown:
             b_data.setdefault('last_roll_time', {})[user_id] = current_time
+    if on_cooldown:
+        if lang == 'en': cooldown_msg = "⏳ Roulette is on cooldown!"
+        elif lang == 'jp': cooldown_msg = "⏳ ルーレットはクールダウン中です！"
+        else: cooldown_msg = random.choice(ROULETTE_COOLDOWN_PHRASES)
+        try:
+            sent_msg = await message.answer(cooldown_msg)
+            spawn_task(delete_message_after_delay(sent_msg, 5))
+        except (TelegramBadRequest, TelegramForbiddenError): pass
+        try: await message.delete()
+        except TelegramBadRequest: pass
+        return
     if not ROULETTE_EVENTS:
         if lang == 'en': error_text = "Roulette data is not loaded."
         elif lang == 'jp': error_text = "ルーレットデータが読み込まれていません。"
