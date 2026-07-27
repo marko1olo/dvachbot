@@ -340,13 +340,29 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
         return
 
     stolen = min(1000, int(target_balance * random.uniform(0.1, 0.3)))
-    
+
     async with db_lock:
+        # Сначала СПИСЫВАЕМ, и только если сумма реально есть.
+        # target_balance читался выше вне лока и к этому моменту мог устареть:
+        # жертва успела потратиться или её уже грабанул кто-то другой. Условие
+        # `balance >= ?` делает проверку и списание одной атомарной операцией.
+        # Без него несколько одновременных грабежей уводили баланс жертвы в
+        # минус, а грабителям начислялось то, чего у неё не было.
+        cursor = await db.execute(
+            "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ? AND balance >= ?",
+            (stolen, target_id, board_id, stolen))
+        robbed = cursor.rowcount == 1
+        # Заточка расходуется в любом случае — попытка была.
         await db.execute("UPDATE Users SET balance = balance + ?, active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (stolen, json.dumps(active_items), user_id, board_id))
-        await db.execute("UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ?",
-                         (stolen, target_id, board_id))
+                         (stolen if robbed else 0, json.dumps(active_items), user_id, board_id))
         await db.commit()
+
+    if not robbed:
+        try: await message.bot.send_message(user_id, "🔪 Пока ты замахивался, у жертвы кончились шекели. Заточка потрачена впустую.", parse_mode="HTML")
+        except: pass
+        try: await message.delete()
+        except: pass
+        return
 
     try: await message.bot.send_message(target_id, f"🔪 В подворотне тебя пырнул Анон <code>{user_id}</code> и отобрал <b>{stolen} Шекелей</b>!", parse_mode="HTML")
     except: pass
