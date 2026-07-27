@@ -1959,6 +1959,69 @@ def _format_runtime_snapshot(snapshot: dict) -> str:
         f"cooldowns/spam/img: <code>roll={board_maps.get('last_roll_time')} info={board_maps.get('last_info_command_time')} spam={board_maps.get('spam_tracker_items')} img={board_maps.get('image_spam_items')}</code>\n"
         f"tracemalloc: <code>{snapshot.get('tracemalloc', {}).get('enabled')} current={snapshot.get('tracemalloc', {}).get('current_mb')}MB peak={snapshot.get('tracemalloc', {}).get('peak_mb')}MB</code>"
     )
+# Per-user хранилища внутри board_data, которые надо освободить, когда юзер
+# ушёл с доски (заблокировал бота). Раньше список был продублирован в двух
+# местах разными наборами: одиночный путь чистил 11 хранилищ, а МАССОВЫЙ путь
+# доставки — всего 3, и именно он обнаруживает большинство заблокировавших.
+# Утекали в том числе last_texts/last_stickers/last_animations/last_audios —
+# это deque с текстами сообщений на каждого юзера, умноженные на число досок.
+USER_BOARD_RAM_STORES = (
+    'last_activity', 'last_texts', 'last_stickers', 'last_animations',
+    'last_audios', 'spam_violations', 'spam_tracker', 'last_user_msgs',
+    'message_counter', 'user_state', 'user_streams', 'user_settings',
+)
+
+
+def _purge_users_from_board_ram_unlocked(b_data: dict, user_ids) -> int:
+    """Вычищает per-user записи ушедших юзеров. Вызывать под storage_lock."""
+    removed = 0
+    for key in USER_BOARD_RAM_STORES:
+        store = b_data.get(key)
+        if not isinstance(store, dict):
+            continue
+        for user_id in user_ids:
+            if store.pop(user_id, None) is not None:
+                removed += 1
+    return removed
+
+
+def _purge_users_from_global_ram(user_ids) -> int:
+    """
+    Чистит глобальные per-user карты. Локи снимаем только свободные:
+    выдернуть захваченный lock из словаря — значит выдать следующему
+    вызывающему новый объект и потерять взаимное исключение.
+    """
+    removed = 0
+    for user_id in user_ids:
+        for mapping in (unknown_command_tracker, user_last_thread_action,
+                        reaction_ratelimit, user_hourly_image_count,
+                        user_hourly_image_reset):
+            if mapping.pop(user_id, None) is not None:
+                removed += 1
+        for locks in (user_spam_locks, generate_locks):
+            lock = locks.get(user_id)
+            if lock is not None and not lock.locked() and not getattr(lock, "_waiters", None):
+                locks.pop(user_id, None)
+                removed += 1
+    return removed
+
+
+async def purge_users_from_board_ram(board_id: str, user_ids) -> int:
+    """Единая точка освобождения RAM для юзеров, покинувших доску."""
+    user_ids = [uid for uid in set(user_ids) if uid]
+    if not board_id or not user_ids:
+        return 0
+    b_data = board_data[board_id]
+    async with storage_lock:
+        removed = _purge_users_from_board_ram_unlocked(b_data, user_ids)
+    async with author_reaction_notify_lock:
+        for uid in user_ids:
+            if author_reaction_notify_tracker.pop(uid, None) is not None:
+                removed += 1
+    removed += _purge_users_from_global_ram(user_ids)
+    return removed
+
+
 async def _handle_telegram_forbidden_error(update) -> None:
     user_id, telegram_object = None, None
     if update and update.message:
@@ -1969,20 +2032,8 @@ async def _handle_telegram_forbidden_error(update) -> None:
         board_id = get_board_id(telegram_object)
         if board_id:
             async with storage_lock:
-                b_data = board_data[board_id]
-                b_data['users']['active'].discard(user_id)
-                for store in [b_data['last_activity'], b_data['last_texts'], b_data['last_stickers'],
-                              b_data['last_animations'], b_data['last_audios'], b_data['spam_violations'],
-                              b_data['spam_tracker'], b_data['last_user_msgs'],
-                              b_data['message_counter'], b_data['user_state'],
-                              b_data.get('user_streams', {})]:
-                    store.pop(user_id, None)
-            async with author_reaction_notify_lock:
-                author_reaction_notify_tracker.pop(user_id, None)
-
-            user_spam_locks.pop(user_id, None)
-            generate_locks.pop(user_id, None)
-            unknown_command_tracker.pop(user_id, None)
+                board_data[board_id]['users']['active'].discard(user_id)
+            await purge_users_from_board_ram(board_id, [user_id])
             await remove_user_from_board(user_id, board_id)
             print(f"🚫 [{board_id}] Юзер {user_id} блокнул бота. Данные удалены (RAM почистится автоматически).")
 
@@ -5420,16 +5471,20 @@ class MessageBroadcaster:
             for uid in self.blocked_users:
                 if uid in self.b_data['users']['active']:
                     self.b_data['users']['active'].discard(uid)
-                    self.b_data.get('user_settings', {}).pop(uid, None)
-                    for cache in [self.b_data['last_activity'], self.b_data['spam_violations']]:
-                        cache.pop(uid, None)
                     users_to_remove_db.append(uid)
+
+            # Раньше здесь чистились только user_settings, last_activity и
+            # spam_violations — три хранилища из двенадцати. Это массовый путь,
+            # именно он находит большинство заблокировавших бота, поэтому
+            # остальное (включая deque с текстами сообщений) утекало.
+            freed = await purge_users_from_board_ram(self.board_id, users_to_remove_db)
 
             if users_to_remove_db:
                 from common.database import remove_users_from_board_batch
                 await remove_users_from_board_batch(users_to_remove_db, self.board_id)
 
-            print(f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} пользователей (блокировка бота).")
+            print(f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} пользователей "
+                  f"(блокировка бота). Освобождено записей в RAM: {freed}.")
 
     async def _send_one_guarded(self, uid: int, timeout_sec: float):
         request_timeout_sec = min(
