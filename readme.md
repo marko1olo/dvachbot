@@ -1,17 +1,21 @@
-TGACH (Telegram-Attached Imageboard)
+<div align="center">
 
-![alt text](https://img.shields.io/badge/status-active-brightgreen)
+# TGACH
 
+### Telegram-Attached Imageboard
 
-![alt text](https://img.shields.io/badge/version-2.5.0--Refactored-blue)
+**Гибридная платформа анонимного общения: классическая механика имиджборда плюс бесшовная двусторонняя синхронизация с Telegram в реальном времени.**
 
+![Status](https://img.shields.io/badge/status-active-brightgreen?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-2.5.0_Refactored-blue?style=for-the-badge)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
+![JavaScript](https://img.shields.io/badge/Vanilla_JS-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
+![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
 
-![alt text](https://img.shields.io/badge/license-MIT-green)
+</div>
 
-
-![alt text](https://img.shields.io/badge/stack-FastAPI_|_SQLite_|_VanillaJS-orange)
-
-TGACH — это гибридная платформа для анонимного общения, объединяющая классическую механику имиджборд (imageboard) с современными возможностями мессенджеров (Telegram). Проект обеспечивает бесшовную синхронизацию контента: треды, созданные на сайте, мгновенно появляются в Telegram-чате, а сообщения из Telegram реплицируются на сайт в реальном времени.
+---
 
 📑 Оглавление
 
