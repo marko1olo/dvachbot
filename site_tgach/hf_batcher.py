@@ -9,6 +9,7 @@ from httpx import AsyncHTTPTransport
 from huggingface_hub import HfApi
 from common.async_file_io import write_async_iter_bytes_to_file
 from common.db_pool import get_pool
+from common.env_utils import proxy_env
 from common.bot_pool import global_bot_pool
 from common.config import STORAGE_CHANNELS
 from common.database import (
@@ -73,22 +74,24 @@ async def refresh_reference_by_send(bot, file_id):
 def upload_folder_sync(folder, token, repo):
     global HF_COOLDOWN_UNTIL
     strategies = [
-        {"name": "Direct/System", "env": {}},
-        {"name": "Proxy", "env": {"HTTPS_PROXY": PROXY_URL, "HTTP_PROXY": PROXY_URL}}
+        {"name": "Direct/System", "proxy": None},
+        {"name": "Proxy", "proxy": PROXY_URL},
     ]
     for strategy in strategies:
         try:
-            os.environ.pop("HTTPS_PROXY", None) 
-            os.environ.pop("HTTP_PROXY", None)
-            os.environ.update(strategy["env"])
-            
-            # ПРАВКА: Увеличиваем внутренние ретраи библиотеки для тяжелых файлов
-            api = HfApi(token=token)
-            api.upload_folder(
-                folder_path=folder, 
-                repo_id=repo, 
-                repo_type="dataset"
-            )
+            # proxy_env восстанавливает HTTPS_PROXY/HTTP_PROXY после блока.
+            # Раньше здесь был безусловный os.environ.pop без восстановления:
+            # прокси снимался со ВСЕГО процесса, включая сессии с trust_env=True
+            # (то есть трафик к Telegram API), а итоговое состояние окружения
+            # зависело от того, какая стратегия отработала последней.
+            with proxy_env(strategy["proxy"]):
+                # ПРАВКА: Увеличиваем внутренние ретраи библиотеки для тяжелых файлов
+                api = HfApi(token=token)
+                api.upload_folder(
+                    folder_path=folder,
+                    repo_id=repo,
+                    repo_type="dataset"
+                )
             clear_hf_failure(repo)
             logger.info(f"✅ HF Batch Upload Success ({strategy['name']})")
             return True

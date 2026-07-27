@@ -8,6 +8,7 @@ from httpx import AsyncHTTPTransport
 from huggingface_hub import HfApi
 from common.async_file_io import write_async_iter_bytes_to_file
 from common.db_pool import get_pool
+from common.env_utils import proxy_env
 from common.bot_pool import global_bot_pool
 from common.config import STORAGE_CHANNELS
 from common.database import (
@@ -69,16 +70,17 @@ async def refresh_reference_by_send(bot, file_id):
 
 def upload_folder_sync(folder, token, repo):
     strategies = [
-        {"name": "Proxy", "env": {"HTTPS_PROXY": PROXY_URL, "HTTP_PROXY": PROXY_URL}},
-        {"name": "Direct/System", "env": {}}
+        {"name": "Proxy", "proxy": PROXY_URL},
+        {"name": "Direct/System", "proxy": None},
     ]
     for strategy in strategies:
         try:
-            os.environ.pop("HTTPS_PROXY", None); os.environ.pop("HTTP_PROXY", None)
-            os.environ.update(strategy["env"])
-            
-            api = HfApi(token=token)
-            api.upload_folder(folder_path=folder, path_in_repo="media", repo_id=repo, repo_type="dataset", commit_message=f"Batch {int(time.time())}")
+            # proxy_env возвращает HTTPS_PROXY/HTTP_PROXY после блока. Прежний
+            # os.environ.pop без восстановления снимал прокси со ВСЕГО процесса,
+            # включая сессии с trust_env=True (Dubsite_tgach/main.py:133 и :4071).
+            with proxy_env(strategy["proxy"]):
+                api = HfApi(token=token)
+                api.upload_folder(folder_path=folder, path_in_repo="media", repo_id=repo, repo_type="dataset", commit_message=f"Batch {int(time.time())}")
             logger.info(f"✅ HF Batch Upload Success ({strategy['name']})")
             return True
         except Exception as e:
