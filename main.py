@@ -5089,6 +5089,8 @@ class MessageBroadcaster:
         self.final_keyboard = self.keyboard
         self.post_num = self.content.get('post_num')
         self.raw_text = self.content.get('text') or self.content.get('caption') or ''
+        # Переопределяется в _prepare_content_and_mentions, когда известен header.
+        self.hide_check_text = self.raw_text.lower()
         self.content_for_common = self.content.copy()
 
     async def broadcast(self) -> list:
@@ -5200,6 +5202,10 @@ class MessageBroadcaster:
 
         has_reply_markers = ">>" in self.raw_text
         self.users_settings = self.b_data.get('user_settings', {})
+        # Текст для проверки /hide одинаков для всех получателей, а считался
+        # заново в _send_one на каждого — конкатенация плюс .lower() по всему
+        # телу поста. Готовим один раз на рассылку.
+        self.hide_check_text = (self.base_header_text + " " + self.raw_text).lower()
 
         if has_reply_markers:
             mentions = RE_YOU_PATTERN.findall(self.raw_text)
@@ -5517,7 +5523,7 @@ class MessageBroadcaster:
         request_timeout = max(3, int(telegram_request_timeout_sec))
         u_set = self.users_settings.get(uid, {'nsfw': False, 'hide': set()})
         if u_set['hide']:
-            check_text = (self.base_header_text + " " + self.raw_text).lower()
+            check_text = self.hide_check_text
             if any(word in check_text for word in u_set['hide']):
                 lang_local = 'en' if self.board_id == 'int' else 'ru'
                 placeholder = "🛡 Message hidden" if lang_local == 'en' else "🛡 Сообщение скрыто"
