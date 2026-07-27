@@ -8277,39 +8277,42 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
             row = await c.fetchone()
             op_bal = row[0] if row and row[0] is not None else 0
 
-        # Проверяем, что дуэль все еще в списке
+        # Ответ юзеру откладываем до выхода из лока: db_lock сериализует ВЕСЬ
+        # доступ к базе в процессе, и держать его на время сетевого вызова
+        # Telegram — значит остановить создание постов и любые запросы во всём
+        # боте. Решение (проверка балансов, изъятие дуэли из пула и перевод)
+        # целиком остаётся под локом, иначе одну дуэль приняли бы дважды.
+        reject_msg = None
         if challenger_id not in _active_duels:
-            await message.answer("⚔️ Эта дуэль уже была принята или истекла.")
-            return
-            
-        duel = _active_duels.pop(challenger_id)
-        amount = duel["amount"]
+            reject_msg = "⚔️ Эта дуэль уже была принята или истекла."
+        else:
+            duel = _active_duels.pop(challenger_id)
+            amount = duel["amount"]
+            if ch_bal < amount:
+                reject_msg = f"⚔️ Вызывающий Анон-{challenger_id%10000:04d} уже не потянет ставку — слился."
+            elif op_bal < amount:
+                # Возвращаем дуэль обратно в пул
+                _active_duels[challenger_id] = duel
+                reject_msg = f"❌ У тебя недостаточно бабок. Нужно {amount} RUB, есть {int(op_bal)}."
+            else:
+                import random
+                winner_id = random.choice([challenger_id, user_id])
+                loser_id  = challenger_id if winner_id == user_id else user_id
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
+                    (winner_id, board_id, amount, amount)
+                )
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?",
+                    (loser_id, board_id, -amount, amount)
+                )
+                await db.commit()
 
-        if ch_bal < amount:
-            await message.answer(f"⚔️ Вызывающий Анон-{challenger_id%10000:04d} уже не потянет ставку — слился.")
-            return
-        if op_bal < amount:
-            # Возвращаем дуэль обратно в пул
-            _active_duels[challenger_id] = duel
-            await message.answer(f"❌ У тебя недостаточно бабок. Нужно {amount} RUB, есть {int(op_bal)}.")
-            return
-
-        # Рандом
-        import random
-        winner_id = random.choice([challenger_id, user_id])
-        loser_id  = challenger_id if winner_id == user_id else user_id
-
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
-            (winner_id, board_id, amount, amount)
-        )
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?",
-            (loser_id, board_id, -amount, amount)
-        )
-        await db.commit()
+    if reject_msg is not None:
+        await message.answer(reject_msg)
+        return
 
     w_tag = f"Анон-{winner_id%10000:04d}"
     l_tag = f"Анон-{loser_id%10000:04d}"
@@ -8429,15 +8432,15 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
         await message.answer("⚠️ Не спамь вызовами дуэлей. Подожди 10 секунд.")
         return
 
-    # Проверяем баланс под локом
+    # Проверяем баланс под локом; ответ юзеру — уже без него, db_lock
+    # сериализует весь доступ к базе в процессе.
     async with db_lock:
         async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
             row = await c.fetchone()
             bal = row[0] if row and row[0] is not None else 0
-
-        if bal < amount:
-            await message.answer(f"❌ Не хватает бабок. Ставка {amount} RUB, у тебя {int(bal)} RUB.")
-            return
+    if bal < amount:
+        await message.answer(f"❌ Не хватает бабок. Ставка {amount} RUB, у тебя {int(bal)} RUB.")
+        return
 
     # Записываем время последнего вызова
     _duel_cooldowns[user_id] = now
@@ -11920,18 +11923,19 @@ async def cmd_airdrop(message: Message, board_id: str | None):
         
         users_to_fix = [r[0] for r in users_to_fix_rows]
 
-        if not users_to_fix:
-            await message.answer("🤷‍♂️ У всех и так есть бабки, эирдроп не нужен.")
-            return
+        if users_to_fix:
+            updates = [(random.randint(8, 15), uid) for uid in users_to_fix]
+            # Начисляем только в ОДНУ (любую) существующую запись юзера, чтобы избежать дублей
+            await db.executemany("""
+                UPDATE Users SET balance = ?
+                WHERE rowid = (SELECT rowid FROM Users WHERE user_id = ? LIMIT 1)
+            """, updates)
+            await db.commit()
 
-        updates = [(random.randint(8, 15), uid) for uid in users_to_fix]
-        # Начисляем только в ОДНУ (любую) существующую запись юзера, чтобы избежать дублей
-        await db.executemany("""
-            UPDATE Users SET balance = ?
-            WHERE rowid = (SELECT rowid FROM Users WHERE user_id = ? LIMIT 1)
-        """, updates)
-        await db.commit()
-        
+    # Ответ юзеру за пределами db_lock: он сериализует весь доступ к базе.
+    if not users_to_fix:
+        await message.answer("🤷‍♂️ У всех и так есть бабки, эирдроп не нужен.")
+        return
     await message.answer(f"🚀 <b>ЭИРДРОП ЗАВЕРШЕН!</b>\nНачислил бабки {len(users_to_fix)} нищим анонам.")
 @dp.callback_query(F.data == "show_active_threads")
 async def cq_show_active_threads(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
