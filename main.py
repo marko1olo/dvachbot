@@ -1329,17 +1329,41 @@ async def _remove_already_delivered_recipients(post_num: int, recipients) -> set
     delivered = {int(recipient_id) for recipient_id, _message_id in copies}
     return candidate_recipients - delivered
 
-async def restore_durable_delivery_queue(limit: int = 1000) -> None:
+DURABLE_RESTORE_PAGE = 1000
+DURABLE_RESTORE_MAX_ITEMS = 100_000
+
+
+async def restore_durable_delivery_queue(limit: int = DURABLE_RESTORE_PAGE) -> None:
 
     if not DURABLE_DELIVERY_QUEUE_ENABLED:
         return
-    items = await get_pending_delivery_queue_items(limit=limit)
+    # Раньше читалась ОДНА страница на 1000 записей, и всё сверх неё не
+    # восстанавливалось никогда: других потребителей у DeliveryQueue нет, а
+    # удаляются строки только по факту доставки. После падения под нагрузкой
+    # это означало навсегда недоставленные посты и вечно растущую таблицу.
+    # Идём страницами по курсору id: восстановление не удаляет строку, поэтому
+    # повторный запрос без курсора вернул бы те же записи и продублировал
+    # рассылку.
+    items = []
+    after_id = 0
+    while True:
+        page = await get_pending_delivery_queue_items(limit=limit, after_id=after_id)
+        if not page:
+            break
+        items.extend(page)
+        after_id = max(int(i["id"]) for i in page)
+        if len(page) < limit or len(items) >= DURABLE_RESTORE_MAX_ITEMS:
+            break
     restored_items = 0
     restored_recipients = 0
     deleted_empty = 0
+    unknown_board = 0
     for item in items:
         board_id = item.get("board_id")
         if board_id not in message_queues:
+            # Доска исчезла из конфига — доставить эти записи нечем. Не удаляем
+            # молча, но считаем и показываем, иначе они копились бы незаметно.
+            unknown_board += 1
             continue
         remaining_recipients = await _remove_already_delivered_recipients(
             int(item["post_num"]),
@@ -1366,25 +1390,32 @@ async def restore_durable_delivery_queue(limit: int = 1000) -> None:
     durable_delivery_stats["restored_items"] += restored_items
     durable_delivery_stats["restored_recipients"] += restored_recipients
     durable_delivery_stats["restore_deleted_empty"] += deleted_empty
-    if restored_items or deleted_empty:
+    if restored_items or deleted_empty or unknown_board:
         runtime_logger.warning(
             "delivery_durable_restore %s",
             json.dumps(
                 {
                     "ts": round(time.time(), 3),
+                    "scanned": len(items),
                     "restored_items": restored_items,
                     "restored_recipients": restored_recipients,
                     "deleted_empty": deleted_empty,
-                    "limit": limit,
+                    "unknown_board": unknown_board,
+                    "page": limit,
+                    "hit_cap": len(items) >= DURABLE_RESTORE_MAX_ITEMS,
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
         )
         print(
-            f"🧷 Durable delivery restore: restored={restored_items}, "
+            f"🧷 Durable delivery restore: scanned={len(items)}, restored={restored_items}, "
             f"recipients={restored_recipients}, deleted_empty={deleted_empty}"
+            + (f", unknown_board={unknown_board}" if unknown_board else "")
         )
+    if len(items) >= DURABLE_RESTORE_MAX_ITEMS:
+        print(f"⚠️ Durable delivery restore: достигнут потолок {DURABLE_RESTORE_MAX_ITEMS}, "
+              f"остаток будет поднят при следующем старте.")
 def _delivery_queue_counts() -> dict[str, int]:
 
     return {board: queue.qsize() for board, queue in message_queues.items()}

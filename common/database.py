@@ -2718,10 +2718,18 @@ async def delete_delivery_queue_item(item_id: int) -> bool:
                 print(f"⚠️ DeliveryQueue delete failed id={item_id}: {type(e).__name__}: {e}")
                 break
     return False
-async def get_pending_delivery_queue_items(limit: int = 500) -> list[dict]:
+async def get_pending_delivery_queue_items(limit: int = 500, after_id: int = 0) -> list[dict]:
+    """
+    Страница ожидающих доставки записей.
+
+    after_id обязателен для постраничного обхода: восстановление НЕ удаляет
+    строку сразу (её удаляет только фактическая доставка), поэтому повторный
+    запрос без курсора вернул бы те же самые записи и продублировал рассылку.
+    """
     from common.db_pool import get_pool, db_lock
 
     safe_limit = max(1, min(int(limit or 500), 5000))
+    safe_after = max(0, int(after_id or 0))
     async with db_lock:
         try:
             db = await get_pool()
@@ -2729,11 +2737,11 @@ async def get_pending_delivery_queue_items(limit: int = 500) -> list[dict]:
                 SELECT id, board_id, post_num, recipients, content, delivery_phase,
                        original_recipients, thread_id, enqueued_at, updated_at, attempts
                 FROM DeliveryQueue
-                WHERE status = 'pending'
+                WHERE status = 'pending' AND id > ?
                 ORDER BY id
                 LIMIT ?
             """
-            async with db.execute(query, (safe_limit,)) as cursor:
+            async with db.execute(query, (safe_after, safe_limit)) as cursor:
                 rows = await cursor.fetchall()
         except Exception as e:
             print(f"⚠️ DeliveryQueue restore read failed: {type(e).__name__}: {e}")
