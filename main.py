@@ -206,6 +206,15 @@ from warhammer_mode import WH40K_PHRASES_START, WH40K_PHRASES_END, warhammer_tra
 from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial_transform
 from gopnik_mode import GOPNIK_PHRASES_START, GOPNIK_PHRASES_END, gopnik_transform
 from shizo_mode import SCHIZO_PHRASES_START, SCHIZO_PHRASES_END, shizo_transform
+# new_modes был написан целиком (трансформации + фразы + движок эффектов), но
+# main.py его не импортировал: пять режимов из /help нельзя было включить.
+from new_modes import (
+    MATRIX_PHRASES_START, MATRIX_PHRASES_END, matrix_transform,
+    AMERICA_PHRASES_START, AMERICA_PHRASES_END, america_transform,
+    HOLIDAY_PHRASES_START, HOLIDAY_PHRASES_END, holiday_transform,
+    OLDWEB_PHRASES_START, OLDWEB_PHRASES_END, oldweb_transform,
+    JEWISH_PHRASES_START, JEWISH_PHRASES_END, jewish_transform,
+)
 from mode_punchup import punch_up_mode_text
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
@@ -4137,12 +4146,17 @@ class ModeTransformer:
         self.header = self.modified_content.get('header')
 
     def _check_active_mode(self) -> bool:
+        # Гейт всего конвейера преобразования. Пять режимов из new_modes здесь
+        # отсутствовали, поэтому даже при выставленном флаге текст оставался
+        # нетронутым — менялся только заголовок поста в format_header.
         return (
             self.b_data.get('anime_mode') or self.b_data.get('slavaukraine_mode') or
             self.b_data.get('zaputin_mode') or self.b_data.get('suka_blyat_mode') or
             self.b_data.get('polish_mode') or self.b_data.get('warhammer_mode') or
             self.b_data.get('imperial_mode') or self.b_data.get('gopnik_mode') or
-            self.b_data.get('schizo_mode')
+            self.b_data.get('schizo_mode') or self.b_data.get('matrix_mode') or
+            self.b_data.get('america_mode') or self.b_data.get('holiday_mode') or
+            self.b_data.get('oldweb_mode') or self.b_data.get('jewish_mode')
         )
 
     def _determine_text_key(self) -> bool:
@@ -4168,6 +4182,18 @@ class ModeTransformer:
             return await loop.run_in_executor(None, polish_transform, self.plain_text, self.header)
         elif self.b_data.get('slavaukraine_mode'):
             return await loop.run_in_executor(None, ukrainian_transform, self.plain_text, self.header)
+        # Все пять возвращают ("text", str) — ту же форму, что ждёт
+        # _handle_transform_result. Раньше не вызывались ниоткуда.
+        elif self.b_data.get('matrix_mode'):
+            return await loop.run_in_executor(None, matrix_transform, self.plain_text, self.header)
+        elif self.b_data.get('america_mode'):
+            return await loop.run_in_executor(None, america_transform, self.plain_text, self.header)
+        elif self.b_data.get('holiday_mode'):
+            return await loop.run_in_executor(None, holiday_transform, self.plain_text, self.header)
+        elif self.b_data.get('oldweb_mode'):
+            return await loop.run_in_executor(None, oldweb_transform, self.plain_text, self.header)
+        elif self.b_data.get('jewish_mode'):
+            return await loop.run_in_executor(None, jewish_transform, self.plain_text, self.header)
         return None
 
     def _handle_transform_result(self, transform_result):
@@ -12360,6 +12386,51 @@ async def activate_lightweight_mode(
     except TelegramBadRequest:
         pass
 
+@dp.message(Command("matrix", "матрица"))
+async def cmd_matrix(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """🟩 Матрица: leet-speak и инъекции системных логов."""
+    await activate_lightweight_mode(
+        message, board_id, stream, 'matrix_mode', MATRIX_PHRASES_START,
+        {'ru': "### ОПЕРАТОР ###", 'en': "### OPERATOR ###", 'jp': "### オペレーター ###"},
+    )
+
+
+@dp.message(Command("america", "liberty", "freedom"))
+async def cmd_america(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """🦅 Liberty-режим."""
+    await activate_lightweight_mode(
+        message, board_id, stream, 'america_mode', AMERICA_PHRASES_START,
+        {'ru': "### ШЕРИФ ###", 'en': "### SHERIFF ###", 'jp': "### 保安官 ###"},
+    )
+
+
+@dp.message(Command("holiday", "prazdnik", "праздник"))
+async def cmd_holiday(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """🎄 Праздничный режим: пьяные опечатки, растянутые гласные и тосты."""
+    await activate_lightweight_mode(
+        message, board_id, stream, 'holiday_mode', HOLIDAY_PHRASES_START,
+        {'ru': "### ТАМАДА ###", 'en': "### TOASTMASTER ###", 'jp': "### 幹事 ###"},
+    )
+
+
+@dp.message(Command("oldweb", "padonki", "preved"))
+async def cmd_oldweb(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """🖥️ Старый интернет: падонковский язык, BBCode и ICQ."""
+    await activate_lightweight_mode(
+        message, board_id, stream, 'oldweb_mode', OLDWEB_PHRASES_START,
+        {'ru': "### МОДЕРАТАР ###", 'en': "### SYSOP ###", 'jp': "### 管理人 ###"},
+    )
+
+
+@dp.message(Command("jewish", "talmud"))
+async def cmd_jewish(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """📜 Талмудический диспут."""
+    await activate_lightweight_mode(
+        message, board_id, stream, 'jewish_mode', JEWISH_PHRASES_START,
+        {'ru': "### РЕБЕ ###", 'en': "### REBBE ###", 'jp': "### ラビ ###"},
+    )
+
+
 MODE_END_PHRASES = {
     'slavaukraine_mode': [
         "💀 Визг хохлов закончен! Украинский режим отключен. Возвращаемся к обычному трёпу.",
@@ -12425,11 +12496,11 @@ MODE_END_PHRASES = {
     'imperial_mode': IMPERIAL_PHRASES_END,
     'gopnik_mode': GOPNIK_PHRASES_END,
     'schizo_mode': SCHIZO_PHRASES_END,
-    # 'matrix_mode': MATRIX_PHRASES_END,
-    # 'america_mode': AMERICA_PHRASES_END,
-    # 'holiday_mode': HOLIDAY_PHRASES_END,
-    # 'oldweb_mode': OLDWEB_PHRASES_END,
-    # 'jewish_mode': JEWISH_PHRASES_END,
+    'matrix_mode': MATRIX_PHRASES_END,
+    'america_mode': AMERICA_PHRASES_END,
+    'holiday_mode': HOLIDAY_PHRASES_END,
+    'oldweb_mode': OLDWEB_PHRASES_END,
+    'jewish_mode': JEWISH_PHRASES_END,
 }
 
 async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: str):
