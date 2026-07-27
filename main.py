@@ -21219,6 +21219,15 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="top", description="Топ пользователей"),
         BotCommand(command="report", description="Жалоба модераторам"),
         BotCommand(command="wordcloud", description="Облако слов дня"),
+        # Рабочие пользовательские команды, отсутствовавшие в меню: узнать о них
+        # можно было только случайно, из чужих сообщений.
+        BotCommand(command="global_top", description="Топ по всем доскам"),
+        BotCommand(command="tags", description="Облако тегов картинок"),
+        BotCommand(command="random", description="Случайное медиа с доски"),
+        BotCommand(command="quote", description="Случайная цитата"),
+        BotCommand(command="daily", description="Ежедневный бонус"),
+        BotCommand(command="duel", description="Вызвать анона на дуэль"),
+        BotCommand(command="dice", description="Бросить кости"),
         BotCommand(command="togglegif", description="Отключить/включить GIF"),
         BotCommand(command="togglestickers", description="Отключить/включить стикеры"),
         BotCommand(command="togglemedia", description="Отключить/включить медиа"),
