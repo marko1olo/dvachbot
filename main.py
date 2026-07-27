@@ -19422,6 +19422,13 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
     Исправлено: теперь ищет пост в БД, если он выгружен из RAM.
     """
     try:
+        # reaction.user — необязательное поле Telegram API: оно приходит только
+        # для неанонимного пользователя, иначе заполняется actor_chat (реакция
+        # от имени канала или анонимного админа). Раньше на таком апдейте
+        # user.id давал AttributeError, его проглатывал внешний except, и в лог
+        # уходила невнятная «Ошибка в handle_message_reaction».
+        if reaction.user is None:
+            return
         user_id = reaction.user.id
         now = time.time()
         if now - reaction_ratelimit[user_id] < 0.5:
