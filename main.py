@@ -3709,6 +3709,13 @@ class NewPostProcessor:
             header_text = await format_thread_post_header(self.board_id, local_post_num, self.user_id, thread_info, stream=self.stream)
         else:
             header_text = await format_header(self.board_id, self.current_post_num, author_id=self.user_id, stream=self.stream)
+        # Метка баяна идёт первой строкой заголовка. Заголовок и так собирается
+        # здесь перед отправкой, поэтому это конкатенация строки — ни одного
+        # лишнего запроса к Telegram (реакцией это стоило бы по вызову API
+        # на КАЖДОГО получателя).
+        repost_count = self.content.get('repost_count')
+        if isinstance(repost_count, int) and repost_count > 1:
+            header_text = f"🪗 БАЯН ×{repost_count}\n{header_text}"
         self.final_content['header'] = header_text
         self.author_content['header'] = header_text
         await update_post_content(self.current_post_num, self.final_content)
@@ -19873,6 +19880,9 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     print(f"👀 ID #{reply_to_post} восстановлен через чтение текста сообщения!")
     content = {'type': message.content_type}
     text_for_corpus = None
+    # file_unique_id из апдейта Telegram — основа определения баяна.
+    # Ничего не качаем и не хешируем, просто читаем готовое поле.
+    _media_unique_id = None
     if message.content_type == 'text':
         text_for_corpus = message.text
         safe_html_text = sanitize_html(processed_html_text)
@@ -19883,6 +19893,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         if isinstance(file_id_obj, list): file_id_obj = file_id_obj[-1]
         safe_caption_html = sanitize_html(processed_html_text)
         content.update({'file_id': file_id_obj.file_id, 'caption': safe_caption_html})
+        _media_unique_id = getattr(file_id_obj, 'file_unique_id', None)
         file_name = getattr(file_id_obj, 'file_name', None)
         mime_type = getattr(file_id_obj, 'mime_type', None)
         if file_name:
@@ -19892,6 +19903,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     elif message.content_type in ['sticker', 'video_note']:
         file_id_obj = getattr(message, message.content_type)
         content.update({'file_id': file_id_obj.file_id})
+        _media_unique_id = getattr(file_id_obj, 'file_unique_id', None)
         if message.content_type == 'sticker' and message.sticker.emoji:
              text_for_corpus = message.sticker.emoji
     if text_for_corpus:
@@ -19913,7 +19925,14 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     quote_info_for_post = await build_quick_quote_info(reply_to_post)
     content['quote_info'] = quote_info_for_post
     # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-    
+
+    # Баян. Шэдоу-мут не считаем: пост никто не увидит, и счётчик бы врал.
+    if _media_unique_id and not is_shadow_muted:
+        from common.database import register_media_repost
+        _times = await register_media_repost(board_id, _media_unique_id)
+        if _times > 1:
+            content['repost_count'] = _times
+
     if is_shadow_muted:
         await process_shadow_reject(ShadowRejectContext(
             bot=message.bot,
