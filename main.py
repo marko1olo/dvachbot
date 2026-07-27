@@ -21328,6 +21328,16 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="daily", description="Ежедневный бонус"),
         BotCommand(command="duel", description="Вызвать анона на дуэль"),
         BotCommand(command="dice", description="Бросить кости"),
+        # Эти четыре стояли в админской секции, хотя админской проверки в них
+        # нет и по замыслу они пользовательские: /redact правит ТОЛЬКО свой пост
+        # (сверка автора внутри хендлера), /token выдаёт токен вызывающему,
+        # /deanon — шутка с кулдауном, /graph строит график доски.
+        # /help при этом описывал /deanon, /token и /redact в ЮЗЕРСКИХ блоках
+        # всех трёх языков — то есть справка их обещала, а меню скрывало.
+        BotCommand(command="redact", description="Удалить свой пост (реплай)"),
+        BotCommand(command="token", description="Токен для входа на сайт"),
+        BotCommand(command="deanon", description="Деанон (шуточный)"),
+        BotCommand(command="graph", description="График активности доски"),
         BotCommand(command="togglegif", description="Отключить/включить GIF"),
         BotCommand(command="togglestickers", description="Отключить/включить стикеры"),
         BotCommand(command="togglemedia", description="Отключить/включить медиа"),
@@ -21374,16 +21384,12 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="addmoney", description="Выдать деньги юзеру"),
         BotCommand(command="airdrop", description="Раздача денег"),
         BotCommand(command="restrict_anime", description="Ограничить аниме юзеру"),
-        BotCommand(command="deanon", description="Деанон (fake)"),
         BotCommand(command="debug_memory", description="Статистика памяти"),
         BotCommand(command="queues", description="Статистика очередей"),
-        BotCommand(command="graph", description="График активности"),
-        BotCommand(command="redact", description="Редактировать текст поста"),
         BotCommand(command="troll", description="Затроллить юзера"),
         BotCommand(command="say", description="Написать от имени бота"),
         BotCommand(command="togglereactions", description="Включить/выключить реакции"),
         BotCommand(command="filter", description="Фильтр слов"),
-        BotCommand(command="token", description="Сгенерировать токен"),
         BotCommand(command="lie", description="Искажение медиа")
     ]
 
