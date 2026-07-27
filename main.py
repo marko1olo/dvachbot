@@ -19247,6 +19247,11 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
                 break
         group['caption'] = found_caption
         final_media_list = []
+        # Личность альбома для определения баяна. file_unique_id Telegram отдаёт
+        # прямо в апдейте, поэтому ничего не качаем и не хешируем — как и для
+        # одиночных медиа. Одиночный путь (@dp.message(~F.media_group_id))
+        # альбомы исключает, поэтому они оставались без проверки.
+        album_unique_ids = []
         for msg in raw_messages:
             media_data = {'type': msg.content_type, 'file_id': None}
             media_obj = None
@@ -19271,7 +19276,19 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
                     media_data['mime_type'] = mime_type
             if media_data['file_id']:
                 final_media_list.append(media_data)
+                uid = getattr(media_obj, 'file_unique_id', None)
+                if uid:
+                    album_unique_ids.append(uid)
         group['media'] = final_media_list
+        # Считаем баян по альбому ЦЕЛИКОМ: ключ — отсортированный набор
+        # file_unique_id. Так «БАЯН» означает «этот же набор картинок уже
+        # постили», без ложных срабатываний на свежий альбом, куда попала одна
+        # старая картинка. И это одна строка в БД на альбом, а не N.
+        if album_unique_ids:
+            import hashlib
+            group['album_unique_key'] = hashlib.sha256(
+                "|".join(sorted(album_unique_ids)).encode('utf-8')
+            ).hexdigest()
         await process_complete_media_group(media_group_key, group, bot_instance)
         current_media_groups.pop(media_group_key, None)
         # --- ИЗМЕНЕНИЕ: Удалена опасная строка sent_media_groups.remove ---
@@ -19308,7 +19325,14 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
     is_long_caption = original_caption and len(original_caption) > CAPTION_LENGTH_LIMIT
     send_caption_separately = is_large_group or is_long_caption
     first_post_num = None
-    
+
+    # Баян по альбому. Шэдоу-мут не считаем: пост никто не увидит, счётчик врал бы.
+    album_repost_count = 0
+    album_key = group.get('album_unique_key')
+    if album_key and not is_shadow_muted:
+        from common.database import register_media_repost
+        album_repost_count = await register_media_repost(board_id, album_key)
+
     for i, chunk in enumerate(media_chunks):
         if not chunk: continue
         reply_to_post = group.get('reply_to_post') if i == 0 else None
@@ -19318,6 +19342,10 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
             'media': chunk,
             'caption': caption_for_chunk
         }
+        # Метка только на первый чанк: большой альбом режется на посты по 10,
+        # дублировать «БАЯН» на каждом смысла нет.
+        if i == 0 and album_repost_count > 1:
+            content['repost_count'] = album_repost_count
         
         # --- НАЧАЛО ИЗМЕНЕНИЙ (Добавлена Быстрая цитата для альбомов) ---
         quote_info = await build_quick_quote_info(reply_to_post)
