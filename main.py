@@ -11534,7 +11534,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     is_blat = None
     is_warhammer = None
     if message.text:
-        txt_l = message.text.lower()
+        txt_l = (message.text or message.caption or "").lower()
         if any(term in txt_l for term in ['blat', 'блат', 'гоп', 'гопник', 'пацанский', 'ауе', 'ауешка', 'patsan']):
             is_blat = True
         elif any(term in txt_l for term in ['wh40k', 'waha', 'warhammer', 'вархаммер', 'инквизиция']):
@@ -11852,7 +11852,7 @@ async def cmd_search(message: types.Message, board_id: str | None, stream: str =
     if not board_id: return
     board_data[board_id]
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    query = message.text.split(maxsplit=1)
+    query = (message.text or message.caption or "").split(maxsplit=1)
     if len(query) < 2 or not query[1].strip():
         if lang == 'en':
             txt = "Usage: <code>/search &lt;text&gt;</code>"
@@ -11963,7 +11963,7 @@ async def cmd_tag_cloud(message: types.Message, board_id: str | None = None, str
     Выводит облако тегов медиафайлов из FileRegistry с кнопками просмотра.
     """
     try:
-        args = message.text.split(maxsplit=1)
+        args = (message.text or message.caption or "").split(maxsplit=1)
         if len(args) > 1 and not args[1].startswith("-"):
             target_tag = args[1].strip().lower().lstrip("#")
             await show_tagged_photos_gallery(message, target_tag, offset=0)
@@ -12998,7 +12998,7 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
         except (TelegramForbiddenError, TelegramBadRequest):
             pass
         return
-    command_args = message.text.split(maxsplit=1)
+    command_args = (message.text or message.caption or "").split(maxsplit=1)
     if len(command_args) > 1 and command_args[1].strip():
         raw_html_text = message.html_text.split(maxsplit=1)[1]
         safe_html_text = sanitize_html(raw_html_text)
@@ -15742,7 +15742,7 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
             else: header = "🚫 <b>Скрытые слова:</b>"
             await message.answer(f"{header}\n{words_str}", parse_mode="HTML")
     elif action == 'add':
-        word_part = message.text.split(maxsplit=2)
+        word_part = (message.text or message.caption or "").split(maxsplit=2)
         if len(word_part) < 3:
              err = "Usage: /hide add &lt;word&gt;"
              await message.answer(err)
@@ -15767,7 +15767,7 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
         else: msg = f"✅ Слово '<b>{escape_html(word)}</b>' добавлено в скрытые."
         await message.answer(msg, parse_mode="HTML")
     elif action == 'remove' or action == 'del':
-        word_part = message.text.split(maxsplit=2)
+        word_part = (message.text or message.caption or "").split(maxsplit=2)
         if len(word_part) < 3:
              await message.answer("Usage: /hide remove &lt;word&gt;")
              return
@@ -16000,7 +16000,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
     if not message.reply_to_message:
         await message.answer("❌ Используй /whisper в ответ на сообщение, автору которого хочешь прошептать.")
         return
-    parts = message.text.split(maxsplit=1)
+    parts = (message.text or message.caption or "").split(maxsplit=1)
     if len(parts) < 2:
         await message.answer("❌ Использование: <code>/whisper &lt;текст&gt;</code>", parse_mode="HTML")
         return
@@ -17399,7 +17399,7 @@ async def cmd_filter(message: types.Message, board_id: str | None, stream: str =
         return
     b_data = board_data[board_id]
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    parts = message.text.split(maxsplit=2)
+    parts = (message.text or message.caption or "").split(maxsplit=2)
     subcommand = parts[1].lower() if len(parts) > 1 else "help"
     if subcommand == "list":
         spam_words = b_data.get('spam_filter_words', set())
