@@ -18682,46 +18682,47 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         return
     post_updated = False
     content_for_db = None
+    # Под storage_lock только РЕШЕНИЕ, без сетевых вызовов. Раньше все пять
+    # путей отказа делали callback.answer(), не выходя из лока: при flood-wait
+    # такой вызов держал глобальный storage_lock секундами, а он защищает
+    # messages_storage / post_to_messages / message_to_post — то есть вместе с
+    # ним замирали доставка, реакции и создание постов на всех досках.
+    reject_msg = None
+    clear_markup = False
     async with storage_lock:
         post_data = messages_storage.get(post_num)
         if not post_data or 'content' not in post_data:
-            if lang == 'en': msg = "This poll is outdated and no longer active."
-            elif lang == 'jp': msg = "この投票は古すぎて無効です。"
-            else: msg = "Этот опрос устарел и больше не активен."
-            try:
-                await callback.answer(msg, show_alert=True)
-                await callback.message.edit_reply_markup(reply_markup=None)
-            except (TelegramBadRequest, TelegramForbiddenError):
-                pass
-            return
-        poll_data = post_data['content'].get('poll_data')
-        if not poll_data:
-            try:
-                await callback.answer("Error: Invalid poll data.", show_alert=True)
-            except TelegramBadRequest:
-                pass
-            return
-        if user_id in poll_data.get('voted_users', {}):
-            if lang == 'en': msg = "You have already voted."
-            elif lang == 'jp': msg = "すでに投票済みです。"
-            else: msg = "Вы уже голосовали в этом опросе."
-            try:
-                await callback.answer(msg, show_alert=True)
-            except TelegramBadRequest:
-                pass
-            return
-        option_key = str(option_index)
-        if 0 <= option_index < len(poll_data.get('options', [])):
-            poll_data.setdefault('votes', {}).setdefault(option_key, []).append(user_id)
-            poll_data.setdefault('voted_users', {})[user_id] = option_key
-            post_updated = True
-            content_for_db = post_data['content'].copy()
+            if lang == 'en': reject_msg = "This poll is outdated and no longer active."
+            elif lang == 'jp': reject_msg = "この投票は古すぎて無効です。"
+            else: reject_msg = "Этот опрос устарел и больше не активен."
+            clear_markup = True
         else:
-            try:
-                await callback.answer("Error: Invalid option.", show_alert=True)
-            except TelegramBadRequest:
-                pass
-            return
+            poll_data = post_data['content'].get('poll_data')
+            if not poll_data:
+                reject_msg = "Error: Invalid poll data."
+            elif user_id in poll_data.get('voted_users', {}):
+                if lang == 'en': reject_msg = "You have already voted."
+                elif lang == 'jp': reject_msg = "すでに投票済みです。"
+                else: reject_msg = "Вы уже голосовали в этом опросе."
+            else:
+                option_key = str(option_index)
+                if 0 <= option_index < len(poll_data.get('options', [])):
+                    poll_data.setdefault('votes', {}).setdefault(option_key, []).append(user_id)
+                    poll_data.setdefault('voted_users', {})[user_id] = option_key
+                    post_updated = True
+                    content_for_db = post_data['content'].copy()
+                else:
+                    reject_msg = "Error: Invalid option."
+
+    if reject_msg is not None:
+        try:
+            await callback.answer(reject_msg, show_alert=True)
+            if clear_markup:
+                await callback.message.edit_reply_markup(reply_markup=None)
+        except (TelegramBadRequest, TelegramForbiddenError):
+            pass
+        return
+
     if post_updated:
         if lang == 'en': phrases = POLL_VOTE_SUCCESS_PHRASES_EN
         elif lang == 'jp': phrases = POLL_VOTE_SUCCESS_PHRASES_JP
