@@ -5785,7 +5785,10 @@ async def api_transcribe_voice(file_id: str, request: Request):
 
     # 3. Вызываем Gemini API
     import base64
-    from summarize import _load_google_keys, PROXY_URL
+    # PROXY_URL берём модульный (объявлен выше в этом файле). В summarize его нет
+    # и никогда не было, поэтому `from summarize import ..., PROXY_URL` бросал
+    # ImportError, и эндпоинт транскрипции отвечал 500 на каждый запрос.
+    from summarize import _load_google_keys
     import time
     
     keys = _load_google_keys()
