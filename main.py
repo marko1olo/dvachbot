@@ -11487,23 +11487,29 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     now_ts = time.time()
+    # Выделенного лока у /summarize нет, поэтому storage_lock оставлен, но сжат
+    # до самого решения: раньше внутри него шли два сетевых вызова Telegram.
+    remaining = 0
     async with storage_lock:
         last_usage = b_data.get('last_summarize_time', 0)
-        if now_ts - last_usage < SUMMARIZE_COOLDOWN:
+        on_cooldown = now_ts - last_usage < SUMMARIZE_COOLDOWN
+        if on_cooldown:
             remaining = SUMMARIZE_COOLDOWN - (now_ts - last_usage)
-            if lang == 'en':
-                cooldown_text = f"⏳ Command is on cooldown. Please wait {int(remaining)} seconds."
-            elif lang == 'jp':
-                cooldown_text = f"⏳ コマンドはクールダウン中です。あと {int(remaining)} 秒お待ちください。"
-            else:
-                cooldown_text = f"⏳ Команда на кулдауне. Подождите еще {int(remaining)} сек."
-            try:
-                await message.answer(cooldown_text)
-                await message.delete()
-            except Exception:
-                pass
-            return
-        b_data['last_summarize_time'] = time.time()
+        else:
+            b_data['last_summarize_time'] = time.time()
+    if on_cooldown:
+        if lang == 'en':
+            cooldown_text = f"⏳ Command is on cooldown. Please wait {int(remaining)} seconds."
+        elif lang == 'jp':
+            cooldown_text = f"⏳ コマンドはクールダウン中です。あと {int(remaining)} 秒お待ちください。"
+        else:
+            cooldown_text = f"⏳ Команда на кулдауне. Подождите еще {int(remaining)} сек."
+        try:
+            await message.answer(cooldown_text)
+            await message.delete()
+        except Exception:
+            pass
+        return
     thread_id = None
     thread_info = {}
 
@@ -12792,20 +12798,25 @@ async def cmd_generate(message: types.Message, board_id: str | None, stream: str
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     COOLDOWN_SECONDS = 20
+    # storage_lock убран: кулдаун лежит в board_data, взаимное исключение уже
+    # даёт generate_locks[user_id]. Ответ юзеру — за пределами лока.
+    remaining = 0
     async with generate_locks[user_id]:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            last_usage = b_data.get('last_generate_time', {}).get(user_id, 0)
-            current_time = time.time()
-            if current_time - last_usage < COOLDOWN_SECONDS:
-                remaining = int(COOLDOWN_SECONDS - (current_time - last_usage))
-                if lang == 'en': txt = f"⏳ Please wait {remaining} more seconds."
-                elif lang == 'jp': txt = f"⏳ あと {remaining} 秒待ってください。"
-                else: txt = f"⏳ Подожди еще {remaining} сек."
-                try: await message.answer(txt)
-                except (TelegramBadRequest, TelegramForbiddenError): pass
-                return
+        b_data = board_data[board_id]
+        last_usage = b_data.get('last_generate_time', {}).get(user_id, 0)
+        current_time = time.time()
+        on_cooldown = current_time - last_usage < COOLDOWN_SECONDS
+        if on_cooldown:
+            remaining = int(COOLDOWN_SECONDS - (current_time - last_usage))
+        else:
             b_data.setdefault('last_generate_time', {})[user_id] = current_time
+    if on_cooldown:
+        if lang == 'en': txt = f"⏳ Please wait {remaining} more seconds."
+        elif lang == 'jp': txt = f"⏳ あと {remaining} 秒待ってください。"
+        else: txt = f"⏳ Подожди еще {remaining} сек."
+        try: await message.answer(txt)
+        except (TelegramBadRequest, TelegramForbiddenError): pass
+        return
     full_command_text = message.text or ""
     text_to_generate = ""
     command_prefix = "/generate "
@@ -13056,19 +13067,24 @@ async def _handle_quick_menu_ruletka(callback, board_id: str, user_id: int, lang
          await callback.message.answer("Roulette data missing.")
          return
     async with roulette_lock:
-         async with storage_lock:
-             b_data = board_data[board_id]
-             last = b_data.get('last_roll_time', {}).get(user_id, 0)
-             if time.time() - last < 60:
-                 if lang == 'en':
-                     cooldown_msg = "⏳ Roulette is on cooldown!"
-                 elif lang == 'jp':
-                     cooldown_msg = "⏳ ルーレットはクールダウン中です！"
-                 else:
-                     cooldown_msg = "⏳ Кулдаун рулетки!"
-                 await callback.message.answer(cooldown_msg)
-                 return
+         # storage_lock убран: кулдаун в board_data, исключение даёт roulette_lock.
+         b_data = board_data[board_id]
+         last = b_data.get('last_roll_time', {}).get(user_id, 0)
+         on_cooldown = time.time() - last < 60
+         if not on_cooldown:
              b_data.setdefault('last_roll_time', {})[user_id] = time.time()
+    if on_cooldown:
+        if lang == 'en':
+            cooldown_msg = "⏳ Roulette is on cooldown!"
+        elif lang == 'jp':
+            cooldown_msg = "⏳ ルーレットはクールダウン中です！"
+        else:
+            cooldown_msg = "⏳ Кулдаун рулетки!"
+        try:
+            await callback.message.answer(cooldown_msg)
+        except (TelegramBadRequest, TelegramForbiddenError):
+            pass
+        return
     event = get_random_event(ROULETTE_EVENTS)
     if event:
         text_for_img = f"[{event.get('id')}]\n\n{event.get('description')}"
@@ -16201,16 +16217,18 @@ async def cmd_board_stats(message: types.Message, board_id: str | None, stream: 
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     INFO_CMD_COOLDOWN = 30
+    # storage_lock убран: кулдаун в board_data, исключение даёт info_cmd_lock.
     async with info_cmd_lock:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            current_time = time.time()
-            last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
-            if current_time - last_usage < INFO_CMD_COOLDOWN:
-                try: await message.delete()
-                except Exception: pass
-                return
+        b_data = board_data[board_id]
+        current_time = time.time()
+        last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
+        on_cooldown = current_time - last_usage < INFO_CMD_COOLDOWN
+        if not on_cooldown:
             b_data.setdefault('last_info_command_time', {})[user_id] = current_time
+    if on_cooldown:
+        try: await message.delete()
+        except Exception: pass
+        return
     b_data = board_data[board_id]
     
     wait_txt = "📊 Собираю статистику, вычисляю активность..." if lang != 'en' else "📊 Gathering statistics..."
@@ -16798,18 +16816,20 @@ async def _safe_delete_user_message(message: types.Message):
 async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     current_time = time.time()
+    # storage_lock убран: кулдаун в board_data, исключение даёт deanon_lock.
     async with deanon_lock:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            if current_time - b_data.get('last_deanon_time', 0) < DEANON_COOLDOWN:
-                cooldown_msg = random.choice(DEANON_COOLDOWN_PHRASES)
-                try:
-                    sent_msg = await message.answer(cooldown_msg)
-                    spawn_task(delete_message_after_delay(sent_msg, 5))
-                except Exception: pass
-                await _safe_delete_user_message(message)
-                return
+        b_data = board_data[board_id]
+        on_cooldown = current_time - b_data.get('last_deanon_time', 0) < DEANON_COOLDOWN
+        if not on_cooldown:
             b_data['last_deanon_time'] = current_time
+    if on_cooldown:
+        cooldown_msg = random.choice(DEANON_COOLDOWN_PHRASES)
+        try:
+            sent_msg = await message.answer(cooldown_msg)
+            spawn_task(delete_message_after_delay(sent_msg, 5))
+        except Exception: pass
+        await _safe_delete_user_message(message)
+        return
     lang = 'en' if board_id == 'int' else 'ru'
     if not message.reply_to_message:
         reply_text = "👀 Reply to a message to de-anonymize!" if lang == 'en' else "⚠️ Ответьте на анонимное сообщение юзера, чтобы попытаться узнать автора: <code>/deanon</code>"
