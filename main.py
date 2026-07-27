@@ -11033,10 +11033,19 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
             'board_id': board_id
         })
 
+@dp.message(Command("roast", "prozharka", "прожарка"))
 async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    🔥 Прожарка борды нейросетью.
+
+    Функция была написана полностью — кулдаун, сбор последних 40 постов за
+    2 часа, трёхъязычные промпты, прогресс-сообщение, обработка ошибок — но
+    у неё отсутствовал декоратор, поэтому команда не регистрировалась и была
+    недостижима. При этом /help её пользователям обещал.
+    """
     if not board_id:
         return
-        
+
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     b_data = board_data.get(board_id)
     if not b_data:
