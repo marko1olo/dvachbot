@@ -12530,22 +12530,28 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
     )
     if not pnum: return
     recipients = None
+    # Под локом только то, что он и должен охранять. Проверка «режим ещё
+    # активен» и сброс флагов остаются АТОМАРНЫМИ — иначе две задачи отключения
+    # одного режима отработали бы дважды. А delete_post_by_num и format_header
+    # это обращения к БД: раньше они выполнялись УДЕРЖИВАЯ storage_lock, то есть
+    # фоновая задача блокировала доставку и реакции на всех досках на время
+    # двух запросов к базе.
     async with storage_lock:
         b_data = board_data[board_id]
-        if not b_data.get(mode_to_disable, False):
-            await delete_post_by_num(pnum)
-            return
-        for mode in all_modes:
-            b_data[mode] = False
-        b_data['active_mode_task'] = None
-        header = await format_header(board_id, pnum)
-        if board_id == 'int':
-            prefix = "### ADMIN ###"
-        else:
-            prefix = "### Админ ###"
-        content['header'] = f"{prefix}\n{header}"
+        mode_was_active = bool(b_data.get(mode_to_disable, False))
+        if mode_was_active:
+            for mode in all_modes:
+                b_data[mode] = False
+            b_data['active_mode_task'] = None
+            recipients = b_data['users']['active']
+    if not mode_was_active:
+        await delete_post_by_num(pnum)
+        return
+    header = await format_header(board_id, pnum)
+    prefix = "### ADMIN ###" if board_id == 'int' else "### Админ ###"
+    content['header'] = f"{prefix}\n{header}"
+    async with storage_lock:
         messages_storage[pnum] = {'author_id': 0, 'timestamp': now_dt, 'content': content, 'board_id': board_id}
-        recipients = b_data['users']['active']
     settings_updates = {mode: False for mode in all_modes}
     await update_board_settings(board_id, settings_updates)
     await update_post_content(pnum, content)
@@ -17309,29 +17315,37 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
         except TelegramBadRequest: pass
         return
     response_text = ""
+    # reaction_banned_users живёт в board_data, а storage_lock охраняет
+    # messages_storage — то есть здесь он был ложной зависимостью и при этом
+    # удерживался через ЧЕТЫРЕ обращения к БД (add/remove_reaction_ban и два
+    # log_global_event). Под локом оставлено только само переключение
+    # множества: оно должно быть атомарным, чтобы два админа одновременно не
+    # получили противоположные результаты. Запись в БД — уже без лока.
     async with storage_lock:
-        b_data = board_data[board_id]
-        banned_set = b_data.setdefault('reaction_banned_users', set())
-        if target_id in banned_set:
+        banned_set = board_data[board_id].setdefault('reaction_banned_users', set())
+        now_allowed = target_id in banned_set
+        if now_allowed:
             banned_set.remove(target_id)
-            await remove_reaction_ban(target_id, board_id)
-            await log_global_event('bot', f"🎭 REAC_OK: Админ {message.from_user.id} РАЗРЕШИЛ реакции для {target_id} на /{board_id}/")
-            if lang == 'en':
-                response_text = f"✅ User <code>{target_id}</code> can now use reactions again."
-            elif lang == 'jp':
-                response_text = f"✅ ユーザー <code>{target_id}</code> のリアクション禁止を解除しました。"
-            else:
-                response_text = f"✅ Пользователь <code>{target_id}</code> теперь снова может ставить реакции."
         else:
             banned_set.add(target_id)
-            await add_reaction_ban(target_id, board_id)
-            await log_global_event('bot', f"🎭 REAC_BAN: Админ {message.from_user.id} ЗАПРЕТИЛ реакции для {target_id} на /{board_id}/")
-            if lang == 'en':
-                response_text = f"🚫 User <code>{target_id}</code> is now banned from using reactions."
-            elif lang == 'jp':
-                response_text = f"🚫 ユーザー <code>{target_id}</code> のリアクションを禁止しました。"
-            else:
-                response_text = f"🚫 Пользователю <code>{target_id}</code> теперь запрещено ставить реакции."
+    if now_allowed:
+        await remove_reaction_ban(target_id, board_id)
+        await log_global_event('bot', f"🎭 REAC_OK: Админ {message.from_user.id} РАЗРЕШИЛ реакции для {target_id} на /{board_id}/")
+        if lang == 'en':
+            response_text = f"✅ User <code>{target_id}</code> can now use reactions again."
+        elif lang == 'jp':
+            response_text = f"✅ ユーザー <code>{target_id}</code> のリアクション禁止を解除しました。"
+        else:
+            response_text = f"✅ Пользователь <code>{target_id}</code> теперь снова может ставить реакции."
+    else:
+        await add_reaction_ban(target_id, board_id)
+        await log_global_event('bot', f"🎭 REAC_BAN: Админ {message.from_user.id} ЗАПРЕТИЛ реакции для {target_id} на /{board_id}/")
+        if lang == 'en':
+            response_text = f"🚫 User <code>{target_id}</code> is now banned from using reactions."
+        elif lang == 'jp':
+            response_text = f"🚫 ユーザー <code>{target_id}</code> のリアクションを禁止しました。"
+        else:
+            response_text = f"🚫 Пользователю <code>{target_id}</code> теперь запрещено ставить реакции."
     try:
         await message.answer(response_text, parse_mode="HTML")
         await message.delete()
