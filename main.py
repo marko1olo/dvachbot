@@ -3867,7 +3867,12 @@ class NewPostProcessor:
                 except Exception as e:
                     print(f"Error triggering auto_roast: {e}")
 
-            if self.author_results and self.author_results[0] and self.author_results[0][1]:
+        # Вторая фаза вынесена из-под storage_lock: внутри неё идёт
+        # update_post_content — запись в БД, а это ГОРЯЧИЙ путь, он исполняется
+        # на КАЖДЫЙ пост. Раньше на время этого запроса замирал весь доступ к
+        # messages_storage / post_to_messages / message_to_post, то есть
+        # доставка и реакции на всех досках.
+        if self.author_results and self.author_results[0] and self.author_results[0][1]:
                 sent_messages = self.author_results[0][1]
                 messages_to_process = sent_messages if isinstance(sent_messages, list) else [sent_messages]
                 if self.final_content.get('type') == 'media_group' and messages_to_process:
@@ -3896,13 +3901,16 @@ class NewPostProcessor:
                 await update_post_content(self.current_post_num, self.final_content)
                 author_message_ids_to_archive = [m.message_id for m in (sent_messages if isinstance(sent_messages, list) else [sent_messages])]
                 messages_to_save = sent_messages if isinstance(sent_messages, list) else [sent_messages]
-                messages_storage[self.current_post_num]['author_message_id'] = author_message_ids_to_archive
-                messages_storage[self.current_post_num]['content'] = self.final_content
-                post_to_messages.setdefault(self.current_post_num, {})[self.user_id] = (
-                    author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
-                )
-                for m in messages_to_save:
-                    message_to_post[(self.user_id, m.message_id)] = self.current_post_num
+                async with storage_lock:
+                    stored = messages_storage.get(self.current_post_num)
+                    if stored is not None:
+                        stored['author_message_id'] = author_message_ids_to_archive
+                        stored['content'] = self.final_content
+                    post_to_messages.setdefault(self.current_post_num, {})[self.user_id] = (
+                        author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
+                    )
+                    for m in messages_to_save:
+                        message_to_post[(self.user_id, m.message_id)] = self.current_post_num
 
     async def _enqueue_and_notify(self):
         if not self.is_shadow_muted and self.recipients:
@@ -9626,12 +9634,15 @@ async def cmd_global_unpin(message: types.Message, board_id: str | None, stream:
     await update_board_settings(board_id, {'active_pin': None})
     target_post_num = None
     if message.reply_to_message:
+        # Под локом только чтение карты message_to_post. Запрос к БД (фолбэк,
+        # когда пост уже выгружен из RAM) вынесен наружу: раньше он выполнялся
+        # удерживая storage_lock.
         async with storage_lock:
             key = (message.chat.id, message.reply_to_message.message_id)
             target_post_num = message_to_post.get(key)
-            if not target_post_num:
-                 post_info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
-                 if post_info: target_post_num = post_info[0]
+        if not target_post_num:
+            post_info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
+            if post_info: target_post_num = post_info[0]
     else:
         target_post_num = old_pin
     if not target_post_num:
@@ -20766,6 +20777,11 @@ async def site_posts_broadcaster():
                     b_data = board_data[board_id]
                     content = post.get('content', {})
                     skip_broadcast = False
+                    # Под локом только решение и обновление счётчика постов.
+                    # format_header ниже — обращение к БД, и раньше оно
+                    # выполнялось УДЕРЖИВАЯ storage_lock: фоновый цикл трансляции
+                    # постов с сайта подвешивал доставку и реакции на всех
+                    # досках на время запроса к базе, на каждый пост из очереди.
                     async with storage_lock:
                         is_banned = author_id in b_data.get('users', {}).get('banned', set())
                         m_until = b_data.get('mutes', {}).get(author_id)
@@ -20776,6 +20792,7 @@ async def site_posts_broadcaster():
                             skip_broadcast = True
                         else:
                             state['post_counter'] = max(state.get('post_counter', 0), post_num)
+                    if not skip_broadcast:
                             header = await format_header(board_id, post_num, stream=post_stream)
                             source_content = content
                             if is_new_thread:
@@ -20818,13 +20835,17 @@ async def site_posts_broadcaster():
                                 content['post_num'] = post_num
                             if post.get('reply_to_post_num'):
                                 content['reply_to_post'] = post['reply_to_post_num']
-                            messages_storage[post_num] = {
-                                'author_id': author_id,
-                                'timestamp': datetime.fromtimestamp(post['timestamp'], UTC),
-                                'content': content,
-                                'board_id': board_id,
-                                'thread_id': post.get('thread_id'),
-                            }
+                            # Запись в messages_storage — единственное, что здесь
+                            # действительно требует storage_lock. Короткий блок,
+                            # без обращений к БД и сети.
+                            async with storage_lock:
+                                messages_storage[post_num] = {
+                                    'author_id': author_id,
+                                    'timestamp': datetime.fromtimestamp(post['timestamp'], UTC),
+                                    'content': content,
+                                    'board_id': board_id,
+                                    'thread_id': post.get('thread_id'),
+                                }
                     if skip_broadcast:
                         await mark_broadcast_posts_sent([post_num])
                         continue
