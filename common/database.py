@@ -7759,16 +7759,29 @@ async def clean_old_postcopies_daily():
         while True:
             async with db_lock:
                 await db.execute("BEGIN IMMEDIATE")
-                cursor = await db.execute("""
-                    DELETE FROM PostCopies 
-                    WHERE rowid IN (
-                        SELECT rowid FROM PostCopies 
-                        WHERE post_num < ? 
-                        LIMIT ?
-                    )
-                """, (threshold_post_num, batch_size))
-                deleted = cursor.rowcount
-                await db.execute("COMMIT")
+                try:
+                    cursor = await db.execute("""
+                        DELETE FROM PostCopies
+                        WHERE rowid IN (
+                            SELECT rowid FROM PostCopies
+                            WHERE post_num < ?
+                            LIMIT ?
+                        )
+                    """, (threshold_post_num, batch_size))
+                    deleted = cursor.rowcount
+                    await db.execute("COMMIT")
+                except Exception:
+                    # Без отката транзакция оставалась ОТКРЫТОЙ на общем
+                    # соединении (isolation_level=None): держала RESERVED-блокировку
+                    # против процесса сайта, а последующие записи бота копились
+                    # незакоммиченными и терялись при SIGINT от memory_restarter.
+                    # Остальные ~85 мест с BEGIN IMMEDIATE в этом файле
+                    # откатываются именно так.
+                    try:
+                        await db.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    raise
             total_deleted += deleted
             if deleted == 0:
                 break

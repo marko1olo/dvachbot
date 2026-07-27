@@ -134,6 +134,26 @@ class MultiStreamBotPool:
                     return self._shared_bots[bot_id]
         return None
     
+    def get_all_active_bots(self) -> List[Bot]:
+        """
+        Все уникальные живые боты по всем потокам.
+
+        Нужен для фолбэка при скачивании файлов: file_id принадлежит выдавшему
+        его боту, остальные получают 'file not found', поэтому приходится
+        перебирать весь пул.
+
+        Метод вызывался из site_tgach.tagging_worker.download_file_with_fallback,
+        но НИКОГДА не был определён: каждое скачивание падало с AttributeError,
+        tagging_loop глушил его как 'Crit fail' и откладывал файл на 300 секунд.
+        В результате воркер тегирования не обработал ни одного файла.
+        """
+        for stream_code in ('ru', 'en', 'jp'):
+            self.init_stream(stream_code)
+        return [
+            bot for bot_id, bot in self._shared_bots.items()
+            if bot_id not in self.disabled_bot_ids
+        ]
+
     def get_main_bot(self) -> Optional[Bot]:
         """Возвращает 'главного' бота (первый из RU пула)."""
         self.init_stream('ru')

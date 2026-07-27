@@ -38,6 +38,8 @@ mocked_deps = [
     'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types'
 ]
 
+_SAVED_MODULES = {dep: sys.modules.get(dep) for dep in mocked_deps + ['async_lru']}
+
 for dep in mocked_deps:
     mock_module(dep)
 
@@ -63,6 +65,18 @@ sys.modules['async_lru'].alru_cache = _alru_cache_stub
 # Now we can safely import the function under test
 from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, get_country_by_ip, check_post_cooldown, _resize_image_if_needed, format_poll_for_html
 from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, get_country_by_ip, check_post_cooldown, _resize_image_if_needed, get_user_id_from_session
+
+# Заглушки нужны были только на время импорта выше — символы уже связаны
+# напрямую. Если оставить их в sys.modules, они протекают на весь прогон pytest
+# и роняют посторонние тестовые модули (test_rss и др.), которые изолированно
+# проходят. Возвращаем всё как было.
+for _dep, _previous in _SAVED_MODULES.items():
+    if _previous is None:
+        sys.modules.pop(_dep, None)
+    else:
+        sys.modules[_dep] = _previous
+del _dep, _previous
+
 from unittest.mock import MagicMock, AsyncMock, patch
 import io
 

@@ -35,6 +35,8 @@ except ImportError:
     import json
 import logging
 import os
+import shutil
+import tempfile
 import tracemalloc
 import uuid
 import math
@@ -67,6 +69,7 @@ from logging.handlers import RotatingFileHandler
 from typing import Tuple
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+from common.chart_lock import ChartLockTimeout, matplotlib_guard
 from common.html_utils import escape_html, convert_site_tags_to_telegram
 from common.token_generator import generate_unique_token
 from common.database import (
@@ -1165,9 +1168,28 @@ def _prepare_queue_item(board_id: str, item: dict) -> dict:
         item.setdefault("board_id", board_id)
         item.setdefault("enqueued_at", time.time())
     return item
-async def enqueue_board_message(board_id: str, item: dict) -> None:
+async def enqueue_board_message(board_id: str, item: dict) -> bool:
+    """
+    Кладёт сообщение в очередь доставки доски.
 
-    await message_queues[board_id].put(_prepare_queue_item(board_id, item))
+    Возвращает True при успехе. Неизвестная доска раньше давала голый KeyError:
+    вызывающий код к этому моменту уже успевал записать пост в БД и
+    messages_storage, поэтому пост оставался в базе, но никогда не доставлялся,
+    а исключение рвало хендлер. Теперь это громкая запись в лог и False.
+    """
+    queue = message_queues.get(board_id)
+    if queue is None:
+        print(f"⛔ enqueue_board_message: неизвестная доска '{board_id}', "
+              f"сообщение #{item.get('post_num') if isinstance(item, dict) else '?'} не поставлено в очередь.")
+        runtime_logger.error(
+            "enqueue_unknown_board board=%s post=%s known=%s",
+            board_id,
+            item.get("post_num") if isinstance(item, dict) else None,
+            ",".join(sorted(message_queues)),
+        )
+        return False
+    await queue.put(_prepare_queue_item(board_id, item))
+    return True
 def _contains_volatile_delivery_payload(value, depth: int = 0) -> bool:
 
     if depth > 8:
@@ -2140,6 +2162,43 @@ async def load_state():
                   f"active_total = {active_count}, "
                   f"tg_banned = {banned_tg_count}, "
                   f"banned_total = {banned_count}")
+# Аварийный graceful_shutdown обёрнут в wait_for(timeout=15), поэтому запас
+# на дозапись должен быть заметно меньше общего бюджета остановки.
+SAVE_EXECUTOR_DRAIN_SEC = 5.0
+
+
+async def _drain_save_executor(timeout: float = SAVE_EXECUTOR_DRAIN_SEC) -> None:
+    """
+    Даёт отложенным записям на диск завершиться, не блокируя event loop.
+
+    save_executor.shutdown(wait=True) синхронный и блокирующий. Уводим его в
+    ОТДЕЛЬНЫЙ daemon-поток, а не в asyncio.to_thread: to_thread занял бы
+    дефолтный пул, и по завершении цикла loop.shutdown_default_executor()
+    всё равно дождался бы этого потока, обнулив смысл таймаута.
+    Daemon-поток процесс на выходе не удерживает.
+    """
+    loop = asyncio.get_running_loop()
+    finished = asyncio.Event()
+
+    def _shutdown_and_signal():
+        try:
+            save_executor.shutdown(wait=True)
+        except Exception as e:
+            print(f"⚠️ Ошибка при завершении save_executor: {e}")
+        finally:
+            try:
+                loop.call_soon_threadsafe(finished.set)
+            except RuntimeError:
+                pass  # цикл уже закрыт — ждать всё равно некому
+
+    threading.Thread(target=_shutdown_and_signal, name="save-executor-drain", daemon=True).start()
+    try:
+        await asyncio.wait_for(finished.wait(), timeout=timeout)
+        print("💾 Отложенные записи на диск завершены.")
+    except asyncio.TimeoutError:
+        print(f"⚠️ Записи на диск не уложились в {timeout:g} с — продолжаю остановку.")
+
+
 async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | None = None, emergency: bool = False):
     """
     Корректное завершение работы.
@@ -2189,8 +2248,13 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
         # Закрываем пул (внутри db_pool.py тоже есть защита)
         await close_pool()
         
+        # git_executor может висеть на сетевом push — его ждать нельзя.
         git_executor.shutdown(wait=False, cancel_futures=True)
-        save_executor.shutdown(wait=False, cancel_futures=True)
+        # save_executor — наоборот, это запись на диск (graph.json, threads_data,
+        # архивы тредов). Прежний wait=False + cancel_futures=True выбрасывал
+        # уже поставленные в очередь записи (замерено: 6 из 8) и не дожидался
+        # выполняющейся, а сразу следом memory_restarter шлёт SIGINT.
+        await _drain_save_executor()
     except Exception as e:
         print(f"⚠️ Ошибка при shutdown: {e}")
         
@@ -6143,13 +6207,47 @@ async def execute_delayed_edit(
             current_task = asyncio.current_task()
             if pending_edit_tasks.get(post_num) is current_task:
                 pending_edit_tasks.pop(post_num, None)
+WORKER_RESTART_DELAY_SEC = 2.0
+WORKER_RESTART_MAX_DELAY_SEC = 60.0
+
+
+async def _supervise_message_worker(worker_name: str, board_id: str, bot_instance: Bot) -> None:
+    """
+    Держит воркер доски живым.
+
+    Раньше воркер, вышедший из цикла (например по 'closed database'), исчезал
+    молча: message_broadcaster висел в gather до смерти ВСЕХ воркеров, поэтому
+    рестарта не происходило и доска переставала доставлять сообщения до
+    перезапуска процесса. Теперь каждый воркер поднимается отдельно.
+    """
+    delay = WORKER_RESTART_DELAY_SEC
+    while not (is_shutting_down or drain_shutdown_requested):
+        try:
+            await message_worker(worker_name, board_id, bot_instance)
+            if is_shutting_down or drain_shutdown_requested:
+                return
+            print(f"⚠️ {worker_name} завершился без запроса остановки. Перезапуск через {delay:.0f} с.")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            if is_shutting_down or drain_shutdown_requested:
+                return
+            print(f"⛔ {worker_name} упал: {type(e).__name__}: {str(e)[:200]}. Перезапуск через {delay:.0f} с.")
+            runtime_logger.exception("message_worker_crashed board=%s", board_id)
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, WORKER_RESTART_MAX_DELAY_SEC)
+
+
 async def message_broadcaster(bots: dict[str, Bot]):
 
     tasks = [
-        spawn_task(message_worker(f"Worker-{board_id}", board_id, bot_instance))
+        spawn_task(_supervise_message_worker(f"Worker-{board_id}", board_id, bot_instance))
         for board_id, bot_instance in bots.items()
     ]
-    await asyncio.gather(*tasks)
+    # return_exceptions: падение одного супервизора не должно ронять
+    # message_broadcaster целиком (иначе _run_background_task поднимет ВТОРОЙ
+    # комплект воркеров поверх ещё живых первых).
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 class MessageDeliveryTask:
     """
@@ -6443,8 +6541,16 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
         except asyncio.CancelledError:
             break
         except Exception as e:
-            if "closed database" in str(e).lower() or is_shutting_down:
+            if is_shutting_down or drain_shutdown_requested:
                 break
+            # 'closed database' раньше означал break, то есть тихую смерть воркера
+            # доски навсегда. Ошибка восстановимая: get_pool() переподключается
+            # сам, поэтому ждём чуть дольше и продолжаем разгребать очередь.
+            if "closed database" in str(e).lower():
+                print(f"{worker_name} | ⚠️ Соединение с БД было закрыто, жду переподключения пула...")
+                runtime_logger.warning("message_worker_db_closed board=%s", board_id)
+                await asyncio.sleep(5)
+                continue
             print(f"{worker_name} | ⛔ Критическая ошибка: {str(e)[:200]}")
             import traceback
             traceback.print_exc()
@@ -7812,6 +7918,17 @@ def _generate_calendar_heatmap(ctx):
 
 def _generate_stats_charts(board_id: str) -> list[bytes]:
     """Generate 4 activity charts for board_id. Returns list of PNG bytes."""
+    # rcParams.update ниже трогает ГЛОБАЛЬНОЕ состояние pyplot, а функция
+    # вызывается через run_in_executor(None, ...). См. common/chart_lock.py.
+    try:
+        with matplotlib_guard():
+            return _generate_stats_charts_locked(board_id)
+    except ChartLockTimeout as e:
+        print(f"⛔ Графики /stats не построены: {e}")
+        return []
+
+
+def _generate_stats_charts_locked(board_id: str) -> list[bytes]:
     import io as _io
     import sqlite3 as _sqlite3
     import numpy as _np
@@ -9866,26 +9983,138 @@ def get_board_id(telegram_object: types.Message | types.CallbackQuery) -> str | 
         return TOKEN_TO_BOARD_MAP.get(bot_token)
     except AttributeError:
         return None
-def _sync_save_graph_stats(data_to_save: dict):
+GRAPH_STATS_PATH = "graph.json"
+GRAPH_STATS_BACKUP_PATH = "graph.json.bak"
+GRAPH_STATS_RETENTION_DAYS = 90  # /graph принимает максимум 30d, держим тройной запас
 
+
+def _sync_save_graph_stats(data_to_save: dict) -> bool:
+    """
+    Атомарно сохраняет статистику графика на диск.
+
+    Пишем во временный файл в той же директории, фсинкаем и только потом
+    подменяем боевой через os.replace (атомарен на Windows и POSIX).
+    Так внезапный SIGINT от memory_restarter не может оставить обрезанный
+    graph.json. Предыдущая удачная версия сохраняется в .bak.
+    """
+    tmp_path = ""
     try:
-        with open("graph.json", 'w', encoding='utf-8') as f:
+        directory = os.path.dirname(os.path.abspath(GRAPH_STATS_PATH))
+        fd, tmp_path = tempfile.mkstemp(prefix=".graph_", suffix=".tmp", dir=directory)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+
+        # Ротация бэкапа перед подменой: если новый файл окажется плохим,
+        # load_graph_stats поднимет предыдущий.
+        if os.path.exists(GRAPH_STATS_PATH):
+            try:
+                shutil.copyfile(GRAPH_STATS_PATH, GRAPH_STATS_BACKUP_PATH)
+            except OSError as e:
+                print(f"⚠️ Не удалось обновить {GRAPH_STATS_BACKUP_PATH}: {e}")
+
+        os.replace(tmp_path, GRAPH_STATS_PATH)
+        tmp_path = ""
         return True
     except Exception as e:
         print(f"⛔ Ошибка в потоке сохранения graph.json: {e}")
         return False
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+def _coerce_graph_stats(raw) -> dict:
+    """
+    Приводит загруженный JSON к ожидаемой форме {board_id: {iso_ts: int}}.
+
+    Файл могли отредактировать руками или он мог прийти из старой версии,
+    поэтому не доверяем структуре: _prepare_graph_data и graph_data_collector
+    падают на любом не-dict значении.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    cleaned = {}
+    for board_id, series in raw.items():
+        if not isinstance(board_id, str) or not isinstance(series, dict):
+            continue
+        board_series = {}
+        for ts_key, count in series.items():
+            if not isinstance(ts_key, str):
+                continue
+            if isinstance(count, bool) or not isinstance(count, (int, float)):
+                continue
+            board_series[ts_key] = int(count)
+        if board_series:
+            cleaned[board_id] = board_series
+    return cleaned
+
+
+def _prune_graph_stats(data: dict, retention_days: int = GRAPH_STATS_RETENTION_DAYS) -> int:
+    """Выбрасывает точки старше retention_days. Возвращает число удалённых."""
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    removed = 0
+    for board_id in list(data.keys()):
+        series = data[board_id]
+        for ts_key in list(series.keys()):
+            try:
+                point_dt = datetime.fromisoformat(ts_key)
+            except ValueError:
+                # Нераспознаваемый ключ — он всё равно уронит pd.to_datetime
+                series.pop(ts_key, None)
+                removed += 1
+                continue
+            if point_dt.tzinfo is None:
+                point_dt = point_dt.replace(tzinfo=UTC)
+            if point_dt < cutoff:
+                series.pop(ts_key, None)
+                removed += 1
+        if not series:
+            data.pop(board_id, None)
+    return removed
+
+
+def _report_graph_save_result(future) -> None:
+    """Callback для run_in_executor: не даём ошибке записи утонуть без следа."""
+    try:
+        if future.result() is False:
+            print("⚠️ graph.json не сохранён (см. ошибку выше), данные остались только в RAM.")
+    except Exception as e:
+        print(f"⛔ Поток сохранения graph.json упал: {type(e).__name__}: {e}")
+
+
 def load_graph_stats():
 
     global graph_stats
-    if os.path.exists("graph.json"):
+    for path, label in ((GRAPH_STATS_PATH, "graph.json"), (GRAPH_STATS_BACKUP_PATH, "graph.json.bak")):
+        if not os.path.exists(path):
+            continue
         try:
-            with open("graph.json", 'r', encoding='utf-8') as f:
-                graph_stats = json.load(f)
-            print(f"✅ Статистика для графика (graph.json) загружена.")
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"⚠️ Не удалось загрузить graph.json: {e}. Файл будет создан заново.")
-            graph_stats = {}
+            with open(path, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+            print(f"⚠️ Не удалось прочитать {label}: {type(e).__name__}: {e}")
+            continue
+
+        loaded = _coerce_graph_stats(raw)
+        if not loaded and raw:
+            print(f"⚠️ В {label} нет ни одной валидной серии "
+                  f"(корень: {type(raw).__name__}), пропускаю файл.")
+            continue
+
+        dropped = _prune_graph_stats(loaded)
+        graph_stats = loaded
+        points = sum(len(series) for series in loaded.values())
+        suffix = f", отброшено {dropped} устаревших точек" if dropped else ""
+        print(f"✅ Статистика для графика ({label}) загружена: {len(loaded)} досок, {points} точек{suffix}.")
+        return
+
+    print("ℹ️ graph.json отсутствует или повреждён — статистика графика начнётся с нуля.")
+    graph_stats = {}
 async def graph_data_collector():
     """
     Фоновая задача, которая раз в час собирает статистику постов
@@ -9919,9 +10148,19 @@ async def graph_data_collector():
             for board_id, count in posts_per_hour.items():
                 if count > 0:
                     graph_stats.setdefault(board_id, {})[timestamp_key] = count
-            print(f"📊 Статистика для графика собрана за {timestamp_key}. Активные доски: {list(posts_per_hour.keys())}")
-            # Сохраняем на диск в фоновом потоке
-            asyncio.get_running_loop().run_in_executor(save_executor, _sync_save_graph_stats, graph_stats.copy())
+            dropped = _prune_graph_stats(graph_stats)
+            pruned_note = f", подрезано {dropped} точек старше {GRAPH_STATS_RETENTION_DAYS}д" if dropped else ""
+            print(f"📊 Статистика для графика собрана за {timestamp_key}. Активные доски: {list(posts_per_hour.keys())}{pruned_note}")
+
+            # Сохраняем на диск в фоновом потоке.
+            # graph_stats.copy() был поверхностным: поток сериализовал те же вложенные
+            # dict'ы, которые здесь мутируются -> "dict changed size during iteration".
+            # Снимаем полноценный снапшот и логируем провал записи, а не глотаем его.
+            snapshot = {board_id: dict(series) for board_id, series in graph_stats.items()}
+            save_future = asyncio.get_running_loop().run_in_executor(
+                save_executor, _sync_save_graph_stats, snapshot
+            )
+            save_future.add_done_callback(_report_graph_save_result)
         except asyncio.CancelledError:
             print("ℹ️ Сборщик статистики для графика остановлен.")
             break
@@ -9998,7 +10237,19 @@ def generate_statistics_graph(board_id: str, days: int) -> bytes | None:
     if not GRAPH_LIBS_AVAILABLE:
         print("⛔ Зависимости для графиков (pandas, matplotlib) не установлены.")
         return None
-    plt.close('all') 
+    # Крутится в дефолтном пуле потоков (до 32 воркеров), а plt.style.use ниже
+    # заменяет ГЛОБАЛЬНЫЕ rcParams. Без замка два параллельных /graph рисовали
+    # друг другу чужую тему. См. common/chart_lock.py.
+    try:
+        with matplotlib_guard():
+            return _generate_statistics_graph_locked(board_id, days)
+    except ChartLockTimeout as e:
+        print(f"⛔ График не построен: {e}")
+        return None
+
+
+def _generate_statistics_graph_locked(board_id: str, days: int) -> bytes | None:
+    plt.close('all')
     try:
         df_resampled = _prepare_graph_data(board_id, days)
         if df_resampled is None:
@@ -14364,6 +14615,157 @@ async def memory_logger_task():
         except Exception as e:
             print(f"Критическая ошибка в memory_logger_task: {e}")
             await asyncio.sleep(600)
+# Окна хранения для per-user трекеров (секунды).
+# Каждое НАМНОГО больше функционального окна соответствующей проверки,
+# поэтому подрезка физически не может изменить поведение антиспама.
+STALE_TRACKER_TTL = 3600          # для окон в 0.5-60 сек
+STALE_DAILY_TRACKER_TTL = 172800  # для суточных лимитов (окно 86400)
+
+
+def _prune_by_timestamp(mapping: dict, now: float, ttl: float) -> int:
+    """Удаляет ключи из {key: timestamp}, чей timestamp старше ttl."""
+    stale = [k for k, ts in mapping.items() if not isinstance(ts, (int, float)) or now - ts > ttl]
+    for k in stale:
+        mapping.pop(k, None)
+    return len(stale)
+
+
+def _prune_timestamp_sequences(mapping: dict, now: float, ttl: float) -> int:
+    """
+    Удаляет ключи из {key: [ts, ...]} / {key: deque([...])}, где нет ни одной
+    свежей отметки. Элементом может быть как float, так и кортеж (ts, ...).
+    """
+    def _newest(seq) -> float:
+        newest = 0.0
+        for item in seq:
+            ts = item[0] if isinstance(item, tuple) and item else item
+            if isinstance(ts, (int, float)) and ts > newest:
+                newest = float(ts)
+        return newest
+
+    stale = []
+    for key, seq in mapping.items():
+        try:
+            if not seq or now - _newest(seq) > ttl:
+                stale.append(key)
+        except TypeError:
+            stale.append(key)
+    for k in stale:
+        mapping.pop(k, None)
+    return len(stale)
+
+
+def _prune_idle_locks(locks: dict) -> int:
+    """
+    Удаляет незанятые asyncio.Lock.
+
+    Безопасно: неконкурентный `async with lock` не отдаёт управление event loop
+    (Lock.acquire возвращается синхронно, если lock свободен), поэтому у
+    свободного лока без waiters не может быть таска "в процессе захвата".
+    Занятые и ожидаемые локи не трогаем.
+    """
+    stale = []
+    for key, lock in locks.items():
+        try:
+            if not lock.locked() and not getattr(lock, "_waiters", None):
+                stale.append(key)
+        except Exception:
+            continue
+    for k in stale:
+        locks.pop(k, None)
+    return len(stale)
+
+
+def _prune_contextual_reply_tracker(now: float, ttl: float) -> int:
+    """Чистит {(board, user): {'last','window_start','count'}} по самой свежей отметке."""
+    stale = []
+    for key, item in contextual_reply_tracker.items():
+        if not isinstance(item, dict):
+            stale.append(key)
+            continue
+        newest = max(
+            float(item.get("last") or 0.0),
+            float(item.get("window_start") or 0.0),
+        )
+        if now - newest > ttl:
+            stale.append(key)
+    for k in stale:
+        contextual_reply_tracker.pop(k, None)
+    return len(stale)
+
+
+def _prune_shadow_fake_counters() -> int:
+    """
+    Чистит {(board, user): fake_post_num} для юзеров, снятых с шэдоу-мута.
+
+    Времени в записи нет, поэтому единственный корректный критерий —
+    пользователь больше не в shadow_mutes своей доски.
+    """
+    stale = []
+    for key in shadow_fake_post_counters:
+        if not (isinstance(key, tuple) and len(key) == 2):
+            stale.append(key)
+            continue
+        board_id, user_id = key
+        if board_id not in board_data:
+            stale.append(key)
+            continue
+        if user_id not in board_data[board_id].get('shadow_mutes', {}):
+            stale.append(key)
+    for k in stale:
+        shadow_fake_post_counters.pop(k, None)
+    return len(stale)
+
+
+def _sweep_stale_runtime_maps() -> dict[str, int]:
+    """
+    Подрезает per-user словари, которые росли без ограничений.
+
+    Все эти карты попадают в телеметрию (_collect_global_maps_snapshot), но
+    раньше их никто не чистил: на боте с большим оборотом пользователей они
+    держали десятки тысяч мёртвых записей до самого memory_restarter.
+    Синхронная функция без await — прерваться посреди подрезки нельзя.
+    """
+    now = time.time()
+    removed: dict[str, int] = {}
+
+    def _note(name: str, count: int) -> None:
+        if count:
+            removed[name] = count
+
+    for name, mapping in (
+        ("user_last_thread_action", user_last_thread_action),
+        ("reaction_ratelimit", reaction_ratelimit),
+        ("last_poll_creation_time", last_poll_creation_time),
+        ("last_poll_vote_time", last_poll_vote_time),
+        ("user_hourly_image_reset", user_hourly_image_reset),
+    ):
+        _note(name, _prune_by_timestamp(mapping, now, STALE_TRACKER_TTL))
+
+    # Счётчик картинок живёт в паре с меткой сброса — выкидываем осиротевшие.
+    orphan_counts = [uid for uid in user_hourly_image_count if uid not in user_hourly_image_reset]
+    for uid in orphan_counts:
+        user_hourly_image_count.pop(uid, None)
+    _note("user_hourly_image_count", len(orphan_counts))
+
+    for name, mapping in (
+        ("unknown_command_tracker", unknown_command_tracker),
+        ("author_reaction_notify_tracker", author_reaction_notify_tracker),
+        # держит тексты сообщений (ts, board, content) -> самый жирный из трекеров
+        ("cross_board_spam_tracker", cross_board_spam_tracker),
+    ):
+        _note(name, _prune_timestamp_sequences(mapping, now, STALE_TRACKER_TTL))
+
+    _note("contextual_reply_tracker",
+          _prune_contextual_reply_tracker(now, STALE_DAILY_TRACKER_TTL))
+    _note("shadow_fake_post_counters", _prune_shadow_fake_counters())
+
+    for name, locks in (("generate_locks", generate_locks), ("user_spam_locks", user_spam_locks)):
+        _note(name, _prune_idle_locks(locks))
+
+    return removed
+
+
 async def auto_memory_cleaner():
     """
     Фоновая задача для периодической очистки закэшированных данных в глобальных словарях,
@@ -14372,28 +14774,32 @@ async def auto_memory_cleaner():
     while True:
         try:
             await asyncio.sleep(3600)  # Запускаем раз в час
-            
-            cleaned_count = 0
-            
+
             # 1. Очистка stream_cache
             cache_size = len(stream_cache)
             stream_cache.clear()
-            if cache_size > 0:
-                cleaned_count += 1
-                
+
             # 2. Очистка завершенных pending_edit_tasks
             done_tasks = [k for k, t in pending_edit_tasks.items() if t.done()]
             for k in done_tasks:
                 pending_edit_tasks.pop(k, None)
-                cleaned_count += 1
-                
-            if cleaned_count > 0:
-                print(f"🧹 [Memory Cleaner] Очищено {len(done_tasks)} мертвых тасок и кэш стримов ({cache_size}).")
-                
+
+            # 3. Подрезка per-user трекеров, которые росли безгранично
+            removed = _sweep_stale_runtime_maps()
+
+            total_stale = sum(removed.values())
+            if done_tasks or cache_size or total_stale:
+                detail = ", ".join(f"{name}={count}" for name, count in
+                                   sorted(removed.items(), key=lambda kv: kv[1], reverse=True))
+                print(f"🧹 [Memory Cleaner] Мертвых тасок: {len(done_tasks)}, кэш стримов: {cache_size}, "
+                      f"устаревших записей: {total_stale}"
+                      + (f" ({detail})" if detail else ""))
+
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"Ошибка в auto_memory_cleaner: {e}")
+            print(f"Ошибка в auto_memory_cleaner: {type(e).__name__}: {e}")
+            runtime_logger.exception("auto_memory_cleaner_failed")
             await asyncio.sleep(60)
 
 async def runtime_telemetry_task():
@@ -18624,6 +19030,23 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
     media_group_timers[media_group_key] = spawn_task(
         complete_media_group_after_delay(media_group_key, message.bot, delay=1.5)
     )
+def _release_media_group_timer(media_group_key: str) -> None:
+    """
+    Снимает запись таймера альбома, ТОЛЬКО если она принадлежит текущей задаче.
+
+    Каждое новое сообщение альбома отменяет предыдущий таймер и кладёт на его
+    место новый. Отменённая задача не должна снести чужую запись, иначе
+    недособранный альбом останется без таймера и не будет опубликован.
+    Тот же приём, что и для pending_edit_tasks.
+    """
+    try:
+        current = asyncio.current_task()
+    except RuntimeError:
+        current = None
+    if media_group_timers.get(media_group_key) is current:
+        media_group_timers.pop(media_group_key, None)
+
+
 async def complete_media_group_after_delay(media_group_key: str, bot_instance: Bot, delay: float = 1.5):
     """
     (ИСПРАВЛЕННАЯ ВЕРСИЯ)
@@ -18633,8 +19056,11 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
         await asyncio.sleep(delay)
         group = current_media_groups.pop(media_group_key, None)
         if not group or media_group_key in sent_media_groups:
+            # Раньше выход отсюда происходил ДО media_group_timers.pop ниже,
+            # и запись таймера оставалась висеть навсегда (замерено: утечка на
+            # каждом дубликате альбома и на каждой гонке двух таймеров).
+            # Теперь уборкой занимается finally.
             return
-        media_group_timers.pop(media_group_key, None)
         raw_messages = group.get('raw_messages', [])
         if not raw_messages:
             return
@@ -18674,16 +19100,18 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
         group['media'] = final_media_list
         await process_complete_media_group(media_group_key, group, bot_instance)
         current_media_groups.pop(media_group_key, None)
-        media_group_timers.pop(media_group_key, None)
         # --- ИЗМЕНЕНИЕ: Удалена опасная строка sent_media_groups.remove ---
         # Объекты в sent_media_groups (deque с maxlen) удаляются сами при переполнении.
         # Попытка удалить их вручную вызывала ValueError, если ID уже вытеснен.
     except asyncio.CancelledError:
+        # Таймер заменён более свежим сообщением альбома: current_media_groups
+        # НЕ трогаем — группу продолжает собирать новая задача.
         pass
     except Exception as e:
         print(f"❌ Ошибка в complete_media_group_after_delay для {media_group_key}: {e}")
         current_media_groups.pop(media_group_key, None)
-        media_group_timers.pop(media_group_key, None)
+    finally:
+        _release_media_group_timer(media_group_key)
 async def process_complete_media_group(media_group_key: str, group: dict, bot_instance: Bot):
     if not group or not group.get('media'):
         return
