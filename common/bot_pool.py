@@ -177,12 +177,22 @@ class MultiStreamBotPool:
         if bot:
             if bot in self.all_bots:
                 self.all_bots.remove(bot)
-            # Закрываем сессию асинхронно с проверкой наличия event loop
+            # Закрываем сессию асинхронно с проверкой наличия event loop.
+            # Через spawn_task, а не голым loop.create_task: цикл событий
+            # держит на задачу только СЛАБУЮ ссылку, и задача без своей
+            # ссылки может быть собрана сборщиком мусора прямо во время
+            # выполнения. Тогда сессия aiohttp мёртвого бота не закрывалась
+            # бы никогда - утечка сокета и памяти на каждом разлогине.
+            # Ровно для этого в проекте есть task_manager, через него идут
+            # все 162 остальные фоновые задачи; это место было единственным
+            # в обход. Он же логирует падение с именем задачи.
             try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._close_bot_session(bot))
+                asyncio.get_running_loop()
             except RuntimeError:
                 pass
+            else:
+                from common.task_manager import spawn_task
+                spawn_task(self._close_bot_session(bot))
 
         # Удаляем из bots_map во всех регионах и перестраиваем итераторы
         for stream_code, bots in self.bots_map.items():
