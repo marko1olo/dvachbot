@@ -728,6 +728,13 @@ async def _create_indices(db):
         "CREATE INDEX IF NOT EXISTS idx_broadcastqueue_pending "
         "ON BroadcastQueue(post_num) WHERE is_sent_to_tg = 0;"
     )
+    # Под суточную чистку MediaReposts: условие индекса дословно повторяет
+    # условие DELETE (times = 1), поэтому строки-баяны в индекс не попадают,
+    # а выборка кандидатов идёт по first_seen вместо полного скана таблицы.
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mediareposts_singleton_age "
+        "ON MediaReposts(first_seen) WHERE times = 1;"
+    )
     await db.execute("CREATE INDEX IF NOT EXISTS idx_deliveryqueue_status_board ON DeliveryQueue(status, board_id, id);")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_deliveryqueue_post_phase ON DeliveryQueue(post_num, board_id, delivery_phase, status);")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_logs_time ON GlobalLogs(created_at);")
@@ -7991,6 +7998,72 @@ async def clean_old_postcopies_daily():
         logging.getLogger("database").error(f"⚠️ [POSTCOPIES_CLEANUP] Ошибка ежедневной чистки: {e}")
         return 0
 
+# Сколько держим запись о медиа, которое видели РОВНО ОДИН раз.
+# Такие строки — подавляющая часть таблицы и нужны лишь затем, чтобы опознать
+# будущий баян. Строки с times > 1 (собственно баяны) не удаляются: их на
+# порядки меньше, и именно они несут смысл.
+MEDIA_REPOSTS_RETENTION_DAYS = 180
+
+
+async def clean_old_media_reposts_daily() -> int:
+    """
+    Ограничивает рост MediaReposts.
+
+    Таблица заводится по строке на каждый УНИКАЛЬНЫЙ файл на доске и без этой
+    чистки росла бы бесконечно: детектор баянов был добавлен без удержания.
+    Плата за удержание — репост картинки старше 180 дней баяном уже не
+    считается. Это осознанный размен: смысл у баяна есть, пока помнят
+    оригинал.
+    """
+    from common.db_pool import get_pool, db_lock
+
+    cutoff = time.time() - (MEDIA_REPOSTS_RETENTION_DAYS * 86400)
+    total_deleted = 0
+    batch_size = 50000
+    try:
+        db = await get_pool()
+        if not db:
+            return 0
+        while True:
+            async with db_lock:
+                await db.execute("BEGIN IMMEDIATE")
+                try:
+                    cursor = await db.execute(
+                        """
+                        DELETE FROM MediaReposts
+                        WHERE rowid IN (
+                            SELECT rowid FROM MediaReposts
+                            WHERE times = 1 AND first_seen IS NOT NULL AND first_seen < ?
+                            LIMIT ?
+                        )
+                        """,
+                        (cutoff, batch_size),
+                    )
+                    deleted = cursor.rowcount or 0
+                    await db.execute("COMMIT")
+                except Exception:
+                    try:
+                        await db.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    raise
+            total_deleted += deleted
+            if deleted == 0:
+                break
+            # Уступаем цикл событий между пачками, как в чистке PostCopies.
+            await asyncio.sleep(0.5)
+
+        if total_deleted > 0:
+            logging.getLogger("database").info(
+                f"🧹 [REPOSTS_CLEANUP] Удалено {total_deleted:,} записей о медиа "
+                f"старше {MEDIA_REPOSTS_RETENTION_DAYS} дней, показанном один раз."
+            )
+        return total_deleted
+    except Exception as e:
+        logging.getLogger("database").error(f"⚠️ [REPOSTS_CLEANUP] Ошибка чистки: {e}")
+        return 0
+
+
 async def postcopies_daily_cleanup_loop():
     """
     Запускает ежедневную очистку PostCopies ровно в 00:00 MSK (UTC+3).
@@ -8004,6 +8077,10 @@ async def postcopies_daily_cleanup_loop():
             sleep_sec = (next_run - now_msk).total_seconds()
             await asyncio.sleep(max(10, sleep_sec))
             await clean_old_postcopies_daily()
+            # Второй уборщик в том же суточном цикле: отдельная фоновая задача
+            # ради одного DELETE в сутки не нужна, а падение любого из двух
+            # ловится общим except ниже и не роняет цикл.
+            await clean_old_media_reposts_daily()
         except asyncio.CancelledError:
             break
         except Exception as e:
