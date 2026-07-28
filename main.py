@@ -7423,8 +7423,9 @@ async def _handle_shoot_bounce(ctx: ShootContext):
         pass
 
 async def _handle_shoot_success(ctx: ShootContext):
-    message, db, db_lock = ctx.message, ctx.db, ctx.db_lock
-    board_id, user_id, target_id, active_items = ctx.board_id, ctx.user_id, ctx.target_id, ctx.active_items
+    # Распаковка ctx в локальные имена удалена: тело функции целиком обращается
+    # к ctx.<поле>, ни одно из семи имён не читалось. Остаток того же
+    # незавершённого рефакторинга, что ломал _handle_shoot_bounce выше.
     async with storage_lock:
         board_data[ctx.board_id]['mutes'][ctx.target_id] = datetime.now(UTC) + timedelta(seconds=3600)
     await apply_regular_mute(ctx.target_id, ctx.board_id, 3600)

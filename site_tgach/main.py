@@ -2067,7 +2067,11 @@ async def ddos_guard_middleware(request: Request, call_next):
     if client_ip in blacklist_raw.split(","):
         return Response("Banned by AI security", status_code=403)
 
-    is_tor = client_ip in TOR_EXIT_NODES
+    # Здесь вычислялось is_tor (принадлежность client_ip к TOR_EXIT_NODES) и
+    # больше нигде не использовалось - особой обработки выходных узлов Tor в
+    # этом middleware нет. Убрано: проверка шла на КАЖДЫЙ HTTP-запрос.
+    # Если такая политика нужна, её надо вводить осознанно, а не оживлять
+    # мёртвую переменную.
     # 1. Проверка белого списка (кэшированная настройка из БД)
     whitelist_raw = await get_setting_cached("ip_whitelist") or ""
     if client_ip in whitelist_raw.split(","):
@@ -7434,7 +7438,11 @@ async def api_create_post(
             f"🤖 BOT TRAPPED: IP {get_remote_address(request)} filled honeypot."
         )
         return {"Status": "OK", "Num": 0}
-    captcha_enabled = (await get_system_setting("captcha_enabled")) == "true"
+    # Чтение captcha_enabled отсюда убрано: результат никуда не шёл и ни разу
+    # не проверялся. Капчу включает global_captcha ниже, читая ту же настройку
+    # заново. get_system_setting кэша НЕ имеет (в отличие от соседней
+    # get_setting_cached с alru_cache ttl=60), так что это был лишний запрос к
+    # БД на КАЖДЫЙ пост.
     is_guest = user.get("is_guest", False)
     user_is_trusted = False
     if not is_guest:
