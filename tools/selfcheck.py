@@ -386,6 +386,18 @@ def check_growth(report):
 
 
 # --------------------------------------------------------------------------
+# Команды, у которых дубль dp + роутер РАЗОБРАН и оставлен осознанно.
+# По каждой из пяти сверены обе реализации построчно, и версия из main.py
+# оказалась не просто «текущей», а более правильной: в мёртвой /curse
+# проклятие пишется в колонку, которую никто не читает; в мёртвой /shit
+# предмет не расходуется при отскоке; мёртвая /mega закрепляет пост в личном
+# чате вызвавшего вместо доски. Решение владельца - оставить рабочие версии
+# как есть. Подробный разбор и то, что из мёртвых версий стоило бы перенести,
+# лежит в докстроке economy_extension.py.
+# ЛЮБАЯ НОВАЯ такая пара по-прежнему будет найдена: список закрытый.
+ACCEPTED_DP_ROUTER_DUPES = frozenset({"rob", "curse", "mega", "partyvan", "shit"})
+
+
 def check_handlers(report):
     """Команды и callback-и, зарегистрированные дважды.
 
@@ -472,6 +484,8 @@ def check_handlers(report):
                                     scoped[v.lower()].setdefault(
                                         scope, f"{path}:{node.lineno} {node.name}()")
     for cmd, where in sorted(scoped.items()):
+        if cmd in ACCEPTED_DP_ROUTER_DUPES:
+            continue
         if "dp" in where and "router" in where:
             report(where["router"].split(":")[0], int(where["router"].split(":")[1].split()[0]),
                    f"/{cmd} зарегистрирована и на dp ({where['dp']}), и на роутере "
