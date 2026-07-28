@@ -41,6 +41,32 @@ from common.config import (
     POST_COPY_RETENTION_POSTS,
 )
 logger = logging.getLogger(__name__)
+
+# Максимум параметров в одном запросе с IN (?, ?, ...).
+# У SQLite жёсткий предел SQLITE_LIMIT_VARIABLE_NUMBER (32766 в текущей
+# сборке). При его превышении драйвер поднимает
+# OperationalError: too many SQL variables, а обработчики ошибок в этом
+# модуле ретраят только "locked"/"busy" — то есть такая ошибка не
+# восстанавливается сама и роняет вызов целиком.
+# 900 берём с запасом: остаётся место под остальные параметры запроса,
+# и батч безопасен на сборках с меньшим лимитом.
+SQL_VAR_CHUNK = 900
+
+
+def iter_sql_chunks(items, chunk_size: int = SQL_VAR_CHUNK):
+    """
+    Режет список параметров на куски, гарантированно влезающие в лимит
+    переменных SQLite.
+
+    Нужен там, где длину IN (...) задаёт не код, а накопленные данные:
+    очереди между сайтом и ботом растут во время простоя другой стороны
+    и потолка не имеют.
+    """
+    items = list(items)
+    for start in range(0, len(items), chunk_size):
+        yield items[start:start + chunk_size]
+
+
 RE_POST_REF = re.compile(r"(?:>>|&gt;&gt;)(\d+)")
 RE_BOARD_POST_REF = re.compile(r"(?:>>|&gt;&gt;)/([a-z0-9]+)/(\d+)")
 
@@ -2783,21 +2809,32 @@ async def get_posts_from_broadcast_queue(last_timestamp: float) -> tuple[list[di
             return [], last_timestamp
         post_nums = [row[0] for row in rows]
         max_created_at = max(row[1] for row in rows)
-        placeholders = ','.join('?' for _ in post_nums)
-        posts_query = f"SELECT * FROM Posts WHERE post_num IN ({placeholders}) ORDER BY timestamp ASC"
+        # Читаем пачками: длина IN (...) равна числу постов, накопившихся с
+        # прошлого опроса. Если листенер сайта надолго встанет, а бот
+        # продолжит писать, набор перейдёт лимит переменных SQLite. Ошибка
+        # уходила бы в except, откуда возвращается ПРЕЖНИЙ last_timestamp —
+        # то есть следующий опрос читал бы тот же (уже больший) набор и падал
+        # там же. Защёлка навсегда: очередь сайта переставала разгребаться.
         processed_posts = []
-        async with db.execute(posts_query, post_nums) as cursor:
-            columns = [description[0] for description in cursor.description]
-            posts_data = await cursor.fetchall()
-            for post_row in posts_data:
-                post_dict = dict(zip(columns, post_row))
-                if 'post_num' not in post_dict: continue
-                try:
-                    if isinstance(post_dict.get('content'), str):
-                        post_dict['content'] = json.loads(post_dict['content'])
-                    processed_posts.append(post_dict)
-                except (json.JSONDecodeError, TypeError):
-                    continue
+        for chunk in iter_sql_chunks(post_nums):
+            placeholders = ','.join('?' for _ in chunk)
+            posts_query = f"SELECT * FROM Posts WHERE post_num IN ({placeholders})"
+            async with db.execute(posts_query, chunk) as cursor:
+                columns = [description[0] for description in cursor.description]
+                posts_data = await cursor.fetchall()
+                for post_row in posts_data:
+                    post_dict = dict(zip(columns, post_row))
+                    if 'post_num' not in post_dict: continue
+                    try:
+                        if isinstance(post_dict.get('content'), str):
+                            post_dict['content'] = json.loads(post_dict['content'])
+                        processed_posts.append(post_dict)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+        # ORDER BY перенесён из SQL в Python: сортировать надо весь результат,
+        # а не каждую пачку по отдельности. Контракт (посты по возрастанию
+        # timestamp) сохранён.
+        processed_posts.sort(key=lambda p: (p.get('timestamp') or 0, p.get('post_num') or 0))
         return processed_posts, max_created_at
     except Exception as e:
         print(f"⛔ ОШИБКА в get_posts_from_broadcast_queue: {e}")
@@ -2915,11 +2952,9 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
                 # НАВСЕГДА: очередь больше не разгребалась ни при одном цикле.
                 # В BroadcastQueue попадает КАЖДЫЙ пост (create_post), так что
                 # после долгого простоя это достижимо.
-                BROADCAST_FETCH_CHUNK = 900
                 columns = []
                 posts_data = []
-                for start in range(0, len(post_nums), BROADCAST_FETCH_CHUNK):
-                    chunk = post_nums[start:start + BROADCAST_FETCH_CHUNK]
+                for chunk in iter_sql_chunks(post_nums):
                     placeholders = ','.join('?' for _ in chunk)
                     post_query = f"SELECT * FROM Posts WHERE post_num IN ({placeholders})"
                     # Используем execute напрямую, так как мы внутри транзакции
@@ -3513,10 +3548,15 @@ async def get_and_clear_reaction_queue() -> list[dict]:
                     result_data.append(d)
                     ids_to_delete.append(d["id"])
                     
-                if ids_to_delete:
-                    placeholders = ','.join('?' for _ in ids_to_delete)
-                    await db.execute(f"DELETE FROM ReactionQueue WHERE id IN ({placeholders});", ids_to_delete)
-                    
+                # Пачками: очередь пишет сайт, разгребает бот. Пока бот лежит,
+                # реакции копятся без потолка, и одним DELETE ... IN (...) их
+                # уже не удалить — запрос упал бы на лимите переменных SQLite,
+                # ROLLBACK отменил бы и чтение, и очередь осталась бы навсегда.
+                for chunk in iter_sql_chunks(ids_to_delete):
+                    placeholders = ','.join('?' for _ in chunk)
+                    await db.execute(f"DELETE FROM ReactionQueue WHERE id IN ({placeholders});", chunk)
+
+
                 await db.execute("COMMIT")
                 return result_data
                 
@@ -6865,8 +6905,12 @@ async def get_and_clear_admin_actions() -> list[dict]:
                 
                 # 2. Очищаем очередь (удаляем всё, что прочитали)
                 ids = [r[0] for r in rows]
-                placeholders = ','.join('?' for _ in ids)
-                await db.execute(f"DELETE FROM AdminActionQueue WHERE id IN ({placeholders})", ids)
+                # Пачками — тот же лимит переменных SQLite. Админ-действий
+                # много не бывает, но цена защиты нулевая, а отказ был бы
+                # такой же необратимой защёлкой, как в остальных очередях.
+                for chunk in iter_sql_chunks(ids):
+                    placeholders = ','.join('?' for _ in chunk)
+                    await db.execute(f"DELETE FROM AdminActionQueue WHERE id IN ({placeholders})", chunk)
                 
                 await db.execute("COMMIT")
                 
