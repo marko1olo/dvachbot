@@ -11999,9 +11999,15 @@ async def cmd_tag_cloud(message: types.Message, board_id: str | None = None, str
             await show_tagged_photos_gallery(message, target_tag, offset=0)
             return
 
-        async with aiosqlite.connect("dvach_bot.db") as db:
-            async with db.execute("SELECT tags FROM FileRegistry WHERE tags IS NOT NULL AND tags != '' ORDER BY created_at DESC LIMIT 500;") as cursor:
-                rows = await cursor.fetchall()
+        # Через общий пул. Раньше здесь было aiosqlite.connect("dvach_bot.db"),
+        # но aiosqlite в main.py не импортирован ВООБЩЕ — на этой строке
+        # вылетал NameError, его глотал except ниже, и команда всегда
+        # отвечала «Не удалось загрузить облако тегов». Заодно уходит
+        # относительный путь (зависел от рабочего каталога) и второе
+        # соединение в обход настроек пула.
+        db = await get_pool()
+        async with db.execute("SELECT tags FROM FileRegistry WHERE tags IS NOT NULL AND tags != '' ORDER BY created_at DESC LIMIT 500;") as cursor:
+            rows = await cursor.fetchall()
 
         if not rows:
             await message.answer("🏷️ Теги медиафайлов пока не сгенерированы. Отправьте несколько картинок в чат!")
@@ -12043,16 +12049,18 @@ async def cmd_tag_cloud(message: types.Message, board_id: str | None = None, str
 
 async def show_tagged_photos_gallery(event: types.Message | types.CallbackQuery, tag_name: str, offset: int = 0):
     try:
-        async with aiosqlite.connect("dvach_bot.db") as db:
-            async with db.execute(
-                "SELECT file_id, thumbnail_id, tags FROM FileRegistry WHERE tags LIKE ? ORDER BY created_at DESC LIMIT 10 OFFSET ?;",
-                (f"%{tag_name}%", offset)
-            ) as cursor:
-                files = await cursor.fetchall()
-            
-            async with db.execute("SELECT COUNT(*) FROM FileRegistry WHERE tags LIKE ?;", (f"%{tag_name}%",)) as cursor:
-                total_row = await cursor.fetchone()
-                total_count = total_row[0] if total_row else 0
+        # Через общий пул — та же причина, что и в cmd_tag_cloud: aiosqlite
+        # в main.py не импортирован, здесь был второй NameError.
+        db = await get_pool()
+        async with db.execute(
+            "SELECT file_id, thumbnail_id, tags FROM FileRegistry WHERE tags LIKE ? ORDER BY created_at DESC LIMIT 10 OFFSET ?;",
+            (f"%{tag_name}%", offset)
+        ) as cursor:
+            files = await cursor.fetchall()
+
+        async with db.execute("SELECT COUNT(*) FROM FileRegistry WHERE tags LIKE ?;", (f"%{tag_name}%",)) as cursor:
+            total_row = await cursor.fetchone()
+            total_count = total_row[0] if total_row else 0
 
         if not files:
             text = f"🏷️ По тегу <code>#{tag_name}</code> пикчи не найдены."

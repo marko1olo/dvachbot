@@ -429,7 +429,14 @@ async def _create_tables(db):
         file_id TEXT NOT NULL,
         thumbnail_id TEXT,
         file_type TEXT,
-        created_at REAL
+        created_at REAL,
+        -- tags отсутствовал в схеме, хотя на него опираются FTS-триггеры
+        -- trg_files_fts_* на этой же таблице, оба tagging_worker, status_check
+        -- и /tags. На существующих БД колонка есть из более старой версии
+        -- схемы, поэтому поломка не была видна: CREATE TABLE IF NOT EXISTS
+        -- просто пропускается. На ЧИСТОЙ БД таблица создавалась без tags, и
+        -- первая же регистрация медиа падала - см. миграцию ниже.
+        tags TEXT
     );
     """)
     await db.execute("""
@@ -601,6 +608,13 @@ async def _apply_migrations(db):
     try:
         await db.execute("ALTER TABLE FileRegistry ADD COLUMN blurhash TEXT;")
         print("✅ Migrated: Added 'blurhash' to FileRegistry.")
+    except aiosqlite.OperationalError: pass
+    try:
+        # Страховка для БД, созданных по схеме без tags. SQLite не проверяет
+        # new.tags при СОЗДАНИИ триггера - только при срабатывании, поэтому
+        # схема поднималась без единой ошибки, а падал уже INSERT медиафайла.
+        await db.execute("ALTER TABLE FileRegistry ADD COLUMN tags TEXT;")
+        print("✅ Migrated: Added 'tags' to FileRegistry.")
     except aiosqlite.OperationalError: pass
     try:
         await db.execute("ALTER TABLE Threads ADD COLUMN stream TEXT DEFAULT 'ru';")
