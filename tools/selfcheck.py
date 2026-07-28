@@ -487,9 +487,64 @@ def check_decorators(report):
                            f"проверь, не вставлена ли функция между декоратором и обработчиком")
 
 
+def check_captions(report):
+    """Обращение к атрибуту message.text там, где text может быть None.
+
+    У сообщения с картинкой текст лежит в caption, а text равен None -
+    message.text.split() падает с AttributeError. Так в этом проекте
+    ломались восемь команд, отправленных подписью к медиа: фильтр Command
+    в aiogram смотрит и text, и caption, поэтому обработчик вызывался, а
+    внутри разбирал только text.
+
+    Считаем обращение защищённым, если где-то в той же функции text
+    проверяется на истинность (if message.text / message.text and ... /
+    message.text or message.caption). Это приблизительно, зато без шума:
+    точный анализ потока тут не нужен, важно поймать функцию, которая о
+    None не думает вовсе.
+    """
+    EVENTISH = {"message", "msg", "m", "event"}
+    for path in LIVE:
+        src, tree = _parse(path)
+        if tree is None:
+            continue
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            # где text/caption попадает в булев контекст внутри этой функции
+            guarded_bases = set()
+            for node in ast.walk(fn):
+                tests = []
+                if isinstance(node, ast.If):
+                    tests.append(node.test)
+                elif isinstance(node, ast.BoolOp):
+                    tests.extend(node.values)
+                elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+                    tests.append(node.operand)
+                for t in tests:
+                    for sub in ast.walk(t):
+                        if (isinstance(sub, ast.Attribute) and sub.attr in ("text", "caption")
+                                and isinstance(sub.value, ast.Name)):
+                            guarded_bases.add(sub.value.id)
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Attribute):
+                    continue
+                inner = node.value
+                if not (isinstance(inner, ast.Attribute) and inner.attr == "text"):
+                    continue
+                base = inner.value
+                if not (isinstance(base, ast.Name) and base.id in EVENTISH):
+                    continue
+                if base.id in guarded_bases:
+                    continue
+                report(path, node.lineno,
+                       f"{fn.name}(): {base.id}.text.{node.attr} без проверки на None - "
+                       f"у сообщения с медиа текст лежит в caption, а text равен None")
+
+
 CHECKS = {
     "dup": ("затенённые определения", check_dup),
     "decor": ("декораторы на чужих функциях", check_decorators),
+    "captions": ("message.text без защиты от None", check_captions),
     "arity": ("несовпадение арности вызовов", check_arity),
     "sql": ("SQL против чистой схемы", check_sql),
     "invars": ("IN (...) без разбиения на пачки", check_invars),
