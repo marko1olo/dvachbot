@@ -3279,7 +3279,16 @@ def _cleanup_orphans(con):
         ("PostCopies", "post_num"), ("ChannelCopies", "post_num"),
         ("BroadcastQueue", "post_num"), ("NotificationQueue", "source_post_num"),
         ("NotificationQueue", "reply_post_num"), ("Reports", "post_num"),
-        ("ModQueue", "post_num"), ("PollVotes", "post_num")
+        ("ModQueue", "post_num"), ("PollVotes", "post_num"),
+        # CrossLinks в этом списке не было, хотя таблица зависит от Posts так
+        # же, как соседи. Внешнего ключа с ON DELETE CASCADE у неё тоже нет -
+        # в отличие от Backlinks, ModQueue и PollVotes, которые чистятся
+        # каскадом. То есть строки о межбордовых ссылках не удалялись НИКОГДА
+        # ни одним путём, накапливаясь по строке на каждую ссылку >>/b/123.
+        # Обе стороны ссылки, как у NotificationQueue: если исчез пост-
+        # источник, запись осиротела; если исчезла цель, ссылка ведёт в никуда
+        # и всё равно не отрисуется.
+        ("CrossLinks", "source_post"), ("CrossLinks", "target_post"),
     ]
     for table, col in cleanup_targets:
         try:
