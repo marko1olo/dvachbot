@@ -19476,7 +19476,8 @@ def apply_greentext_formatting(text: str) -> str:
         else:
             processed_lines.append(line)
     return '\n'.join(processed_lines)
-@dp.message_reaction()
+
+
 async def _send_notification_quietly(bot: Bot, chat_id: int, text: str) -> None:
     """
     Необязательное уведомление «в никуда»: юзер мог заблокировать бота.
@@ -19490,6 +19491,7 @@ async def _send_notification_quietly(bot: Bot, chat_id: int, text: str) -> None:
         pass
 
 
+@dp.message_reaction()
 async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_id: str | None, bot_instance: Optional[Bot] = None):
     """
     Обрабатывает реакции: уведомления автору и репост в канал "Лучшее".

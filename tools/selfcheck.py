@@ -431,8 +431,52 @@ def check_handlers(report):
                        f"callback '{v1}' -> {f1}() дублирует {f2}() строка {l2}")
 
 
+def check_decorators(report):
+    """Декоратор регистрации, попавший не на ту функцию.
+
+    Реальный случай: хелпер вставили между @dp.message_reaction() и
+    обработчиком, декоратор достался хелперу, а настоящий обработчик
+    реакций перестал регистрироваться. Ловим по первому параметру: у
+    обработчика aiogram он всегда объект события, а не bot/chat_id/text.
+    """
+    expect = {
+        "dp.message": ("message", "msg", "event"),
+        "dp.edited_message": ("message", "msg", "event"),
+        "dp.callback_query": ("callback", "call", "query", "cb", "event"),
+        "dp.message_reaction": ("reaction", "event", "update"),
+        "dp.inline_query": ("query", "inline_query", "event"),
+        "dp.chat_member": ("update", "event", "chat_member_update"),
+        "dp.my_chat_member": ("update", "event", "chat_member_update"),
+    }
+    for path in LIVE:
+        src, tree = _parse(path)
+        if tree is None:
+            continue
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for d in node.decorator_list:
+                u = ast.unparse(d)
+                base = u.split("(")[0]
+                names = expect.get(base)
+                if names is None:
+                    continue
+                args = node.args.posonlyargs + node.args.args
+                if not args:
+                    report(path, node.lineno,
+                           f"{base} на {node.name}(), у которой нет ни одного параметра")
+                    continue
+                first = args[0].arg
+                if not any(n in first for n in names):
+                    report(path, node.lineno,
+                           f"{base} навешен на {node.name}(), первый параметр '{first}' "
+                           f"не похож на объект события (ожидалось одно из {list(names)}); "
+                           f"проверь, не вставлена ли функция между декоратором и обработчиком")
+
+
 CHECKS = {
     "dup": ("затенённые определения", check_dup),
+    "decor": ("декораторы на чужих функциях", check_decorators),
     "arity": ("несовпадение арности вызовов", check_arity),
     "sql": ("SQL против чистой схемы", check_sql),
     "invars": ("IN (...) без разбиения на пачки", check_invars),
