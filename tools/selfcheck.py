@@ -541,8 +541,60 @@ def check_captions(report):
                        f"у сообщения с медиа текст лежит в caption, а text равен None")
 
 
+def check_locks(report):
+    """Сетевой вызов Telegram под глобальным локом.
+
+    storage_lock и db_lock - процессные, по одному на весь бот. Пока такой
+    лок удерживается, ни один другой обработчик не может к нему подойти.
+    Сетевой вызов к Telegram длится десятки миллисекунд, а под flood-wait -
+    секунды и минуты, и всё это время встают ВСЕ пользователи на всех
+    досках. Отдельно опасен вызов, который сам изнутри берёт тот же лок:
+    asyncio.Lock не реентерабелен, это мгновенный вечный дедлок.
+
+    В проекте это чинилось семью коммитами; проверка держит результат.
+    Данные под локом читать можно и нужно - ловим именно СЕТЬ.
+    """
+    LOCKS = ("storage_lock", "db_lock")
+    # Признаки сетевого вызова к Telegram. Обязательна открывающая скобка:
+    # без неё шаблон message\.reply совпадал с ОБРАЩЕНИЕМ message.reply_to_message,
+    # которое сети не касается, и давал ложное срабатывание.
+    NET = re.compile(
+        r"(?:"
+        r"\bbot\.(?:send|edit|delete|copy|forward|pin|unpin|ban|restrict|answer|get_chat|set_)\w*"
+        r"|\bmessage\.(?:answer|reply|edit|delete|copy|forward|pin|unpin)\w*"
+        r"|\bcallback\.(?:answer|message)\w*"
+        r"|\bbot_instance\.(?:send|edit|delete|copy)\w*"
+        r"|\.session\.(?:post|get|request)"
+        r"|\baiohttp\.\w+|\bClientSession"
+        r")\s*\("
+    )
+    for path in LIVE:
+        src, tree = _parse(path)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.With, ast.AsyncWith)):
+                continue
+            held = [l for l in LOCKS
+                    if any(l in ast.unparse(i.context_expr) for i in node.items)]
+            if not held:
+                continue
+            for inner in ast.walk(node):
+                if not isinstance(inner, ast.Await):
+                    continue
+                expr = ast.unparse(inner.value)
+                if not NET.search(expr):
+                    continue
+                # вложенный with, который лок отпускает, нам не встречается:
+                # локи тут не переоткрываются, так что any-await = under-lock
+                report(path, inner.lineno,
+                       f"под {'+'.join(held)} сетевой вызов: {expr[:60]} - "
+                       f"на время ответа Telegram встанут все доски")
+
+
 CHECKS = {
     "dup": ("затенённые определения", check_dup),
+    "locks": ("сеть под глобальным локом", check_locks),
     "decor": ("декораторы на чужих функциях", check_decorators),
     "captions": ("message.text без защиты от None", check_captions),
     "arity": ("несовпадение арности вызовов", check_arity),
