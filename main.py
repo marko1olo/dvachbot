@@ -7795,38 +7795,11 @@ class ChartContext:
     dt: Any
 
 def _generate_activity_clock(ctx: ChartContext):
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG, ctx.np, ctx.plt, ctx.io, ctx.mpl
-import dataclasses
-@dataclasses.dataclass
-class StatsContext:
-    since_ts: int
-    _np: Any
-    _plt: Any
-    _io: Any
-    _mpl: Any = None
-    defaultdict: Any = None
-    HEAT: Any = None
-    _dt: Any = None
-def _generate_activity_clock(ctx: StatsContext):
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx._mpl
-    HEAT: 'Any'
-    _np: 'Any'
-    _plt: 'Any'
-    _io: 'Any'
-    _mpl: 'Any' = None
-    defaultdict: 'Any' = None
-    _dt: 'Any' = None
-def _generate_activity_clock(ctx):
+    # Модули берём по именам полей ChartContext (np/plt/io/mpl, без
+    # подчёркивания). Подчёркивание — префикс локальных имён внутри тела,
+    # а не имя поля контекста; ctx._np роняло функцию с AttributeError.
     cur, board_id, since_90, BG, FG = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG
-    _np, _plt, _io, _mpl = ctx._np, ctx._plt, ctx._io, ctx._mpl
-    HEAT: object
-    _np: object
-    _plt: object
-    _io: object
-    _mpl: object
-    _dt: object
-    defaultdict: object
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx._mpl
+    _np, _plt, _io, _mpl = ctx.np, ctx.plt, ctx.io, ctx.mpl
     cur.execute("""
         SELECT CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
                COUNT(*) as cnt
@@ -7874,13 +7847,8 @@ def _generate_activity_clock(ctx):
     return buf.getvalue()
 
 def _generate_ridge_plot(ctx: ChartContext):
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG, ctx.np, ctx.plt, ctx.io, ctx.defaultdict
-def _generate_ridge_plot(ctx: StatsContext):
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx.defaultdict
-def _generate_ridge_plot(ctx):
     cur, board_id, since_90, BG, FG = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG
-    _np, _plt, _io, defaultdict = ctx._np, ctx._plt, ctx._io, ctx.defaultdict
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx.defaultdict
+    _np, _plt, _io, defaultdict = ctx.np, ctx.plt, ctx.io, ctx.defaultdict
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER),
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER),
@@ -7930,13 +7898,8 @@ def _generate_ridge_plot(ctx):
     return buf2.getvalue()
 
 def _generate_weekday_heatmap(ctx: ChartContext):
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT, ctx.np, ctx.plt, ctx.io
-def _generate_weekday_heatmap(ctx: StatsContext):
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io
-def _generate_weekday_heatmap(ctx):
     cur, board_id, since_180, BG, FG, HEAT = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT
-    _np, _plt, _io = ctx._np, ctx._plt, ctx._io
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io
+    _np, _plt, _io = ctx.np, ctx.plt, ctx.io
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER) as dow,
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
@@ -7971,13 +7934,8 @@ def _generate_weekday_heatmap(ctx):
     return buf3.getvalue()
 
 def _generate_calendar_heatmap(ctx: ChartContext):
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT, ctx.np, ctx.plt, ctx.io, ctx.dt
-def _generate_calendar_heatmap(ctx: StatsContext):
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io, ctx._dt
-def _generate_calendar_heatmap(ctx):
     cur, board_id, since_180, BG, FG, HEAT = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT
-    _np, _plt, _io, _dt = ctx._np, ctx._plt, ctx._io, ctx._dt
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io, ctx._dt
+    _np, _plt, _io, _dt = ctx.np, ctx.plt, ctx.io, ctx.dt
     cur.execute("""
         SELECT date(timestamp,'unixepoch','localtime') as day, COUNT(*)
         FROM Posts WHERE board_id=? AND timestamp > ?
