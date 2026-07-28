@@ -8026,51 +8026,64 @@ def _generate_stats_charts_locked(board_id: str) -> list[bytes]:
     import os
     db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvach_bot.db')
     con = _sqlite3.connect(db_path)
-    cur = con.cursor()
+    try:
+        cur = con.cursor()
 
-    import time as _time_module
-    since_90 = int(_time_module.time()) - 90 * 86400
-    since_180 = int(_time_module.time()) - 180 * 86400
-    bufs = []
+        import time as _time_module
+        since_90 = int(_time_module.time()) - 90 * 86400
+        since_180 = int(_time_module.time()) - 180 * 86400
+        bufs = []
 
-    HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
+        HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
 
-    ctx = ChartContext(
-        cur=cur,
-        board_id=board_id,
-        since_90=since_90,
-        since_180=since_180,
-        BG=BG,
-        FG=FG,
-        HEAT=HEAT,
-        np=_np,
-        plt=_plt,
-        io=_io,
-        mpl=_mpl,
-        defaultdict=defaultdict,
-        dt=_dt,
-    )
+        ctx = ChartContext(
+            cur=cur,
+            board_id=board_id,
+            since_90=since_90,
+            since_180=since_180,
+            BG=BG,
+            FG=FG,
+            HEAT=HEAT,
+            np=_np,
+            plt=_plt,
+            io=_io,
+            mpl=_mpl,
+            defaultdict=defaultdict,
+            dt=_dt,
+        )
 
-    activity_clock = _generate_activity_clock(ctx)
-    if not activity_clock:
+        activity_clock = _generate_activity_clock(ctx)
+        if not activity_clock:
+            return []
+        bufs.append(activity_clock)
+
+        ridge_plot = _generate_ridge_plot(ctx)
+        if ridge_plot:
+            bufs.append(ridge_plot)
+
+        heatmap = _generate_weekday_heatmap(ctx)
+        if heatmap:
+            bufs.append(heatmap)
+
+        calendar = _generate_calendar_heatmap(ctx)
+        if calendar:
+            bufs.append(calendar)
+
+        return bufs
+    finally:
+        # Оба ресурса освобождаем безусловно. Раньше con.close() стоял на
+        # двух путях возврата, и любое исключение в генераторе проходило
+        # мимо обоих: соединение с sqlite (и его файловый дескриптор)
+        # утекало на каждом сбое.
         con.close()
-        return []
-    bufs.append(activity_clock)
-
-    ridge_plot = _generate_ridge_plot(ctx)
-    if ridge_plot:
-        bufs.append(ridge_plot)
-
-    heatmap = _generate_weekday_heatmap(ctx)
-    if heatmap:
-        bufs.append(heatmap)
-
-    calendar = _generate_calendar_heatmap(ctx)
-    if calendar:
-        bufs.append(calendar)
-
-    con.close()
-    return bufs
+        # Фигуры matplotlib живут в ГЛОБАЛЬНОМ реестре pyplot, а не в
+        # локальной переменной: незакрытая фигура не собирается сборщиком
+        # мусора и держит память до конца процесса. Каждый генератор
+        # закрывает свою, но только если дошёл до конца — сбой между
+        # созданием фигуры и close() оставлял её висеть навсегда.
+        # close('all') безопасен: вся функция идёт под matplotlib_guard(),
+        # так что чужих фигур в этот момент в процессе быть не может.
+        _plt.close('all')
 
 
 _stats_cooldown_tracker = {}
