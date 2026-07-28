@@ -1807,7 +1807,9 @@ async def get_op_posts_for_board(
                         if raw_tid:
                             clean_tid_str = str(raw_tid).strip()
                             real_thread_id_map[clean_tid_str] = pid
-                            if clean_tid_str.isdigit():
+                            # isdecimal: у isdigit истинны надстрочные цифры,
+                            # которые int() не принимает
+                            if clean_tid_str.isdecimal():
                                 real_thread_id_map[int(clean_tid_str)] = pid
                         
                         try:

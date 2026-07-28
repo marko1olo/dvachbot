@@ -85,7 +85,9 @@ def _read_heartbeat() -> dict | None:
 def _read_lock_pid() -> int | None:
     try:
         text = BOT_LOCK.read_text(encoding="utf-8").strip()
-        if text.isdigit():
+        # isdecimal: except ниже ловит только OSError, а int() от
+        # надстрочной цифры дал бы ValueError мимо него
+        if text.isdecimal():
             return int(text)
     except OSError:
         return None

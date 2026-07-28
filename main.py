@@ -6966,7 +6966,11 @@ def throttle(rate: int):
 async def cmd_random_media(message: types.Message):
     args = (message.text or message.caption or "").split()
     count = 1
-    if len(args) > 1 and args[1].isdigit():
+    # isdecimal, а не isdigit: у isdigit истинны надстрочные и кружковые
+    # цифры ('²', '③'), которые int() НЕ принимает, и /random ² роняло
+    # обработчик с ValueError. isdecimal истинно ровно для того, что int()
+    # разбирает, включая арабо-индийские цифры.
+    if len(args) > 1 and args[1].isdecimal():
         count = int(args[1])
         count = max(1, min(10, count))
     
@@ -18110,7 +18114,8 @@ async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str
     args = (message.text or message.caption or "").split()
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    elif len(args) > 1 and args[1].isdigit():
+    elif len(args) > 1 and args[1].isdecimal():
+        # isdecimal, не isdigit — см. пояснение в cmd_random_media
         target_id = int(args[1])
 
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -21880,7 +21885,8 @@ async def handle_inline_query(inline_query: types.InlineQuery):
         if cmd in available_cmds:
             desc, canonical = available_cmds[cmd]
             count = 1
-            if len(parts) > 1 and parts[1].isdigit():
+            if len(parts) > 1 and parts[1].isdecimal():
+                # isdecimal, не isdigit — см. пояснение в cmd_random_media
                 count = int(parts[1])
             
             counts_to_show = [count]

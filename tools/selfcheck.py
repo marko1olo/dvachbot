@@ -662,8 +662,41 @@ def check_menu(report):
                    f"но обработчика нет ни на dp, ни на роутерах, ни в регулярных фильтрах")
 
 
+def check_isdigit(report):
+    """str.isdigit() как защита перед int() - защита неполная.
+
+    isdigit() истинно для всего, у чего есть цифровое ЗНАЧЕНИЕ, включая
+    надстрочные и кружковые цифры: '²', '³', '①', '⑵'. int() их не
+    принимает и падает с ValueError. То есть '/random ²' роняло обработчик,
+    хотя проверка вроде бы стояла.
+
+    Правильная проверка - isdecimal(): она истинна ровно для категории Nd,
+    то есть в точности для того, что разбирает int(), и арабо-индийские
+    цифры ('٣') при этом продолжают работать.
+    """
+    pat = re.compile(r"([\w.\[\]'\"]+)\.isdigit\(\)")
+    for path in _py_files():
+        src, tree = _parse(path)
+        if tree is None:
+            continue
+        sl = src.splitlines()
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            body = "\n".join(sl[fn.lineno - 1:fn.end_lineno])
+            for m in pat.finditer(body):
+                var = m.group(1)
+                if not re.search(rf"int\(\s*{re.escape(var)}\s*\)", body):
+                    continue
+                report(path, fn.lineno + body[:m.start()].count("\n"),
+                       f"{fn.name}(): {var}.isdigit() перед int({var}) - "
+                       f"isdigit истинно для '²' и '①', а int() на них падает; "
+                       f"нужен isdecimal()")
+
+
 CHECKS = {
     "dup": ("затенённые определения", check_dup),
+    "isdigit": ("isdigit как защита перед int", check_isdigit),
     "menu": ("пункты меню без обработчика", check_menu),
     "locks": ("сеть под глобальным локом", check_locks),
     "decor": ("декораторы на чужих функциях", check_decorators),
