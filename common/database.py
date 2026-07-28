@@ -490,10 +490,41 @@ async def _create_tables(db):
     """)
 
 async def _apply_migrations(db):
+    # ВАЖНО: по одному ALTER на try. Раньше эти три стояли в ОДНОМ блоке, и
+    # так как balance уже есть в CREATE TABLE Users, первый же ALTER падал с
+    # "duplicate column name: balance", except его глотал, а до третьего
+    # выполнение не доходило вовсе. reaction_reward_counter не появлялся ни на
+    # одной БД, хотя миграция для него в файле есть. Остальные 40 миграций в
+    # этом модуле оформлены по одной на try - здесь было исключение.
     try:
         await db.execute("ALTER TABLE Users ADD COLUMN balance REAL DEFAULT 0;")
+    except aiosqlite.OperationalError: pass
+    try:
         await db.execute("ALTER TABLE Users ADD COLUMN is_verified_b INTEGER DEFAULT 0;")
+    except aiosqlite.OperationalError: pass
+    try:
         await db.execute("ALTER TABLE Users ADD COLUMN reaction_reward_counter INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added 'reaction_reward_counter' to Users.")
+    except aiosqlite.OperationalError: pass
+    # Колонки экономики и предметов. Их не было ни в CREATE TABLE Users, ни в
+    # миграциях, хотя код обращается к ним из 105 мест: инвентарь предметов
+    # (/shop, мут-ган, зеркальный щит), проклятия, платные префиксы. На чистой
+    # БД всё это падало с "no such column".
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN active_items TEXT DEFAULT '{}';")
+        print("✅ Migrated: Added 'active_items' to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN cursed_until REAL DEFAULT 0;")
+        print("✅ Migrated: Added 'cursed_until' to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN custom_prefix TEXT;")
+        print("✅ Migrated: Added 'custom_prefix' to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN prefix_expires_at REAL DEFAULT 0;")
+        print("✅ Migrated: Added 'prefix_expires_at' to Users.")
     except aiosqlite.OperationalError: pass
     try:
         await db.execute("ALTER TABLE Users ADD COLUMN referrals_count INTEGER DEFAULT 0;")
