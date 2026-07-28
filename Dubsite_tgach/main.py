@@ -6273,9 +6273,25 @@ async def _fetch_telegram_path(file_id: str, bot_token: str):
                 data = await resp.json()
                 return data["result"]["file_path"] if data.get("ok") else None
         except: return None
-async def get_cached_file_path(file_id: str) -> tuple[str, str] | None:
+async def get_cached_file_path(
+    file_id: str, allow_protected_tokens: bool = False
+) -> tuple[str, str] | None:
+    # allow_protected_tokens добавлен, потому что вызов на строке 5771 его уже
+    # передавал, а параметра здесь не было: get_cached_file_path() got an
+    # unexpected keyword argument. Флаг завели в site_tgach и не перенесли в
+    # эту копию, разошедшуюся с оригиналом (там функция уже 115 строк против
+    # 32 здесь, с другой архитектурой резолва токенов).
+    #
+    # Фильтрации токенов у этой копии нет вовсе: пул обходится целиком через
+    # get_bot_by_id/all_bots, то есть поведение и так эквивалентно
+    # allow_protected_tokens=True. Поэтому флаг здесь влияет только на ключ
+    # негативного кэша - как и в site_tgach, чтобы промах в одной области
+    # видимости не отравлял поиск в другой. Реализовывать разделение токенов
+    # тут нельзя: _resolve_known_file_bot_token и _iter_known_file_bot_tokens
+    # в этот модуль не перенесены.
     backend = FastAPICache.get_backend()
-    if await backend.get(f"dead_file:{file_id}"):
+    dead_key = f"dead_file:{'protected' if allow_protected_tokens else 'public'}:{file_id}"
+    if await backend.get(dead_key):
         return None
     owner_id = await get_file_owner_id(file_id)
     tried_tokens = set()
@@ -6303,7 +6319,9 @@ async def get_cached_file_path(file_id: str) -> tuple[str, str] | None:
             if path:
                 await register_file_owner(file_id, bot.id)
                 return path, bot.token
-    await backend.set(f"dead_file:{file_id}", "1", expire=600)
+    # Пишем ТОТ ЖЕ ключ, что читаем выше. Иначе негативный кэш не срабатывал
+    # бы никогда и каждый промах заново обходил бы пул ботов.
+    await backend.set(dead_key, "1", expire=600)
     return None
 @app.get("/games/abu")
 async def game_abu_page(request: Request, user: dict | None = Depends(get_optional_user)):
