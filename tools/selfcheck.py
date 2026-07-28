@@ -5,11 +5,18 @@
 
 Запуск:
     python tools/selfcheck.py            # все проверки
+    python tools/selfcheck.py --fast     # только по AST, без поднятия БД
     python tools/selfcheck.py --list     # перечислить проверки
-    python tools/selfcheck.py schema sql # только выбранные
+    python tools/selfcheck.py dup sql    # только выбранные
 
 Код возврата 1, если что-то найдено. Ничего не правит и не пишет в проект;
-для проверки схемы поднимает временную БД настоящим initialize_database.
+для проверок sql и growth поднимает временную БД настоящим
+initialize_database во временном каталоге и удаляет её за собой.
+
+Подключение к pre-commit, если понадобится, - решение владельца
+репозитория: хуки здесь настроены глобально через core.hooksPath, то есть
+один каталог на ВСЕ проекты, и падающая или медленная проверка
+заблокировала бы коммиты везде. Для такого сценария есть --fast.
 
 Почему именно эти семь: все они выросли из реальных поломок.
   dup      - /stats и /shoot не работали НИКОГДА: победившее определение
@@ -67,13 +74,19 @@ def _py_files():
                     yield p
 
 
+_PARSE_CACHE: dict[str, tuple] = {}
+
+
 def _parse(path):
-    try:
-        with open(os.path.join(ROOT, path), encoding="utf-8") as fh:
-            src = fh.read()
-        return src, ast.parse(src)
-    except (OSError, SyntaxError):
-        return None, None
+    """Разбор с кэшем: main.py весит мегабайт, а его читают шесть проверок."""
+    if path not in _PARSE_CACHE:
+        try:
+            with open(os.path.join(ROOT, path), encoding="utf-8") as fh:
+                src = fh.read()
+            _PARSE_CACHE[path] = (src, ast.parse(src))
+        except (OSError, SyntaxError):
+            _PARSE_CACHE[path] = (None, None)
+    return _PARSE_CACHE[path]
 
 
 # --------------------------------------------------------------------------
@@ -485,20 +498,30 @@ CHECKS = {
     "handlers": ("дублирующиеся обработчики", check_handlers),
 }
 
+# Этим двум нужна временная БД, поднятая настоящим initialize_database, -
+# это и есть основная их стоимость. --fast их пропускает.
+DB_CHECKS = {"sql", "growth"}
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("checks", nargs="*", help="какие проверки запустить (по умолчанию все)")
     ap.add_argument("--list", action="store_true", help="перечислить проверки и выйти")
+    ap.add_argument("--fast", action="store_true",
+                    help="только проверки по AST, без поднятия временной БД")
     args = ap.parse_args(argv)
 
     if args.list:
         for key, (title, fn) in CHECKS.items():
-            print(f"  {key:<10} {title}")
+            slow = " (поднимает временную БД)" if key in DB_CHECKS else ""
+            print(f"  {key:<10} {title}{slow}")
         return 0
 
-    selected = args.checks or list(CHECKS)
+    if args.fast and args.checks:
+        print("--fast и явный список проверок вместе не имеют смысла")
+        return 2
+    selected = args.checks or [k for k in CHECKS if not (args.fast and k in DB_CHECKS)]
     unknown = [c for c in selected if c not in CHECKS]
     if unknown:
         print(f"неизвестные проверки: {unknown}; доступны: {list(CHECKS)}")
