@@ -4,10 +4,18 @@
 работающий баг. Держим их как постоянный сторож, а не как разовый разбор.
 
 Запуск:
-    python tools/selfcheck.py            # все проверки
-    python tools/selfcheck.py --fast     # только по AST, без поднятия БД
-    python tools/selfcheck.py --list     # перечислить проверки
-    python tools/selfcheck.py dup sql    # только выбранные
+    python tools/selfcheck.py                  # все проверки
+    python tools/selfcheck.py --fast           # только по AST, без поднятия БД
+    python tools/selfcheck.py --list           # перечислить проверки
+    python tools/selfcheck.py dup sql          # только выбранные
+    python tools/selfcheck.py --against 12f3fac  # проверить сам сторож на истории
+
+Замер на состоянии 12f3fac (до правок этой серии) против текущего:
+    dup 8->0   locks 22->0   captions 5->0   arity 2->0   sql 41->0
+    invars 3->0   dictkeys 570->0   growth 1->0
+    decor и handlers были чисты и там (эти два дефекта появились позже)
+Итого 652 находки на старом состоянии и 0 на нынешнем - подтверждение,
+что проверки ловят настоящие классы дефектов, а не выдуманные.
 
 Код возврата 1, если что-то найдено. Ничего не правит и не пишет в проект;
 для проверок sql и growth поднимает временную БД настоящим
@@ -41,7 +49,9 @@ import contextlib
 import io
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from collections import defaultdict
@@ -610,6 +620,51 @@ CHECKS = {
 DB_CHECKS = {"sql", "growth"}
 
 
+def _run_against_ref(ref: str, selected):
+    """Прогоняет те же проверки против исторического состояния из git.
+
+    Нужно, чтобы сторож можно было проверить, а не принимать на веру: если
+    проверка ничего не находит НИ на одном состоянии проекта, она бесполезна
+    и об этом лучше знать. Разворачиваем .py файлы указанного ref во
+    временное дерево и запускаем там саму себя отдельным процессом - так
+    проверки видят старый код, включая старую схему БД.
+    """
+    listing = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", ref], cwd=ROOT,
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    if listing.returncode != 0:
+        print(f"не удалось прочитать ref {ref!r}: {listing.stderr.strip()[:200]}")
+        return 2
+    files = [f for f in listing.stdout.split()
+             if f.endswith(".py") and not f.startswith(("tests/", "scratch"))]
+    if not files:
+        print(f"в ref {ref!r} нет подходящих .py файлов")
+        return 2
+
+    work = tempfile.mkdtemp(prefix="selfcheck-ref-")
+    try:
+        for f in files:
+            dst = os.path.join(work, f)
+            os.makedirs(os.path.dirname(dst) or work, exist_ok=True)
+            blob = subprocess.run(["git", "show", f"{ref}:{f}"], cwd=ROOT,
+                                  capture_output=True)
+            with open(dst, "wb") as fh:
+                fh.write(blob.stdout)
+        os.makedirs(os.path.join(work, "tools"), exist_ok=True)
+        shutil.copy(os.path.abspath(__file__), os.path.join(work, "tools", "selfcheck.py"))
+        print(f"развёрнуто {len(files)} файлов состояния {ref}, запускаю проверки там\n")
+        r = subprocess.run([sys.executable, "tools/selfcheck.py", *selected], cwd=work,
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace")
+        print(r.stdout.rstrip())
+        if r.stderr.strip():
+            print(r.stderr.strip()[-500:])
+        return r.returncode
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -617,6 +672,10 @@ def main(argv=None):
     ap.add_argument("--list", action="store_true", help="перечислить проверки и выйти")
     ap.add_argument("--fast", action="store_true",
                     help="только проверки по AST, без поднятия временной БД")
+    ap.add_argument("--against", metavar="REF",
+                    help="прогнать проверки против исторического состояния из git "
+                         "(например --against 12f3fac): так видно, что сторож ловит "
+                         "настоящий класс дефекта, а не выдуманный")
     args = ap.parse_args(argv)
 
     if args.list:
@@ -633,6 +692,9 @@ def main(argv=None):
     if unknown:
         print(f"неизвестные проверки: {unknown}; доступны: {list(CHECKS)}")
         return 2
+
+    if args.against:
+        return _run_against_ref(args.against, args.checks)
 
     total = 0
     for key in selected:
