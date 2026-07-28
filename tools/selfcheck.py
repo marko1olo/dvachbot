@@ -441,6 +441,42 @@ def check_handlers(report):
             report("main.py", occ[0][1],
                    f"/{cmd} зарегистрирована {len(occ)} раза; работает {occ[0][2]}(), "
                    f"мертвы: {dead}")
+
+    # Одна и та же команда на dp И на включённом роутере. Обработчики самого
+    # Dispatcher разрешаются РАНЬШЕ под-роутеров независимо от порядка
+    # include_router (проверено feed_update), поэтому версия на роутере
+    # мертва. Класс не выдуманный: пять команд экономики (/rob, /curse,
+    # /mega, /partyvan, /shit) существовали в двух реализациях, и правка
+    # гонки в /rob ушла в мёртвую копию на роутере.
+    scoped = defaultdict(dict)
+    for path in _py_files():
+        _, t = _parse(path)
+        if t is None:
+            continue
+        for node in t.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for d in node.decorator_list:
+                m = re.match(r"(dp|\w*router)\.message", ast.unparse(d))
+                if not m:
+                    continue
+                scope = "dp" if m.group(1) == "dp" else "router"
+                for c in ast.walk(d):
+                    if isinstance(c, ast.Call) and getattr(c.func, "id", "") == "Command":
+                        for a in c.args:
+                            vals = ([a.value] if isinstance(a, ast.Constant)
+                                    else [e.value for e in getattr(a, "elts", [])
+                                          if isinstance(e, ast.Constant)])
+                            for v in vals:
+                                if isinstance(v, str):
+                                    scoped[v.lower()].setdefault(
+                                        scope, f"{path}:{node.lineno} {node.name}()")
+    for cmd, where in sorted(scoped.items()):
+        if "dp" in where and "router" in where:
+            report(where["router"].split(":")[0], int(where["router"].split(":")[1].split()[0]),
+                   f"/{cmd} зарегистрирована и на dp ({where['dp']}), и на роутере "
+                   f"({where['router']}). Обработчики Dispatcher разрешаются раньше "
+                   f"под-роутеров, поэтому версия на роутере МЕРТВА")
     for o1, t1, v1, l1, f1 in filters:
         for o2, t2, v2, l2, f2 in filters:
             if o2 >= o1:

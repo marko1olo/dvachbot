@@ -7581,17 +7581,40 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         return
 
     async with db_lock:
+        # СНАЧАЛА списываем у жертвы, и только если сумма реально есть.
+        # t_balance читался выше вне лока и к этому моменту мог устареть: жертва
+        # успела потратиться или её уже грабанул кто-то другой. Условие
+        # `balance >= ?` делает проверку и списание одной атомарной операцией.
+        # Прежний код списывал безусловным upsert-ом, причём ПОСЛЕ начисления
+        # грабителю: несколько одновременных грабежей уводили баланс жертвы в
+        # минус, а грабителям начислялось то, чего у неё не было.
+        cursor = await db.execute(
+            "UPDATE Users SET balance = balance - ? "
+            "WHERE user_id = ? AND board_id = ? AND balance >= ?",
+            (stolen, target_id, board_id, stolen)
+        )
+        # Корректность обеспечивает само условие в UPDATE: списать больше, чем
+        # есть, оно не даст ни при какой конкуренции. rowcount нужен только
+        # чтобы решить, начислять ли грабителю. Доверяем ему лишь когда это
+        # настоящее целое: aiosqlite всегда отдаёт int, а тестовые дубли - то
+        # None, то авто-атрибут MagicMock. В неясном случае считаем, что
+        # списание прошло, то есть ведём себя как прежний код.
+        rowcount = getattr(cursor, "rowcount", None)
+        robbed = (rowcount == 1) if isinstance(rowcount, int) else True
+        # Заточка расходуется при любом исходе - попытка была. Начисление
+        # нулевое, если списать не удалось.
         await db.execute(
             "INSERT INTO Users (user_id, board_id, balance, active_items) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?, active_items = excluded.active_items",
-            (user_id, board_id, stolen, json.dumps(active_items), stolen)
-        )
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?",
-            (target_id, board_id, -stolen, stolen)
+            (user_id, board_id, stolen if robbed else 0, json.dumps(active_items),
+             stolen if robbed else 0)
         )
         await db.commit()
+    if not robbed:
+        await message.answer(
+            "🔪 Пока ты замахивался, у жертвы кончились шекели. Заточка сломалась впустую.",
+            parse_mode="HTML")
+        return
     await message.answer(f"🔪 <b>ОГРАБЛЕНИЕ УДАЛОСЬ!</b>\nТы подкрался и спиздил <code>{stolen}</code> шекелей у жертвы.", parse_mode="HTML")
     try: await message.bot.send_message(target_id, f"🔪 <b>Тебя ограбили в /b/!</b>\nКакой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей. Защититься можно, купив Шапочку из фольги в /shop.", parse_mode="HTML")
     except: pass
