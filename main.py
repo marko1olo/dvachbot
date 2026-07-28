@@ -19017,60 +19017,9 @@ async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru
             stream=stream
         ))
 
-async def periodic_shop_broadcast():
-    import random
-    while True:
-        # Sleep for 24 hours plus a random offset (0 to 4 hours) to avoid exact daily timing
-        sleep_seconds = 86400 + random.randint(0, 4 * 3600)
-        await asyncio.sleep(sleep_seconds)
-        try:
-            print("🛒 [SHOP BROADCAST] Рассылка рекламы теневого магазина...")
-            shop_text = (
-                "🛒 <b>ТЕНЕВОЙ МАГАЗИН ОБНОВЛЁН</b> 🛒\n\n"
-                "Устал терпеть шитпостеров? Анон бесит тебя своей тупостью?\n"
-                "Заходи в <code>/shop</code> и покупай власть за шекели:\n\n"
-                "🔫 <b>Мут-Ган</b> — выключи клоуна на час.\n"
-                "🚔 <b>Пативэн</b> — отправь неугодного в автозак на 12 часов.\n"
-                "🐒 <b>Кусок говна</b> — обмажь врага ради смеха.\n"
-                "🔪 <b>Заточка</b> — отбери шекели у богатых.\n\n"
-                "🛡️ <i>И не забудь купить Фольгу или Щит, чтобы не стать жертвой.</i>\n\n"
-                "👉 <b>Пиши /shop прямо в чат!</b>"
-            )
-            
-            target_boards = ['thread', 'b']
-            for board_id in target_boards:
-                if board_id not in board_data:
-                    continue
-                b_data = board_data[board_id]
-                recipients = b_data['users']['active'] - b_data['users']['banned']
-                if not recipients:
-                    continue
-                content = {
-                    'type': 'text',
-                    'text': shop_text,
-                    'is_system_message': True,
-                    'archive_allowed': True
-                }
-                pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
-                if pnum:
-                    header_base = await format_header(board_id, pnum)
-                    content['header'] = f"### BLACK MARKET ###\n{header_base}"
-                    await update_post_content(pnum, content)
-                    async with storage_lock:
-                        messages_storage[pnum] = {
-                            'author_id': 0, 
-                            'timestamp': datetime.datetime.now(datetime.timezone.utc), 
-                            'content': content, 
-                            'board_id': board_id
-                        }
-                    await enqueue_board_message(board_id, {
-                        "recipients": recipients,
-                        "content": content,
-                        "post_num": pnum,
-                        "board_id": board_id
-                    })
-        except Exception as e:
-            print(f"❌ [SHOP BROADCAST] Ошибка рассылки магазина: {e}")
+# Здесь лежала первая из ДВУХ побайтово одинаковых копий
+# periodic_shop_broadcast. Работала только нижняя: имя перекрывалось.
+# Удалена, чтобы правка не ушла в мёртвую копию.
 
 SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
 

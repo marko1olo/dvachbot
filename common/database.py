@@ -1332,44 +1332,9 @@ async def remove_user_from_board(user_id: int, board_id: str):
     """Обертка для удаления одного пользователя."""
     await remove_users_from_board_batch([user_id], board_id)
 
-async def remove_users_from_board_batch(user_ids: list[int], board_id: str):
-    """
-    Массовое удаление пользователей с защитой от блокировок БД.
-    """
-    if not user_ids: return
-    
-    from common.db_pool import get_pool, db_lock
-    
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-                
-                placeholders = ','.join('?' for _ in user_ids)
-                query = f"DELETE FROM Users WHERE board_id = ? AND user_id IN ({placeholders})"
-                params = [board_id] + list(user_ids)
-                
-                cursor = await db.execute(query, params)
-                count = cursor.rowcount
-                
-                await db.execute("COMMIT")
-                
-                if count > 0:
-                    print(f"  > DB: Удалено {count} пользователей с доски '{board_id}'.")
-                return
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
-                    continue
-                break
-            except Exception:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                break
+# Здесь лежала первая из ДВУХ одинаковых копий remove_users_from_board_batch.
+# Её молча затирало определение ниже по файлу (различалась только строка
+# докстроки), поэтому правка в неё не влияла бы ни на что. Удалена.
 async def update_shadow_mute(user_id: int, board_id: str, expires_at: float | None):
     """
     Добавляет, обновляет или удаляет теневой мут.
