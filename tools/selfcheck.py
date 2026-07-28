@@ -602,8 +602,69 @@ def check_locks(report):
                        f"на время ответа Telegram встанут все доски")
 
 
+def check_menu(report):
+    """Команда обещана в меню бота, но обработчика у неё нет.
+
+    Меню, которое Telegram показывает пользователю, задаётся списком
+    BotCommand. Лишний пункт там - прямая ложь: человек видит команду,
+    нажимает, и ничего не происходит.
+
+    Считать надо ВСЕ способы регистрации, иначе проверка сама себя
+    обманет - на этом я и попался дважды. Кроме dp.message(Command(...))
+    есть команды на подключённых роутерах (economy_router даёт /work,
+    /rob, /curse и другие) и команды, которые ловит регулярный фильтр по
+    ANIME_COMMAND_MAP, а не фильтр Command.
+    """
+    src, tree = _parse("main.py")
+    if tree is None:
+        return
+
+    handled = set()
+    for path in _py_files():
+        _, t = _parse(path)
+        if t is None:
+            continue
+        for node in t.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for d in node.decorator_list:
+                if not re.match(r"(dp|\w*router)\.(message|edited_message)",
+                                ast.unparse(d)):
+                    continue
+                for c in ast.walk(d):
+                    if isinstance(c, ast.Call) and getattr(c.func, "id", "") == "Command":
+                        for a in c.args:
+                            vals = ([a.value] if isinstance(a, ast.Constant)
+                                    else [e.value for e in getattr(a, "elts", [])
+                                          if isinstance(e, ast.Constant)])
+                            handled.update(v.lower() for v in vals if isinstance(v, str))
+
+    # команды, которые ловит регулярный фильтр вместо фильтра Command
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "ANIME_COMMAND_MAP" for t in node.targets):
+            for k in getattr(node.value, "keys", []):
+                if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                    handled.add(k.value.lower())
+
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "BotCommand"):
+            continue
+        cmd = desc = None
+        for k in node.keywords:
+            if k.arg == "command" and isinstance(k.value, ast.Constant):
+                cmd = k.value.value
+            elif k.arg == "description" and isinstance(k.value, ast.Constant):
+                desc = k.value.value
+        if cmd and cmd.lower() not in handled:
+            report("main.py", node.lineno,
+                   f"/{cmd} есть в меню бота («{(desc or '')[:40]}»), "
+                   f"но обработчика нет ни на dp, ни на роутерах, ни в регулярных фильтрах")
+
+
 CHECKS = {
     "dup": ("затенённые определения", check_dup),
+    "menu": ("пункты меню без обработчика", check_menu),
     "locks": ("сеть под глобальным локом", check_locks),
     "decor": ("декораторы на чужих функциях", check_decorators),
     "captions": ("message.text без защиты от None", check_captions),
