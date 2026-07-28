@@ -2323,13 +2323,20 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                            VALUES (?, ?, ?, ?, ?, ?)""",
                         notifications_to_insert_fixed
                     )
-                    # Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
-                    # FIX: Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
-                    # Fix already implemented
+                    # Здесь были слиты ДВА варианта одного comprehension, и это
+                    # был не мёртвый код, а поломка. Python разбирал
+                    # "... for ... in notifications_to_insert (r_id, ...)" как
+                    # ВЫЗОВ списка с кортежем в аргументах, а имена r_id/t_id/
+                    # src_num/rep_num в этой позиции ещё не связаны — первый же
+                    # проход давал NameError: name 'r_id' is not defined.
+                    # Исключение ловил except Exception ниже, тот делал ROLLBACK
+                    # и break, откатывая ВСЮ транзакцию вместе со вставкой в
+                    # NotificationQueue. То есть ни одно упоминание не порождало
+                    # ни уведомления в боте, ни записи «ответы вам» на сайте.
+                    # Оставлен вариант по notifications_to_insert_fixed: там
+                    # приведение t_id уже сделано выше, результат обоих
+                    # вариантов побайтово одинаков.
                     site_notifs = [
-                        (r_id, board_id, str(t_id) if t_id is not None else str(rep_num), src_num, rep_num, 0, current_time)
-                        for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert
-
                         (r_id, board_id, t_id, src_num, rep_num, 0, current_time)
                         for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert_fixed
                     ]
