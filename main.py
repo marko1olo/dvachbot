@@ -22027,5 +22027,17 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
+    except KeyboardInterrupt:
+        print("ℹ️ Завершение работы по запросу...")
+    except SystemExit as exc:
+        # SystemExit ловили вместе с KeyboardInterrupt и молча гасили, поэтому
+        # процесс ВСЕГДА завершался кодом 0 - даже когда main() звал
+        # sys.exit(1). А зовёт он его на двух фатальных путях: незаполненная
+        # БД (load_state) и «бот с таким PID уже запущен». Супервизору оба
+        # выглядели как успешный штатный выход: systemd с Restart=on-failure
+        # не перезапустил бы бота, а деплой счёл бы запуск удавшимся.
+        # Штатную остановку (код 0 или None) по-прежнему гасим тихо.
+        if exc.code:
+            print(f"⛔ Аварийное завершение, код выхода {exc.code}.")
+            raise
         print("ℹ️ Завершение работы по запросу...")
