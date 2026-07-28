@@ -7359,6 +7359,12 @@ class ShootContext:
     user_id: int
     target_id: int
     active_items: dict
+    # Инвентарь ЦЕЛИ. Нужен только ветке рикошета: _handle_shoot_bounce
+    # обращается к ctx.t_items, но поля в контексте не было — рефакторинг
+    # «всё через ctx» довели до тела функции и не довели до dataclass.
+    # Значение по умолчанию оставляет вызов _handle_shoot_success с семью
+    # аргументами рабочим: успешному выстрелу инвентарь цели не нужен.
+    t_items: dict = dataclasses.field(default_factory=dict)
 
 async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
@@ -7369,17 +7375,10 @@ async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
     except:
         return {}
 
-async def _handle_shoot_bounce(ctx: ShootContext, t_items: dict):
-    message, db, db_lock = ctx.message, ctx.db, ctx.db_lock
-    board_id, user_id, target_id, active_items = ctx.board_id, ctx.user_id, ctx.target_id, ctx.active_items
-    t_items["reflect_shield_until"] = 0
-    active_items["mute_gun"] = False
-    async with db_lock:
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (json.dumps(t_items), target_id, board_id))
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (json.dumps(active_items), user_id, board_id))
-        await db.commit()
+# Здесь лежала вторая, более ранняя копия _handle_shoot_bounce с сигнатурой
+# (ctx, t_items). Её молча затирало определение ниже, так что работала только
+# нижняя версия — а вызовы были написаны под эту, верхнюю. Удалена, чтобы
+# правка не ушла в мёртвую копию.
 
 @dataclass
 class ShootContext:
@@ -7498,7 +7497,10 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
 
     if t_items.get("reflect_shield_until", 0) > current_time:
         # Рикошет!
-        await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items), t_items)
+        # t_items передаём ВНУТРИ контекста: живая _handle_shoot_bounce
+        # принимает один аргумент. Вторым позиционным это был TypeError,
+        # то есть Зеркальный Щит не срабатывал ни разу.
+        await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items, t_items))
         return
 
     # Идемпотентность: цель уже в муте
@@ -7509,7 +7511,12 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         
     if current_mute and current_mute > datetime.now(UTC):
         await message.answer("⚠️ Эта цель УЖЕ находится в муте! Выбери кого-то другого. Мут-Ган остался у тебя.")
-        await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items, t_items))
+        # Здесь стоял вызов _handle_shoot_bounce — он падал на арности
+        # ShootContext (восемь аргументов на семь полей) и до тела не доходил.
+        # Вызывать его нельзя: рикошет списывает мут-ган и сажает в мут самого
+        # стрелка, прямо противореча сообщению выше («Мут-Ган остался у тебя»).
+        # Наблюдаемое поведение — предупредить и выйти, ничего не списывая, —
+        # именно то, что давало падение до записи в БД. Сохраняем его явно.
         return
 
     # Обычный мут цели
