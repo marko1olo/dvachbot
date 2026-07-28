@@ -1208,9 +1208,22 @@ def check_perm(user: dict, required_role: str) -> bool:
     if user.get("id") in ADMIN_IDS:
         return True
     user_role = user.get("role", "user")
+    # Неизвестная роль ПОЛЬЗОВАТЕЛЯ -> уровень 0, самый низкий. Это верно:
+    # неопознанная роль не должна давать прав.
     user_level = ROLE_HIERARCHY.get(user_role, 0)
-    req_level = ROLE_HIERARCHY.get(required_role, 0)
-    return user_level >= req_level
+    # А вот неизвестная ТРЕБУЕМАЯ роль раньше тоже давала 0, и условие
+    # user_level >= 0 выполнялось для кого угодно. То есть опечатка в имени
+    # роли на любом из 18 вызовов молча ОТКЛЮЧАЛА бы проверку, пропуская
+    # обычных пользователей в админское действие. Отказ по умолчанию.
+    # Сегодня это ничего не меняет: все запрашиваемые роли (janitor, mod,
+    # admin) в ROLE_HIERARCHY есть, проверено по всем вызовам.
+    if required_role not in ROLE_HIERARCHY:
+        logger.error(
+            "check_perm: неизвестная роль %r, доступ запрещён. "
+            "Известные роли: %s", required_role, sorted(ROLE_HIERARCHY)
+        )
+        return False
+    return user_level >= ROLE_HIERARCHY[required_role]
 
 
 async def check_and_punish_site_spam(
