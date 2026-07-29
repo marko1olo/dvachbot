@@ -55,6 +55,7 @@ except Exception:
 import io
 import time
 import periodic_publisher
+import traceback
 import threading
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2101,7 +2102,6 @@ async def _handle_telegram_bad_request(exception: Exception, update) -> None:
         generate_locks.pop(user_id, None)
 
 async def _handle_unhandled_exception(exception: Exception, update) -> None:
-    import traceback
     print("⛔⛔⛔ НЕПРЕДВИДЕННАЯ КРИТИЧЕСКАЯ ОШИБКА ⛔⛔⛔")
     print(f"Exception: {type(exception).__name__}: {exception}")
     traceback.print_exc()
@@ -3373,7 +3373,6 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
         
         return total_deleted_count
     except Exception as e:
-        import traceback
         print(f"Критическая ошибка в delete_user_posts: {e}\n{traceback.format_exc()}")
         return 0
 async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
@@ -3997,7 +3996,6 @@ class NewPostProcessor:
 
             return self.current_post_num
         except Exception as e:
-            import traceback
             print(f"🔥🔥🔥 ФАТАЛЬНАЯ ОШИБКА в process_new_post для user {self.user_id}: {e}\n{traceback.format_exc()}")
             return None
 
@@ -4604,7 +4602,6 @@ def generate_wipe_image(text: str) -> bytes | None:
         return buffer.getvalue()
     except Exception as e:
         print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА в generate_wipe_image: {e}")
-        import traceback
         traceback.print_exc()
         return None
 def _format_quote_block(quote_info: dict | None) -> str | None:
@@ -6664,7 +6661,6 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
                 await asyncio.sleep(5)
                 continue
             print(f"{worker_name} | ⛔ Критическая ошибка: {str(e)[:200]}")
-            import traceback
             traceback.print_exc()
             await asyncio.sleep(1)
         finally:
@@ -10402,7 +10398,6 @@ def _generate_statistics_graph_locked(board_id: str, days: int) -> bytes | None:
 
         return buf.getvalue()
     except Exception as e:
-        import traceback
         print(f"⛔ Ошибка при генерации графика: {e}\n{traceback.format_exc()}")
         if 'fig' in locals() and 'fig' in vars() and plt.fignum_exists(fig.number):
             plt.close(fig)
@@ -13986,7 +13981,6 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
                     print(f"❌ Финальная попытка отправки текста для #{post_num} также провалилась: {final_e}")
                 return # Выходим в любом случае после BadRequest
     except Exception as e:
-        import traceback
         print(f"⛔ Не удалось отправить счастливый пост #{post_num} в канал после всех попыток: {e}\n{traceback.format_exc()}")
 def get_quick_menu_keyboard(board_id: str, stream: str = 'ru') -> InlineKeyboardMarkup:
     """
@@ -14282,7 +14276,6 @@ async def reply_notifier_task():
             print("ℹ️ Обработчик уведомлений об ответах остановлен.")
             break
         except Exception as e:
-            import traceback
             print(f"⛔ ОШИБКА в reply_notifier_task: {e}\n{traceback.format_exc()}")
             await asyncio.sleep(15)
 async def sync_boards_with_config():
@@ -14593,7 +14586,6 @@ def _sync_generate_thread_archive(board_id: str, thread_id: str, thread_info: di
         print(f"✅ [{board_id}] Архив для треда {thread_id} сохранен в {filepath}")
         return filepath
     except Exception as e:
-        import traceback
         print(f"⛔ [{board_id}] Ошибка генерации архива для треда {thread_id}: {e}\n{traceback.format_exc()}")
         return None
 async def archive_thread(bots: dict[str, Bot], board_id: str, thread_id: str, thread_info: dict):
@@ -20380,7 +20372,6 @@ async def _run_background_task(task_factory: Callable[[], Awaitable[Any]], task_
             print(f"ℹ️ Фоновая задача '{task_name}' была отменена.")
             break
         except Exception as e:
-            import traceback
             if is_shutting_down or drain_shutdown_requested:
                 print(f"Background task '{task_name}' ended during shutdown: {e}")
                 break
@@ -21869,7 +21860,6 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
         await status_message.delete()
         
     except Exception as e:
-        import traceback
         traceback.print_exc()
         await status_message.edit_text(f"Произошла ошибка при генерации облака слов: {e}", parse_mode=None)
 
@@ -22017,7 +22007,6 @@ async def main():
             reset_webhook=True, timeout=60
         )
     except Exception as e:
-        import traceback
         print(f"🔥 Критическая ошибка в main: {e}\n{traceback.format_exc()}")
     finally:
         if drain_shutdown_requested:
