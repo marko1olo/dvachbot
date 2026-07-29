@@ -1,170 +1,185 @@
-import unittest
+"""
+Тесты ЖИВОГО /rob - того обработчика, который бот действительно исполняет.
+
+До переписывания этот файл импортировал cmd_rob из economy_extension.py.
+Та функция висит на economy_router и не вызывается никогда (Dispatcher
+разрешает свои обработчики раньше включённых под-роутеров), поэтому файл был
+не бесполезным, а вредным: он зеленел, пока в работающем /rob двое суток жила
+гонка, уводившая баланс жертвы в минус. Обработчик берётся через
+tests/economy_live.live_handler, то есть по РЕГИСТРАЦИИ на main.dp.
+
+Проверки идут по состоянию настоящей БД, а не по дословным текстам ответов:
+состояние - это контракт, а формулировки правятся свободно.
+"""
+
 import asyncio
-from unittest.mock import patch, AsyncMock, MagicMock
-import time
 import json
+import time
+import unittest
+from unittest import mock
 
-from aiogram import types
-from economy_extension import cmd_rob
+from tests.economy_live import BOARD, live_economy, live_handler
 
-class MockDBExecute:
-    def __init__(self, fetchone_return=None):
-        self.fetchone_return = fetchone_return
+ROBBER = 1001
+VICTIM = 1002
 
-    async def __aenter__(self):
-        cm = AsyncMock()
-        cm.fetchone.return_value = self.fetchone_return
-        return cm
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        pass
+class TestLiveRobHandler(unittest.IsolatedAsyncioTestCase):
+    def test_registered_handler_is_the_live_one(self):
+        """/rob обслуживает main.cmd_rob, и он на dp ровно один."""
+        handler = live_handler("rob")
+        self.assertEqual(handler.__name__, "cmd_rob")
+        self.assertEqual(handler.__module__, "main")
 
-    def __await__(self):
-        async def dummy():
-            pass
-        return dummy().__await__()
+    async def test_without_reply_nothing_is_touched(self):
+        async with live_economy() as live:
+            await live.seed_user(ROBBER, 100.0, {"knife_gun": True})
+            msg = live.message(ROBBER, with_reply=False)
+            await live_handler("rob")(msg, BOARD)
 
-class MockDB:
-    def __init__(self, queries=None):
-        self.queries = queries or {}
-        self.execute_calls = []
-        self.commit = AsyncMock()
+            self.assertIn("Reply", " ".join(live.answers(msg)))
+            # Заточка на месте, деньги не двигались.
+            self.assertTrue((await live.items_of(ROBBER))["knife_gun"])
+            self.assertEqual(await live.balance_of(ROBBER), 100.0)
 
-    def execute(self, query, params=None):
-        self.execute_calls.append((query, params))
-        res = ("{}",)
-        for q, ret in self.queries.items():
-            if q in query:
-                res = ret
-                break
-        return MockDBExecute(res)
+    async def test_without_knife_refuses(self):
+        async with live_economy() as live:
+            await live.seed_user(ROBBER, 100.0, {})
+            await live.seed_user(VICTIM, 500.0, {})
+            live.aim_at(VICTIM)
+            msg = live.message(ROBBER)
+            await live_handler("rob")(msg, BOARD)
 
-class TestCmdRob(unittest.IsolatedAsyncioTestCase):
-    async def test_no_board_id(self):
-        message = AsyncMock()
-        result = await cmd_rob(message, board_id=None)
-        self.assertIsNone(result)
-        message.reply.assert_not_called()
+            self.assertIn("Заточки", " ".join(live.answers(msg)))
+            self.assertEqual(await live.balance_of(VICTIM), 500.0)
 
-    @patch('economy_extension.get_reply_target')
-    async def test_no_target_id(self, mock_get_reply_target):
-        mock_get_reply_target.return_value = None
-        message = AsyncMock()
-        message.from_user.id = 123
-        await cmd_rob(message, board_id="b")
-        message.reply.assert_called_with("Нужно сделать Reply на пост жертвы!")
+    async def test_robbing_self_keeps_the_knife(self):
+        async with live_economy() as live:
+            await live.seed_user(ROBBER, 100.0, {"knife_gun": True})
+            live.aim_at(ROBBER)
+            msg = live.message(ROBBER)
+            await live_handler("rob")(msg, BOARD)
 
-    @patch('economy_extension.get_reply_target')
-    async def test_target_self(self, mock_get_reply_target):
-        mock_get_reply_target.return_value = 123
-        message = AsyncMock()
-        message.from_user.id = 123
-        await cmd_rob(message, board_id="b")
-        message.reply.assert_called_with("Нельзя ограбить самого себя.")
+            self.assertIn("сам себя", " ".join(live.answers(msg)))
+            self.assertTrue((await live.items_of(ROBBER))["knife_gun"])
+            self.assertEqual(await live.balance_of(ROBBER), 100.0)
 
-    @patch('economy_extension.get_pool')
-    @patch('economy_extension.get_reply_target')
-    async def test_no_knife_gun(self, mock_get_reply_target, mock_get_pool):
-        mock_get_reply_target.return_value = 456
-        message = AsyncMock()
-        message.from_user.id = 123
+    async def test_broke_victim_keeps_the_knife(self):
+        """Нечего украсть - заточка не расходуется."""
+        async with live_economy() as live:
+            await live.seed_user(ROBBER, 100.0, {"knife_gun": True})
+            await live.seed_user(VICTIM, 0.0, {})
+            live.aim_at(VICTIM)
+            msg = live.message(ROBBER)
+            await live_handler("rob")(msg, BOARD)
 
-        mock_db = MockDB(queries={"SELECT active_items FROM Users WHERE user_id = ?": ("{}",)})
-        mock_get_pool.return_value = mock_db
+            self.assertIn("шекелей", " ".join(live.answers(msg)))
+            self.assertTrue((await live.items_of(ROBBER))["knife_gun"])
+            self.assertEqual(await live.balance_of(ROBBER), 100.0)
+            self.assertEqual(await live.balance_of(VICTIM), 0.0)
 
-        await cmd_rob(message, board_id="b")
-        message.reply.assert_called_with("У тебя нет заточки! Купи её в /shop.")
+    async def test_tinfoil_hat_makes_robber_pay(self):
+        """Шапочка из фольги: жертва цела, грабитель теряет долю СВОИХ денег."""
+        async with live_economy() as live:
+            await live.seed_user(ROBBER, 300.0, {"knife_gun": True})
+            await live.seed_user(
+                VICTIM, 1000.0, {"tinfoil_hat": int(time.time()) + 3600})
+            live.aim_at(VICTIM)
+            msg = live.message(ROBBER)
+            with mock.patch("random.uniform", return_value=0.2):
+                await live_handler("rob")(msg, BOARD)
 
-    @patch('economy_extension.get_pool')
-    @patch('economy_extension.get_reply_target')
-    async def test_tinfoil_hat_blocks(self, mock_get_reply_target, mock_get_pool):
-        mock_get_reply_target.return_value = 456
-        message = AsyncMock()
-        message.from_user.id = 123
+            self.assertIn("ШАПОЧКА ИЗ ФОЛЬГИ", " ".join(live.answers(msg)))
+            # 20% от 300 своих = 60 потеряно; у жертвы не тронуто ничего.
+            self.assertEqual(await live.balance_of(ROBBER), 240.0)
+            self.assertEqual(await live.balance_of(VICTIM), 1000.0)
+            self.assertFalse((await live.items_of(ROBBER))["knife_gun"])
 
-        user_items = json.dumps({"knife_gun": True})
-        target_items = json.dumps({"tinfoil_hat": int(time.time()) + 3600})
+    async def test_successful_robbery_moves_exact_amount(self):
+        async with live_economy() as live:
+            await live.seed_user(ROBBER, 0.0, {"knife_gun": True})
+            await live.seed_user(VICTIM, 500.0, {})
+            live.aim_at(VICTIM)
+            msg = live.message(ROBBER)
+            with mock.patch("random.uniform", return_value=0.2):
+                await live_handler("rob")(msg, BOARD)
 
-        mock_db = MockDB()
-        def side_effect_execute(query, params=None):
-            if "UPDATE" in query:
-                return MockDBExecute(None)
-            if params and params[0] == 456:
-                return MockDBExecute((1000, target_items))
-            elif params and params[0] == 123:
-                return MockDBExecute((user_items,))
-            return MockDBExecute(None)
+            self.assertIn("ОГРАБЛЕНИЕ УДАЛОСЬ", " ".join(live.answers(msg)))
+            self.assertEqual(await live.balance_of(VICTIM), 400.0)
+            self.assertEqual(await live.balance_of(ROBBER), 100.0)
+            self.assertFalse((await live.items_of(ROBBER))["knife_gun"])
+            # Жертву уведомляют в личку.
+            msg.bot.send_message.assert_awaited()
 
-        mock_db.execute = MagicMock(side_effect=side_effect_execute)
-        mock_get_pool.return_value = mock_db
+    async def test_stolen_amount_is_capped(self):
+        """Сколько бы ни было у жертвы, за один раз уходит не больше 1000."""
+        async with live_economy() as live:
+            await live.seed_user(ROBBER, 0.0, {"knife_gun": True})
+            await live.seed_user(VICTIM, 100000.0, {})
+            live.aim_at(VICTIM)
+            msg = live.message(ROBBER)
+            with mock.patch("random.uniform", return_value=0.3):
+                await live_handler("rob")(msg, BOARD)
 
-        await cmd_rob(message, board_id="b")
+            self.assertEqual(await live.balance_of(ROBBER), 1000.0)
+            self.assertEqual(await live.balance_of(VICTIM), 99000.0)
 
-        message.bot.send_message.assert_any_call(123, "🔪 Твоя заточка сломалась о Шапочку из фольги жертвы! Ограбление не удалось.", parse_mode="HTML")
-        message.bot.send_message.assert_any_call(456, "👽 Анон <code>123</code> попытался ограбить тебя, но твоя Шапочка из фольги спасла твои шекели!", parse_mode="HTML")
-        message.delete.assert_called_once()
-        mock_db.commit.assert_called_once()
+    async def test_concurrent_robberies_cannot_overdraw_victim(self):
+        """ГОНКА. Два одновременных грабежа по 200 при 250 на счету жертвы.
 
-    @patch('economy_extension.get_pool')
-    @patch('economy_extension.get_reply_target')
-    async def test_target_too_poor(self, mock_get_reply_target, mock_get_pool):
-        mock_get_reply_target.return_value = 456
-        message = AsyncMock()
-        message.from_user.id = 123
+        Это тот самый дефект, из-за которого файл переписан. До защиты оба
+        грабежа проходили: списание шло безусловным upsert-ом и ПОСЛЕ
+        начисления грабителю, поэтому баланс жертвы уходил в минус, а
+        грабителям начислялось то, чего у неё не было. Защита делает проверку и
+        списание одной операцией: UPDATE ... WHERE balance >= ?.
 
-        user_items = json.dumps({"knife_gun": True})
-        target_items = json.dumps({})
+        Утверждения намеренно про инварианты, а не про то, какой из двух
+        вызовов победил: порядок задач планировщик не обязан повторять.
+        """
+        async with live_economy() as live:
+            await live.seed_user(ROBBER, 0.0, {"knife_gun": True})
+            await live.seed_user(VICTIM, 250.0, {})
+            live.aim_at(VICTIM)
+            first, second = live.message(ROBBER), live.message(ROBBER)
+            rob = live_handler("rob")
+            # 250 * 0.8 = 200: одного грабежа хватает, двух - нет.
+            with mock.patch("random.uniform", return_value=0.8):
+                await asyncio.gather(rob(first, BOARD), rob(second, BOARD))
 
-        mock_db = MockDB()
-        def side_effect_execute(query, params=None):
-            if "UPDATE" in query:
-                return MockDBExecute(None)
-            if params and params[0] == 456:
-                return MockDBExecute((49, target_items))
-            elif params and params[0] == 123:
-                return MockDBExecute((user_items,))
-            return MockDBExecute(None)
+            victim = await live.balance_of(VICTIM)
+            robber = await live.balance_of(ROBBER)
+            said = live.answers(first) + live.answers(second)
+            wins = [t for t in said if "ОГРАБЛЕНИЕ УДАЛОСЬ" in t]
+            fails = [t for t in said if "кончились шекели" in t]
 
-        mock_db.execute = MagicMock(side_effect=side_effect_execute)
-        mock_get_pool.return_value = mock_db
+            self.assertGreaterEqual(
+                victim, 0.0,
+                f"баланс жертвы ушёл в минус ({victim}): защита гонки в "
+                f"main.cmd_rob снята или обойдена")
+            self.assertEqual(
+                len(wins), 1,
+                f"успешных грабежей {len(wins)}, ожидался ровно один: {said}")
+            self.assertEqual(len(fails), 1, f"нет отказа второму грабителю: {said}")
+            self.assertEqual(victim, 50.0)
+            self.assertEqual(robber, 200.0)
+            # Закон сохранения: шекели не создаются из воздуха.
+            self.assertEqual(victim + robber, 250.0)
 
-        await cmd_rob(message, board_id="b")
+    async def test_concurrent_robberies_leave_valid_json(self):
+        """Одновременная запись active_items не портит JSON обоим участникам."""
+        async with live_economy() as live:
+            await live.seed_user(ROBBER, 0.0, {"knife_gun": True})
+            await live.seed_user(VICTIM, 250.0, {})
+            live.aim_at(VICTIM)
+            rob = live_handler("rob")
+            with mock.patch("random.uniform", return_value=0.8):
+                await asyncio.gather(rob(live.message(ROBBER), BOARD),
+                                     rob(live.message(ROBBER), BOARD))
 
-        message.bot.send_message.assert_called_once_with(123, "🔪 Ты приставил заточку, но у жертвы в карманах только дыры... Грабить нечего.", parse_mode="HTML")
-        message.delete.assert_called_once()
-        mock_db.commit.assert_called_once()
+            for uid in (ROBBER, VICTIM):
+                raw = await live.column_of(uid, "active_items")
+                self.assertIsInstance(json.loads(raw), dict)
 
-    @patch('economy_extension.random.uniform')
-    @patch('economy_extension.get_pool')
-    @patch('economy_extension.get_reply_target')
-    async def test_successful_robbery(self, mock_get_reply_target, mock_get_pool, mock_uniform):
-        mock_get_reply_target.return_value = 456
-        mock_uniform.return_value = 0.2
-        message = AsyncMock()
-        message.from_user.id = 123
 
-        user_items = json.dumps({"knife_gun": True})
-        target_items = json.dumps({})
-
-        mock_db = MockDB()
-        def side_effect_execute(query, params=None):
-            if "UPDATE" in query:
-                return MockDBExecute(None)
-            if params and params[0] == 456:
-                return MockDBExecute((1000, target_items))
-            elif params and params[0] == 123:
-                return MockDBExecute((user_items,))
-            return MockDBExecute(None)
-
-        mock_db.execute = MagicMock(side_effect=side_effect_execute)
-        mock_get_pool.return_value = mock_db
-
-        await cmd_rob(message, board_id="b")
-
-        message.bot.send_message.assert_any_call(456, "🔪 В подворотне тебя пырнул Анон <code>123</code> и отобрал <b>200 Шекелей</b>!", parse_mode="HTML")
-        message.bot.send_message.assert_any_call(123, "🔪 Ограбление прошло успешно! Ты отжал у лоха <code>456</code> <b>200 Шекелей</b>.", parse_mode="HTML")
-        message.delete.assert_called_once()
-        mock_db.commit.assert_called_once()
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
