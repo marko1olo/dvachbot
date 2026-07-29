@@ -1,165 +1,150 @@
+"""
+Кто из двух реализаций команды экономики живой - проверка самого этого факта.
+
+Раньше этот файл был третьим набором тестов недостижимого cmd_rob из
+economy_extension.py: он дословно повторял tests/test_economy_rob.py и вместе с
+ним давал ложную уверенность. Поведение /rob теперь проверяется на живом
+обработчике там, а здесь остаётся то, чего не проверял никто, - РАЗРЕШЕНИЕ.
+
+Правило, установленное исполнением, а не документацией: Dispatcher разрешает
+СВОИ обработчики раньше включённых под-роутеров, причём независимо от порядка
+include_router. Пять команд экономики объявлены дважды - на dp в main.py и на
+economy_router в economy_extension.py, - и работают только версии из main.py.
+Именно поэтому фикс гонки в /rob двое суток лежал в файле, который не
+исполняется. Тест на синтетическом Dispatcher закрепляет правило: если поведение
+aiogram при обновлении изменится, сломается он, а не прод.
+
+ВАЖНО: economy_extension.py НЕ мёртв целиком и удалять его нельзя. /work живёт
+именно на роутере - на dp обработчика этой команды нет вовсе
+(test_work_is_served_only_by_the_router). Мёртвы только пять перекрытых копий.
+"""
+
+from datetime import UTC, datetime
+from unittest import mock
+
 import pytest
-import asyncio
-from unittest.mock import AsyncMock, patch, MagicMock
-import json
-import time
-from aiogram import types
+from aiogram import Dispatcher, Router
+from aiogram.filters import Command
+from aiogram.types import Chat, Message, User
 
-from economy_extension import cmd_rob
+from tests.economy_live import dp_own_handlers, live_handler, sub_router_handlers
 
-@pytest.fixture
-def mock_message():
-    msg = AsyncMock(spec=types.Message)
-    msg.from_user = MagicMock()
-    msg.from_user.id = 123
-    msg.reply = AsyncMock()
-    msg.bot = AsyncMock()
-    msg.bot.send_message = AsyncMock()
-    msg.delete = AsyncMock()
-    return msg
+# Команды, объявленные и на dp, и на economy_router. Список ЗАКРЫТЫЙ: новая
+# такая пара должна ломать тест, а не молча пополнять его.
+SHADOWED_COMMANDS = ("rob", "shit", "curse", "partyvan", "mega")
 
-class AsyncContextManagerMock:
-    def __init__(self, fetchone_return_value):
-        self.cursor = AsyncMock()
-        self.cursor.fetchone.return_value = fetchone_return_value
 
-    def __await__(self):
-        # Allow being awaited like a standard coroutine
-        async def mock_coro():
-            return self.cursor
-        return mock_coro().__await__()
+@pytest.mark.parametrize("command", SHADOWED_COMMANDS)
+def test_live_version_comes_from_main(command):
+    """Работает версия из main.py, и на dp она одна."""
+    assert live_handler(command).__module__ == "main"
 
-    async def __aenter__(self):
-        return self.cursor
 
-    async def __aexit__(self, exc_type, exc, tb):
-        pass
+@pytest.mark.parametrize("command", SHADOWED_COMMANDS)
+def test_economy_extension_copy_is_registered_but_shadowed(command):
+    """Копия в economy_extension зарегистрирована - и потому именно перекрыта.
 
-class DummyLock:
-    async def __aenter__(self):
-        pass
-    async def __aexit__(self, exc_type, exc, tb):
-        pass
+    Разница существенная: «не зарегистрирована» означало бы, что её никогда не
+    вызовут по другой причине и достаточно её удалить. Она зарегистрирована,
+    выглядит рабочей и молча проигрывает разрешение - тот случай, на котором
+    ошибиться легче всего.
+    """
+    shadowed = [fn for _, fn in sub_router_handlers(command)
+                if fn.__module__ == "economy_extension"]
+    assert len(shadowed) == 1, (
+        f"/{command}: в под-роутерах {len(shadowed)} копий из economy_extension. "
+        f"Если копия удалена - удали команду из SHADOWED_COMMANDS, "
+        f"а не подгоняй утверждение")
+    # И она не та, что обслуживает команду.
+    assert shadowed[0] is not live_handler(command)
 
-@pytest.fixture
-def patch_db_lock():
-    with patch('economy_extension.db_lock', new=DummyLock()):
-        yield
 
-@pytest.mark.asyncio
-async def test_cmd_rob_no_board_id(mock_message):
-    await cmd_rob(mock_message, board_id=None)
-    mock_message.reply.assert_not_called()
+@pytest.mark.parametrize("command", SHADOWED_COMMANDS)
+def test_no_economy_extension_handler_reaches_dp(command):
+    """На самом dp нет ни одного обработчика этих команд из мёртвого модуля."""
+    assert not [fn for fn in dp_own_handlers(command)
+                if fn.__module__ == "economy_extension"]
 
-@pytest.mark.asyncio
-@patch('economy_extension.get_reply_target', return_value=None)
-async def test_cmd_rob_no_target(mock_get_target, mock_message):
-    await cmd_rob(mock_message, board_id="test_board")
-    mock_message.reply.assert_called_with("Нужно сделать Reply на пост жертвы!")
 
-@pytest.mark.asyncio
-@patch('economy_extension.get_reply_target', return_value=123)
-async def test_cmd_rob_self(mock_get_target, mock_message):
-    await cmd_rob(mock_message, board_id="test_board")
-    mock_message.reply.assert_called_with("Нельзя ограбить самого себя.")
+def test_work_is_served_only_by_the_router():
+    """economy_extension удалять нельзя: /work живёт только там."""
+    assert dp_own_handlers("work") == [], (
+        "у /work появился обработчик на dp - тогда на роутере он тоже стал "
+        "перекрытым, и /work пора внести в SHADOWED_COMMANDS")
+    on_router = [fn for _, fn in sub_router_handlers("work")
+                 if fn.__module__ == "economy_extension"]
+    assert len(on_router) == 1
 
-@pytest.mark.asyncio
-@patch('economy_extension.get_reply_target', return_value=456)
-@patch('economy_extension.get_pool')
-async def test_cmd_rob_no_knife(mock_get_pool, mock_get_target, mock_message, patch_db_lock):
-    db_mock = MagicMock()
-    # User has empty active_items
-    db_mock.execute.return_value = AsyncContextManagerMock(fetchone_return_value=("{}",))
-    mock_get_pool.return_value = db_mock
 
-    await cmd_rob(mock_message, board_id="test_board")
-    mock_message.reply.assert_called_with("У тебя нет заточки! Купи её в /shop.")
+# --------------------------------------------------------------------------
+# Само правило разрешения - на синтетическом Dispatcher, без Bot и без сети.
+# propagate_event это настоящий механизм aiogram: он сначала опрашивает
+# собственный observer роутера и только потом идёт по sub_routers.
 
-@pytest.mark.asyncio
-@patch('economy_extension.get_reply_target', return_value=456)
-@patch('economy_extension.get_pool')
-async def test_cmd_rob_tinfoil_hat(mock_get_pool, mock_get_target, mock_message, patch_db_lock):
-    db_mock = MagicMock()
-
-    def side_effect(query, args):
-        if query.startswith("SELECT active_items FROM Users WHERE user_id = ?"):
-            # attacker
-            if args[0] == 123:
-                return AsyncContextManagerMock(fetchone_return_value=(json.dumps({"knife_gun": True}),))
-        elif query.startswith("SELECT balance, active_items FROM Users WHERE user_id = ?"):
-            # target
-            if args[0] == 456:
-                return AsyncContextManagerMock(fetchone_return_value=(1000, json.dumps({"tinfoil_hat": int(time.time()) + 1000})))
-        return AsyncContextManagerMock(fetchone_return_value=None)
-
-    db_mock.execute.side_effect = side_effect
-    mock_get_pool.return_value = db_mock
-    db_mock.commit = AsyncMock()
-
-    await cmd_rob(mock_message, board_id="test_board")
-
-    # Check that bot send message was called indicating tinfoil hat blocked it
-    mock_message.bot.send_message.assert_any_call(
-        123, "🔪 Твоя заточка сломалась о Шапочку из фольги жертвы! Ограбление не удалось.", parse_mode="HTML"
+def _synthetic_message(text: str) -> Message:
+    return Message(
+        message_id=1,
+        date=datetime.now(UTC),
+        chat=Chat(id=1, type="private"),
+        from_user=User(id=1, is_bot=False, first_name="A"),
+        text=text,
     )
 
+
+async def _who_wins(include_router_first: bool) -> list[str]:
+    fired: list[str] = []
+    dp = Dispatcher()
+    router = Router()
+
+    @router.message(Command("rob"))
+    async def _on_router(message, **kwargs):
+        fired.append("router")
+
+    if include_router_first:
+        dp.include_router(router)
+
+    @dp.message(Command("rob"))
+    async def _on_dp(message, **kwargs):
+        fired.append("dp")
+
+    if not include_router_first:
+        dp.include_router(router)
+
+    # Фильтру Command нужен bot в kwargs, но обращается он к нему только при
+    # разборе упоминания вида /rob@botname - здесь его нет.
+    await dp.propagate_event("message", _synthetic_message("/rob"),
+                             bot=mock.MagicMock())
+    return fired
+
+
 @pytest.mark.asyncio
-@patch('economy_extension.get_reply_target', return_value=456)
-@patch('economy_extension.get_pool')
-async def test_cmd_rob_poor_target(mock_get_pool, mock_get_target, mock_message, patch_db_lock):
-    db_mock = MagicMock()
-
-    def side_effect(query, args):
-        if query.startswith("SELECT active_items FROM Users WHERE user_id = ?"):
-            # attacker
-            if args[0] == 123:
-                return AsyncContextManagerMock(fetchone_return_value=(json.dumps({"knife_gun": True}),))
-        elif query.startswith("SELECT balance, active_items FROM Users WHERE user_id = ?"):
-            # target
-            if args[0] == 456:
-                # balance 40 (less than 50)
-                return AsyncContextManagerMock(fetchone_return_value=(40, "{}"))
-        return AsyncContextManagerMock(fetchone_return_value=None)
-
-    db_mock.execute.side_effect = side_effect
-    db_mock.commit = AsyncMock()
-    mock_get_pool.return_value = db_mock
-
-    await cmd_rob(mock_message, board_id="test_board")
-
-    mock_message.bot.send_message.assert_any_call(
-        123, "🔪 Ты приставил заточку, но у жертвы в карманах только дыры... Грабить нечего.", parse_mode="HTML"
+@pytest.mark.parametrize("include_router_first", [True, False])
+async def test_dispatcher_own_handler_wins_regardless_of_include_order(
+        include_router_first):
+    assert await _who_wins(include_router_first) == ["dp"], (
+        "порядок разрешения aiogram изменился: обработчик под-роутера перебил "
+        "обработчик самого Dispatcher. Тогда живыми становятся версии из "
+        "economy_extension, и все тесты экономики нужно переписывать, а не "
+        "править"
     )
+
 
 @pytest.mark.asyncio
-@patch('economy_extension.get_reply_target', return_value=456)
-@patch('economy_extension.get_pool')
-@patch('economy_extension.random.uniform', return_value=0.2)
-async def test_cmd_rob_success(mock_uniform, mock_get_pool, mock_get_target, mock_message, patch_db_lock):
-    db_mock = MagicMock()
+async def test_router_handler_runs_when_dispatcher_has_none():
+    """Контроль: под-роутер вообще-то работает - он проигрывает, а не сломан.
 
-    def side_effect(query, args):
-        if query.startswith("SELECT active_items FROM Users WHERE user_id = ?"):
-            # attacker
-            if args[0] == 123:
-                return AsyncContextManagerMock(fetchone_return_value=(json.dumps({"knife_gun": True}),))
-        elif query.startswith("SELECT balance, active_items FROM Users WHERE user_id = ?"):
-            # target
-            if args[0] == 456:
-                # balance 500
-                return AsyncContextManagerMock(fetchone_return_value=(500, "{}"))
-        return AsyncContextManagerMock(fetchone_return_value=None)
+    Без этой проверки предыдущий тест зеленел бы и в случае, если обработчик
+    роутера не срабатывает ни при каких условиях.
+    """
+    fired: list[str] = []
+    dp = Dispatcher()
+    router = Router()
 
-    db_mock.execute.side_effect = side_effect
-    db_mock.commit = AsyncMock()
-    mock_get_pool.return_value = db_mock
+    @router.message(Command("rob"))
+    async def _on_router(message, **kwargs):
+        fired.append("router")
 
-    await cmd_rob(mock_message, board_id="test_board")
-
-    # 20% of 500 is 100
-    mock_message.bot.send_message.assert_any_call(
-        456, f"🔪 В подворотне тебя пырнул Анон <code>123</code> и отобрал <b>100 Шекелей</b>!", parse_mode="HTML"
-    )
-    mock_message.bot.send_message.assert_any_call(
-        123, f"🔪 Ограбление прошло успешно! Ты отжал у лоха <code>456</code> <b>100 Шекелей</b>.", parse_mode="HTML"
-    )
+    dp.include_router(router)
+    await dp.propagate_event("message", _synthetic_message("/rob"),
+                             bot=mock.MagicMock())
+    assert fired == ["router"]
