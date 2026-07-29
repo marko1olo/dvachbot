@@ -46,6 +46,44 @@ import secrets
 import html
 import signal
 import sys
+from deanonymizer import (
+    generate_deanon_info,
+)
+from help_text import (
+    HELP_TEXT_COMMANDS, HELP_TEXT_EN_COMMANDS, HELP_TEXT_JP_COMMANDS,
+    generate_boards_list,
+    THREAD_PROMO_TEXT_RU, THREAD_PROMO_TEXT_EN, THREAD_PROMO_TEXT_JP,
+    MODE_INFO_TEXT_RU, MODE_INFO_TEXT_EN, MODE_INFO_TEXT_JP,
+    MECHANICS_INFO_TEXT_RU, MECHANICS_INFO_TEXT_EN, MECHANICS_INFO_TEXT_JP,
+    CHANNEL_PROMO_TEXT_RU, CHANNEL_PROMO_TEXT_EN, CHANNEL_PROMO_TEXT_JP
+)
+from japanese_translator import (
+    anime_transform, get_random_anime_image, get_monogatari_image,
+    get_nsfw_anime_image, get_loli_image, get_dynamic_proxy_url
+)
+from summarize import summarize_text_with_hf, create_telegraph_page_async
+from thread_texts import thread_messages
+from ukrainian_mode import ukrainian_transform
+from zaputin_mode import zaputin_transform
+from polish_mode import POLISH_PHRASES_START, POLISH_PHRASES_END, polish_transform
+from warhammer_mode import WH40K_PHRASES_START, WH40K_PHRASES_END, warhammer_transform
+from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial_transform
+from gopnik_mode import GOPNIK_PHRASES_START, GOPNIK_PHRASES_END, gopnik_transform
+from shizo_mode import SCHIZO_PHRASES_START, SCHIZO_PHRASES_END, shizo_transform
+from mode_punchup import punch_up_mode_text
+from aiogram import BaseMiddleware
+from aiogram.types import TelegramObject
+from typing import Callable, Dict, Any, Awaitable, Optional
+from roulette_logic import load_roulette_data, get_random_event, ROULETTE_COOLDOWN_PHRASES, ROULETTE_RESULT_PHRASES
+try:
+    import pandas as pd
+    import matplotlib
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    matplotlib.use('Agg')  # Используем бэкенд, не требующий GUI
+    GRAPH_LIBS_AVAILABLE = True
+except ImportError:
+    GRAPH_LIBS_AVAILABLE = False
 try:
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding='utf-8')
@@ -180,46 +218,6 @@ class WithdrawalStates(StatesGroup):
     choosing_method = State()
     entering_data = State()
     processing = State() # Фейковое состояние для анимации
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-time.sleep(2)
-from deanonymizer import (
-    generate_deanon_info,
-)
-from help_text import (
-    HELP_TEXT_COMMANDS, HELP_TEXT_EN_COMMANDS, HELP_TEXT_JP_COMMANDS,
-    generate_boards_list,
-    THREAD_PROMO_TEXT_RU, THREAD_PROMO_TEXT_EN, THREAD_PROMO_TEXT_JP,
-    MODE_INFO_TEXT_RU, MODE_INFO_TEXT_EN, MODE_INFO_TEXT_JP,
-    MECHANICS_INFO_TEXT_RU, MECHANICS_INFO_TEXT_EN, MECHANICS_INFO_TEXT_JP,
-    CHANNEL_PROMO_TEXT_RU, CHANNEL_PROMO_TEXT_EN, CHANNEL_PROMO_TEXT_JP
-)
-from japanese_translator import (
-    anime_transform, get_random_anime_image, get_monogatari_image, 
-    get_nsfw_anime_image, get_loli_image, get_dynamic_proxy_url
-)
-from summarize import summarize_text_with_hf, create_telegraph_page_async
-from thread_texts import thread_messages
-from ukrainian_mode import ukrainian_transform
-from zaputin_mode import zaputin_transform
-from polish_mode import POLISH_PHRASES_START, POLISH_PHRASES_END, polish_transform
-from warhammer_mode import WH40K_PHRASES_START, WH40K_PHRASES_END, warhammer_transform
-from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial_transform
-from gopnik_mode import GOPNIK_PHRASES_START, GOPNIK_PHRASES_END, gopnik_transform
-from shizo_mode import SCHIZO_PHRASES_START, SCHIZO_PHRASES_END, shizo_transform
-from mode_punchup import punch_up_mode_text
-from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
-from typing import Callable, Dict, Any, Awaitable, Optional
-from roulette_logic import load_roulette_data, get_random_event, ROULETTE_COOLDOWN_PHRASES, ROULETTE_RESULT_PHRASES
-try:
-    import pandas as pd
-    import matplotlib
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-    matplotlib.use('Agg')  # Используем бэкенд, не требующий GUI
-    GRAPH_LIBS_AVAILABLE = True
-except ImportError:
-    GRAPH_LIBS_AVAILABLE = False
 ANIME_COMMAND_MAP = {
     "fap": get_random_anime_image,
     "Fap": get_random_anime_image,
