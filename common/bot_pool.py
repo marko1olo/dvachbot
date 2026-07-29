@@ -164,13 +164,6 @@ class MultiStreamBotPool:
             return self.all_bots[0]
         return None
 
-    def get_all_active_bots(self) -> List[Bot]:
-        """Возвращает список всех активных ботов во всех пулах."""
-        for s in ['ru', 'en', 'jp']:
-            if s not in self._loaded_streams:
-                self.init_stream(s)
-        return [b for b in self.all_bots if b]
-
     def mark_bot_dead(self, bot_id: int):
         """Помечает бота как неактивного (logged out) и удаляет из всех пулов и итераторов."""
         if bot_id in self.disabled_bot_ids:
