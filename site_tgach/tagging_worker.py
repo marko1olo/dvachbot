@@ -469,7 +469,10 @@ async def tagging_loop():
         try:
             now = time.time()
             if TEMP_FAILED_FILES:
-                TEMP_FAILED_FILES = {k: v for k, v in TEMP_FAILED_FILES.items() if v > now}
+                TEMP_FAILED_FILES = {
+                    k: v for k, v in TEMP_FAILED_FILES.items() 
+                    if (v.get('until', 0) if isinstance(v, dict) else v) > now
+                }
 
             db = await get_pool()
             if not db:
@@ -508,8 +511,18 @@ async def tagging_loop():
                     img_bytes, active_bot = await download_file_with_fallback(download_target_id, primary_bot=bot)
 
                 if not img_bytes:
-                    logger.warning(f"❌ DL fail for {file_id[:15]} across all bots. Skipping temporarily.")
-                    TEMP_FAILED_FILES[file_id] = time.time() + 180
+                    entry = TEMP_FAILED_FILES.get(file_id)
+                    fail_cnt = (entry.get('cnt', 0) + 1) if isinstance(entry, dict) else 1
+                    if fail_cnt >= 3:
+                        logger.warning(f"⛔ [TAGGER] DL failed 3 times for {file_id[:15]} across all bots. Marking as 'download_failed'.")
+                        async with db_lock:
+                            await db.execute("UPDATE FileRegistry SET tags='download_failed' WHERE file_id=?", (file_id,))
+                            await db.commit()
+                        if file_id in TEMP_FAILED_FILES:
+                            del TEMP_FAILED_FILES[file_id]
+                    else:
+                        logger.warning(f"❌ DL fail for {file_id[:15]} across all bots (attempt {fail_cnt}/3). Skipping temporarily.")
+                        TEMP_FAILED_FILES[file_id] = {'until': time.time() + 300, 'cnt': fail_cnt}
                     continue
 
                 # 2. CPU (Хеши + РЕСАЙЗ)
