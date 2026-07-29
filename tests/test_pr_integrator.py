@@ -5,6 +5,34 @@ import subprocess
 import sys
 
 class TestPrIntegrator(unittest.TestCase):
+    @patch('pr_integrator.run_git')
+    def test_get_unmerged_branches(self, mock_run_git):
+        mock_run_git.side_effect = [
+            "",
+            "  origin/HEAD -> origin/main\n* origin/main\n  origin/feature-1\n  origin/bugfix-2\n  "
+        ]
+
+        branches = pr_integrator.get_unmerged_branches()
+
+        self.assertEqual(branches, ["origin/feature-1", "origin/bugfix-2"])
+        self.assertEqual(mock_run_git.call_count, 2)
+        mock_run_git.assert_any_call(["fetch", "origin"])
+        mock_run_git.assert_any_call(["branch", "-r", "--no-merged", "origin/main"])
+
+    @patch('pr_integrator.run_git')
+    def test_get_unmerged_branches_empty(self, mock_run_git):
+        mock_run_git.side_effect = [
+            "",
+            "  origin/HEAD -> origin/main\n* origin/main\n"
+        ]
+
+        branches = pr_integrator.get_unmerged_branches()
+
+        self.assertEqual(branches, [])
+        self.assertEqual(mock_run_git.call_count, 2)
+        mock_run_git.assert_any_call(["fetch", "origin"])
+        mock_run_git.assert_any_call(["branch", "-r", "--no-merged", "origin/main"])
+
     @patch('subprocess.run')
     def test_run_tests_success(self, mock_run):
         mock_result = MagicMock()
