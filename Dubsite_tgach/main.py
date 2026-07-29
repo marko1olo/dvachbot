@@ -3632,7 +3632,7 @@ async def api_get_my_posts_content(
     if not unique_ids:
         return []
     ids_str = ",".join(map(str, unique_ids))
-    cache_key = f"myposts_v2:{hashlib.md5(ids_str.encode()).hexdigest()}"
+    cache_key = f"myposts_v2:{hashlib.sha256(ids_str.encode()).hexdigest()}"
     backend = FastAPICache.get_backend()
     if backend:
         cached_data = await backend.get(cache_key)
