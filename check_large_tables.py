@@ -32,10 +32,6 @@ def check_indexes():
                 for idx in indexes:
                     cols = index_cols.get(idx[1], [])
                     print(f"  Index: {idx[1]} -> Columns: {cols}")
-            for idx in indexes:
-                cursor.execute("SELECT * FROM pragma_index_info(?)", (idx[1],))
-                cols = [row[2] for row in cursor]
-                print(f"  Index: {idx[1]} -> Columns: {cols}")
 
 if __name__ == '__main__':
     check_indexes()
