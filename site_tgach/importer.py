@@ -903,9 +903,6 @@ class ThreadImporter:
                     await asyncio.sleep(0.05)
 
                 await conn.execute("BEGIN")
-                unique_authors = set(p["author_id"] for p in prepared_posts)
-                # for uid in unique_authors:
-                #     await conn.execute("INSERT OR IGNORE INTO Users (user_id, board_id, stream) VALUES (?, ?, ?)", (uid, target_board, stream))
 
                 from common.config import STORAGE_CHANNELS
 
@@ -948,7 +945,9 @@ class ThreadImporter:
                                 "files": p_data["files"],
                                 "type": "files" if p_data["files"] else "text",
                             }
-                            update_posts_params.append((json.dumps(new_content_obj), reply_to_id, new_id))
+                            update_posts_params.append(
+                                (json.dumps(new_content_obj), reply_to_id, new_id)
+                            )
 
                             if reply_to_id:
                                 all_backlink_pairs.append((reply_to_id, new_id))
