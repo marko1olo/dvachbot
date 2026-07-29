@@ -71,15 +71,17 @@ async def upload_file_to_pixhost(file_path: str) -> str | None:
                 if resp.status_code == 200:
                     j = resp.json()
                     # Response: {"th_url": "...", "show_url": "...", ...}
-                    # show_url is the page, th_url is the thumbnail, we need the direct image url
-                    # Direct image URL is built from show_url: replace show with img domain
                     show_url = j.get("show_url", "")
                     if show_url:
                         # Construct direct URL: pixhost converts show_url to direct img
                         # e.g. https://pixhost.to/show/123/abc.jpg -> https://img123.pixhost.to/images/123/abc.jpg
-                        # The API returns th_url for thumbnail, show_url for page
-                        # We store the show_url as the mirror link (functional enough for redirect)
-                        direct_url = show_url  # The page shows the image
+                        import re
+                        m = re.match(r"https?://(?:www\.)?pixhost\.to/show/([^/]+)/(.+)", show_url)
+                        if m:
+                            dir_id, filename = m.group(1), m.group(2)
+                            direct_url = f"https://img{dir_id}.pixhost.to/images/{dir_id}/{filename}"
+                        else:
+                            direct_url = show_url
                         logger.info(f"✅ Pixhost upload success ({strategy['name']}): {direct_url}")
                         return direct_url
                     else:

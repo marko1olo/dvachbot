@@ -17,6 +17,7 @@ from site_tgach.mtproto_client import download_file_mtproto
 from site_tgach.zeroxzero import is_0x0_available, upload_url_to_0x0, upload_file_to_0x0
 from site_tgach.pixhost import upload_file_to_pixhost, PIXHOST_SUPPORTED_EXT, PIXHOST_MAX_MB
 from site_tgach.imgbb import upload_file_to_imgbb, IMGBB_SUPPORTED_EXT
+from site_tgach.freeimage import upload_file_to_freeimage
 
 logger = logging.getLogger("mirror_worker")
 _INTERNAL_FILE_BOTS: dict[int, Bot] = {}
@@ -303,6 +304,8 @@ async def _process_single_task(task):
                                 await remove_mirror_task(task_id)
                                 return
                         success_link = await upload_file_to_imgbb(lpath)
+                    elif mirror_type == 'freeimage':
+                        success_link = await upload_file_to_freeimage(lpath)
                 else:
                     logger.warning(f"⛔ All download methods failed for {file_id[:10]}. Rescheduling.")
                     await reschedule_mirror_task(task_id, attempt)
@@ -343,6 +346,8 @@ async def process_mirror_queue():
                     allowed_types.append('0x0')
                 if os.getenv("IMGBB_API_KEY"):
                     allowed_types.append('imgbb')
+                if os.getenv("FREEIMAGE_API_KEY"):
+                    allowed_types.append('freeimage')
 
                 tasks = await get_pending_mirror_tasks(limit=20, allowed_types=allowed_types)
                 if not tasks:
