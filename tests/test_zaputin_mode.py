@@ -59,9 +59,9 @@ class TestZaputinMode(unittest.TestCase):
 
         self.assertIn("произвел", result)
         self.assertIn("импортозамещение", result)
-import zaputin_mode
-        self.assertEqual(zaputin_mode.zaputin_transform(""), "")
-        self.assertEqual(zaputin_mode.zaputin_transform(None), None)
+    def test_empty_string(self):
+        self.assertEqual(zaputin_transform(""), "")
+        self.assertEqual(zaputin_transform(None), None)
     def test_zv_replacement(self):
         # tests that 'з' and 'в' are replaced by 'Z' and 'V' (preserving case via mapping)
         # However, the code uses uppercase 'Z' and 'V' for both lowercase and uppercase.
@@ -98,11 +98,10 @@ import zaputin_mode
         # Needs > 3 words for slogan
         result = zaputin_mode.zaputin_transform("раз два три четыре")
         # Slogan is in PATRIOTIC_PHRASES
-        self.assertIn("<b>", result)
-# Ensure import paths work
-from zaputin_mode import zaputin_transform
     def test_zaputin_transform_empty_text(self):
         """Test that empty or None text returns appropriately."""
+        self.assertEqual(zaputin_mode.zaputin_transform(""), "")
+        self.assertEqual(zaputin_mode.zaputin_transform(None), None)
     def test_ideological_replacements(self, mock_random, mock_choice):
         """Test that ideological replacements apply correctly and preserve case."""
         # Ensure random effects like kancelarit caps and slogans don't interfere

@@ -195,8 +195,12 @@ _geoip_init_lock = asyncio.Lock()
 @alru_cache(maxsize=10000, ttl=3600)
 async def get_country_by_ip(ip: str) -> str:
     global GEOIP_READER
-    if ip in ("127.0.0.1", "localhost", "::1"):
-        return "XX"
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_reserved or ip_obj.is_link_local:
+            return "XX"
+    except Exception:
+        pass
 
     if GEOIP_READER is None:
         try:
@@ -211,17 +215,15 @@ async def get_country_by_ip(ip: str) -> str:
                         GEOIP_READER = await asyncio.to_thread(
                             geoip2.database.Reader, db_full_path
                         )
-        except Exception as e:
-            import logging
-
-            logging.getLogger(__name__).error(f"Failed to load GeoIP DB: {e}")
+        except Exception:
+            pass
 
     if GEOIP_READER:
         try:
             response = await asyncio.to_thread(GEOIP_READER.country, ip)
             return response.country.iso_code or "XX"
-        except Exception as e:
-            logging.getLogger(__name__).error(f"GeoIP country lookup failed for IP {ip}: {e}")
+        except Exception:
+            pass
 
     strategies = [
         {"proxy": PROXY_URL, "name": "Proxy"},
@@ -241,7 +243,7 @@ async def get_country_by_ip(ip: str) -> str:
                 resp = await client.get(f"http://ip-api.com/json/{ip}")
                 if resp.status_code == 200:
                     return resp.json().get("countryCode", "XX")
-        except:
+        except Exception:
             continue
 
     return "XX"
@@ -1898,7 +1900,10 @@ async def custom_access_log_middleware(request: Request, call_next):
     # 1. Фиксация нового посетителя (Вход)
     if client_ip not in KNOWN_IPS:
         KNOWN_IPS.add(client_ip)
-        country = await get_country_by_ip(client_ip)
+        try:
+            country = await get_country_by_ip(client_ip)
+        except Exception:
+            country = "XX"
         v_logger.info(f"[ENTER] {client_ip} ({country})")
 
     # 2. Определение человекочитаемого действия
@@ -2619,17 +2624,24 @@ async def language_middleware(request: Request, call_next):
     if request.url.path.startswith("/ws/") or request.url.path.startswith("/static/"):
         try:
             return await call_next(request)
-        except RuntimeError as e:
-            if str(e) == "No response returned.":
-                return Response("OK", status_code=200)
-            raise e
+        except Exception as e:
+            return Response("OK", status_code=200)
     try:
         response = await call_next(request)
         return response
-    except RuntimeError as e:
-        if str(e) == "No response returned.":
-            return Response("Request processing error", status_code=500)
-        raise e
+    except Exception as e:
+        err_msg = str(e)
+        err_type = type(e).__name__
+        if (
+            "No response returned" in err_msg
+            or "connection closed" in err_msg.lower()
+            or "clientdisconnect" in err_msg.lower()
+            or "taskgroup" in err_msg.lower()
+            or "exceptiongroup" in err_type.lower()
+        ):
+            return Response("OK", status_code=200)
+        logger.warning(f"⚠️ Handled request exception: {err_type}: {err_msg[:100]}")
+        return Response("Request processing error", status_code=500)
 
 
 async def custom_rate_limit_handler(request: Request, exc: RateLimitExceeded):

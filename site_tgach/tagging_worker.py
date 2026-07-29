@@ -349,7 +349,12 @@ async def download_file_with_fallback(file_id: str, primary_bot=None):
     if main_bot and main_bot not in bots_to_try:
         bots_to_try.append(main_bot)
         
-    all_bots = global_bot_pool.get_all_active_bots() if global_bot_pool else []
+    all_bots = []
+    if global_bot_pool:
+        if hasattr(global_bot_pool, "get_all_active_bots"):
+            all_bots = global_bot_pool.get_all_active_bots()
+        elif hasattr(global_bot_pool, "all_bots"):
+            all_bots = global_bot_pool.all_bots
     for b in all_bots:
         if b not in bots_to_try:
             bots_to_try.append(b)
