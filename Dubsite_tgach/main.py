@@ -6369,7 +6369,6 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
         if mirrors:
             await backend.set(cache_key, json.dumps(mirrors), expire=900)
 
-    hf_link = mirrors.get('huggingface')
     catbox_link = mirrors.get('catbox')
     shadow_file_id = mirrors.get('tg_shadow')
     freeimage_link = mirrors.get('freeimage')
@@ -6400,9 +6399,6 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
             headers={"Cache-Control": "public, max-age=3600"}
         )
 
-    # if hf_link:
-    #     return RedirectResponse(url=hf_link, status_code=307)
-    
     if freeimage_link and "freeimage" not in skipped_types:
         return RedirectResponse(url=freeimage_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"})
 
