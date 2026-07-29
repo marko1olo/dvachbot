@@ -45,5 +45,22 @@ class TestPrIntegrator(unittest.TestCase):
             cwd="."
         )
 
+
+    def test_count_test_issues_summary(self):
+        output = "FAILED (failures=2, errors=1)"
+        self.assertEqual(pr_integrator.count_test_issues(output), 3)
+
+    def test_count_test_issues_ok(self):
+        output = "Ran 15 tests in 0.052s\n\nOK\n"
+        self.assertEqual(pr_integrator.count_test_issues(output), 0)
+
+    def test_count_test_issues_no_summary_but_failed(self):
+        output = "======================================================================\nFAIL: test_something\n======================================================================\nFAILED"
+        self.assertEqual(pr_integrator.count_test_issues(output), 2)
+
+    def test_count_test_issues_zero_if_no_failed(self):
+        output = "Some random output without FAILED or OK"
+        self.assertEqual(pr_integrator.count_test_issues(output), 0)
+
 if __name__ == '__main__':
     unittest.main()
