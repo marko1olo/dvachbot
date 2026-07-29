@@ -85,7 +85,7 @@ from common.database import (
 )
 from site_tgach.admin_config import ADMIN_IDS
 from site_tgach.tagging_worker import tagging_loop
-from common.db_pool import create_pool, get_pool
+from common.db_pool import create_pool, get_pool, db_lock, close_pool
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from text_assets import (
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP,
@@ -2293,7 +2293,7 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
     shutdown_event.set()
     
     # Импортируем лок для безопасного доступа к БД
-    from common.db_pool import get_pool, db_lock, close_pool
+
     
     reason = "АВАРИЙНЫЙ (OOM)" if emergency else "ШТАТНЫЙ"
     print(f"🛑 [{reason}] Начинаем процедуру остановки...")
@@ -3015,7 +3015,7 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
     """
     custom_prefix = ""
     if author_id > 0:
-        from common.db_pool import get_pool
+
         import time
         import json
         db = await get_pool()
@@ -3107,7 +3107,7 @@ async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru')
 async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, stream: str):
     if user_id <= 0: return
     
-    from common.db_pool import get_pool, db_lock
+
     db = await get_pool()
 
     # Функция спавнится на КАЖДЫЙ пост, а db_lock сериализует весь доступ к базе
@@ -3159,7 +3159,7 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
             pass
 
 async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str) -> tuple[list[int], list, list]:
-    from common.db_pool import get_pool, db_lock
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -3380,7 +3380,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
     """
     Удаляет один конкретный пост отовсюду: из БД, RAM, ЛС пользователей и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
     """
-    from common.db_pool import get_pool
+
     board_id = None
     try:
         db = await get_pool()
@@ -3729,7 +3729,7 @@ class NewPostProcessor:
     async def _apply_content_transformations(self):
         self.author_content = await _apply_mode_transformations(self.content, self.board_id)
         if self.user_id > 0:
-            from common.db_pool import get_pool
+
             import time
             db = await get_pool()
             async with db.execute("SELECT cursed_until, active_items FROM Users WHERE user_id = ?", (self.user_id,)) as c:
@@ -7141,7 +7141,7 @@ async def cmd_global_pin(message: types.Message, board_id: str | None, stream: s
 async def cmd_shop(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
-    from common.db_pool import get_pool
+
     db = await get_pool()
     async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
         row = await c.fetchone()
@@ -7184,7 +7184,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     item = parts[2]  # janitor, mute, shield, prefix
     costs = {"janitor": 1000, "mute": 600, "shield": 800, "prefix": 400, "partyvan": 2000, "shit": 100, "pills": 100, "knife": 400, "tinfoil": 800, "bribe": 1200, "laxative": 800, "megaphone": 2000}
     price = costs.get(item, 999999)
-    from common.db_pool import get_pool, db_lock
+
     db = await get_pool()
     async with db.execute("SELECT SUM(balance), MAX(active_items) FROM Users WHERE user_id = ?", (user_id,)) as c:
         row = await c.fetchone()
@@ -7472,7 +7472,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         await message.answer("⚠️ Сделай Reply на пост жертвы с командой /shoot!")
         return
 
-    from common.db_pool import get_pool, db_lock
+
     import time
     db = await get_pool()
 
@@ -7529,7 +7529,7 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
     if not message.reply_to_message:
         await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, которую хочешь ограбить!", parse_mode="HTML")
         return
-    from common.db_pool import get_pool, db_lock
+
     import time
     import random
     import json
@@ -7626,7 +7626,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     if not message.reply_to_message:
         await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, в которую хочешь кинуть говном!", parse_mode="HTML")
         return
-    from common.db_pool import get_pool, db_lock
+
     import time
     import json
     db = await get_pool()
@@ -7681,7 +7681,7 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
     if not message.reply_to_message:
         await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, чтобы подлить слабительное!", parse_mode="HTML")
         return
-    from common.db_pool import get_pool, db_lock
+
     import time, json
     db = await get_pool()
     active_items = await _get_user_active_items(db, user_id, board_id)
@@ -7725,7 +7725,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     if not message.reply_to_message:
         await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на донос-пост жертвы, чтобы вызвать Пативэн!", parse_mode="HTML")
         return
-    from common.db_pool import get_pool, db_lock
+
     import json
     from datetime import datetime, timedelta, UTC
     db = await get_pool()
@@ -7763,7 +7763,7 @@ async def cmd_mega(message: types.Message, board_id: str | None, stream: str = '
     if not message.reply_to_message:
         await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост, который хочешь объявить в Мегафон!", parse_mode="HTML")
         return
-    from common.db_pool import get_pool, db_lock
+
     import json
     db = await get_pool()
     active_items = await _get_user_active_items(db, user_id, board_id)
@@ -8176,7 +8176,7 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
     if not board_id: return
     user_id = message.from_user.id
     import time, json
-    from common.db_pool import get_pool, db_lock
+
 
     db = await get_pool()
 
@@ -8250,7 +8250,7 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
 @dp.message(Command("top", "leaderboard", "топ"))
 async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
-    from common.db_pool import get_pool
+
 
     db = await get_pool()
 
@@ -8296,7 +8296,7 @@ _DUEL_TIMEOUT = 120       # секунд на принятие
 
 async def accept_duel_logic(message: types.Message, challenger_id: int, board_id: str):
     import time
-    from common.db_pool import get_pool, db_lock
+
     db = await get_pool()
     user_id = message.from_user.id
     time.time()
@@ -8443,7 +8443,7 @@ async def _handle_duel_accept(message: types.Message, board_id: str):
 async def _handle_duel_create(message: types.Message, board_id: str, args: list, stream: str = 'ru'):
     user_id  = message.from_user.id
     import time
-    from common.db_pool import get_pool, db_lock
+
     db = await get_pool()
 
     try:
@@ -8522,7 +8522,7 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
     if not board_id: return
     user_id = message.from_user.id
     
-    from common.db_pool import get_pool, db_lock
+
     db = await get_pool()
     
     # 1. Проверяем наличие юзера и его статус ГЛОБАЛЬНО
@@ -8608,7 +8608,7 @@ async def cb_start_withdrawal(callback: types.CallbackQuery, state: FSMContext, 
     user_id = callback.from_user.id
     if not board_id: return
     
-    from common.db_pool import get_pool
+
     db = await get_pool()
     
     # ИСПРАВЛЕНО: Теперь считаем SUM(balance) по всем доскам, а не локально
@@ -8709,7 +8709,7 @@ async def _run_delayed_prank(params: DelayedPrankParams):
 
     await asyncio.sleep(5)
 
-    from common.db_pool import get_pool, db_lock
+
     db_p = await get_pool()
     async with db_lock:
         await db_p.execute(
@@ -8778,7 +8778,7 @@ async def process_withdrawal_data(message: types.Message, state: FSMContext, boa
     data = await state.get_data()
     method = data.get('wd_method', 'sber')
     
-    from common.db_pool import get_pool
+
     db = await get_pool()
     
     async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
@@ -8916,7 +8916,7 @@ def _get_passport_rank_and_role(lang: str, post_count: int) -> tuple[str, str]:
         else: return "👁️ Сын Абу", "Бог говна"
 
 async def _get_passport_stats(user_id: int) -> tuple[int, float, int] | None:
-    from common.db_pool import get_pool, db_lock
+
     post_count = 0
     balance = 0
     is_verified = 0
@@ -9014,7 +9014,7 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
         return
     post_count, balance, is_verified = stats
     
-    from common.db_pool import get_pool
+
     db = await get_pool()
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ?", (user_id,)) as c:
         row = await c.fetchone()
@@ -9065,7 +9065,7 @@ async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = 
                 break
                 
     if len(recent_posts) < limit:
-        from common.db_pool import get_pool
+
         db = await get_pool()
         needed = limit - len(recent_posts)
         exclude_clause = f"AND post_num != {exclude_post_num}" if exclude_post_num else ""
@@ -9600,7 +9600,7 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
     anon_name = generate_anon_name(target_id)
     balance = 0
     post_count = 0
-    from common.db_pool import get_pool, db_lock
+
     try:
         async with db_lock:
             db = await get_pool()
@@ -10490,7 +10490,7 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
         return
     b_data = board_data[board_id]
     
-    from common.db_pool import get_pool, db_lock
+
     db = await get_pool()
 
     # 1. Проверяем, существует ли пользователь в БД глобально (на любой доске)
@@ -11951,7 +11951,7 @@ async def cmd_airdrop(message: Message, board_id: str | None):
     try: await message.delete()
     except Exception: pass
     
-    from common.db_pool import get_pool, db_lock
+
     async with db_lock:
         db = await get_pool()
         # Выбираем уникальных нищих (у кого СУММАРНЫЙ баланс по всем доскам <= 0)
@@ -12196,7 +12196,7 @@ async def cmd_dice(message: types.Message, board_id: str | None, stream: str = '
 @dp.message(Command("quote", "цитата", "random_post"))
 async def cmd_quote(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
-    from common.db_pool import get_pool
+
     import html
     db = await get_pool()
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -12249,7 +12249,7 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
         
     try:
         target_id, amount = int(args[1]), int(args[2])
-        from common.db_pool import get_pool, db_lock
+
         async with db_lock:
             db = await get_pool()
             # 1. Гарантируем, что запись на ТЕКУЩЕЙ доске существует
@@ -14242,7 +14242,7 @@ async def reply_notifier_task():
 
                     thread_id = source_post_data.get('thread_id')
                     if not thread_id:
-                        from common.db_pool import get_pool, db_lock
+
                         pool = get_pool()
                         if pool:
                             try:
@@ -14290,7 +14290,7 @@ async def sync_boards_with_config():
     Синхронизирует список досок в БД с конфигом BOARD_CONFIG.
     Добавляет недостающие доски при старте бота.
     """
-    from common.db_pool import get_pool, db_lock # Локальный импорт
+
     
     db = await get_pool()
     print("🔄 Синхронизация досок из конфига с базой данных...")
@@ -16164,7 +16164,7 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
     if post_num in messages_storage:
         post_board = messages_storage[post_num].get('board_id')
     if not post_board:
-        from common.db_pool import get_pool
+
         db = await get_pool()
         async with db.execute("SELECT board_id FROM Posts WHERE post_num = ?", (post_num,)) as c:
             row = await c.fetchone()
@@ -16332,7 +16332,7 @@ async def cmd_global_top(message: types.Message, board_id: str | None, stream: s
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
-    from common.db_pool import get_pool, db_lock
+
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     
     wait_txt = "🏆 Анализирую базу данных для построения топов..." if lang != 'en' else "🏆 Computing leaderboards..."
@@ -18421,7 +18421,7 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
     active_items = {}
     db = None
     if not admin_status:
-        from common.db_pool import get_pool
+
         import json
         import time
         db = await get_pool()
@@ -18458,7 +18458,7 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
         return
     if is_janitor:
         import json
-        from common.db_pool import get_pool, db_lock
+
         if not db:
             db = await get_pool()
         janitor_deletes_left -= 1
@@ -19663,7 +19663,7 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                     # Фиксируем оплату
                     post_data['paid_reactors'].add(user_id)
 
-                from common.db_pool import get_pool, db_lock
+
                 
                 async with db_lock:
                     db = await get_pool()
@@ -19874,7 +19874,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             b_data['mutes'].pop(user_id, None)
             
         if message.content_type == 'text' and len(message.text) > 50:
-            from common.db_pool import get_pool
+
             db_p = await get_pool()
             c_items = await _get_user_active_items(db_p, user_id, board_id)
             if c_items.get("cursed_until", 0) > time.time():
@@ -21799,7 +21799,7 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
     status_message = await message.answer(wait_msg)
     
     try:
-        from common.db_pool import get_pool
+
         db = await get_pool()
         
         # 24 hours ago
