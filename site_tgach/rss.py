@@ -83,10 +83,12 @@ async def generate_rss(board_id: str, request):
                     # ленту, но и глухое 'pass' плохо: пост исчезал бесследно.
                     # Голый except ловил ещё и BaseException (CancelledError,
                     # KeyboardInterrupt) — этого здесь быть не должно.
-                    print(f"RSS: пропущен пост {pid}: {e}")
+                    err_msg = str(e).encode('ascii', 'replace').decode('ascii')
+                    print(f"RSS: skipped post {pid}: {err_msg}")
 
     except Exception as e:
-        print(f"RSS Error: {e}")
+        err_msg = str(e).encode('ascii', 'replace').decode('ascii')
+        print(f"RSS Error: {err_msg}")
         
     xml.append('</channel>')
     xml.append('</rss>')

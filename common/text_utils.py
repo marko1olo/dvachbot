@@ -55,6 +55,11 @@ def clean_html_tags(text: str) -> str:
     text = unwrap_tg_emoji(text)
     return RE_HTML_TAGS.sub('', text)
 
+RE_ATTRS = re.compile(
+    r'''\b([a-z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))''',
+    flags=re.IGNORECASE,
+)
+
 def sanitize_html(text: str) -> str:
     if not text: return ""
 
@@ -62,13 +67,41 @@ def sanitize_html(text: str) -> str:
 
     parts = []
     last_idx = 0
+    open_a_count = 0
     for match in ALLOWED_TAGS_PATTERN.finditer(text):
         start, end = match.span()
+        tag_text = match.group(0)
+        tag_lower = tag_text.lower()
+        
+        valid_a_tag = None
+        if tag_lower.startswith('<a'):
+            for attr_m in RE_ATTRS.finditer(tag_text):
+                attr_name = attr_m.group(1).lower()
+                if attr_name == "href":
+                    val = attr_m.group(2) if attr_m.group(2) is not None else (attr_m.group(3) if attr_m.group(3) is not None else attr_m.group(4))
+                    if val and val.lower().strip().startswith(("http://", "https://", "tg://")):
+                        valid_a_tag = f'<a href="{val}">'
+                    break
+
         if start > last_idx:
             chunk = text[last_idx:start]
             chunk_escaped = chunk.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             parts.append(chunk_escaped)
-        parts.append(strip_unsafe_attributes(match.group(0)))
+        
+        if tag_lower.startswith('<a'):
+            if valid_a_tag:
+                open_a_count += 1
+                parts.append(valid_a_tag)
+            else:
+                parts.append(tag_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+        elif tag_lower.startswith('</a'):
+            if open_a_count > 0:
+                open_a_count -= 1
+                parts.append('</a>')
+            else:
+                parts.append(tag_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;'))
+        else:
+            parts.append(strip_unsafe_attributes(tag_text))
         last_idx = end
         
     if last_idx < len(text):

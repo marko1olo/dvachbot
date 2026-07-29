@@ -2371,9 +2371,23 @@ async def site_healthz():
             )
         except Exception as exc:
             process_data["error"] = str(exc)
+    db_ok = False
+    try:
+        db = await get_pool()
+        if db:
+            async with db.execute("SELECT 1") as cursor:
+                await cursor.fetchone()
+            db_ok = True
+    except Exception as exc:
+        process_data["db_error"] = str(exc)
+
+    status_str = "ok" if db_ok else "degraded"
+    status_code = 200 if db_ok else 503
+
     return JSONResponse(
         {
-            "status": "ok",
+            "status": status_str,
+            "db_ok": db_ok,
             "pid": os.getpid(),
             "ts": round(time.time(), 3),
             "process": process_data,
@@ -2387,6 +2401,7 @@ async def site_healthz():
                 "known_ips": len(KNOWN_IPS),
             },
         },
+        status_code=status_code,
         headers={"Cache-Control": "no-store"},
     )
 
