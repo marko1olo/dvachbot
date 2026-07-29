@@ -47,10 +47,29 @@ def patch_sys_modules():
         'aiogram.exceptions', 'periodic_publisher', 'bot_pool', 'check_large_tables'
     ]
 
+    saved = {dep: sys.modules.get(dep) for dep in mocked_deps}
     for dep in mocked_deps:
         sys.modules[dep] = MockModule(dep)
+    return saved
 
-patch_sys_modules()
+_SAVED_MODULES = patch_sys_modules()
+
+
+def unpatch_sys_modules():
+    """
+    Снимает заглушки сразу после импорта тестируемой функции.
+
+    Раньше они оставались в sys.modules на весь прогон pytest. Заглушка здесь —
+    обычный object, а не types.ModuleType, поэтому проверка вытеснения в
+    tests/test_warhammer_mode.py (`isinstance(mod, types.ModuleType)`) её не
+    распознавала: реальный warhammer_mode не импортировался, и orkify()
+    оказывался MagicMock. Изолированно тот файл проходил, в общем прогоне — нет.
+    """
+    for dep, previous in _SAVED_MODULES.items():
+        if previous is None:
+            sys.modules.pop(dep, None)
+        else:
+            sys.modules[dep] = previous
 
 import asyncio
 
@@ -61,8 +80,17 @@ except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-# Import main using standard import
-from main import _select_mirror_strategically
+# Импортируем явно из Dubsite_tgach: 'from main import ...' резолвился через
+# sys.path-хак выше и в одиночном запуске случайно попадал в нужный модуль, но в
+# полном прогоне корневой main.py бота (в котором этой функции нет и не было)
+# уже лежит в sys.modules['main'] — отсюда ImportError, обрывавший сбор ВСЕГО
+# набора тестов. Набор моков выше (fastapi/starlette/slowapi) — как раз для
+# веб-приложения Dubsite_tgach.
+from Dubsite_tgach.main import _select_mirror_strategically
+
+# Функция уже импортирована и держит прямые ссылки — заглушки больше не нужны
+# и не должны протекать в остальные тестовые модули.
+unpatch_sys_modules()
 
 class TestSelectMirrorStrategically(unittest.TestCase):
 

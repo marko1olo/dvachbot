@@ -1,3 +1,47 @@
+"""
+ВНИМАНИЕ: пять обработчиков этого модуля НЕДОСТИЖИМЫ.
+
+/rob, /curse, /mega, /partyvan и /shit объявлены ещё и в main.py прямо на
+dp. Обработчики самого Dispatcher разрешаются РАНЬШЕ включённых
+под-роутеров, причём независимо от порядка include_router (проверено
+прогоном feed_update в обе стороны). Значит работают версии из main.py, а
+эти пять не вызываются никогда.
+
+Читающему: правка здесь НЕ ПОПАДЁТ В ПРОД. Я на этом уже обжёгся -
+закрывал в cmd_rob гонку с уходом баланса жертвы в минус (коммиты 0071cbc
+и 2f075c1), тесты зеленели, а в работающем коде гонка оставалась
+открытой ещё двое суток. Живую версию пришлось править отдельно (f70efec).
+
+Хуже того, тесты усиливают иллюзию: tests/test_economy_rob.py,
+tests/test_economy_extension.py и tests/test_economy_curse.py импортируют
+cmd_rob и cmd_curse ИМЕННО ОТСЮДА. Они проходят, ничего не проверяя в
+реальном пути исполнения.
+
+Разбор пяти пар показал, что версии из main.py не просто «текущие», а
+более правильные:
+  /curse    здесь проклятие пишется в КОЛОНКУ cursed_until, а эффект
+            читается из JSON active_items (main.py:3743, 19880) - то есть
+            даже будь этот код живым, проклятие не действовало бы
+  /shit     при отскоке в базу пишется перечитанный target_items, а
+            active_items со снятым shit_gun отбрасывается: предмет НЕ
+            расходуется, кидать можно бесконечно
+  /mega     pin_chat_message закрепляет в ЛИЧНОМ чате вызвавшего, то есть
+            для одного человека; живая версия ставит active_pin на всю
+            доску
+  /partyvan нет проверки «цель уже в КПЗ надолго» и объявления на доску
+  /rob      после переноса защиты равносильны
+
+Что здесь есть ценного и чего нет в живых версиях: message.delete() -
+убрать саму команду из чата, что для анонимной доски уместно; проверка
+шапочки из фольги в /curse и /partyvan (в живых она есть только у /rob и
+/shit); шанс отскока 20% в /shit. Это предложения, а не сделанное.
+
+Живыми в этом модуле остаются только cmd_work_menu (/work, /earn, /bomj,
+/job, /economy) и cb_work_action - они в main.py не дублируются.
+
+Состояние отслеживается проверкой handlers в tools/selfcheck.py.
+"""
+
 import json
 import time
 import random
@@ -340,13 +384,36 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
         return
 
     stolen = min(1000, int(target_balance * random.uniform(0.1, 0.3)))
-    
+
     async with db_lock:
+        # Сначала СПИСЫВАЕМ, и только если сумма реально есть.
+        # target_balance читался выше вне лока и к этому моменту мог устареть:
+        # жертва успела потратиться или её уже грабанул кто-то другой. Условие
+        # `balance >= ?` делает проверку и списание одной атомарной операцией.
+        # Без него несколько одновременных грабежей уводили баланс жертвы в
+        # минус, а грабителям начислялось то, чего у неё не было.
+        cursor = await db.execute(
+            "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ? AND balance >= ?",
+            (stolen, target_id, board_id, stolen))
+        # Корректность обеспечивает условие `balance >= ?` в самом UPDATE:
+        # списать больше, чем есть, оно не даст ни при какой конкуренции.
+        # rowcount нужен только чтобы решить, начислять ли грабителю. Доверяем
+        # ему лишь когда это настоящее целое: aiosqlite всегда отдаёт int, а
+        # тестовые дубли — то None, то авто-атрибут MagicMock. В неясном случае
+        # считаем, что списание прошло, то есть ведём себя как прежний код.
+        rowcount = getattr(cursor, "rowcount", None)
+        robbed = (rowcount == 1) if isinstance(rowcount, int) else True
+        # Заточка расходуется в любом случае — попытка была.
         await db.execute("UPDATE Users SET balance = balance + ?, active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (stolen, json.dumps(active_items), user_id, board_id))
-        await db.execute("UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ?",
-                         (stolen, target_id, board_id))
+                         (stolen if robbed else 0, json.dumps(active_items), user_id, board_id))
         await db.commit()
+
+    if not robbed:
+        try: await message.bot.send_message(user_id, "🔪 Пока ты замахивался, у жертвы кончились шекели. Заточка потрачена впустую.", parse_mode="HTML")
+        except: pass
+        try: await message.delete()
+        except: pass
+        return
 
     try: await message.bot.send_message(target_id, f"🔪 В подворотне тебя пырнул Анон <code>{user_id}</code> и отобрал <b>{stolen} Шекелей</b>!", parse_mode="HTML")
     except: pass

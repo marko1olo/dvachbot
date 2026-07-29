@@ -1210,9 +1210,22 @@ def check_perm(user: dict, required_role: str) -> bool:
     if user.get("id") in ADMIN_IDS:
         return True
     user_role = user.get("role", "user")
+    # Неизвестная роль ПОЛЬЗОВАТЕЛЯ -> уровень 0, самый низкий. Это верно:
+    # неопознанная роль не должна давать прав.
     user_level = ROLE_HIERARCHY.get(user_role, 0)
-    req_level = ROLE_HIERARCHY.get(required_role, 0)
-    return user_level >= req_level
+    # А вот неизвестная ТРЕБУЕМАЯ роль раньше тоже давала 0, и условие
+    # user_level >= 0 выполнялось для кого угодно. То есть опечатка в имени
+    # роли на любом из 18 вызовов молча ОТКЛЮЧАЛА бы проверку, пропуская
+    # обычных пользователей в админское действие. Отказ по умолчанию.
+    # Сегодня это ничего не меняет: все запрашиваемые роли (janitor, mod,
+    # admin) в ROLE_HIERARCHY есть, проверено по всем вызовам.
+    if required_role not in ROLE_HIERARCHY:
+        logger.error(
+            "check_perm: неизвестная роль %r, доступ запрещён. "
+            "Известные роли: %s", required_role, sorted(ROLE_HIERARCHY)
+        )
+        return False
+    return user_level >= ROLE_HIERARCHY[required_role]
 
 
 async def check_and_punish_site_spam(
@@ -2072,7 +2085,11 @@ async def ddos_guard_middleware(request: Request, call_next):
     if client_ip in blacklist_raw.split(","):
         return Response("Banned by AI security", status_code=403)
 
-    is_tor = client_ip in TOR_EXIT_NODES
+    # Здесь вычислялось is_tor (принадлежность client_ip к TOR_EXIT_NODES) и
+    # больше нигде не использовалось - особой обработки выходных узлов Tor в
+    # этом middleware нет. Убрано: проверка шла на КАЖДЫЙ HTTP-запрос.
+    # Если такая политика нужна, её надо вводить осознанно, а не оживлять
+    # мёртвую переменную.
     # 1. Проверка белого списка (кэшированная настройка из БД)
     whitelist_raw = await get_setting_cached("ip_whitelist") or ""
     if client_ip in whitelist_raw.split(","):
@@ -3143,11 +3160,14 @@ def format_post_text(text: str) -> str:
     return processed_text
 
 
-def sanitize_html(text: str) -> str:
-    if not text:
-        return ""
-    # quote=False оставляет кавычки как есть (читаемее), но убивает теги
-    return html.escape(text, quote=False)
+# sanitize_html жила здесь копией, вторая копия — в Dubsite_tgach/main.py, и они
+# разошлись (там не экранировался '&'). Теперь реализация одна, в
+# site_tgach/html_sanitizer.py, оба сайта её импортируют. Поведение для строк
+# прежнее: html.escape(text, quote=False).
+# Импорт стоит на месте прежнего def, а не в шапке файла, чтобы имя появлялось в
+# модуле в той же точке — порядок определений в этом файле длиной 385 КБ уже
+# используется как есть.
+from site_tgach.html_sanitizer import sanitize_html
 
 
 def optimize_thread_context(op_post: dict, replies: list, max_posts: int = 40) -> str:
@@ -7446,7 +7466,11 @@ async def api_create_post(
             f"🤖 BOT TRAPPED: IP {get_remote_address(request)} filled honeypot."
         )
         return {"Status": "OK", "Num": 0}
-    captcha_enabled = (await get_system_setting("captcha_enabled")) == "true"
+    # Чтение captcha_enabled отсюда убрано: результат никуда не шёл и ни разу
+    # не проверялся. Капчу включает global_captcha ниже, читая ту же настройку
+    # заново. get_system_setting кэша НЕ имеет (в отличие от соседней
+    # get_setting_cached с alru_cache ttl=60), так что это был лишний запрос к
+    # БД на КАЖДЫЙ пост.
     is_guest = user.get("is_guest", False)
     user_is_trusted = False
     if not is_guest:
@@ -9159,7 +9183,10 @@ async def api_transcribe_voice(file_id: str, request: Request):
 
     # 3. Вызываем Gemini API
     import base64
-    from summarize import _load_google_keys, PROXY_URL
+    # PROXY_URL берём модульный (объявлен выше в этом файле). В summarize его нет
+    # и никогда не было, поэтому `from summarize import ..., PROXY_URL` бросал
+    # ImportError, и эндпоинт транскрипции отвечал 500 на каждый запрос.
+    from summarize import _load_google_keys
     import time
     
     keys = _load_google_keys()

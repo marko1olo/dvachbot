@@ -10,13 +10,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 
+from common.chart_lock import matplotlib_guard
+
 # Use non-interactive backend
 matplotlib.use('Agg')
 
-# Set dark theme for imageboard vibes
-plt.style.use('dark_background')
-sns.set_theme(style="darkgrid", rc={
-    "axes.facecolor": "#121212", 
+SNS_THEME_RC = {
+    "axes.facecolor": "#121212",
     "figure.facecolor": "#121212",
     "text.color": "#FFFFFF",
     "axes.labelcolor": "#FFFFFF",
@@ -24,7 +24,25 @@ sns.set_theme(style="darkgrid", rc={
     "ytick.color": "#FFFFFF",
     "grid.color": "#333333",
     "font.family": "sans-serif"
-})
+}
+
+
+def apply_dark_theme():
+    """
+    Ставит тему модуля на глобальные rcParams.
+
+    Вызывать перед КАЖДЫМ прогоном, а не только при импорте: другие генераторы
+    (main.generate_statistics_graph -> plt.style.use, main._generate_stats_charts
+    -> rcParams.update) перетирают глобальные rcParams, и одного применения на
+    старте процесса не хватало — после первого же /graph эти графики рисовались
+    чужой темой до самого перезапуска.
+    """
+    plt.style.use('dark_background')
+    sns.set_theme(style="darkgrid", rc=SNS_THEME_RC)
+
+
+# Set dark theme for imageboard vibes
+apply_dark_theme()
 
 RU_STOP = {
     'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то', 'все', 'она', 'так', 'его', 'но', 'да', 'ты',
@@ -1452,6 +1470,14 @@ def _generate_chart_30(images):
 
 def generate_all_charts():
     """Generates exactly 10 toxic charts and returns a list of io.BytesIO objects"""
+    # pyplot глобален, а генераторов графиков в боте три и все в пулах потоков.
+    # Без замка параллельный /graph перетирал тему прямо посреди отрисовки.
+    with matplotlib_guard():
+        apply_dark_theme()
+        return _generate_all_charts_locked()
+
+
+def _generate_all_charts_locked():
     conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
     conn.row_factory = dict_factory
     c = conn.cursor()

@@ -32,7 +32,8 @@ def _read_json(path: Path) -> dict:
 def _read_pid(path: Path) -> int | None:
     try:
         text = path.read_text(encoding="utf-8").strip()
-        return int(text) if text.isdigit() else None
+        # isdecimal: int() принимает ровно его, isdigit шире
+        return int(text) if text.isdecimal() else None
     except Exception:
         return None
 

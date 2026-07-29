@@ -86,8 +86,12 @@ async def witching_hour_ghost_worker(bot_instance):
     in active boards.
     """
     from summarize import summarize_text_with_hf
-    from common.database import get_board_chunk
-    from main import board_data, format_header, send_message_to_users, state, BroadcastConfig
+    # get_board_chunk объявлена в main.py, а не в common.database — прежний
+    # импорт гарантированно падал ImportError при первом запуске воркера.
+    from main import (
+        board_data, format_header, get_board_chunk, send_message_to_users,
+        state, BroadcastConfig,
+    )
     
     while True:
         await asyncio.sleep(60) # Check every minute

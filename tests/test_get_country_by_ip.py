@@ -34,6 +34,8 @@ mocked_deps = [
     'aiogram.webhook', 'aiogram.webhook.aiohttp_server'
 ]
 
+_SAVED_MODULES = {dep: sys.modules.get(dep) for dep in mocked_deps + ['async_lru']}
+
 for dep in mocked_deps:
     mock_module(dep)
 
@@ -48,7 +50,33 @@ sys.modules['async_lru'].alru_cache = lambda *args, **kwargs: lambda func: func
 
 from Dubsite_tgach.main import get_country_by_ip
 
+# Заглушки требовались только для импорта выше. Оставаясь в sys.modules, они
+# протекали на весь прогон pytest и роняли посторонние модули
+# (test_japanese_translator и др.), которые изолированно проходят.
+for _dep, _previous in _SAVED_MODULES.items():
+    if _previous is None:
+        sys.modules.pop(_dep, None)
+    else:
+        sys.modules[_dep] = _previous
+del _dep, _previous
+
+
 class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # get_country_by_ip обёрнута в alru_cache. Заглушка-обход выше
+        # срабатывает, только если Dubsite_tgach.main импортируется впервые
+        # ИМЕННО здесь. Если модуль уже импортирован другим тестом
+        # (например tests/test_check_perm.py), работает настоящий кэш, и тесты
+        # получали закэшированный ответ предыдущего кейса ('YY' вместо 'ZZ').
+        # Чистим кэш явно — корректно при любом варианте.
+        for attr in ("cache_clear", "invalidate_all"):
+            clear = getattr(get_country_by_ip, attr, None)
+            if callable(clear):
+                result = clear()
+                if hasattr(result, "__await__"):
+                    await result
+                break
+
     async def test_local_ip(self):
         self.assertEqual(await get_country_by_ip("127.0.0.1"), "XX")
 

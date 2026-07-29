@@ -2,6 +2,7 @@ import os
 import logging
 from io import BytesIO
 from huggingface_hub import HfApi
+from common.env_utils import proxy_env
 from common.token_pool import hf_accounts
 
 logger = logging.getLogger("huggingface")
@@ -20,25 +21,24 @@ def _upload_sync(file_bytes: bytes, filename: str) -> str | None:
     path_in_repo = f"media/{subfolder}/{filename}"
 
     strategies = [
-        {"name": "Proxy", "env": {"HTTPS_PROXY": PROXY_URL, "HTTP_PROXY": PROXY_URL}},
-        {"name": "Direct/System", "env": {}}
+        {"name": "Proxy", "proxy": PROXY_URL},
+        {"name": "Direct/System", "proxy": None},
     ]
 
     for strategy in strategies:
         try:
-            # Очищаем или ставим прокси для текущей попытки
-            os.environ.pop("HTTPS_PROXY", None)
-            os.environ.pop("HTTP_PROXY", None)
-            os.environ.update(strategy["env"])
+            # Прокси ставится только на время попытки и снимается после.
+            # Раньше os.environ.pop выполнялся без восстановления и снимал
+            # прокси со всего процесса, включая сессии с trust_env=True.
+            with proxy_env(strategy["proxy"]):
+                api = HfApi(token=token)
 
-            api = HfApi(token=token)
-            
-            api.upload_file(
-                path_or_fileobj=BytesIO(file_bytes),
-                path_in_repo=path_in_repo,
-                repo_id=repo_id,
-                repo_type="dataset"
-            )
+                api.upload_file(
+                    path_or_fileobj=BytesIO(file_bytes),
+                    path_in_repo=path_in_repo,
+                    repo_id=repo_id,
+                    repo_type="dataset"
+                )
             return f"https://huggingface.co/datasets/{repo_id}/resolve/main/{path_in_repo}"
         
         except Exception as e:

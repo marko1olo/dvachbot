@@ -25,7 +25,12 @@ def infinite_iter(self):
 
 try:
     MagicMock.__iter__ = infinite_iter
-    import main
+    # Явно из Dubsite_tgach: localize_boards определена именно там, а голое
+    # `import main` полагалось на sys.path-хак выше и брало то, что уже лежит в
+    # sys.modules['main']. В общем прогоне туда раньше попадал КОРНЕВОЙ main.py
+    # бота (его импортирует tests/test_batch_replies.py), и тест падал, хотя
+    # изолированно проходил.
+    from Dubsite_tgach import main
 finally:
     # Always restore it!
     del MagicMock.__iter__
@@ -35,7 +40,7 @@ class TestLocalizeBoards(unittest.TestCase):
         # Reset the lru_cache for predictable testing
         main.localize_boards.cache_clear()
 
-    @patch('main.BOARD_CONFIG', {
+    @patch('Dubsite_tgach.main.BOARD_CONFIG', {
         'b': {'description': {'ru': 'Бред', 'en': 'Random', 'jp': 'ランダム'}},
         'a': {'description': {'ru': 'Аниме'}},
         'c': {'description': {'en': 'Anime', 'jp': 'アニメ'}},
@@ -58,7 +63,7 @@ class TestLocalizeBoards(unittest.TestCase):
         self.assertEqual(en_boards['a']['description'], 'Аниме') # Fallback to ru, then first available
         self.assertEqual(en_boards['c']['description'], 'Anime')
 
-    @patch('main.BOARD_CONFIG', {
+    @patch('Dubsite_tgach.main.BOARD_CONFIG', {
         'str_board': {'description': 'String Description'},
         'num_board': {'description': 123},
         'none_board': {'description': None}

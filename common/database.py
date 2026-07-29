@@ -41,6 +41,32 @@ from common.config import (
     POST_COPY_RETENTION_POSTS,
 )
 logger = logging.getLogger(__name__)
+
+# Максимум параметров в одном запросе с IN (?, ?, ...).
+# У SQLite жёсткий предел SQLITE_LIMIT_VARIABLE_NUMBER (32766 в текущей
+# сборке). При его превышении драйвер поднимает
+# OperationalError: too many SQL variables, а обработчики ошибок в этом
+# модуле ретраят только "locked"/"busy" — то есть такая ошибка не
+# восстанавливается сама и роняет вызов целиком.
+# 900 берём с запасом: остаётся место под остальные параметры запроса,
+# и батч безопасен на сборках с меньшим лимитом.
+SQL_VAR_CHUNK = 900
+
+
+def iter_sql_chunks(items, chunk_size: int = SQL_VAR_CHUNK):
+    """
+    Режет список параметров на куски, гарантированно влезающие в лимит
+    переменных SQLite.
+
+    Нужен там, где длину IN (...) задаёт не код, а накопленные данные:
+    очереди между сайтом и ботом растут во время простоя другой стороны
+    и потолка не имеют.
+    """
+    items = list(items)
+    for start in range(0, len(items), chunk_size):
+        yield items[start:start + chunk_size]
+
+
 RE_POST_REF = re.compile(r"(?:>>|&gt;&gt;)(\d+)")
 RE_BOARD_POST_REF = re.compile(r"(?:>>|&gt;&gt;)/([a-z0-9]+)/(\d+)")
 
@@ -277,6 +303,21 @@ async def _create_tables(db):
         bot_id INTEGER NOT NULL
     );
     """)
+    # Учёт баянов. file_unique_id приходит от Telegram прямо в апдейте, поэтому
+    # определение репоста не требует ни скачивания файла, ни вычисления хеша —
+    # бот остаётся слепым ретранслятором (шлёт по file_id, файл не качает).
+    # Ключ включает board_id: одна и та же картинка на /b/ и на /sex/ — это не
+    # баян, доски живут отдельно.
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS MediaReposts (
+        board_id TEXT NOT NULL,
+        file_unique_id TEXT NOT NULL,
+        times INTEGER NOT NULL DEFAULT 1,
+        first_post_num INTEGER,
+        first_seen REAL,
+        PRIMARY KEY (board_id, file_unique_id)
+    );
+    """)
     await db.execute("""
     CREATE TABLE IF NOT EXISTS MirrorQueue (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -388,7 +429,14 @@ async def _create_tables(db):
         file_id TEXT NOT NULL,
         thumbnail_id TEXT,
         file_type TEXT,
-        created_at REAL
+        created_at REAL,
+        -- tags отсутствовал в схеме, хотя на него опираются FTS-триггеры
+        -- trg_files_fts_* на этой же таблице, оба tagging_worker, status_check
+        -- и /tags. На существующих БД колонка есть из более старой версии
+        -- схемы, поэтому поломка не была видна: CREATE TABLE IF NOT EXISTS
+        -- просто пропускается. На ЧИСТОЙ БД таблица создавалась без tags, и
+        -- первая же регистрация медиа падала - см. миграцию ниже.
+        tags TEXT
     );
     """)
     await db.execute("""
@@ -442,10 +490,41 @@ async def _create_tables(db):
     """)
 
 async def _apply_migrations(db):
+    # ВАЖНО: по одному ALTER на try. Раньше эти три стояли в ОДНОМ блоке, и
+    # так как balance уже есть в CREATE TABLE Users, первый же ALTER падал с
+    # "duplicate column name: balance", except его глотал, а до третьего
+    # выполнение не доходило вовсе. reaction_reward_counter не появлялся ни на
+    # одной БД, хотя миграция для него в файле есть. Остальные 40 миграций в
+    # этом модуле оформлены по одной на try - здесь было исключение.
     try:
         await db.execute("ALTER TABLE Users ADD COLUMN balance REAL DEFAULT 0;")
+    except aiosqlite.OperationalError: pass
+    try:
         await db.execute("ALTER TABLE Users ADD COLUMN is_verified_b INTEGER DEFAULT 0;")
+    except aiosqlite.OperationalError: pass
+    try:
         await db.execute("ALTER TABLE Users ADD COLUMN reaction_reward_counter INTEGER DEFAULT 0;")
+        print("✅ Migrated: Added 'reaction_reward_counter' to Users.")
+    except aiosqlite.OperationalError: pass
+    # Колонки экономики и предметов. Их не было ни в CREATE TABLE Users, ни в
+    # миграциях, хотя код обращается к ним из 105 мест: инвентарь предметов
+    # (/shop, мут-ган, зеркальный щит), проклятия, платные префиксы. На чистой
+    # БД всё это падало с "no such column".
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN active_items TEXT DEFAULT '{}';")
+        print("✅ Migrated: Added 'active_items' to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN cursed_until REAL DEFAULT 0;")
+        print("✅ Migrated: Added 'cursed_until' to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN custom_prefix TEXT;")
+        print("✅ Migrated: Added 'custom_prefix' to Users.")
+    except aiosqlite.OperationalError: pass
+    try:
+        await db.execute("ALTER TABLE Users ADD COLUMN prefix_expires_at REAL DEFAULT 0;")
+        print("✅ Migrated: Added 'prefix_expires_at' to Users.")
     except aiosqlite.OperationalError: pass
     try:
         await db.execute("ALTER TABLE Users ADD COLUMN referrals_count INTEGER DEFAULT 0;")
@@ -562,6 +641,13 @@ async def _apply_migrations(db):
         print("✅ Migrated: Added 'blurhash' to FileRegistry.")
     except aiosqlite.OperationalError: pass
     try:
+        # Страховка для БД, созданных по схеме без tags. SQLite не проверяет
+        # new.tags при СОЗДАНИИ триггера - только при срабатывании, поэтому
+        # схема поднималась без единой ошибки, а падал уже INSERT медиафайла.
+        await db.execute("ALTER TABLE FileRegistry ADD COLUMN tags TEXT;")
+        print("✅ Migrated: Added 'tags' to FileRegistry.")
+    except aiosqlite.OperationalError: pass
+    try:
         await db.execute("ALTER TABLE Threads ADD COLUMN stream TEXT DEFAULT 'ru';")
         print("✅ Migrated: Added 'stream' to Threads.")
     except aiosqlite.OperationalError: pass
@@ -628,6 +714,27 @@ async def _create_indices(db):
     await db.execute("CREATE INDEX IF NOT EXISTS idx_threads_last_updated ON Threads(is_archived, last_updated_at);")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_postcopies_post_num ON PostCopies(post_num);")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_broadcastqueue_created_at ON BroadcastQueue(created_at);")
+    # ЧАСТИЧНЫЙ индекс только по неотправленным. get_and_clear_broadcast_queue
+    # опрашивает мост сайт -> бот в цикле запросом
+    # "SELECT post_num FROM BroadcastQueue WHERE is_sent_to_tg = 0", а колонка
+    # is_sent_to_tg добавлена миграцией и индекса не получила - в отличие от
+    # created_at. Каждый опрос сканировал таблицу целиком, хотя в ней лежит
+    # КАЖДЫЙ пост за окно хранения, а ждут отправки обычно единицы.
+    # Условие WHERE в индексе означает, что в нём физически лежат только
+    # ожидающие строки: индекс остаётся крошечным, а запрос покрывается им
+    # целиком (COVERING INDEX), не заглядывая в таблицу.
+    # Замер на 500 040 строках при 40 ожидающих: 15.63 мс -> 0.035 мс.
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_broadcastqueue_pending "
+        "ON BroadcastQueue(post_num) WHERE is_sent_to_tg = 0;"
+    )
+    # Под суточную чистку MediaReposts: условие индекса дословно повторяет
+    # условие DELETE (times = 1), поэтому строки-баяны в индекс не попадают,
+    # а выборка кандидатов идёт по first_seen вместо полного скана таблицы.
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mediareposts_singleton_age "
+        "ON MediaReposts(first_seen) WHERE times = 1;"
+    )
     await db.execute("CREATE INDEX IF NOT EXISTS idx_deliveryqueue_status_board ON DeliveryQueue(status, board_id, id);")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_deliveryqueue_post_phase ON DeliveryQueue(post_num, board_id, delivery_phase, status);")
     await db.execute("CREATE INDEX IF NOT EXISTS idx_logs_time ON GlobalLogs(created_at);")
@@ -1225,44 +1332,9 @@ async def remove_user_from_board(user_id: int, board_id: str):
     """Обертка для удаления одного пользователя."""
     await remove_users_from_board_batch([user_id], board_id)
 
-async def remove_users_from_board_batch(user_ids: list[int], board_id: str):
-    """
-    Массовое удаление пользователей с защитой от блокировок БД.
-    """
-    if not user_ids: return
-    
-    from common.db_pool import get_pool, db_lock
-    
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-                
-                placeholders = ','.join('?' for _ in user_ids)
-                query = f"DELETE FROM Users WHERE board_id = ? AND user_id IN ({placeholders})"
-                params = [board_id] + list(user_ids)
-                
-                cursor = await db.execute(query, params)
-                count = cursor.rowcount
-                
-                await db.execute("COMMIT")
-                
-                if count > 0:
-                    print(f"  > DB: Удалено {count} пользователей с доски '{board_id}'.")
-                return
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
-                    continue
-                break
-            except Exception:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                break
+# Здесь лежала первая из ДВУХ одинаковых копий remove_users_from_board_batch.
+# Её молча затирало определение ниже по файлу (различалась только строка
+# докстроки), поэтому правка в неё не влияла бы ни на что. Удалена.
 async def update_shadow_mute(user_id: int, board_id: str, expires_at: float | None):
     """
     Добавляет, обновляет или удаляет теневой мут.
@@ -1735,7 +1807,9 @@ async def get_op_posts_for_board(
                         if raw_tid:
                             clean_tid_str = str(raw_tid).strip()
                             real_thread_id_map[clean_tid_str] = pid
-                            if clean_tid_str.isdigit():
+                            # isdecimal: у isdigit истинны надстрочные цифры,
+                            # которые int() не принимает
+                            if clean_tid_str.isdecimal():
                                 real_thread_id_map[int(clean_tid_str)] = pid
                         
                         try:
@@ -2282,13 +2356,20 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                            VALUES (?, ?, ?, ?, ?, ?)""",
                         notifications_to_insert_fixed
                     )
-                    # Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
-                    # FIX: Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
-                    # Fix already implemented
+                    # Здесь были слиты ДВА варианта одного comprehension, и это
+                    # был не мёртвый код, а поломка. Python разбирал
+                    # "... for ... in notifications_to_insert (r_id, ...)" как
+                    # ВЫЗОВ списка с кортежем в аргументах, а имена r_id/t_id/
+                    # src_num/rep_num в этой позиции ещё не связаны — первый же
+                    # проход давал NameError: name 'r_id' is not defined.
+                    # Исключение ловил except Exception ниже, тот делал ROLLBACK
+                    # и break, откатывая ВСЮ транзакцию вместе со вставкой в
+                    # NotificationQueue. То есть ни одно упоминание не порождало
+                    # ни уведомления в боте, ни записи «ответы вам» на сайте.
+                    # Оставлен вариант по notifications_to_insert_fixed: там
+                    # приведение t_id уже сделано выше, результат обоих
+                    # вариантов побайтово одинаков.
                     site_notifs = [
-                        (r_id, board_id, str(t_id) if t_id is not None else str(rep_num), src_num, rep_num, 0, current_time)
-                        for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert
-
                         (r_id, board_id, t_id, src_num, rep_num, 0, current_time)
                         for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert_fixed
                     ]
@@ -2703,10 +2784,18 @@ async def delete_delivery_queue_item(item_id: int) -> bool:
                 print(f"⚠️ DeliveryQueue delete failed id={item_id}: {type(e).__name__}: {e}")
                 break
     return False
-async def get_pending_delivery_queue_items(limit: int = 500) -> list[dict]:
+async def get_pending_delivery_queue_items(limit: int = 500, after_id: int = 0) -> list[dict]:
+    """
+    Страница ожидающих доставки записей.
+
+    after_id обязателен для постраничного обхода: восстановление НЕ удаляет
+    строку сразу (её удаляет только фактическая доставка), поэтому повторный
+    запрос без курсора вернул бы те же самые записи и продублировал рассылку.
+    """
     from common.db_pool import get_pool, db_lock
 
     safe_limit = max(1, min(int(limit or 500), 5000))
+    safe_after = max(0, int(after_id or 0))
     async with db_lock:
         try:
             db = await get_pool()
@@ -2714,11 +2803,11 @@ async def get_pending_delivery_queue_items(limit: int = 500) -> list[dict]:
                 SELECT id, board_id, post_num, recipients, content, delivery_phase,
                        original_recipients, thread_id, enqueued_at, updated_at, attempts
                 FROM DeliveryQueue
-                WHERE status = 'pending'
+                WHERE status = 'pending' AND id > ?
                 ORDER BY id
                 LIMIT ?
             """
-            async with db.execute(query, (safe_limit,)) as cursor:
+            async with db.execute(query, (safe_after, safe_limit)) as cursor:
                 rows = await cursor.fetchall()
         except Exception as e:
             print(f"⚠️ DeliveryQueue restore read failed: {type(e).__name__}: {e}")
@@ -2760,21 +2849,32 @@ async def get_posts_from_broadcast_queue(last_timestamp: float) -> tuple[list[di
             return [], last_timestamp
         post_nums = [row[0] for row in rows]
         max_created_at = max(row[1] for row in rows)
-        placeholders = ','.join('?' for _ in post_nums)
-        posts_query = f"SELECT * FROM Posts WHERE post_num IN ({placeholders}) ORDER BY timestamp ASC"
+        # Читаем пачками: длина IN (...) равна числу постов, накопившихся с
+        # прошлого опроса. Если листенер сайта надолго встанет, а бот
+        # продолжит писать, набор перейдёт лимит переменных SQLite. Ошибка
+        # уходила бы в except, откуда возвращается ПРЕЖНИЙ last_timestamp —
+        # то есть следующий опрос читал бы тот же (уже больший) набор и падал
+        # там же. Защёлка навсегда: очередь сайта переставала разгребаться.
         processed_posts = []
-        async with db.execute(posts_query, post_nums) as cursor:
-            columns = [description[0] for description in cursor.description]
-            posts_data = await cursor.fetchall()
-            for post_row in posts_data:
-                post_dict = dict(zip(columns, post_row))
-                if 'post_num' not in post_dict: continue
-                try:
-                    if isinstance(post_dict.get('content'), str):
-                        post_dict['content'] = json.loads(post_dict['content'])
-                    processed_posts.append(post_dict)
-                except (json.JSONDecodeError, TypeError):
-                    continue
+        for chunk in iter_sql_chunks(post_nums):
+            placeholders = ','.join('?' for _ in chunk)
+            posts_query = f"SELECT * FROM Posts WHERE post_num IN ({placeholders})"
+            async with db.execute(posts_query, chunk) as cursor:
+                columns = [description[0] for description in cursor.description]
+                posts_data = await cursor.fetchall()
+                for post_row in posts_data:
+                    post_dict = dict(zip(columns, post_row))
+                    if 'post_num' not in post_dict: continue
+                    try:
+                        if isinstance(post_dict.get('content'), str):
+                            post_dict['content'] = json.loads(post_dict['content'])
+                        processed_posts.append(post_dict)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+        # ORDER BY перенесён из SQL в Python: сортировать надо весь результат,
+        # а не каждую пачку по отдельности. Контракт (посты по возрастанию
+        # timestamp) сохранён.
+        processed_posts.sort(key=lambda p: (p.get('timestamp') or 0, p.get('post_num') or 0))
         return processed_posts, max_created_at
     except Exception as e:
         print(f"⛔ ОШИБКА в get_posts_from_broadcast_queue: {e}")
@@ -2881,15 +2981,28 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
                     return []
                     
                 post_nums = [row[0] for row in rows]
-                placeholders = ','.join('?' for _ in post_nums)
-                
-                # 2. Читаем контент постов
-                post_query = f"SELECT * FROM Posts WHERE post_num IN ({placeholders})"
-                # Используем execute напрямую, так как мы внутри транзакции
-                async with db.execute(post_query, post_nums) as post_cursor:
-                    columns = [description[0] for description in post_cursor.description]
-                    posts_data = await post_cursor.fetchall()
-                
+
+                # 2. Читаем контент постов ПАЧКАМИ.
+                # Раньше плейсхолдер строился на каждый пост сразу. У SQLite
+                # жёсткий предел SQLITE_LIMIT_VARIABLE_NUMBER (32766 в текущей
+                # сборке): при большем числе непереданных постов запрос падал с
+                # "too many SQL variables". Это OperationalError, но не
+                # locked/busy, поэтому ветка ретраев его не ловила — функция
+                # печатала ошибку и возвращала []. Мост сайт -> бот умирал
+                # НАВСЕГДА: очередь больше не разгребалась ни при одном цикле.
+                # В BroadcastQueue попадает КАЖДЫЙ пост (create_post), так что
+                # после долгого простоя это достижимо.
+                columns = []
+                posts_data = []
+                for chunk in iter_sql_chunks(post_nums):
+                    placeholders = ','.join('?' for _ in chunk)
+                    post_query = f"SELECT * FROM Posts WHERE post_num IN ({placeholders})"
+                    # Используем execute напрямую, так как мы внутри транзакции
+                    async with db.execute(post_query, chunk) as post_cursor:
+                        if not columns:
+                            columns = [description[0] for description in post_cursor.description]
+                        posts_data.extend(await post_cursor.fetchall())
+
                 await db.execute("COMMIT")
                 
                 # Обработка данных (уже вне транзакции, в памяти)
@@ -3133,7 +3246,16 @@ def _cleanup_orphans(con):
         ("PostCopies", "post_num"), ("ChannelCopies", "post_num"),
         ("BroadcastQueue", "post_num"), ("NotificationQueue", "source_post_num"),
         ("NotificationQueue", "reply_post_num"), ("Reports", "post_num"),
-        ("ModQueue", "post_num"), ("PollVotes", "post_num")
+        ("ModQueue", "post_num"), ("PollVotes", "post_num"),
+        # CrossLinks в этом списке не было, хотя таблица зависит от Posts так
+        # же, как соседи. Внешнего ключа с ON DELETE CASCADE у неё тоже нет -
+        # в отличие от Backlinks, ModQueue и PollVotes, которые чистятся
+        # каскадом. То есть строки о межбордовых ссылках не удалялись НИКОГДА
+        # ни одним путём, накапливаясь по строке на каждую ссылку >>/b/123.
+        # Обе стороны ссылки, как у NotificationQueue: если исчез пост-
+        # источник, запись осиротела; если исчезла цель, ссылка ведёт в никуда
+        # и всё равно не отрисуется.
+        ("CrossLinks", "source_post"), ("CrossLinks", "target_post"),
     ]
     for table, col in cleanup_targets:
         try:
@@ -3475,10 +3597,15 @@ async def get_and_clear_reaction_queue() -> list[dict]:
                     result_data.append(d)
                     ids_to_delete.append(d["id"])
                     
-                if ids_to_delete:
-                    placeholders = ','.join('?' for _ in ids_to_delete)
-                    await db.execute(f"DELETE FROM ReactionQueue WHERE id IN ({placeholders});", ids_to_delete)
-                    
+                # Пачками: очередь пишет сайт, разгребает бот. Пока бот лежит,
+                # реакции копятся без потолка, и одним DELETE ... IN (...) их
+                # уже не удалить — запрос упал бы на лимите переменных SQLite,
+                # ROLLBACK отменил бы и чтение, и очередь осталась бы навсегда.
+                for chunk in iter_sql_chunks(ids_to_delete):
+                    placeholders = ','.join('?' for _ in chunk)
+                    await db.execute(f"DELETE FROM ReactionQueue WHERE id IN ({placeholders});", chunk)
+
+
                 await db.execute("COMMIT")
                 return result_data
                 
@@ -5496,6 +5623,55 @@ async def get_banned_files_list(limit: int = 100) -> list[dict]:
     except Exception as e:
         print(f"Error getting banned files: {e}")
         return []
+async def register_media_repost(board_id: str, file_unique_id: str, post_num: int | None = None) -> int:
+    """
+    Отмечает публикацию медиа и возвращает, какой это по счёту раз на доске.
+
+    1 — файл видят впервые, 2+ — баян. Работает на file_unique_id, который
+    Telegram кладёт прямо в апдейт: ни скачивания, ни хеширования, один
+    индексированный upsert по первичному ключу (замерено ~60 мкс на 500k
+    записей — примерно в 3000 раз дешевле одного send_photo).
+
+    При любой ошибке возвращает 1: баян — украшение, оно не должно мешать
+    публикации поста.
+    """
+    if not board_id or not file_unique_id:
+        return 1
+    from common.db_pool import get_pool, db_lock
+
+    upsert = """
+        INSERT INTO MediaReposts (board_id, file_unique_id, times, first_post_num, first_seen)
+        VALUES (?, ?, 1, ?, ?)
+        ON CONFLICT(board_id, file_unique_id)
+        DO UPDATE SET times = times + 1
+    """
+    params = (board_id, file_unique_id, post_num, time.time())
+    try:
+        async with db_lock:
+            db = await get_pool()
+            # Один атомарный upsert с RETURNING: не нужны ни явная транзакция,
+            # ни отдельный SELECT (это давало 2.4 мс против 0.1 мс).
+            try:
+                async with db.execute(upsert + " RETURNING times", params) as cursor:
+                    row = await cursor.fetchone()
+                if row:
+                    return int(row[0])
+            except Exception:
+                # RETURNING появился в SQLite 3.35 — на старой сборке читаем следом.
+                await db.execute(upsert, params)
+                async with db.execute(
+                    "SELECT times FROM MediaReposts WHERE board_id = ? AND file_unique_id = ?",
+                    (board_id, file_unique_id),
+                ) as cursor:
+                    row = await cursor.fetchone()
+                if row:
+                    return int(row[0])
+        return 1
+    except Exception as e:
+        logging.getLogger("database").warning(f"⚠️ [REPOST] Учёт баяна не удался: {e}")
+        return 1
+
+
 async def get_duplicate_counts(file_ids: list[str]) -> dict:
     """
     Возвращает словарь {file_id: count}.
@@ -6778,8 +6954,12 @@ async def get_and_clear_admin_actions() -> list[dict]:
                 
                 # 2. Очищаем очередь (удаляем всё, что прочитали)
                 ids = [r[0] for r in rows]
-                placeholders = ','.join('?' for _ in ids)
-                await db.execute(f"DELETE FROM AdminActionQueue WHERE id IN ({placeholders})", ids)
+                # Пачками — тот же лимит переменных SQLite. Админ-действий
+                # много не бывает, но цена защиты нулевая, а отказ был бы
+                # такой же необратимой защёлкой, как в остальных очередях.
+                for chunk in iter_sql_chunks(ids):
+                    placeholders = ','.join('?' for _ in chunk)
+                    await db.execute(f"DELETE FROM AdminActionQueue WHERE id IN ({placeholders})", chunk)
                 
                 await db.execute("COMMIT")
                 
@@ -7759,16 +7939,29 @@ async def clean_old_postcopies_daily():
         while True:
             async with db_lock:
                 await db.execute("BEGIN IMMEDIATE")
-                cursor = await db.execute("""
-                    DELETE FROM PostCopies 
-                    WHERE rowid IN (
-                        SELECT rowid FROM PostCopies 
-                        WHERE post_num < ? 
-                        LIMIT ?
-                    )
-                """, (threshold_post_num, batch_size))
-                deleted = cursor.rowcount
-                await db.execute("COMMIT")
+                try:
+                    cursor = await db.execute("""
+                        DELETE FROM PostCopies
+                        WHERE rowid IN (
+                            SELECT rowid FROM PostCopies
+                            WHERE post_num < ?
+                            LIMIT ?
+                        )
+                    """, (threshold_post_num, batch_size))
+                    deleted = cursor.rowcount
+                    await db.execute("COMMIT")
+                except Exception:
+                    # Без отката транзакция оставалась ОТКРЫТОЙ на общем
+                    # соединении (isolation_level=None): держала RESERVED-блокировку
+                    # против процесса сайта, а последующие записи бота копились
+                    # незакоммиченными и терялись при SIGINT от memory_restarter.
+                    # Остальные ~85 мест с BEGIN IMMEDIATE в этом файле
+                    # откатываются именно так.
+                    try:
+                        await db.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    raise
             total_deleted += deleted
             if deleted == 0:
                 break
@@ -7780,6 +7973,72 @@ async def clean_old_postcopies_daily():
     except Exception as e:
         logging.getLogger("database").error(f"⚠️ [POSTCOPIES_CLEANUP] Ошибка ежедневной чистки: {e}")
         return 0
+
+# Сколько держим запись о медиа, которое видели РОВНО ОДИН раз.
+# Такие строки — подавляющая часть таблицы и нужны лишь затем, чтобы опознать
+# будущий баян. Строки с times > 1 (собственно баяны) не удаляются: их на
+# порядки меньше, и именно они несут смысл.
+MEDIA_REPOSTS_RETENTION_DAYS = 180
+
+
+async def clean_old_media_reposts_daily() -> int:
+    """
+    Ограничивает рост MediaReposts.
+
+    Таблица заводится по строке на каждый УНИКАЛЬНЫЙ файл на доске и без этой
+    чистки росла бы бесконечно: детектор баянов был добавлен без удержания.
+    Плата за удержание — репост картинки старше 180 дней баяном уже не
+    считается. Это осознанный размен: смысл у баяна есть, пока помнят
+    оригинал.
+    """
+    from common.db_pool import get_pool, db_lock
+
+    cutoff = time.time() - (MEDIA_REPOSTS_RETENTION_DAYS * 86400)
+    total_deleted = 0
+    batch_size = 50000
+    try:
+        db = await get_pool()
+        if not db:
+            return 0
+        while True:
+            async with db_lock:
+                await db.execute("BEGIN IMMEDIATE")
+                try:
+                    cursor = await db.execute(
+                        """
+                        DELETE FROM MediaReposts
+                        WHERE rowid IN (
+                            SELECT rowid FROM MediaReposts
+                            WHERE times = 1 AND first_seen IS NOT NULL AND first_seen < ?
+                            LIMIT ?
+                        )
+                        """,
+                        (cutoff, batch_size),
+                    )
+                    deleted = cursor.rowcount or 0
+                    await db.execute("COMMIT")
+                except Exception:
+                    try:
+                        await db.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    raise
+            total_deleted += deleted
+            if deleted == 0:
+                break
+            # Уступаем цикл событий между пачками, как в чистке PostCopies.
+            await asyncio.sleep(0.5)
+
+        if total_deleted > 0:
+            logging.getLogger("database").info(
+                f"🧹 [REPOSTS_CLEANUP] Удалено {total_deleted:,} записей о медиа "
+                f"старше {MEDIA_REPOSTS_RETENTION_DAYS} дней, показанном один раз."
+            )
+        return total_deleted
+    except Exception as e:
+        logging.getLogger("database").error(f"⚠️ [REPOSTS_CLEANUP] Ошибка чистки: {e}")
+        return 0
+
 
 async def postcopies_daily_cleanup_loop():
     """
@@ -7794,6 +8053,10 @@ async def postcopies_daily_cleanup_loop():
             sleep_sec = (next_run - now_msk).total_seconds()
             await asyncio.sleep(max(10, sleep_sec))
             await clean_old_postcopies_daily()
+            # Второй уборщик в том же суточном цикле: отдельная фоновая задача
+            # ради одного DELETE в сутки не нужна, а падение любого из двух
+            # ловится общим except ниже и не роняет цикл.
+            await clean_old_media_reposts_daily()
         except asyncio.CancelledError:
             break
         except Exception as e:

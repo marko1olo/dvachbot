@@ -1,43 +1,37 @@
-TGACH (Telegram-Attached Imageboard)
+<div align="center">
 
-![alt text](https://img.shields.io/badge/status-active-brightgreen)
+# TGACH
 
+### Telegram-Attached Imageboard
 
-![alt text](https://img.shields.io/badge/version-2.5.0--Refactored-blue)
+**Гибридная платформа анонимного общения: классическая механика имиджборда плюс бесшовная двусторонняя синхронизация с Telegram в реальном времени.**
 
+![Status](https://img.shields.io/badge/status-active-brightgreen?style=for-the-badge)
+![Version](https://img.shields.io/badge/version-2.5.0_Refactored-blue?style=for-the-badge)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
+![JavaScript](https://img.shields.io/badge/Vanilla_JS-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
+![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
 
-![alt text](https://img.shields.io/badge/license-MIT-green)
+</div>
 
+---
 
-![alt text](https://img.shields.io/badge/stack-FastAPI_|_SQLite_|_VanillaJS-orange)
+## 📑 Оглавление
 
-TGACH — это гибридная платформа для анонимного общения, объединяющая классическую механику имиджборд (imageboard) с современными возможностями мессенджеров (Telegram). Проект обеспечивает бесшовную синхронизацию контента: треды, созданные на сайте, мгновенно появляются в Telegram-чате, а сообщения из Telegram реплицируются на сайт в реальном времени.
+- [Философия и Архитектура](#философия-и-архитектура)
+- [Функциональные возможности](#функциональные-возможности)
+- [Технический стек](#технический-стек)
+- [Структура Фронтенда (Deep Dive)](#структура-фронтенда-deep-dive)
+- [Модульная архитектура JS](#модульная-архитектура-js)
+- [Система темизации (CSS Variables)](#система-темизации-css-variables)
+- [Адаптивность и Mobile-First](#адаптивность-и-mobile-first)
+- [API Reference (Frontend Consumer)](#api-reference-frontend-consumer)
+- [Администрирование и Модерация](#администрирование-и-модерация)
+- [Установка и Запуск](#установка-и-запуск)
+- [Руководство по разработке (Contributing)](#руководство-по-разработке-contributing)
 
-📑 Оглавление
-
-Философия и Архитектура
-
-Функциональные возможности
-
-Технический стек
-
-Структура Фронтенда (Deep Dive)
-
-Модульная архитектура JS
-
-Система темизации (CSS Variables)
-
-Адаптивность и Mobile-First
-
-API Reference (Frontend Consumer)
-
-Администрирование и Модерация
-
-Установка и Запуск
-
-Руководство по разработке (Contributing)
-
-🏛 Философия и Архитектура
+## 🏛 Философия и Архитектура
 
 TGACH отвергает тяжелые SPA-фреймворки (React, Vue, Angular) в пользу чистого, производительного Vanilla JavaScript и Server-Side Rendering (SSR) через Jinja2. Это обеспечивает:
 
@@ -55,7 +49,7 @@ SEO-оптимизацию: Контент доступен поисковика
 
 Пользователь (Telegram) пишет сообщение -> Bot Webhook ловит апдейт -> сохраняет в БД -> рассылает уведомление через WebSocket.
 
-🚀 Функциональные возможности
+## 🚀 Функциональные возможности
 Для пользователей
 
 Гибридный постинг: Текст, Изображения, Видео, Аудио, Стикеры (Webp/Webm), Голосовые сообщения.
@@ -118,7 +112,7 @@ Stealth Edit: Тихое редактирование постов (без по�
 
 Dashboard: Мониторинг здоровья сервера (CPU/RAM), статистика онлайна WS.
 
-🛠 Технический стек
+## 🛠 Технический стек
 Backend
 
 Language: Python 3.10+
@@ -141,11 +135,11 @@ Logic: Vanilla ES6+ JavaScript. Без jQuery.
 
 Architecture: Singleton Managers Pattern.
 
-🧠 Структура Фронтенда (Deep Dive)
+## 🧠 Структура Фронтенда (Deep Dive)
 
 Frontend построен на базе паттерна "Менеджеры". Каждый логический блок вынесен в отдельный объект-синглтон в main.js.
 
-Модульная архитектура JS
+## Модульная архитектура JS
 1. SettingsManager
 
 Управляет пользовательскими настройками.
@@ -214,7 +208,7 @@ AutoSave: Сохранение черновика текста в localStorage �
 
 StealthEditor подгружает сырой текст поста (с разметкой) в модальное окно.
 
-Система темизации (CSS Variables)
+## Система темизации (CSS Variables)
 
 Стилизация реализована через мощную систему CSS переменных (:root). Переключение темы сводится к замене класса у <body>.
 
@@ -239,7 +233,7 @@ Windows 95: Имитация 3D-рамок через border-color: #fff #808080
 
 Lain / Terminal: Эффекты хроматической аберрации, статический шум (SVG Noise), анимация печатающегося текста для новых постов.
 
-Адаптивность и Mobile-First
+## Адаптивность и Mobile-First
 
 CSS написан с учетом жесткой оптимизации под мобильные устройства (@media (max-width: 768px)).
 
@@ -251,7 +245,7 @@ Inputs: Предотвращение зума на iOS (font-size >= 16px).
 
 Floating Action Button (FAB): Кнопка быстрого ответа в правом нижнем углу.
 
-📡 API Reference (Frontend Consumer)
+## 📡 API Reference (Frontend Consumer)
 
 JS-клиент взаимодействует с бэкендом через следующие эндпоинты (восстановлено по коду main.js):
 
@@ -289,7 +283,7 @@ GET /api/admin/stats — Статистика сервера.
 
 GET /api/admin/logs — Системные логи.
 
-🛡 Администрирование и Модерация
+## 🛡 Администрирование и Модерация
 
 Вход в админ-панель осуществляется через кнопку 👮‍♂️ в хедере (доступна только при наличии флага is_admin в сессии).
 
@@ -303,7 +297,7 @@ Wipe: Экстренная кнопка. Удаляет все следы пре
 
 Приемная (Feedback): Вкладка в админ-панели, куда падают тикеты от пользователей с сайта. Позволяет отвечать (пока ментально) и удалять прочитанное.
 
-📥 Установка и Запуск
+## 📥 Установка и Запуск
 Предварительные требования
 
 Python 3.10+
@@ -336,7 +330,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 Сайт будет доступен по адресу http://localhost:8000.
 
-🤝 Руководство по разработке (Contributing)
+## 🤝 Руководство по разработке (Contributing)
 
 Мы приветствуем Pull Requests! Пожалуйста, следуйте этим правилам:
 

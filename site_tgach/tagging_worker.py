@@ -33,6 +33,8 @@ Functions:
 """
 import logging
 import base64
+import os
+import tempfile
 import time
 import httpx
 import hashlib
@@ -70,6 +72,21 @@ TEMP_FAILED_FILES = {}
 
 SUSPICIOUS_KEYWORDS = {'child', 'kid', 'toddler', 'infant', 'baby', 'teen', 'underage', 'young girl', 'little girl'}
 SAFE_KEYWORDS = {'anime', 'illustration', 'sketch', 'digital art', 'painting', '3d_render', 'cartoon', 'manga'}
+
+# Один висящий get_file/download_file раньше мог застопорить весь цикл тегирования
+# на минуты, потому что фолбэк перебирает ВСЕ боты пула подряд.
+DOWNLOAD_TIMEOUT_PER_BOT = 45.0
+DOWNLOAD_TOTAL_TIMEOUT = 120.0
+
+
+def _remove_temp_file(path: str | None) -> None:
+    """Best-effort удаление временного файла; тихо игнорирует отсутствие."""
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 # ==========================================
 # ФУНКЦИИ BLURHASH
@@ -138,12 +155,14 @@ def extract_video_frame_cpu(video_bytes: bytes) -> bytes | None:
     """
     if not video_bytes:
         return None
-    import tempfile, subprocess, os
+    import subprocess
+
+    tmp_v_path = ""
     try:
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_v:
             tmp_v_path = tmp_v.name
             tmp_v.write(video_bytes)
-        
+
         cmd = [
             "ffmpeg", "-y", "-ss", "00:00:00.500",
             "-i", tmp_v_path,
@@ -153,14 +172,18 @@ def extract_video_frame_cpu(video_bytes: bytes) -> bytes | None:
             "-"
         ]
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
-        try:
-            os.remove(tmp_v_path)
-        except Exception:
-            pass
         if res.returncode == 0 and res.stdout and len(res.stdout) > 100:
             return res.stdout
+    except FileNotFoundError:
+        logger.warning("⚠️ [TAGGER] ffmpeg не найден в PATH, кадры из видео не извлекаются.")
+    except subprocess.TimeoutExpired:
+        # Раньше os.remove стоял ПОСЛЕ subprocess.run, поэтому таймаут
+        # (частый на тяжёлых видео) навсегда оставлял mp4 в %TEMP%.
+        logger.warning(f"⚠️ [TAGGER] ffmpeg timeout на {len(video_bytes)} байт видео.")
     except Exception as e:
         logger.warning(f"⚠️ [TAGGER] ffmpeg frame extraction failed: {e}")
+    finally:
+        _remove_temp_file(tmp_v_path)
     return None
 
 def process_image_cpu(image_bytes):
@@ -197,36 +220,45 @@ def process_image_cpu(image_bytes):
                     img = Image.open(io.BytesIO(frame_bytes))
                     img.load()
                     if img.mode != 'RGB': img = img.convert('RGB')
-                except Exception as ex:
+                except Exception:
                     return (sha, None, None, None), f"unsupported_format: {e}"
             else:
                 return (sha, None, None, None), f"unsupported_format: {e}"
 
-        # 3. pHash
-        phash = str(imagehash.phash(img))
-        
-        # 4. BlurHash
         try:
-            small_blur = img.resize((32, 32), Image.Resampling.BILINEAR)
-            b_hash = encode_blurhash_internal(small_blur, 4, 3)
-        except Exception:
-            b_hash = None
+            # 3. pHash
+            phash = str(imagehash.phash(img))
 
-        # 5. ПОДГОТОВКА ДЛЯ НЕЙРОНКИ (Ресайз)
-        # Groq не любит файлы > 4MB. Ужимаем до 1024px по большей стороне.
-        MAX_SIZE = 1024
-        if max(img.size) > MAX_SIZE:
-            img.thumbnail((MAX_SIZE, MAX_SIZE), Image.Resampling.LANCZOS)
-        
-        # Сохраняем в JPEG (легче чем PNG)
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=85)
-        resized_bytes = buffer.getvalue()
+            # 4. BlurHash
+            small_blur = None
+            try:
+                small_blur = img.resize((32, 32), Image.Resampling.BILINEAR)
+                b_hash = encode_blurhash_internal(small_blur, 4, 3)
+            except Exception:
+                b_hash = None
+            finally:
+                if small_blur is not None:
+                    small_blur.close()
 
-        return (sha, phash, b_hash, resized_bytes), None
+            # 5. ПОДГОТОВКА ДЛЯ НЕЙРОНКИ (Ресайз)
+            # Groq не любит файлы > 4MB. Ужимаем до 1024px по большей стороне.
+            MAX_SIZE = 1024
+            if max(img.size) > MAX_SIZE:
+                img.thumbnail((MAX_SIZE, MAX_SIZE), Image.Resampling.LANCZOS)
+
+            # Сохраняем в JPEG (легче чем PNG)
+            with io.BytesIO() as buffer:
+                img.save(buffer, format="JPEG", quality=85)
+                resized_bytes = buffer.getvalue()
+
+            return (sha, phash, b_hash, resized_bytes), None
+        finally:
+            # Воркер крутится 24/7: незакрытый Image держит буфер декодера
+            # на каждый обработанный файл.
+            img.close()
 
     except Exception as e:
-        return None, f"CPU Error: {e}"
+        return None, f"CPU Error: {type(e).__name__}: {e}"
 
 @api_retry
 async def _execute_tagging(client, model, messages, max_tokens):
@@ -240,22 +272,28 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
     """
     Получает теги для изображения, используя основной каскад Vision (Gemini / Groq).
     """
+    if not resized_image_bytes:
+        return None
+
+    tmp_path = ""
     try:
-        import tempfile, os
         from site_tgach.vision import describe_image
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
             tmp.write(resized_image_bytes)
-        
-        tags = await describe_image(tmp_path, caption="Generate tags for this image", is_passive=False, source="TAGGER")
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
-        return tags
+
+        return await describe_image(
+            tmp_path, caption="Generate tags for this image", is_passive=False, source="TAGGER"
+        )
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
-        logger.warning(f"⚠️ [TAGGER] Vision analysis error: {e}")
+        logger.warning(f"⚠️ [TAGGER] Vision analysis error: {type(e).__name__}: {e}")
         return None
+    finally:
+        # Раньше удаление стояло после await: любое исключение в describe_image
+        # оставляло jpg в %TEMP% навсегда.
+        _remove_temp_file(tmp_path)
 
 # ==========================================
 # ПОЛУЧЕНИЕ ЗАДАЧ
@@ -340,15 +378,15 @@ async def get_tasks(db) -> list[dict]:
 
     return tasks
 
-async def download_file_with_fallback(file_id: str, primary_bot=None):
+def _build_download_candidates(primary_bot) -> list:
+    """Порядок ботов для попытки скачивания: владелец файла -> главный -> остальные."""
     bots_to_try = []
     if primary_bot:
         bots_to_try.append(primary_bot)
-    
+
     main_bot = global_bot_pool.get_main_bot() if global_bot_pool else None
     if main_bot and main_bot not in bots_to_try:
         bots_to_try.append(main_bot)
-        
     all_bots = []
     if global_bot_pool:
         if hasattr(global_bot_pool, "get_all_active_bots"):
@@ -358,16 +396,45 @@ async def download_file_with_fallback(file_id: str, primary_bot=None):
     for b in all_bots:
         if b not in bots_to_try:
             bots_to_try.append(b)
+    return bots_to_try
+
+
+async def _download_via_bot(bot, file_id: str) -> bytes | None:
+    """Одна попытка скачивания конкретным ботом под жёстким таймаутом."""
+    f_info = await asyncio.wait_for(bot.get_file(file_id), timeout=DOWNLOAD_TIMEOUT_PER_BOT)
+    file_path = getattr(f_info, "file_path", None)
+    if not file_path:
+        return None
+    f_obj = await asyncio.wait_for(bot.download_file(file_path), timeout=DOWNLOAD_TIMEOUT_PER_BOT)
+    return f_obj.read() if hasattr(f_obj, 'read') else f_obj
+
+
+async def download_file_with_fallback(file_id: str, primary_bot=None):
+    """
+    Пробует скачать файл каждым доступным ботом.
+
+    Таймауты обязательны: без них один зависший HTTP-запрос останавливал весь
+    цикл тегирования, а перебор всего пула умножал задержку на число ботов.
+    """
+    bots_to_try = _build_download_candidates(primary_bot)
+    if not bots_to_try:
+        return None, None
+
+    deadline = time.monotonic() + DOWNLOAD_TOTAL_TIMEOUT
 
     for b in bots_to_try:
+        if time.monotonic() >= deadline:
+            logger.warning(f"⏱️ [TAGGER] Общий бюджет скачивания исчерпан для {file_id[:15]}.")
+            break
         try:
-            f_info = await b.get_file(file_id)
-            file_path = getattr(f_info, "file_path", None)
-            if not file_path: continue
-            f_obj = await b.download_file(file_path)
-            img_bytes = f_obj.read() if hasattr(f_obj, 'read') else f_obj
+            img_bytes = await _download_via_bot(b, file_id)
             if img_bytes:
                 return img_bytes, b
+        except asyncio.TimeoutError:
+            logger.warning(f"⏱️ [TAGGER] Таймаут скачивания {file_id[:15]}, пробую следующего бота.")
+            continue
+        except asyncio.CancelledError:
+            raise
         except TelegramBadRequest:
             continue
         except Exception as e:

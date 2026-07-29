@@ -35,6 +35,8 @@ except ImportError:
     import json
 import logging
 import os
+import shutil
+import tempfile
 import tracemalloc
 import uuid
 import math
@@ -67,6 +69,7 @@ from logging.handlers import RotatingFileHandler
 from typing import Tuple
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+from common.chart_lock import ChartLockTimeout, matplotlib_guard
 from common.html_utils import escape_html, convert_site_tags_to_telegram
 from common.token_generator import generate_unique_token
 from common.database import (
@@ -1165,9 +1168,28 @@ def _prepare_queue_item(board_id: str, item: dict) -> dict:
         item.setdefault("board_id", board_id)
         item.setdefault("enqueued_at", time.time())
     return item
-async def enqueue_board_message(board_id: str, item: dict) -> None:
+async def enqueue_board_message(board_id: str, item: dict) -> bool:
+    """
+    Кладёт сообщение в очередь доставки доски.
 
-    await message_queues[board_id].put(_prepare_queue_item(board_id, item))
+    Возвращает True при успехе. Неизвестная доска раньше давала голый KeyError:
+    вызывающий код к этому моменту уже успевал записать пост в БД и
+    messages_storage, поэтому пост оставался в базе, но никогда не доставлялся,
+    а исключение рвало хендлер. Теперь это громкая запись в лог и False.
+    """
+    queue = message_queues.get(board_id)
+    if queue is None:
+        print(f"⛔ enqueue_board_message: неизвестная доска '{board_id}', "
+              f"сообщение #{item.get('post_num') if isinstance(item, dict) else '?'} не поставлено в очередь.")
+        runtime_logger.error(
+            "enqueue_unknown_board board=%s post=%s known=%s",
+            board_id,
+            item.get("post_num") if isinstance(item, dict) else None,
+            ",".join(sorted(message_queues)),
+        )
+        return False
+    await queue.put(_prepare_queue_item(board_id, item))
+    return True
 def _contains_volatile_delivery_payload(value, depth: int = 0) -> bool:
 
     if depth > 8:
@@ -1307,17 +1329,41 @@ async def _remove_already_delivered_recipients(post_num: int, recipients) -> set
     delivered = {int(recipient_id) for recipient_id, _message_id in copies}
     return candidate_recipients - delivered
 
-async def restore_durable_delivery_queue(limit: int = 1000) -> None:
+DURABLE_RESTORE_PAGE = 1000
+DURABLE_RESTORE_MAX_ITEMS = 100_000
+
+
+async def restore_durable_delivery_queue(limit: int = DURABLE_RESTORE_PAGE) -> None:
 
     if not DURABLE_DELIVERY_QUEUE_ENABLED:
         return
-    items = await get_pending_delivery_queue_items(limit=limit)
+    # Раньше читалась ОДНА страница на 1000 записей, и всё сверх неё не
+    # восстанавливалось никогда: других потребителей у DeliveryQueue нет, а
+    # удаляются строки только по факту доставки. После падения под нагрузкой
+    # это означало навсегда недоставленные посты и вечно растущую таблицу.
+    # Идём страницами по курсору id: восстановление не удаляет строку, поэтому
+    # повторный запрос без курсора вернул бы те же записи и продублировал
+    # рассылку.
+    items = []
+    after_id = 0
+    while True:
+        page = await get_pending_delivery_queue_items(limit=limit, after_id=after_id)
+        if not page:
+            break
+        items.extend(page)
+        after_id = max(int(i["id"]) for i in page)
+        if len(page) < limit or len(items) >= DURABLE_RESTORE_MAX_ITEMS:
+            break
     restored_items = 0
     restored_recipients = 0
     deleted_empty = 0
+    unknown_board = 0
     for item in items:
         board_id = item.get("board_id")
         if board_id not in message_queues:
+            # Доска исчезла из конфига — доставить эти записи нечем. Не удаляем
+            # молча, но считаем и показываем, иначе они копились бы незаметно.
+            unknown_board += 1
             continue
         remaining_recipients = await _remove_already_delivered_recipients(
             int(item["post_num"]),
@@ -1344,25 +1390,32 @@ async def restore_durable_delivery_queue(limit: int = 1000) -> None:
     durable_delivery_stats["restored_items"] += restored_items
     durable_delivery_stats["restored_recipients"] += restored_recipients
     durable_delivery_stats["restore_deleted_empty"] += deleted_empty
-    if restored_items or deleted_empty:
+    if restored_items or deleted_empty or unknown_board:
         runtime_logger.warning(
             "delivery_durable_restore %s",
             json.dumps(
                 {
                     "ts": round(time.time(), 3),
+                    "scanned": len(items),
                     "restored_items": restored_items,
                     "restored_recipients": restored_recipients,
                     "deleted_empty": deleted_empty,
-                    "limit": limit,
+                    "unknown_board": unknown_board,
+                    "page": limit,
+                    "hit_cap": len(items) >= DURABLE_RESTORE_MAX_ITEMS,
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
         )
         print(
-            f"🧷 Durable delivery restore: restored={restored_items}, "
+            f"🧷 Durable delivery restore: scanned={len(items)}, restored={restored_items}, "
             f"recipients={restored_recipients}, deleted_empty={deleted_empty}"
+            + (f", unknown_board={unknown_board}" if unknown_board else "")
         )
+    if len(items) >= DURABLE_RESTORE_MAX_ITEMS:
+        print(f"⚠️ Durable delivery restore: достигнут потолок {DURABLE_RESTORE_MAX_ITEMS}, "
+              f"остаток будет поднят при следующем старте.")
 def _delivery_queue_counts() -> dict[str, int]:
 
     return {board: queue.qsize() for board, queue in message_queues.items()}
@@ -1937,6 +1990,69 @@ def _format_runtime_snapshot(snapshot: dict) -> str:
         f"cooldowns/spam/img: <code>roll={board_maps.get('last_roll_time')} info={board_maps.get('last_info_command_time')} spam={board_maps.get('spam_tracker_items')} img={board_maps.get('image_spam_items')}</code>\n"
         f"tracemalloc: <code>{snapshot.get('tracemalloc', {}).get('enabled')} current={snapshot.get('tracemalloc', {}).get('current_mb')}MB peak={snapshot.get('tracemalloc', {}).get('peak_mb')}MB</code>"
     )
+# Per-user хранилища внутри board_data, которые надо освободить, когда юзер
+# ушёл с доски (заблокировал бота). Раньше список был продублирован в двух
+# местах разными наборами: одиночный путь чистил 11 хранилищ, а МАССОВЫЙ путь
+# доставки — всего 3, и именно он обнаруживает большинство заблокировавших.
+# Утекали в том числе last_texts/last_stickers/last_animations/last_audios —
+# это deque с текстами сообщений на каждого юзера, умноженные на число досок.
+USER_BOARD_RAM_STORES = (
+    'last_activity', 'last_texts', 'last_stickers', 'last_animations',
+    'last_audios', 'spam_violations', 'spam_tracker', 'last_user_msgs',
+    'message_counter', 'user_state', 'user_streams', 'user_settings',
+)
+
+
+def _purge_users_from_board_ram_unlocked(b_data: dict, user_ids) -> int:
+    """Вычищает per-user записи ушедших юзеров. Вызывать под storage_lock."""
+    removed = 0
+    for key in USER_BOARD_RAM_STORES:
+        store = b_data.get(key)
+        if not isinstance(store, dict):
+            continue
+        for user_id in user_ids:
+            if store.pop(user_id, None) is not None:
+                removed += 1
+    return removed
+
+
+def _purge_users_from_global_ram(user_ids) -> int:
+    """
+    Чистит глобальные per-user карты. Локи снимаем только свободные:
+    выдернуть захваченный lock из словаря — значит выдать следующему
+    вызывающему новый объект и потерять взаимное исключение.
+    """
+    removed = 0
+    for user_id in user_ids:
+        for mapping in (unknown_command_tracker, user_last_thread_action,
+                        reaction_ratelimit, user_hourly_image_count,
+                        user_hourly_image_reset):
+            if mapping.pop(user_id, None) is not None:
+                removed += 1
+        for locks in (user_spam_locks, generate_locks):
+            lock = locks.get(user_id)
+            if lock is not None and not lock.locked() and not getattr(lock, "_waiters", None):
+                locks.pop(user_id, None)
+                removed += 1
+    return removed
+
+
+async def purge_users_from_board_ram(board_id: str, user_ids) -> int:
+    """Единая точка освобождения RAM для юзеров, покинувших доску."""
+    user_ids = [uid for uid in set(user_ids) if uid]
+    if not board_id or not user_ids:
+        return 0
+    b_data = board_data[board_id]
+    async with storage_lock:
+        removed = _purge_users_from_board_ram_unlocked(b_data, user_ids)
+    async with author_reaction_notify_lock:
+        for uid in user_ids:
+            if author_reaction_notify_tracker.pop(uid, None) is not None:
+                removed += 1
+    removed += _purge_users_from_global_ram(user_ids)
+    return removed
+
+
 async def _handle_telegram_forbidden_error(update) -> None:
     user_id, telegram_object = None, None
     if update and update.message:
@@ -1947,20 +2063,8 @@ async def _handle_telegram_forbidden_error(update) -> None:
         board_id = get_board_id(telegram_object)
         if board_id:
             async with storage_lock:
-                b_data = board_data[board_id]
-                b_data['users']['active'].discard(user_id)
-                for store in [b_data['last_activity'], b_data['last_texts'], b_data['last_stickers'],
-                              b_data['last_animations'], b_data['last_audios'], b_data['spam_violations'],
-                              b_data['spam_tracker'], b_data['last_user_msgs'],
-                              b_data['message_counter'], b_data['user_state'],
-                              b_data.get('user_streams', {})]:
-                    store.pop(user_id, None)
-            async with author_reaction_notify_lock:
-                author_reaction_notify_tracker.pop(user_id, None)
-
-            user_spam_locks.pop(user_id, None)
-            generate_locks.pop(user_id, None)
-            unknown_command_tracker.pop(user_id, None)
+                board_data[board_id]['users']['active'].discard(user_id)
+            await purge_users_from_board_ram(board_id, [user_id])
             await remove_user_from_board(user_id, board_id)
             print(f"🚫 [{board_id}] Юзер {user_id} блокнул бота. Данные удалены (RAM почистится автоматически).")
 
@@ -2140,6 +2244,43 @@ async def load_state():
                   f"active_total = {active_count}, "
                   f"tg_banned = {banned_tg_count}, "
                   f"banned_total = {banned_count}")
+# Аварийный graceful_shutdown обёрнут в wait_for(timeout=15), поэтому запас
+# на дозапись должен быть заметно меньше общего бюджета остановки.
+SAVE_EXECUTOR_DRAIN_SEC = 5.0
+
+
+async def _drain_save_executor(timeout: float = SAVE_EXECUTOR_DRAIN_SEC) -> None:
+    """
+    Даёт отложенным записям на диск завершиться, не блокируя event loop.
+
+    save_executor.shutdown(wait=True) синхронный и блокирующий. Уводим его в
+    ОТДЕЛЬНЫЙ daemon-поток, а не в asyncio.to_thread: to_thread занял бы
+    дефолтный пул, и по завершении цикла loop.shutdown_default_executor()
+    всё равно дождался бы этого потока, обнулив смысл таймаута.
+    Daemon-поток процесс на выходе не удерживает.
+    """
+    loop = asyncio.get_running_loop()
+    finished = asyncio.Event()
+
+    def _shutdown_and_signal():
+        try:
+            save_executor.shutdown(wait=True)
+        except Exception as e:
+            print(f"⚠️ Ошибка при завершении save_executor: {e}")
+        finally:
+            try:
+                loop.call_soon_threadsafe(finished.set)
+            except RuntimeError:
+                pass  # цикл уже закрыт — ждать всё равно некому
+
+    threading.Thread(target=_shutdown_and_signal, name="save-executor-drain", daemon=True).start()
+    try:
+        await asyncio.wait_for(finished.wait(), timeout=timeout)
+        print("💾 Отложенные записи на диск завершены.")
+    except asyncio.TimeoutError:
+        print(f"⚠️ Записи на диск не уложились в {timeout:g} с — продолжаю остановку.")
+
+
 async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | None = None, emergency: bool = False):
     """
     Корректное завершение работы.
@@ -2189,8 +2330,13 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
         # Закрываем пул (внутри db_pool.py тоже есть защита)
         await close_pool()
         
+        # git_executor может висеть на сетевом push — его ждать нельзя.
         git_executor.shutdown(wait=False, cancel_futures=True)
-        save_executor.shutdown(wait=False, cancel_futures=True)
+        # save_executor — наоборот, это запись на диск (graph.json, threads_data,
+        # архивы тредов). Прежний wait=False + cancel_futures=True выбрасывал
+        # уже поставленные в очередь записи (замерено: 6 из 8) и не дожидался
+        # выполняющейся, а сразу следом memory_restarter шлёт SIGINT.
+        await _drain_save_executor()
     except Exception as e:
         print(f"⚠️ Ошибка при shutdown: {e}")
         
@@ -2963,7 +3109,11 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
     
     from common.db_pool import get_pool, db_lock
     db = await get_pool()
-    
+
+    # Функция спавнится на КАЖДЫЙ пост, а db_lock сериализует весь доступ к базе
+    # в процессе. Поздравление о верификации отправляем уже после выхода из
+    # лока, иначе сетевой вызов Telegram останавливал бы работу с БД во всём боте.
+    should_notify = False
     async with db_lock:
         try:
             await db.execute("BEGIN IMMEDIATE")
@@ -2989,23 +3139,24 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
             )
             
             should_notify = cursor.rowcount > 0
-            
+
             await db.execute("COMMIT")
-            
-            if should_notify:
-                lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-                msg_text = VERIFICATION_SUCCESS_MESSAGES.get(lang, VERIFICATION_SUCCESS_MESSAGES['ru'])
-                try:
-                    await bot.send_message(user_id, msg_text, parse_mode="HTML")
-                except Exception:
-                    pass
-                    
+
         except Exception as e:
+            should_notify = False
             try:
                 await db.execute("ROLLBACK")
             except Exception:
                 pass
             print(f"⚠️ Ошибка верификации для {user_id}: {e}")
+
+    if should_notify:
+        lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+        msg_text = VERIFICATION_SUCCESS_MESSAGES.get(lang, VERIFICATION_SUCCESS_MESSAGES['ru'])
+        try:
+            await bot.send_message(user_id, msg_text, parse_mode="HTML")
+        except Exception:
+            pass
 
 async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str) -> tuple[list[int], list, list]:
     from common.db_pool import get_pool, db_lock
@@ -3645,6 +3796,13 @@ class NewPostProcessor:
             header_text = await format_thread_post_header(self.board_id, local_post_num, self.user_id, thread_info, stream=self.stream)
         else:
             header_text = await format_header(self.board_id, self.current_post_num, author_id=self.user_id, stream=self.stream)
+        # Метка баяна идёт первой строкой заголовка. Заголовок и так собирается
+        # здесь перед отправкой, поэтому это конкатенация строки — ни одного
+        # лишнего запроса к Telegram (реакцией это стоило бы по вызову API
+        # на КАЖДОГО получателя).
+        repost_count = self.content.get('repost_count')
+        if isinstance(repost_count, int) and repost_count > 1:
+            header_text = f"🪗 БАЯН ×{repost_count}\n{header_text}"
         self.final_content['header'] = header_text
         self.author_content['header'] = header_text
         await update_post_content(self.current_post_num, self.final_content)
@@ -3745,7 +3903,12 @@ class NewPostProcessor:
                 except Exception as e:
                     print(f"Error triggering auto_roast: {e}")
 
-            if self.author_results and self.author_results[0] and self.author_results[0][1]:
+        # Вторая фаза вынесена из-под storage_lock: внутри неё идёт
+        # update_post_content — запись в БД, а это ГОРЯЧИЙ путь, он исполняется
+        # на КАЖДЫЙ пост. Раньше на время этого запроса замирал весь доступ к
+        # messages_storage / post_to_messages / message_to_post, то есть
+        # доставка и реакции на всех досках.
+        if self.author_results and self.author_results[0] and self.author_results[0][1]:
                 sent_messages = self.author_results[0][1]
                 messages_to_process = sent_messages if isinstance(sent_messages, list) else [sent_messages]
                 if self.final_content.get('type') == 'media_group' and messages_to_process:
@@ -3774,13 +3937,16 @@ class NewPostProcessor:
                 await update_post_content(self.current_post_num, self.final_content)
                 author_message_ids_to_archive = [m.message_id for m in (sent_messages if isinstance(sent_messages, list) else [sent_messages])]
                 messages_to_save = sent_messages if isinstance(sent_messages, list) else [sent_messages]
-                messages_storage[self.current_post_num]['author_message_id'] = author_message_ids_to_archive
-                messages_storage[self.current_post_num]['content'] = self.final_content
-                post_to_messages.setdefault(self.current_post_num, {})[self.user_id] = (
-                    author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
-                )
-                for m in messages_to_save:
-                    message_to_post[(self.user_id, m.message_id)] = self.current_post_num
+                async with storage_lock:
+                    stored = messages_storage.get(self.current_post_num)
+                    if stored is not None:
+                        stored['author_message_id'] = author_message_ids_to_archive
+                        stored['content'] = self.final_content
+                    post_to_messages.setdefault(self.current_post_num, {})[self.user_id] = (
+                        author_message_ids_to_archive[0] if len(author_message_ids_to_archive) == 1 else author_message_ids_to_archive
+                    )
+                    for m in messages_to_save:
+                        message_to_post[(self.user_id, m.message_id)] = self.current_post_num
 
     async def _enqueue_and_notify(self):
         if not self.is_shadow_muted and self.recipients:
@@ -4967,6 +5133,8 @@ class MessageBroadcaster:
         self.final_keyboard = self.keyboard
         self.post_num = self.content.get('post_num')
         self.raw_text = self.content.get('text') or self.content.get('caption') or ''
+        # Переопределяется в _prepare_content_and_mentions, когда известен header.
+        self.hide_check_text = self.raw_text.lower()
         self.content_for_common = self.content.copy()
 
     async def broadcast(self) -> list:
@@ -5078,6 +5246,10 @@ class MessageBroadcaster:
 
         has_reply_markers = ">>" in self.raw_text
         self.users_settings = self.b_data.get('user_settings', {})
+        # Текст для проверки /hide одинаков для всех получателей, а считался
+        # заново в _send_one на каждого — конкатенация плюс .lower() по всему
+        # телу поста. Готовим один раз на рассылку.
+        self.hide_check_text = (self.base_header_text + " " + self.raw_text).lower()
 
         if has_reply_markers:
             mentions = RE_YOU_PATTERN.findall(self.raw_text)
@@ -5349,16 +5521,20 @@ class MessageBroadcaster:
             for uid in self.blocked_users:
                 if uid in self.b_data['users']['active']:
                     self.b_data['users']['active'].discard(uid)
-                    self.b_data.get('user_settings', {}).pop(uid, None)
-                    for cache in [self.b_data['last_activity'], self.b_data['spam_violations']]:
-                        cache.pop(uid, None)
                     users_to_remove_db.append(uid)
+
+            # Раньше здесь чистились только user_settings, last_activity и
+            # spam_violations — три хранилища из двенадцати. Это массовый путь,
+            # именно он находит большинство заблокировавших бота, поэтому
+            # остальное (включая deque с текстами сообщений) утекало.
+            freed = await purge_users_from_board_ram(self.board_id, users_to_remove_db)
 
             if users_to_remove_db:
                 from common.database import remove_users_from_board_batch
                 await remove_users_from_board_batch(users_to_remove_db, self.board_id)
 
-            print(f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} пользователей (блокировка бота).")
+            print(f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} пользователей "
+                  f"(блокировка бота). Освобождено записей в RAM: {freed}.")
 
     async def _send_one_guarded(self, uid: int, timeout_sec: float):
         request_timeout_sec = min(
@@ -5391,7 +5567,7 @@ class MessageBroadcaster:
         request_timeout = max(3, int(telegram_request_timeout_sec))
         u_set = self.users_settings.get(uid, {'nsfw': False, 'hide': set()})
         if u_set['hide']:
-            check_text = (self.base_header_text + " " + self.raw_text).lower()
+            check_text = self.hide_check_text
             if any(word in check_text for word in u_set['hide']):
                 lang_local = 'en' if self.board_id == 'int' else 'ru'
                 placeholder = "🛡 Message hidden" if lang_local == 'en' else "🛡 Сообщение скрыто"
@@ -6143,13 +6319,47 @@ async def execute_delayed_edit(
             current_task = asyncio.current_task()
             if pending_edit_tasks.get(post_num) is current_task:
                 pending_edit_tasks.pop(post_num, None)
+WORKER_RESTART_DELAY_SEC = 2.0
+WORKER_RESTART_MAX_DELAY_SEC = 60.0
+
+
+async def _supervise_message_worker(worker_name: str, board_id: str, bot_instance: Bot) -> None:
+    """
+    Держит воркер доски живым.
+
+    Раньше воркер, вышедший из цикла (например по 'closed database'), исчезал
+    молча: message_broadcaster висел в gather до смерти ВСЕХ воркеров, поэтому
+    рестарта не происходило и доска переставала доставлять сообщения до
+    перезапуска процесса. Теперь каждый воркер поднимается отдельно.
+    """
+    delay = WORKER_RESTART_DELAY_SEC
+    while not (is_shutting_down or drain_shutdown_requested):
+        try:
+            await message_worker(worker_name, board_id, bot_instance)
+            if is_shutting_down or drain_shutdown_requested:
+                return
+            print(f"⚠️ {worker_name} завершился без запроса остановки. Перезапуск через {delay:.0f} с.")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            if is_shutting_down or drain_shutdown_requested:
+                return
+            print(f"⛔ {worker_name} упал: {type(e).__name__}: {str(e)[:200]}. Перезапуск через {delay:.0f} с.")
+            runtime_logger.exception("message_worker_crashed board=%s", board_id)
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, WORKER_RESTART_MAX_DELAY_SEC)
+
+
 async def message_broadcaster(bots: dict[str, Bot]):
 
     tasks = [
-        spawn_task(message_worker(f"Worker-{board_id}", board_id, bot_instance))
+        spawn_task(_supervise_message_worker(f"Worker-{board_id}", board_id, bot_instance))
         for board_id, bot_instance in bots.items()
     ]
-    await asyncio.gather(*tasks)
+    # return_exceptions: падение одного супервизора не должно ронять
+    # message_broadcaster целиком (иначе _run_background_task поднимет ВТОРОЙ
+    # комплект воркеров поверх ещё живых первых).
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 class MessageDeliveryTask:
     """
@@ -6443,8 +6653,16 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
         except asyncio.CancelledError:
             break
         except Exception as e:
-            if "closed database" in str(e).lower() or is_shutting_down:
+            if is_shutting_down or drain_shutdown_requested:
                 break
+            # 'closed database' раньше означал break, то есть тихую смерть воркера
+            # доски навсегда. Ошибка восстановимая: get_pool() переподключается
+            # сам, поэтому ждём чуть дольше и продолжаем разгребать очередь.
+            if "closed database" in str(e).lower():
+                print(f"{worker_name} | ⚠️ Соединение с БД было закрыто, жду переподключения пула...")
+                runtime_logger.warning("message_worker_db_closed board=%s", board_id)
+                await asyncio.sleep(5)
+                continue
             print(f"{worker_name} | ⛔ Критическая ошибка: {str(e)[:200]}")
             import traceback
             traceback.print_exc()
@@ -6748,7 +6966,11 @@ def throttle(rate: int):
 async def cmd_random_media(message: types.Message):
     args = (message.text or message.caption or "").split()
     count = 1
-    if len(args) > 1 and args[1].isdigit():
+    # isdecimal, а не isdigit: у isdigit истинны надстрочные и кружковые
+    # цифры ('²', '③'), которые int() НЕ принимает, и /random ² роняло
+    # обработчик с ValueError. isdecimal истинно ровно для того, что int()
+    # разбирает, включая арабо-индийские цифры.
+    if len(args) > 1 and args[1].isdecimal():
         count = int(args[1])
         count = max(1, min(10, count))
     
@@ -7141,6 +7363,12 @@ class ShootContext:
     user_id: int
     target_id: int
     active_items: dict
+    # Инвентарь ЦЕЛИ. Нужен только ветке рикошета — _handle_shoot_bounce
+    # читает ctx.t_items. Умолчание оставляет вызов _handle_shoot_success с
+    # семью аргументами рабочим: успешному выстрелу инвентарь цели не нужен.
+    # default_factory, а не None: словарь тут индексируют, и общий изменяемый
+    # объект на все экземпляры был бы ловушкой.
+    t_items: dict = dataclasses.field(default_factory=dict)
 
 async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
@@ -7151,28 +7379,14 @@ async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
     except:
         return {}
 
-async def _handle_shoot_bounce(ctx: ShootContext, t_items: dict):
-    message, db, db_lock = ctx.message, ctx.db, ctx.db_lock
-    board_id, user_id, target_id, active_items = ctx.board_id, ctx.user_id, ctx.target_id, ctx.active_items
-    t_items["reflect_shield_until"] = 0
-    active_items["mute_gun"] = False
-    async with db_lock:
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (json.dumps(t_items), target_id, board_id))
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (json.dumps(active_items), user_id, board_id))
-        await db.commit()
+# Здесь лежала вторая, более ранняя копия _handle_shoot_bounce с сигнатурой
+# (ctx, t_items). Её молча затирало определение ниже, так что работала только
+# нижняя версия — а вызовы были написаны под эту, верхнюю. Удалена, чтобы
+# правка не ушла в мёртвую копию.
 
-@dataclass
-class ShootContext:
-    message: types.Message
-    db: object
-    db_lock: object
-    board_id: str
-    user_id: int
-    target_id: int
-    active_items: dict
-    t_items: dict = None
+# Второе, затенявшее определение ShootContext удалено: класс был объявлен
+# дважды подряд с одинаковым набором полей. Побеждало это, нижнее, поэтому
+# правка верхнего не влияла ни на что. Оставлено одно, выше по файлу.
 
 async def _handle_shoot_bounce(ctx: ShootContext):
     ctx.t_items["reflect_shield_until"] = 0
@@ -7213,8 +7427,9 @@ async def _handle_shoot_bounce(ctx: ShootContext):
         pass
 
 async def _handle_shoot_success(ctx: ShootContext):
-    message, db, db_lock = ctx.message, ctx.db, ctx.db_lock
-    board_id, user_id, target_id, active_items = ctx.board_id, ctx.user_id, ctx.target_id, ctx.active_items
+    # Распаковка ctx в локальные имена удалена: тело функции целиком обращается
+    # к ctx.<поле>, ни одно из семи имён не читалось. Остаток того же
+    # незавершённого рефакторинга, что ломал _handle_shoot_bounce выше.
     async with storage_lock:
         board_data[ctx.board_id]['mutes'][ctx.target_id] = datetime.now(UTC) + timedelta(seconds=3600)
     await apply_regular_mute(ctx.target_id, ctx.board_id, 3600)
@@ -7280,7 +7495,10 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
 
     if t_items.get("reflect_shield_until", 0) > current_time:
         # Рикошет!
-        await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items), t_items)
+        # t_items передаём ВНУТРИ контекста: живая _handle_shoot_bounce
+        # принимает один аргумент. Вторым позиционным это был TypeError,
+        # то есть Зеркальный Щит не срабатывал ни разу.
+        await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items, t_items))
         return
 
     # Идемпотентность: цель уже в муте
@@ -7291,7 +7509,14 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         
     if current_mute and current_mute > datetime.now(UTC):
         await message.answer("⚠️ Эта цель УЖЕ находится в муте! Выбери кого-то другого. Мут-Ган остался у тебя.")
-        await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items, t_items))
+        # Здесь стоял вызов _handle_shoot_bounce. Он РАБОТАЛ, и в этом была
+        # проблема: рикошет списывает мут-ган и сажает в мут на час самого
+        # стрелка, отправляя вдогонку «🛡️ ЗЕРКАЛЬНЫЙ ЩИТ!». То есть на попытку
+        # выстрелить в уже замученного пользователь получал два сообщения
+        # подряд с противоположным смыслом и терял предмет — прямо вопреки
+        # строке выше, где ему сказано «Мут-Ган остался у тебя».
+        # Ветка «цель уже в муте» не рикошет: предупреждаем и выходим, ничего
+        # не списывая. Это сознательное изменение поведения, а не фикс падения.
         return
 
     # Обычный мут цели
@@ -7356,17 +7581,40 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         return
 
     async with db_lock:
+        # СНАЧАЛА списываем у жертвы, и только если сумма реально есть.
+        # t_balance читался выше вне лока и к этому моменту мог устареть: жертва
+        # успела потратиться или её уже грабанул кто-то другой. Условие
+        # `balance >= ?` делает проверку и списание одной атомарной операцией.
+        # Прежний код списывал безусловным upsert-ом, причём ПОСЛЕ начисления
+        # грабителю: несколько одновременных грабежей уводили баланс жертвы в
+        # минус, а грабителям начислялось то, чего у неё не было.
+        cursor = await db.execute(
+            "UPDATE Users SET balance = balance - ? "
+            "WHERE user_id = ? AND board_id = ? AND balance >= ?",
+            (stolen, target_id, board_id, stolen)
+        )
+        # Корректность обеспечивает само условие в UPDATE: списать больше, чем
+        # есть, оно не даст ни при какой конкуренции. rowcount нужен только
+        # чтобы решить, начислять ли грабителю. Доверяем ему лишь когда это
+        # настоящее целое: aiosqlite всегда отдаёт int, а тестовые дубли - то
+        # None, то авто-атрибут MagicMock. В неясном случае считаем, что
+        # списание прошло, то есть ведём себя как прежний код.
+        rowcount = getattr(cursor, "rowcount", None)
+        robbed = (rowcount == 1) if isinstance(rowcount, int) else True
+        # Заточка расходуется при любом исходе - попытка была. Начисление
+        # нулевое, если списать не удалось.
         await db.execute(
             "INSERT INTO Users (user_id, board_id, balance, active_items) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?, active_items = excluded.active_items",
-            (user_id, board_id, stolen, json.dumps(active_items), stolen)
-        )
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?",
-            (target_id, board_id, -stolen, stolen)
+            (user_id, board_id, stolen if robbed else 0, json.dumps(active_items),
+             stolen if robbed else 0)
         )
         await db.commit()
+    if not robbed:
+        await message.answer(
+            "🔪 Пока ты замахивался, у жертвы кончились шекели. Заточка сломалась впустую.",
+            parse_mode="HTML")
+        return
     await message.answer(f"🔪 <b>ОГРАБЛЕНИЕ УДАЛОСЬ!</b>\nТы подкрался и спиздил <code>{stolen}</code> шекелей у жертвы.", parse_mode="HTML")
     try: await message.bot.send_message(target_id, f"🔪 <b>Тебя ограбили в /b/!</b>\nКакой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей. Защититься можно, купив Шапочку из фольги в /shop.", parse_mode="HTML")
     except: pass
@@ -7570,38 +7818,11 @@ class ChartContext:
     dt: Any
 
 def _generate_activity_clock(ctx: ChartContext):
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG, ctx.np, ctx.plt, ctx.io, ctx.mpl
-import dataclasses
-@dataclasses.dataclass
-class StatsContext:
-    since_ts: int
-    _np: Any
-    _plt: Any
-    _io: Any
-    _mpl: Any = None
-    defaultdict: Any = None
-    HEAT: Any = None
-    _dt: Any = None
-def _generate_activity_clock(ctx: StatsContext):
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx._mpl
-    HEAT: 'Any'
-    _np: 'Any'
-    _plt: 'Any'
-    _io: 'Any'
-    _mpl: 'Any' = None
-    defaultdict: 'Any' = None
-    _dt: 'Any' = None
-def _generate_activity_clock(ctx):
+    # Модули берём по именам полей ChartContext (np/plt/io/mpl, без
+    # подчёркивания). Подчёркивание — префикс локальных имён внутри тела,
+    # а не имя поля контекста; ctx._np роняло функцию с AttributeError.
     cur, board_id, since_90, BG, FG = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG
-    _np, _plt, _io, _mpl = ctx._np, ctx._plt, ctx._io, ctx._mpl
-    HEAT: object
-    _np: object
-    _plt: object
-    _io: object
-    _mpl: object
-    _dt: object
-    defaultdict: object
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, _mpl = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx._mpl
+    _np, _plt, _io, _mpl = ctx.np, ctx.plt, ctx.io, ctx.mpl
     cur.execute("""
         SELECT CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
                COUNT(*) as cnt
@@ -7649,13 +7870,8 @@ def _generate_activity_clock(ctx):
     return buf.getvalue()
 
 def _generate_ridge_plot(ctx: ChartContext):
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG, ctx.np, ctx.plt, ctx.io, ctx.defaultdict
-def _generate_ridge_plot(ctx: StatsContext):
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx.defaultdict
-def _generate_ridge_plot(ctx):
     cur, board_id, since_90, BG, FG = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG
-    _np, _plt, _io, defaultdict = ctx._np, ctx._plt, ctx._io, ctx.defaultdict
-    cur, board_id, since_90, BG, FG, _np, _plt, _io, defaultdict = ctx.cur, ctx.board_id, ctx.since_90, ctx.BG, ctx.FG, ctx._np, ctx._plt, ctx._io, ctx.defaultdict
+    _np, _plt, _io, defaultdict = ctx.np, ctx.plt, ctx.io, ctx.defaultdict
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER),
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER),
@@ -7705,13 +7921,8 @@ def _generate_ridge_plot(ctx):
     return buf2.getvalue()
 
 def _generate_weekday_heatmap(ctx: ChartContext):
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT, ctx.np, ctx.plt, ctx.io
-def _generate_weekday_heatmap(ctx: StatsContext):
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io
-def _generate_weekday_heatmap(ctx):
     cur, board_id, since_180, BG, FG, HEAT = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT
-    _np, _plt, _io = ctx._np, ctx._plt, ctx._io
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io
+    _np, _plt, _io = ctx.np, ctx.plt, ctx.io
     cur.execute("""
         SELECT CAST(strftime('%w', timestamp,'unixepoch','localtime') AS INTEGER) as dow,
                CAST(strftime('%H', timestamp,'unixepoch','localtime') AS INTEGER) as hr,
@@ -7746,13 +7957,8 @@ def _generate_weekday_heatmap(ctx):
     return buf3.getvalue()
 
 def _generate_calendar_heatmap(ctx: ChartContext):
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT, ctx.np, ctx.plt, ctx.io, ctx.dt
-def _generate_calendar_heatmap(ctx: StatsContext):
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt = ctx.cur, ctx.board_id, ctx.since_ts, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io, ctx._dt
-def _generate_calendar_heatmap(ctx):
     cur, board_id, since_180, BG, FG, HEAT = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT
-    _np, _plt, _io, _dt = ctx._np, ctx._plt, ctx._io, ctx._dt
-    cur, board_id, since_180, BG, FG, HEAT, _np, _plt, _io, _dt = ctx.cur, ctx.board_id, ctx.since_180, ctx.BG, ctx.FG, ctx.HEAT, ctx._np, ctx._plt, ctx._io, ctx._dt
+    _np, _plt, _io, _dt = ctx.np, ctx.plt, ctx.io, ctx.dt
     cur.execute("""
         SELECT date(timestamp,'unixepoch','localtime') as day, COUNT(*)
         FROM Posts WHERE board_id=? AND timestamp > ?
@@ -7812,6 +8018,17 @@ def _generate_calendar_heatmap(ctx):
 
 def _generate_stats_charts(board_id: str) -> list[bytes]:
     """Generate 4 activity charts for board_id. Returns list of PNG bytes."""
+    # rcParams.update ниже трогает ГЛОБАЛЬНОЕ состояние pyplot, а функция
+    # вызывается через run_in_executor(None, ...). См. common/chart_lock.py.
+    try:
+        with matplotlib_guard():
+            return _generate_stats_charts_locked(board_id)
+    except ChartLockTimeout as e:
+        print(f"⛔ Графики /stats не построены: {e}")
+        return []
+
+
+def _generate_stats_charts_locked(board_id: str) -> list[bytes]:
     import io as _io
     import sqlite3 as _sqlite3
     import numpy as _np
@@ -7832,51 +8049,64 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
     import os
     db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvach_bot.db')
     con = _sqlite3.connect(db_path)
-    cur = con.cursor()
+    try:
+        cur = con.cursor()
 
-    import time as _time_module
-    since_90 = int(_time_module.time()) - 90 * 86400
-    since_180 = int(_time_module.time()) - 180 * 86400
-    bufs = []
+        import time as _time_module
+        since_90 = int(_time_module.time()) - 90 * 86400
+        since_180 = int(_time_module.time()) - 180 * 86400
+        bufs = []
 
-    HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
+        HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
 
-    ctx = ChartContext(
-        cur=cur,
-        board_id=board_id,
-        since_90=since_90,
-        since_180=since_180,
-        BG=BG,
-        FG=FG,
-        HEAT=HEAT,
-        np=_np,
-        plt=_plt,
-        io=_io,
-        mpl=_mpl,
-        defaultdict=defaultdict,
-        dt=_dt,
-    )
+        ctx = ChartContext(
+            cur=cur,
+            board_id=board_id,
+            since_90=since_90,
+            since_180=since_180,
+            BG=BG,
+            FG=FG,
+            HEAT=HEAT,
+            np=_np,
+            plt=_plt,
+            io=_io,
+            mpl=_mpl,
+            defaultdict=defaultdict,
+            dt=_dt,
+        )
 
-    activity_clock = _generate_activity_clock(ctx)
-    if not activity_clock:
+        activity_clock = _generate_activity_clock(ctx)
+        if not activity_clock:
+            return []
+        bufs.append(activity_clock)
+
+        ridge_plot = _generate_ridge_plot(ctx)
+        if ridge_plot:
+            bufs.append(ridge_plot)
+
+        heatmap = _generate_weekday_heatmap(ctx)
+        if heatmap:
+            bufs.append(heatmap)
+
+        calendar = _generate_calendar_heatmap(ctx)
+        if calendar:
+            bufs.append(calendar)
+
+        return bufs
+    finally:
+        # Оба ресурса освобождаем безусловно. Раньше con.close() стоял на
+        # двух путях возврата, и любое исключение в генераторе проходило
+        # мимо обоих: соединение с sqlite (и его файловый дескриптор)
+        # утекало на каждом сбое.
         con.close()
-        return []
-    bufs.append(activity_clock)
-
-    ridge_plot = _generate_ridge_plot(ctx)
-    if ridge_plot:
-        bufs.append(ridge_plot)
-
-    heatmap = _generate_weekday_heatmap(ctx)
-    if heatmap:
-        bufs.append(heatmap)
-
-    calendar = _generate_calendar_heatmap(ctx)
-    if calendar:
-        bufs.append(calendar)
-
-    con.close()
-    return bufs
+        # Фигуры matplotlib живут в ГЛОБАЛЬНОМ реестре pyplot, а не в
+        # локальной переменной: незакрытая фигура не собирается сборщиком
+        # мусора и держит память до конца процесса. Каждый генератор
+        # закрывает свою, но только если дошёл до конца — сбой между
+        # созданием фигуры и close() оставлял её висеть навсегда.
+        # close('all') безопасен: вся функция идёт под matplotlib_guard(),
+        # так что чужих фигур в этот момент в процессе быть не может.
+        _plt.close('all')
 
 
 _stats_cooldown_tracker = {}
@@ -8084,39 +8314,42 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
             row = await c.fetchone()
             op_bal = row[0] if row and row[0] is not None else 0
 
-        # Проверяем, что дуэль все еще в списке
+        # Ответ юзеру откладываем до выхода из лока: db_lock сериализует ВЕСЬ
+        # доступ к базе в процессе, и держать его на время сетевого вызова
+        # Telegram — значит остановить создание постов и любые запросы во всём
+        # боте. Решение (проверка балансов, изъятие дуэли из пула и перевод)
+        # целиком остаётся под локом, иначе одну дуэль приняли бы дважды.
+        reject_msg = None
         if challenger_id not in _active_duels:
-            await message.answer("⚔️ Эта дуэль уже была принята или истекла.")
-            return
-            
-        duel = _active_duels.pop(challenger_id)
-        amount = duel["amount"]
+            reject_msg = "⚔️ Эта дуэль уже была принята или истекла."
+        else:
+            duel = _active_duels.pop(challenger_id)
+            amount = duel["amount"]
+            if ch_bal < amount:
+                reject_msg = f"⚔️ Вызывающий Анон-{challenger_id%10000:04d} уже не потянет ставку — слился."
+            elif op_bal < amount:
+                # Возвращаем дуэль обратно в пул
+                _active_duels[challenger_id] = duel
+                reject_msg = f"❌ У тебя недостаточно бабок. Нужно {amount} RUB, есть {int(op_bal)}."
+            else:
+                import random
+                winner_id = random.choice([challenger_id, user_id])
+                loser_id  = challenger_id if winner_id == user_id else user_id
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
+                    (winner_id, board_id, amount, amount)
+                )
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?",
+                    (loser_id, board_id, -amount, amount)
+                )
+                await db.commit()
 
-        if ch_bal < amount:
-            await message.answer(f"⚔️ Вызывающий Анон-{challenger_id%10000:04d} уже не потянет ставку — слился.")
-            return
-        if op_bal < amount:
-            # Возвращаем дуэль обратно в пул
-            _active_duels[challenger_id] = duel
-            await message.answer(f"❌ У тебя недостаточно бабок. Нужно {amount} RUB, есть {int(op_bal)}.")
-            return
-
-        # Рандом
-        import random
-        winner_id = random.choice([challenger_id, user_id])
-        loser_id  = challenger_id if winner_id == user_id else user_id
-
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
-            (winner_id, board_id, amount, amount)
-        )
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?",
-            (loser_id, board_id, -amount, amount)
-        )
-        await db.commit()
+    if reject_msg is not None:
+        await message.answer(reject_msg)
+        return
 
     w_tag = f"Анон-{winner_id%10000:04d}"
     l_tag = f"Анон-{loser_id%10000:04d}"
@@ -8236,15 +8469,15 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
         await message.answer("⚠️ Не спамь вызовами дуэлей. Подожди 10 секунд.")
         return
 
-    # Проверяем баланс под локом
+    # Проверяем баланс под локом; ответ юзеру — уже без него, db_lock
+    # сериализует весь доступ к базе в процессе.
     async with db_lock:
         async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
             row = await c.fetchone()
             bal = row[0] if row and row[0] is not None else 0
-
-        if bal < amount:
-            await message.answer(f"❌ Не хватает бабок. Ставка {amount} RUB, у тебя {int(bal)} RUB.")
-            return
+    if bal < amount:
+        await message.answer(f"❌ Не хватает бабок. Ставка {amount} RUB, у тебя {int(bal)} RUB.")
+        return
 
     # Записываем время последнего вызова
     _duel_cooldowns[user_id] = now
@@ -9441,12 +9674,15 @@ async def cmd_global_unpin(message: types.Message, board_id: str | None, stream:
     await update_board_settings(board_id, {'active_pin': None})
     target_post_num = None
     if message.reply_to_message:
+        # Под локом только чтение карты message_to_post. Запрос к БД (фолбэк,
+        # когда пост уже выгружен из RAM) вынесен наружу: раньше он выполнялся
+        # удерживая storage_lock.
         async with storage_lock:
             key = (message.chat.id, message.reply_to_message.message_id)
             target_post_num = message_to_post.get(key)
-            if not target_post_num:
-                 post_info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
-                 if post_info: target_post_num = post_info[0]
+        if not target_post_num:
+            post_info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
+            if post_info: target_post_num = post_info[0]
     else:
         target_post_num = old_pin
     if not target_post_num:
@@ -9866,26 +10102,138 @@ def get_board_id(telegram_object: types.Message | types.CallbackQuery) -> str | 
         return TOKEN_TO_BOARD_MAP.get(bot_token)
     except AttributeError:
         return None
-def _sync_save_graph_stats(data_to_save: dict):
+GRAPH_STATS_PATH = "graph.json"
+GRAPH_STATS_BACKUP_PATH = "graph.json.bak"
+GRAPH_STATS_RETENTION_DAYS = 90  # /graph принимает максимум 30d, держим тройной запас
 
+
+def _sync_save_graph_stats(data_to_save: dict) -> bool:
+    """
+    Атомарно сохраняет статистику графика на диск.
+
+    Пишем во временный файл в той же директории, фсинкаем и только потом
+    подменяем боевой через os.replace (атомарен на Windows и POSIX).
+    Так внезапный SIGINT от memory_restarter не может оставить обрезанный
+    graph.json. Предыдущая удачная версия сохраняется в .bak.
+    """
+    tmp_path = ""
     try:
-        with open("graph.json", 'w', encoding='utf-8') as f:
+        directory = os.path.dirname(os.path.abspath(GRAPH_STATS_PATH))
+        fd, tmp_path = tempfile.mkstemp(prefix=".graph_", suffix=".tmp", dir=directory)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(data_to_save, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+
+        # Ротация бэкапа перед подменой: если новый файл окажется плохим,
+        # load_graph_stats поднимет предыдущий.
+        if os.path.exists(GRAPH_STATS_PATH):
+            try:
+                shutil.copyfile(GRAPH_STATS_PATH, GRAPH_STATS_BACKUP_PATH)
+            except OSError as e:
+                print(f"⚠️ Не удалось обновить {GRAPH_STATS_BACKUP_PATH}: {e}")
+
+        os.replace(tmp_path, GRAPH_STATS_PATH)
+        tmp_path = ""
         return True
     except Exception as e:
         print(f"⛔ Ошибка в потоке сохранения graph.json: {e}")
         return False
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+def _coerce_graph_stats(raw) -> dict:
+    """
+    Приводит загруженный JSON к ожидаемой форме {board_id: {iso_ts: int}}.
+
+    Файл могли отредактировать руками или он мог прийти из старой версии,
+    поэтому не доверяем структуре: _prepare_graph_data и graph_data_collector
+    падают на любом не-dict значении.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    cleaned = {}
+    for board_id, series in raw.items():
+        if not isinstance(board_id, str) or not isinstance(series, dict):
+            continue
+        board_series = {}
+        for ts_key, count in series.items():
+            if not isinstance(ts_key, str):
+                continue
+            if isinstance(count, bool) or not isinstance(count, (int, float)):
+                continue
+            board_series[ts_key] = int(count)
+        if board_series:
+            cleaned[board_id] = board_series
+    return cleaned
+
+
+def _prune_graph_stats(data: dict, retention_days: int = GRAPH_STATS_RETENTION_DAYS) -> int:
+    """Выбрасывает точки старше retention_days. Возвращает число удалённых."""
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    removed = 0
+    for board_id in list(data.keys()):
+        series = data[board_id]
+        for ts_key in list(series.keys()):
+            try:
+                point_dt = datetime.fromisoformat(ts_key)
+            except ValueError:
+                # Нераспознаваемый ключ — он всё равно уронит pd.to_datetime
+                series.pop(ts_key, None)
+                removed += 1
+                continue
+            if point_dt.tzinfo is None:
+                point_dt = point_dt.replace(tzinfo=UTC)
+            if point_dt < cutoff:
+                series.pop(ts_key, None)
+                removed += 1
+        if not series:
+            data.pop(board_id, None)
+    return removed
+
+
+def _report_graph_save_result(future) -> None:
+    """Callback для run_in_executor: не даём ошибке записи утонуть без следа."""
+    try:
+        if future.result() is False:
+            print("⚠️ graph.json не сохранён (см. ошибку выше), данные остались только в RAM.")
+    except Exception as e:
+        print(f"⛔ Поток сохранения graph.json упал: {type(e).__name__}: {e}")
+
+
 def load_graph_stats():
 
     global graph_stats
-    if os.path.exists("graph.json"):
+    for path, label in ((GRAPH_STATS_PATH, "graph.json"), (GRAPH_STATS_BACKUP_PATH, "graph.json.bak")):
+        if not os.path.exists(path):
+            continue
         try:
-            with open("graph.json", 'r', encoding='utf-8') as f:
-                graph_stats = json.load(f)
-            print(f"✅ Статистика для графика (graph.json) загружена.")
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"⚠️ Не удалось загрузить graph.json: {e}. Файл будет создан заново.")
-            graph_stats = {}
+            with open(path, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+            print(f"⚠️ Не удалось прочитать {label}: {type(e).__name__}: {e}")
+            continue
+
+        loaded = _coerce_graph_stats(raw)
+        if not loaded and raw:
+            print(f"⚠️ В {label} нет ни одной валидной серии "
+                  f"(корень: {type(raw).__name__}), пропускаю файл.")
+            continue
+
+        dropped = _prune_graph_stats(loaded)
+        graph_stats = loaded
+        points = sum(len(series) for series in loaded.values())
+        suffix = f", отброшено {dropped} устаревших точек" if dropped else ""
+        print(f"✅ Статистика для графика ({label}) загружена: {len(loaded)} досок, {points} точек{suffix}.")
+        return
+
+    print("ℹ️ graph.json отсутствует или повреждён — статистика графика начнётся с нуля.")
+    graph_stats = {}
 async def graph_data_collector():
     """
     Фоновая задача, которая раз в час собирает статистику постов
@@ -9919,9 +10267,19 @@ async def graph_data_collector():
             for board_id, count in posts_per_hour.items():
                 if count > 0:
                     graph_stats.setdefault(board_id, {})[timestamp_key] = count
-            print(f"📊 Статистика для графика собрана за {timestamp_key}. Активные доски: {list(posts_per_hour.keys())}")
-            # Сохраняем на диск в фоновом потоке
-            asyncio.get_running_loop().run_in_executor(save_executor, _sync_save_graph_stats, graph_stats.copy())
+            dropped = _prune_graph_stats(graph_stats)
+            pruned_note = f", подрезано {dropped} точек старше {GRAPH_STATS_RETENTION_DAYS}д" if dropped else ""
+            print(f"📊 Статистика для графика собрана за {timestamp_key}. Активные доски: {list(posts_per_hour.keys())}{pruned_note}")
+
+            # Сохраняем на диск в фоновом потоке.
+            # graph_stats.copy() был поверхностным: поток сериализовал те же вложенные
+            # dict'ы, которые здесь мутируются -> "dict changed size during iteration".
+            # Снимаем полноценный снапшот и логируем провал записи, а не глотаем его.
+            snapshot = {board_id: dict(series) for board_id, series in graph_stats.items()}
+            save_future = asyncio.get_running_loop().run_in_executor(
+                save_executor, _sync_save_graph_stats, snapshot
+            )
+            save_future.add_done_callback(_report_graph_save_result)
         except asyncio.CancelledError:
             print("ℹ️ Сборщик статистики для графика остановлен.")
             break
@@ -9998,7 +10356,19 @@ def generate_statistics_graph(board_id: str, days: int) -> bytes | None:
     if not GRAPH_LIBS_AVAILABLE:
         print("⛔ Зависимости для графиков (pandas, matplotlib) не установлены.")
         return None
-    plt.close('all') 
+    # Крутится в дефолтном пуле потоков (до 32 воркеров), а plt.style.use ниже
+    # заменяет ГЛОБАЛЬНЫЕ rcParams. Без замка два параллельных /graph рисовали
+    # друг другу чужую тему. См. common/chart_lock.py.
+    try:
+        with matplotlib_guard():
+            return _generate_statistics_graph_locked(board_id, days)
+    except ChartLockTimeout as e:
+        print(f"⛔ График не построен: {e}")
+        return None
+
+
+def _generate_statistics_graph_locked(board_id: str, days: int) -> bytes | None:
+    plt.close('all')
     try:
         df_resampled = _prepare_graph_data(board_id, days)
         if df_resampled is None:
@@ -10714,10 +11084,19 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
             'board_id': board_id
         })
 
+@dp.message(Command("roast", "prozharka", "прожарка"))
 async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    🔥 Прожарка борды нейросетью.
+
+    Функция была написана полностью — кулдаун, сбор последних 40 постов за
+    2 часа, трёхъязычные промпты, прогресс-сообщение, обработка ошибок — но
+    у неё отсутствовал декоратор, поэтому команда не регистрировалась и была
+    недостижима. При этом /help её пользователям обещал.
+    """
     if not board_id:
         return
-        
+
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     b_data = board_data.get(board_id)
     if not b_data:
@@ -11159,23 +11538,29 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     now_ts = time.time()
+    # Выделенного лока у /summarize нет, поэтому storage_lock оставлен, но сжат
+    # до самого решения: раньше внутри него шли два сетевых вызова Telegram.
+    remaining = 0
     async with storage_lock:
         last_usage = b_data.get('last_summarize_time', 0)
-        if now_ts - last_usage < SUMMARIZE_COOLDOWN:
+        on_cooldown = now_ts - last_usage < SUMMARIZE_COOLDOWN
+        if on_cooldown:
             remaining = SUMMARIZE_COOLDOWN - (now_ts - last_usage)
-            if lang == 'en':
-                cooldown_text = f"⏳ Command is on cooldown. Please wait {int(remaining)} seconds."
-            elif lang == 'jp':
-                cooldown_text = f"⏳ コマンドはクールダウン中です。あと {int(remaining)} 秒お待ちください。"
-            else:
-                cooldown_text = f"⏳ Команда на кулдауне. Подождите еще {int(remaining)} сек."
-            try:
-                await message.answer(cooldown_text)
-                await message.delete()
-            except Exception:
-                pass
-            return
-        b_data['last_summarize_time'] = time.time()
+        else:
+            b_data['last_summarize_time'] = time.time()
+    if on_cooldown:
+        if lang == 'en':
+            cooldown_text = f"⏳ Command is on cooldown. Please wait {int(remaining)} seconds."
+        elif lang == 'jp':
+            cooldown_text = f"⏳ コマンドはクールダウン中です。あと {int(remaining)} 秒お待ちください。"
+        else:
+            cooldown_text = f"⏳ Команда на кулдауне. Подождите еще {int(remaining)} сек."
+        try:
+            await message.answer(cooldown_text)
+            await message.delete()
+        except Exception:
+            pass
+        return
     thread_id = None
     thread_info = {}
 
@@ -11206,7 +11591,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     is_blat = None
     is_warhammer = None
     if message.text:
-        txt_l = message.text.lower()
+        txt_l = (message.text or message.caption or "").lower()
         if any(term in txt_l for term in ['blat', 'блат', 'гоп', 'гопник', 'пацанский', 'ауе', 'ауешка', 'patsan']):
             is_blat = True
         elif any(term in txt_l for term in ['wh40k', 'waha', 'warhammer', 'вархаммер', 'инквизиция']):
@@ -11524,7 +11909,7 @@ async def cmd_search(message: types.Message, board_id: str | None, stream: str =
     if not board_id: return
     board_data[board_id]
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    query = message.text.split(maxsplit=1)
+    query = (message.text or message.caption or "").split(maxsplit=1)
     if len(query) < 2 or not query[1].strip():
         if lang == 'en':
             txt = "Usage: <code>/search &lt;text&gt;</code>"
@@ -11575,18 +11960,19 @@ async def cmd_airdrop(message: Message, board_id: str | None):
         
         users_to_fix = [r[0] for r in users_to_fix_rows]
 
-        if not users_to_fix:
-            await message.answer("🤷‍♂️ У всех и так есть бабки, эирдроп не нужен.")
-            return
+        if users_to_fix:
+            updates = [(random.randint(8, 15), uid) for uid in users_to_fix]
+            # Начисляем только в ОДНУ (любую) существующую запись юзера, чтобы избежать дублей
+            await db.executemany("""
+                UPDATE Users SET balance = ?
+                WHERE rowid = (SELECT rowid FROM Users WHERE user_id = ? LIMIT 1)
+            """, updates)
+            await db.commit()
 
-        updates = [(random.randint(8, 15), uid) for uid in users_to_fix]
-        # Начисляем только в ОДНУ (любую) существующую запись юзера, чтобы избежать дублей
-        await db.executemany("""
-            UPDATE Users SET balance = ?
-            WHERE rowid = (SELECT rowid FROM Users WHERE user_id = ? LIMIT 1)
-        """, updates)
-        await db.commit()
-        
+    # Ответ юзеру за пределами db_lock: он сериализует весь доступ к базе.
+    if not users_to_fix:
+        await message.answer("🤷‍♂️ У всех и так есть бабки, эирдроп не нужен.")
+        return
     await message.answer(f"🚀 <b>ЭИРДРОП ЗАВЕРШЕН!</b>\nНачислил бабки {len(users_to_fix)} нищим анонам.")
 @dp.callback_query(F.data == "show_active_threads")
 async def cq_show_active_threads(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
@@ -11635,15 +12021,21 @@ async def cmd_tag_cloud(message: types.Message, board_id: str | None = None, str
     Выводит облако тегов медиафайлов из FileRegistry с кнопками просмотра.
     """
     try:
-        args = message.text.split(maxsplit=1)
+        args = (message.text or message.caption or "").split(maxsplit=1)
         if len(args) > 1 and not args[1].startswith("-"):
             target_tag = args[1].strip().lower().lstrip("#")
             await show_tagged_photos_gallery(message, target_tag, offset=0)
             return
 
-        async with aiosqlite.connect("dvach_bot.db") as db:
-            async with db.execute("SELECT tags FROM FileRegistry WHERE tags IS NOT NULL AND tags != '' ORDER BY created_at DESC LIMIT 500;") as cursor:
-                rows = await cursor.fetchall()
+        # Через общий пул. Раньше здесь было aiosqlite.connect("dvach_bot.db"),
+        # но aiosqlite в main.py не импортирован ВООБЩЕ — на этой строке
+        # вылетал NameError, его глотал except ниже, и команда всегда
+        # отвечала «Не удалось загрузить облако тегов». Заодно уходит
+        # относительный путь (зависел от рабочего каталога) и второе
+        # соединение в обход настроек пула.
+        db = await get_pool()
+        async with db.execute("SELECT tags FROM FileRegistry WHERE tags IS NOT NULL AND tags != '' ORDER BY created_at DESC LIMIT 500;") as cursor:
+            rows = await cursor.fetchall()
 
         if not rows:
             await message.answer("🏷️ Теги медиафайлов пока не сгенерированы. Отправьте несколько картинок в чат!")
@@ -11685,16 +12077,18 @@ async def cmd_tag_cloud(message: types.Message, board_id: str | None = None, str
 
 async def show_tagged_photos_gallery(event: types.Message | types.CallbackQuery, tag_name: str, offset: int = 0):
     try:
-        async with aiosqlite.connect("dvach_bot.db") as db:
-            async with db.execute(
-                "SELECT file_id, thumbnail_id, tags FROM FileRegistry WHERE tags LIKE ? ORDER BY created_at DESC LIMIT 10 OFFSET ?;",
-                (f"%{tag_name}%", offset)
-            ) as cursor:
-                files = await cursor.fetchall()
-            
-            async with db.execute("SELECT COUNT(*) FROM FileRegistry WHERE tags LIKE ?;", (f"%{tag_name}%",)) as cursor:
-                total_row = await cursor.fetchone()
-                total_count = total_row[0] if total_row else 0
+        # Через общий пул — та же причина, что и в cmd_tag_cloud: aiosqlite
+        # в main.py не импортирован, здесь был второй NameError.
+        db = await get_pool()
+        async with db.execute(
+            "SELECT file_id, thumbnail_id, tags FROM FileRegistry WHERE tags LIKE ? ORDER BY created_at DESC LIMIT 10 OFFSET ?;",
+            (f"%{tag_name}%", offset)
+        ) as cursor:
+            files = await cursor.fetchall()
+
+        async with db.execute("SELECT COUNT(*) FROM FileRegistry WHERE tags LIKE ?;", (f"%{tag_name}%",)) as cursor:
+            total_row = await cursor.fetchone()
+            total_count = total_row[0] if total_row else 0
 
         if not files:
             text = f"🏷️ По тегу <code>#{tag_name}</code> пикчи не найдены."
@@ -12202,22 +12596,28 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
     )
     if not pnum: return
     recipients = None
+    # Под локом только то, что он и должен охранять. Проверка «режим ещё
+    # активен» и сброс флагов остаются АТОМАРНЫМИ — иначе две задачи отключения
+    # одного режима отработали бы дважды. А delete_post_by_num и format_header
+    # это обращения к БД: раньше они выполнялись УДЕРЖИВАЯ storage_lock, то есть
+    # фоновая задача блокировала доставку и реакции на всех досках на время
+    # двух запросов к базе.
     async with storage_lock:
         b_data = board_data[board_id]
-        if not b_data.get(mode_to_disable, False):
-            await delete_post_by_num(pnum)
-            return
-        for mode in all_modes:
-            b_data[mode] = False
-        b_data['active_mode_task'] = None
-        header = await format_header(board_id, pnum)
-        if board_id == 'int':
-            prefix = "### ADMIN ###"
-        else:
-            prefix = "### Админ ###"
-        content['header'] = f"{prefix}\n{header}"
+        mode_was_active = bool(b_data.get(mode_to_disable, False))
+        if mode_was_active:
+            for mode in all_modes:
+                b_data[mode] = False
+            b_data['active_mode_task'] = None
+            recipients = b_data['users']['active']
+    if not mode_was_active:
+        await delete_post_by_num(pnum)
+        return
+    header = await format_header(board_id, pnum)
+    prefix = "### ADMIN ###" if board_id == 'int' else "### Админ ###"
+    content['header'] = f"{prefix}\n{header}"
+    async with storage_lock:
         messages_storage[pnum] = {'author_id': 0, 'timestamp': now_dt, 'content': content, 'board_id': board_id}
-        recipients = b_data['users']['active']
     settings_updates = {mode: False for mode in all_modes}
     await update_board_settings(board_id, settings_updates)
     await update_post_content(pnum, content)
@@ -12393,16 +12793,20 @@ async def cmd_active(message: types.Message, board_id: str | None, stream: str =
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     INFO_CMD_COOLDOWN = 30 
+    # storage_lock убран как ложная зависимость: кулдаун лежит в board_data, а
+    # не в messages_storage. Взаимное исключение даёт info_cmd_lock, внутри
+    # которого нет ни одного await — проверка и запись времени атомарны.
     async with info_cmd_lock:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            current_time = time.time()
-            last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
-            if current_time - last_usage < INFO_CMD_COOLDOWN:
-                try: await message.delete()
-                except Exception: pass
-                return
+        b_data = board_data[board_id]
+        current_time = time.time()
+        last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
+        on_cooldown = current_time - last_usage < INFO_CMD_COOLDOWN
+        if not on_cooldown:
             b_data.setdefault('last_info_command_time', {})[user_id] = current_time
+    if on_cooldown:
+        try: await message.delete()
+        except Exception: pass
+        return
     day_ago = datetime.now(UTC) - timedelta(hours=24)
     timestamps_for_analysis = []
     async with storage_lock:
@@ -12454,20 +12858,25 @@ async def cmd_generate(message: types.Message, board_id: str | None, stream: str
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     COOLDOWN_SECONDS = 20
+    # storage_lock убран: кулдаун лежит в board_data, взаимное исключение уже
+    # даёт generate_locks[user_id]. Ответ юзеру — за пределами лока.
+    remaining = 0
     async with generate_locks[user_id]:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            last_usage = b_data.get('last_generate_time', {}).get(user_id, 0)
-            current_time = time.time()
-            if current_time - last_usage < COOLDOWN_SECONDS:
-                remaining = int(COOLDOWN_SECONDS - (current_time - last_usage))
-                if lang == 'en': txt = f"⏳ Please wait {remaining} more seconds."
-                elif lang == 'jp': txt = f"⏳ あと {remaining} 秒待ってください。"
-                else: txt = f"⏳ Подожди еще {remaining} сек."
-                try: await message.answer(txt)
-                except (TelegramBadRequest, TelegramForbiddenError): pass
-                return
+        b_data = board_data[board_id]
+        last_usage = b_data.get('last_generate_time', {}).get(user_id, 0)
+        current_time = time.time()
+        on_cooldown = current_time - last_usage < COOLDOWN_SECONDS
+        if on_cooldown:
+            remaining = int(COOLDOWN_SECONDS - (current_time - last_usage))
+        else:
             b_data.setdefault('last_generate_time', {})[user_id] = current_time
+    if on_cooldown:
+        if lang == 'en': txt = f"⏳ Please wait {remaining} more seconds."
+        elif lang == 'jp': txt = f"⏳ あと {remaining} 秒待ってください。"
+        else: txt = f"⏳ Подожди еще {remaining} сек."
+        try: await message.answer(txt)
+        except (TelegramBadRequest, TelegramForbiddenError): pass
+        return
     full_command_text = message.text or ""
     text_to_generate = ""
     command_prefix = "/generate "
@@ -12573,26 +12982,31 @@ async def cmd_graph(message: types.Message, board_id: str | None, stream: str = 
         except Exception: pass
         return
     INFO_CMD_COOLDOWN = 60
+    # storage_lock убран как ложная зависимость: кулдаун в board_data, а лок
+    # защищает messages_storage. Исключение уже даёт info_cmd_lock.
+    remaining = 0
     async with info_cmd_lock:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            current_time = time.time()
-            last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
-            if current_time - last_usage < INFO_CMD_COOLDOWN:
-                remaining = int(INFO_CMD_COOLDOWN - (current_time - last_usage))
-                if lang == 'en':
-                    cooldown_text = f"⏳ You can use this command in {remaining} seconds."
-                elif lang == 'jp':
-                    cooldown_text = f"⏳ このコマンドはあと {remaining} 秒後に使用できます。"
-                else:
-                    cooldown_text = f"⏳ Команду можно использовать через {remaining} сек."
-                try:
-                    sent_msg = await message.answer(cooldown_text)
-                    spawn_task(delete_message_after_delay(sent_msg, 5))
-                    await message.delete()
-                except Exception: pass
-                return
+        b_data = board_data[board_id]
+        current_time = time.time()
+        last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
+        on_cooldown = current_time - last_usage < INFO_CMD_COOLDOWN
+        if on_cooldown:
+            remaining = int(INFO_CMD_COOLDOWN - (current_time - last_usage))
+        else:
             b_data.setdefault('last_info_command_time', {})[user_id] = current_time
+    if on_cooldown:
+        if lang == 'en':
+            cooldown_text = f"⏳ You can use this command in {remaining} seconds."
+        elif lang == 'jp':
+            cooldown_text = f"⏳ このコマンドはあと {remaining} 秒後に使用できます。"
+        else:
+            cooldown_text = f"⏳ Команду можно использовать через {remaining} сек."
+        try:
+            sent_msg = await message.answer(cooldown_text)
+            spawn_task(delete_message_after_delay(sent_msg, 5))
+            await message.delete()
+        except Exception: pass
+        return
     args = (message.text or message.caption or "").split()
     days = 7  # По умолчанию 7 дней
     if len(args) > 1:
@@ -12670,7 +13084,7 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
         except (TelegramForbiddenError, TelegramBadRequest):
             pass
         return
-    command_args = message.text.split(maxsplit=1)
+    command_args = (message.text or message.caption or "").split(maxsplit=1)
     if len(command_args) > 1 and command_args[1].strip():
         raw_html_text = message.html_text.split(maxsplit=1)[1]
         safe_html_text = sanitize_html(raw_html_text)
@@ -12713,19 +13127,24 @@ async def _handle_quick_menu_ruletka(callback, board_id: str, user_id: int, lang
          await callback.message.answer("Roulette data missing.")
          return
     async with roulette_lock:
-         async with storage_lock:
-             b_data = board_data[board_id]
-             last = b_data.get('last_roll_time', {}).get(user_id, 0)
-             if time.time() - last < 60:
-                 if lang == 'en':
-                     cooldown_msg = "⏳ Roulette is on cooldown!"
-                 elif lang == 'jp':
-                     cooldown_msg = "⏳ ルーレットはクールダウン中です！"
-                 else:
-                     cooldown_msg = "⏳ Кулдаун рулетки!"
-                 await callback.message.answer(cooldown_msg)
-                 return
+         # storage_lock убран: кулдаун в board_data, исключение даёт roulette_lock.
+         b_data = board_data[board_id]
+         last = b_data.get('last_roll_time', {}).get(user_id, 0)
+         on_cooldown = time.time() - last < 60
+         if not on_cooldown:
              b_data.setdefault('last_roll_time', {})[user_id] = time.time()
+    if on_cooldown:
+        if lang == 'en':
+            cooldown_msg = "⏳ Roulette is on cooldown!"
+        elif lang == 'jp':
+            cooldown_msg = "⏳ ルーレットはクールダウン中です！"
+        else:
+            cooldown_msg = "⏳ Кулдаун рулетки!"
+        try:
+            await callback.message.answer(cooldown_msg)
+        except (TelegramBadRequest, TelegramForbiddenError):
+            pass
+        return
     event = get_random_event(ROULETTE_EVENTS)
     if event:
         text_for_img = f"[{event.get('id')}]\n\n{event.get('description')}"
@@ -14364,6 +14783,157 @@ async def memory_logger_task():
         except Exception as e:
             print(f"Критическая ошибка в memory_logger_task: {e}")
             await asyncio.sleep(600)
+# Окна хранения для per-user трекеров (секунды).
+# Каждое НАМНОГО больше функционального окна соответствующей проверки,
+# поэтому подрезка физически не может изменить поведение антиспама.
+STALE_TRACKER_TTL = 3600          # для окон в 0.5-60 сек
+STALE_DAILY_TRACKER_TTL = 172800  # для суточных лимитов (окно 86400)
+
+
+def _prune_by_timestamp(mapping: dict, now: float, ttl: float) -> int:
+    """Удаляет ключи из {key: timestamp}, чей timestamp старше ttl."""
+    stale = [k for k, ts in mapping.items() if not isinstance(ts, (int, float)) or now - ts > ttl]
+    for k in stale:
+        mapping.pop(k, None)
+    return len(stale)
+
+
+def _prune_timestamp_sequences(mapping: dict, now: float, ttl: float) -> int:
+    """
+    Удаляет ключи из {key: [ts, ...]} / {key: deque([...])}, где нет ни одной
+    свежей отметки. Элементом может быть как float, так и кортеж (ts, ...).
+    """
+    def _newest(seq) -> float:
+        newest = 0.0
+        for item in seq:
+            ts = item[0] if isinstance(item, tuple) and item else item
+            if isinstance(ts, (int, float)) and ts > newest:
+                newest = float(ts)
+        return newest
+
+    stale = []
+    for key, seq in mapping.items():
+        try:
+            if not seq or now - _newest(seq) > ttl:
+                stale.append(key)
+        except TypeError:
+            stale.append(key)
+    for k in stale:
+        mapping.pop(k, None)
+    return len(stale)
+
+
+def _prune_idle_locks(locks: dict) -> int:
+    """
+    Удаляет незанятые asyncio.Lock.
+
+    Безопасно: неконкурентный `async with lock` не отдаёт управление event loop
+    (Lock.acquire возвращается синхронно, если lock свободен), поэтому у
+    свободного лока без waiters не может быть таска "в процессе захвата".
+    Занятые и ожидаемые локи не трогаем.
+    """
+    stale = []
+    for key, lock in locks.items():
+        try:
+            if not lock.locked() and not getattr(lock, "_waiters", None):
+                stale.append(key)
+        except Exception:
+            continue
+    for k in stale:
+        locks.pop(k, None)
+    return len(stale)
+
+
+def _prune_contextual_reply_tracker(now: float, ttl: float) -> int:
+    """Чистит {(board, user): {'last','window_start','count'}} по самой свежей отметке."""
+    stale = []
+    for key, item in contextual_reply_tracker.items():
+        if not isinstance(item, dict):
+            stale.append(key)
+            continue
+        newest = max(
+            float(item.get("last") or 0.0),
+            float(item.get("window_start") or 0.0),
+        )
+        if now - newest > ttl:
+            stale.append(key)
+    for k in stale:
+        contextual_reply_tracker.pop(k, None)
+    return len(stale)
+
+
+def _prune_shadow_fake_counters() -> int:
+    """
+    Чистит {(board, user): fake_post_num} для юзеров, снятых с шэдоу-мута.
+
+    Времени в записи нет, поэтому единственный корректный критерий —
+    пользователь больше не в shadow_mutes своей доски.
+    """
+    stale = []
+    for key in shadow_fake_post_counters:
+        if not (isinstance(key, tuple) and len(key) == 2):
+            stale.append(key)
+            continue
+        board_id, user_id = key
+        if board_id not in board_data:
+            stale.append(key)
+            continue
+        if user_id not in board_data[board_id].get('shadow_mutes', {}):
+            stale.append(key)
+    for k in stale:
+        shadow_fake_post_counters.pop(k, None)
+    return len(stale)
+
+
+def _sweep_stale_runtime_maps() -> dict[str, int]:
+    """
+    Подрезает per-user словари, которые росли без ограничений.
+
+    Все эти карты попадают в телеметрию (_collect_global_maps_snapshot), но
+    раньше их никто не чистил: на боте с большим оборотом пользователей они
+    держали десятки тысяч мёртвых записей до самого memory_restarter.
+    Синхронная функция без await — прерваться посреди подрезки нельзя.
+    """
+    now = time.time()
+    removed: dict[str, int] = {}
+
+    def _note(name: str, count: int) -> None:
+        if count:
+            removed[name] = count
+
+    for name, mapping in (
+        ("user_last_thread_action", user_last_thread_action),
+        ("reaction_ratelimit", reaction_ratelimit),
+        ("last_poll_creation_time", last_poll_creation_time),
+        ("last_poll_vote_time", last_poll_vote_time),
+        ("user_hourly_image_reset", user_hourly_image_reset),
+    ):
+        _note(name, _prune_by_timestamp(mapping, now, STALE_TRACKER_TTL))
+
+    # Счётчик картинок живёт в паре с меткой сброса — выкидываем осиротевшие.
+    orphan_counts = [uid for uid in user_hourly_image_count if uid not in user_hourly_image_reset]
+    for uid in orphan_counts:
+        user_hourly_image_count.pop(uid, None)
+    _note("user_hourly_image_count", len(orphan_counts))
+
+    for name, mapping in (
+        ("unknown_command_tracker", unknown_command_tracker),
+        ("author_reaction_notify_tracker", author_reaction_notify_tracker),
+        # держит тексты сообщений (ts, board, content) -> самый жирный из трекеров
+        ("cross_board_spam_tracker", cross_board_spam_tracker),
+    ):
+        _note(name, _prune_timestamp_sequences(mapping, now, STALE_TRACKER_TTL))
+
+    _note("contextual_reply_tracker",
+          _prune_contextual_reply_tracker(now, STALE_DAILY_TRACKER_TTL))
+    _note("shadow_fake_post_counters", _prune_shadow_fake_counters())
+
+    for name, locks in (("generate_locks", generate_locks), ("user_spam_locks", user_spam_locks)):
+        _note(name, _prune_idle_locks(locks))
+
+    return removed
+
+
 async def auto_memory_cleaner():
     """
     Фоновая задача для периодической очистки закэшированных данных в глобальных словарях,
@@ -14372,28 +14942,32 @@ async def auto_memory_cleaner():
     while True:
         try:
             await asyncio.sleep(3600)  # Запускаем раз в час
-            
-            cleaned_count = 0
-            
+
             # 1. Очистка stream_cache
             cache_size = len(stream_cache)
             stream_cache.clear()
-            if cache_size > 0:
-                cleaned_count += 1
-                
+
             # 2. Очистка завершенных pending_edit_tasks
             done_tasks = [k for k, t in pending_edit_tasks.items() if t.done()]
             for k in done_tasks:
                 pending_edit_tasks.pop(k, None)
-                cleaned_count += 1
-                
-            if cleaned_count > 0:
-                print(f"🧹 [Memory Cleaner] Очищено {len(done_tasks)} мертвых тасок и кэш стримов ({cache_size}).")
-                
+
+            # 3. Подрезка per-user трекеров, которые росли безгранично
+            removed = _sweep_stale_runtime_maps()
+
+            total_stale = sum(removed.values())
+            if done_tasks or cache_size or total_stale:
+                detail = ", ".join(f"{name}={count}" for name, count in
+                                   sorted(removed.items(), key=lambda kv: kv[1], reverse=True))
+                print(f"🧹 [Memory Cleaner] Мертвых тасок: {len(done_tasks)}, кэш стримов: {cache_size}, "
+                      f"устаревших записей: {total_stale}"
+                      + (f" ({detail})" if detail else ""))
+
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"Ошибка в auto_memory_cleaner: {e}")
+            print(f"Ошибка в auto_memory_cleaner: {type(e).__name__}: {e}")
+            runtime_logger.exception("auto_memory_cleaner_failed")
             await asyncio.sleep(60)
 
 async def runtime_telemetry_task():
@@ -14531,8 +15105,19 @@ async def memory_restarter(bots: list[Bot], healthcheck_site: web.TCPSite | None
             except Exception:
                 private_usage = rss_usage
             mem_usage = max(rss_usage, private_usage)
-        except Exception:
-            break
+        except psutil.NoSuchProcess:
+            # Собственный процесс исчез — мониторить больше нечего.
+            print("ℹ️ Мониторинг памяти остановлен: процесс завершается.")
+            return
+        except Exception as e:
+            # Раньше здесь был `break`: одна транзиентная осечка psutil
+            # (на Windows это регулярные ошибки доступа к хендлу) молча гасила
+            # сторожа. Поднимал его потом _run_background_task, но с
+            # экспоненциальным backoff — до 10 минут без контроля памяти,
+            # то есть без единственного механизма, который успевает сделать
+            # graceful_shutdown с чекпойнтом WAL до того, как процесс убьёт ОС.
+            print(f"⚠️ Не удалось снять метрику памяти ({type(e).__name__}: {e}), повтор через минуту.")
+            continue
         if mem_usage > MEMORY_LIMIT_BYTES:
             print(f"⛔ ПАМЯТЬ ПЕРЕПОЛНЕНА ({mem_usage / 1024**3:.2f} ГБ). АВАРИЙНАЯ ОСТАНОВКА.")
             try:
@@ -15248,7 +15833,7 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
             else: header = "🚫 <b>Скрытые слова:</b>"
             await message.answer(f"{header}\n{words_str}", parse_mode="HTML")
     elif action == 'add':
-        word_part = message.text.split(maxsplit=2)
+        word_part = (message.text or message.caption or "").split(maxsplit=2)
         if len(word_part) < 3:
              err = "Usage: /hide add &lt;word&gt;"
              await message.answer(err)
@@ -15273,7 +15858,7 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
         else: msg = f"✅ Слово '<b>{escape_html(word)}</b>' добавлено в скрытые."
         await message.answer(msg, parse_mode="HTML")
     elif action == 'remove' or action == 'del':
-        word_part = message.text.split(maxsplit=2)
+        word_part = (message.text or message.caption or "").split(maxsplit=2)
         if len(word_part) < 3:
              await message.answer("Usage: /hide remove &lt;word&gt;")
              return
@@ -15506,7 +16091,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
     if not message.reply_to_message:
         await message.answer("❌ Используй /whisper в ответ на сообщение, автору которого хочешь прошептать.")
         return
-    parts = message.text.split(maxsplit=1)
+    parts = (message.text or message.caption or "").split(maxsplit=1)
     if len(parts) < 2:
         await message.answer("❌ Использование: <code>/whisper &lt;текст&gt;</code>", parse_mode="HTML")
         return
@@ -15692,16 +16277,18 @@ async def cmd_board_stats(message: types.Message, board_id: str | None, stream: 
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     INFO_CMD_COOLDOWN = 30
+    # storage_lock убран: кулдаун в board_data, исключение даёт info_cmd_lock.
     async with info_cmd_lock:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            current_time = time.time()
-            last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
-            if current_time - last_usage < INFO_CMD_COOLDOWN:
-                try: await message.delete()
-                except Exception: pass
-                return
+        b_data = board_data[board_id]
+        current_time = time.time()
+        last_usage = b_data.get('last_info_command_time', {}).get(user_id, 0)
+        on_cooldown = current_time - last_usage < INFO_CMD_COOLDOWN
+        if not on_cooldown:
             b_data.setdefault('last_info_command_time', {})[user_id] = current_time
+    if on_cooldown:
+        try: await message.delete()
+        except Exception: pass
+        return
     b_data = board_data[board_id]
     
     wait_txt = "📊 Собираю статистику, вычисляю активность..." if lang != 'en' else "📊 Gathering statistics..."
@@ -16289,18 +16876,20 @@ async def _safe_delete_user_message(message: types.Message):
 async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     current_time = time.time()
+    # storage_lock убран: кулдаун в board_data, исключение даёт deanon_lock.
     async with deanon_lock:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            if current_time - b_data.get('last_deanon_time', 0) < DEANON_COOLDOWN:
-                cooldown_msg = random.choice(DEANON_COOLDOWN_PHRASES)
-                try:
-                    sent_msg = await message.answer(cooldown_msg)
-                    spawn_task(delete_message_after_delay(sent_msg, 5))
-                except Exception: pass
-                await _safe_delete_user_message(message)
-                return
+        b_data = board_data[board_id]
+        on_cooldown = current_time - b_data.get('last_deanon_time', 0) < DEANON_COOLDOWN
+        if not on_cooldown:
             b_data['last_deanon_time'] = current_time
+    if on_cooldown:
+        cooldown_msg = random.choice(DEANON_COOLDOWN_PHRASES)
+        try:
+            sent_msg = await message.answer(cooldown_msg)
+            spawn_task(delete_message_after_delay(sent_msg, 5))
+        except Exception: pass
+        await _safe_delete_user_message(message)
+        return
     lang = 'en' if board_id == 'int' else 'ru'
     if not message.reply_to_message:
         reply_text = "👀 Reply to a message to de-anonymize!" if lang == 'en' else "⚠️ Ответьте на анонимное сообщение юзера, чтобы попытаться узнать автора: <code>/deanon</code>"
@@ -16806,29 +17395,37 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
         except TelegramBadRequest: pass
         return
     response_text = ""
+    # reaction_banned_users живёт в board_data, а storage_lock охраняет
+    # messages_storage — то есть здесь он был ложной зависимостью и при этом
+    # удерживался через ЧЕТЫРЕ обращения к БД (add/remove_reaction_ban и два
+    # log_global_event). Под локом оставлено только само переключение
+    # множества: оно должно быть атомарным, чтобы два админа одновременно не
+    # получили противоположные результаты. Запись в БД — уже без лока.
     async with storage_lock:
-        b_data = board_data[board_id]
-        banned_set = b_data.setdefault('reaction_banned_users', set())
-        if target_id in banned_set:
+        banned_set = board_data[board_id].setdefault('reaction_banned_users', set())
+        now_allowed = target_id in banned_set
+        if now_allowed:
             banned_set.remove(target_id)
-            await remove_reaction_ban(target_id, board_id)
-            await log_global_event('bot', f"🎭 REAC_OK: Админ {message.from_user.id} РАЗРЕШИЛ реакции для {target_id} на /{board_id}/")
-            if lang == 'en':
-                response_text = f"✅ User <code>{target_id}</code> can now use reactions again."
-            elif lang == 'jp':
-                response_text = f"✅ ユーザー <code>{target_id}</code> のリアクション禁止を解除しました。"
-            else:
-                response_text = f"✅ Пользователь <code>{target_id}</code> теперь снова может ставить реакции."
         else:
             banned_set.add(target_id)
-            await add_reaction_ban(target_id, board_id)
-            await log_global_event('bot', f"🎭 REAC_BAN: Админ {message.from_user.id} ЗАПРЕТИЛ реакции для {target_id} на /{board_id}/")
-            if lang == 'en':
-                response_text = f"🚫 User <code>{target_id}</code> is now banned from using reactions."
-            elif lang == 'jp':
-                response_text = f"🚫 ユーザー <code>{target_id}</code> のリアクションを禁止しました。"
-            else:
-                response_text = f"🚫 Пользователю <code>{target_id}</code> теперь запрещено ставить реакции."
+    if now_allowed:
+        await remove_reaction_ban(target_id, board_id)
+        await log_global_event('bot', f"🎭 REAC_OK: Админ {message.from_user.id} РАЗРЕШИЛ реакции для {target_id} на /{board_id}/")
+        if lang == 'en':
+            response_text = f"✅ User <code>{target_id}</code> can now use reactions again."
+        elif lang == 'jp':
+            response_text = f"✅ ユーザー <code>{target_id}</code> のリアクション禁止を解除しました。"
+        else:
+            response_text = f"✅ Пользователь <code>{target_id}</code> теперь снова может ставить реакции."
+    else:
+        await add_reaction_ban(target_id, board_id)
+        await log_global_event('bot', f"🎭 REAC_BAN: Админ {message.from_user.id} ЗАПРЕТИЛ реакции для {target_id} на /{board_id}/")
+        if lang == 'en':
+            response_text = f"🚫 User <code>{target_id}</code> is now banned from using reactions."
+        elif lang == 'jp':
+            response_text = f"🚫 ユーザー <code>{target_id}</code> のリアクションを禁止しました。"
+        else:
+            response_text = f"🚫 Пользователю <code>{target_id}</code> теперь запрещено ставить реакции."
     try:
         await message.answer(response_text, parse_mode="HTML")
         await message.delete()
@@ -16905,7 +17502,7 @@ async def cmd_filter(message: types.Message, board_id: str | None, stream: str =
         return
     b_data = board_data[board_id]
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    parts = message.text.split(maxsplit=2)
+    parts = (message.text or message.caption or "").split(maxsplit=2)
     subcommand = parts[1].lower() if len(parts) > 1 else "help"
     if subcommand == "list":
         spam_words = b_data.get('spam_filter_words', set())
@@ -17540,7 +18137,8 @@ async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str
     args = (message.text or message.caption or "").split()
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
-    elif len(args) > 1 and args[1].isdigit():
+    elif len(args) > 1 and args[1].isdecimal():
+        # isdecimal, не isdigit — см. пояснение в cmd_random_media
         target_id = int(args[1])
 
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -17626,6 +18224,92 @@ async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream:
     )
     await message.answer(response_text)
     await message.delete()
+@dp.message(Command("deletethread", "delthread", "delete_thread"))
+async def cmd_delete_thread(message: Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Удаляет тред: помечает архивным в БД и вычищает из RAM.
+
+    Команда объявлена в админском меню (setup_bot_commands), а рабочая
+    delete_thread_atomic существовала без единого вызова — админ видел
+    /deletethread в меню, но она ничего не делала. Здесь связаны обе части:
+    archive_thread_in_db даёт персистентность (иначе тред вернулся бы после
+    рестарта из таблицы Threads), delete_thread_atomic убирает его из памяти
+    и возвращает читателей на главную.
+    """
+    if not board_id or not is_admin(message.from_user.id, board_id) or board_id not in THREAD_BOARDS:
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+        return
+
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    args = (message.text or message.caption or "").split()[1:]
+    b_data = board_data[board_id]
+    threads_data = b_data.get('threads_data', {})
+
+    # Без аргумента удаляем тред, в котором админ сейчас находится.
+    thread_id = args[0].lstrip('#') if args else None
+    if not thread_id:
+        location = b_data.get('user_state', {}).get(message.from_user.id, {}).get('location', 'main')
+        if location and location != 'main':
+            thread_id = str(location)
+
+    if not thread_id:
+        if lang == 'en':
+            usage = "Usage: <code>/deletethread &lt;thread_id&gt;</code>, or run it inside the thread."
+        elif lang == 'jp':
+            usage = "使用法: <code>/deletethread &lt;thread_id&gt;</code>、またはスレッド内で実行。"
+        else:
+            usage = "Использование: <code>/deletethread &lt;id треда&gt;</code>, либо вызови внутри треда."
+        await message.answer(usage, parse_mode="HTML")
+        return
+
+    thread_info = threads_data.get(thread_id)
+    if not thread_info:
+        if lang == 'en':
+            not_found = f"❌ Thread <code>{escape_html(thread_id)}</code> not found on this board."
+        elif lang == 'jp':
+            not_found = f"❌ スレッド <code>{escape_html(thread_id)}</code> はこの板に存在しません。"
+        else:
+            not_found = f"❌ Тред <code>{escape_html(thread_id)}</code> не найден на этой доске."
+        await message.answer(not_found, parse_mode="HTML")
+        return
+
+    title = thread_info.get('title') or thread_id
+    posts_count = len(thread_info.get('posts', []))
+
+    # Сначала персистентно: если упадём после очистки RAM, тред не должен
+    # «воскреснуть» активным при следующем старте.
+    try:
+        from common.database import archive_thread_in_db
+        await archive_thread_in_db(int(thread_id))
+    except (TypeError, ValueError):
+        print(f"⚠️ [/deletethread] thread_id '{thread_id}' не приводится к int, пропускаю запись в БД.")
+    except Exception as e:
+        print(f"⛔ [/deletethread] Не удалось архивировать тред #{thread_id} в БД: {e}")
+        if lang == 'en':
+            await message.answer("❌ DB error, thread left untouched.")
+        else:
+            await message.answer("❌ Ошибка БД, тред не тронут.")
+        return
+
+    await delete_thread_atomic(
+        message.bot, board_id, thread_id,
+        notify_users=True, initiator_id=message.from_user.id
+    )
+
+    if lang == 'en':
+        done = f"🗑 Thread <b>{escape_html(str(title))}</b> (<code>{escape_html(thread_id)}</code>) deleted, {posts_count} posts purged."
+    elif lang == 'jp':
+        done = f"🗑 スレッド <b>{escape_html(str(title))}</b> (<code>{escape_html(thread_id)}</code>) を削除しました（{posts_count} レス）。"
+    else:
+        done = f"🗑 Тред <b>{escape_html(str(title))}</b> (<code>{escape_html(thread_id)}</code>) удалён, вычищено постов: {posts_count}."
+    await message.answer(done, parse_mode="HTML")
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
 @dp.message(Command("sdel", "swipe"))
 async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -18102,46 +18786,47 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         return
     post_updated = False
     content_for_db = None
+    # Под storage_lock только РЕШЕНИЕ, без сетевых вызовов. Раньше все пять
+    # путей отказа делали callback.answer(), не выходя из лока: при flood-wait
+    # такой вызов держал глобальный storage_lock секундами, а он защищает
+    # messages_storage / post_to_messages / message_to_post — то есть вместе с
+    # ним замирали доставка, реакции и создание постов на всех досках.
+    reject_msg = None
+    clear_markup = False
     async with storage_lock:
         post_data = messages_storage.get(post_num)
         if not post_data or 'content' not in post_data:
-            if lang == 'en': msg = "This poll is outdated and no longer active."
-            elif lang == 'jp': msg = "この投票は古すぎて無効です。"
-            else: msg = "Этот опрос устарел и больше не активен."
-            try:
-                await callback.answer(msg, show_alert=True)
-                await callback.message.edit_reply_markup(reply_markup=None)
-            except (TelegramBadRequest, TelegramForbiddenError):
-                pass
-            return
-        poll_data = post_data['content'].get('poll_data')
-        if not poll_data:
-            try:
-                await callback.answer("Error: Invalid poll data.", show_alert=True)
-            except TelegramBadRequest:
-                pass
-            return
-        if user_id in poll_data.get('voted_users', {}):
-            if lang == 'en': msg = "You have already voted."
-            elif lang == 'jp': msg = "すでに投票済みです。"
-            else: msg = "Вы уже голосовали в этом опросе."
-            try:
-                await callback.answer(msg, show_alert=True)
-            except TelegramBadRequest:
-                pass
-            return
-        option_key = str(option_index)
-        if 0 <= option_index < len(poll_data.get('options', [])):
-            poll_data.setdefault('votes', {}).setdefault(option_key, []).append(user_id)
-            poll_data.setdefault('voted_users', {})[user_id] = option_key
-            post_updated = True
-            content_for_db = post_data['content'].copy()
+            if lang == 'en': reject_msg = "This poll is outdated and no longer active."
+            elif lang == 'jp': reject_msg = "この投票は古すぎて無効です。"
+            else: reject_msg = "Этот опрос устарел и больше не активен."
+            clear_markup = True
         else:
-            try:
-                await callback.answer("Error: Invalid option.", show_alert=True)
-            except TelegramBadRequest:
-                pass
-            return
+            poll_data = post_data['content'].get('poll_data')
+            if not poll_data:
+                reject_msg = "Error: Invalid poll data."
+            elif user_id in poll_data.get('voted_users', {}):
+                if lang == 'en': reject_msg = "You have already voted."
+                elif lang == 'jp': reject_msg = "すでに投票済みです。"
+                else: reject_msg = "Вы уже голосовали в этом опросе."
+            else:
+                option_key = str(option_index)
+                if 0 <= option_index < len(poll_data.get('options', [])):
+                    poll_data.setdefault('votes', {}).setdefault(option_key, []).append(user_id)
+                    poll_data.setdefault('voted_users', {})[user_id] = option_key
+                    post_updated = True
+                    content_for_db = post_data['content'].copy()
+                else:
+                    reject_msg = "Error: Invalid option."
+
+    if reject_msg is not None:
+        try:
+            await callback.answer(reject_msg, show_alert=True)
+            if clear_markup:
+                await callback.message.edit_reply_markup(reply_markup=None)
+        except (TelegramBadRequest, TelegramForbiddenError):
+            pass
+        return
+
     if post_updated:
         if lang == 'en': phrases = POLL_VOTE_SUCCESS_PHRASES_EN
         elif lang == 'jp': phrases = POLL_VOTE_SUCCESS_PHRASES_JP
@@ -18177,23 +18862,30 @@ async def cmd_roll(message: types.Message, board_id: str | None, stream: str = '
         return
     user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    # storage_lock здесь был ложной зависимостью: он защищает messages_storage /
+    # post_to_messages / message_to_post, а кулдаун лежит в board_data, к
+    # которому 111 из 146 обращений в этом файле идут вообще без него.
+    # Взаимное исключение уже даёт roulette_lock. Внутри лока нет ни одного
+    # await, поэтому проверка и запись времени атомарны; ответ юзеру ушёл
+    # наружу, чтобы flood-wait не держал лок рулетки.
     async with roulette_lock:
-        async with storage_lock:
-            b_data = board_data[board_id]
-            current_time = time.time()
-            last_usage = b_data.get('last_roll_time', {}).get(user_id, 0)
-            if current_time - last_usage < 60:
-                if lang == 'en': cooldown_msg = "⏳ Roulette is on cooldown!"
-                elif lang == 'jp': cooldown_msg = "⏳ ルーレットはクールダウン中です！"
-                else: cooldown_msg = random.choice(ROULETTE_COOLDOWN_PHRASES)
-                try:
-                    sent_msg = await message.answer(cooldown_msg)
-                    spawn_task(delete_message_after_delay(sent_msg, 5))
-                except (TelegramBadRequest, TelegramForbiddenError): pass
-                try: await message.delete()
-                except TelegramBadRequest: pass
-                return
+        b_data = board_data[board_id]
+        current_time = time.time()
+        last_usage = b_data.get('last_roll_time', {}).get(user_id, 0)
+        on_cooldown = current_time - last_usage < 60
+        if not on_cooldown:
             b_data.setdefault('last_roll_time', {})[user_id] = current_time
+    if on_cooldown:
+        if lang == 'en': cooldown_msg = "⏳ Roulette is on cooldown!"
+        elif lang == 'jp': cooldown_msg = "⏳ ルーレットはクールダウン中です！"
+        else: cooldown_msg = random.choice(ROULETTE_COOLDOWN_PHRASES)
+        try:
+            sent_msg = await message.answer(cooldown_msg)
+            spawn_task(delete_message_after_delay(sent_msg, 5))
+        except (TelegramBadRequest, TelegramForbiddenError): pass
+        try: await message.delete()
+        except TelegramBadRequest: pass
+        return
     if not ROULETTE_EVENTS:
         if lang == 'en': error_text = "Roulette data is not loaded."
         elif lang == 'jp': error_text = "ルーレットデータが読み込まれていません。"
@@ -18353,60 +19045,9 @@ async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru
             stream=stream
         ))
 
-async def periodic_shop_broadcast():
-    import random
-    while True:
-        # Sleep for 24 hours plus a random offset (0 to 4 hours) to avoid exact daily timing
-        sleep_seconds = 86400 + random.randint(0, 4 * 3600)
-        await asyncio.sleep(sleep_seconds)
-        try:
-            print("🛒 [SHOP BROADCAST] Рассылка рекламы теневого магазина...")
-            shop_text = (
-                "🛒 <b>ТЕНЕВОЙ МАГАЗИН ОБНОВЛЁН</b> 🛒\n\n"
-                "Устал терпеть шитпостеров? Анон бесит тебя своей тупостью?\n"
-                "Заходи в <code>/shop</code> и покупай власть за шекели:\n\n"
-                "🔫 <b>Мут-Ган</b> — выключи клоуна на час.\n"
-                "🚔 <b>Пативэн</b> — отправь неугодного в автозак на 12 часов.\n"
-                "🐒 <b>Кусок говна</b> — обмажь врага ради смеха.\n"
-                "🔪 <b>Заточка</b> — отбери шекели у богатых.\n\n"
-                "🛡️ <i>И не забудь купить Фольгу или Щит, чтобы не стать жертвой.</i>\n\n"
-                "👉 <b>Пиши /shop прямо в чат!</b>"
-            )
-            
-            target_boards = ['thread', 'b']
-            for board_id in target_boards:
-                if board_id not in board_data:
-                    continue
-                b_data = board_data[board_id]
-                recipients = b_data['users']['active'] - b_data['users']['banned']
-                if not recipients:
-                    continue
-                content = {
-                    'type': 'text',
-                    'text': shop_text,
-                    'is_system_message': True,
-                    'archive_allowed': True
-                }
-                pnum = await create_post(board_id=board_id, author_id=0, content=content, timestamp=time.time())
-                if pnum:
-                    header_base = await format_header(board_id, pnum)
-                    content['header'] = f"### BLACK MARKET ###\n{header_base}"
-                    await update_post_content(pnum, content)
-                    async with storage_lock:
-                        messages_storage[pnum] = {
-                            'author_id': 0, 
-                            'timestamp': datetime.datetime.now(datetime.timezone.utc), 
-                            'content': content, 
-                            'board_id': board_id
-                        }
-                    await enqueue_board_message(board_id, {
-                        "recipients": recipients,
-                        "content": content,
-                        "post_num": pnum,
-                        "board_id": board_id
-                    })
-        except Exception as e:
-            print(f"❌ [SHOP BROADCAST] Ошибка рассылки магазина: {e}")
+# Здесь лежала первая из ДВУХ побайтово одинаковых копий
+# periodic_shop_broadcast. Работала только нижняя: имя перекрывалось.
+# Удалена, чтобы правка не ушла в мёртвую копию.
 
 SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
 
@@ -18624,6 +19265,23 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
     media_group_timers[media_group_key] = spawn_task(
         complete_media_group_after_delay(media_group_key, message.bot, delay=1.5)
     )
+def _release_media_group_timer(media_group_key: str) -> None:
+    """
+    Снимает запись таймера альбома, ТОЛЬКО если она принадлежит текущей задаче.
+
+    Каждое новое сообщение альбома отменяет предыдущий таймер и кладёт на его
+    место новый. Отменённая задача не должна снести чужую запись, иначе
+    недособранный альбом останется без таймера и не будет опубликован.
+    Тот же приём, что и для pending_edit_tasks.
+    """
+    try:
+        current = asyncio.current_task()
+    except RuntimeError:
+        current = None
+    if media_group_timers.get(media_group_key) is current:
+        media_group_timers.pop(media_group_key, None)
+
+
 async def complete_media_group_after_delay(media_group_key: str, bot_instance: Bot, delay: float = 1.5):
     """
     (ИСПРАВЛЕННАЯ ВЕРСИЯ)
@@ -18633,8 +19291,11 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
         await asyncio.sleep(delay)
         group = current_media_groups.pop(media_group_key, None)
         if not group or media_group_key in sent_media_groups:
+            # Раньше выход отсюда происходил ДО media_group_timers.pop ниже,
+            # и запись таймера оставалась висеть навсегда (замерено: утечка на
+            # каждом дубликате альбома и на каждой гонке двух таймеров).
+            # Теперь уборкой занимается finally.
             return
-        media_group_timers.pop(media_group_key, None)
         raw_messages = group.get('raw_messages', [])
         if not raw_messages:
             return
@@ -18647,6 +19308,11 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
                 break
         group['caption'] = found_caption
         final_media_list = []
+        # Личность альбома для определения баяна. file_unique_id Telegram отдаёт
+        # прямо в апдейте, поэтому ничего не качаем и не хешируем — как и для
+        # одиночных медиа. Одиночный путь (@dp.message(~F.media_group_id))
+        # альбомы исключает, поэтому они оставались без проверки.
+        album_unique_ids = []
         for msg in raw_messages:
             media_data = {'type': msg.content_type, 'file_id': None}
             media_obj = None
@@ -18671,19 +19337,33 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
                     media_data['mime_type'] = mime_type
             if media_data['file_id']:
                 final_media_list.append(media_data)
+                uid = getattr(media_obj, 'file_unique_id', None)
+                if uid:
+                    album_unique_ids.append(uid)
         group['media'] = final_media_list
+        # Считаем баян по альбому ЦЕЛИКОМ: ключ — отсортированный набор
+        # file_unique_id. Так «БАЯН» означает «этот же набор картинок уже
+        # постили», без ложных срабатываний на свежий альбом, куда попала одна
+        # старая картинка. И это одна строка в БД на альбом, а не N.
+        if album_unique_ids:
+            import hashlib
+            group['album_unique_key'] = hashlib.sha256(
+                "|".join(sorted(album_unique_ids)).encode('utf-8')
+            ).hexdigest()
         await process_complete_media_group(media_group_key, group, bot_instance)
         current_media_groups.pop(media_group_key, None)
-        media_group_timers.pop(media_group_key, None)
         # --- ИЗМЕНЕНИЕ: Удалена опасная строка sent_media_groups.remove ---
         # Объекты в sent_media_groups (deque с maxlen) удаляются сами при переполнении.
         # Попытка удалить их вручную вызывала ValueError, если ID уже вытеснен.
     except asyncio.CancelledError:
+        # Таймер заменён более свежим сообщением альбома: current_media_groups
+        # НЕ трогаем — группу продолжает собирать новая задача.
         pass
     except Exception as e:
         print(f"❌ Ошибка в complete_media_group_after_delay для {media_group_key}: {e}")
         current_media_groups.pop(media_group_key, None)
-        media_group_timers.pop(media_group_key, None)
+    finally:
+        _release_media_group_timer(media_group_key)
 async def process_complete_media_group(media_group_key: str, group: dict, bot_instance: Bot):
     if not group or not group.get('media'):
         return
@@ -18706,7 +19386,14 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
     is_long_caption = original_caption and len(original_caption) > CAPTION_LENGTH_LIMIT
     send_caption_separately = is_large_group or is_long_caption
     first_post_num = None
-    
+
+    # Баян по альбому. Шэдоу-мут не считаем: пост никто не увидит, счётчик врал бы.
+    album_repost_count = 0
+    album_key = group.get('album_unique_key')
+    if album_key and not is_shadow_muted:
+        from common.database import register_media_repost
+        album_repost_count = await register_media_repost(board_id, album_key)
+
     for i, chunk in enumerate(media_chunks):
         if not chunk: continue
         reply_to_post = group.get('reply_to_post') if i == 0 else None
@@ -18716,6 +19403,10 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
             'media': chunk,
             'caption': caption_for_chunk
         }
+        # Метка только на первый чанк: большой альбом режется на посты по 10,
+        # дублировать «БАЯН» на каждом смысла нет.
+        if i == 0 and album_repost_count > 1:
+            content['repost_count'] = album_repost_count
         
         # --- НАЧАЛО ИЗМЕНЕНИЙ (Добавлена Быстрая цитата для альбомов) ---
         quote_info = await build_quick_quote_info(reply_to_post)
@@ -18813,6 +19504,21 @@ def apply_greentext_formatting(text: str) -> str:
         else:
             processed_lines.append(line)
     return '\n'.join(processed_lines)
+
+
+async def _send_notification_quietly(bot: Bot, chat_id: int, text: str) -> None:
+    """
+    Необязательное уведомление «в никуда»: юзер мог заблокировать бота.
+
+    Нужна отдельной корутиной, чтобы такую отправку можно было запускать через
+    spawn_task из-под db_lock, не удерживая его на время сетевого вызова.
+    """
+    try:
+        await bot.send_message(chat_id, text, parse_mode="HTML", disable_notification=True)
+    except Exception:
+        pass
+
+
 @dp.message_reaction()
 async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_id: str | None, bot_instance: Optional[Bot] = None):
     """
@@ -18820,6 +19526,13 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
     Исправлено: теперь ищет пост в БД, если он выгружен из RAM.
     """
     try:
+        # reaction.user — необязательное поле Telegram API: оно приходит только
+        # для неанонимного пользователя, иначе заполняется actor_chat (реакция
+        # от имени канала или анонимного админа). Раньше на таком апдейте
+        # user.id давал AttributeError, его проглатывал внешний except, и в лог
+        # уходила невнятная «Ошибка в handle_message_reaction».
+        if reaction.user is None:
+            return
         user_id = reaction.user.id
         now = time.time()
         if now - reaction_ratelimit[user_id] < 0.5:
@@ -18998,17 +19711,16 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                             notif_tpl = random.choice(EARNING_NOTIFICATIONS)
                             notif_text = notif_tpl.format(amount=display_reward, balance=int(global_balance))
                             
-                            try:
-                                # Используем bot_instance, переданный в функцию
-                                final_bot = bot_instance if bot_instance else reaction.bot
-                                await final_bot.send_message(
-                                    author_id, 
-                                    notif_text, 
-                                    parse_mode="HTML", 
-                                    disable_notification=True
-                                )
-                            except Exception:
-                                pass # Юзер мог заблочить бота
+                            # Используем bot_instance, переданный в функцию.
+                            # Отправляем отдельной задачей, а не await: этот код
+                            # выполняется ПОД db_lock, который сериализует весь
+                            # доступ к базе в процессе. Ждать здесь сетевой
+                            # вызов — значит остановить работу с БД во всём боте
+                            # ради необязательного уведомления.
+                            final_bot = bot_instance if bot_instance else reaction.bot
+                            spawn_task(_send_notification_quietly(
+                                final_bot, author_id, notif_text
+                            ))
         if should_trigger_edit:
             author_id_for_notify = None
             text_for_notify = None
@@ -19359,6 +20071,9 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     print(f"👀 ID #{reply_to_post} восстановлен через чтение текста сообщения!")
     content = {'type': message.content_type}
     text_for_corpus = None
+    # file_unique_id из апдейта Telegram — основа определения баяна.
+    # Ничего не качаем и не хешируем, просто читаем готовое поле.
+    _media_unique_id = None
     if message.content_type == 'text':
         text_for_corpus = message.text
         safe_html_text = sanitize_html(processed_html_text)
@@ -19369,6 +20084,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         if isinstance(file_id_obj, list): file_id_obj = file_id_obj[-1]
         safe_caption_html = sanitize_html(processed_html_text)
         content.update({'file_id': file_id_obj.file_id, 'caption': safe_caption_html})
+        _media_unique_id = getattr(file_id_obj, 'file_unique_id', None)
         file_name = getattr(file_id_obj, 'file_name', None)
         mime_type = getattr(file_id_obj, 'mime_type', None)
         if file_name:
@@ -19378,6 +20094,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     elif message.content_type in ['sticker', 'video_note']:
         file_id_obj = getattr(message, message.content_type)
         content.update({'file_id': file_id_obj.file_id})
+        _media_unique_id = getattr(file_id_obj, 'file_unique_id', None)
         if message.content_type == 'sticker' and message.sticker.emoji:
              text_for_corpus = message.sticker.emoji
     if text_for_corpus:
@@ -19399,7 +20116,14 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     quote_info_for_post = await build_quick_quote_info(reply_to_post)
     content['quote_info'] = quote_info_for_post
     # --- КОНЕЦ ИЗМЕНЕНИЙ ---
-    
+
+    # Баян. Шэдоу-мут не считаем: пост никто не увидит, и счётчик бы врал.
+    if _media_unique_id and not is_shadow_muted:
+        from common.database import register_media_repost
+        _times = await register_media_repost(board_id, _media_unique_id)
+        if _times > 1:
+            content['repost_count'] = _times
+
     if is_shadow_muted:
         await process_shadow_reject(ShadowRejectContext(
             bot=message.bot,
@@ -20066,6 +20790,11 @@ async def site_posts_broadcaster():
                     b_data = board_data[board_id]
                     content = post.get('content', {})
                     skip_broadcast = False
+                    # Под локом только решение и обновление счётчика постов.
+                    # format_header ниже — обращение к БД, и раньше оно
+                    # выполнялось УДЕРЖИВАЯ storage_lock: фоновый цикл трансляции
+                    # постов с сайта подвешивал доставку и реакции на всех
+                    # досках на время запроса к базе, на каждый пост из очереди.
                     async with storage_lock:
                         is_banned = author_id in b_data.get('users', {}).get('banned', set())
                         m_until = b_data.get('mutes', {}).get(author_id)
@@ -20076,6 +20805,7 @@ async def site_posts_broadcaster():
                             skip_broadcast = True
                         else:
                             state['post_counter'] = max(state.get('post_counter', 0), post_num)
+                    if not skip_broadcast:
                             header = await format_header(board_id, post_num, stream=post_stream)
                             source_content = content
                             if is_new_thread:
@@ -20118,13 +20848,17 @@ async def site_posts_broadcaster():
                                 content['post_num'] = post_num
                             if post.get('reply_to_post_num'):
                                 content['reply_to_post'] = post['reply_to_post_num']
-                            messages_storage[post_num] = {
-                                'author_id': author_id,
-                                'timestamp': datetime.fromtimestamp(post['timestamp'], UTC),
-                                'content': content,
-                                'board_id': board_id,
-                                'thread_id': post.get('thread_id'),
-                            }
+                            # Запись в messages_storage — единственное, что здесь
+                            # действительно требует storage_lock. Короткий блок,
+                            # без обращений к БД и сети.
+                            async with storage_lock:
+                                messages_storage[post_num] = {
+                                    'author_id': author_id,
+                                    'timestamp': datetime.fromtimestamp(post['timestamp'], UTC),
+                                    'content': content,
+                                    'board_id': board_id,
+                                    'thread_id': post.get('thread_id'),
+                                }
                     if skip_broadcast:
                         await mark_broadcast_posts_sent([post_num])
                         continue
@@ -20705,6 +21439,25 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="top", description="Топ пользователей"),
         BotCommand(command="report", description="Жалоба модераторам"),
         BotCommand(command="wordcloud", description="Облако слов дня"),
+        # Рабочие пользовательские команды, отсутствовавшие в меню: узнать о них
+        # можно было только случайно, из чужих сообщений.
+        BotCommand(command="global_top", description="Топ по всем доскам"),
+        BotCommand(command="tags", description="Облако тегов картинок"),
+        BotCommand(command="random", description="Случайное медиа с доски"),
+        BotCommand(command="quote", description="Случайная цитата"),
+        BotCommand(command="daily", description="Ежедневный бонус"),
+        BotCommand(command="duel", description="Вызвать анона на дуэль"),
+        BotCommand(command="dice", description="Бросить кости"),
+        # Эти четыре стояли в админской секции, хотя админской проверки в них
+        # нет и по замыслу они пользовательские: /redact правит ТОЛЬКО свой пост
+        # (сверка автора внутри хендлера), /token выдаёт токен вызывающему,
+        # /deanon — шутка с кулдауном, /graph строит график доски.
+        # /help при этом описывал /deanon, /token и /redact в ЮЗЕРСКИХ блоках
+        # всех трёх языков — то есть справка их обещала, а меню скрывало.
+        BotCommand(command="redact", description="Удалить свой пост (реплай)"),
+        BotCommand(command="token", description="Токен для входа на сайт"),
+        BotCommand(command="deanon", description="Деанон (шуточный)"),
+        BotCommand(command="graph", description="График активности доски"),
         BotCommand(command="togglegif", description="Отключить/включить GIF"),
         BotCommand(command="togglestickers", description="Отключить/включить стикеры"),
         BotCommand(command="togglemedia", description="Отключить/включить медиа"),
@@ -20751,16 +21504,12 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="addmoney", description="Выдать деньги юзеру"),
         BotCommand(command="airdrop", description="Раздача денег"),
         BotCommand(command="restrict_anime", description="Ограничить аниме юзеру"),
-        BotCommand(command="deanon", description="Деанон (fake)"),
         BotCommand(command="debug_memory", description="Статистика памяти"),
         BotCommand(command="queues", description="Статистика очередей"),
-        BotCommand(command="graph", description="График активности"),
-        BotCommand(command="redact", description="Редактировать текст поста"),
         BotCommand(command="troll", description="Затроллить юзера"),
         BotCommand(command="say", description="Написать от имени бота"),
         BotCommand(command="togglereactions", description="Включить/выключить реакции"),
         BotCommand(command="filter", description="Фильтр слов"),
-        BotCommand(command="token", description="Сгенерировать токен"),
         BotCommand(command="lie", description="Искажение медиа")
     ]
 
@@ -21159,7 +21908,8 @@ async def handle_inline_query(inline_query: types.InlineQuery):
         if cmd in available_cmds:
             desc, canonical = available_cmds[cmd]
             count = 1
-            if len(parts) > 1 and parts[1].isdigit():
+            if len(parts) > 1 and parts[1].isdecimal():
+                # isdecimal, не isdigit — см. пояснение в cmd_random_media
                 count = int(parts[1])
             
             counts_to_show = [count]
@@ -21306,5 +22056,17 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
+    except KeyboardInterrupt:
+        print("ℹ️ Завершение работы по запросу...")
+    except SystemExit as exc:
+        # SystemExit ловили вместе с KeyboardInterrupt и молча гасили, поэтому
+        # процесс ВСЕГДА завершался кодом 0 - даже когда main() звал
+        # sys.exit(1). А зовёт он его на двух фатальных путях: незаполненная
+        # БД (load_state) и «бот с таким PID уже запущен». Супервизору оба
+        # выглядели как успешный штатный выход: systemd с Restart=on-failure
+        # не перезапустил бы бота, а деплой счёл бы запуск удавшимся.
+        # Штатную остановку (код 0 или None) по-прежнему гасим тихо.
+        if exc.code:
+            print(f"⛔ Аварийное завершение, код выхода {exc.code}.")
+            raise
         print("ℹ️ Завершение работы по запросу...")
