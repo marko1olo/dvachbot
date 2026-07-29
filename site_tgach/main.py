@@ -10421,14 +10421,6 @@ async def get_telegram_file(
                 headers={"Cache-Control": "public, max-age=3600"},
             )
 
-    # 2. HuggingFace — ПРИОРИТЕТ №2 (ОТКЛЮЧЕН - HF сдох)
-    # if is_hf_link_allowed(hf_link, VALID_HF_REPOS):
-    #     return RedirectResponse(
-    #         url=hf_link,
-    #         status_code=307,
-    #         headers={"Cache-Control": "public, max-age=86400"}
-    #     )
-
     # 3. Shadow Telegram (Прямой редирект для теневого файла с защищенными токенами)
     if shadow_file_id and "telegram" not in skipped_types:
         info_shadow = await get_cached_file_path(shadow_file_id, allow_protected_tokens=True)
