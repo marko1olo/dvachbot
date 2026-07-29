@@ -19,7 +19,7 @@ def mock_module(name):
 
 # Mock heavy/missing dependencies to allow import
 mocked_deps = [
-    'site_tgach', 'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
+    'site_tgach', 'site_tgach.html_sanitizer', 'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
     'site_tgach.security', 'site_tgach.image_processing', 'site_tgach.catbox',
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
@@ -789,6 +789,46 @@ class TestDownloadImageWithProxy(unittest.IsolatedAsyncioTestCase):
                 # Verify proxy is None
                 call_kwargs = mock_session.get.call_args[1]
                 self.assertIsNone(call_kwargs.get('proxy'))
+
+
+class TestShadowCleanupTask(unittest.IsolatedAsyncioTestCase):
+    async def test_shadow_cleanup_task_success(self):
+        from Dubsite_tgach.main import shadow_cleanup_task
+        import asyncio
+        from unittest.mock import patch, AsyncMock
+
+        with patch('Dubsite_tgach.main.asyncio.sleep', new_callable=AsyncMock) as mock_sleep, \
+             patch('Dubsite_tgach.main.cleanup_shadow_posts_db', new_callable=AsyncMock) as mock_cleanup, \
+             patch('Dubsite_tgach.main.logger') as mock_logger:
+
+            # Break the while True loop after first iteration
+            mock_sleep.side_effect = [None, asyncio.CancelledError()]
+
+            with self.assertRaises(asyncio.CancelledError):
+                await shadow_cleanup_task()
+
+            mock_cleanup.assert_awaited_once_with(hours=24)
+            mock_logger.info.assert_any_call("✅ [Shadow] Cleanup complete.")
+
+    async def test_shadow_cleanup_task_exception(self):
+        from Dubsite_tgach.main import shadow_cleanup_task
+        import asyncio
+        from unittest.mock import patch, AsyncMock
+
+        with patch('Dubsite_tgach.main.asyncio.sleep', new_callable=AsyncMock) as mock_sleep, \
+             patch('Dubsite_tgach.main.cleanup_shadow_posts_db', new_callable=AsyncMock) as mock_cleanup, \
+             patch('Dubsite_tgach.main.logger') as mock_logger:
+
+            # Break the while True loop after first iteration
+            mock_sleep.side_effect = [None, asyncio.CancelledError()]
+
+            # Make cleanup raise an exception
+            mock_cleanup.side_effect = Exception("Test exception")
+
+            with self.assertRaises(asyncio.CancelledError):
+                await shadow_cleanup_task()
+
+            mock_logger.error.assert_any_call("⚠️ Shadow cleanup error: Test exception")
 
 if __name__ == "__main__":
     unittest.main()
