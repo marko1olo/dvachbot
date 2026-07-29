@@ -171,7 +171,7 @@ async def process_queue_batch():
                     bot = global_bot_pool.get_bot_by_id(owner_id) if owner_id else global_bot_pool.get_main_bot()
                     if not bot: return None
                     
-                    sub = hashlib.md5(fid.encode()).hexdigest()[:2]
+                    sub = hashlib.sha256(fid.encode()).hexdigest()[:2]
                     fname_db = details.get("filename") if details else None
                     
                     fdir = os.path.join(media_root, sub); os.makedirs(fdir, exist_ok=True)
