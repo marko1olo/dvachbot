@@ -177,6 +177,20 @@ from slowapi.errors import RateLimitExceeded
 faulthandler.enable()
 
 
+def sanitize_header_filename(filename: str | None) -> str:
+    """
+    Sanitize filename parameter for Content-Disposition header values to strip quotes,
+    newlines, carriage returns, null bytes, and invalid header characters.
+    """
+    if not filename:
+        return "file"
+    filename = str(filename)
+    filename = re.sub(r'[\r\n\x00\'"]+', '', filename)
+    filename = "".join(c for c in filename if ord(c) >= 32 and ord(c) != 127)
+    filename = filename.strip()
+    return filename or "file"
+
+
 def get_real_ip(request: Request) -> str:
     real_ip = request.headers.get("x-real-ip")
     if real_ip:
@@ -521,6 +535,19 @@ def _mark_random_dead_file(file_id: str | None):
         while len(RANDOM_DEAD_FILE_IDS) >= RANDOM_DEAD_FILE_MAX_KEYS:
             RANDOM_DEAD_FILE_IDS.pop(next(iter(RANDOM_DEAD_FILE_IDS)), None)
     RANDOM_DEAD_FILE_IDS[str(file_id)] = now
+
+    try:
+        backend = FastAPICache.get_backend()
+        if backend:
+            key = f"dead_file:public:{file_id}"
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(backend.set(key, "1", expire=RANDOM_DEAD_FILE_TTL_SEC))
+            except RuntimeError:
+                pass
+    except Exception:
+        pass
+
 
 
 def _is_random_dead_file(file_id: str | None) -> bool:
@@ -1784,6 +1811,9 @@ async def lifespan(app: FastAPI):
         await close_all_mtproto_clients()
         if GLOBAL_HTTP_SESSION:
             await GLOBAL_HTTP_SESSION.close()
+        if GLOBAL_PROXY_HTTP_SESSION and not GLOBAL_PROXY_HTTP_SESSION.closed:
+            await GLOBAL_PROXY_HTTP_SESSION.close()
+
         if not GEO_IP_CLIENT.is_closed:
             await GEO_IP_CLIENT.aclose()
         if GEOIP_READER:
@@ -2189,7 +2219,7 @@ async def ddos_guard_middleware(request: Request, call_next):
                 media_type="application/x-gzip",
                 headers={
                     "Content-Encoding": "gzip",
-                    "Content-Disposition": f'attachment; filename="{filename}"',
+                    "Content-Disposition": f'attachment; filename="{sanitize_header_filename(filename)}"',
                 },
             )
 
@@ -3288,31 +3318,38 @@ def _select_mirror_strategically(
     base_original_url = file_info.get("original_url", "")
     base_thumbnail_url = file_info.get("thumbnail_url", "")
 
-    # Проверка валидности HF (из глобального списка VALID_HF_REPOS)
+    # Проверка R2 CDN
+    r2_candidate = mirrors.get("r2") or mirrors.get("r2_url")
     hf_candidate = mirrors.get("huggingface")
     hf_valid = is_hf_link_allowed(hf_candidate, VALID_HF_REPOS)
     zeroxzero_candidate = mirrors.get("0x0")
 
     # --- ВЫБОР ОРИГИНАЛА ---
-    selected_original = base_original_url  # По умолчанию Telegram Proxy
-
-    if not is_ru:
+    if r2_candidate:
+        selected_original = r2_candidate
+    elif not is_ru:
         if hf_valid:
             selected_original = hf_candidate
         elif zeroxzero_candidate:
             selected_original = zeroxzero_candidate
+        elif mirrors.get("catbox"):
+            selected_original = mirrors["catbox"]
+        else:
+            selected_original = base_original_url
     else:
         # Для RU-IP: Приоритет HF или Telegram
         if hf_valid:
             selected_original = hf_candidate
         elif zeroxzero_candidate:
             selected_original = zeroxzero_candidate
+        else:
+            selected_original = base_original_url
 
     # --- ВЫБОР ПРЕВЬЮ (Thumbnail) ---
-    selected_thumbnail = base_thumbnail_url
-
-    # Приоритет №1: Telegra.ph (самый быстрый CDN для превью)
-    if "telegraph" in thumb_mirrors:
+    r2_thumb = thumb_mirrors.get("r2") or thumb_mirrors.get("r2_url")
+    if r2_thumb:
+        selected_thumbnail = r2_thumb
+    elif "telegraph" in thumb_mirrors:
         selected_thumbnail = thumb_mirrors["telegraph"]
     else:
         hf_thumb = thumb_mirrors.get("huggingface")
@@ -3326,11 +3363,15 @@ def _select_mirror_strategically(
                 selected_thumbnail = hf_thumb
             elif zeroxzero_thumb:
                 selected_thumbnail = zeroxzero_thumb
+            else:
+                selected_thumbnail = base_thumbnail_url
         else:
             if hf_thumb_valid:
                 selected_thumbnail = hf_thumb
             elif zeroxzero_thumb:
                 selected_thumbnail = zeroxzero_thumb
+            else:
+                selected_thumbnail = base_thumbnail_url
 
     return selected_original, selected_thumbnail
 
@@ -4993,7 +5034,7 @@ async def honey_pot_troll(request: Request):
             media_type="application/x-gzip",
             headers={
                 "Content-Encoding": "gzip",
-                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Disposition": f'attachment; filename="{sanitize_header_filename(filename)}"',
             },
         )
 
@@ -6483,7 +6524,7 @@ async def export_thread_html(board_id: str, post_num: int):
     html.append("</html>")
 
     headers = {
-        "Content-Disposition": f"attachment; filename=thread-{board_id}-{real_thread_id}.html"
+        "Content-Disposition": f'attachment; filename="{sanitize_header_filename(f"thread-{board_id}-{real_thread_id}.html")}"'
     }
     return Response(content="\n".join(html), media_type="text/html", headers=headers)
 
@@ -9862,6 +9903,21 @@ async def api_get_my_posts(
 
 
 GLOBAL_HTTP_SESSION: Optional[aiohttp.ClientSession] = None
+GLOBAL_PROXY_HTTP_SESSION: Optional[aiohttp.ClientSession] = None
+
+
+def _get_shared_aiohttp_session() -> aiohttp.ClientSession:
+    global GLOBAL_PROXY_HTTP_SESSION
+    if GLOBAL_PROXY_HTTP_SESSION is None or GLOBAL_PROXY_HTTP_SESSION.closed:
+        timeout = aiohttp.ClientTimeout(total=180, sock_connect=10, sock_read=30)
+        connector = aiohttp.TCPConnector(
+            limit=200, ttl_dns_cache=300, family=socket.AF_INET
+        )
+        GLOBAL_PROXY_HTTP_SESSION = aiohttp.ClientSession(
+            connector=connector, timeout=timeout, trust_env=False
+        )
+    return GLOBAL_PROXY_HTTP_SESSION
+
 
 
 async def _fetch_telegram_path(file_id: str, bot_token: str):
@@ -10047,7 +10103,9 @@ async def get_cached_file_path(
             allow_protected_tokens=allow_protected_tokens
         )
         random.shuffle(all_bot_tokens)
-        result = await try_bot_batch(all_bot_tokens)
+        all_bot_tokens = all_bot_tokens[:2]
+        result = await try_bot_batch(all_bot_tokens, batch_size=2)
+
         if result:
             return result
         if all_bot_tokens:
@@ -10124,9 +10182,7 @@ async def _proxy_protected_telegram_file(
     except Exception:
         pass
 
-    timeout = aiohttp.ClientTimeout(total=180, sock_connect=10, sock_read=30)
-    connector = aiohttp.TCPConnector(limit=1, ttl_dns_cache=300, family=socket.AF_INET)
-    session = aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=False)
+    session = _get_shared_aiohttp_session()
     url = f"https://api.telegram.org/file/bot{token}/{file_path}"
     try:
         request_headers = {}
@@ -10136,12 +10192,10 @@ async def _proxy_protected_telegram_file(
                 request_headers["Range"] = range_header
         resp = await session.get(url, headers=request_headers)
     except Exception:
-        await session.close()
         raise HTTPException(status_code=404, detail="File unavailable.")
 
     if resp.status not in (200, 206):
         resp.release()
-        await session.close()
         raise HTTPException(status_code=404, detail="File unavailable.")
 
     closed = False
@@ -10152,7 +10206,6 @@ async def _proxy_protected_telegram_file(
             return
         closed = True
         resp.release()
-        await session.close()
 
     try:
         guessed_type = mimetypes.guess_type(filename or file_path)[0]
@@ -10161,13 +10214,24 @@ async def _proxy_protected_telegram_file(
             media_type = guessed_type or media_type or "application/octet-stream"
 
         headers = {
+            "Access-Control-Allow-Origin": "*",
             "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"),
             "Cache-Control": "public, max-age=300",
         }
-        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag"):
+        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag", "Content-Disposition"):
             value = resp.headers.get(header_name)
             if value:
                 headers[header_name] = value
+        if filename and "Content-Disposition" not in headers:
+            safe_filename = sanitize_header_filename(filename)
+            headers["Content-Disposition"] = f'inline; filename="{safe_filename}"'
+        elif "Content-Disposition" in headers:
+            cd_val = headers["Content-Disposition"]
+            headers["Content-Disposition"] = re.sub(
+                r'(filename=)["\']?([^"\';\r\n]+)["\']?',
+                lambda m: f'{m.group(1)}"{sanitize_header_filename(m.group(2))}"',
+                cd_val,
+            )
     except Exception:
         await close_upstream()
         raise
@@ -10202,9 +10266,7 @@ async def _proxy_external_url(
     filename: str | None = None,
     request: Request | None = None,
 ):
-    timeout = aiohttp.ClientTimeout(total=90, sock_connect=10, sock_read=25)
-    connector = aiohttp.TCPConnector(limit=1, ttl_dns_cache=300, family=socket.AF_INET)
-    session = aiohttp.ClientSession(connector=connector, timeout=timeout, trust_env=False)
+    session = _get_shared_aiohttp_session()
     try:
         request_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -10216,12 +10278,10 @@ async def _proxy_external_url(
         resp = await session.get(url, headers=request_headers)
     except Exception as e:
         logger.error(f"Proxy external file connection error: {e}")
-        await session.close()
         raise HTTPException(status_code=404, detail="File unavailable.")
 
     if resp.status not in (200, 206):
         resp.release()
-        await session.close()
         raise HTTPException(status_code=404, detail="File unavailable.")
 
     closed = False
@@ -10232,7 +10292,6 @@ async def _proxy_external_url(
             return
         closed = True
         resp.release()
-        await session.close()
 
     try:
         guessed_type = mimetypes.guess_type(filename or url)[0]
@@ -10241,13 +10300,24 @@ async def _proxy_external_url(
             media_type = guessed_type or media_type or "application/octet-stream"
 
         headers = {
+            "Access-Control-Allow-Origin": "*",
             "Accept-Ranges": resp.headers.get("Accept-Ranges", "bytes"),
             "Cache-Control": "public, max-age=86400",
         }
-        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag"):
+        for header_name in ("Content-Length", "Content-Range", "Last-Modified", "ETag", "Content-Disposition"):
             value = resp.headers.get(header_name)
             if value:
                 headers[header_name] = value
+        if filename and "Content-Disposition" not in headers:
+            safe_filename = sanitize_header_filename(filename)
+            headers["Content-Disposition"] = f'inline; filename="{safe_filename}"'
+        elif "Content-Disposition" in headers:
+            cd_val = headers["Content-Disposition"]
+            headers["Content-Disposition"] = re.sub(
+                r'(filename=)["\']?([^"\';\r\n]+)["\']?',
+                lambda m: f'{m.group(1)}"{sanitize_header_filename(m.group(2))}"',
+                cd_val,
+            )
     except Exception:
         await close_upstream()
         raise
@@ -10311,18 +10381,34 @@ async def check_url_alive(url: str) -> bool:
 
 
 @app.api_route("/files/{file_id:path}", methods=["GET", "HEAD"])
+@app.api_route("/file/{file_id:path}", methods=["GET", "HEAD"])
+@app.api_route("/thumb/{file_id:path}", methods=["GET", "HEAD"])
+@app.api_route("/i/{file_id:path}", methods=["GET", "HEAD"])
+@app.api_route("/preview/{file_id:path}", methods=["GET", "HEAD"])
+@app.api_route("/{board_id}/src/{file_id:path}", methods=["GET", "HEAD"])
+@app.api_route("/{board_id}/thumb/{file_id:path}", methods=["GET", "HEAD"])
 async def get_telegram_file(
-    file_id: str, request: Request, filename: str = None, skip: str = None
+    file_id: str, request: Request, filename: str = None, skip: str = None, board_id: str = None
 ):
     # Очистка file_id от лишних слешей и сегментов пути
     file_id = file_id.lstrip("/")
+
+    # Если file_id уже является полной ссылкой (или URL в пути), перенаправляем
+    if file_id.startswith(("http:/", "https:/", "http://", "https://")):
+        full_url = file_id
+        if full_url.startswith("http:/") and not full_url.startswith("http://"):
+            full_url = "http://" + full_url[6:].lstrip("/")
+        elif full_url.startswith("https:/") and not full_url.startswith("https://"):
+            full_url = "https://" + full_url[7:].lstrip("/")
+        return RedirectResponse(
+            url=full_url,
+            status_code=301,
+            headers={"Access-Control-Allow-Origin": "*"}
+        )
+
     if "/" in file_id:
         file_id, path_filename = file_id.split("/", 1)
         filename = filename or path_filename.rsplit("/", 1)[-1]
-
-    # Если file_id уже является полной ссылкой, перенаправляем
-    if file_id.startswith(("http://", "https://")):
-        return RedirectResponse(url=file_id, status_code=301)
 
     # Динамическое определение страны по IP
     client_ip = get_real_ip(request)
@@ -10338,15 +10424,13 @@ async def get_telegram_file(
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         "Pragma": "no-cache",
         "Expires": "0",
+        "Access-Control-Allow-Origin": "*",
     }
 
     # --- SMART WAIT LOOP ---
-    # Ждем до 2.5 секунд появления зеркал или кэша пути.
-    # Это спасает от 404 сразу после постинга.
     backend = FastAPICache.get_backend()
     mirrors = {}
 
-    # ПРАВКА: Видео через Bot API не прогрузятся, поэтому для них ждем HF дольше (до 7.5 сек)
     is_video_ext = any(
         x in request.url.path.lower() for x in ["mp4", "webm", "mov", "gif"]
     )
@@ -10375,7 +10459,8 @@ async def get_telegram_file(
         # 1. Сначала проверяем зеркала
         catbox_link = mirrors.get("catbox")
         zeroxzero_link = mirrors.get("0x0")
-        if (is_ru and hf_valid) or (
+        r2_link = mirrors.get("r2") or mirrors.get("r2_url")
+        if r2_link or (is_ru and hf_valid) or (
             not is_ru and (catbox_link or hf_valid or zeroxzero_link)
         ):
             break
@@ -10400,6 +10485,7 @@ async def get_telegram_file(
             await asyncio.sleep(0.5)
 
     # Извлечение (повторное для надежности)
+    r2_link = mirrors.get("r2") or mirrors.get("r2_url")
     hf_link = mirrors.get("huggingface")
     catbox_link = mirrors.get("catbox")
     zeroxzero_link = mirrors.get("0x0")
@@ -10408,7 +10494,15 @@ async def get_telegram_file(
     imgbb_link = mirrors.get("imgbb")
     pixhost_link = mirrors.get("pixhost")
 
-    skipped_types = set(skip.split(",")) if skip else set()
+    skipped_types = [s.strip().lower() for s in skip.split(",") if s.strip()] if skip else []
+
+    # 0. R2 CDN Mirror
+    if r2_link and "r2" not in skipped_types:
+        return RedirectResponse(
+            url=r2_link,
+            status_code=307,
+            headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
+        )
 
     # 1. Telegram Direct — ПРИОРИТЕТ №1 (Если путь закеширован)
     if "telegram" not in skipped_types:
@@ -10418,16 +10512,8 @@ async def get_telegram_file(
             return RedirectResponse(
                 url=f"https://api.telegram.org/file/bot{token}/{path}",
                 status_code=307,
-                headers={"Cache-Control": "public, max-age=3600"},
+                headers={"Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*"},
             )
-
-    # 2. HuggingFace — ПРИОРИТЕТ №2 (ОТКЛЮЧЕН - HF сдох)
-    # if is_hf_link_allowed(hf_link, VALID_HF_REPOS):
-    #     return RedirectResponse(
-    #         url=hf_link,
-    #         status_code=307,
-    #         headers={"Cache-Control": "public, max-age=86400"}
-    #     )
 
     # 3. Shadow Telegram (Прямой редирект для теневого файла с защищенными токенами)
     if shadow_file_id and "telegram" not in skipped_types:
@@ -10437,7 +10523,7 @@ async def get_telegram_file(
             return RedirectResponse(
                 url=f"https://api.telegram.org/file/bot{token}/{path}",
                 status_code=307,
-                headers={"Cache-Control": "public, max-age=3600"},
+                headers={"Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*"},
             )
 
     # 3.1. FreeImage (работает везде, включая РФ)
@@ -10445,7 +10531,7 @@ async def get_telegram_file(
         return RedirectResponse(
             url=freeimage_link,
             status_code=307,
-            headers={"Cache-Control": "public, max-age=86400"}
+            headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
         )
 
     # 3.2. ImgBB (работает везде, включая РФ)
@@ -10453,7 +10539,7 @@ async def get_telegram_file(
         return RedirectResponse(
             url=imgbb_link,
             status_code=307,
-            headers={"Cache-Control": "public, max-age=86400"}
+            headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
         )
 
     # 3.3. PixHost (работает везде, включая РФ)
@@ -10461,34 +10547,35 @@ async def get_telegram_file(
         return RedirectResponse(
             url=pixhost_link,
             status_code=307,
-            headers={"Cache-Control": "public, max-age=86400"}
+            headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
         )
 
     # 4. Catbox
     if catbox_link and "catbox" not in skipped_types:
         if not is_ru:
-            # Для не-RU пользователей и краулеров отдаем прямой редирект для экономии трафика
             return RedirectResponse(
                 url=catbox_link,
                 status_code=307,
-                headers={"Cache-Control": "public, max-age=86400"}
+                headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
             )
         try:
             return await _proxy_external_url(catbox_link, filename, request)
         except HTTPException:
-            pass # Если кетбокс лежит, идем дальше
+            pass
 
     if zeroxzero_link and "0x0" not in skipped_types:
         if not is_ru:
             return RedirectResponse(
-                url=zeroxzero_link, status_code=307, headers={"Cache-Control": "public, max-age=86400"}
+                url=zeroxzero_link,
+                status_code=307,
+                headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
             )
         try:
             return await _proxy_external_url(zeroxzero_link, filename, request)
         except HTTPException:
             pass
 
-    # Fallback для превью (миниатюр): если не удалось найти превью, пробуем оригинальный файл
+    # Fallback для превью (миниатюр)
     if file_id.startswith("AgAC"):
         orig_fid = None
         try:
