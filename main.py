@@ -7191,7 +7191,8 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         balance = row[0] if row and row[0] is not None else 0
         active_items_str = row[1] if row and len(row) > 1 and row[1] else "{}"
     if balance < price:
-        await callback.answer(f"❌ Не хватает бабок! Нужно {price} Шекелей, у тебя {int(balance)} Шекелей.", show_alert=True)
+        import html
+        await callback.answer(f"❌ Не хватает бабок! Нужно {html.escape(str(price))} Шекелей, у тебя {html.escape(str(int(balance)))} Шекелей.", show_alert=True)
         return
     import json
     import time
