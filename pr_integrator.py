@@ -226,6 +226,7 @@ def main():
     except Exception as e:
         print(f"Error fetching branches: {e}")
         sys.exit(1)
+        return
         
     print(f"Found {len(branches)} unmerged branches.")
     
