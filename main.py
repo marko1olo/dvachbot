@@ -59,6 +59,15 @@ import threading
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
+try:
+    import pandas as pd
+    import matplotlib
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    matplotlib.use('Agg')  # Используем бэкенд, не требующий GUI
+    GRAPH_LIBS_AVAILABLE = True
+except ImportError:
+    GRAPH_LIBS_AVAILABLE = False
 from PIL import Image, ImageDraw, ImageFont
 from collections import deque, defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -69,6 +78,10 @@ from logging.handlers import RotatingFileHandler
 from typing import Tuple
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+from aiogram import BaseMiddleware
+from aiogram.types import TelegramObject
+from typing import Callable, Dict, Any, Awaitable, Optional
+from roulette_logic import load_roulette_data, get_random_event, ROULETTE_COOLDOWN_PHRASES, ROULETTE_RESULT_PHRASES
 from common.chart_lock import ChartLockTimeout, matplotlib_guard
 from common.html_utils import escape_html, convert_site_tags_to_telegram
 from common.token_generator import generate_unique_token
@@ -207,19 +220,6 @@ from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial
 from gopnik_mode import GOPNIK_PHRASES_START, GOPNIK_PHRASES_END, gopnik_transform
 from shizo_mode import SCHIZO_PHRASES_START, SCHIZO_PHRASES_END, shizo_transform
 from mode_punchup import punch_up_mode_text
-from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
-from typing import Callable, Dict, Any, Awaitable, Optional
-from roulette_logic import load_roulette_data, get_random_event, ROULETTE_COOLDOWN_PHRASES, ROULETTE_RESULT_PHRASES
-try:
-    import pandas as pd
-    import matplotlib
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-    matplotlib.use('Agg')  # Используем бэкенд, не требующий GUI
-    GRAPH_LIBS_AVAILABLE = True
-except ImportError:
-    GRAPH_LIBS_AVAILABLE = False
 ANIME_COMMAND_MAP = {
     "fap": get_random_anime_image,
     "Fap": get_random_anime_image,
