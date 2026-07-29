@@ -3148,11 +3148,14 @@ def format_post_text(text: str) -> str:
     return processed_text
 
 
-def sanitize_html(text: str) -> str:
-    if not text:
-        return ""
-    # quote=False оставляет кавычки как есть (читаемее), но убивает теги
-    return html.escape(text, quote=False)
+# sanitize_html жила здесь копией, вторая копия — в Dubsite_tgach/main.py, и они
+# разошлись (там не экранировался '&'). Теперь реализация одна, в
+# site_tgach/html_sanitizer.py, оба сайта её импортируют. Поведение для строк
+# прежнее: html.escape(text, quote=False).
+# Импорт стоит на месте прежнего def, а не в шапке файла, чтобы имя появлялось в
+# модуле в той же точке — порядок определений в этом файле длиной 385 КБ уже
+# используется как есть.
+from site_tgach.html_sanitizer import sanitize_html
 
 
 def optimize_thread_context(op_post: dict, replies: list, max_posts: int = 40) -> str:

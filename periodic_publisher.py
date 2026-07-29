@@ -85,7 +85,8 @@ def _drain_chart_buffers(images: Sequence[tuple]) -> list[tuple[str, bytes]]:
     Дубликаты имён не схлопываем: dict(images) молча терял бы график.
     """
     drained: list[tuple[str, bytes]] = []
-    seen: dict[str, int] = {}
+    used: set[str] = set()
+    dup_counter: dict[str, int] = {}
     for entry in images:
         if not entry or len(entry) != 2:
             logger.warning("Пропущен некорректный элемент графиков: %r", entry)
@@ -107,12 +108,20 @@ def _drain_chart_buffers(images: Sequence[tuple]) -> list[tuple[str, bytes]]:
             continue
 
         # Разводим одинаковые имена, чтобы ни один график не потерялся.
-        if name in seen:
-            seen[name] += 1
+        # Проверяем занятость в цикле: с одним счётчиком набор
+        # ('a.png', 'a.png', 'a_1.png') давал 'a_1.png' дважды, и dict() в
+        # get_stats_media_groups снова терял график — ровно то, от чего эта
+        # ветка и защищает.
+        if name in used:
             stem, _, ext = str(name).rpartition('.')
-            name = f"{stem}_{seen[name]}.{ext}" if stem else f"{name}_{seen[name]}"
-        else:
-            seen[name] = 0
+            counter = dup_counter.get(name, 0)
+            candidate = name
+            while candidate in used:
+                counter += 1
+                candidate = f"{stem}_{counter}.{ext}" if stem else f"{name}_{counter}"
+            dup_counter[name] = counter
+            name = candidate
+        used.add(name)
         drained.append((name, payload))
     return drained
 

@@ -1683,10 +1683,11 @@ def format_post_text(text: str) -> str:
     processed_text = SPOILER_PATTERN.sub(r'<span class="spoiler">\1</span>', processed_text)
     
     return processed_text
-def sanitize_html(text: str) -> str:
-    if not isinstance(text, str): return str(text)
-    text = text.replace('<', '&lt;').replace('>', '&gt;')
-    return text
+# Общая реализация: site_tgach/html_sanitizer.py. Локальная копия не экранировала
+# '&' и на None отдавала строку "None" — расхождение с site_tgach, которое пришлось
+# бы чинить дважды. Межпакетный импорт из site_tgach в этом файле уже есть
+# (from site_tgach.image_processing import apply_grimdark_filter_async, строка ~4940).
+from site_tgach.html_sanitizer import sanitize_html
 def optimize_thread_context(op_post: dict, replies: list, max_posts: int = 40) -> str:
     """
     Превращает тред в компактную строку для нейронки.
