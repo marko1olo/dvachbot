@@ -2435,18 +2435,19 @@ async def delete_post_by_num(post_num: int) -> bool:
                     await db.execute("DELETE FROM Posts WHERE thread_id = ?", (post_id_str,))
                     await db.execute("DELETE FROM UserReplies WHERE thread_id = ?", (post_id_str,))
                     # Мгновенная очистка кэша тредов
-                    for b in _THREAD_CACHE:
-                        if post_id_str in _THREAD_CACHE[b]: _THREAD_CACHE[b].remove(post_id_str)
+                    for cache_list in _THREAD_CACHE.values():
+                        if post_id_str in cache_list:
+                            cache_list.remove(post_id_str)
                 else:
                     print(f"🗑️ [DB] Удаление ПОСТА #{post_num}...")
                     await db.execute("DELETE FROM Posts WHERE post_num = ?", (post_id_int,))
                     await db.execute("DELETE FROM UserReplies WHERE post_num = ? OR parent_num = ?", (post_id_int, post_id_int))
                 
                 # Мгновенная очистка медиа-кэша (удаляем все вхождения этого поста)
-                for b in _VIDEO_CACHE:
-                    _VIDEO_CACHE[b] = [item for item in _VIDEO_CACHE[b] if item[0] != post_id_int]
-                for b in _IMAGE_CACHE:
-                    _IMAGE_CACHE[b] = [item for item in _IMAGE_CACHE[b] if item[0] != post_id_int]
+                for cache_list in _VIDEO_CACHE.values():
+                    cache_list[:] = [item for item in cache_list if item[0] != post_id_int]
+                for cache_list in _IMAGE_CACHE.values():
+                    cache_list[:] = [item for item in cache_list if item[0] != post_id_int]
                 
                 await db.execute("COMMIT")
                 return True
