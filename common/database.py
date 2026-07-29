@@ -2347,7 +2347,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                 if notifications_to_insert:
                     # FIX: Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
                     notifications_to_insert_fixed = [
-                        (r_id, src_num, rep_num, b_id, str(t_id) if t_id else str(rep_num), c_time)
+                        (r_id, src_num, rep_num, b_id, str(t_id) if t_id is not None else str(rep_num), c_time)
                         for (r_id, src_num, rep_num, b_id, t_id, c_time) in notifications_to_insert
                     ]
                     await db.executemany(
