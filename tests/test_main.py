@@ -23,6 +23,7 @@ mocked_deps = [
     'site_tgach.security', 'site_tgach.image_processing', 'site_tgach.catbox',
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
+    'site_tgach.html_sanitizer',
     'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
     'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
     'fastapi', 'fastapi.responses', 'fastapi.middleware', 'fastapi.middleware.cors',
@@ -65,6 +66,7 @@ sys.modules['async_lru'].alru_cache = _alru_cache_stub
 # Now we can safely import the function under test
 from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, get_country_by_ip, check_post_cooldown, _resize_image_if_needed, format_poll_for_html
 from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, get_country_by_ip, check_post_cooldown, _resize_image_if_needed, get_user_id_from_session
+from Dubsite_tgach.main import get_setting_cached
 
 # Заглушки нужны были только на время импорта выше — символы уже связаны
 # напрямую. Если оставить их в sys.modules, они протекают на весь прогон pytest
@@ -789,6 +791,14 @@ class TestDownloadImageWithProxy(unittest.IsolatedAsyncioTestCase):
                 # Verify proxy is None
                 call_kwargs = mock_session.get.call_args[1]
                 self.assertIsNone(call_kwargs.get('proxy'))
+
+class TestGetSettingCached(unittest.IsolatedAsyncioTestCase):
+    @patch('Dubsite_tgach.main.get_system_setting')
+    async def test_get_setting_cached(self, mock_get_system_setting):
+        mock_get_system_setting.return_value = "value_test"
+        result = await get_setting_cached("test_key")
+        self.assertEqual(result, "value_test")
+        mock_get_system_setting.assert_called_once_with("test_key")
 
 if __name__ == "__main__":
     unittest.main()
