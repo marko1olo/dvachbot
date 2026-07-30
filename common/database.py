@@ -3291,11 +3291,12 @@ def _cleanup_archived_threads(con, archive_lifetime):
         chunk_size = 50
         for i in range(0, len(tids), chunk_size):
             chunk = tids[i:i + chunk_size]
-            placeholders = ",".join("?" * len(chunk))
+            # Convert chunk to a list of tuples for executemany
+            params = [(t,) for t in chunk]
             try:
                 con.execute("BEGIN IMMEDIATE")
-                con.execute(f"DELETE FROM Posts WHERE thread_id IN ({placeholders})", chunk)
-                con.execute(f"DELETE FROM Threads WHERE thread_id IN ({placeholders})", chunk)
+                con.executemany("DELETE FROM Posts WHERE thread_id = ?", params)
+                con.executemany("DELETE FROM Threads WHERE thread_id = ?", params)
                 con.execute("COMMIT")
                 time.sleep(0.05)
             except:
