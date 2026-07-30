@@ -1012,6 +1012,35 @@ async def process_import_queue(app_state_broadcast_queue):
 
                 processed_ids = []
 
+                all_refs = set()
+                all_task_ids = set()
+                for row in rows:
+                    content_str = row[5]
+                    try:
+                        content = json.loads(content_str)
+                        text = content.get("text", "")
+                        refs = re.findall(r"(?:>>|&gt;&gt;)(\d+)", text)
+                        if refs:
+                            all_refs.update(refs)
+                            all_task_ids.add(row[1])
+                    except Exception:
+                        pass
+
+                global_replacements = {}
+                if all_refs and all_task_ids:
+                    q_map = (
+                        "SELECT task_id, original_post_num, real_post_num "
+                        "FROM ImportRefMap "
+                        "WHERE task_id IN (SELECT value FROM json_each(?)) "
+                        "AND original_post_num IN (SELECT value FROM json_each(?))"
+                    )
+                    async with conn.execute(
+                        q_map,
+                        [json.dumps(list(all_task_ids)), json.dumps(list(all_refs))]
+                    ) as map_cur:
+                        async for m_row in map_cur:
+                            global_replacements[(m_row[0], str(m_row[1]))] = m_row[2]
+
                 for row in rows:
                     (
                         q_id,
@@ -1034,11 +1063,9 @@ async def process_import_queue(app_state_broadcast_queue):
                         real_reply_to = None
 
                         if refs:
-                            placeholders = ",".join(["?"] * len(refs))
-                            q_map = f"SELECT original_post_num, real_post_num FROM ImportRefMap WHERE task_id = ? AND original_post_num IN ({placeholders})"
-                            async with conn.execute(q_map, [task_id] + refs) as map_cur:
-                                async for m_row in map_cur:
-                                    replacements[str(m_row[0])] = m_row[1]
+                            for ref in refs:
+                                if (task_id, ref) in global_replacements:
+                                    replacements[ref] = global_replacements[(task_id, ref)]
 
                         if replacements:
 
