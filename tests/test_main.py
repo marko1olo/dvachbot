@@ -19,6 +19,10 @@ def mock_module(name):
 
 # Mock heavy/missing dependencies to allow import
 mocked_deps = [
+    'lxml',
+    'lxml.html',
+    'lxml.html.clean',
+    'site_tgach.html_sanitizer',
     'site_tgach', 'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
     'site_tgach.security', 'site_tgach.image_processing', 'site_tgach.catbox',
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',

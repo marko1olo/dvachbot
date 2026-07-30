@@ -6361,17 +6361,25 @@ async def message_broadcaster(bots: dict[str, Bot]):
     # комплект воркеров поверх ещё живых первых).
     await asyncio.gather(*tasks, return_exceptions=True)
 
+@dataclass
+class MessageDeliveryTaskConfig:
+    worker_name: str
+    board_id: str
+    bot_instance: Bot
+    queue: asyncio.Queue
+    msg_data: dict
+
 class MessageDeliveryTask:
     """
     Класс для обработки доставки одного сообщения.
     Инкапсулирует логику, ранее находившуюся в монолитной функции message_worker.
     """
-    def __init__(self, worker_name, board_id, bot_instance, queue, msg_data):
-        self.worker_name = worker_name
-        self.board_id = board_id
-        self.bot_instance = bot_instance
-        self.queue = queue
-        self.msg_data = msg_data
+    def __init__(self, config: MessageDeliveryTaskConfig):
+        self.worker_name = config.worker_name
+        self.board_id = config.board_id
+        self.bot_instance = config.bot_instance
+        self.queue = config.queue
+        self.msg_data = config.msg_data
 
         self.b_data = board_data[self.board_id]
 
@@ -6647,7 +6655,14 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
                 await asyncio.sleep(0.05)
                 continue
 
-            task = MessageDeliveryTask(worker_name, board_id, bot_instance, queue, msg_data)
+            config = MessageDeliveryTaskConfig(
+                worker_name=worker_name,
+                board_id=board_id,
+                bot_instance=bot_instance,
+                queue=queue,
+                msg_data=msg_data
+            )
+            task = MessageDeliveryTask(config)
             await task.process()
 
         except asyncio.CancelledError:
