@@ -2770,8 +2770,9 @@ def _check_cross_board_spam(user_id: int, board_id: str, content: str, msg_type:
                     return False
     return True
 
-def _check_repeats(user_id: int, b_data: dict, content: str, msg_type: str, rules: dict, violations: dict) -> bool:
+def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules: dict, violations: dict) -> bool:
     """Check if the user is repeatedly sending the same or highly similar messages."""
+    content, msg_type = msg_info
     max_repeats = rules.get('max_repeats')
     if not max_repeats or not content:
         return True
@@ -2851,7 +2852,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         violations['level'] = 0
         violations['last_reset'] = now
 
-    if not _check_repeats(user_id, b_data, content, msg_type, rules, violations):
+    if not _check_repeats(user_id, b_data, (content, msg_type), rules, violations):
         return False
 
     if not _check_rate_limit(user_id, b_data, rules, violations):
