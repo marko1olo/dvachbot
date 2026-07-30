@@ -1012,6 +1012,9 @@ async def process_import_queue(app_state_broadcast_queue):
 
                 processed_ids = []
 
+                # Pre-fetch all replacements for the current batch
+                task_refs = {}
+                parsed_batch = []
                 for row in rows:
                     (
                         q_id,
@@ -1025,20 +1028,77 @@ async def process_import_queue(app_state_broadcast_queue):
                         is_op,
                         title,
                     ) = row
+
                     try:
                         content = json.loads(content_str)
                         text = content.get("text", "")
+                    except Exception as e:
+                        # If parsing fails or content is not a dict, we don't fetch refs.
+                        # We will re-raise or handle this in the main loop to preserve original error handling.
+                        parsed_batch.append({
+                            "row": row,
+                            "content": None,
+                            "text": "",
+                            "refs": [],
+                            "error": e
+                        })
+                        continue
 
-                        refs = re.findall(r"(?:>>|&gt;&gt;)(\d+)", text)
+                    refs = re.findall(r"(?:>>|&gt;&gt;)(\d+)", text)
+                    if refs:
+                        if task_id not in task_refs:
+                            task_refs[task_id] = set()
+                        task_refs[task_id].update(refs)
+
+                    parsed_batch.append({
+                        "row": row,
+                        "content": content,
+                        "text": text,
+                        "refs": refs,
+                        "error": None
+                    })
+
+                all_replacements = {}
+                if task_refs:
+                    for t_id, t_refs in task_refs.items():
+                        refs_json = json.dumps(list(t_refs))
+                        q_map = "SELECT original_post_num, real_post_num FROM ImportRefMap, json_each(?) WHERE task_id = ? AND original_post_num = json_each.value"
+                        async with conn.execute(q_map, [refs_json, t_id]) as map_cur:
+                            async for m_row in map_cur:
+                                all_replacements[(t_id, str(m_row[0]))] = m_row[1]
+
+                for item in parsed_batch:
+                    row = item["row"]
+                    (
+                        q_id,
+                        task_id,
+                        board_id,
+                        orig_num,
+                        reply_to_orig,
+                        content_str,
+                        author_id,
+                        stream,
+                        is_op,
+                        title,
+                    ) = row
+
+                    try:
+                        # Re-raise any error caught during pre-parsing to preserve original behavior
+                        if item["error"]:
+                            raise item["error"]
+
+                        content = item["content"]
+                        text = item["text"]
+                        refs = item["refs"]
+
                         replacements = {}
                         real_reply_to = None
 
                         if refs:
-                            placeholders = ",".join(["?"] * len(refs))
-                            q_map = f"SELECT original_post_num, real_post_num FROM ImportRefMap WHERE task_id = ? AND original_post_num IN ({placeholders})"
-                            async with conn.execute(q_map, [task_id] + refs) as map_cur:
-                                async for m_row in map_cur:
-                                    replacements[str(m_row[0])] = m_row[1]
+                            for ref in refs:
+                                key = (task_id, ref)
+                                if key in all_replacements:
+                                    replacements[ref] = all_replacements[key]
 
                         if replacements:
 
