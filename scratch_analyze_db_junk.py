@@ -10,29 +10,24 @@ db_paths = [
     r'C:\Users\danat\Desktop\dvachbot\2d2vach_bot.db'
 ]
 
-def analyze_db(db_path):
+
+def print_file_metrics(db_path):
     if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
-        return
-    
+        return False
+
     file_size_mb = os.path.getsize(db_path) / (1024 * 1024)
     wal_path = db_path + "-wal"
     wal_size_mb = (os.path.getsize(wal_path) / (1024 * 1024)) if os.path.exists(wal_path) else 0.0
 
-    print(f"\n======================================================================")
+    print("\n======================================================================")
     print(f"📊 АНАЛИЗ БАЗЫ ДАННЫХ: {os.path.basename(db_path)}")
     print(f"   • Размер основного файла .db: {file_size_mb:.2f} МБ ({file_size_mb / 1024:.2f} ГБ)")
     print(f"   • Размер WAL файла (.db-wal): {wal_size_mb:.2f} МБ")
-    print(f"======================================================================")
+    print("======================================================================")
+    return True
 
-    uri = f"file:///{db_path.replace('\\', '/')}?mode=ro"
-    try:
-        conn = sqlite3.connect(uri, uri=True)
-    except Exception:
-        conn = sqlite3.connect(db_path)
-    
-    cur = conn.cursor()
 
-    # 1. Page metrics
+def print_page_metrics(cur):
     cur.execute("PRAGMA page_count;")
     page_count = cur.fetchone()[0]
     cur.execute("PRAGMA page_size;")
@@ -41,14 +36,12 @@ def analyze_db(db_path):
     freelist_count = cur.fetchone()[0]
     freelist_mb = (freelist_count * page_size) / (1024 * 1024)
 
-    print(f"📦 СТРУКТУРА СВОБОДНОГО МЕСТА (PAGE METRICS):")
+    print("📦 СТРУКТУРА СВОБОДНОГО МЕСТА (PAGE METRICS):")
     print(f"   • Всего страниц: {page_count:,}")
     print(f"   • Свободных удаленных страниц (Freelist): {freelist_count:,} ({freelist_mb:.2f} МБ)")
 
-    # 2. Таблицы и количество строк
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
-    tables = [r[0] for r in cur.fetchall()]
 
+def print_top_tables(cur, tables):
     table_counts = {}
     for tbl in tables:
         try:
@@ -58,11 +51,14 @@ def analyze_db(db_path):
             table_counts[tbl] = -1
 
     sorted_tables = sorted(table_counts.items(), key=lambda x: x[1], reverse=True)
-    print(f"\n📋 ТОП-15 САМЫХ БОЛЬШИХ ТАБЛИЦ ПО КОЛИЧЕСТВУ СТРОК:")
+    print("\n📋 ТОП-15 САМЫХ БОЛЬШИХ ТАБЛИЦ ПО КОЛИЧЕСТВУ СТРОК:")
     for tbl, count in sorted_tables[:15]:
         print(f"   • {tbl:<25}: {count:>12,} строк")
+    return table_counts
 
-    print(f"\n🔍 ДЕТАЛЬНЫЙ АНАЛИЗ ГИГАНТОВ И КАНДИДАТОВ В МУСОР:")
+
+def analyze_candidates(cur, tables, table_counts):
+    print("\n🔍 ДЕТАЛЬНЫЙ АНАЛИЗ ГИГАНТОВ И КАНДИДАТОВ В МУСОР:")
 
     # 3.1 PostCopies - 30 миллионный гигант
     if 'PostCopies' in tables:
@@ -140,7 +136,30 @@ def analyze_db(db_path):
         print(f"      - Старше 90 дней: {p90:,} (58.6% базы)")
         print(f"      - Старше 180 дней: {p180:,} (31.4% базы)")
 
+
+def analyze_db(db_path):
+    if not print_file_metrics(db_path):
+        return
+
+    uri = f"file:///{db_path.replace('\\', '/')}?mode=ro"
+    try:
+        conn = sqlite3.connect(uri, uri=True)
+    except Exception:
+        conn = sqlite3.connect(db_path)
+
+    cur = conn.cursor()
+
+    print_page_metrics(cur)
+
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")
+    tables = [r[0] for r in cur.fetchall()]
+
+    table_counts = print_top_tables(cur, tables)
+
+    analyze_candidates(cur, tables, table_counts)
+
     conn.close()
+
 
 def main():
     print("======================================================================")
@@ -148,6 +167,7 @@ def main():
     print("======================================================================")
     for db in db_paths:
         analyze_db(db)
+
 
 if __name__ == '__main__':
     main()
