@@ -7,6 +7,8 @@ import re
 from datetime import datetime
 
 # Настройки цветов для терминала
+
+
 class Colors:
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
@@ -17,6 +19,7 @@ class Colors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
 
+
 def get_db_path():
     """Пытается угадать имя базы данных."""
     candidates = ['dvach_bot.db', 'tgach.db', 'database.db']
@@ -24,6 +27,7 @@ def get_db_path():
         if os.path.exists(db):
             return db
     return None
+
 
 def format_size(size_bytes):
     for unit in ['B', 'KB', 'MB', 'GB']:
@@ -54,12 +58,14 @@ def check_integrity(cur):
         cur.execute("PRAGMA integrity_check")
         result = cur.fetchone()[0]
         if result == "ok":
-            print(f"{Colors.OKGREEN}✅ Целостность структуры базы данных: OK{Colors.ENDC}")
+            print(
+                f"{Colors.OKGREEN}✅ Целостность структуры базы данных: OK{Colors.ENDC}")
         else:
             print(f"{Colors.FAIL}⛔ ОБНАРУЖЕНЫ ПОВРЕЖДЕНИЯ: {result}{Colors.ENDC}")
     except Exception as e:
         print(f"{Colors.FAIL}Ошибка проверки целостности: {e}{Colors.ENDC}")
     print(f"   (Заняло {time.time() - start_time:.4f} сек)")
+
 
 def get_table_statistics(cur, tables):
     print(f"\n{Colors.BOLD}2. Статистика таблиц{Colors.ENDC}")
@@ -87,11 +93,8 @@ def get_table_statistics(cur, tables):
     print(f"{Colors.BOLD}Всего записей: {total_rows}{Colors.ENDC}")
     return total_rows
 
-def find_logical_garbage(cur, tables):
-    print(f"\n{Colors.BOLD}3. Поиск логического мусора (Orphans & Garbage){Colors.ENDC}")
-    garbage_found = False
 
-    # 3.1 Посты без доски
+def _check_orphaned_posts_board(cur):
     cur.execute("""
         SELECT COUNT(*) FROM Posts 
         WHERE board_id NOT IN (SELECT board_id FROM Boards)
@@ -99,11 +102,13 @@ def find_logical_garbage(cur, tables):
     orphaned_posts_board = cur.fetchone()[0]
     if orphaned_posts_board > 0:
         print(f"{Colors.FAIL}⚠️  Посты, ссылающиеся на несуществующие доски: {orphaned_posts_board}{Colors.ENDC}")
-        garbage_found = True
+        return True
     else:
         print(f"{Colors.OKGREEN}✓ Посты корректно привязаны к доскам{Colors.ENDC}")
+        return False
 
-    # 3.2 Мертвые треды (Запись в Threads есть, а ОП-поста в Posts нет)
+
+def _check_dead_threads(cur):
     cur.execute("""
         SELECT COUNT(*) FROM Threads t
         LEFT JOIN Posts p ON t.thread_id = CAST(p.post_num AS TEXT)
@@ -111,13 +116,17 @@ def find_logical_garbage(cur, tables):
     """)
     dead_threads = cur.fetchone()[0]
     if dead_threads > 0:
-        print(f"{Colors.FAIL}⚠️  Треды без ОП-поста (битые записи в Threads): {dead_threads}{Colors.ENDC}")
-        print(f"   {Colors.WARNING}-> Рекомендуется: DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts){Colors.ENDC}")  # nosec B608
-        garbage_found = True
+        print(
+            f"{Colors.FAIL}⚠️  Треды без ОП-поста (битые записи в Threads): {dead_threads}{Colors.ENDC}")
+        # nosec B608
+        print(f"   {Colors.WARNING}-> Рекомендуется: DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts){Colors.ENDC}")
+        return dead_threads, True
     else:
         print(f"{Colors.OKGREEN}✓ Все треды имеют живой ОП-пост{Colors.ENDC}")
+        return dead_threads, False
 
-    # 3.3 Посты-сироты (указан thread_id, но такого треда нет в таблице Threads)
+
+def _check_posts_orphaned_thread(cur):
     cur.execute("""
         SELECT COUNT(*) FROM Posts 
         WHERE thread_id IS NOT NULL 
@@ -128,18 +137,20 @@ def find_logical_garbage(cur, tables):
     if posts_orphaned_thread > 0:
         print(f"{Colors.WARNING}⚠️  Посты, привязанные к удаленным тредам: {posts_orphaned_thread}{Colors.ENDC}")
         print(f"   (Это может быть нормально, если удаляли тред, но посты остались как 'призраки'. Лучше почистить)")
-        garbage_found = True
+        return posts_orphaned_thread, True
     else:
         print(f"{Colors.OKGREEN}✓ Посты корректно привязаны к тредам{Colors.ENDC}")
+        return posts_orphaned_thread, False
 
-    # 3.4 Мусор в очередях (ссылки на удаленные посты)
+
+def _check_orphan_tables(cur, tables):
     tables_to_check = {
         "PostCopies": "post_num",
         "BroadcastQueue": "post_num",
         "NotificationQueue": "source_post_num",
         "Reports": "post_num"
     }
-    
+
     # Fetch valid table names from sqlite_master for whitelisting
     cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
     valid_tables = {row[0] for row in cur.fetchall()}
@@ -147,18 +158,21 @@ def find_logical_garbage(cur, tables):
     orphan_tables = []
     queries = []
     params = []
+    garbage_found = False
 
     for table, col in tables_to_check.items():
         if table in tables:
             valid_t = get_valid_table_name(table, valid_tables)
             if not valid_t:
-                print(f"{Colors.FAIL}⚠️  Пропущена таблица {table}: нет в базе или недопустимое имя{Colors.ENDC}")
+                print(
+                    f"{Colors.FAIL}⚠️  Пропущена таблица {table}: нет в базе или недопустимое имя{Colors.ENDC}")
                 continue
             # Also strictly validate the column name to be alphanumeric
             if not re.match(r'^[a-zA-Z0-9_]+$', col):
                 continue
             if not re.match(r'^[a-zA-Z0-9_]+$', col):
-                print(f"{Colors.FAIL}⚠️  Пропущена колонка {col}: недопустимое имя{Colors.ENDC}")
+                print(
+                    f"{Colors.FAIL}⚠️  Пропущена колонка {col}: недопустимое имя{Colors.ENDC}")
                 continue
             safe_table = quote_identifier(table)
             safe_col = quote_identifier(col)
@@ -177,41 +191,77 @@ def find_logical_garbage(cur, tables):
             col_name = row[1]
             orphans = row[2]
             if orphans > 0:
-                print(f"{Colors.FAIL}⚠️  Мусор в таблице {table_name}: {orphans} записей (ссылаются на удаленные посты){Colors.ENDC}")
+                print(
+                    f"{Colors.FAIL}⚠️  Мусор в таблице {table_name}: {orphans} записей (ссылаются на удаленные посты){Colors.ENDC}")
                 garbage_found = True
                 orphan_tables.append((table_name, col_name))
             else:
                 print(f"{Colors.OKGREEN}✓ Таблица {table_name} чиста{Colors.ENDC}")
 
+    return orphan_tables, garbage_found
+
+
+def _check_expired_mutes(cur):
     # 3.5 Просроченные муты/баны (которые уже истекли, но висят в БД)
     current_ts = time.time()
     cur.execute("SELECT COUNT(*) FROM Mutes WHERE expires_at < ?", (current_ts,))
     expired_mutes = cur.fetchone()[0]
     if expired_mutes > 0:
-        print(f"{Colors.WARNING}⚠️  Истекшие муты в базе (можно почистить): {expired_mutes}{Colors.ENDC}")
+        print(
+            f"{Colors.WARNING}⚠️  Истекшие муты в базе (можно почистить): {expired_mutes}{Colors.ENDC}")
     else:
         print(f"{Colors.OKGREEN}✓ Актуальность таблицы Mutes в порядке{Colors.ENDC}")
 
+
+def find_logical_garbage(cur, tables):
+    print(
+        f"\n{Colors.BOLD}3. Поиск логического мусора (Orphans & Garbage){Colors.ENDC}")
+    garbage_found = False
+
+    # 3.1 Посты без доски
+    if _check_orphaned_posts_board(cur):
+        garbage_found = True
+
+    # 3.2 Мертвые треды (Запись в Threads есть, а ОП-поста в Posts нет)
+    dead_threads, dead_garbage = _check_dead_threads(cur)
+    if dead_garbage:
+        garbage_found = True
+
+    # 3.3 Посты-сироты (указан thread_id, но такого треда нет в таблице Threads)
+    posts_orphaned_thread, orphaned_thread_garbage = _check_posts_orphaned_thread(
+        cur)
+    if orphaned_thread_garbage:
+        garbage_found = True
+
+    # 3.4 Мусор в очередях (ссылки на удаленные посты)
+    orphan_tables, tables_garbage = _check_orphan_tables(cur, tables)
+    if tables_garbage:
+        garbage_found = True
+
+    # 3.5 Просроченные муты/баны (которые уже истекли, но висят в БД)
+    _check_expired_mutes(cur)
+
     return garbage_found, dead_threads, posts_orphaned_thread, orphan_tables
+
 
 def analyze_content(cur):
     print(f"\n{Colors.BOLD}4. Анализ контента (JSON и Медиа){Colors.ENDC}")
     print("Сканирование всех постов... (может занять время)")
-    
+
     cur.execute("SELECT post_num, content FROM Posts")
-    
+
     json_errors = 0
     total_files = 0
     empty_content = 0
     shadow_posts = 0
-    
+
     counter = 0
     try:
         while True:
             rows = cur.fetchmany(1000)
             if not rows:
                 break
-            
+
             for row in rows:
                 row['post_num']
                 raw_content = row['content']
@@ -220,7 +270,7 @@ def analyze_content(cur):
                 if not raw_content:
                     empty_content += 1
                     continue
-                
+
                 try:
                     data = json.loads(raw_content)
                     # Считаем файлы
@@ -236,7 +286,7 @@ def analyze_content(cur):
 
     except KeyboardInterrupt:
         print("\nПроцесс прерван пользователем.")
-    
+
     # Также проверим кол-во теневых постов через SQL (быстрее)
     cur.execute("SELECT COUNT(*) FROM Posts WHERE is_shadow = 1")
     shadow_posts = cur.fetchone()[0]
@@ -246,67 +296,79 @@ def analyze_content(cur):
         print(f"{Colors.FAIL}   - Постов с битым JSON: {json_errors}{Colors.ENDC}")
     else:
         print(f"{Colors.OKGREEN}   - Все JSON поля валидны{Colors.ENDC}")
-    
+
     print(f"   - Всего медиа-файлов (ссылок): {total_files}")
     print(f"   - Пустых постов: {empty_content}")
     print(f"   - Теневых (Shadow) постов: {shadow_posts}")
     return json_errors > 0
 
+
 def analyze_users(cur):
     print(f"\n{Colors.BOLD}5. Анализ пользователей{Colors.ENDC}")
     cur.execute("SELECT COUNT(*) FROM Users")
     total_users = cur.fetchone()[0]
-    
+
     cur.execute("SELECT COUNT(DISTINCT user_id) FROM Users")
     unique_users = cur.fetchone()[0]
-    
+
     cur.execute("SELECT COUNT(*) FROM Users WHERE status = 'banned'")
     banned_users = cur.fetchone()[0]
-    
+
     print(f"   - Записей в таблице Users: {total_users}")
     print(f"   - Уникальных User ID: {unique_users}")
     print(f"   - Активных банов (status='banned'): {banned_users}")
 
+
 def print_recommendations(garbage_found, dead_threads, orphan_tables, posts_orphaned_thread, db_path):
     print(f"\n{Colors.HEADER}{Colors.BOLD}=== ИТОГОВЫЙ ОТЧЕТ ==={Colors.ENDC}")
-    
+
     if garbage_found:
-        print(f"{Colors.FAIL}⛔ В базе данных обнаружен мусор или несоответствия.{Colors.ENDC}")
+        print(
+            f"{Colors.FAIL}⛔ В базе данных обнаружен мусор или несоответствия.{Colors.ENDC}")
         print("Рекомендуемые действия:")
-        
+
         if dead_threads > 0:
             print(f"1. Выполнить очистку мертвых тредов:")
-            print(f"   {Colors.OKCYAN}DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts);{Colors.ENDC}")  # nosec B608
-            
+            # nosec B608
+            print(
+                f"   {Colors.OKCYAN}DELETE FROM Threads WHERE thread_id NOT IN (SELECT CAST(post_num AS TEXT) FROM Posts);{Colors.ENDC}")
+
         if orphan_tables:
             print("2. Очистить очереди от ссылок на несуществующие посты:")
             for tbl, col in orphan_tables:
-                print(f"   {Colors.OKCYAN}DELETE FROM {tbl} WHERE {col} NOT IN (SELECT post_num FROM Posts);{Colors.ENDC}")  # nosec B608
+                # nosec B608
+                print(
+                    f"   {Colors.OKCYAN}DELETE FROM {tbl} WHERE {col} NOT IN (SELECT post_num FROM Posts);{Colors.ENDC}")
 
         if posts_orphaned_thread > 0:
             print("3. (Опционально) Удалить посты, чьи треды были удалены:")
             print(f"   {Colors.OKCYAN}DELETE FROM Posts WHERE thread_id IS NOT NULL AND thread_id != CAST(post_num AS TEXT) AND thread_id NOT IN (SELECT thread_id FROM Threads);{Colors.ENDC}")  # nosec B608
-            
+
     else:
-        print(f"{Colors.OKGREEN}✅ Критических проблем в структуре данных не обнаружено.{Colors.ENDC}")
+        print(
+            f"{Colors.OKGREEN}✅ Критических проблем в структуре данных не обнаружено.{Colors.ENDC}")
 
     # Проверка размера WAL файла
     wal_path = db_path + "-wal"
     if os.path.exists(wal_path):
         wal_size = os.path.getsize(wal_path)
         print(f"\nРазмер WAL-журнала: {format_size(wal_size)}")
-        if wal_size > 50 * 1024 * 1024: # 50MB
-            print(f"{Colors.WARNING}⚠️  WAL файл велик. Рекомендуется выполнить VACUUM или checkpoint.{Colors.ENDC}")
+        if wal_size > 50 * 1024 * 1024:  # 50MB
+            print(
+                f"{Colors.WARNING}⚠️  WAL файл велик. Рекомендуется выполнить VACUUM или checkpoint.{Colors.ENDC}")
 
     print("\nДля полной оптимизации (сжатия) базы рекомендуется выполнить SQL команду:")
     print(f"{Colors.OKCYAN}VACUUM;{Colors.ENDC}")
+
 
 def print_startup_info(db_path):
     print(f"{Colors.HEADER}{Colors.BOLD}=== ЗАПУСК ГЛУБОКОГО АНАЛИЗА БД: {db_path} ==={Colors.ENDC}")
     print(f"Время запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     file_size = os.path.getsize(db_path)
-    print(f"Физический размер файла: {Colors.OKCYAN}{format_size(file_size)}{Colors.ENDC}")
+    print(
+        f"Физический размер файла: {Colors.OKCYAN}{format_size(file_size)}{Colors.ENDC}")
+
 
 def get_db_connection(db_path):
     try:
@@ -317,6 +379,7 @@ def get_db_connection(db_path):
         print(f"{Colors.FAIL}Критическая ошибка подключения: {e}{Colors.ENDC}")
         sys.exit(1)
 
+
 def run_analysis(cur, db_path):
     check_integrity(cur)
 
@@ -325,20 +388,24 @@ def run_analysis(cur, db_path):
 
     get_table_statistics(cur, tables)
 
-    garbage_found, dead_threads, posts_orphaned_thread, orphan_tables = find_logical_garbage(cur, tables)
+    garbage_found, dead_threads, posts_orphaned_thread, orphan_tables = find_logical_garbage(
+        cur, tables)
 
     if analyze_content(cur):
         garbage_found = True
 
     analyze_users(cur)
 
-    print_recommendations(garbage_found, dead_threads, orphan_tables, posts_orphaned_thread, db_path)
+    print_recommendations(garbage_found, dead_threads,
+                          orphan_tables, posts_orphaned_thread, db_path)
+
 
 def probe_database():
     db_path = get_db_path()
 
     if not db_path:
-        print(f"{Colors.FAIL}❌ База данных не найдена в текущей директории.{Colors.ENDC}")
+        print(
+            f"{Colors.FAIL}❌ База данных не найдена в текущей директории.{Colors.ENDC}")
         print("Ожидались: dvach_bot.db или tgach.db")
         sys.exit(1)
 
@@ -350,6 +417,7 @@ def probe_database():
     run_analysis(cur, db_path)
 
     conn.close()
+
 
 if __name__ == "__main__":
     probe_database()
