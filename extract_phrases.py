@@ -20,8 +20,9 @@ def extract_strings(filename):
             
     return phrases
 
-phrases = extract_strings('main.py')
-with open('phrases_main.json', 'w', encoding='utf-8') as f:
-    json.dump(phrases, f, ensure_ascii=False, indent=2)
+if __name__ == '__main__':
+    phrases = extract_strings('main.py')
+    with open('phrases_main.json', 'w', encoding='utf-8') as f:
+        json.dump(phrases, f, ensure_ascii=False, indent=2)
 
-print(f"Extracted {len(phrases)} phrases to phrases_main.json")
+    print(f"Extracted {len(phrases)} phrases to phrases_main.json")
