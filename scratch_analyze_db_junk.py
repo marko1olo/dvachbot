@@ -13,23 +13,23 @@ db_paths = [
 def analyze_db(db_path):
     if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
         return
-    
+
     file_size_mb = os.path.getsize(db_path) / (1024 * 1024)
     wal_path = db_path + "-wal"
     wal_size_mb = (os.path.getsize(wal_path) / (1024 * 1024)) if os.path.exists(wal_path) else 0.0
 
-    print(f"\n======================================================================")
+    print("\n======================================================================")
     print(f"📊 АНАЛИЗ БАЗЫ ДАННЫХ: {os.path.basename(db_path)}")
     print(f"   • Размер основного файла .db: {file_size_mb:.2f} МБ ({file_size_mb / 1024:.2f} ГБ)")
     print(f"   • Размер WAL файла (.db-wal): {wal_size_mb:.2f} МБ")
-    print(f"======================================================================")
+    print("======================================================================")
 
     uri = f"file:///{db_path.replace('\\', '/')}?mode=ro"
     try:
         conn = sqlite3.connect(uri, uri=True)
     except Exception:
         conn = sqlite3.connect(db_path)
-    
+
     cur = conn.cursor()
 
     # 1. Page metrics
@@ -41,7 +41,7 @@ def analyze_db(db_path):
     freelist_count = cur.fetchone()[0]
     freelist_mb = (freelist_count * page_size) / (1024 * 1024)
 
-    print(f"📦 СТРУКТУРА СВОБОДНОГО МЕСТА (PAGE METRICS):")
+    print("📦 СТРУКТУРА СВОБОДНОГО МЕСТА (PAGE METRICS):")
     print(f"   • Всего страниц: {page_count:,}")
     print(f"   • Свободных удаленных страниц (Freelist): {freelist_count:,} ({freelist_mb:.2f} МБ)")
 
@@ -50,19 +50,35 @@ def analyze_db(db_path):
     tables = [r[0] for r in cur.fetchall()]
 
     table_counts = {}
-    for tbl in tables:
+    chunk_size = 100
+    for i in range(0, len(tables), chunk_size):
+        chunk = tables[i:i + chunk_size]
+        query_parts = []
+        for tbl in chunk:
+            safe_tbl = tbl.replace("'", "''")
+            query_parts.append(f"SELECT '{safe_tbl}', COUNT(*) FROM \"{tbl}\"")
+        union_query = " UNION ALL ".join(query_parts)
+
         try:
-            cur.execute(f"SELECT COUNT(*) FROM \"{tbl}\"")
-            table_counts[tbl] = cur.fetchone()[0]
+            if union_query:
+                cur.execute(union_query)
+                for tbl_name, count in cur.fetchall():
+                    table_counts[tbl_name] = count
         except Exception:
-            table_counts[tbl] = -1
+            # Fallback for individual queries if chunked fails
+            for tbl in chunk:
+                try:
+                    cur.execute(f"SELECT COUNT(*) FROM \"{tbl}\"")
+                    table_counts[tbl] = cur.fetchone()[0]
+                except Exception:
+                    table_counts[tbl] = -1
 
     sorted_tables = sorted(table_counts.items(), key=lambda x: x[1], reverse=True)
-    print(f"\n📋 ТОП-15 САМЫХ БОЛЬШИХ ТАБЛИЦ ПО КОЛИЧЕСТВУ СТРОК:")
+    print("\n📋 ТОП-15 САМЫХ БОЛЬШИХ ТАБЛИЦ ПО КОЛИЧЕСТВУ СТРОК:")
     for tbl, count in sorted_tables[:15]:
         print(f"   • {tbl:<25}: {count:>12,} строк")
 
-    print(f"\n🔍 ДЕТАЛЬНЫЙ АНАЛИЗ ГИГАНТОВ И КАНДИДАТОВ В МУСОР:")
+    print("\n🔍 ДЕТАЛЬНЫЙ АНАЛИЗ ГИГАНТОВ И КАНДИДАТОВ В МУСОР:")
 
     # 3.1 PostCopies - 30 миллионный гигант
     if 'PostCopies' in tables:
