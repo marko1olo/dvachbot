@@ -904,8 +904,9 @@ class ThreadImporter:
 
                 await conn.execute("BEGIN")
                 unique_authors = set(p["author_id"] for p in prepared_posts)
-                # for uid in unique_authors:
-                #     await conn.execute("INSERT OR IGNORE INTO Users (user_id, board_id, stream) VALUES (?, ?, ?)", (uid, target_board, stream))
+                user_params = [(uid, target_board, stream) for uid in unique_authors]
+                if user_params:
+                    await conn.executemany("INSERT OR IGNORE INTO Users (user_id, board_id, stream) VALUES (?, ?, ?)", user_params)
 
                 from common.config import STORAGE_CHANNELS
 
