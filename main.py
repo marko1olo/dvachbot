@@ -11416,6 +11416,10 @@ async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, 
         elif lang == 'jp':
             prompt = random.choice(SUMMARIZE_PROMPTS_BOARD_JP)
             info_text = "板での過去6時間の間に"
+        else:
+            all_ru_prompts = SUMMARIZE_PROMPTS_BOARD_SHORT + SUMMARIZE_PROMPTS_BOARD + SUMMARIZE_PROMPTS_BOARD_LONG
+            prompt = random.choice(all_ru_prompts)
+            info_text = f"За последние 6 часов на доске /{board_id}/"
         chunk = await get_board_chunk(board_id, hours=6, lang=lang)
 
     # Dynamically inject exact paragraph count constraint only if the prompt does not enforce a rigid template structure
