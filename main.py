@@ -5089,6 +5089,15 @@ class BroadcastConfig:
 # Alias for backwards compat
 BroadcasterConfig = BroadcastConfig
 
+@dataclass
+class DeliveryMetricsParams:
+    active_recipients: set
+    original_recipients_count: int
+    start_time: float
+    remaining_recipients_for_later: set
+    interrupted_reason: str | None
+    phase_budget_sec: float
+
 class MessageBroadcaster:
     def __init__(self, config: BroadcastConfig):
         self.bot_instance = config.bot_instance
@@ -5166,14 +5175,15 @@ class MessageBroadcaster:
             ordered_recipients, start_time
         )
 
-        self._log_delivery_metrics(
-            active_recipients,
-            original_recipients_count,
-            start_time,
-            remaining_recipients_for_later,
-            interrupted_reason,
-            phase_budget_sec
+        metrics_params = DeliveryMetricsParams(
+            active_recipients=active_recipients,
+            original_recipients_count=original_recipients_count,
+            start_time=start_time,
+            remaining_recipients_for_later=remaining_recipients_for_later,
+            interrupted_reason=interrupted_reason,
+            phase_budget_sec=phase_budget_sec
         )
+        self._log_delivery_metrics(metrics_params)
 
         await self._save_copies_to_db()
         await self._remove_blocked_users()
@@ -5393,16 +5403,8 @@ class MessageBroadcaster:
 
         return remaining_recipients_for_later, interrupted_reason, phase_budget_sec
 
-    def _log_delivery_metrics(
-        self,
-        active_recipients,
-        original_recipients_count,
-        start_time,
-        remaining_recipients_for_later,
-        interrupted_reason,
-        phase_budget_sec
-    ):
-        time_taken = time.time() - start_time
+    def _log_delivery_metrics(self, params: DeliveryMetricsParams):
+        time_taken = time.time() - params.start_time
         post_created_at = self.post_data_copy.get("timestamp") if self.post_data_copy else None
         post_age_sec = None
         if isinstance(post_created_at, datetime):
@@ -5418,15 +5420,15 @@ class MessageBroadcaster:
         if self.verbose:
             log_line = (
                 f"📊 #{self.post_num} [{self.delivery_phase}] | "
-                f"✅ {self.stats['success']}/{len(active_recipients)} phase "
-                f"({len(active_recipients)}/{original_recipients_count}, def {self.delivery_deferred_recipients}) | "
+                f"✅ {self.stats['success']}/{len(params.active_recipients)} phase "
+                f"({len(params.active_recipients)}/{params.original_recipients_count}, def {self.delivery_deferred_recipients}) | "
                 f"🚫 {self.stats['blocks']} | "
                 f"❌ {self.stats['errors']} | "
                 f"👻 {self.stats['ghosts']} | "
                 f"🔄 {self.stats['retries']} | "
                 f"⏲ {self.stats['timeouts']} | "
-                f"⏭ {len(remaining_recipients_for_later)} | "
-                f"prio {self.stats['priority_recipients']}/{len(active_recipients)} | "
+                f"⏭ {len(params.remaining_recipients_for_later)} | "
+                f"prio {self.stats['priority_recipients']}/{len(params.active_recipients)} | "
                 f"⏱ {time_taken:.1f}s"
             )
             print(log_line)
@@ -5436,9 +5438,9 @@ class MessageBroadcaster:
                 "post_num": self.post_num,
                 "phase": self.delivery_phase,
                 "type": str(self.content.get("type")),
-                "recipients": len(active_recipients),
-                "phase_recipients": len(active_recipients),
-                "original_recipients": original_recipients_count,
+                "recipients": len(params.active_recipients),
+                "phase_recipients": len(params.active_recipients),
+                "original_recipients": params.original_recipients_count,
                 "deferred_recipients": self.delivery_deferred_recipients,
                 "priority_recipients": self.stats["priority_recipients"],
                 "passive_recipients": self.stats["passive_recipients"],
@@ -5448,9 +5450,9 @@ class MessageBroadcaster:
                 "ghosts": self.stats["ghosts"],
                 "retries": self.stats["retries"],
                 "timeouts": self.stats["timeouts"],
-                "budget_deferred": len(remaining_recipients_for_later),
-                "interrupted_reason": interrupted_reason,
-                "phase_budget_sec": phase_budget_sec,
+                "budget_deferred": len(params.remaining_recipients_for_later),
+                "interrupted_reason": params.interrupted_reason,
+                "phase_budget_sec": params.phase_budget_sec,
                 "seconds": round(time_taken, 3),
                 "post_age_sec": round(post_age_sec, 3) if post_age_sec is not None else None,
                 "queue_wait_sec": round(self.queue_wait_sec, 3) if self.queue_wait_sec is not None else None,
@@ -5466,7 +5468,7 @@ class MessageBroadcaster:
                     "delivery_slow %s",
                     json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
                 )
-            if remaining_recipients_for_later:
+            if params.remaining_recipients_for_later:
                 runtime_logger.warning(
                     "delivery_phase_budget_deferred %s",
                     json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
