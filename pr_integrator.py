@@ -281,7 +281,7 @@ def main():
         try:
             # Run git merge
             subprocess.run(
-                ["git", "merge", "--no-ff", "-m", f"Merge remote-tracking branch '{branch}'", branch], 
+                ["git", "merge", "--no-ff", "-m", f"Merge remote-tracking branch '{branch}'", "--", branch],
                 cwd=repo_path, 
                 check=True, 
                 capture_output=True,
