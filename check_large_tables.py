@@ -2,14 +2,15 @@ import re
 import sqlite3
 import json
 
+
 def check_indexes():
-    conn = sqlite3.connect('dvach_bot.db')
+    conn = sqlite3.connect("dvach_bot.db")
     cursor = conn.cursor()
-    
+
     # Analyze table sizes
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = [row[0] for row in cursor]
-    
+
     for table in tables:
         if not re.match(r"^[a-zA-Z0-9_]+$", table):
             continue
@@ -23,7 +24,7 @@ def check_indexes():
                 index_names = [idx[1] for idx in indexes]
                 cursor.execute(
                     "SELECT j.value, p.name FROM json_each(?) j CROSS JOIN pragma_index_info(j.value) p",
-                    (json.dumps(index_names),)
+                    (json.dumps(index_names),),
                 )
                 index_cols = {name: [] for name in index_names}
                 for row in cursor.fetchall():
@@ -32,10 +33,7 @@ def check_indexes():
                 for idx in indexes:
                     cols = index_cols.get(idx[1], [])
                     print(f"  Index: {idx[1]} -> Columns: {cols}")
-            for idx in indexes:
-                cursor.execute("SELECT * FROM pragma_index_info(?)", (idx[1],))
-                cols = [row[2] for row in cursor]
-                print(f"  Index: {idx[1]} -> Columns: {cols}")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     check_indexes()
