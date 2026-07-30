@@ -930,15 +930,12 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
                 if format_original == "PNG" and input_size > 5 * 1024 * 1024:
                     pass
                 else:
+                    if format_original in ["JPEG", "PNG", "WEBP"]:
+                        return image_bytes
                     output_buffer = io.BytesIO()
-                    save_fmt = (
-                        format_original
-                        if format_original in ["PNG", "WEBP"]
-                        else "JPEG"
-                    )
-
+                    save_fmt = "JPEG"
                     save_img = img
-                    if save_fmt == "JPEG" and img.mode in ("RGBA", "LA", "P"):
+                    if img.mode in ("RGBA", "LA", "P"):
                         save_img = img.convert("RGB")
                     save_img.save(output_buffer, format=save_fmt, quality=95)
                     return output_buffer.getvalue()
