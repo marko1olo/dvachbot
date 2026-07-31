@@ -287,6 +287,7 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
     
     async with db_lock:
         if bounce:
+            target_items["shit_gun"] = False # they consume the item when throwing
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(target_items), user_id, board_id))
         else:
