@@ -398,16 +398,10 @@ def check_growth(report):
 ACCEPTED_DP_ROUTER_DUPES = frozenset({"rob", "curse", "mega", "partyvan", "shit"})
 
 
-def check_handlers(report):
-    """Команды и callback-и, зарегистрированные дважды.
-
-    В aiogram апдейт забирает ПЕРВЫЙ подошедший обработчик, остальные
-    мертвы. Отдельно ловим точное совпадение F.data, съеденное более ранним
-    фильтром startswith.
-    """
+def _check_main_handlers(report):
     src, tree = _parse("main.py")
     if tree is None:
-        return
+        return False
     cmds = defaultdict(list)
     order = 0
     filters = []
@@ -454,6 +448,22 @@ def check_handlers(report):
                    f"/{cmd} зарегистрирована {len(occ)} раза; работает {occ[0][2]}(), "
                    f"мертвы: {dead}")
 
+    for o1, t1, v1, l1, f1 in filters:
+        for o2, t2, v2, l2, f2 in filters:
+            if o2 >= o1:
+                continue
+            if t2 == "startswith" and v1.startswith(v2) and v1 != v2:
+                report("main.py", l1,
+                       f"callback '{v1}' -> {f1}() недостижим: раньше зарегистрирован "
+                       f"startswith('{v2}') -> {f2}() строка {l2}")
+            elif t2 == "==" and t1 == "==" and v1 == v2:
+                report("main.py", l1,
+                       f"callback '{v1}' -> {f1}() дублирует {f2}() строка {l2}")
+
+    return True
+
+
+def _check_scoped_handlers(report):
     # Одна и та же команда на dp И на включённом роутере. Обработчики самого
     # Dispatcher разрешаются РАНЬШЕ под-роутеров независимо от порядка
     # include_router (проверено feed_update), поэтому версия на роутере
@@ -491,17 +501,18 @@ def check_handlers(report):
                    f"/{cmd} зарегистрирована и на dp ({where['dp']}), и на роутере "
                    f"({where['router']}). Обработчики Dispatcher разрешаются раньше "
                    f"под-роутеров, поэтому версия на роутере МЕРТВА")
-    for o1, t1, v1, l1, f1 in filters:
-        for o2, t2, v2, l2, f2 in filters:
-            if o2 >= o1:
-                continue
-            if t2 == "startswith" and v1.startswith(v2) and v1 != v2:
-                report("main.py", l1,
-                       f"callback '{v1}' -> {f1}() недостижим: раньше зарегистрирован "
-                       f"startswith('{v2}') -> {f2}() строка {l2}")
-            elif t2 == "==" and t1 == "==" and v1 == v2:
-                report("main.py", l1,
-                       f"callback '{v1}' -> {f1}() дублирует {f2}() строка {l2}")
+
+
+def check_handlers(report):
+    """Команды и callback-и, зарегистрированные дважды.
+
+    В aiogram апдейт забирает ПЕРВЫЙ подошедший обработчик, остальные
+    мертвы. Отдельно ловим точное совпадение F.data, съеденное более ранним
+    фильтром startswith.
+    """
+    if not _check_main_handlers(report):
+        return
+    _check_scoped_handlers(report)
 
 
 def check_decorators(report):
