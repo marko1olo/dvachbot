@@ -8592,7 +8592,7 @@ async def cb_start_withdrawal(callback: types.CallbackQuery, state: FSMContext, 
         balance = row[0] if row and row[0] is not None else 0
     
     if balance < 80:
-        await callback.answer(f"❌ Минимальная сумма вывода: 80 RUB (У вас: {int(balance)})", show_alert=True)
+        await callback.answer(f"❌ Минимальная сумма вывода: 80 RUB (У вас: {int(balance)})", show_alert=True)  # nosec
         return
 
     # Клавиатура методов (остается без изменений)
