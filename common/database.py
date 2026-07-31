@@ -3167,7 +3167,7 @@ def _delete_in_chunks(con, table, where_clause, params, chunk_size=100):
                 break
 
             # Даем передышку другим процессам
-            time.sleep(0.1)
+            time.sleep(0.001)
 
         except sqlite3.OperationalError as e:
             try: con.execute("ROLLBACK")
