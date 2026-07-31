@@ -2222,12 +2222,14 @@ TRANSLATIONS = {
 }
 
 def get_t(lang: str):
-    dictionary = TRANSLATIONS.get(lang, TRANSLATIONS['ru'])
     def t(key: str, default: str = None, **kwargs):
-        fallback = default if default is not None else key
-        val = dictionary.get(key, TRANSLATIONS['ru'].get(key, fallback))
+        val = TRANSLATIONS.get(lang, {}).get(key)
+        if not val:
+            val = TRANSLATIONS.get("ru", {}).get(key)
+        if not val:
+            return default if default else f"[{key}]"
         if kwargs:
             try: return val.format(**kwargs)
-            except: return val
+            except Exception: return val
         return val
     return t
