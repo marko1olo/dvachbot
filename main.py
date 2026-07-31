@@ -2348,7 +2348,6 @@ async def log_memory_summary():
         log_memory_summary.previous_stats = {}
     log_memory_summary.previous_stats
     current_stats = {}
-    import gc
     print(f"\n--- 📝 Запуск анализа памяти в {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')} ---")
     gc_count = gc.collect()
     print(f"GC.collect() завершён, удалено объектов: {gc_count}")
@@ -10367,7 +10366,6 @@ def _generate_statistics_graph_locked(board_id: str, days: int) -> bytes | None:
         plt.close('all') # Закрываем вообще всё
         fig = None
         ax = None
-        import gc
         gc.collect()
 
         return buf.getvalue()
