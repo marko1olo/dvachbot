@@ -218,23 +218,7 @@ def verify_syntax_locally(files, cwd="."):
                 return False, f"Syntax check failed for {f}:\n{res.stderr}"
     return True, ""
 
-def main():
-    repo_path = "C:\\Users\\danat\\Desktop\\dvachbot"
-    print("=== Step 1: Gathering unmerged branches ===")
-    try:
-        branches = get_unmerged_branches()
-    except Exception as e:
-        print(f"Error fetching branches: {e}")
-        sys.exit(1)
-        
-    print(f"Found {len(branches)} unmerged branches.")
-    
-    # Gather test baseline
-    print("\n=== Gathering test baseline ===")
-    baseline_ok, baseline_output = run_tests(cwd=repo_path)
-    baseline_issues = count_test_issues(baseline_output)
-    print(f"Baseline tests OK: {baseline_ok}. Total baseline issues/failures: {baseline_issues}")
-    
+def audit_branches(branches, cwd):
     report = []
     accept_branches = []
     reject_branches = []
@@ -242,7 +226,7 @@ def main():
     
     print("\n=== Step 2: Auditing branches ===")
     for branch in branches:
-        decision, reason, files, add_count, del_count = classify_branch(branch, cwd=repo_path)
+        decision, reason, files, add_count, del_count = classify_branch(branch, cwd=cwd)
         record = {
             "branch": branch,
             "decision": decision,
@@ -261,16 +245,20 @@ def main():
             manual_review_branches.append(branch)
             
     # Save JSON report
-    report_file = os.path.join(repo_path, "audit_report.json")
+    report_file = os.path.join(cwd, "audit_report.json")
     with open(report_file, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
     print(f"\nAudit report saved to {report_file}")
     
-    print(f"\nClassification Summary:")
+    print("\nClassification Summary:")
     print(f"ACCEPT: {len(accept_branches)}")
     print(f"REJECT: {len(reject_branches)}")
     print(f"MANUAL_REVIEW: {len(manual_review_branches)}")
     
+    return report, accept_branches, reject_branches, manual_review_branches
+
+
+def auto_merge_branches(accept_branches, cwd):
     print("\n=== Step 3: Auto-merging ACCEPT branches ===")
     merged_successfully = []
     conflicts = []
@@ -282,7 +270,7 @@ def main():
             # Run git merge
             subprocess.run(
                 ["git", "merge", "--no-ff", "-m", f"Merge remote-tracking branch '{branch}'", branch], 
-                cwd=repo_path, 
+                cwd=cwd,
                 check=True, 
                 capture_output=True,
                 encoding="utf-8",
@@ -290,7 +278,7 @@ def main():
             )
             
             # Fast syntax check
-            syntax_ok, syntax_err = verify_syntax_locally(files, cwd=repo_path)
+            syntax_ok, syntax_err = verify_syntax_locally(files, cwd=cwd)
             if syntax_ok:
                 print(f"  Merged cleanly: {branch}")
                 merged_successfully.append(branch)
@@ -298,23 +286,26 @@ def main():
                 print(f"  ERR: Syntax verification failed on {branch}. Reverting merge.")
                 subprocess.run(
                     ["git", "reset", "--hard", "HEAD~1"], 
-                    cwd=repo_path, 
+                    cwd=cwd,
                     check=True, 
                     capture_output=True
                 )
                 syntax_failures.append({"branch": branch, "error": syntax_err})
                 
-        except subprocess.CalledProcessError as e:
+        except subprocess.CalledProcessError:
             print(f"  ERR: Conflict or merge failure on {branch}. Aborting merge.")
-            subprocess.run(["git", "merge", "--abort"], cwd=repo_path, capture_output=True)
-            status_out = run_git(["status", "--porcelain"], cwd=repo_path)
+            subprocess.run(["git", "merge", "--abort"], cwd=cwd, capture_output=True)
+            status_out = run_git(["status", "--porcelain"], cwd=cwd)
             conflicts.append({"branch": branch, "status": status_out})
             
     print(f"\nMerged clean candidates: {len(merged_successfully)}")
-    
+    return merged_successfully, conflicts, syntax_failures
+
+
+def verify_and_rollback(merged_successfully, baseline_issues, cwd):
     # Final Verification and self-healing rollback
     print("\n=== Step 4: Final verification and self-healing ===")
-    test_ok, test_output = run_tests(cwd=repo_path)
+    test_ok, test_output = run_tests(cwd=cwd)
     final_issues = count_test_issues(test_output)
     print(f"Final test issues: {final_issues} (baseline: {baseline_issues})")
     
@@ -323,18 +314,22 @@ def main():
         print("ERR: Merged batch introduced new test failures! Commencing self-healing rollback...")
         for branch in reversed(merged_successfully.copy()):
             print(f"Reverting merge of {branch}...")
-            subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=repo_path, check=True, capture_output=True)
+            subprocess.run(["git", "reset", "--hard", "HEAD~1"], cwd=cwd, check=True, capture_output=True)
             merged_successfully.remove(branch)
             test_failures.append(branch)
             
             # Test again to see if we restored green status
-            test_ok, test_output = run_tests(cwd=repo_path)
+            test_ok, test_output = run_tests(cwd=cwd)
             current_issues = count_test_issues(test_output)
             print(f"Issues after reverting {branch}: {current_issues}")
             if current_issues <= baseline_issues:
                 print("OK: Restored green state.")
                 break
                 
+    return merged_successfully, test_failures
+
+
+def save_merge_summary(merged_successfully, conflicts, syntax_failures, test_failures, manual_review_branches, report, cwd):
     print("\n=== Auto-merge Summary ===")
     print(f"Merged successfully: {len(merged_successfully)}")
     print(f"Conflicts: {len(conflicts)}")
@@ -350,10 +345,37 @@ def main():
         "manual_review": manual_review_branches,
         "rejected": [r for r in report if r["decision"] == "REJECT"]
     }
-    summary_file = os.path.join(repo_path, "merge_summary.json")
+    summary_file = os.path.join(cwd, "merge_summary.json")
     with open(summary_file, "w", encoding="utf-8") as f:
         json.dump(merge_summary, f, indent=2, ensure_ascii=False)
     print(f"Merge summary saved to {summary_file}")
+
+
+def main():
+    repo_path = "C:\\Users\\danat\\Desktop\\dvachbot"
+    print("=== Step 1: Gathering unmerged branches ===")
+    try:
+        branches = get_unmerged_branches()
+    except Exception as e:
+        print(f"Error fetching branches: {e}")
+        sys.exit(1)
+
+    print(f"Found {len(branches)} unmerged branches.")
+
+    # Gather test baseline
+    print("\n=== Gathering test baseline ===")
+    baseline_ok, baseline_output = run_tests(cwd=repo_path)
+    baseline_issues = count_test_issues(baseline_output)
+    print(f"Baseline tests OK: {baseline_ok}. Total baseline issues/failures: {baseline_issues}")
+
+    report, accept_branches, reject_branches, manual_review_branches = audit_branches(branches, repo_path)
+
+    merged_successfully, conflicts, syntax_failures = auto_merge_branches(accept_branches, repo_path)
+
+    merged_successfully, test_failures = verify_and_rollback(merged_successfully, baseline_issues, repo_path)
+
+    save_merge_summary(merged_successfully, conflicts, syntax_failures, test_failures, manual_review_branches, report, repo_path)
+
 
 if __name__ == "__main__":
     main()
