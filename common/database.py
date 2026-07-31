@@ -6238,7 +6238,6 @@ async def process_cross_links(source_board: str, source_post: int, text: str, st
                 except: pass
                 break
 async def process_backlinks(source_post_num: int, text: str, reply_to_int: Optional[int] = None):
-    import re
     refs = set(RE_POST_REF.findall(text))
     refs = set(REF_PATTERN.findall(text))
     
