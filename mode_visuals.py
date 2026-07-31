@@ -126,12 +126,18 @@ def _find_best_font_size(draw, text, fit_config: FontFitConfig):
             return font, wrapped_text
     return font, wrapped_text
 
-def _draw_text_with_shadow(draw, position, text, font, fill, align, anchor, stroke_width=0):
+def _draw_text_with_shadow(draw, position, text, **kwargs):
     x, y = position
     shadow_color = (0, 0, 0, 180)
-    for off_x, off_y in [(-2,-2), (2,-2), (-2,2), (2,2), (0,3)]:
-        draw.multiline_text((x+off_x, y+off_y), text, font=font, fill=shadow_color, align=align, anchor=anchor)
-    draw.multiline_text(position, text, font=font, fill=fill, align=align, anchor=anchor, stroke_width=stroke_width, stroke_fill=(0,0,0))
+
+    fill = kwargs.pop('fill', None)
+    stroke_width = kwargs.pop('stroke_width', 0)
+    stroke_fill = kwargs.pop('stroke_fill', (0, 0, 0))
+
+    for off_x, off_y in [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, 3)]:
+        draw.multiline_text((x+off_x, y+off_y), text, fill=shadow_color, **kwargs)
+
+    draw.multiline_text(position, text, fill=fill, stroke_width=stroke_width, stroke_fill=stroke_fill, **kwargs)
 
 def create_visual_post(mode, text, header=None):
     try:
@@ -192,7 +198,7 @@ def create_visual_post(mode, text, header=None):
                     text_align='center'
                 )
                 h_font, h_text = _find_best_font_size(draw, clean_h, h_fit_config)
-                _draw_text_with_shadow(draw, (h_x1 + (h_x2-h_x1)/2, h_y1), h_text, h_font, (255,220,50), 'center', 'ma', 2)
+                _draw_text_with_shadow(draw, (h_x1 + (h_x2-h_x1)/2, h_y1), h_text, font=h_font, fill=(255,220,50), align='center', anchor='ma', stroke_width=2)
 
             x1, y1, x2, y2 = config['text_area']
             display_text = text
@@ -208,7 +214,7 @@ def create_visual_post(mode, text, header=None):
                 text_align='center'
             )
             font, w_text = _find_best_font_size(draw, display_text, fit_config)
-            _draw_text_with_shadow(draw, (x1 + (x2-x1)/2, y1), w_text, font, (255,255,255), 'center', 'ma', 2)
+            _draw_text_with_shadow(draw, (x1 + (x2-x1)/2, y1), w_text, font=font, fill=(255,255,255), align='center', anchor='ma', stroke_width=2)
 
         else:
             x1, y1, x2, y2 = config['text_area']
