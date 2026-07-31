@@ -1,3 +1,4 @@
+from urllib.parse import urlparse
 import sys
 import os
 import asyncio
@@ -1479,7 +1480,15 @@ app.add_middleware(
     same_site='lax', 
     https_only=IS_PRODUCTION
 )
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+_allowed_hosts = ["localhost", "127.0.0.1"]
+for _env_var in ["SITE_URL", "WEBAPP_URL", "BASE_URL", "SITE_PUBLIC_BASE_URL"]:
+    _url = os.getenv(_env_var, "")
+    if _url:
+        _parsed_host = urlparse(_url).hostname
+        if _parsed_host and _parsed_host not in _allowed_hosts:
+            _allowed_hosts.append(_parsed_host)
+
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
 @app.exception_handler(404)
 async def custom_404_handler(request: Request, exc):
     path = request.url.path.lower()
