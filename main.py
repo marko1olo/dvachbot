@@ -248,7 +248,7 @@ ANIME_COMMAND_MAP = {
     "LOLICON": get_loli_image,
     "LOLIS": get_loli_image,
 }
-from common.text_utils import clean_html_tags, sanitize_html, RE_YOU_PATTERN
+from common.text_utils import clean_html_tags, sanitize_html, RE_YOU_PATTERN, unwrap_tg_emoji
 RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
 RE_SYSTEM_HEADER_CLEAN = re.compile(r'^(###.*?###|<i>.*?</i>)\s*\n?', flags=re.MULTILINE)
 RE_NEWLINES = re.compile(r'\n{2,}')
@@ -464,8 +464,6 @@ def generate_anon_name(user_id: int) -> str:
 
 
 def clean_html_for_tg(text: str) -> str:
-    import re
-    from common.text_utils import unwrap_tg_emoji
     if not text: return ''
     
     # First unwrap custom Telegram emoji tags <tg-emoji emoji-id="...">EMOJI</tg-emoji> -> EMOJI
