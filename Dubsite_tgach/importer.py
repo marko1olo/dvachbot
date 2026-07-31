@@ -113,10 +113,8 @@ class ThreadImporter:
         except Exception as e:
             logger.error(f"❌ CRITICAL ROLLBACK FAIL: {e}", exc_info=True)
 
-    def _normalize_html_sync(self, raw_html: str) -> str:
-        if not raw_html:
-            return ""
-
+    @staticmethod
+    def _apply_text_replacements(text: str) -> str:
         replacements = {
             r"двач": "тгач",
             r"харкач": "тгач",
@@ -133,17 +131,22 @@ class ThreadImporter:
             r"4chan.org": "tgach.site",
         }
         for pattern, replacement in replacements.items():
-            raw_html = re.sub(pattern, replacement, raw_html, flags=re.IGNORECASE)
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+        return text
 
+    @staticmethod
+    def _parse_html_to_soup(html: str) -> BeautifulSoup:
         import warnings
 
         warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
         try:
-            soup = BeautifulSoup(raw_html, "lxml")
+            return BeautifulSoup(html, "lxml")
         except Exception:
-            soup = BeautifulSoup(raw_html, "html.parser")
+            return BeautifulSoup(html, "html.parser")
 
+    @staticmethod
+    def _clean_soup_tags(soup: BeautifulSoup) -> None:
         for tag in soup.find_all(
             [
                 "script",
@@ -173,11 +176,21 @@ class ThreadImporter:
             href = a.get_text()
             a.replace_with(href)
 
-        clean_text = soup.get_text()
-        clean_text = re.sub(r"\s*\(OP\)", "", clean_text)
+    @staticmethod
+    def _finalize_text(text: str) -> str:
+        clean_text = re.sub(r"\s*\(OP\)", "", text)
         clean_text = re.sub(r" +", " ", clean_text)
         clean_text = re.sub(r"\n\s*\n", "\n\n", clean_text)
         return clean_text.strip()
+
+    def _normalize_html_sync(self, raw_html: str) -> str:
+        if not raw_html:
+            return ""
+
+        raw_html = self._apply_text_replacements(raw_html)
+        soup = self._parse_html_to_soup(raw_html)
+        self._clean_soup_tags(soup)
+        return self._finalize_text(soup.get_text())
 
     async def normalize_html(self, raw_html: str) -> str:
         loop = asyncio.get_running_loop()
