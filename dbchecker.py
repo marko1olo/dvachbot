@@ -83,7 +83,8 @@ def get_table_statistics(cur, tables):
             print(f"{table:<25} | {'INVALID/NOT IN DB':<10}")
             continue
         try:
-            cur.execute(f'SELECT COUNT(*) FROM "{valid_t}"')  # nosec B608
+            safe_table = quote_identifier(valid_t)
+            cur.execute(f'SELECT COUNT(*) FROM {safe_table}')  # nosec B608
             count = cur.fetchone()[0]
             print(f"{table:<25} | {count:<10}")
             total_rows += count
