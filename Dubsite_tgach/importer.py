@@ -281,18 +281,33 @@ class ThreadImporter:
         except json.JSONDecodeError:
             raise Exception("Server returned non-JSON response")
 
+    def _is_valid_post_list(self, value: Any) -> bool:
+        if not isinstance(value, list) or not value:
+            return False
+        first_item = value[0]
+        if not isinstance(first_item, dict):
+            return False
+        return any(k in first_item for k in ("comment", "no", "num", "com"))
+
     def extract_posts_data(self, json_data: Any) -> List[Dict]:
-        if isinstance(json_data, dict):
-            if "posts" in json_data:
-                return json_data["posts"]
-            if "threads" in json_data and isinstance(json_data["threads"], list):
-                return json_data["threads"][0].get("posts", [])
-            for v in json_data.values():
-                if isinstance(v, list) and v and isinstance(v[0], dict):
-                    if any(k in v[0] for k in ("comment", "no", "num", "com")):
-                        return v
-        elif isinstance(json_data, list):
+        if isinstance(json_data, list):
             return json_data
+
+        if not isinstance(json_data, dict):
+            raise ValueError("Unknown JSON structure: could not find posts list")
+
+        if "posts" in json_data:
+            return json_data["posts"]
+
+        if "threads" in json_data and isinstance(json_data["threads"], list):
+            if json_data["threads"]:
+                return json_data["threads"][0].get("posts", [])
+            return []
+
+        for value in json_data.values():
+            if self._is_valid_post_list(value):
+                return value
+
         raise ValueError("Unknown JSON structure: could not find posts list")
 
     async def _process_single_post_media(
@@ -835,19 +850,30 @@ class ThreadImporter:
                         values_placeholders = []
                         params = []
                         for p_data in chunk:
-                            content = json.dumps({
-                                "text": p_data["text"],
-                                "files": p_data["files"],
-                                "type": "files" if p_data["files"] else "text"
-                            })
+                            content = json.dumps(
+                                {
+                                    "text": p_data["text"],
+                                    "files": p_data["files"],
+                                    "type": "files" if p_data["files"] else "text",
+                                }
+                            )
                             values_placeholders.append("(?, ?, ?, ?, ?, NULL, ?)")
-                            params.extend((target_board, new_thread_id, content, p_data["timestamp"], p_data["author_id"], stream))
+                            params.extend(
+                                (
+                                    target_board,
+                                    new_thread_id,
+                                    content,
+                                    p_data["timestamp"],
+                                    p_data["author_id"],
+                                    stream,
+                                )
+                            )
 
                         cur = await conn.execute(
                             f"""INSERT INTO posts
                                (board_id, thread_id, content, timestamp, author_id, reply_to_post_num, stream) 
                                VALUES {','.join(values_placeholders)} RETURNING post_num""",
-                            params
+                            params,
                         )
                         rows = await cur.fetchall()
                         for idx, (new_id,) in enumerate(rows):
