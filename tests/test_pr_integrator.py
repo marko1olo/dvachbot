@@ -45,5 +45,46 @@ class TestPrIntegrator(unittest.TestCase):
             cwd="."
         )
 
+
+    @patch('subprocess.run')
+    def test_run_git_success(self, mock_run):
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "  branch_output\n "
+        mock_result.stderr = ""
+        mock_run.return_value = mock_result
+
+        output = pr_integrator.run_git(["branch"], cwd="/test/dir")
+
+        self.assertEqual(output, "branch_output")
+        mock_run.assert_called_once_with(
+            ["git", "branch"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd="/test/dir"
+        )
+
+    @patch('subprocess.run')
+    def test_run_git_failure(self, mock_run):
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = ""
+        mock_result.stderr = "fatal: not a git repository"
+        mock_run.return_value = mock_result
+
+        with self.assertRaises(RuntimeError) as context:
+            pr_integrator.run_git(["status"])
+
+        self.assertIn("Git command failed: git status", str(context.exception))
+        self.assertIn("fatal: not a git repository", str(context.exception))
+        mock_run.assert_called_once_with(
+            ["git", "status"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd="."
+        )
+
 if __name__ == '__main__':
     unittest.main()
