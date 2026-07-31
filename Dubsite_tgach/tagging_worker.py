@@ -26,6 +26,7 @@ BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насилов
 GROQ_COOLDOWN_UNTIL = 0
 TEMP_FAILED_FILES = {}
 
+
 # ==========================================
 # ФУНКЦИИ BLURHASH
 # ==========================================
@@ -33,20 +34,30 @@ def apply_srgb_to_linear(value):
     v = value / 255.0
     return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
 
+
 def sign_pow(val, exp):
     return math.copysign(abs(val) ** exp, val)
 
+
 def encode_83(value, length):
     chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~"
-    return "".join(chars[(value // (83 ** (length - i))) % 83] for i in range(1, length + 1))
+    return "".join(
+        chars[(value // (83 ** (length - i))) % 83] for i in range(1, length + 1)
+    )
+
 
 def encode_dc(value):
     rounded = [int(min(255, max(0, v * 255 + 0.5))) for v in value]
     return encode_83(rounded[0] << 16 | rounded[1] << 8 | rounded[2], 4)
 
+
 def encode_ac(value, max_val):
-    quant = [int(max(0, min(18, math.floor(sign_pow(v / max_val, 0.5) * 9 + 9.5)))) for v in value]
+    quant = [
+        int(max(0, min(18, math.floor(sign_pow(v / max_val, 0.5) * 9 + 9.5))))
+        for v in value
+    ]
     return encode_83(quant[0] * 19 * 19 + quant[1] * 19 + quant[2], 2)
+
 
 def encode_blurhash_internal(image: Image.Image, components_x: int, components_y: int):
     if image.mode != "RGB":
@@ -68,7 +79,8 @@ def encode_blurhash_internal(image: Image.Image, components_x: int, components_y
                     b_sum += apply_srgb_to_linear(b) * basis
             scale = 1.0 / (width * height)
             factors.append([r_sum * scale, g_sum * scale, b_sum * scale])
-    dc = factors[0]; ac = factors[1:]
+    dc = factors[0]
+    ac = factors[1:]
     hash_list = []
     size_flag = (components_x - 1) + (components_y - 1) * 9
     hash_list.append(encode_83(size_flag, 1))
@@ -78,10 +90,13 @@ def encode_blurhash_internal(image: Image.Image, components_x: int, components_y
         max_val = (quantised_max + 1) / 166.0
         hash_list.append(encode_83(quantised_max, 1))
     else:
-        max_val = 1.0; hash_list.append(encode_83(0, 1))
+        max_val = 1.0
+        hash_list.append(encode_83(0, 1))
     hash_list.append(encode_dc(dc))
-    for factor in ac: hash_list.append(encode_ac(factor, max_val))
+    for factor in ac:
+        hash_list.append(encode_ac(factor, max_val))
     return "".join(hash_list)
+
 
 # ==========================================
 # CPU TASKS (HASHER & RESIZER)
@@ -92,10 +107,11 @@ def process_image_cpu(image_bytes):
     2. Ресайзит картинку для нейронки (чтобы не ловить 413 Payload Too Large).
     """
     try:
-        Image.MAX_IMAGE_PIXELS = 49_000_000 
+        Image.MAX_IMAGE_PIXELS = 49_000_000
 
-        if not image_bytes: return None, "Empty bytes"
-        
+        if not image_bytes:
+            return None, "Empty bytes"
+
         # 1. SHA256 (всегда)
         sha = hashlib.sha256(image_bytes).hexdigest()
 
@@ -103,7 +119,8 @@ def process_image_cpu(image_bytes):
         try:
             img = Image.open(io.BytesIO(image_bytes))
             img.load()
-            if img.mode != 'RGB': img = img.convert('RGB')
+            if img.mode != "RGB":
+                img = img.convert("RGB")
         except Image.DecompressionBombError:
             return None, "Decompression Bomb Detected"
         except Exception as e:
@@ -111,7 +128,7 @@ def process_image_cpu(image_bytes):
 
         # 3. pHash
         phash = str(imagehash.phash(img))
-        
+
         # 4. BlurHash
         try:
             small_blur = img.resize((32, 32), Image.Resampling.BILINEAR)
@@ -124,7 +141,7 @@ def process_image_cpu(image_bytes):
         MAX_SIZE = 1024
         if max(img.size) > MAX_SIZE:
             img.thumbnail((MAX_SIZE, MAX_SIZE), Image.Resampling.LANCZOS)
-        
+
         # Сохраняем в JPEG (легче чем PNG)
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=85)
@@ -135,26 +152,28 @@ def process_image_cpu(image_bytes):
     except Exception as e:
         return None, f"CPU Error: {e}"
 
+
 # ==========================================
 # НЕЙРОНКА (GROQ)
 # ==========================================
 async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
     global GROQ_COOLDOWN_UNTIL
-    
+
     if time.time() < GROQ_COOLDOWN_UNTIL:
         return None
 
     if not groq_pool.tokens:
-        if time.time() % 60 < 5: logger.warning("⚠️ No Groq tokens available!")
+        if time.time() % 60 < 5:
+            logger.warning("⚠️ No Groq tokens available!")
         return None
 
     try:
         # Картинка уже сжата в process_image_cpu, так что 413 быть не должно
-        b64 = base64.b64encode(resized_image_bytes).decode('utf-8')
+        b64 = base64.b64encode(resized_image_bytes).decode("utf-8")
         url = f"data:image/jpeg;base64,{b64}"
     except Exception:
         return None
-    
+
     prompt = (
         "Analyze the image content comprehensively. It can be an illustration, a screenshot, a photo, a chart, or a meme. "
         "Generate a diverse list of 20-40 descriptive tags based on the content type:\n"
@@ -168,35 +187,62 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
 
     strategies = [
         {"proxy": PROXY_URL, "name": "Proxy"},
-        {"proxy": None, "name": "Direct"}
+        {"proxy": None, "name": "Direct"},
     ]
 
-    for _ in range(3): 
+    for _ in range(3):
         token = groq_pool.get_token()
-        if not token: break
-        
+        if not token:
+            break
+
         for strategy in strategies:
             try:
                 transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0")
-                async with httpx.AsyncClient(proxy=strategy["proxy"], transport=transport, verify=False, timeout=GROQ_TIMEOUT) as http_client:
-                    client = AsyncOpenAI(api_key=token, base_url="https://api.groq.com/openai/v1", http_client=http_client, max_retries=0)
+                async with httpx.AsyncClient(
+                    proxy=strategy["proxy"],
+                    transport=transport,
+                    verify=False,
+                    timeout=GROQ_TIMEOUT,
+                ) as http_client:
+                    client = AsyncOpenAI(
+                        api_key=token,
+                        base_url="https://api.groq.com/openai/v1",
+                        http_client=http_client,
+                        max_retries=0,
+                    )
                     resp = await client.chat.completions.create(
                         model=GROQ_MODEL,
-                        messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": url}}]}],
-                        max_tokens=250
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": prompt},
+                                    {"type": "image_url", "image_url": {"url": url}},
+                                ],
+                            }
+                        ],
+                        max_tokens=250,
                     )
                     content = resp.choices[0].message.content
                     if content:
-                        return content.strip().rstrip('.,')
+                        return content.strip().rstrip(".,")
             except Exception as e:
                 err_str = str(e).lower()
-                if "401" in err_str or "unauthorized" in err_str or "invalid api key" in err_str:
-                    logger.error(f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool.")
+                if (
+                    "401" in err_str
+                    or "unauthorized" in err_str
+                    or "invalid api key" in err_str
+                ):
+                    logger.error(
+                        f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool."
+                    )
                     groq_pool.remove_token(token)
                     continue
                 if "413" in err_str:
-                    logger.error("❌ 413 Payload Too Large (Even after resize!). Skipping tags.")
-                    return "error_413" # Возвращаем спец-код, чтобы сохранить хеши, но без тегов
+                    logger.error(
+                        "❌ 413 Payload Too Large (Even after resize!). Skipping tags."
+                    )
+                    return "error_413"  # Возвращаем спец-код, чтобы сохранить хеши, но без тегов
                 if "429" in err_str or "limit" in err_str:
                     logger.warning(f"Groq Rate Limit. Cooldown 60s.")
                     GROQ_COOLDOWN_UNTIL = time.time() + 60
@@ -204,8 +250,9 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
                 elif "400" in err_str:
                     return "error_400"
                 continue
-            
+
     return None
+
 
 # ==========================================
 # ПОЛУЧЕНИЕ ЗАДАЧ
@@ -224,7 +271,7 @@ async def get_tasks(db) -> list[dict]:
     try:
         async with db.execute(query_registry) as cursor:
             async for row in cursor:
-                tasks.append({'fid': row[0], 'type': row[1]})
+                tasks.append({"fid": row[0], "type": row[1]})
     except Exception as e:
         logger.error(f"DB Error getting registry tasks: {e}")
 
@@ -241,16 +288,19 @@ async def get_tasks(db) -> list[dict]:
         try:
             async with db.execute(query_gaps) as cursor:
                 async for row in cursor:
-                    if not any(t['fid'] == row[0] for t in tasks):
-                        tasks.append({'fid': row[0], 'type': row[1]})
-        except Exception: pass
+                    if not any(t["fid"] == row[0] for t in tasks):
+                        tasks.append({"fid": row[0], "type": row[1]})
+        except Exception as e:
+            logger.error(f"DB Error getting missing files (gaps): {e}")
 
     # Fetch FileOwners only for the actual task file_ids (targeted, not full-table)
-    file_ids = [t['fid'] for t in tasks]
+    file_ids = [t["fid"] for t in tasks]
     file_owners = {}
     if file_ids:
-        placeholders = ', '.join(['?'] * len(file_ids))
-        query_owners = f"SELECT file_id, bot_id FROM FileOwners WHERE file_id IN ({placeholders})"
+        placeholders = ", ".join(["?"] * len(file_ids))
+        query_owners = (
+            f"SELECT file_id, bot_id FROM FileOwners WHERE file_id IN ({placeholders})"
+        )
         try:
             async with db.execute(query_owners, file_ids) as cursor:
                 async for row in cursor:
@@ -258,9 +308,10 @@ async def get_tasks(db) -> list[dict]:
         except Exception as e:
             logger.error(f"DB Error getting file owners: {e}")
     for t in tasks:
-        t['bot_id'] = file_owners.get(t['fid'])
+        t["bot_id"] = file_owners.get(t["fid"])
 
     return tasks[:BATCH_SIZE]
+
 
 # ==========================================
 # ОСНОВНОЙ ЦИКЛ
@@ -268,17 +319,21 @@ async def get_tasks(db) -> list[dict]:
 async def tagging_loop():
     logger.info("🚀 Tagging Worker Started (Single-Threaded + Resizer)")
     await asyncio.sleep(5)
-    
+
     global TEMP_FAILED_FILES
-    if TEMP_FAILED_FILES is None: TEMP_FAILED_FILES = {}
-    
+    if TEMP_FAILED_FILES is None:
+        TEMP_FAILED_FILES = {}
+
     # Считаем бэклог при старте
     try:
         db = await get_pool()
-        async with db.execute("SELECT COUNT(*) FROM FileRegistry WHERE file_type IN ('image', 'photo') AND (tags IS NULL OR tags = '' OR phash IS NULL)") as cursor:
+        async with db.execute(
+            "SELECT COUNT(*) FROM FileRegistry WHERE file_type IN ('image', 'photo') AND (tags IS NULL OR tags = '' OR phash IS NULL)"
+        ) as cursor:
             total_backlog = (await cursor.fetchone())[0]
         logger.info(f"📊 GLOBAL STATUS: {total_backlog} files waiting.")
-    except: pass
+    except:
+        pass
 
     loop = asyncio.get_running_loop()
 
@@ -286,30 +341,38 @@ async def tagging_loop():
         try:
             now = time.time()
             if TEMP_FAILED_FILES:
-                TEMP_FAILED_FILES = {k: v for k, v in TEMP_FAILED_FILES.items() if v > now}
+                TEMP_FAILED_FILES = {
+                    k: v for k, v in TEMP_FAILED_FILES.items() if v > now
+                }
 
             db = await get_pool()
             if not db:
-                await asyncio.sleep(5); continue
+                await asyncio.sleep(5)
+                continue
 
             # Забираем ОДНУ задачу (так как BATCH_SIZE=1)
             all_tasks = await get_tasks(db)
-            
+
             # Фильтруем "временно упавшие"
             valid_task = None
             for t in all_tasks:
-                if t['fid'] not in TEMP_FAILED_FILES:
+                if t["fid"] not in TEMP_FAILED_FILES:
                     valid_task = t
                     break
-            
+
             if not valid_task:
-                await asyncio.sleep(2); continue
+                await asyncio.sleep(2)
+                continue
 
-            file_id = valid_task['fid']
-            bot_id = valid_task['bot_id']
-            file_type = valid_task['type']
+            file_id = valid_task["fid"]
+            bot_id = valid_task["bot_id"]
+            file_type = valid_task["type"]
 
-            bot = global_bot_pool.get_bot_by_id(bot_id) if bot_id else global_bot_pool.get_main_bot()
+            bot = (
+                global_bot_pool.get_bot_by_id(bot_id)
+                if bot_id
+                else global_bot_pool.get_main_bot()
+            )
             if not bot:
                 TEMP_FAILED_FILES[file_id] = time.time() + 300
                 continue
@@ -323,19 +386,31 @@ async def tagging_loop():
                         logger.error(f"⚠️ No file_path for {file_id}. Skipping.")
                         continue
                     f_obj = await bot.download_file(file_path)
-                    img_bytes = f_obj.read() if hasattr(f_obj, 'read') else f_obj
+                    img_bytes = f_obj.read() if hasattr(f_obj, "read") else f_obj
                 except TelegramBadRequest:
                     logger.error(f"🗑️ File {file_id} deleted. Marking error.")
                     async with db_lock:
-                        await db.executemany("UPDATE FileRegistry SET tags='error' WHERE file_id=?", [(file_id,)])
+                        await db.executemany(
+                            "UPDATE FileRegistry SET tags='error' WHERE file_id=?",
+                            [(file_id,)],
+                        )
                         dummy_sha = f"del_{file_id}"
-                        await db.executemany("INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)", [(dummy_sha, file_id, time.time())])
+                        await db.executemany(
+                            "INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)",
+                            [(dummy_sha, file_id, time.time())],
+                        )
                         await db.commit()
                     continue
                 except Exception as e:
                     err_str = str(e).lower()
-                    if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
-                        logger.error(f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling.")
+                    if (
+                        "logged out" in err_str
+                        or "unauthorized" in err_str
+                        or "token is invalid" in err_str
+                    ):
+                        logger.error(
+                            f"🚨 Bot {bot.token[:10]}... is logged out/unauthorized. Disabling."
+                        )
                         if global_bot_pool:
                             global_bot_pool.mark_bot_dead_by_token(bot.token)
                     else:
@@ -344,59 +419,90 @@ async def tagging_loop():
                     continue
 
                 # 2. CPU (Хеши + РЕСАЙЗ)
-                res, error_msg = await loop.run_in_executor(None, process_image_cpu, img_bytes)
-                
+                res, error_msg = await loop.run_in_executor(
+                    None, process_image_cpu, img_bytes
+                )
+
                 if not res:
                     logger.error(f"⚠️ Bad File {file_id}: {error_msg}")
                     # Сохраняем как ошибку, чтобы не долбить
                     sha_fail = hashlib.sha256(img_bytes).hexdigest()
                     async with db_lock:
-                        await db.executemany("UPDATE FileRegistry SET tags='error' WHERE file_id=?", [(file_id,)])
-                        await db.executemany("INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)", [(sha_fail, file_id, time.time())])
+                        await db.executemany(
+                            "UPDATE FileRegistry SET tags='error' WHERE file_id=?",
+                            [(file_id,)],
+                        )
+                        await db.executemany(
+                            "INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)",
+                            [(sha_fail, file_id, time.time())],
+                        )
                         await db.commit()
                     continue
 
                 sha, phash, b_hash, resized_bytes = res
                 tags = None
                 try:
-                    async with db.execute("SELECT tags FROM FileRegistry WHERE sha256 = ? AND tags IS NOT NULL AND tags != '' LIMIT 1", (sha,)) as cursor:
+                    async with db.execute(
+                        "SELECT tags FROM FileRegistry WHERE sha256 = ? AND tags IS NOT NULL AND tags != '' LIMIT 1",
+                        (sha,),
+                    ) as cursor:
                         row = await cursor.fetchone()
                         if row:
                             tags = row[0]
                             logger.info(f"♻️ Skip Neuro: Tags found for SHA {sha[:8]}")
-                except Exception: pass
+                except Exception as e:
+                    logger.error(
+                        f"DB Error checking existing tags for SHA {sha[:8]}: {e}"
+                    )
 
                 # 3. НЕЙРОНКА (Только если теги еще не найдены в БД)
                 if tags is None:
                     tags = await get_neuro_tags(resized_bytes)
-                
+
                 if tags == "error_413":
                     tags = "error_too_large"
-                
+
                 tag_mark = "🏷️" if (tags and "error" not in tags) else "⚪"
                 tags_preview = "No tags"
                 if tags and "error" not in tags:
-                    parts = [stripped for t in tags.split(',') if (stripped := t.strip())]
+                    parts = [
+                        stripped for t in tags.split(",") if (stripped := t.strip())
+                    ]
                     tags_preview = ", ".join(parts[:3])
                 save_success = False
                 for attempt in range(10):
                     try:
                         async with db_lock:
-                            cursor = await db.execute("""
+                            cursor = await db.execute(
+                                """
                                 UPDATE FileRegistry 
                                 SET tags = ?, phash = ?, blurhash = ?
                                 WHERE file_id = ?
-                            """, (tags, phash, b_hash, file_id))
-                            
+                            """,
+                                (tags, phash, b_hash, file_id),
+                            )
+
                             if cursor.rowcount == 0:
-                                await db.execute("""
+                                await db.execute(
+                                    """
                                     INSERT INTO FileRegistry 
                                     (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                                     ON CONFLICT(sha256) DO UPDATE SET
                                         tags = excluded.tags,
                                         phash = excluded.phash
-                                """, (sha, phash, file_id, None, file_type, time.time(), b_hash, tags))
+                                """,
+                                    (
+                                        sha,
+                                        phash,
+                                        file_id,
+                                        None,
+                                        file_type,
+                                        time.time(),
+                                        b_hash,
+                                        tags,
+                                    ),
+                                )
 
                             await db.commit()
                         save_success = True
@@ -408,16 +514,18 @@ async def tagging_loop():
                             continue
                         logger.error(f"❌ DB Save error for {file_id[:8]}: {e}")
                         break
-                
+
                 if not save_success:
-                    logger.warning(f"⚠️ Failed to save tags for {file_id[:8]} after all retries.")                
+                    logger.warning(
+                        f"⚠️ Failed to save tags for {file_id[:8]} after all retries."
+                    )
                 if not tags:
                     TEMP_FAILED_FILES[file_id] = time.time() + 60
 
             except Exception as e:
                 logger.error(f"💥 Crit fail {file_id}: {e}")
                 TEMP_FAILED_FILES[file_id] = time.time() + 300
-            
+
             # Пауза между файлами (чтобы не спамить в Groq)
             await asyncio.sleep(2)
 

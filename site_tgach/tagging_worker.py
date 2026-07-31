@@ -1,6 +1,7 @@
 import asyncio
 from common.http_utils import api_retry
 from common.task_manager import spawn_task
+
 """
 tagging_worker.py
 This module contains the implementation of a tagging worker for processing images and videos 
@@ -70,8 +71,27 @@ BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насилов
 GROQ_COOLDOWN_UNTIL = 0
 TEMP_FAILED_FILES = {}
 
-SUSPICIOUS_KEYWORDS = {'child', 'kid', 'toddler', 'infant', 'baby', 'teen', 'underage', 'young girl', 'little girl'}
-SAFE_KEYWORDS = {'anime', 'illustration', 'sketch', 'digital art', 'painting', '3d_render', 'cartoon', 'manga'}
+SUSPICIOUS_KEYWORDS = {
+    "child",
+    "kid",
+    "toddler",
+    "infant",
+    "baby",
+    "teen",
+    "underage",
+    "young girl",
+    "little girl",
+}
+SAFE_KEYWORDS = {
+    "anime",
+    "illustration",
+    "sketch",
+    "digital art",
+    "painting",
+    "3d_render",
+    "cartoon",
+    "manga",
+}
 
 # Один висящий get_file/download_file раньше мог застопорить весь цикл тегирования
 # на минуты, потому что фолбэк перебирает ВСЕ боты пула подряд.
@@ -88,6 +108,7 @@ def _remove_temp_file(path: str | None) -> None:
     except OSError:
         pass
 
+
 # ==========================================
 # ФУНКЦИИ BLURHASH
 # ==========================================
@@ -95,20 +116,30 @@ def apply_srgb_to_linear(value):
     v = value / 255.0
     return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
 
+
 def sign_pow(val, exp):
     return math.copysign(abs(val) ** exp, val)
 
+
 def encode_83(value, length):
     chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~"
-    return "".join(chars[(value // (83 ** (length - i))) % 83] for i in range(1, length + 1))
+    return "".join(
+        chars[(value // (83 ** (length - i))) % 83] for i in range(1, length + 1)
+    )
+
 
 def encode_dc(value):
     rounded = [int(min(255, max(0, v * 255 + 0.5))) for v in value]
     return encode_83(rounded[0] << 16 | rounded[1] << 8 | rounded[2], 4)
 
+
 def encode_ac(value, max_val):
-    quant = [int(max(0, min(18, math.floor(sign_pow(v / max_val, 0.5) * 9 + 9.5)))) for v in value]
+    quant = [
+        int(max(0, min(18, math.floor(sign_pow(v / max_val, 0.5) * 9 + 9.5))))
+        for v in value
+    ]
     return encode_83(quant[0] * 19 * 19 + quant[1] * 19 + quant[2], 2)
+
 
 def encode_blurhash_internal(image: Image.Image, components_x: int, components_y: int):
     if image.mode != "RGB":
@@ -130,7 +161,8 @@ def encode_blurhash_internal(image: Image.Image, components_x: int, components_y
                     b_sum += apply_srgb_to_linear(b) * basis
             scale = 1.0 / (width * height)
             factors.append([r_sum * scale, g_sum * scale, b_sum * scale])
-    dc = factors[0]; ac = factors[1:]
+    dc = factors[0]
+    ac = factors[1:]
     hash_list = []
     size_flag = (components_x - 1) + (components_y - 1) * 9
     hash_list.append(encode_83(size_flag, 1))
@@ -140,10 +172,13 @@ def encode_blurhash_internal(image: Image.Image, components_x: int, components_y
         max_val = (quantised_max + 1) / 166.0
         hash_list.append(encode_83(quantised_max, 1))
     else:
-        max_val = 1.0; hash_list.append(encode_83(0, 1))
+        max_val = 1.0
+        hash_list.append(encode_83(0, 1))
     hash_list.append(encode_dc(dc))
-    for factor in ac: hash_list.append(encode_ac(factor, max_val))
+    for factor in ac:
+        hash_list.append(encode_ac(factor, max_val))
     return "".join(hash_list)
+
 
 # ==========================================
 # CPU TASKS (HASHER & RESIZER)
@@ -164,18 +199,29 @@ def extract_video_frame_cpu(video_bytes: bytes) -> bytes | None:
             tmp_v.write(video_bytes)
 
         cmd = [
-            "ffmpeg", "-y", "-ss", "00:00:00.500",
-            "-i", tmp_v_path,
-            "-vframes", "1",
-            "-f", "image2pipe",
-            "-vcodec", "mjpeg",
-            "-"
+            "ffmpeg",
+            "-y",
+            "-ss",
+            "00:00:00.500",
+            "-i",
+            tmp_v_path,
+            "-vframes",
+            "1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "mjpeg",
+            "-",
         ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        res = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15
+        )
         if res.returncode == 0 and res.stdout and len(res.stdout) > 100:
             return res.stdout
     except FileNotFoundError:
-        logger.warning("⚠️ [TAGGER] ffmpeg не найден в PATH, кадры из видео не извлекаются.")
+        logger.warning(
+            "⚠️ [TAGGER] ffmpeg не найден в PATH, кадры из видео не извлекаются."
+        )
     except subprocess.TimeoutExpired:
         # Раньше os.remove стоял ПОСЛЕ subprocess.run, поэтому таймаут
         # (частый на тяжёлых видео) навсегда оставлял mp4 в %TEMP%.
@@ -186,6 +232,7 @@ def extract_video_frame_cpu(video_bytes: bytes) -> bytes | None:
         _remove_temp_file(tmp_v_path)
     return None
 
+
 def process_image_cpu(image_bytes):
     """
     1. Считает хеши (SHA, pHash, Blur).
@@ -193,15 +240,16 @@ def process_image_cpu(image_bytes):
     3. Ресайзит картинку для нейронки.
     """
     try:
-        Image.MAX_IMAGE_PIXELS = 49_000_000 
+        Image.MAX_IMAGE_PIXELS = 49_000_000
 
-        if not image_bytes: return None, "Empty bytes"
-        
+        if not image_bytes:
+            return None, "Empty bytes"
+
         # 1. SHA256 (всегда)
         sha = hashlib.sha256(image_bytes).hexdigest()
 
         # 1.1 Проверка сигнатуры Lottie Telegram стикера (.tgs gzipped json)
-        if image_bytes.startswith(b'\x1f\x8b'):
+        if image_bytes.startswith(b"\x1f\x8b"):
             return (sha, None, None, None), "lottie_sticker"
 
         # 2. Открываем PIL
@@ -209,7 +257,8 @@ def process_image_cpu(image_bytes):
         try:
             img = Image.open(io.BytesIO(image_bytes))
             img.load()
-            if img.mode != 'RGB': img = img.convert('RGB')
+            if img.mode != "RGB":
+                img = img.convert("RGB")
         except Image.DecompressionBombError:
             return None, "Decompression Bomb Detected"
         except Exception as e:
@@ -219,7 +268,8 @@ def process_image_cpu(image_bytes):
                 try:
                     img = Image.open(io.BytesIO(frame_bytes))
                     img.load()
-                    if img.mode != 'RGB': img = img.convert('RGB')
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
                 except Exception:
                     return (sha, None, None, None), f"unsupported_format: {e}"
             else:
@@ -260,13 +310,13 @@ def process_image_cpu(image_bytes):
     except Exception as e:
         return None, f"CPU Error: {type(e).__name__}: {e}"
 
+
 @api_retry
 async def _execute_tagging(client, model, messages, max_tokens):
     return await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_tokens=max_tokens
+        model=model, messages=messages, max_tokens=max_tokens
     )
+
 
 async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
     """
@@ -278,12 +328,16 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
     tmp_path = ""
     try:
         from site_tgach.vision import describe_image
+
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp_path = tmp.name
             tmp.write(resized_image_bytes)
 
         return await describe_image(
-            tmp_path, caption="Generate tags for this image", is_passive=False, source="TAGGER"
+            tmp_path,
+            caption="Generate tags for this image",
+            is_passive=False,
+            source="TAGGER",
         )
     except asyncio.CancelledError:
         raise
@@ -294,6 +348,7 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
         # Раньше удаление стояло после await: любое исключение в describe_image
         # оставляло jpg в %TEMP% навсегда.
         _remove_temp_file(tmp_path)
+
 
 # ==========================================
 # ПОЛУЧЕНИЕ ЗАДАЧ
@@ -312,12 +367,9 @@ async def get_tasks(db) -> list[dict]:
     try:
         async with db.execute(query_registry) as cursor:
             async for row in cursor:
-                tasks.append({
-                    'fid': row[0], 
-                    'type': row[1], 
-                    'thumb_id': row[2], 
-                    'bot_id': None
-                })
+                tasks.append(
+                    {"fid": row[0], "type": row[1], "thumb_id": row[2], "bot_id": None}
+                )
     except Exception as e:
         logger.error(f"DB Error getting registry tasks: {e}")
 
@@ -350,12 +402,26 @@ async def get_tasks(db) -> list[dict]:
         try:
             async with db.execute(query_gaps_files) as cursor:
                 async for row in cursor:
-                    if row[0] and not any(t['fid'] == row[0] for t in tasks):
-                        tasks.append({'fid': row[0], 'type': row[1] or 'photo', 'thumb_id': row[2], 'bot_id': None})
+                    if row[0] and not any(t["fid"] == row[0] for t in tasks):
+                        tasks.append(
+                            {
+                                "fid": row[0],
+                                "type": row[1] or "photo",
+                                "thumb_id": row[2],
+                                "bot_id": None,
+                            }
+                        )
             async with db.execute(query_gaps_single) as cursor:
                 async for row in cursor:
-                    if row[0] and not any(t['fid'] == row[0] for t in tasks):
-                        tasks.append({'fid': row[0], 'type': row[1] or 'photo', 'thumb_id': row[2], 'bot_id': None})
+                    if row[0] and not any(t["fid"] == row[0] for t in tasks):
+                        tasks.append(
+                            {
+                                "fid": row[0],
+                                "type": row[1] or "photo",
+                                "thumb_id": row[2],
+                                "bot_id": None,
+                            }
+                        )
         except Exception as e:
             logger.error(f"Gaps query error: {e}")
 
@@ -363,8 +429,8 @@ async def get_tasks(db) -> list[dict]:
 
     # 3. Populate bot_id for the tasks
     if tasks:
-        fids = [t['fid'] for t in tasks]
-        placeholders = ','.join(['?'] * len(fids))
+        fids = [t["fid"] for t in tasks]
+        placeholders = ",".join(["?"] * len(fids))
         try:
             query_owners = f"SELECT file_id, bot_id FROM FileOwners WHERE file_id IN ({placeholders})"
             async with db.execute(query_owners, fids) as cursor:
@@ -372,11 +438,12 @@ async def get_tasks(db) -> list[dict]:
                 async for row in cursor:
                     owners_map[row[0]] = row[1]
                 for t in tasks:
-                    t['bot_id'] = owners_map.get(t['fid'])
+                    t["bot_id"] = owners_map.get(t["fid"])
         except Exception as e:
             logger.error(f"DB Error getting file owners: {e}")
 
     return tasks
+
 
 def _build_download_candidates(primary_bot) -> list:
     """Порядок ботов для попытки скачивания: владелец файла -> главный -> остальные."""
@@ -401,12 +468,16 @@ def _build_download_candidates(primary_bot) -> list:
 
 async def _download_via_bot(bot, file_id: str) -> bytes | None:
     """Одна попытка скачивания конкретным ботом под жёстким таймаутом."""
-    f_info = await asyncio.wait_for(bot.get_file(file_id), timeout=DOWNLOAD_TIMEOUT_PER_BOT)
+    f_info = await asyncio.wait_for(
+        bot.get_file(file_id), timeout=DOWNLOAD_TIMEOUT_PER_BOT
+    )
     file_path = getattr(f_info, "file_path", None)
     if not file_path:
         return None
-    f_obj = await asyncio.wait_for(bot.download_file(file_path), timeout=DOWNLOAD_TIMEOUT_PER_BOT)
-    return f_obj.read() if hasattr(f_obj, 'read') else f_obj
+    f_obj = await asyncio.wait_for(
+        bot.download_file(file_path), timeout=DOWNLOAD_TIMEOUT_PER_BOT
+    )
+    return f_obj.read() if hasattr(f_obj, "read") else f_obj
 
 
 async def download_file_with_fallback(file_id: str, primary_bot=None):
@@ -424,14 +495,18 @@ async def download_file_with_fallback(file_id: str, primary_bot=None):
 
     for b in bots_to_try:
         if time.monotonic() >= deadline:
-            logger.warning(f"⏱️ [TAGGER] Общий бюджет скачивания исчерпан для {file_id[:15]}.")
+            logger.warning(
+                f"⏱️ [TAGGER] Общий бюджет скачивания исчерпан для {file_id[:15]}."
+            )
             break
         try:
             img_bytes = await _download_via_bot(b, file_id)
             if img_bytes:
                 return img_bytes, b
         except asyncio.TimeoutError:
-            logger.warning(f"⏱️ [TAGGER] Таймаут скачивания {file_id[:15]}, пробую следующего бота.")
+            logger.warning(
+                f"⏱️ [TAGGER] Таймаут скачивания {file_id[:15]}, пробую следующего бота."
+            )
             continue
         except asyncio.CancelledError:
             raise
@@ -439,11 +514,16 @@ async def download_file_with_fallback(file_id: str, primary_bot=None):
             continue
         except Exception as e:
             err_str = str(e).lower()
-            if "logged out" in err_str or "unauthorized" in err_str or "token is invalid" in err_str:
+            if (
+                "logged out" in err_str
+                or "unauthorized" in err_str
+                or "token is invalid" in err_str
+            ):
                 if global_bot_pool:
                     global_bot_pool.mark_bot_dead_by_token(b.token)
             continue
     return None, None
+
 
 # ==========================================
 # ОСНОВНОЙ ЦИКЛ
@@ -451,17 +531,21 @@ async def download_file_with_fallback(file_id: str, primary_bot=None):
 async def tagging_loop():
     logger.info("🚀 Tagging Worker Started (Single-Threaded + Resizer)")
     await asyncio.sleep(5)
-    
+
     global TEMP_FAILED_FILES
-    if TEMP_FAILED_FILES is None: TEMP_FAILED_FILES = {}
-    
+    if TEMP_FAILED_FILES is None:
+        TEMP_FAILED_FILES = {}
+
     # Считаем бэклог при старте
     try:
         db = await get_pool()
-        async with db.execute("SELECT COUNT(*) FROM FileRegistry WHERE file_type IN ('image', 'photo') AND (tags IS NULL OR tags = '' OR phash IS NULL)") as cursor:
+        async with db.execute(
+            "SELECT COUNT(*) FROM FileRegistry WHERE file_type IN ('image', 'photo') AND (tags IS NULL OR tags = '' OR phash IS NULL)"
+        ) as cursor:
             total_backlog = (await cursor.fetchone())[0]
         logger.info(f"📊 GLOBAL STATUS: {total_backlog} files waiting.")
-    except: pass
+    except:
+        pass
 
     loop = asyncio.get_running_loop()
 
@@ -470,74 +554,116 @@ async def tagging_loop():
             now = time.time()
             if TEMP_FAILED_FILES:
                 TEMP_FAILED_FILES = {
-                    k: v for k, v in TEMP_FAILED_FILES.items() 
-                    if (v.get('until', 0) if isinstance(v, dict) else v) > now
+                    k: v
+                    for k, v in TEMP_FAILED_FILES.items()
+                    if (v.get("until", 0) if isinstance(v, dict) else v) > now
                 }
 
             db = await get_pool()
             if not db:
-                await asyncio.sleep(5); continue
+                await asyncio.sleep(5)
+                continue
 
             # Забираем ОДНУ задачу (так как BATCH_SIZE=1)
             all_tasks = await get_tasks(db)
-            
+
             # Фильтруем "временно упавшие"
             valid_task = None
             for t in all_tasks:
-                if t['fid'] not in TEMP_FAILED_FILES:
+                if t["fid"] not in TEMP_FAILED_FILES:
                     valid_task = t
                     break
-            
+
             if not valid_task:
-                await asyncio.sleep(2); continue
+                await asyncio.sleep(2)
+                continue
 
-            file_id = valid_task['fid']
-            bot_id = valid_task['bot_id']
-            file_type = valid_task['type']
-            thumb_id = valid_task.get('thumb_id')
+            file_id = valid_task["fid"]
+            bot_id = valid_task["bot_id"]
+            file_type = valid_task["type"]
+            thumb_id = valid_task.get("thumb_id")
 
-            bot = global_bot_pool.get_bot_by_id(bot_id) if bot_id else global_bot_pool.get_main_bot()
+            bot = (
+                global_bot_pool.get_bot_by_id(bot_id)
+                if bot_id
+                else global_bot_pool.get_main_bot()
+            )
 
             # Определяем, что качать (для видео предпочтительно превью, иначе сам файл)
-            download_target_id = thumb_id if (thumb_id and file_type in {'video', 'animation', 'gif', 'video_note'}) else file_id
+            download_target_id = (
+                thumb_id
+                if (
+                    thumb_id
+                    and file_type in {"video", "animation", "gif", "video_note"}
+                )
+                else file_id
+            )
 
             try:
                 # 1. СКАЧИВАНИЕ С РЕТРАЕМ ПО ВСЕМ БОТАМ
-                img_bytes, active_bot = await download_file_with_fallback(download_target_id, primary_bot=bot)
-                
+                img_bytes, active_bot = await download_file_with_fallback(
+                    download_target_id, primary_bot=bot
+                )
+
                 # Если превью не удалось скачать для видео, пробуем скачать сам файл видео
                 if not img_bytes and download_target_id != file_id:
                     download_target_id = file_id
-                    img_bytes, active_bot = await download_file_with_fallback(download_target_id, primary_bot=bot)
+                    img_bytes, active_bot = await download_file_with_fallback(
+                        download_target_id, primary_bot=bot
+                    )
 
                 if not img_bytes:
                     entry = TEMP_FAILED_FILES.get(file_id)
-                    fail_cnt = (entry.get('cnt', 0) + 1) if isinstance(entry, dict) else 1
+                    fail_cnt = (
+                        (entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1
+                    )
                     if fail_cnt >= 3:
-                        logger.warning(f"⛔ [TAGGER] DL failed 3 times for {file_id[:15]} across all bots. Marking as 'download_failed'.")
+                        logger.warning(
+                            f"⛔ [TAGGER] DL failed 3 times for {file_id[:15]} across all bots. Marking as 'download_failed'."
+                        )
                         async with db_lock:
-                            await db.execute("UPDATE FileRegistry SET tags='download_failed' WHERE file_id=?", (file_id,))
+                            await db.execute(
+                                "UPDATE FileRegistry SET tags='download_failed' WHERE file_id=?",
+                                (file_id,),
+                            )
                             await db.commit()
                         if file_id in TEMP_FAILED_FILES:
                             del TEMP_FAILED_FILES[file_id]
                     else:
-                        logger.warning(f"❌ DL fail for {file_id[:15]} across all bots (attempt {fail_cnt}/3). Skipping temporarily.")
-                        TEMP_FAILED_FILES[file_id] = {'until': time.time() + 300, 'cnt': fail_cnt}
+                        logger.warning(
+                            f"❌ DL fail for {file_id[:15]} across all bots (attempt {fail_cnt}/3). Skipping temporarily."
+                        )
+                        TEMP_FAILED_FILES[file_id] = {
+                            "until": time.time() + 300,
+                            "cnt": fail_cnt,
+                        }
                     continue
 
                 # 2. CPU (Хеши + РЕСАЙЗ)
-                res, error_msg = await loop.run_in_executor(None, process_image_cpu, img_bytes)
-                
+                res, error_msg = await loop.run_in_executor(
+                    None, process_image_cpu, img_bytes
+                )
+
                 if error_msg == "lottie_sticker":
-                    logger.info(f"🎨 [BG_TAGGER] Lottie Sticker {file_id[:12]} -> marked as 'sticker_animated'")
+                    logger.info(
+                        f"🎨 [BG_TAGGER] Lottie Sticker {file_id[:12]} -> marked as 'sticker_animated'"
+                    )
                     async with db_lock:
-                        await db.execute("UPDATE FileRegistry SET tags='sticker_animated' WHERE file_id=?", (file_id,))
+                        await db.execute(
+                            "UPDATE FileRegistry SET tags='sticker_animated' WHERE file_id=?",
+                            (file_id,),
+                        )
                         await db.commit()
                     continue
                 elif error_msg and "unsupported_format" in error_msg:
-                    logger.info(f"📁 [BG_TAGGER] Media {file_id[:12]} -> marked as 'format_unsupported'")
+                    logger.info(
+                        f"📁 [BG_TAGGER] Media {file_id[:12]} -> marked as 'format_unsupported'"
+                    )
                     async with db_lock:
-                        await db.execute("UPDATE FileRegistry SET tags='format_unsupported' WHERE file_id=?", (file_id,))
+                        await db.execute(
+                            "UPDATE FileRegistry SET tags='format_unsupported' WHERE file_id=?",
+                            (file_id,),
+                        )
                         await db.commit()
                     continue
                 elif not res:
@@ -545,91 +671,122 @@ async def tagging_loop():
                     # Сохраняем как ошибку, чтобы не долбить
                     sha_fail = hashlib.sha256(img_bytes).hexdigest()
                     async with db_lock:
-                        await db.executemany("UPDATE FileRegistry SET tags='error' WHERE file_id=?", [(file_id,)])
-                        await db.executemany("INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)", [(sha_fail, file_id, time.time())])
+                        await db.executemany(
+                            "UPDATE FileRegistry SET tags='error' WHERE file_id=?",
+                            [(file_id,)],
+                        )
+                        await db.executemany(
+                            "INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)",
+                            [(sha_fail, file_id, time.time())],
+                        )
                         await db.commit()
                     continue
 
                 sha, phash, b_hash, resized_bytes = res
                 tags = None
                 try:
-                    async with db.execute("SELECT tags FROM FileRegistry WHERE sha256 = ? AND tags IS NOT NULL AND tags != '' LIMIT 1", (sha,)) as cursor:
+                    async with db.execute(
+                        "SELECT tags FROM FileRegistry WHERE sha256 = ? AND tags IS NOT NULL AND tags != '' LIMIT 1",
+                        (sha,),
+                    ) as cursor:
                         row = await cursor.fetchone()
                         if row:
                             tags = row[0]
                             logger.info(f"♻️ Skip Neuro: Tags found for SHA {sha[:8]}")
-                except Exception: pass
+                except Exception as e:
+                    logger.error(
+                        f"DB Error checking existing tags for SHA {sha[:8]}: {e}"
+                    )
 
                 # 3. НЕЙРОНКА (Только если теги еще не найдены в БД)
                 if tags is None:
                     tags = await get_neuro_tags(resized_bytes)
-                
+
                 if tags == "error_413":
                     tags = "error_too_large"
-                
+
                 tag_mark = "🏷️" if (tags and "error" not in tags) else "⚪"
-                
+
                 save_success = False
-                has_suspicious = False # <--- ИНИЦИАЛИЗАЦИЯ
+                has_suspicious = False  # <--- ИНИЦИАЛИЗАЦИЯ
 
                 for attempt in range(10):
                     try:
                         async with db_lock:
-                            cursor = await db.execute("""
+                            cursor = await db.execute(
+                                """
                                 UPDATE FileRegistry 
                                 SET tags = ?, phash = ?, blurhash = ?
                                 WHERE file_id = ?
-                            """, (tags, phash, b_hash, file_id))
-                            
+                            """,
+                                (tags, phash, b_hash, file_id),
+                            )
+
                             if cursor.rowcount == 0:
-                                await db.execute("""
+                                await db.execute(
+                                    """
                                     INSERT INTO FileRegistry 
                                     (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                                     ON CONFLICT(sha256) DO UPDATE SET
                                         tags = excluded.tags,
                                         phash = excluded.phash
-                                """, (sha, phash, file_id, None, file_type, time.time(), b_hash, tags))
+                                """,
+                                    (
+                                        sha,
+                                        phash,
+                                        file_id,
+                                        None,
+                                        file_type,
+                                        time.time(),
+                                        b_hash,
+                                        tags,
+                                    ),
+                                )
 
                             await db.commit()
                         save_success = True
-                        logger.info(f"🖼 [BG_TAGGER] ✅ {file_type.upper()} {file_id[:12]} | {tag_mark} | Tags: '{tags[:200] if tags else 'none'}...'")
+                        logger.info(
+                            f"🖼 [BG_TAGGER] ✅ {file_type.upper()} {file_id[:12]} | {tag_mark} | Tags: '{tags[:200] if tags else 'none'}...'"
+                        )
                         break
                     except Exception as e:
                         if "locked" in str(e).lower():
                             await asyncio.sleep(0.5 * (attempt + 1))
                             continue
-                        logger.error(f"❌ [BG_TAGGER] DB Save error for {file_id[:12]}: {e}")
+                        logger.error(
+                            f"❌ [BG_TAGGER] DB Save error for {file_id[:12]}: {e}"
+                        )
                         break
-                
+
                 # === МОДЕРАЦИЯ (Deep Check) ===
                 should_deep_check = False
-                
+
                 # 1. Проверка по типу файла (видео чекаем всегда, так как теги по первому кадру могут врать)
-                if file_type in ['gif', 'video_note']:
+                if file_type in ["gif", "video_note"]:
                     should_deep_check = True
-                
+
                 # 2. Проверка по тегам (если файл успешно сохранен и теги есть)
                 elif save_success and tags and "error" not in tags:
                     tags_lower = tags.lower()
                     has_suspicious = any(w in tags_lower for w in SUSPICIOUS_KEYWORDS)
                     is_safe_style = any(s in tags_lower for s in SAFE_KEYWORDS)
-                    
+
                     # Чекаем только если есть подозрительные слова И ЭТО НЕ безопасный стиль (аниме/арт)
                     if has_suspicious and not is_safe_style:
                         should_deep_check = True
-                
+
                 if should_deep_check:
                     logger.warning(f"🛡️ Triggered DEEP CHECK for {file_id}")
                     spawn_task(run_deep_check(resized_bytes, file_id))
-                
+
                 if not tags:
                     TEMP_FAILED_FILES[file_id] = time.time() + 60
 
             except Exception as e:
                 logger.error(f"💥 Crit fail {file_id}: {e}")
                 TEMP_FAILED_FILES[file_id] = time.time() + 300
-            
+
             # Пауза между файлами (чтобы не спамить в Groq)
             await asyncio.sleep(2)
 
