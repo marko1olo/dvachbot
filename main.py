@@ -8453,7 +8453,9 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
             row = await c.fetchone()
             bal = row[0] if row and row[0] is not None else 0
     if bal < amount:
-        await message.answer(f"❌ Не хватает бабок. Ставка {amount} RUB, у тебя {int(bal)} RUB.")
+        safe_amount = html.escape(str(amount))
+        safe_bal = html.escape(str(int(bal)))
+        await message.answer(f"❌ Не хватает бабок. Ставка {safe_amount} RUB, у тебя {safe_bal} RUB.")
         return
 
     # Записываем время последнего вызова
