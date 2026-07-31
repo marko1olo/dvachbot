@@ -23,7 +23,7 @@ mocked_deps = [
     'site_tgach.security', 'site_tgach.image_processing', 'site_tgach.catbox',
     'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
     'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
-    'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
+    'site_tgach.voice_processing', 'site_tgach.html_sanitizer', 'warhammer_mode', 'japanese_translator',
     'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
     'fastapi', 'fastapi.responses', 'fastapi.middleware', 'fastapi.middleware.cors',
     'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip',
@@ -444,7 +444,7 @@ class TestSanitizeHtml(unittest.TestCase):
 from PIL import Image as PilImage
 
 class TestResizeImageIfNeeded(unittest.TestCase):
-    def create_image_bytes(self, width, height, format="JPEG", mode="RGB", extra_bytes=b""):
+    def create_image_bytes(self, width, height, format="JPEG", mode="RGB", extra_bytes=b""):  # noqa: PLR0913
         img = PilImage.new(mode, (width, height), color="red")
         b = io.BytesIO()
         img.save(b, format=format)
