@@ -2335,7 +2335,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                         ref_post_num, recipient_id, thread_id = row
                         if recipient_id > 0 and recipient_id != author_id:
                             # Если thread_id is None (чат), используем ID поста, на который отвечаем (ref_post_num)
-                            final_thread_id = thread_id if thread_id is not None else ref_post_num
+                            final_thread_id = str(thread_id if thread_id is not None else ref_post_num)
                             notifications_to_insert.append((
                                 recipient_id, 
                                 source_post_num, 
@@ -2345,33 +2345,15 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                                 current_time
                             ))
                 if notifications_to_insert:
-                    # FIX: Если t_id is None (чат), используем ID поста, на который отвечаем (rep_num)
-                    notifications_to_insert_fixed = [
-                        (r_id, src_num, rep_num, b_id, str(t_id) if t_id else str(rep_num), c_time)
-                        for (r_id, src_num, rep_num, b_id, t_id, c_time) in notifications_to_insert
-                    ]
                     await db.executemany(
                         """INSERT INTO NotificationQueue 
                            (recipient_id, source_post_num, reply_post_num, board_id, thread_id, created_at) 
                            VALUES (?, ?, ?, ?, ?, ?)""",
-                        notifications_to_insert_fixed
+                        notifications_to_insert
                     )
-                    # Здесь были слиты ДВА варианта одного comprehension, и это
-                    # был не мёртвый код, а поломка. Python разбирал
-                    # "... for ... in notifications_to_insert (r_id, ...)" как
-                    # ВЫЗОВ списка с кортежем в аргументах, а имена r_id/t_id/
-                    # src_num/rep_num в этой позиции ещё не связаны — первый же
-                    # проход давал NameError: name 'r_id' is not defined.
-                    # Исключение ловил except Exception ниже, тот делал ROLLBACK
-                    # и break, откатывая ВСЮ транзакцию вместе со вставкой в
-                    # NotificationQueue. То есть ни одно упоминание не порождало
-                    # ни уведомления в боте, ни записи «ответы вам» на сайте.
-                    # Оставлен вариант по notifications_to_insert_fixed: там
-                    # приведение t_id уже сделано выше, результат обоих
-                    # вариантов побайтово одинаков.
                     site_notifs = [
                         (r_id, board_id, t_id, src_num, rep_num, 0, current_time)
-                        for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert_fixed
+                        for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert
                     ]
                     await db.executemany(
                         """INSERT INTO UserReplies 
