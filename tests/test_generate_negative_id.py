@@ -91,5 +91,31 @@ class TestGenerateNegativeId(unittest.TestCase):
         self.assertTrue(res < 0)
         self.assertIsInstance(res, int)
 
+    def test_boundary_conditions(self):
+        with unittest.mock.patch('hashlib.sha256') as mock_sha256:
+            # Mock hash resulting in 0
+            mock_sha256.return_value.hexdigest.return_value = "00000000000000000000000000000000"
+            self.assertEqual(generate_negative_id_dub("token"), -1)
+            self.assertEqual(generate_negative_id_site("token"), -1)
+
+            # Mock hash resulting in val % 2147483647 == 2147483646
+            # 7ffffffe in hex is 2147483646
+            mock_sha256.return_value.hexdigest.return_value = "7ffffffe000000000000000000000000"
+            self.assertEqual(generate_negative_id_dub("token"), -2147483647)
+            self.assertEqual(generate_negative_id_site("token"), -2147483647)
+
+    def test_invalid_input(self):
+        with self.assertRaises(AttributeError):
+            generate_negative_id_dub(None)
+
+        with self.assertRaises(AttributeError):
+            generate_negative_id_dub(123)
+
+        with self.assertRaises(AttributeError):
+            generate_negative_id_site(None)
+
+        with self.assertRaises(AttributeError):
+            generate_negative_id_site(123)
+
 if __name__ == '__main__':
     unittest.main()
