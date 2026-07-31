@@ -90,25 +90,20 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                         channel_messages_to_delete = await cursor.fetchall()
 
                     # Удаляем из Posts
-                    await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                    await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", posts_to_delete_nums)  # nosec B608
 
                     # Удаляем из PostCopies
-                    await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                    await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)  # nosec B608
 
                     # Удаляем из ChannelCopies
-                    await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)
+                    await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)  # nosec B608
 
                     # Удаляем из UserReplies
-                    await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders})", posts_to_delete_nums + posts_to_delete_nums)
-                    await db.execute(f"DELETE FROM Posts WHERE post_num IN ({placeholders})", posts_to_delete_nums)  # nosec B608
-                    await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)  # nosec B608
-                    await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", posts_to_delete_nums)  # nosec B608
                     await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders})", posts_to_delete_nums + posts_to_delete_nums)  # nosec B608
 
                     # Удаляем из Threads
                     if threads_to_delete:
                         t_placeholders = ','.join('?' for _ in threads_to_delete)
-                        await db.execute(f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})", threads_to_delete)
                         await db.execute(f"DELETE FROM Threads WHERE thread_id IN ({t_placeholders})", threads_to_delete)  # nosec B608
 
                     await db.execute("COMMIT")
