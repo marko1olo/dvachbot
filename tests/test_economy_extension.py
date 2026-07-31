@@ -26,6 +26,8 @@ import pytest
 from aiogram import Dispatcher, Router
 from aiogram.filters import Command
 from aiogram.types import Chat, Message, User
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from economy_extension import cmd_work_menu
 
 from tests.economy_live import dp_own_handlers, live_handler, sub_router_handlers
 
@@ -148,3 +150,32 @@ async def test_router_handler_runs_when_dispatcher_has_none():
     await dp.propagate_event("message", _synthetic_message("/rob"),
                              bot=mock.MagicMock())
     assert fired == ["router"]
+
+@pytest.mark.asyncio
+async def test_cmd_work_menu_returns_buttons():
+    message = mock.AsyncMock(spec=Message)
+    message.reply = mock.AsyncMock()
+    message.delete = mock.AsyncMock()
+
+    await cmd_work_menu(message, board_id="test_board")
+
+    message.reply.assert_called_once()
+    args, kwargs = message.reply.call_args
+    assert "Биржа Труда (Заработок)" in args[0]
+
+    kb = kwargs.get("reply_markup")
+    assert isinstance(kb, InlineKeyboardMarkup)
+    assert len(kb.inline_keyboard) == 2
+    assert kb.inline_keyboard[0][0].callback_data == "work_bottles"
+    assert kb.inline_keyboard[1][0].callback_data == "work_sell_mother"
+
+    message.delete.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_cmd_work_menu_no_board_id():
+    message = mock.AsyncMock(spec=Message)
+    message.reply = mock.AsyncMock()
+
+    await cmd_work_menu(message, board_id=None)
+
+    message.reply.assert_not_called()
