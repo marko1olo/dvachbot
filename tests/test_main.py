@@ -48,7 +48,10 @@ for dep in mocked_deps:
 # Return MagicMock for any attribute access on our mocked modules
 for mod_name in sys.modules:
     if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
-        sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
+        try:
+            sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
+        except AttributeError:
+            pass
 
 # Stub async_lru.alru_cache so it acts as an identity decorator instead of returning MagicMock.
 # Without this, @alru_cache(...) wraps async functions and replaces them with MagicMock

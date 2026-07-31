@@ -59,6 +59,15 @@ import threading
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
+try:
+    import pandas as pd
+    import matplotlib
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    matplotlib.use('Agg')  # Используем бэкенд, не требующий GUI
+    GRAPH_LIBS_AVAILABLE = True
+except ImportError:
+    GRAPH_LIBS_AVAILABLE = False
 from PIL import Image, ImageDraw, ImageFont
 from collections import deque, defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -211,15 +220,6 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 from typing import Callable, Dict, Any, Awaitable, Optional
 from roulette_logic import load_roulette_data, get_random_event, ROULETTE_COOLDOWN_PHRASES, ROULETTE_RESULT_PHRASES
-try:
-    import pandas as pd
-    import matplotlib
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-    matplotlib.use('Agg')  # Используем бэкенд, не требующий GUI
-    GRAPH_LIBS_AVAILABLE = True
-except ImportError:
-    GRAPH_LIBS_AVAILABLE = False
 ANIME_COMMAND_MAP = {
     "fap": get_random_anime_image,
     "Fap": get_random_anime_image,
