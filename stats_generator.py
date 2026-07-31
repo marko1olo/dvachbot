@@ -91,9 +91,9 @@ def save_chart(images: list, filename: str, bbox_inches=None):
 def _generate_chart_1(thirty_days_ago, c, images):
     # 1. Объем высеров (Posts per day)
     c.execute('''
-        SELECT date(timestamp, 'unixepoch', 'localtime') as d, COUNT(*) as cnt 
-        FROM Posts 
-        WHERE timestamp > ? 
+        SELECT date(timestamp, 'unixepoch', 'localtime') as d, COUNT(*) as cnt
+        FROM Posts
+        WHERE timestamp > ?
         GROUP BY d ORDER BY d
     ''', (thirty_days_ago,))
     data = c.fetchall()
@@ -114,9 +114,9 @@ def _generate_chart_1(thirty_days_ago, c, images):
 def _generate_chart_2(c, images):
     # 2. Уникальные шизы (Weekly Active Users)
     c.execute('''
-        SELECT strftime('%Y-%W', datetime(timestamp, 'unixepoch', 'localtime')) as week, COUNT(DISTINCT author_id) as cnt 
-        FROM Posts 
-        WHERE timestamp > ? 
+        SELECT strftime('%Y-%W', datetime(timestamp, 'unixepoch', 'localtime')) as week, COUNT(DISTINCT author_id) as cnt
+        FROM Posts
+        WHERE timestamp > ?
         GROUP BY week ORDER BY week
     ''', (time.time() - (60 * 24 * 3600),)) # 60 days to show weekly trends better
     data = c.fetchall()
@@ -132,20 +132,20 @@ def _generate_chart_2(c, images):
 def _generate_chart_3(thirty_days_ago, c, images):
     # 3. Матоемкость борды
     c.execute('''
-        SELECT date(timestamp, 'unixepoch', 'localtime') as d, content 
-        FROM Posts 
-        WHERE timestamp > ? 
+        SELECT date(timestamp, 'unixepoch', 'localtime') as d, content
+        FROM Posts
+        WHERE timestamp > ?
     ''', (thirty_days_ago,))
     data = c.fetchall()
     if data:
         daily_stats = {}
         swear_roots = ['хуй', 'хуе', 'хуя', 'бля', 'пизд', 'еба', 'пидор', 'гандон', 'шлюх', 'мудак']
-        
+
         for r in data:
             d = r['d']
             if d not in daily_stats:
                 daily_stats[d] = {'total': 0, 'toxic': 0}
-            
+
             daily_stats[d]['total'] += 1
             content_raw = r['content']
             if content_raw:
@@ -154,16 +154,16 @@ def _generate_chart_3(thirty_days_ago, c, images):
                     text = content_data.get('text', '') or content_data.get('caption', '') or ''
                 except Exception:
                     text = content_raw
-                
+
                 content_lower = text.lower()
                 if any(root in content_lower for root in swear_roots):
                     daily_stats[d]['toxic'] += 1
-                
+
         plot_data = []
         for d, stats in sorted(daily_stats.items()):
             toxic_percent = (stats['toxic'] / stats['total']) * 100 if stats['total'] > 0 else 0
             plot_data.append({'d': d, 'toxic_percent': toxic_percent})
-            
+
         df = pd.DataFrame(plot_data)
         fig, ax = plt.subplots(figsize=(10, 5))
         xs3 = list(range(len(df)))
@@ -180,8 +180,8 @@ def _generate_chart_3(thirty_days_ago, c, images):
 def _generate_chart_4(thirty_days_ago, c, images):
     # 4. Топ-10 Главных Шизоидов
     c.execute('''
-        SELECT author_id, COUNT(*) as cnt 
-        FROM Posts 
+        SELECT author_id, COUNT(*) as cnt
+        FROM Posts
         WHERE author_id IS NOT NULL AND timestamp > ?
         GROUP BY author_id ORDER BY cnt DESC LIMIT 10
     ''', (thirty_days_ago,))
@@ -196,7 +196,7 @@ def _generate_chart_4(thirty_days_ago, c, images):
         plt.ylabel('')
         ax.set_xlim(0, df['cnt'].max() * 1.12)
         for idx, row in df.iterrows():
-            ax.text(row['cnt'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['cnt'])}", 
+            ax.text(row['cnt'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['cnt'])}",
                     va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
         plt.tight_layout()
         save_chart(images, '4_top_schizos.png')
@@ -204,7 +204,7 @@ def _generate_chart_4(thirty_days_ago, c, images):
 def _generate_chart_5(thirty_days_ago, c, images):
     # 5. Главные Провокаторы (Топ-5 юзеров, кому больше всего отвечают)
     c.execute('''
-        SELECT orig.author_id, COUNT(*) as cnt 
+        SELECT orig.author_id, COUNT(*) as cnt
         FROM Posts repl
         JOIN Posts orig ON repl.reply_to_post_num = orig.post_num AND repl.board_id = orig.board_id
         WHERE repl.timestamp > ? AND orig.author_id IS NOT NULL
@@ -249,7 +249,7 @@ def _generate_chart_6(thirty_days_ago, c, images):
                     lengths.append(len(text))
             except:
                 pass
-        
+
         if lengths:
             df = pd.DataFrame({'length': lengths})
             df = df[df['length'] < 1000]
@@ -268,7 +268,7 @@ def _generate_chart_6(thirty_days_ago, c, images):
 def _generate_chart_7(thirty_days_ago, c, images):
     # 7+8+9. Три пирога в одном — Ночники / Медиа / Диалог
     c.execute('''
-        SELECT 
+        SELECT
             SUM(CASE WHEN cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) BETWEEN 1 AND 6 THEN 1 ELSE 0 END) as night_posts,
             SUM(CASE WHEN cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) NOT BETWEEN 1 AND 6 THEN 1 ELSE 0 END) as day_posts,
             SUM(CASE WHEN content LIKE '%"type": "text"%' THEN 1 ELSE 0 END) as text_posts,
@@ -309,11 +309,11 @@ def _generate_chart_7(thirty_days_ago, c, images):
 def _generate_chart_8(thirty_days_ago, c, images):
     # 10. Тепловая карта активности (Heatmap)
     c.execute('''
-        SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w, 
-               cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h, 
-               COUNT(*) as cnt 
-        FROM Posts 
-        WHERE timestamp > ? 
+        SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w,
+               cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h,
+               COUNT(*) as cnt
+        FROM Posts
+        WHERE timestamp > ?
         GROUP BY w, h
     ''', (thirty_days_ago,))
     data = c.fetchall()
@@ -325,7 +325,7 @@ def _generate_chart_8(thirty_days_ago, c, images):
         # Ensure all weekdays are present in index and reorder (1=Mon, 2=Tue... 6=Sat, 0=Sun)
         heatmap_data = heatmap_data.reindex(index=[1, 2, 3, 4, 5, 6, 0], fill_value=0)
         heatmap_data.index = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
-        
+
         fig, ax = plt.subplots(figsize=(12, 6))
         sns.heatmap(heatmap_data, cmap="inferno", linewidths=.5, ax=ax)
         plt.title('10. Циркадные ритмы Анона (Активность по часам/дням)', fontsize=16, fontweight='bold', color="#ffaa00")
@@ -356,25 +356,25 @@ def _generate_chart_9(thirty_days_ago, c, images):
                     G[u][v]['weight'] += w
                 else:
                     G.add_edge(u, v, weight=w)
-            
+
             if len(G) > 0:
                 top_nodes = [node for node, degree in sorted(G.degree(), key=lambda x: x[1], reverse=True)[:100]]
                 G_sub = G.subgraph(top_nodes).copy()
-                
+
                 communities = nx.community.louvain_communities(G_sub)
                 community_map = {}
                 for i, comm in enumerate(communities):
                     for node in comm:
                         community_map[node] = i
-                        
+
                 colors = [community_map.get(node, 0) for node in G_sub.nodes()]
-                
+
                 fig, ax = plt.subplots(figsize=(10, 8))
                 pos = nx.spring_layout(G_sub, k=0.18, seed=42)
-                
+
                 nx.draw_networkx_nodes(G_sub, pos, node_size=120, node_color=colors, cmap=plt.cm.tab20, ax=ax)
                 nx.draw_networkx_edges(G_sub, pos, alpha=0.3, edge_color='#555555', ax=ax)
-                
+
                 plt.title('11. Граф Социального Пузыря (Эхо-камеры)', fontsize=16, fontweight='bold', color="#00ffcc")
                 ax.axis('off')
                 plt.tight_layout()
@@ -393,14 +393,14 @@ def _generate_chart_10(edges_data, images):
                 u, v, w = edge['replier'], edge['original'], edge['weight']
                 if u == v: continue
                 DiG.add_edge(u, v, weight=w)
-                
+
             if len(DiG) > 0:
                 pagerank_scores = nx.pagerank(DiG, weight='weight')
                 sorted_pr = sorted(pagerank_scores.items(), key=lambda x: x[1], reverse=True)[:10]
-                
+
                 df_pr = pd.DataFrame(sorted_pr, columns=['author_id', 'pagerank'])
                 df_pr['author_name'] = df_pr['author_id'].apply(generate_schizo_name)
-                
+
                 fig, ax = plt.subplots(figsize=(10, 5))
                 sns.barplot(data=df_pr, y='author_name', x='pagerank', hue='author_name', palette="cool", legend=False, ax=ax)
                 plt.title('12. Топ-10 Хабов Внимания (PageRank)', fontsize=16, fontweight='bold', color="#ff00ff")
@@ -408,7 +408,7 @@ def _generate_chart_10(edges_data, images):
                 plt.ylabel('')
                 ax.set_xlim(0, df_pr['pagerank'].max() * 1.15)
                 for idx, row in df_pr.iterrows():
-                    ax.text(row['pagerank'] + (ax.get_xlim()[1] * 0.01), idx, f"{row['pagerank']:.4f}", 
+                    ax.text(row['pagerank'] + (ax.get_xlim()[1] * 0.01), idx, f"{row['pagerank']:.4f}",
                             va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
                 save_chart(images, '12_pagerank.png')
@@ -436,7 +436,7 @@ def _generate_chart_11(edges_data, images):
                 reciprocity = 2 * min(w_u, w_v)
                 if reciprocity > 0:
                     mutual_list.append((u, v, reciprocity))
-                    
+
             if mutual_list:
                 sorted_mutual = sorted(mutual_list, key=lambda x: x[2], reverse=True)[:10]
                 plot_data = []
@@ -444,7 +444,7 @@ def _generate_chart_11(edges_data, images):
                     name_u = generate_schizo_name(u)
                     name_v = generate_schizo_name(v)
                     plot_data.append({'pair': f"{name_u} & {name_v}", 'score': rec})
-                    
+
                 df_mut = pd.DataFrame(plot_data)
                 fig, ax = plt.subplots(figsize=(12, 8))
                 sns.barplot(data=df_mut, y='pair', x='score', hue='pair', palette="spring", legend=False, ax=ax)
@@ -453,7 +453,7 @@ def _generate_chart_11(edges_data, images):
                 plt.ylabel('')
                 ax.set_xlim(0, df_mut['score'].max() * 1.12)
                 for idx, row in df_mut.iterrows():
-                    ax.text(row['score'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['score'])}", 
+                    ax.text(row['score'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['score'])}",
                             va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
                 save_chart(images, '13_circlejerk.png')
@@ -464,8 +464,8 @@ def _generate_chart_12(thirty_days_ago, c, images):
     # 14. Сессионный Анализ (Длина сессий)
     try:
         c.execute('''
-            SELECT author_id, timestamp 
-            FROM Posts 
+            SELECT author_id, timestamp
+            FROM Posts
             WHERE timestamp > ? AND author_id IS NOT NULL
             ORDER BY author_id, timestamp
         ''', (thirty_days_ago,))
@@ -478,13 +478,13 @@ def _generate_chart_12(thirty_days_ago, c, images):
                 if uid not in user_posts:
                     user_posts[uid] = []
                 user_posts[uid].append(ts)
-                
+
             session_durations = []
             for uid, times in user_posts.items():
                 if len(times) == 1:
                     session_durations.append(1.0)
                     continue
-                
+
                 start_ts = times[0]
                 prev_ts = times[0]
                 for ts in times[1:]:
@@ -495,11 +495,11 @@ def _generate_chart_12(thirty_days_ago, c, images):
                     prev_ts = ts
                 duration = max((prev_ts - start_ts) / 60.0, 1.0)
                 session_durations.append(duration)
-                
+
             if session_durations:
                 df_sess = pd.DataFrame({'duration': session_durations})
                 df_sess = df_sess[df_sess['duration'] < 180]
-                
+
                 fig, ax = plt.subplots(figsize=(10, 5))
                 sns.histplot(df_sess['duration'], bins=30, color="#ff9933", kde=True, ax=ax)
                 plt.title('14. Длина непрерывного залипания (Сессии)', fontsize=16, fontweight='bold', color="#ff9933")
@@ -510,83 +510,87 @@ def _generate_chart_12(thirty_days_ago, c, images):
     except Exception as e:
         print(f"Error Chart 14: {e}")
 
+
+def _clean_text_local(raw_content):
+    if not raw_content:
+        return ""
+    try:
+        content_dict = json.loads(raw_content)
+        text = content_dict.get('text', '') or content_dict.get('caption', '') or ''
+    except Exception:
+        text = raw_content
+    if not text:
+        return ""
+    text_clean = re.sub(r'<[^>]+>', '', text)
+    return text_clean
+
+# Expand stop words dynamically
+
+RADAR_STOP_WORDS = RU_STOP.union({
+    'prefixes', 'prefix', 'injections', 'injection', 'signatures', 'signature',
+    'info', 'entry', 'exit', 'take', 'profit', 'zone', 'price', 'reason',
+    'buy', 'sell', 'usdt', 'btc', 'eth', 'sol', 'xmr', 'ltc', 'trx', 'trc',
+    'trc20', 'ton', 'sim', 'pnl', 'gross', 'net', 'limit', 'stop', 'cringe', 'report'
+})
+
+
+def _get_word_counts(posts_list):
+    from collections import Counter
+    counts = Counter()
+    for row in posts_list:
+        # 1. Skip system posts
+        if row.get('author_id') in (0, 1163970492):
+            continue
+
+        text = _clean_text_local(row['content'])
+
+        # 2. Skip logs and reports structurally
+        if text.count('|') >= 3:
+            continue
+        if '[INFO]' in text or '[DEBUG]' in text or '[ERROR]' in text:
+            continue
+        if 'ChatGPT Cringe Report' in text or 'нелепых и шаблонных фразах' in text:
+            continue
+
+        tokens = re.findall(r'[a-zA-Zа-яА-ЯёЁ]{4,}', text.lower())
+        for t in tokens:
+            if t not in RADAR_STOP_WORDS:
+                counts[t] += 1
+    return counts
+
+
 def _generate_chart_13(c, images):
     # 15. Мем-Радар: Взлетающие Тренды (Rising Keywords)
     try:
         now_ts = time.time()
         seven_days_ago = now_ts - (7 * 24 * 3600)
         fourteen_days_ago = now_ts - (14 * 24 * 3600)
-        
+
         c.execute("SELECT content, author_id FROM Posts WHERE timestamp > ?", (seven_days_ago,))
         this_week_posts = c.fetchall()
-        
+
         c.execute("SELECT content, author_id FROM Posts WHERE timestamp BETWEEN ? AND ?", (fourteen_days_ago, seven_days_ago))
         last_week_posts = c.fetchall()
-        
-        def clean_text_local(raw_content):
-            if not raw_content:
-                return ""
-            try:
-                content_dict = json.loads(raw_content)
-                text = content_dict.get('text', '') or content_dict.get('caption', '') or ''
-            except Exception:
-                text = raw_content
-            if not text:
-                return ""
-            text_clean = re.sub(r'<[^>]+>', '', text)
-            return text_clean
 
-        # Expand stop words dynamically
-        radar_stop = RU_STOP.union({
-            'prefixes', 'prefix', 'injections', 'injection', 'signatures', 'signature', 
-            'info', 'entry', 'exit', 'take', 'profit', 'zone', 'price', 'reason', 
-            'buy', 'sell', 'usdt', 'btc', 'eth', 'sol', 'xmr', 'ltc', 'trx', 'trc', 
-            'trc20', 'ton', 'sim', 'pnl', 'gross', 'net', 'limit', 'stop', 'cringe', 'report'
-        })
+        this_week_counts = _get_word_counts(this_week_posts)
+        last_week_counts = _get_word_counts(last_week_posts)
 
-        def get_word_counts(posts_list):
-            from collections import Counter
-            counts = Counter()
-            for row in posts_list:
-                # 1. Skip system posts
-                if row.get('author_id') in (0, 1163970492):
-                    continue
-                    
-                text = clean_text_local(row['content'])
-                
-                # 2. Skip logs and reports structurally
-                if text.count('|') >= 3:
-                    continue
-                if '[INFO]' in text or '[DEBUG]' in text or '[ERROR]' in text:
-                    continue
-                if 'ChatGPT Cringe Report' in text or 'нелепых и шаблонных фразах' in text:
-                    continue
-                    
-                tokens = re.findall(r'[a-zA-Zа-яА-ЯёЁ]{4,}', text.lower())
-                for t in tokens:
-                    if t not in radar_stop:
-                        counts[t] += 1
-            return counts
-
-        this_week_counts = get_word_counts(this_week_posts)
-        last_week_counts = get_word_counts(last_week_posts)
-        
         rising_words = []
         for word, c1 in this_week_counts.items():
             c2 = last_week_counts.get(word, 0)
             if c1 >= 5 and c1 > c2:
                 pct_change = ((c1 - c2) / c2) * 100 if c2 > 0 else c1 * 100
                 rising_words.append({'word': word, 'c1': c1, 'c2': c2, 'change': pct_change})
-                
+
         rising_words = sorted(rising_words, key=lambda x: x['change'], reverse=True)[:20]
-        
+
         if rising_words:
             df_radar = pd.DataFrame(rising_words)
             df_left = df_radar.iloc[:10].reset_index(drop=True)
             df_right = df_radar.iloc[10:20].reset_index(drop=True)
-            
+
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 7))
-            
+
             # Left subplot (Top 1-10)
             if not df_left.empty:
                 sns.barplot(data=df_left, x='change', y='word', hue='word', palette="Reds_r", legend=False, ax=ax1)
@@ -594,9 +598,9 @@ def _generate_chart_13(c, images):
                 ax1.set_xlabel('Прирост (%)')
                 ax1.set_ylabel('')
                 for idx, row in df_left.iterrows():
-                    ax1.text(row['change'] + (ax1.get_xlim()[1]*0.01), idx, f"+{int(row['change'])}%", 
+                    ax1.text(row['change'] + (ax1.get_xlim()[1]*0.01), idx, f"+{int(row['change'])}%",
                             va='center', fontsize=9, fontweight='bold', color="#ff3333")
-                            
+
             # Right subplot (Top 11-20)
             if not df_right.empty:
                 sns.barplot(data=df_right, x='change', y='word', hue='word', palette="Oranges_r", legend=False, ax=ax2)
@@ -604,9 +608,9 @@ def _generate_chart_13(c, images):
                 ax2.set_xlabel('Прирост (%)')
                 ax2.set_ylabel('')
                 for idx, row in df_right.iterrows():
-                    ax2.text(row['change'] + (ax2.get_xlim()[1]*0.01), idx, f"+{int(row['change'])}%", 
+                    ax2.text(row['change'] + (ax2.get_xlim()[1]*0.01), idx, f"+{int(row['change'])}%",
                             va='center', fontsize=9, fontweight='bold', color="#ff9933")
-                            
+
             plt.suptitle('15. Мем-Радар: Взлетающие Тренды (Прирост за неделю)', fontsize=16, fontweight='bold', color="#ffaa00", y=0.96)
             plt.tight_layout(rect=[0, 0, 1, 0.95])
             save_chart(images, '15_autocorrelation.png')
@@ -618,7 +622,7 @@ def _generate_chart_14(thirty_days_ago, c, images):
     try:
         from collections import Counter
         c.execute('''
-            SELECT content FROM Posts 
+            SELECT content FROM Posts
             WHERE timestamp > ? AND content IS NOT NULL
         ''', (thirty_days_ago,))
         word_data = c.fetchall()
@@ -640,7 +644,7 @@ def _generate_chart_14(thirty_days_ago, c, images):
                 'http', 'https', 'www', 'com', 'ru', 'org', 'net', 'href', 'html', 'code', 'emoji', 'span', 'div', 'class', 'style', 'br', 'li', 'ul', 'ol', 'pre', 'img', 'src', 'width', 'height', 'alt', 'title', 'target', 'blank', 'rel', 'noopener', 'noreferrer', 'data',
                 'tgach', 'тгач', 'chatbot', 'dvach', 'dvachbot', 'bot', 'id', 'user', 'author', 'posts', 'post', 'thread', 'board', 'text', 'type', 'message', 'telegram', 'entities', 'url'
             }
-            
+
             words_list = []
             for r in word_data:
                 content_raw = r['content']
@@ -653,21 +657,21 @@ def _generate_chart_14(thirty_days_ago, c, images):
                     text = content_raw
                 if not text:
                     continue
-                
+
                 # Strip HTML tags
                 text_clean = re.sub(r'<[^>]+>', '', text)
-                
+
                 # Tokenize cyrillic and latin words
                 tokens = re.findall(r'[a-zA-Zа-яА-ЯёЁ]+', text_clean.lower())
                 for token in tokens:
                     if len(token) > 3 and token not in ru_stop:
                         words_list.append(token)
-            
+
             counter = Counter(words_list)
             top_words = counter.most_common(30)
             if top_words:
                 df_words = pd.DataFrame(top_words, columns=['Слово', 'Частота'])
-                
+
                 fig, ax = plt.subplots(figsize=(10, 10))
                 sns.barplot(data=df_words, x='Частота', y='Слово', hue='Слово', palette="plasma", legend=False, ax=ax)
                 plt.title('16. Частотный Шитпост-Словарь (Топ-30 Слов)', fontsize=16, fontweight='bold', color="#ff33cc")
@@ -675,7 +679,7 @@ def _generate_chart_14(thirty_days_ago, c, images):
                 plt.ylabel('')
                 ax.set_xlim(0, df_words['Частота'].max() * 1.12)
                 for idx, row in df_words.iterrows():
-                    ax.text(row['Частота'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['Частота'])}", 
+                    ax.text(row['Частота'] + (ax.get_xlim()[1] * 0.01), idx, f"{int(row['Частота'])}",
                             va='center', ha='left', fontsize=9, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
                 save_chart(images, '16_top_words.png')
@@ -686,30 +690,30 @@ def _generate_chart_15(thirty_days_ago, c, images):
     # 17. Индекс Токсичности (Сентимент)
     try:
         c.execute('''
-            SELECT date(timestamp, 'unixepoch', 'localtime') as d, content 
-            FROM Posts 
+            SELECT date(timestamp, 'unixepoch', 'localtime') as d, content
+            FROM Posts
             WHERE timestamp > ? AND content IS NOT NULL
         ''', (thirty_days_ago,))
         sentiment_posts = c.fetchall()
         if sentiment_posts:
             pos_words = {'база', 'базирован', 'красавчик', 'хорош', 'круто', 'ахуенно', 'охуенно', 'люблю', 'спасибо', 'четко', 'класс', 'лучший', 'добро'}
             neg_words = {'говно', 'хуйня', 'пидор', 'сука', 'урод', 'ненавижу', 'смерть', 'боль', 'плохо', 'худший', 'тупой', 'дебил', 'долбоеб', 'даун', 'мразь', 'ебать', 'хуй', 'бля', 'пиздец'}
-            
+
             daily_sent = {}
             for r in sentiment_posts:
                 d = r['d']
                 if d not in daily_sent:
                     daily_sent[d] = []
-                    
+
                 try:
                     content_dict = json.loads(r['content'])
                     text = (content_dict.get('text') or content_dict.get('caption') or '').lower()
                 except:
                     text = (r['content'] or '').lower()
-                    
+
                 if not text:
                     continue
-                    
+
                 words = text.split()
                 score = 0
                 for w in words:
@@ -719,12 +723,12 @@ def _generate_chart_15(thirty_days_ago, c, images):
                     elif w_clean in neg_words:
                         score -= 1
                 daily_sent[d].append(score)
-                
+
             plot_data = []
             for d, scores in sorted(daily_sent.items()):
                 avg_score = sum(scores) / len(scores) if scores else 0.0
                 plot_data.append({'d': d, 'sentiment': avg_score})
-                
+
             if plot_data:
                 df_sent = pd.DataFrame(plot_data)
                 fig, ax = plt.subplots(figsize=(10, 5))
@@ -749,8 +753,8 @@ def _generate_chart_16(thirty_days_ago, c, images):
     # 18. Лексическое Разнообразие (MSTTR)
     try:
         c.execute('''
-            SELECT author_id, content 
-            FROM Posts 
+            SELECT author_id, content
+            FROM Posts
             WHERE timestamp > ? AND author_id IS NOT NULL AND content IS NOT NULL
         ''', (thirty_days_ago,))
         ttr_data = c.fetchall()
@@ -767,17 +771,17 @@ def _generate_chart_16(thirty_days_ago, c, images):
                     if uid not in user_texts:
                         user_texts[uid] = []
                     user_texts[uid].append(text.lower())
-                    
+
             sorted_users = sorted(user_texts.items(), key=lambda x: len(x[1]), reverse=True)[:10]
-            
+
             msttr_results = []
             for uid, texts in sorted_users:
                 full_text = " ".join(texts)
                 words = [w.strip('.,!?-()":;') for w in full_text.split() if w.strip('.,!?-()":;')]
-                
+
                 segment_size = 100
                 segments = [words[i:i + segment_size] for i in range(0, len(words), segment_size) if len(words[i:i + segment_size]) == segment_size]
-                
+
                 if segments:
                     ttrs = []
                     for seg in segments:
@@ -785,13 +789,13 @@ def _generate_chart_16(thirty_days_ago, c, images):
                     msttr = sum(ttrs) / len(ttrs)
                 else:
                     msttr = len(set(words)) / len(words) if words else 0.0
-                    
+
                 msttr_results.append((uid, msttr))
-                
+
             if msttr_results:
                 df_ttr = pd.DataFrame(msttr_results, columns=['author_id', 'msttr'])
                 df_ttr['author_name'] = df_ttr['author_id'].apply(generate_schizo_name)
-                
+
                 fig, ax = plt.subplots(figsize=(10, 5))
                 sns.barplot(data=df_ttr, y='author_name', x='msttr', hue='author_name', palette="coolwarm", legend=False, ax=ax)
                 plt.title('18. Лексическое Разнообразие (Разнообразие Словарного Запаса)', fontsize=16, fontweight='bold', color="#ffcc00")
@@ -799,7 +803,7 @@ def _generate_chart_16(thirty_days_ago, c, images):
                 plt.ylabel('')
                 ax.set_xlim(0, df_ttr['msttr'].max() * 1.15)
                 for idx, row in df_ttr.iterrows():
-                    ax.text(row['msttr'] + (ax.get_xlim()[1] * 0.01), idx, f"{row['msttr']:.3f}", 
+                    ax.text(row['msttr'] + (ax.get_xlim()[1] * 0.01), idx, f"{row['msttr']:.3f}",
                             va='center', ha='left', fontsize=10, fontweight='bold', color="#ffffff")
                 plt.tight_layout()
                 save_chart(images, '18_lexical_diversity.png')
@@ -810,10 +814,10 @@ def _generate_chart_17(thirty_days_ago, c, images):
     # 19. Популярность разделов (Посты по доскам)
     try:
         c.execute('''
-            SELECT board_id, COUNT(*) as cnt 
-            FROM Posts 
-            WHERE timestamp > ? 
-            GROUP BY board_id 
+            SELECT board_id, COUNT(*) as cnt
+            FROM Posts
+            WHERE timestamp > ?
+            GROUP BY board_id
             ORDER BY cnt DESC
         ''', (thirty_days_ago,))
         board_data = c.fetchall()
@@ -826,9 +830,9 @@ def _generate_chart_17(thirty_days_ago, c, images):
                 df_board_plot = pd.concat([top_boards, others_row], ignore_index=True)
             else:
                 df_board_plot = df_board
-                
+
             fig, ax = plt.subplots(figsize=(8, 8))
-            ax.pie(df_board_plot['cnt'], labels=df_board_plot['board_id'], autopct='%1.1f%%', startangle=140, 
+            ax.pie(df_board_plot['cnt'], labels=df_board_plot['board_id'], autopct='%1.1f%%', startangle=140,
                    colors=sns.color_palette("hls", len(df_board_plot)))
             plt.title('19. Популярность разделов (Посты по доскам)', fontsize=16, fontweight='bold', color="#ffffff")
             plt.tight_layout()
@@ -842,7 +846,7 @@ def _generate_chart_18(thirty_days_ago, c, images):
     try:
         c.execute("SELECT date(timestamp, 'unixepoch', 'localtime') as d, content FROM Posts WHERE timestamp > ?", (thirty_days_ago,))
         posts_data = c.fetchall()
-        
+
         def clean_text_local2(raw_content):
             if not raw_content:
                 return ""
@@ -862,11 +866,11 @@ def _generate_chart_18(thirty_days_ago, c, images):
             text = clean_text_local2(r['content'])
             if not text:
                 continue
-                
+
             words = text.split()
             word_count = len(words)
             char_count = len(text)
-            
+
             if word_count <= 3:
                 cat = "Односложные высеры (1-3 слова)"
             elif char_count <= 100:
@@ -875,14 +879,14 @@ def _generate_chart_18(thirty_days_ago, c, images):
                 cat = "Обсуждения (100-400 симв.)"
             else:
                 cat = "Лонгриды / Пасты (>400 симв.)"
-                
+
             plot_rows.append({'d': d, 'category': cat})
-            
+
         if plot_rows:
             df_reading = pd.DataFrame(plot_rows)
             df_counts = df_reading.groupby(['d', 'category']).size().reset_index(name='cnt')
             pivot_df = df_counts.pivot(index='d', columns='category', values='cnt').fillna(0)
-            
+
             categories_order = [
                 "Односложные высеры (1-3 слова)",
                 "Короткие комменты (<100 симв.)",
@@ -890,14 +894,14 @@ def _generate_chart_18(thirty_days_ago, c, images):
                 "Лонгриды / Пасты (>400 симв.)"
             ]
             pivot_df = pivot_df.reindex(columns=categories_order, fill_value=0)
-            
+
             row_sums = pivot_df.sum(axis=1)
             pivot_pct = pivot_df.div(row_sums, axis=0).fillna(0) * 100
-            
+
             fig, ax = plt.subplots(figsize=(10, 6))
             colors = ["#ff3333", "#ff9933", "#3399ff", "#33cc66"]
             pivot_pct.plot.area(ax=ax, color=colors, alpha=0.85)
-            
+
             plt.title('20. Профиль Чтива (Качество постов по дням)', fontsize=16, fontweight='bold', color="#ffffff")
             plt.xlabel('Дата')
             plt.ylabel('Доля (%)')
@@ -916,11 +920,11 @@ def _generate_chart_19(c, images):
         from matplotlib.colors import LinearSegmentedColormap
         since_180 = time.time() - 180 * 86400
         c.execute('''
-            SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w, 
-                   cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h, 
-                   COUNT(*) as cnt 
-            FROM Posts 
-            WHERE timestamp > ? 
+            SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w,
+                   cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h,
+                   COUNT(*) as cnt
+            FROM Posts
+            WHERE timestamp > ?
             GROUP BY w, h
         ''', (since_180,))
         data = c.fetchall()
@@ -928,7 +932,7 @@ def _generate_chart_19(c, images):
             grid = _np.zeros((7, 24))
             for row in data:
                 grid[row['w']][row['h']] = row['cnt']
-            
+
             days_ru_full = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота']
             fig, ax = plt.subplots(figsize=(10, 4.5))
             HEAT = LinearSegmentedColormap.from_list('dv', ['#0d1117','#003d20','#006d35','#39d353','#80ffaa'])
@@ -956,11 +960,11 @@ def _generate_chart_20(c, images):
         import numpy as _np
         since_90 = time.time() - 90 * 86400
         c.execute('''
-            SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w, 
-                   cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h, 
-                   COUNT(*) as cnt 
-            FROM Posts 
-            WHERE timestamp > ? 
+            SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w,
+                   cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h,
+                   COUNT(*) as cnt
+            FROM Posts
+            WHERE timestamp > ?
             GROUP BY w, h
         ''', (since_90,))
         data = c.fetchall()
@@ -969,7 +973,7 @@ def _generate_chart_20(c, images):
             dh = defaultdict(lambda: _np.zeros(24))
             for row in data:
                 dh[row['w']][row['h']] = row['cnt']
-            
+
             days_ru = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб']
             day_colors = ['#f78166','#58a6ff','#79c0ff','#d2a8ff','#ffa657','#39d353','#e3b341']
             hrs = _np.arange(24)
@@ -1004,7 +1008,7 @@ def _generate_chart_20(c, images):
             axes[-1].set_xlabel('Час суток')
             fig.suptitle('22. Ритм по дням недели (90д)', fontsize=15, y=0.99, color='#ffffff', fontweight='bold')
             plt.tight_layout(rect=[0.05, 0, 1, 0.98])
-            
+
             save_chart(images, '22_ridge_weekday.png')
     except Exception as e:
         print(f"Error Chart 22: {e}")
@@ -1015,10 +1019,10 @@ def _generate_chart_21(c, images):
         import numpy as _np
         since_90 = time.time() - 90 * 86400
         c.execute('''
-            SELECT cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h, 
-                   COUNT(*) as cnt 
-            FROM Posts 
-            WHERE timestamp > ? 
+            SELECT cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h,
+                   COUNT(*) as cnt
+            FROM Posts
+            WHERE timestamp > ?
             GROUP BY h ORDER BY h
         ''', (since_90,))
         data = c.fetchall()
@@ -1059,7 +1063,7 @@ def _generate_chart_21(c, images):
             ax.text(0, 0, f'{total_posts//1000}k', ha='center', va='center',
                     fontsize=14, color='#ffffff', fontweight='bold', alpha=0.55)
             plt.tight_layout()
-            
+
             save_chart(images, '23_activity_clock.png')
     except Exception as e:
         print(f"Error Chart 23: {e}")
@@ -1072,9 +1076,9 @@ def _generate_chart_22(c, images):
         from matplotlib.colors import LinearSegmentedColormap
         since_180 = time.time() - 180 * 86400
         c.execute('''
-            SELECT date(timestamp, 'unixepoch', 'localtime') as day, COUNT(*) as cnt 
-            FROM Posts 
-            WHERE timestamp > ? 
+            SELECT date(timestamp, 'unixepoch', 'localtime') as day, COUNT(*) as cnt
+            FROM Posts
+            WHERE timestamp > ?
             GROUP BY day ORDER BY day
         ''', (since_180,))
         data = c.fetchall()
@@ -1120,7 +1124,7 @@ def _generate_chart_22(c, images):
             cb.set_label('постов/день', color='#ffffff', fontsize=7.5)
             cb.ax.xaxis.set_tick_params(color='#ffffff', labelsize=7)
             plt.tight_layout()
-            
+
             save_chart(images, '24_calendar_180.png')
     except Exception as e:
         print(f"Error Chart 24: {e}")
@@ -1527,7 +1531,7 @@ def _generate_all_charts_locked():
 def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
     conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
     c = conn.cursor()
-    
+
     # 1. Fetch user profile
     c.execute("SELECT balance, role, created_at, lie_media, custom_prefix FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id))
     profile = c.fetchone()
@@ -1535,31 +1539,31 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
         balance, role, created_at, lie_media, custom_prefix = profile
     else:
         balance, role, created_at, lie_media, custom_prefix = 0.0, 'user', time.time(), 0, None
-        
+
     # 2. Count actual posts
     c.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ? AND board_id = ?", (user_id, board_id))
     posts_count = c.fetchone()[0]
-    
+
     # 3. Count reactions received
     c.execute("""
-        SELECT COUNT(*) FROM ReactionQueue rq 
-        JOIN Posts p ON rq.post_num = p.post_num 
+        SELECT COUNT(*) FROM ReactionQueue rq
+        JOIN Posts p ON rq.post_num = p.post_num
         WHERE p.author_id = ? AND p.board_id = ?
     """, (user_id, board_id))
     rx_received = c.fetchone()[0]
-    
+
     # 4. Count reactions given
     c.execute("SELECT COUNT(*) FROM ReactionQueue WHERE user_id = ?", (user_id,))
     rx_given = c.fetchone()[0]
-    
+
     # 5. Count mutes
     c.execute("SELECT COUNT(*) FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
     mutes_count = c.fetchone()[0]
-    
+
     # 6. Rank among other users on this board
     c.execute("""
-        SELECT user_id FROM Users 
-        WHERE board_id = ? 
+        SELECT user_id FROM Users
+        WHERE board_id = ?
         ORDER BY posts_count DESC, balance DESC;
     """, (board_id,))
     all_users = [r[0] for r in c]
@@ -1567,7 +1571,7 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
         rank = all_users.index(user_id) + 1
     except ValueError:
         rank = len(all_users) + 1
-        
+
     conn.close()
 
     return {
@@ -1688,7 +1692,7 @@ def draw_user_stats_card(
     width, height = 800, 450
     img = Image.new('RGB', (width, height), color='#0d0f12')
     draw = ImageDraw.Draw(img)
-    
+
     try:
         font_path = "font1.ttf" if os.path.exists("font1.ttf") else "arial.ttf"
         font_title = ImageFont.truetype(font_path, 26)
@@ -1698,22 +1702,22 @@ def draw_user_stats_card(
         font_comment = ImageFont.truetype(font_path, 14)
     except Exception:
         font_title = font_subtitle = font_card_num = font_card_lbl = font_comment = ImageFont.load_default()
-        
+
     # Header bar
     draw.rectangle([0, 0, width, 95], fill='#13171f')
     draw.line([0, 95, width, 95], fill='#252932', width=2)
-    
+
     # Title & Info
     draw.text((30, 22), data.schizo_name, fill='#ff9900', font=font_title)
     status_text = f"ID: {data.user_id}  |  Раздел: /{data.board_id}/  |  Статус: {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}"
     draw.text((30, 60), status_text, fill='#8abeb7', font=font_subtitle)
-    
+
     # Certified badge (top right)
     draw.rounded_rectangle([610, 15, 770, 80], radius=6, fill='#1b1f28', outline='#ff9900', width=2)
     draw.text((690, 33), "ТГАЧ CERTIFIED", fill='#ff9900', font=font_subtitle, anchor="mm")
     sub_cert = "APPROVED BITYARD" if data.role != 'admin' else "ADMINISTRATOR"
     draw.text((690, 58), sub_cert, fill='#00ffcc', font=ImageFont.truetype(font_path, 10) if os.path.exists(font_path) else font_subtitle, anchor="mm")
-    
+
     # Helper to draw cards
     def draw_card(cfg: CardConfig):
         draw.rounded_rectangle([cfg.x, cfg.y, cfg.x+cfg.w, cfg.y+cfg.h], radius=6, fill='#13171f', outline='#252932', width=1)
@@ -1726,21 +1730,21 @@ def draw_user_stats_card(
         CardConfig(30, 115, 175, 80, str(data.posts_count), "Написано постов", "#00ffcc"),
         CardConfig(220, 115, 175, 80, f"#{data.rank} / {data.total_users}", "Ранг на борде", "#ffcc00"),
         CardConfig(410, 115, 175, 80, f"{int(data.balance)} RUB", "Баланс коинов", "#00ff66"),
-        
+
         CardConfig(30, 210, 175, 80, f"+{data.rx_received}", "Получено реакций", "#ff3399"),
         CardConfig(220, 210, 175, 80, str(data.rx_given), "Поставлено реакций", "#859900"),
         CardConfig(410, 210, 175, 80, f"{data.lie_media}%", "Кринж-фактор", "#cc00ff"),
     ]
-    
+
     for card in cards:
         draw_card(card)
-        
+
     # Mutes Card (top right block)
     draw.rounded_rectangle([600, 115, 770, 175], radius=6, fill='#1d1315', outline='#ff3333', width=1)
     draw.ellipse([600+15, 115+16, 600+23, 115+24], fill="#ff3333")
     draw.text((600+33, 115+20), "Схвачено мутов", fill='#969896', font=font_card_lbl, anchor="lm")
     draw.text((600+15, 115+48), f"{data.mutes_count} шт", fill="#ff3339", font=font_card_num, anchor="lm")
-    
+
     # Activity Level Card (below mutes)
     draw.rounded_rectangle([600, 210, 770, 290], radius=6, fill='#13171f', outline='#252932', width=1)
     draw.text((615, 230), "Уровень деградации", fill='#969896', font=font_card_lbl)
@@ -1748,11 +1752,11 @@ def draw_user_stats_card(
     draw.rounded_rectangle([615, 255, 755, 267], radius=3, fill='#1b1f28')
     draw.rounded_rectangle([615, 255, 615 + int(140 * activity_pct), 267], radius=3, fill='#ff9900')
     draw.text((755, 230), f"{int(activity_pct*100)}%", fill='#ff9900', font=font_card_lbl, anchor="ra")
-    
+
     # Bottom Summary Box
     draw.rounded_rectangle([30, 310, 770, 420], radius=8, fill='#1b1f28', outline='#252932', width=1)
     draw.text((50, 335), "РЕЗЮМЕ ДЕГРАДАЦИИ:", fill='#ff9900', font=font_card_lbl)
-    
+
     # Wrap comment safely
     import textwrap
     wrapped_lines = textwrap.wrap(f'"{data.slang_comment}"', width=90)
@@ -1760,7 +1764,7 @@ def draw_user_stats_card(
     for line in wrapped_lines[:2]:
         draw.text((50, y_comm), line, fill='#e6edf3', font=font_comment)
         y_comm += 20
-        
+
     buf = io.BytesIO()
     img.save(buf, format='png')
     buf.seek(0)
