@@ -1,6 +1,7 @@
 import sys
 import os
 import unittest
+sys.path.insert(0, os.path.abspath('.'))
 import types
 from unittest.mock import MagicMock
 
