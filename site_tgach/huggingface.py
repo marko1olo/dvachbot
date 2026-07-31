@@ -19,7 +19,7 @@ def _upload_sync(file_bytes: bytes, filename: str) -> str | None:
         return None
 
     # Хэшируем имя файла для равномерного распределения по 256 папкам (лимит Git: 10к файлов в папке)
-    subfolder = hashlib.md5(filename.encode()).hexdigest()[:2]
+    subfolder = hashlib.md5(filename.encode(), usedforsecurity=False).hexdigest()[:2]
     path_in_repo = f"media/{subfolder}/{filename}"
 
     strategies = [
