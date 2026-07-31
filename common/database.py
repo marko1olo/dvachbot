@@ -2315,9 +2315,9 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
 
     from common.db_pool import get_pool, db_lock
     
-    params = list(mentions)
-    params.append(board_id)
-    placeholders = ','.join('?' for _ in mentions)
+    import json
+
+    params = [json.dumps(list(mentions)), board_id]
     current_time = time.time()
 
     async with db_lock:
@@ -2329,7 +2329,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                 notifications_to_insert = []
                 
                 # 1. Находим получателей
-                query = f"SELECT post_num, author_id, thread_id FROM Posts WHERE post_num IN ({placeholders}) AND board_id = ?"
+                query = "SELECT post_num, author_id, thread_id FROM Posts WHERE post_num IN (SELECT value FROM json_each(?)) AND board_id = ?"
                 async with db.execute(query, params) as cursor:
                     async for row in cursor:
                         ref_post_num, recipient_id, thread_id = row
