@@ -114,6 +114,7 @@ from common.database import (
     get_updates_since,
     get_activity_history,
     get_poll_results,
+    get_poll_results_batch,
 )
 from collections import deque, defaultdict
 from contextlib import asynccontextmanager
@@ -3407,8 +3408,7 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
         tasks.append(get_mirrors_batch(all_fids))
 
     if poll_post_ids:
-        for pid in poll_post_ids:
-            tasks.append(get_poll_results(pid))
+        tasks.append(get_poll_results_batch(poll_post_ids))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -3429,10 +3429,10 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
 
     poll_results_map = {}
     if poll_post_ids:
-        for i, pid in enumerate(poll_post_ids):
-            val = results[res_idx + i]
-            if not isinstance(val, Exception):
-                poll_results_map[pid] = val
+        val = results[res_idx]
+        if not isinstance(val, Exception):
+            poll_results_map = val
+        res_idx += 1
 
     if all_post_ids:
         try:
@@ -3888,8 +3888,7 @@ async def enrich_heavy_data(posts: List[dict]):
         tasks.append(get_mirrors_batch(all_fids))
 
     if poll_post_ids:
-        for pid in poll_post_ids:
-            tasks.append(get_poll_results(pid))
+        tasks.append(get_poll_results_batch(poll_post_ids))
 
     # Бэклинки теперь тоже в пуле задач
     if all_post_ids:
@@ -3929,11 +3928,10 @@ async def enrich_heavy_data(posts: List[dict]):
 
     poll_results_map = {}
     if poll_post_ids:
-        for i, pid in enumerate(poll_post_ids):
-            val = results[res_idx + i]
-            if not isinstance(val, Exception):
-                poll_results_map[pid] = val
-        res_idx += len(poll_post_ids)
+        val = results[res_idx]
+        if not isinstance(val, Exception):
+            poll_results_map = val
+        res_idx += 1
 
     # Достаем бэклинки из результатов gather
     backlinks_map = {}

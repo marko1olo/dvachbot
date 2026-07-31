@@ -7547,6 +7547,31 @@ async def get_poll_results(post_num: int) -> dict:
                 results[str(row[0])] = row[1]
     except: pass
     return results
+
+async def get_poll_results_batch(post_nums: list[int]) -> dict:
+    """Собирает результаты голосования для нескольких постов."""
+    if not post_nums:
+        return {}
+
+    from common.db_pool import get_pool
+    db = await get_pool()
+    results = {num: {} for num in post_nums}
+    try:
+        chunk_size = 900
+        for i in range(0, len(post_nums), chunk_size):
+            chunk = post_nums[i:i + chunk_size]
+            placeholders = ','.join('?' for _ in chunk)
+            query = f"SELECT post_num, option_index, COUNT(*) FROM PollVotes WHERE post_num IN ({placeholders}) GROUP BY post_num, option_index"
+            async with db.execute(query, chunk) as cursor:
+                async for row in cursor:
+                    post_num, option_index, count = row
+                    if post_num not in results:
+                        results[post_num] = {}
+                    results[post_num][str(option_index)] = count
+    except Exception:
+        pass
+    return results
+
 async def get_file_tags(file_id: str) -> list[str]:
     """Возвращает список тегов для файла."""
     from common.db_pool import get_pool, db_lock
