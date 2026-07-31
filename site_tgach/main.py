@@ -819,6 +819,51 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 URL_PATTERN = re.compile(r'(https?://[^\s<>"\'`]+)')
+XSS_REPLACEMENTS = [
+    (re.compile(r"(s)(c)(r)(i)(p)(t)", re.IGNORECASE), r"\1\2\3l\5\6"),
+    (re.compile(r"(i)(f)(r)(a)(m)(e)", re.IGNORECASE), r"l\2\3\4\5\6"),
+    (
+        re.compile(r"(e)(x)(p)(r)(e)(s)(s)(i)(o)(n)", re.IGNORECASE),
+        r"\1\2\3l\5\6\7\8\9\10",
+    ),
+    (re.compile(r"(s)(t)(y)(l)(e)", re.IGNORECASE), r"\1\2\3\4e"),
+    (
+        re.compile(
+            r"\bon(load|error|click|mouse|key|focus|blur|change|submit)",
+            re.IGNORECASE,
+        ),
+        r"0n\1",
+    ),
+]
+BBCODE_REPLACEMENTS = [
+    (re.compile(r"\[b\](.*?)\[/b\]", re.DOTALL), r"<b>\1</b>"),
+    (re.compile(r"\[i\](.*?)\[/i\]", re.DOTALL), r"<i>\1</i>"),
+    (
+        re.compile(r"\[h1\](.*?)\[/h1\]", re.DOTALL),
+        r'<h3 class="post-heading">\1</h3>',
+    ),
+    (re.compile(r"\[s\](.*?)\[/s\]", re.DOTALL), r"<s>\1</s>"),
+    (re.compile(r"\[u\](.*?)\[/u\]", re.DOTALL), r"<u>\1</u>"),
+    (re.compile(r"\[code\](.*?)\[/code\]", re.DOTALL), r"<code>\1</code>"),
+    (
+        re.compile(r"\[shake\](.*?)\[/shake\]", re.DOTALL),
+        r'<span class="effect-shake">\1</span>',
+    ),
+    (
+        re.compile(r"\[rainbow\](.*?)\[/rainbow\]", re.DOTALL),
+        r'<span class="effect-rainbow">\1</span>',
+    ),
+    (
+        re.compile(r"\[blur\](.*?)\[/blur\]", re.DOTALL),
+        r'<span class="effect-blur">\1</span>',
+    ),
+]
+POST_LINK_PATTERN_CROSS = re.compile(r"&gt;&gt;/([a-z0-9]+)/(\d+)")
+POST_LINK_PATTERN = re.compile(r"&gt;&gt;(\d+)")
+BTN_PATTERN = re.compile(r"\[btn=(https?://[^\]]+)\](.*?)\[/btn\]", re.DOTALL)
+SIZE_PATTERN = re.compile(r"\[size=(\d+)\](.*?)\[/size\]", re.DOTALL)
+GLITCH_PATTERN = re.compile(r"\[glitch\](.*?)\[/glitch\]", re.DOTALL)
+NEWLINE_PATTERN = re.compile(r"&lt;br\s*/?&gt;", re.IGNORECASE)
 CROSS_LINK_PATTERN = re.compile(r">>/([a-z0-9]+)/(\d+)")
 REF_LINK_PATTERN = re.compile(r"(>>(\d+))")
 SPOILER_PATTERN = re.compile(r"\|\|(.+?)\|\|")
@@ -3060,50 +3105,20 @@ def log_system_event(message: str):
     SYSTEM_LOGS.appendleft(f"[{timestamp}] {message}")
 
 
-def format_post_text(text: str) -> str:
-    if not isinstance(text, str):
-        return ""
+def _apply_xss_protection(text: str) -> str:
+    for pattern, replacement in XSS_REPLACEMENTS:
+        text = pattern.sub(replacement, text)
+    return text.replace("style", "sty1e").replace("STYLE", "STY1E")
 
-    # --- СУПЕР-ЗАЩИТА ОТ XSS (искажение ключевых слов) ---
-    # script -> sclipt (i -> l)
-    text = re.sub(r"(s)(c)(r)(i)(p)(t)", r"\1\2\3l\5\6", text, flags=re.IGNORECASE)
-    # iframe -> lframe (i -> l)
-    text = re.sub(r"(i)(f)(r)(a)(m)(e)", r"l\2\3\4\5\6", text, flags=re.IGNORECASE)
-    # expression -> explession (для CSS) (r -> l чтобы сломать слово)
-    text = re.sub(
-        r"(e)(x)(p)(r)(e)(s)(s)(i)(o)(n)",
-        r"\1\2\3l\5\6\7\8\9\10",
-        text,
-        flags=re.IGNORECASE,
-    )
-    # style -> sty1e (l -> 1)
-    text = (
-        re.sub(r"(s)(t)(y)(l)(e)", r"\1\2\3\4e", text, flags=re.IGNORECASE)
-        .replace("style", "sty1e")
-        .replace("STYLE", "STY1E")
-    )
-    # События (onload, onerror, onclick...) -> 0nload...
-    text = re.sub(
-        r"\bon(load|error|click|mouse|key|focus|blur|change|submit)",
-        r"0n\1",
-        text,
-        flags=re.IGNORECASE,
-    )
-    # javascript: -> javasclipt: (уже покрыто заменой script, но на всякий случай)
 
-    # --- ЭКРАНИРОВАНИЕ HTML ---
-    # Превращает < > " ' & в безопасные сущности
-    text = html.escape(text, quote=True)
-
-    # --- ФОРМАТИРОВАНИЕ ---
-    text = re.sub(r"&lt;br\s*/?&gt;", "\n", text, flags=re.IGNORECASE)
-
-    processed_text = URL_PATTERN.sub(
+def _format_lines_and_greentext(text: str) -> str:
+    text = NEWLINE_PATTERN.sub("\n", text)
+    text = URL_PATTERN.sub(
         r'<a href="\1" target="_blank" rel="noopener noreferrer">\1</a>', text
     )
 
     lines = []
-    for line in processed_text.split("\n"):
+    for line in text.split("\n"):
         stripped = line.strip()
         if stripped.startswith("&gt;") and not stripped.startswith("&gt;&gt;"):
             lines.append(f'<span class="greentext">{line}</span>')
@@ -3111,98 +3126,67 @@ def format_post_text(text: str) -> str:
             lines.append(f'<span class="greentext">{line}</span>')
         else:
             lines.append(line)
-    processed_text = "<br>".join(lines)
+    return "<br>".join(lines)
 
-    processed_text = re.sub(
-        r"&gt;&gt;/([a-z0-9]+)/(\d+)",
-        r'<a href="/\1/res/0#post-\2" class="post-link cross-board-link" data-board-id="\1" data-post-num="\2">&gt;&gt;/\1/\2</a>',
-        processed_text,
+
+def _apply_bbcode_and_effects(text: str) -> str:
+    text = POST_LINK_PATTERN_CROSS.sub(
+        r'<a href="/\1/res/0#post-\2" class="post-link cross-board-link" '
+        r'data-board-id="\1" data-post-num="\2">&gt;&gt;/\1/\2</a>',
+        text,
     )
-
-    processed_text = re.sub(
-        r"&gt;&gt;(\d+)",
+    text = POST_LINK_PATTERN.sub(
         r'<a href="#post-\1" class="post-link" data-post-num="\1">&gt;&gt;\1</a>',
-        processed_text,
+        text,
     )
 
-    processed_text = re.sub(
-        r"\[b\](.*?)\[/b\]", r"<b>\1</b>", processed_text, flags=re.DOTALL
-    )
-    processed_text = re.sub(
-        r"\[i\](.*?)\[/i\]", r"<i>\1</i>", processed_text, flags=re.DOTALL
-    )
-    processed_text = re.sub(
-        r"\[h1\](.*?)\[/h1\]",
-        r'<h3 class="post-heading">\1</h3>',
-        processed_text,
-        flags=re.DOTALL,
-    )
+    for pattern, replacement in BBCODE_REPLACEMENTS:
+        text = pattern.sub(replacement, text)
 
     def btn_replacer(match):
         url = match.group(1)
         safe_url = html.escape(url, quote=True)
-        text = match.group(2)
-        return f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-small post-btn">{text}</a>'
+        btn_text = match.group(2)
+        return (
+            f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" '
+            f'class="btn btn-primary btn-small post-btn">{btn_text}</a>'
+        )
 
-    processed_text = re.sub(
-        r"\[btn=(https?://[^\]]+)\](.*?)\[/btn\]",
-        btn_replacer,
-        processed_text,
-        flags=re.DOTALL,
-    )
+    text = BTN_PATTERN.sub(btn_replacer, text)
 
     def size_replacer(match):
         try:
             s = int(match.group(1))
             s = max(10, min(30, s))
             return f'<span style="font-size: {s}px;">{match.group(2)}</span>'
-        except:
+        except Exception:
             return match.group(2)
 
-    processed_text = re.sub(
-        r"\[size=(\d+)\](.*?)\[/size\]", size_replacer, processed_text, flags=re.DOTALL
-    )
-    processed_text = re.sub(
-        r"\[s\](.*?)\[/s\]", r"<s>\1</s>", processed_text, flags=re.DOTALL
-    )
-    processed_text = re.sub(
-        r"\[u\](.*?)\[/u\]", r"<u>\1</u>", processed_text, flags=re.DOTALL
-    )
-    processed_text = re.sub(
-        r"\[code\](.*?)\[/code\]", r"<code>\1</code>", processed_text, flags=re.DOTALL
-    )
-
-    processed_text = re.sub(
-        r"\[shake\](.*?)\[/shake\]",
-        r'<span class="effect-shake">\1</span>',
-        processed_text,
-        flags=re.DOTALL,
-    )
-    processed_text = re.sub(
-        r"\[rainbow\](.*?)\[/rainbow\]",
-        r'<span class="effect-rainbow">\1</span>',
-        processed_text,
-        flags=re.DOTALL,
-    )
-    processed_text = re.sub(
-        r"\[blur\](.*?)\[/blur\]",
-        r'<span class="effect-blur">\1</span>',
-        processed_text,
-        flags=re.DOTALL,
-    )
+    text = SIZE_PATTERN.sub(size_replacer, text)
 
     def _glitch_replacer(match):
         content = match.group(1)
-        return f'<span class="effect-glitch" data-text="{content}">{content}</span>'
+        return (
+            f'<span class="effect-glitch" data-text="{content}">'
+            f'{content}</span>'
+        )
 
-    processed_text = re.sub(
-        r"\[glitch\](.*?)\[/glitch\]", _glitch_replacer, processed_text, flags=re.DOTALL
-    )
-    processed_text = SPOILER_PATTERN.sub(
-        r'<span class="spoiler">\1</span>', processed_text
-    )
+    text = GLITCH_PATTERN.sub(_glitch_replacer, text)
+    text = SPOILER_PATTERN.sub(r'<span class="spoiler">\1</span>', text)
 
-    return processed_text
+    return text
+
+
+def format_post_text(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+
+    text = _apply_xss_protection(text)
+    text = html.escape(text, quote=True)
+    text = _format_lines_and_greentext(text)
+    text = _apply_bbcode_and_effects(text)
+
+    return text
 
 
 # sanitize_html жила здесь копией, вторая копия — в Dubsite_tgach/main.py, и они
