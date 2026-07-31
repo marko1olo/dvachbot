@@ -7352,9 +7352,6 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     except:
         pass
 
-import json
-import time
-
 @dataclass
 class ShootContext:
     message: types.Message
@@ -21752,13 +21749,6 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
         pass
     await callback.answer()
 
-import io
-try:
-    import ujson as json
-except ImportError:
-    import json
-import re
-import time
 try:
     from wordcloud import WordCloud
     HAS_WORDCLOUD = True
