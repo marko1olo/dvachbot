@@ -971,6 +971,24 @@ async def process_import_queue(app_state_broadcast_queue):
                     await asyncio.sleep(5)
                     continue
 
+
+                non_op_task_ids = list({row[1] for row in rows if not row[8]})
+                op_threads_map = {}
+                if non_op_task_ids:
+                    q_op = """
+                        SELECT task_id, real_post_num
+                        FROM ImportRefMap
+                        WHERE rowid IN (
+                            SELECT MIN(rowid)
+                            FROM ImportRefMap
+                            WHERE task_id IN (SELECT value FROM json_each(?))
+                            GROUP BY task_id
+                        )
+                    """
+                    async with conn.execute(q_op, (json.dumps(non_op_task_ids),)) as cur_op:
+                        async for t_row in cur_op:
+                            op_threads_map[t_row[0]] = str(t_row[1])
+
                 processed_ids = []
 
                 # Pre-fetch all replacements for the current batch
@@ -1073,13 +1091,7 @@ async def process_import_queue(app_state_broadcast_queue):
 
                         final_thread_id_db = None
                         if not is_op:
-                            async with conn.execute(
-                                "SELECT real_post_num FROM ImportRefMap WHERE task_id = ? ORDER BY rowid ASC LIMIT 1",
-                                (task_id,),
-                            ) as op_cur:
-                                op_row = await op_cur.fetchone()
-                                if op_row:
-                                    final_thread_id_db = str(op_row[0])
+                            final_thread_id_db = op_threads_map.get(task_id)
 
                         post_mode = "new_thread" if is_op else "reply"
                         new_post_num = await create_post(
