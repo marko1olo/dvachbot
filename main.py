@@ -12226,7 +12226,8 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
             await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (amount, target_id, board_id))
             await db.commit()
         
-        await message.answer(f"✅ Нарисовано {amount} рублей для юзера {target_id}. Баланс пополнен (корзина /{board_id}/).")
+        import html
+        await message.answer(f"✅ Нарисовано {html.escape(str(amount))} рублей для юзера {html.escape(str(target_id))}. Баланс пополнен (корзина /{html.escape(str(board_id))}/).")
         try:
             await message.bot.send_message(target_id, f"🎁 <b>Администрация начислила вам бонус: {amount} RUB! Кошелек - /wallet </b>", parse_mode="HTML")
         except Exception:
