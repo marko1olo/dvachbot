@@ -40,10 +40,7 @@ class TestBotPool(unittest.TestCase):
             self.assertEqual(bot, mock_bot_instance)
 
             # Since target_stream changes to 'ru' (which is in self.iterators),
-            # init_stream('ru') is not explicitly called because of the logic:
-            # target_stream = stream if stream in self.iterators else 'ru'
-            # if target_stream not in self.iterators:
-            #    self.init_stream('ru')
+            # init_stream('ru') is not explicitly called because of the logic.
             # So init_stream is only called once for 'en'. Let's verify that.
             self.assertEqual(mock_init_stream.call_count, 1)
             mock_init_stream.assert_called_once_with('en')
