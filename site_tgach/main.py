@@ -1363,7 +1363,7 @@ async def check_and_punish_site_spam(
                 content = await img.read()
                 await img.seek(0)
                 if content:
-                    h = hashlib.md5(content).hexdigest()
+                    h = hashlib.sha256(content).hexdigest()
                     file_hashes.append(h)
             except Exception:
                 pass
@@ -5854,7 +5854,7 @@ async def api_makaba_posting(
                 files_to_process.append(file_obj)
 
     file_sig = [(f.filename, f.size) for f in files_to_process]
-    content_hash = hashlib.md5(
+    content_hash = hashlib.sha256(
         f"{comment}{board}{thread}{file_sig}".encode()
     ).hexdigest()
     idemp_key = f"idemp_mob_{author_id}_{content_hash}"
@@ -6041,7 +6041,7 @@ async def api_get_my_posts_content(request: Request, data: PostNumsRequest):
     if not unique_ids:
         return []
     ids_str = ",".join(map(str, unique_ids))
-    cache_key = f"myposts_v2:{hashlib.md5(ids_str.encode()).hexdigest()}"
+    cache_key = f"myposts_v2:{hashlib.sha256(ids_str.encode()).hexdigest()}"
     backend = FastAPICache.get_backend()
     if backend:
         cached_data = await backend.get(cache_key)
@@ -7649,7 +7649,7 @@ async def api_create_post(
     stream = getattr(request.state, "stream", "ru")
     file_sig = [(f.filename, f.size) for f in images or []]
     context_sig = f"{board_id}_{reply_to or 'OP'}"
-    content_hash = hashlib.md5(f"{text}{file_sig}{context_sig}".encode()).hexdigest()
+    content_hash = hashlib.sha256(f"{text}{file_sig}{context_sig}".encode()).hexdigest()
     idemp_key = f"idemp_{author_id}_{content_hash}"
     backend = FastAPICache.get_backend()
     if await backend.get(idemp_key):
