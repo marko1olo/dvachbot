@@ -18,7 +18,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from common.bot_pool import global_bot_pool
 from common.database import add_file_mirror, get_file_owner_id
 from site_tgach.freeimage import upload_file_to_freeimage
-from site_tgach.mirror_worker import _resolve_file_bot, _find_msg_info, _bot_id_from_token
+from site_tgach.mirror_worker import _resolve_file_bot, _find_msg_info
 from site_tgach.mtproto_client import download_file_mtproto
 
 PROXY_URL = os.getenv("PROXY_URL")
