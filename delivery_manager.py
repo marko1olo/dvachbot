@@ -1,0 +1,1171 @@
+from common.config import BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE, BOT_PRIORITY_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_SLICE_AGE_SEC
+
+from shared_state import (
+    storage_lock, post_to_messages, is_shutting_down, drain_shutdown_requested, 
+    durable_delivery_stats, weekly_active_users, BroadcastConfig, enqueue_board_message
+)
+from common.database import (
+    upsert_delivery_queue_item, delete_delivery_queue_item, get_post_copies, 
+    create_post, update_post_content, get_stream_active_users
+)
+from common.board_config import BOARD_CONFIG
+from post_helpers import format_header
+from help_text import HELP_TEXT_EN_COMMANDS, THREAD_PROMO_TEXT_EN
+from datetime import timezone
+UTC = timezone.utc
+
+PRIORITY_PASSIVE_MEDIA_SLICE_SIZE = max(10, BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE)
+
+PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE = max(10, int(BOT_PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE))
+
+PRIORITY_PASSIVE_SLICE_SIZE = max(10, BOT_PRIORITY_PASSIVE_SLICE_SIZE)
+
+PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE = max(10, int(BOT_PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE))
+
+PRIORITY_PRESSURE_SLICE_AGE_SEC = max(0.0, float(BOT_PRIORITY_PRESSURE_SLICE_AGE_SEC))
+
+def _durable_recipients_from_item(item: dict) -> list[int]:
+
+    recipients = item.get("recipients", [])
+    try:
+        return sorted({int(uid) for uid in recipients if int(uid) > 0})
+    except Exception:
+        return []
+
+
+def _queue_item_can_be_durable(item: dict) -> bool:
+
+    if not DURABLE_DELIVERY_QUEUE_ENABLED:
+        return False
+    if not isinstance(item, dict):
+        return False
+    if item.get("keyboard") is not None:
+        return False
+    if item.get("thread_id"):
+        return False
+    if item.get("delivery_phase") != "passive":
+        return False
+    content = item.get("content")
+    if not isinstance(content, dict):
+        return False
+    if _contains_volatile_delivery_payload(content):
+        return False
+    return bool(item.get("post_num")) and bool(_durable_recipients_from_item(item))
+
+
+
+
+
+
+
+def _board_queue_oldest_age_sec(board_id: str | None) -> float:
+
+    if not board_id:
+        return 0.0
+    queue = message_queues.get(board_id)
+    if not queue:
+        return 0.0
+    now = time.time()
+    oldest = 0.0
+    try:
+        for item in getattr(queue, "_queue", []):
+            if not isinstance(item, dict):
+                continue
+            enqueued_at = item.get("enqueued_at")
+            if enqueued_at is None:
+                continue
+            try:
+                oldest = max(oldest, now - float(enqueued_at))
+            except (TypeError, ValueError):
+                continue
+    except Exception:
+        return 0.0
+    return max(0.0, oldest)
+
+
+async def get_board_activity_last_hours(board_id: str, hours: int = 2) -> float:
+    if hours <= 0: return 0.0
+    time_threshold = datetime.now(UTC) - timedelta(hours=hours)
+    post_count = 0
+    async with storage_lock:
+        for post_data in reversed(messages_storage.values()):
+            if post_data.get("timestamp") < time_threshold: break
+            if post_data.get("board_id") == board_id:
+                post_count += 1
+    return post_count / hours
+
+import asyncio
+import json
+import random
+import re
+import time
+from dataclasses import dataclass
+from typing import Optional, List, Dict, Any, Tuple
+from aiogram import Bot
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter
+from collections import defaultdict
+import traceback
+
+from shared_state import (
+    board_data, messages_storage,
+    message_queues, current_deliveries, pending_edit_tasks,
+    pending_edit_lock, posts_pending_deletion, runtime_logger
+)
+from common.html_utils import escape_html
+from common.task_manager import spawn_task
+from common.db_pool import get_pool
+from post_helpers import check_post_numerals, apply_shadow_autoreplace
+from broadcaster import (
+    _format_message_body, _order_recipients_for_delivery, send_message_to_users,
+    _build_lie_media_content, DeliveryResults, MessageBroadcaster, add_you_to_my_posts_fast
+)
+from moderation_config import _LIE_IMAGE_EXTS, _LIE_VIDEO_EXTS
+
+# Constants needed by delivery manager
+CHUNK_SIZE = 30
+DELAY_BETWEEN_CHUNKS = 1.0
+PRIORITY_SPLIT_FANOUT_ENABLED = True
+PRIORITY_SPLIT_MIN_PASSIVE = 200
+WORKER_RESTART_DELAY_SEC = 5.0
+WORKER_RESTART_MAX_DELAY_SEC = 60.0
+PASSIVE_MAX_PREEMPTIONS = 5
+ENABLE_MULTILANG = True
+RE_YOU_PATTERN = re.compile(r'>>(\d+)')
+
+def _get_random_header_prefix(lang='ru'):
+    if lang == 'jp': return "名無し - "
+    if lang == 'en': return "Anon - "
+    return "Анон - "
+
+class PassiveQueueItemParams:
+    source_item: dict
+    recipients: set[int]
+    post_num: int
+    original_recipients: int
+    enqueued_at: float | None
+    started_at: float
+
+
+def _build_passive_queue_item(params: PassiveQueueItemParams) -> dict:
+
+    passive_item = params.source_item.copy()
+    passive_item["recipients"] = set(params.recipients)
+    passive_item["delivery_phase"] = "passive"
+    passive_item["original_recipients"] = params.original_recipients
+    passive_item["priority_split_from"] = params.post_num
+    passive_item["phase_enqueued_at"] = time.time()
+    passive_item["board_id"] = params.source_item.get("board_id")
+    if "enqueued_at" not in passive_item:
+        passive_item["enqueued_at"] = params.enqueued_at or params.started_at
+    return passive_item
+
+
+async def _persist_durable_delivery_item(board_id: str, item: dict, reason: str) -> int | None:
+
+    if not _queue_item_can_be_durable(item):
+        return None
+    durable_id = await upsert_delivery_queue_item(
+        board_id=board_id,
+        post_num=int(item["post_num"]),
+        recipients=_durable_recipients_from_item(item),
+        content=item["content"],
+        delivery_phase=item.get("delivery_phase", "passive"),
+        original_recipients=int(item.get("original_recipients") or 0),
+        thread_id=item.get("thread_id"),
+        enqueued_at=float(item.get("enqueued_at") or time.time()),
+    )
+    if durable_id:
+        item["durable_delivery_id"] = durable_id
+        durable_delivery_stats["persisted"] += 1
+        runtime_logger.info(
+            "delivery_durable_saved %s",
+            json.dumps(
+                {
+                    "ts": round(time.time(), 3),
+                    "id": durable_id,
+                    "board_id": board_id,
+                    "post_num": item.get("post_num"),
+                    "phase": item.get("delivery_phase"),
+                    "recipients": len(_durable_recipients_from_item(item)),
+                    "reason": reason,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+        return durable_id
+    durable_delivery_stats["persist_failed"] += 1
+    return None
+
+
+async def _delete_durable_delivery_item(item_or_id, reason: str) -> None:
+
+    durable_id = item_or_id
+    if isinstance(item_or_id, dict):
+        durable_id = item_or_id.get("durable_delivery_id")
+    if not durable_id:
+        return
+    if await delete_delivery_queue_item(int(durable_id)):
+        durable_delivery_stats["deleted"] += 1
+        runtime_logger.info(
+            "delivery_durable_deleted %s",
+            json.dumps(
+                {
+                    "ts": round(time.time(), 3),
+                    "id": int(durable_id),
+                    "reason": reason,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+
+
+async def _remove_already_delivered_recipients(post_num: int, recipients) -> set[int]:
+
+    try:
+        candidate_recipients = {int(uid) for uid in recipients if int(uid) > 0}
+    except Exception:
+        return set()
+    if not candidate_recipients:
+        return set()
+    copies = await get_post_copies(post_num)
+    delivered = {int(recipient_id) for recipient_id, _message_id in copies}
+    return candidate_recipients - delivered
+
+
+def _passive_slice_size_for_content(content: dict, board_id: str | None = None) -> int:
+
+    content_type = str((content or {}).get("type", "")).split(".")[-1].lower()
+    if content_type in {
+        "photo",
+        "video",
+        "animation",
+        "document",
+        "audio",
+        "voice",
+        "sticker",
+        "video_note",
+        "media_group",
+    }:
+        base_size = PRIORITY_PASSIVE_MEDIA_SLICE_SIZE
+        pressure_size = PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE
+    else:
+        base_size = PRIORITY_PASSIVE_SLICE_SIZE
+        pressure_size = PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE
+    if (
+        board_id
+        and PRIORITY_PRESSURE_SLICE_AGE_SEC > 0
+        and _board_queue_oldest_age_sec(board_id) >= PRIORITY_PRESSURE_SLICE_AGE_SEC
+    ):
+        return min(base_size, pressure_size)
+    return base_size
+
+
+def _queue_has_full_message(queue: asyncio.Queue) -> bool:
+
+    try:
+        for item in getattr(queue, "_queue", []):
+            if isinstance(item, dict) and item.get("delivery_phase", "full") == "full":
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _split_recipients_for_delivery(board_id: str, recipients) -> tuple[list[int], list[int]]:
+    recipient_list = list(recipients)
+    if not PRIORITY_DELIVERY_ENABLED or not recipient_list:
+        return [], recipient_list
+    priority_set = weekly_active_users.get(board_id, set())
+    if not priority_set:
+        return [], recipient_list
+    priority = []
+    passive = []
+    for uid in recipient_list:
+        if uid in priority_set:
+            priority.append(uid)
+        else:
+            passive.append(uid)
+    return priority, passive
+
+
+def _lie_media_kind(raw_type: str | None, item: dict | None = None) -> str | None:
+    item = item or {}
+    ftype = str(raw_type or item.get('type') or '').split('.')[-1].lower()
+    mime = str(item.get('mime_type') or item.get('mime') or '').lower()
+    filename = str(item.get('filename') or item.get('file_name') or item.get('name') or '').lower()
+    if ftype in {'photo', 'image'}:
+        return 'image'
+    if ftype in {'video', 'animation', 'gif'}:
+        return 'video'
+    if ftype == 'document':
+        if mime.startswith('video/') or filename.endswith(_LIE_VIDEO_EXTS):
+            return 'video'
+        if mime.startswith('image/') or filename.endswith(_LIE_IMAGE_EXTS):
+            return 'image'
+    return None
+
+
+def _lie_archive_send_type(entry: dict, desired_kind: str) -> str | None:
+    source_type = str(entry.get('source_type') or entry.get('type') or '').split('.')[-1].lower()
+    mime = str(entry.get('mime_type') or entry.get('mime') or '').lower()
+    filename = str(entry.get('filename') or entry.get('file_name') or entry.get('name') or '').lower()
+    if desired_kind == 'image':
+        if source_type in {'photo', 'image'}:
+            return 'photo'
+        if source_type == 'document' and (mime.startswith('image/') or filename.endswith(_LIE_IMAGE_EXTS)):
+            return 'document'
+    elif desired_kind == 'video':
+        if source_type == 'video':
+            return 'video'
+        if source_type in {'animation', 'gif'}:
+            return 'animation'
+        if source_type == 'document' and (mime.startswith('video/') or filename.endswith(_LIE_VIDEO_EXTS)):
+            return 'document'
+    return None
+
+
+def _lie_file_from_random_post(
+    post: dict | None,
+    desired_kind: str,
+    allowed_send_types: set[str],
+    avoid_post_num: int | None = None,
+    exclude_file_ids: set[str] | None = None,
+) -> dict | None:
+    if not post or not isinstance(post.get('content'), dict):
+        return None
+    if avoid_post_num is not None:
+        try:
+            candidate_post_num = int(post.get('post_num') or post.get('id') or 0)
+            if candidate_post_num == int(avoid_post_num):
+                return None
+        except (TypeError, ValueError):
+            pass
+    files = post['content'].get('files') or []
+    if not files:
+        return None
+    selected_idx = post.get('_selected_file_index', 0)
+    if not isinstance(selected_idx, int) or selected_idx < 0 or selected_idx >= len(files):
+        selected_idx = 0
+    entry = files[selected_idx]
+    if not isinstance(entry, dict):
+        return None
+    file_id = entry.get('original_file_id') or entry.get('file_id') or entry.get('media')
+    if not file_id or not isinstance(file_id, str) or file_id.startswith('<'):
+        return None
+    if exclude_file_ids and file_id in exclude_file_ids:
+        return None
+    send_type = _lie_archive_send_type(entry, desired_kind)
+    if not send_type or send_type not in allowed_send_types:
+        return None
+    return {
+        'type': send_type,
+        'file_id': file_id,
+        'filename': entry.get('filename') or entry.get('file_name') or entry.get('name'),
+        'mime_type': entry.get('mime_type') or entry.get('mime'),
+    }
+
+
+async def _get_lie_archive_media(
+    board_id: str,
+    desired_kind: str,
+    allowed_send_types: set[str],
+    avoid_post_num: int | None = None,
+    exclude_file_ids: set[str] | None = None,
+) -> dict | None:
+    getter = get_random_video_post if desired_kind == 'video' else get_random_image_post
+    for _ in range(12):
+        post = await getter([board_id])
+        media = _lie_file_from_random_post(post, desired_kind, allowed_send_types, avoid_post_num, exclude_file_ids)
+        if media:
+            return media
+    return None
+
+
+def _lie_allowed_send_types(raw_type: str, media_group: bool = False) -> set[str]:
+    ctype = str(raw_type or '').split('.')[-1].lower()
+    if media_group:
+        if ctype == 'photo':
+            return {'photo'}
+        if ctype == 'video':
+            return {'video'}
+        if ctype == 'document':
+            return {'document'}
+        return set()
+    if ctype == 'photo':
+        return {'photo'}
+    if ctype == 'video':
+        return {'video'}
+    if ctype == 'animation':
+        return {'animation'}
+    if ctype == 'document':
+        return {'document'}
+    return set()
+
+
+async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
+    """
+    Находит все отправленные копии поста и редактирует их.
+    Основной источник данных - база данных.
+    Версия 2.2: Добавлена группировка сообщений по юзерам (защита от мульти-эдита альбомов).
+    """
+    copies_info = await get_post_copies(post_num)
+    user_messages_map = defaultdict(list)
+    if copies_info:
+        for uid, mid in copies_info:
+            user_messages_map[uid].append(mid)
+    async with storage_lock:
+        ram_copies = post_to_messages.get(post_num, {})
+        for uid, mid_or_list in ram_copies.items():
+            if isinstance(mid_or_list, list):
+                for m in mid_or_list:
+                    if m not in user_messages_map[uid]:
+                        user_messages_map[uid].append(m)
+            else:
+                if mid_or_list not in user_messages_map[uid]:
+                    user_messages_map[uid].append(mid_or_list)
+
+    if not user_messages_map:
+        return
+
+    post_data_copy = {}
+    content_copy = {}
+    reply_author_id = None
+    board_id = None
+    async with storage_lock:
+        post_data = messages_storage.get(post_num)
+        if not post_data: return
+        content_type = post_data.get('content', {}).get('type')
+        can_be_edited = content_type in ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'media_group']
+        if not can_be_edited: return
+        post_data_copy = post_data.copy()
+        content_copy = post_data.get('content', {}).copy()
+        board_id = post_data.get('board_id')
+        reply_to_post_num = content_copy.get('reply_to_post')
+        if reply_to_post_num:
+            reply_author_id = messages_storage.get(reply_to_post_num, {}).get('author_id')
+    if not board_id: return
+    
+    final_keyboard = None
+    if content_copy.get('poll_data'):
+        poll_options = content_copy.get('poll_data', {}).get('options', [])
+        if poll_options:
+            buttons = []
+            for i, option_text in enumerate(poll_options):
+                button_text = option_text[:60]
+                buttons.append(
+                    InlineKeyboardButton(
+                        text=button_text,
+                        callback_data=f"poll_vote_{post_num}_{i}"
+                    )
+                )
+            final_keyboard = InlineKeyboardMarkup(inline_keyboard=[[btn] for btn in buttons])
+            
+    user_specific_texts = {}
+    text_or_caption_base = content_copy.get('text') or content_copy.get('caption')
+    text_with_you_links = text_or_caption_base
+    if text_or_caption_base and ">>" in text_or_caption_base:
+        mentioned_authors = {}
+        mentions = RE_YOU_PATTERN.findall(text_or_caption_base)
+        if mentions:
+            async with storage_lock:
+                for m_num_str in mentions:
+                    try:
+                        m_num = int(m_num_str)
+                        if m_num in messages_storage:
+                            mentioned_authors[m_num] = messages_storage[m_num].get("author_id")
+                    except ValueError:
+                        continue
+        text_with_you_links = add_you_to_my_posts_fast(
+            text_or_caption_base, 
+            post_data_copy.get('author_id'), 
+            mentioned_authors
+        )            
+    b_data = board_data[board_id]
+    users_settings = b_data.get('user_settings', {})
+    for user_id in user_messages_map.keys():
+        header_text = content_copy.get('header', '')
+        u_set = users_settings.get(user_id, {'hide': set()})
+        should_hide = False
+        if u_set['hide']:
+            raw_content_text = content_copy.get('text') or content_copy.get('caption') or ""
+            check_text = (header_text + " " + raw_content_text).lower()
+            if any(word in check_text for word in u_set['hide']):
+                should_hide = True
+        head = f"<i>{escape_html(header_text)}</i>"
+        if user_id == reply_author_id:
+            head = head.replace("Пост", "🔴 Пост").replace("Post", "🔴 Post")
+        if should_hide:
+            lang_local = 'en' if board_id == 'int' else 'ru'
+            placeholder = "🛡 Message hidden" if lang_local == 'en' else "🛡 Сообщение скрыто"
+            full_text = f"{head}\n{placeholder}"
+        else:
+            current_text_or_caption = text_or_caption_base
+            if user_id == post_data_copy.get('author_id'):
+                current_text_or_caption = text_with_you_links
+            content_for_user = content_copy.copy()
+            if 'text' in content_for_user: content_for_user['text'] = current_text_or_caption
+            elif 'caption' in content_for_user: content_for_user['caption'] = current_text_or_caption
+            formatted_body = await _format_message_body(
+                content=content_for_user, user_id_for_context=user_id,
+                post_data=post_data_copy, reply_to_post_author_id=reply_author_id,
+                quote_info=content_for_user.get('quote_info')
+            )
+            full_text = f"{head}\n\n{formatted_body}" if formatted_body else head
+        user_specific_texts[user_id] = full_text
+
+    async def _edit_one(user_id: int, message_id: int):
+        max_attempts = 6
+        delay = 1.5
+        for attempt in range(max_attempts):
+            try:
+                full_text = user_specific_texts.get(user_id, "")
+                content_type = content_copy.get('type')
+                if content_type == 'text':
+                    if len(full_text) > 4096: full_text = full_text[:4093] + "..."
+                    await bot_instance.edit_message_text(text=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard)
+                else:
+                    if len(full_text) > 1024: full_text = full_text[:1021] + "..."
+                    await bot_instance.edit_message_caption(caption=full_text, chat_id=user_id, message_id=message_id, parse_mode="HTML", reply_markup=final_keyboard)
+                return 
+            except TelegramRetryAfter as e:
+                wait_sec = e.retry_after + 1
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(wait_sec)
+                    continue
+                else:
+                    return 
+            except TelegramBadRequest as e:
+                error_message_lower = e.message.lower()
+                ignored_errors = ("message is not modified", "message to edit not found", "chat not found")
+                if any(err in error_message_lower for err in ignored_errors):
+                    return
+                if "flood control" in error_message_lower or "retry after" in error_message_lower:
+                    wait_sec = 3
+                    match = re.search(r'retry after (\d+)', error_message_lower)
+                    if match:
+                        wait_sec = int(match.group(1)) + 1
+                    if attempt < max_attempts - 1:
+                        await asyncio.sleep(wait_sec)
+                        continue
+                    else:
+                        return
+                return 
+            except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError) as e:
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 10) 
+                    continue
+                else:
+                    return
+            except Exception as e:
+                print(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
+                return
+    tasks_to_run = []
+    for uid, msgs in user_messages_map.items():
+        if msgs:
+            target_mid = sorted(msgs)[0]
+            task = spawn_task(_edit_one(uid, target_mid))
+            tasks_to_run.append(task)
+
+    CHUNK_SIZE = 30 
+    DELAY_BETWEEN_CHUNKS = 0.3
+    for i in range(0, len(tasks_to_run), CHUNK_SIZE):
+        chunk_tasks = tasks_to_run[i:i + CHUNK_SIZE]
+        await asyncio.gather(*chunk_tasks, return_exceptions=True)
+        if i + CHUNK_SIZE < len(tasks_to_run):
+            await asyncio.sleep(DELAY_BETWEEN_CHUNKS)
+
+
+async def execute_delayed_edit(
+    post_num: int,
+    bot_instance: Bot,
+    author_id: int | None,
+    notify_text: str | None,
+    reply_to_message_id: int | None = None,
+    delay: float = 3.0
+):
+    """
+    Ждет задержку, отправляет уведомление (если оно есть) в виде ответа, а затем редактирует пост.
+    """
+    try:
+        await asyncio.sleep(delay)
+        if author_id and notify_text:
+            try:
+                await bot_instance.send_message(
+                    author_id,
+                    notify_text,
+                    reply_to_message_id=reply_to_message_id
+                )
+            except (TelegramForbiddenError, TelegramBadRequest):
+                pass
+        await edit_post_for_all_recipients(post_num, bot_instance)
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        print(f"❌ Ошибка в execute_delayed_edit для поста #{post_num}: {e}")
+    finally:
+        async with pending_edit_lock:
+            current_task = asyncio.current_task()
+            if pending_edit_tasks.get(post_num) is current_task:
+                pending_edit_tasks.pop(post_num, None)
+
+
+async def _supervise_message_worker(worker_name: str, board_id: str, bot_instance: Bot) -> None:
+    """
+    Держит воркер доски живым.
+
+    Раньше воркер, вышедший из цикла (например по 'closed database'), исчезал
+    молча: message_broadcaster висел в gather до смерти ВСЕХ воркеров, поэтому
+    рестарта не происходило и доска переставала доставлять сообщения до
+    перезапуска процесса. Теперь каждый воркер поднимается отдельно.
+    """
+    delay = WORKER_RESTART_DELAY_SEC
+    while not (is_shutting_down or drain_shutdown_requested):
+        try:
+            await message_worker(worker_name, board_id, bot_instance)
+            if is_shutting_down or drain_shutdown_requested:
+                return
+            print(f"⚠️ {worker_name} завершился без запроса остановки. Перезапуск через {delay:.0f} с.")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            if is_shutting_down or drain_shutdown_requested:
+                return
+            print(f"⛔ {worker_name} упал: {type(e).__name__}: {str(e)[:200]}. Перезапуск через {delay:.0f} с.")
+            runtime_logger.exception("message_worker_crashed board=%s", board_id)
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, WORKER_RESTART_MAX_DELAY_SEC)
+
+
+async def message_broadcaster(bots: dict[str, Bot]):
+
+    tasks = [
+        spawn_task(_supervise_message_worker(f"Worker-{board_id}", board_id, bot_instance))
+        for board_id, bot_instance in bots.items()
+    ]
+    # return_exceptions: падение одного супервизора не должно ронять
+    # message_broadcaster целиком (иначе _run_background_task поднимет ВТОРОЙ
+    # комплект воркеров поверх ещё живых первых).
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+class MessageDeliveryTask:
+    """
+    Класс для обработки доставки одного сообщения.
+    Инкапсулирует логику, ранее находившуюся в монолитной функции message_worker.
+    """
+    def __init__(self, worker_name, board_id, bot_instance, queue, msg_data):
+        self.worker_name = worker_name
+        self.board_id = board_id
+        self.bot_instance = bot_instance
+        self.queue = queue
+        self.msg_data = msg_data
+
+        self.b_data = board_data[self.board_id]
+
+    async def process(self):
+        """Основной метод оркестрации обработки сообщения."""
+        if not await validate_message_format(self.msg_data):
+            return
+
+        # Delayed initialization to ensure msg_data is valid
+        self.post_num = self.msg_data['post_num']
+        self.content = self.msg_data['content']
+        self.content['post_num'] = self.post_num
+        self.keyboard = self.msg_data.get('keyboard')
+        self.thread_id = self.msg_data.get('thread_id')
+        self.delivery_phase = self.msg_data.get("delivery_phase", "full")
+        self.initial_recipients = self.msg_data['recipients']
+
+        self.enqueued_at = self.msg_data.get("enqueued_at")
+        self.started_at = time.time()
+        self.queue_wait_sec = None
+        if self.enqueued_at is not None:
+            try:
+                self.queue_wait_sec = max(0.0, self.started_at - float(self.enqueued_at))
+            except (TypeError, ValueError):
+                pass
+
+        self.passive_slice_size = _passive_slice_size_for_content(self.content, self.board_id)
+
+        if self.post_num in posts_pending_deletion:
+            print(f"[{self.board_id}] Worker пропустил пост #{self.post_num}, т.к. он помечен на удаление.")
+            return
+
+        if self.msg_data.get("durable_delivery_id"):
+            self.initial_recipients = await _remove_already_delivered_recipients(self.post_num, self.initial_recipients)
+            self.msg_data["recipients"] = self.initial_recipients
+            if not self.initial_recipients:
+                await _delete_durable_delivery_item(self.msg_data, "already_delivered")
+                return
+
+        if await self._handle_preemption():
+            return
+
+        active_recipients = self._resolve_active_recipients()
+        if not active_recipients:
+            if self.msg_data.get("durable_delivery_id"):
+                await _delete_durable_delivery_item(self.msg_data, "no_active_recipients")
+            return
+
+        try:
+            original_recipients_for_post = int(self.msg_data.get("original_recipients") or len(active_recipients))
+        except (TypeError, ValueError):
+            original_recipients_for_post = len(active_recipients)
+
+        recipients_to_send, passive_recipients_for_later, delivery_phase_for_send, deferred_reason = self._determine_delivery_phases(active_recipients)
+
+        reply_info_copy = {}
+        async with storage_lock:
+            if self.post_num in post_to_messages:
+                reply_info_copy = post_to_messages[self.post_num].copy()
+
+        current_deliveries[self.board_id] = {
+            "post_num": self.post_num,
+            "started_at": self.started_at,
+            "enqueued_at": self.enqueued_at,
+            "queue_wait_sec": round(self.queue_wait_sec, 3) if self.queue_wait_sec is not None else None,
+            "recipients": len(recipients_to_send),
+            "original_recipients": original_recipients_for_post,
+            "passive_deferred": len(passive_recipients_for_later),
+            "passive_slice_size": self.passive_slice_size,
+            "phase": delivery_phase_for_send,
+            "thread_id": self.thread_id,
+        }
+
+        planned_passive_durable_id = None
+        planned_passive_item = None
+        if passive_recipients_for_later and not self.msg_data.get("durable_delivery_id"):
+            planned_passive_item = _build_passive_queue_item(
+                PassiveQueueItemParams(
+                    source_item=self.msg_data,
+                    recipients=passive_recipients_for_later,
+                    post_num=self.post_num,
+                    original_recipients=original_recipients_for_post,
+                    enqueued_at=self.enqueued_at,
+                    started_at=self.started_at,
+                )
+            )
+            planned_passive_durable_id = await _persist_durable_delivery_item(
+                self.board_id,
+                planned_passive_item,
+                "planned_before_send",
+            )
+
+        budget_deferred_count = 0
+        delivered_now_count = 0
+        try:
+            delivery_results = await send_message_to_users(BroadcastConfig(
+                bot_instance=self.bot_instance,
+                board_id=self.board_id,
+                recipients=recipients_to_send,
+                content=self.content,
+                reply_info=reply_info_copy,
+                keyboard=self.keyboard,
+                verbose=True,
+                queue_enqueued_at=self.enqueued_at,
+                queue_wait_sec=self.queue_wait_sec,
+                delivery_phase=delivery_phase_for_send,
+                delivery_original_recipients=original_recipients_for_post,
+                delivery_deferred_recipients=len(passive_recipients_for_later),
+            ))
+            delivered_now_count = len(delivery_results)
+            budget_deferred = getattr(delivery_results, "remaining_recipients", set())
+            if budget_deferred:
+                budget_deferred_count = len(budget_deferred)
+                passive_recipients_for_later.update(budget_deferred)
+                budget_reason = getattr(delivery_results, "interrupted_reason", None) or "phase_budget"
+                deferred_reason = f"{deferred_reason}+{budget_reason}" if deferred_reason else budget_reason
+        except Exception:
+            if planned_passive_durable_id and passive_recipients_for_later:
+                planned_passive_item["durable_delivery_id"] = planned_passive_durable_id
+                await self.queue.put(planned_passive_item)
+                runtime_logger.warning(
+                    "delivery_durable_requeued_after_send_error %s",
+                    json.dumps(
+                        {
+                            "ts": round(time.time(), 3),
+                            "id": planned_passive_durable_id,
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
+                            "deferred": len(passive_recipients_for_later),
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+            raise
+        finally:
+            current_delivery = current_deliveries.get(self.board_id)
+            if current_delivery and current_delivery.get("post_num") == self.post_num:
+                current_deliveries.pop(self.board_id, None)
+
+        if passive_recipients_for_later:
+            passive_item = _build_passive_queue_item(
+                PassiveQueueItemParams(
+                    source_item=self.msg_data,
+                    recipients=passive_recipients_for_later,
+                    post_num=self.post_num,
+                    original_recipients=original_recipients_for_post,
+                    enqueued_at=self.enqueued_at,
+                    started_at=self.started_at,
+                )
+            )
+            if planned_passive_durable_id:
+                passive_item["durable_delivery_id"] = planned_passive_durable_id
+            await _persist_durable_delivery_item(self.board_id, passive_item, "deferred_after_send")
+            await self.queue.put(passive_item)
+            runtime_logger.info(
+                "delivery_passive_deferred %s",
+                json.dumps(
+                    {
+                        "ts": round(time.time(), 3),
+                        "board_id": self.board_id,
+                        "post_num": self.post_num,
+                        "phase": delivery_phase_for_send,
+                        "reason": deferred_reason,
+                        "requested_now": len(recipients_to_send),
+                        "sent_now": delivered_now_count,
+                        "deferred": len(passive_recipients_for_later),
+                        "budget_deferred": budget_deferred_count,
+                        "queue_size": self.queue.qsize(),
+                        "passive_slice_size": self.passive_slice_size,
+                        "content_type": str(self.content.get("type")),
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            )
+        elif self.msg_data.get("durable_delivery_id"):
+            await _delete_durable_delivery_item(self.msg_data, "completed")
+
+    async def _handle_preemption(self):
+        """Обрабатывает логику прерывания для пассивной фазы."""
+        if (
+            PRIORITY_SPLIT_FANOUT_ENABLED
+            and self.delivery_phase == "passive"
+            and not self.thread_id
+            and PASSIVE_MAX_PREEMPTIONS > 0
+            and len(self.initial_recipients) > self.passive_slice_size
+            and _queue_has_full_message(self.queue)
+        ):
+            preemptions = int(self.msg_data.get("passive_preemptions", 0) or 0)
+            if preemptions < PASSIVE_MAX_PREEMPTIONS:
+                self.msg_data["passive_preemptions"] = preemptions + 1
+                await self.queue.put(self.msg_data)
+                runtime_logger.warning(
+                    "delivery_passive_preempted %s",
+                    json.dumps(
+                        {
+                            "ts": round(time.time(), 3),
+                            "board_id": self.board_id,
+                            "post_num": self.post_num,
+                            "preemptions": self.msg_data["passive_preemptions"],
+                            "max_preemptions": PASSIVE_MAX_PREEMPTIONS,
+                            "queue_size": self.queue.qsize(),
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+                return True
+        return False
+
+    def _resolve_active_recipients(self):
+        """Определяет список активных получателей."""
+        active_recipients = set()
+        if self.thread_id:
+            active_recipients = {
+                uid for uid in self.initial_recipients
+                if uid > 0 and uid not in self.b_data['users']['banned']
+            }
+        else:
+            user_states = self.b_data.get('user_state', {})
+            recipients_on_main = {
+                uid for uid in self.initial_recipients
+                if uid > 0 and user_states.get(uid, {}).get('location', 'main') == 'main'
+            }
+            active_recipients = {uid for uid in recipients_on_main if uid not in self.b_data['users']['banned']}
+        return active_recipients
+
+    def _determine_delivery_phases(self, active_recipients):
+        """Определяет фазы доставки (recipients_to_send, passive_recipients_for_later, phase, reason)."""
+        recipients_to_send = active_recipients
+        passive_recipients_for_later = set()
+        delivery_phase_for_send = self.delivery_phase
+        deferred_reason = None
+
+        if (
+            self.delivery_phase == "full"
+            and PRIORITY_SPLIT_FANOUT_ENABLED
+            and not self.thread_id
+        ):
+            priority_recipients, passive_recipients = _split_recipients_for_delivery(self.board_id, active_recipients)
+            if priority_recipients and len(passive_recipients) >= PRIORITY_SPLIT_MIN_PASSIVE:
+                recipients_to_send = set(priority_recipients)
+                passive_recipients_for_later = set(passive_recipients)
+                delivery_phase_for_send = "priority"
+                deferred_reason = "split_priority_first"
+        elif (
+            self.delivery_phase == "passive"
+            and PRIORITY_SPLIT_FANOUT_ENABLED
+            and not self.thread_id
+            and len(active_recipients) > self.passive_slice_size
+        ):
+            ordered_passive = list(active_recipients)
+            recipients_to_send = set(ordered_passive[:self.passive_slice_size])
+            passive_recipients_for_later = set(ordered_passive[self.passive_slice_size:])
+            delivery_phase_for_send = "passive_slice"
+            deferred_reason = "passive_slice"
+
+        return recipients_to_send, passive_recipients_for_later, delivery_phase_for_send, deferred_reason
+
+
+async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
+    """
+    Воркер обработки очереди сообщений.
+    Исправлено: queue.get() вынесен из try-блока, чтобы избежать ошибки task_done() при отмене задачи.
+    Рефакторинг: Использован паттерн Method Object (MessageDeliveryTask) для инкапсуляции логики обработки сообщения.
+    """
+    queue = message_queues[board_id]
+    while True:
+        msg_data = await queue.get()
+        try:
+            if not msg_data:
+                await asyncio.sleep(0.05)
+                continue
+
+            task = MessageDeliveryTask(worker_name, board_id, bot_instance, queue, msg_data)
+            await task.process()
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            if is_shutting_down or drain_shutdown_requested:
+                break
+            # 'closed database' раньше означал break, то есть тихую смерть воркера
+            # доски навсегда. Ошибка восстановимая: get_pool() переподключается
+            # сам, поэтому ждём чуть дольше и продолжаем разгребать очередь.
+            if "closed database" in str(e).lower():
+                print(f"{worker_name} | ⚠️ Соединение с БД было закрыто, жду переподключения пула...")
+                runtime_logger.warning("message_worker_db_closed board=%s", board_id)
+                await asyncio.sleep(5)
+                continue
+            print(f"{worker_name} | ⛔ Критическая ошибка: {str(e)[:200]}")
+            import traceback
+            traceback.print_exc()
+            await asyncio.sleep(1)
+        finally:
+            queue.task_done()
+
+
+async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_location: str, stream: str = 'ru') -> tuple[bool, bool]:
+    """
+    Отправляет пользователю пропущенные сообщения. Гарантирует, что ОП-пост
+    треда будет показан первым. ОПТИМИЗИРОВАННАЯ ВЕРСИЯ.
+    Возвращает кортеж (были ли отправлены сообщения, нужно ли показать кнопку "Вся летопись" - всегда False).
+    """
+    b_data = board_data[board_id]
+    user_s = b_data['user_state'].setdefault(user_id, {})
+    missed_post_nums_full = []
+    op_post_num = None
+    posts_to_send_data = [] # Здесь будем хранить полные данные постов
+    async with storage_lock:
+        if target_location == 'main':
+            last_seen_post = user_s.get('last_seen_main', 0)
+            all_main_posts = sorted([
+                p_num for p_num, p_data in messages_storage.items() 
+                if p_data.get('board_id') == board_id and not p_data.get('thread_id')
+            ])
+            missed_post_nums_full = [p_num for p_num in all_main_posts if p_num > last_seen_post]
+            if len(missed_post_nums_full) > 20:
+                missed_post_nums_full = missed_post_nums_full[-20:]
+        else: # Загрузка для треда
+            thread_id = target_location
+            thread_info = b_data.get('threads_data', {}).get(thread_id)
+            if not thread_info: return False, False
+            all_thread_posts = sorted(thread_info.get('posts', []))
+            if all_thread_posts:
+                op_post_num = all_thread_posts[0]
+            missed_post_nums_full = all_thread_posts
+        if not missed_post_nums_full:
+            return False, False
+        for post_num in missed_post_nums_full:
+            post_data = messages_storage.get(post_num)
+            if post_data:
+                posts_to_send_data.append({
+                    'content': post_data.get('content', {}).copy(),
+                    'reply_info': post_to_messages.get(post_num, {}).copy()
+                })
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if target_location != 'main':
+        try:
+            if lang == 'en':
+                loading_text = "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n<b>THREAD LOADED</b>\n🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴"
+            elif lang == 'jp':
+                loading_text = "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n<b>スレッド読み込み完了</b>\n🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴"
+            else:
+                loading_text = "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n<b>ТРЕД ЗАГРУЖЕН</b>\n🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴"
+            await bot.send_message(user_id, loading_text, parse_mode="HTML")
+            await asyncio.sleep(0.5)
+        except (TelegramForbiddenError, TelegramBadRequest):
+            pass
+    if op_post_num:
+        op_post_data = next((p for p in posts_to_send_data if p['content'].get('post_num') == op_post_num), None)
+        if op_post_data:
+            try:
+                await send_message_to_users(BroadcastConfig(bot_instance=bot, board_id=board_id, recipients={user_id}, content=op_post_data['content'], reply_info=op_post_data['reply_info']))
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                print(f"Ошибка отправки ОП-поста #{op_post_num} юзеру {user_id}: {e}")
+    for post_bundle in posts_to_send_data:
+        if post_bundle['content'].get('post_num') != op_post_num:
+            try:
+                await send_message_to_users(BroadcastConfig(bot_instance=bot, board_id=board_id, recipients={user_id}, content=post_bundle['content'], reply_info=post_bundle['reply_info']))
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                print(f"Ошибка отправки пропущенного сообщения #{post_bundle['content'].get('post_num')} юзеру {user_id}: {e}")
+    if lang == 'en':
+        final_text = "All new messages loaded."
+    elif lang == 'jp':
+        final_text = "新着メッセージを読み込みました。"
+    else:
+        final_text = "Все новые сообщения загружены."
+    entry_keyboard = _get_thread_entry_keyboard(board_id, stream=stream)
+    try:
+        await bot.send_message(user_id, final_text, reply_markup=entry_keyboard, parse_mode="HTML")
+    except (TelegramForbiddenError, TelegramBadRequest):
+        pass
+    if missed_post_nums_full:
+        new_last_seen = missed_post_nums_full[-1]
+        if target_location == 'main':
+            user_s['last_seen_main'] = new_last_seen
+        else:
+            user_s.setdefault('last_seen_threads', {})[target_location] = new_last_seen
+    return True, False
+
+
+async def board_help_worker(board_id: str):
+    """
+    Индивидуальный воркер рассылки помощи. 
+    Исправлено: message.queues -> message_queues
+    """
+    await asyncio.sleep(random.randint(10, 300))
+    while True:
+        try:
+            delay = random.randint(10800, 72000)  # от 3 до 20 часов
+            await asyncio.sleep(delay)
+            activity = await get_board_activity_last_hours(board_id, hours=24)
+            if activity < 15: # Если меньше 15 постов за сутки - доска мертва
+                print(f"💀 [{board_id}] Доска полудохлая (акт: {activity}), пропускаем рассылку помощи.")
+                continue
+            b_data = board_data[board_id]
+            streams_to_process = ['ru']
+            if board_id == 'int':
+                streams_to_process = ['en']
+            elif ENABLE_MULTILANG:
+                streams_to_process = ['ru', 'en', 'jp']
+            for stream in streams_to_process:
+                if board_id == 'int':
+                    recipients = b_data['users']['active'] - b_data['users']['banned']
+                else:
+                    if ENABLE_MULTILANG:
+                        stream_users = await get_stream_active_users(board_id, stream)
+                        recipients = stream_users.intersection(b_data['users']['active']) - b_data['users']['banned']
+                    else:
+                        if stream != 'ru': continue 
+                        recipients = b_data['users']['active'] - b_data['users']['banned']
+                if not recipients:
+                    continue
+                message_text = ""
+                choice = random.randint(1, 6)
+                if stream == 'en':
+                    if choice == 1: message_text = random.choice(HELP_TEXT_EN_COMMANDS)
+                    elif choice == 2: message_text = generate_boards_list(BOARD_CONFIG, 'en')
+                    elif choice == 3: message_text = random.choice(THREAD_PROMO_TEXT_EN)
+                    elif choice == 4: message_text = random.choice(MODE_INFO_TEXT_EN)
+                    elif choice == 5: message_text = random.choice(CHANNEL_PROMO_TEXT_EN)
+                    else: message_text = random.choice(MECHANICS_INFO_TEXT_EN)
+                elif stream == 'jp':
+                    if choice == 1: message_text = random.choice(HELP_TEXT_JP_COMMANDS)
+                    elif choice == 2: message_text = generate_boards_list(BOARD_CONFIG, 'jp')
+                    elif choice == 3: message_text = random.choice(THREAD_PROMO_TEXT_JP)
+                    elif choice == 4: message_text = random.choice(MODE_INFO_TEXT_JP)
+                    elif choice == 5: message_text = random.choice(CHANNEL_PROMO_TEXT_JP)
+                    else: message_text = random.choice(MECHANICS_INFO_TEXT_JP)
+                else: # ru
+                    if choice == 1: message_text = random.choice(HELP_TEXT_COMMANDS)
+                    elif choice == 2: message_text = generate_boards_list(BOARD_CONFIG, 'ru')
+                    elif choice == 3: message_text = random.choice(THREAD_PROMO_TEXT_RU)
+                    elif choice == 4: message_text = random.choice(MODE_INFO_TEXT_RU)
+                    elif choice == 5: message_text = random.choice(CHANNEL_PROMO_TEXT_RU)
+                    else: message_text = random.choice(MECHANICS_INFO_TEXT_RU)
+                now_dt = datetime.now(UTC)
+                content = {'type': 'text', 'text': message_text, 'is_system_message': True}
+                post_num = await create_post(
+                    board_id=board_id, author_id=0, content=content,
+                    timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
+                )
+                if not post_num: continue
+                header = await format_header(board_id, post_num, stream=stream)
+                content['header'] = header
+                await update_post_content(post_num, content)
+                async with storage_lock:
+                    messages_storage[post_num] = {
+                        'author_id': 0, 'timestamp': now_dt,
+                        'content': content, 'board_id': board_id
+                    }
+                await enqueue_board_message(board_id, {
+                    'recipients': recipients, 'content': content,
+                    'post_num': post_num, 'board_id': board_id
+                })
+                print(f"✅ [{board_id}] Помощь ({stream}) #{post_num} отправлена в очередь.")
+        except asyncio.CancelledError:
+            print(f"ℹ️ Воркер помощи для [{board_id}] остановлен.")
+            break
+        except Exception as e:
+            print(f"❌ [{board_id}] Ошибка в board_help_worker: {e}")
+            await asyncio.sleep(120)
+
+
+async def validate_message_format(msg_data: dict) -> bool:
+
+    if not isinstance(msg_data, dict):
+        return False
+    required = ['recipients', 'content', 'post_num']
+    if any(key not in msg_data for key in required):
+        return False
+    if not isinstance(msg_data['recipients'], (set, list)):
+        return False
+    if not isinstance(msg_data['content'], dict):
+        return False
+    if (msg_data['content'].get('type') == 'media_group' and 
+        not isinstance(msg_data['content'].get('media'), list)):
+        return False
+    return True
+
+
+def _get_thread_entry_keyboard(board_id: str, show_history_button: bool = False, stream: str = 'ru') -> InlineKeyboardMarkup:
+    """
+    Создает и возвращает инлайн-клавиатуру для сообщения о входе в тред.
+    """
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    if lang == 'en':
+        button_good_thread_text = "👍 Good Thread"
+        button_leave_text = "Leave Thread"
+    elif lang == 'jp':
+        button_good_thread_text = "👍 良スレ"
+        button_leave_text = "スレッドを出る"
+    else:
+        button_good_thread_text = "👍 Годный тред"
+        button_leave_text = "Выйти из треда"
+    keyboard_layout = [
+        [
+            InlineKeyboardButton(text=button_good_thread_text, callback_data="thread_like_placeholder"),
+            InlineKeyboardButton(text=button_leave_text, callback_data="leave_thread")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard_layout)

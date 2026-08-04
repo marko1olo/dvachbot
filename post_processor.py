@@ -19,6 +19,7 @@ from common.task_manager import spawn_task
 from common.database import update_post_content, add_channel_copy
 
 from shared_state import *
+from archive_manager import _forward_post_to_realtime_archive, post_special_num_to_channel
 from broadcaster import send_message_to_users
 from media_utils import _download_image_with_proxy, _resize_image_if_needed
 from post_helpers import format_header, format_thread_post_header, apply_shadow_autoreplace, check_post_numerals, execute_auto_roast
@@ -413,155 +414,12 @@ class NewPostProcessor:
             print(f"🔥🔥🔥 ФАТАЛЬНАЯ ОШИБКА в process_new_post для user {self.user_id}: {e}\n{traceback.format_exc()}")
             return None
 
-async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, post_num: int, content: dict, is_shadow_muted: bool, stream: str = 'ru'):
-    if is_shadow_muted:
-        return
-    from common.database import get_post_by_num
-    import main as _main
-    _ARCHIVE_POSTING_BOT_ID = getattr(_main, 'ARCHIVE_POSTING_BOT_ID', None)
-    _AUTHORIZED_ARCHIVE_BOTS = getattr(_main, 'AUTHORIZED_ARCHIVE_BOTS', set())
-    _MIRROR_CHANNELS = getattr(_main, 'MIRROR_CHANNELS', [])
-    _build_archive_header = getattr(_main, '_build_archive_header', None)
-    _fmt_archive_text = getattr(_main, '_format_archive_text_content', None)
-    _send_archive_media = getattr(_main, '_send_archive_media', None)
-    _update_archive_post_content = getattr(_main, '_update_archive_post_content', None)
-
-    check_post = await get_post_by_num(post_num)
-    if not check_post:
-        return
-    archive_bot = GLOBAL_BOTS.get(_ARCHIVE_POSTING_BOT_ID)
-    sender_bot = bot_instance if board_id in _AUTHORIZED_ARCHIVE_BOTS else archive_bot
-    if not sender_bot:
-        return
-    sender_bot_id = getattr(sender_bot, 'id', 0)
-    lang = 'en' if board_id == 'int' else 'ru'
-
-    header_text = _build_archive_header(board_id, post_num, content, lang) if _build_archive_header else ''
-    
-    content_type = content.get("type", "text")
-    text_to_send = _fmt_archive_text(content, header_text) if _fmt_archive_text else header_text
-    
-    db_updated = False
-    for channel_id in _MIRROR_CHANNELS:
-        if not channel_id or channel_id == 0:
-            continue
-        if not _send_archive_media:
-            continue
-        sent_message, new_files_data = await _send_archive_media(sender_bot, channel_id, content, content_type, text_to_send, header_text)
-        if sent_message:
-            try:
-                await add_channel_copy(post_num, channel_id, sent_message.message_id)
-                if not db_updated and new_files_data and _update_archive_post_content:
-                    await _update_archive_post_content(post_num, content, content_type, new_files_data, sender_bot_id)
-                    db_updated = True
-            except Exception:
-                pass
 
 def mark_weekly_active_delivery_user(board_id: str, user_id: int):
-    import main as _main
-    _PRIORITY_DELIVERY_ENABLED = getattr(_main, 'PRIORITY_DELIVERY_ENABLED', False)
-    _weekly_active_users = getattr(_main, 'weekly_active_users', {})
-    if not _PRIORITY_DELIVERY_ENABLED or user_id <= 0:
+    if not PRIORITY_DELIVERY_ENABLED or user_id <= 0:
         return
-    _weekly_active_users.setdefault(board_id, set()).add(user_id)
+    weekly_active_users.setdefault(board_id, set()).add(user_id)
 
-async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_num: int, level: int, content: dict, author_id: int):
-    """
-    (ИСПРАВЛЕННАЯ ВЕРСИЯ 3.0)
-    Отправляет уведомление о "счастливом" посте в канал архивов.
-    Надежно обрабатывает все типы медиа, отправляя сам файл, а не плейсхолдер.
-    """
-    import main as _main
-    _AUTHORIZED_ARCHIVE_BOTS = getattr(_main, 'AUTHORIZED_ARCHIVE_BOTS', set())
-    _ARCHIVE_POSTING_BOT_ID = getattr(_main, 'ARCHIVE_POSTING_BOT_ID', None)
-    _SPECIAL_NUMERALS_CONFIG = getattr(_main, 'SPECIAL_NUMERALS_CONFIG', {})
-    _ARCHIVE_CHANNEL_ID = getattr(_main, 'ARCHIVE_CHANNEL_ID', None)
-    try:
-        bot_instance = bots.get(board_id)
-        archive_bot = bot_instance if board_id in _AUTHORIZED_ARCHIVE_BOTS else GLOBAL_BOTS.get(_ARCHIVE_POSTING_BOT_ID)
-        
-        if not archive_bot:
-            print(f"⛔ Ошибка: бот для постинга архивов не найден.")
-            return
-
-        config = _SPECIAL_NUMERALS_CONFIG.get(level, {'label': 'Get', 'emojis': ('🎯',)})
-        emoji = random.choice(config['emojis'])
-        label = config['label'].upper()
-        board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
-        
-        header = f"{emoji} <b>{label} #{post_num}</b> {emoji}\n\n<b>Доска:</b> {board_name}\n"
-        text_content = content.get('text') or content.get('caption') or ''
-        
-        caption_text = f"{header}\n{text_content}"
-        content_type_str = str(content.get("type", "")).split('.')[-1].lower()
-
-        max_attempts = 5
-        delay = 3.0
-        
-        for attempt in range(max_attempts):
-            try:
-                # --- НАЧАЛО ИСПРАВЛЕНИЙ (Надежная отправка медиа) ---
-                file_id = content.get('file_id')
-                if content_type_str == 'media_group':
-                    media_list = content.get('media', [])
-                    if media_list and media_list[0]:
-                        file_id = media_list[0].get('file_id')
-                        content_type_str = media_list[0].get('type', 'photo')
-
-                final_caption = caption_text[:1021] + "..." if len(caption_text) > 1024 else caption_text
-                
-                # Явная обработка каждого типа, чтобы избежать ошибок с аргументами
-                if content_type_str == 'photo' and file_id:
-                    await archive_bot.send_photo(_ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
-                elif content_type_str == 'video' and file_id:
-                    await archive_bot.send_video(_ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
-                elif content_type_str == 'animation' and file_id:
-                    await archive_bot.send_animation(_ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
-                elif content_type_str == 'document' and file_id:
-                    await archive_bot.send_document(_ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
-                elif content_type_str == 'audio' and file_id:
-                    await archive_bot.send_audio(_ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
-                elif content_type_str == 'voice' and file_id:
-                    await archive_bot.send_voice(_ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(_ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
-                elif content_type_str == 'sticker' and file_id:
-                    await archive_bot.send_sticker(_ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(_ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
-                elif content_type_str == 'video_note' and file_id:
-                    await archive_bot.send_video_note(_ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(_ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
-                else: # Если это текст или медиа без file_id
-                    final_text_for_message = caption_text[:4093] + "..." if len(caption_text) > 4096 else caption_text
-                    await archive_bot.send_message(_ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
-                # --- КОНЕЦ ИСПРАВЛЕНИЙ ---
-                
-                print(f"✅ Уведомление о счастливом посте #{post_num} ({label}) отправлено в канал.")
-                return 
-
-            except TelegramRetryAfter as e:
-                wait_time = e.retry_after + 1
-                print(f"⚠️ API Limit on happy post #{post_num}. Waiting {wait_time}s...")
-                await asyncio.sleep(wait_time)
-            except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError) as e:
-                if attempt < max_attempts - 1:
-                    print(f"🌐 Network error on happy post #{post_num} (try {attempt + 1}). Retrying in {delay:.1f}s...")
-                    await asyncio.sleep(delay)
-                    delay *= 1.5
-                else:
-                    raise e
-            except TelegramBadRequest as e:
-                print(f"❌ BadRequest on happy post #{post_num}: {e}. No retry.")
-                # Если медиа не отправилось, пробуем отправить как текст
-                try:
-                    final_text_for_message = caption_text[:4093] + "..." if len(caption_text) > 4096 else caption_text
-                    await archive_bot.send_message(_ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
-                    print(f"✅ Уведомление о счастливом посте #{post_num} отправлено как текст после ошибки медиа.")
-                except Exception as final_e:
-                    print(f"❌ Финальная попытка отправки текста для #{post_num} также провалилась: {final_e}")
-                return # Выходим в любом случае после BadRequest
-    except Exception as e:
-        import traceback
-        print(f"⛔ Не удалось отправить счастливый пост #{post_num} в канал после всех попыток: {e}\n{traceback.format_exc()}")
 
 async def post_thread_notification_to_channel(bots: dict[str, Bot], board_id: str, thread_id: str, thread_info: dict, event_type: str, details: dict | None = None):
     """
@@ -573,12 +431,9 @@ async def post_thread_notification_to_channel(bots: dict[str, Bot], board_id: st
     :param event_type: Тип события ('new_thread', 'milestone', 'high_activity').
     :param details: Дополнительная информация (например, {'posts': 150} или {'activity': 25.5}).
     """
-    import main as _main
-    _ARCHIVE_POSTING_BOT_ID = getattr(_main, 'ARCHIVE_POSTING_BOT_ID', None)
-    _ARCHIVE_CHANNEL_ID = getattr(_main, 'ARCHIVE_CHANNEL_ID', None)
-    bot_instance = bots.get(_ARCHIVE_POSTING_BOT_ID)
+    bot_instance = bots.get(ARCHIVE_POSTING_BOT_ID)
     if not bot_instance:
-        print(f"⛔ Ошибка: бот для постинга ('{_ARCHIVE_POSTING_BOT_ID}') не найден.")
+        print(f"⛔ Ошибка: бот для постинга ('{ARCHIVE_POSTING_BOT_ID}') не найден.")
         return
     details = details or {}
     title = escape_html(thread_info.get('title', 'Без названия'))
@@ -608,7 +463,7 @@ async def post_thread_notification_to_channel(bots: dict[str, Bot], board_id: st
         return
     try:
         await bot_instance.send_message(
-            chat_id=_ARCHIVE_CHANNEL_ID,
+            chat_id=ARCHIVE_CHANNEL_ID,
             text=message_text,
             parse_mode="HTML"
         )

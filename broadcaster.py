@@ -6,7 +6,12 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Any, Optional
 from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramNetworkError, TelegramBadRequest
+import aiohttp
+import re
+from datetime import datetime
+from common.text_utils import clean_html_tags
 from shared_state import *
 from utils import split_text
 

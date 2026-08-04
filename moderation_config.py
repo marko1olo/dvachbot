@@ -62,3 +62,6 @@ POLITICAL_REPLACEMENTS = [
     (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*о\s*й\b'), ['руснявой', 'пидорусской']),
     (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*у\s*ю\b'), ['руснявую', 'пидорусскую'])
 ]
+
+_LIE_VIDEO_EXTS = ('.mp4', '.webm', '.mov', '.mkv')
+_LIE_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.gif')

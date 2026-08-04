@@ -559,10 +559,12 @@ async def tagging_loop():
         try:
             now = time.time()
             if TEMP_FAILED_FILES:
+                # Clean up entries older than 2 hours to avoid memory leaks, 
+                # but preserve them long enough for 3 retries (5 mins each)
                 TEMP_FAILED_FILES = {
                     k: v
                     for k, v in TEMP_FAILED_FILES.items()
-                    if (v.get("until", 0) if isinstance(v, dict) else v) > now
+                    if (v.get("until", 0) if isinstance(v, dict) else v) > now - 7200
                 }
 
             db = await get_pool()
@@ -576,7 +578,8 @@ async def tagging_loop():
             # Фильтруем "временно упавшие"
             valid_task = None
             for t in all_tasks:
-                if t["fid"] not in TEMP_FAILED_FILES:
+                failed_info = TEMP_FAILED_FILES.get(t["fid"])
+                if not failed_info or (isinstance(failed_info, dict) and failed_info.get("until", 0) <= now):
                     valid_task = t
                     break
 
@@ -769,11 +772,7 @@ async def tagging_loop():
                 should_deep_check = False
 
                 # 1. Проверка по типу файла (видео чекаем всегда, так как теги по первому кадру могут врать)
-<<<<<<< HEAD
-                if file_type in ["gif", "video_note"]:
-=======
                 if file_type in ['gif', 'video_note', 'video', 'animation']:
->>>>>>> 5b69ed4e (sync: update local workspace changes)
                     should_deep_check = True
 
                 # 2. Проверка по тегам (если файл успешно сохранен и теги есть)
@@ -791,11 +790,31 @@ async def tagging_loop():
                     spawn_task(run_deep_check(resized_bytes, file_id))
 
                 if not tags:
-                    TEMP_FAILED_FILES[file_id] = time.time() + 60
+                    entry = TEMP_FAILED_FILES.get(file_id)
+                    fail_cnt = (entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1
+                    if fail_cnt >= 5:
+                        logger.warning(f"⛔ [TAGGER] No tags 5 times for {file_id[:15]}. Marking as 'error_no_tags'.")
+                        async with db_lock:
+                            await db.execute("UPDATE FileRegistry SET tags='error_no_tags' WHERE file_id=?", (file_id,))
+                            await db.commit()
+                        if file_id in TEMP_FAILED_FILES:
+                            del TEMP_FAILED_FILES[file_id]
+                    else:
+                        TEMP_FAILED_FILES[file_id] = {"until": time.time() + 60, "cnt": fail_cnt}
 
             except Exception as e:
                 logger.error(f"💥 Crit fail {file_id}: {e}")
-                TEMP_FAILED_FILES[file_id] = time.time() + 300
+                entry = TEMP_FAILED_FILES.get(file_id)
+                fail_cnt = (entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1
+                if fail_cnt >= 3:
+                    logger.warning(f"⛔ [TAGGER] Crit fail 3 times for {file_id[:15]}. Marking as 'error'.")
+                    async with db_lock:
+                        await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
+                        await db.commit()
+                    if file_id in TEMP_FAILED_FILES:
+                        del TEMP_FAILED_FILES[file_id]
+                else:
+                    TEMP_FAILED_FILES[file_id] = {"until": time.time() + 300, "cnt": fail_cnt}
 
             # Пауза между файлами (чтобы не спамить в Groq)
             await asyncio.sleep(2)

@@ -1,5 +1,7 @@
+from concurrent.futures import ThreadPoolExecutor
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup
+import os
 import asyncio
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -13,6 +15,17 @@ import logging
 BOARDS = list(BOARD_CONFIG.keys())
 message_queues = {board: asyncio.Queue(maxsize=0) for board in BOARDS}
 runtime_logger = logging.getLogger('runtime')
+
+is_shutting_down = False
+drain_shutdown_requested = False
+durable_delivery_stats = {
+    'db_loads': 0,
+    'failed_queue_upserts': 0,
+    'failed_queue_deletes': 0,
+    'invalid_recipients': 0,
+}
+weekly_active_users = {board: set() for board in BOARDS}
+
 
 def _prepare_queue_item(board_id: str, item: dict) -> dict:
     if isinstance(item, dict):
@@ -130,3 +143,33 @@ async def enqueue_board_message(board_id: str, item: dict) -> bool:
         return False
     await queue.put(_prepare_queue_item(board_id, item))
     return True
+current_deliveries = {}
+pending_edit_tasks = {}  # Словарь для хранения активных задач редактирования {post_num: asyncio.Task}
+pending_edit_lock = asyncio.Lock()
+posts_pending_deletion = set()
+
+
+# --- Archive Config ---
+MIRROR_CHANNELS = [
+    -1003549106152, 
+    -1003651702446,
+    -1003614166511, 
+]
+
+ARCHIVE_CHANNEL_ID = int(os.getenv("ARCHIVE_CHANNEL_ID", -1002827087363))
+
+ARCHIVE_POSTING_BOT_ID = 'test' 
+
+AUTHORIZED_ARCHIVE_BOTS = {'b', 'a', 'test', 'sex', 'int', 'po', 'vg', 'thread', 'meta', 'trash', 'ai', 'news', 'tech', 'me', 'sci', 'h', 'soc', 'bunker', 'fit', 'fa', 'biz', 'mu', 'tv', 'au', 'vt', 'x'}
+
+SPECIAL_NUMERALS_CONFIG = {
+    4: {'label': 'Квадрипл', 'emojis': ('🎯', '🚀', '🔥', '🍀')},
+    5: {'label': 'Пентипл', 'emojis': ('🏆', '⭐', '🥇', '💫')},
+    6: {'label': 'Секстипл', 'emojis': ('💎', '👑', ' JACKPOT ', '🤩')},
+    7: {'label': 'Септипл', 'emojis': ('🤯', '🌌', '🌠', '🪐')},
+    8: {'label': 'Октипл', 'emojis': ('🦄', '👽', '💠', '🔱')}
+}
+
+
+# --- Thread Pools ---
+save_executor = ThreadPoolExecutor(max_workers=2)

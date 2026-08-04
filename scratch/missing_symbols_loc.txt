@@ -1,0 +1,261 @@
+=== storage_lock ===
+  anchor_bot.py:196 async with _main.storage_lock:
+  broadcaster.py:257 async with storage_lock:
+  broadcaster.py:275 async with storage_lock:
+  broadcaster.py:313 async with storage_lock:
+  broadcaster.py:536 async with storage_lock:
+  broadcaster.py:708 async with storage_lock:
+  conan.py:133 async with storage_lock:
+  conan.py:162 async with storage_lock:
+  delete_user_posts.py:123 async with storage_lock:
+  delivery_manager.py:323 async with storage_lock:
+  delivery_manager.py:341 async with storage_lock:
+  delivery_manager.py:377 async with storage_lock:
+  delivery_manager.py:626 async with storage_lock:
+  delivery_manager.py:880 async with storage_lock:
+  delivery_manager.py:1020 async with storage_lock:
+  economy_extension.py:206 async with storage_lock:
+  main.py:1801 async with storage_lock:
+  main.py:1820 async with storage_lock:
+  main.py:1944 async with storage_lock:
+  main.py:2190 async with storage_lock:
+  main.py:2240 async with storage_lock:
+  main.py:2255 async with storage_lock:
+  main.py:2408 async with storage_lock:
+  main.py:2882 async with storage_lock:
+  main.py:3021 async with storage_lock:
+  main.py:3138 async with storage_lock:
+  main.py:3157 async with storage_lock:
+  main.py:3553 async with storage_lock:
+  main.py:3948 async with storage_lock:
+  main.py:4140 async with storage_lock:
+  main.py:4438 async with storage_lock:
+  main.py:4471 async with storage_lock:
+  main.py:4544 async with storage_lock:
+  main.py:4775 async with storage_lock:
+  main.py:4786 async with storage_lock:
+  main.py:4807 async with storage_lock:
+  main.py:6077 async with storage_lock:
+  main.py:6140 async with storage_lock:
+  main.py:6340 async with storage_lock:
+  main.py:6373 async with storage_lock:
+  main.py:6414 async with storage_lock:
+  main.py:6471 async with storage_lock:
+  main.py:6509 async with storage_lock:
+  main.py:6558 async with storage_lock:
+  main.py:6693 async with storage_lock:
+  main.py:6795 async with storage_lock:
+  main.py:6859 async with storage_lock:
+  main.py:7012 async with storage_lock:
+  main.py:7230 async with storage_lock:
+  main.py:7615 async with storage_lock:
+  main.py:7995 async with storage_lock:
+  main.py:8426 async with storage_lock:
+  main.py:8651 async with storage_lock:
+  main.py:8707 async with storage_lock:
+  main.py:8774 async with storage_lock:
+  main.py:9208 async with storage_lock:
+  main.py:9261 async with storage_lock:
+  main.py:9306 async with storage_lock:
+  main.py:9364 async with storage_lock:
+  main.py:9484 async with storage_lock:
+  main.py:9498 async with storage_lock:
+  main.py:9540 async with storage_lock:
+  main.py:9583 async with storage_lock:
+  main.py:9624 async with storage_lock:
+  main.py:9647 async with storage_lock:
+  main.py:9691 async with storage_lock:
+  main.py:10380 async with storage_lock:
+  main.py:10998 async with storage_lock:
+  main.py:11251 async with storage_lock:
+  main.py:11302 async with storage_lock:
+  main.py:11376 async with storage_lock:
+  main.py:11393 async with storage_lock:
+  main.py:12276 async with storage_lock:
+  main.py:12327 async with storage_lock:
+  main.py:12378 async with storage_lock:
+  main.py:12592 async with storage_lock:
+  main.py:12890 async with storage_lock:
+  main.py:13095 async with storage_lock:
+  main.py:13118 async with storage_lock:
+  main.py:13554 async with storage_lock:
+  main.py:13588 async with storage_lock:
+  main.py:13690 async with storage_lock:
+  main.py:13795 async with storage_lock:
+  main.py:13868 async with storage_lock:
+  main.py:14051 async with storage_lock:
+  main.py:14099 async with storage_lock:
+  main.py:14671 async with storage_lock:
+  main.py:14799 async with storage_lock:
+  main.py:15040 async with storage_lock:
+  main.py:15095 async with storage_lock:
+  main.py:15441 async with storage_lock:
+  main.py:15645 async with storage_lock:
+  main.py:15652 async with storage_lock:
+  main.py:15664 async with storage_lock:
+  main.py:15730 async with storage_lock:
+  main.py:15791 async with storage_lock:
+  main.py:15873 async with storage_lock:
+  main.py:16200 async with storage_lock:
+  main.py:16208 async with storage_lock:
+  main.py:16225 async with storage_lock:
+  main.py:16299 async with storage_lock:
+  main.py:16705 async with storage_lock:
+  main.py:16720 async with storage_lock:
+  main.py:16752 async with storage_lock: last_messages.append(text_for_corpus)
+  main.py:16859 async with storage_lock:
+  main.py:16894 async with storage_lock: # Безопасно читаем данные
+  main.py:16941 async with storage_lock:
+  main.py:16981 async with storage_lock:
+  main.py:17000 async with storage_lock:
+  main.py:17132 async with storage_lock:
+  main.py:17187 async with storage_lock:
+  main.py:17241 async with storage_lock:
+  main.py:17296 async with storage_lock:
+  main.py:17450 # выполнялось УДЕРЖИВАЯ storage_lock: фоновый цикл трансляции
+  main.py:17453 async with storage_lock:
+  main.py:17509 async with storage_lock:
+  main.py:17576 async with storage_lock:
+  main.py:18279 async with storage_lock:
+  make_helpers.py:102 async with storage_lock:
+  post_helpers.py:174 async with storage_lock:
+  post_helpers.py:185 async with storage_lock:
+  post_helpers.py:252 async with storage_lock:
+  post_helpers_extracted.py:204 async with storage_lock:
+  post_helpers_extracted.py:215 async with storage_lock:
+  post_helpers_extracted.py:282 async with storage_lock:
+  post_processor.py:286 async with storage_lock:
+  post_processor.py:318 # Вторая фаза вынесена из-под storage_lock: внутри неё идёт
+  post_processor.py:352 async with storage_lock:
+  shared_state.py:25 storage_lock = asyncio.Lock()  # Блокировка для доступа к messages_storage, post_to_messages и т.д.
+  tests\test_conan.py:46 storage_lock = asyncio.Lock()
+=== post_to_messages ===
+  broadcaster.py:276 if self.post_num_for_replies in post_to_messages:
+  delivery_manager.py:627 if self.post_num in post_to_messages:
+  shared_state.py:87 post_to_messages = {}
+  tests\test_conan.py:38 post_to_messages = {1: True}
+=== is_shutting_down ===
+  main.py:580 is_shutting_down = False
+  main.py:2044 if is_shutting_down:
+  main.py:2046 is_shutting_down = True
+  main.py:17658 while not is_shutting_down:
+  main.py:17688 while not is_shutting_down:
+  main.py:18679 if not is_shutting_down:
+=== drain_shutdown_requested ===
+  delivery_manager.py:533 if is_shutting_down or drain_shutdown_requested:
+  delivery_manager.py:539 if is_shutting_down or drain_shutdown_requested:
+  delivery_manager.py:851 if is_shutting_down or drain_shutdown_requested:
+  main.py:582 drain_shutdown_requested = False
+  main.py:17028 if is_shutting_down or drain_shutdown_requested:
+  main.py:17039 if is_shutting_down or drain_shutdown_requested:
+  main.py:17416 if drain_shutdown_requested:
+  main.py:17690 if not drain_shutdown_requested:
+  main.py:17691 drain_shutdown_requested = True
+  main.py:18669 if drain_shutdown_requested:
+=== durable_delivery_stats ===
+  main.py:592 durable_delivery_stats = {
+=== upsert_delivery_queue_item ===
+  common\database.py:2630 async def upsert_delivery_queue_item(
+=== delete_delivery_queue_item ===
+  common\database.py:2743 async def delete_delivery_queue_item(item_id: int) -> bool:
+=== _queue_item_can_be_durable ===
+  main.py:1098 def _queue_item_can_be_durable(item: dict) -> bool:
+=== _durable_recipients_from_item ===
+  main.py:1090 def _durable_recipients_from_item(item: dict) -> list[int]:
+=== get_post_copies ===
+  common\database.py:2592 async def get_post_copies(post_num: int) -> list[tuple[int, int]]: ...
+  common\database.py:2595 async def get_post_copies(post_num: list[int]) -> dict[int, list[tuple[int, int]]]: ...
+  common\database.py:2597 async def get_post_copies(post_num: int | list[int]) -> list[tuple[int, int]] | dict[int, list[tuple[int, int]]]:
+=== PRIORITY_PASSIVE_MEDIA_SLICE_SIZE ===
+  main.py:909 PRIORITY_PASSIVE_MEDIA_SLICE_SIZE = max(10, BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE)
+=== PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE ===
+  main.py:912 PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE = max(10, int(BOT_PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE))
+=== PRIORITY_PASSIVE_SLICE_SIZE ===
+  main.py:908 PRIORITY_PASSIVE_SLICE_SIZE = max(10, BOT_PRIORITY_PASSIVE_SLICE_SIZE)
+=== PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE ===
+  main.py:911 PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE = max(10, int(BOT_PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE))
+=== PRIORITY_PRESSURE_SLICE_AGE_SEC ===
+  main.py:910 PRIORITY_PRESSURE_SLICE_AGE_SEC = max(0.0, float(BOT_PRIORITY_PRESSURE_SLICE_AGE_SEC))
+=== _board_queue_oldest_age_sec ===
+  main.py:1249 def _board_queue_oldest_age_sec(board_id: str | None) -> float:
+=== weekly_active_users ===
+  main.py:575 weekly_active_users = {board: set() for board in BOARDS}
+  post_processor.py:463 _weekly_active_users = getattr(_main, 'weekly_active_users', {})
+=== BroadcastConfig ===
+  shared_state.py:91 class BroadcastConfig:
+=== get_board_activity_last_hours ===
+  main.py:1940 async def get_board_activity_last_hours(board_id: str, hours: int = 2) -> float:
+=== get_stream_active_users ===
+  common\database.py:4794 async def get_stream_active_users(board_id: str, stream: str) -> set[int]:
+=== HELP_TEXT_EN_COMMANDS ===
+  help_text.py:78 HELP_TEXT_EN_COMMANDS = [
+=== BOARD_CONFIG ===
+  main.py:7557 if requested_board_alias not in BOARD_CONFIG:
+  main.py:17442 if not board_id or board_id not in BOARD_CONFIG:
+  common\board_config.py:34 BOARD_CONFIG = {
+  common\database.py:6130 for board_id in BOARD_CONFIG:
+  Dubsite_tgach\main.py:892 if bid not in BOARD_CONFIG:
+  Dubsite_tgach\main.py:2615 if board_id not in BOARD_CONFIG:
+  Dubsite_tgach\main.py:2647 if board_id not in BOARD_CONFIG: return JSONResponse({}, status_code=404)
+  Dubsite_tgach\main.py:2659 if board_id not in BOARD_CONFIG: return JSONResponse({}, status_code=404)
+  Dubsite_tgach\main.py:3265 if board_id not in BOARD_CONFIG:
+  Dubsite_tgach\main.py:3295 if board_id not in BOARD_CONFIG:
+  Dubsite_tgach\main.py:3413 if board not in BOARD_CONFIG: return JSONResponse({"Error": "Invalid board", "Status": "Error"}, 404)
+  Dubsite_tgach\main.py:3653 if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
+  Dubsite_tgach\main.py:3703 if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
+  Dubsite_tgach\main.py:3726 if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
+  Dubsite_tgach\main.py:3840 if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
+  Dubsite_tgach\main.py:3991 if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
+  Dubsite_tgach\main.py:4003 if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
+  Dubsite_tgach\main.py:4125 if data.board_id in BOARD_CONFIG:
+  Dubsite_tgach\main.py:4192 if data.board_id in BOARD_CONFIG:
+  Dubsite_tgach\main.py:4203 if data.target_board not in BOARD_CONFIG:
+  Dubsite_tgach\main.py:4458 if data.board_id in BOARD_CONFIG:
+  Dubsite_tgach\main.py:4579 elif board_id not in BOARD_CONFIG:
+  Dubsite_tgach\main.py:5329 if not url or not board_id or board_id not in BOARD_CONFIG:
+  Dubsite_tgach\main.py:5525 if data.board_id not in BOARD_CONFIG:
+  Dubsite_tgach\main.py:5922 if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
+  Dubsite_tgach\main.py:5948 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:1717 if bid not in BOARD_CONFIG:
+  site_tgach\main.py:2511 for board_id in BOARD_CONFIG:
+  site_tgach\main.py:4687 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:4724 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:4742 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:5582 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:5619 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:5772 if board not in BOARD_CONFIG:
+  site_tgach\main.py:6073 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:6167 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:6206 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:6345 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:6524 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:6560 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:6742 if data.board_id in BOARD_CONFIG:
+  site_tgach\main.py:6852 if data.board_id in BOARD_CONFIG:
+  site_tgach\main.py:6864 if data.target_board not in BOARD_CONFIG:
+  site_tgach\main.py:7246 if data.board_id in BOARD_CONFIG:
+  site_tgach\main.py:7391 elif board_id not in BOARD_CONFIG:
+  site_tgach\main.py:8355 if not url or not board_id or board_id not in BOARD_CONFIG:
+  site_tgach\main.py:8880 if data.board_id not in BOARD_CONFIG:
+  site_tgach\main.py:9100 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:9375 if board_id not in BOARD_CONFIG:
+  site_tgach\main.py:9400 if board_id != "overboard" and board_id not in BOARD_CONFIG:
+  site_tgach\rss.py:27 if board_id not in BOARD_CONFIG:
+  tests\test_dubsite_lifespan.py:69 main_module.BOARD_CONFIG = {}
+=== UTC ===
+  post_processor.py:27 UTC = timezone.utc
+=== THREAD_PROMO_TEXT_EN ===
+  help_text.py:347 THREAD_PROMO_TEXT_EN = [
+=== create_post ===
+  common\database.py:1448 async def create_post(
+  common\database.py:1596 local_logger.error(f"Error in create_post: {e}")
+  common\database.py:1598 print(f"Error in create_post: {e}")
+=== format_header ===
+  post_helpers.py:89 async def format_header(board_id: str, post_num: int, author_id: int = 0, stream: str = 'ru') -> str:
+  post_helpers_extracted.py:119 async def format_header(board_id: str, post_num: int, author_id: int = 0, stream: str = 'ru') -> str:
+  tests\test_conan.py:41 format_header = AsyncMock(return_value="Conan Header")
+=== update_post_content ===
+  common\database.py:2493 async def update_post_content(post_num: int, content: dict):
+=== enqueue_board_message ===
+  shared_state.py:111 async def enqueue_board_message(board_id: str, item: dict) -> bool:
+  shared_state.py:122 print(f"⛔ enqueue_board_message: неизвестная доска '{board_id}', "

@@ -17,6 +17,7 @@ load_dotenv(dotenv_path=dotenv_path)
 # 3. ПОТОМ уже считываем переменные
 BIND_IPV4 = os.getenv("BIND_IPV4", "0.0.0.0")
 DB_NAME = PROJECT_ROOT / "dvach_bot.db"
+DATA_DIR = PROJECT_ROOT / "data"
 DB_TIMEOUT = 30.0
 DB_POST_LIMIT = int(os.getenv("DB_POST_LIMIT", "25000"))
 BOT_POST_CACHE_LIMIT = int(os.getenv("BOT_POST_CACHE_LIMIT", "3300"))
