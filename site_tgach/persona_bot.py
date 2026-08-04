@@ -128,7 +128,7 @@ async def generate_anon_reply(context_text: str, target_post: str, is_dialogue: 
             )
             
         print(f"📝 [Persona] Raw reply from LLM: '{reply}'", flush=True)
-        if not reply or len(reply) > 220 or "Нейронка" in reply:
+        if not reply or len(reply) > 400 or "Нейронка" in reply:
             print(f"❌ [Persona] Reply discarded by validation (len={len(reply) if reply else 0})", flush=True)
             return None
         

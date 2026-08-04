@@ -1,3 +1,4 @@
+import os
 from site_tgach.neuro_poster import _execute_groq_post
 from common.database import set_system_setting
 
@@ -36,7 +37,7 @@ from site_tgach.admin_config import ADMIN_IDS, IP_BAN_LIST
 logger = logging.getLogger("neuro_mod")
 
 # === НАСТРОЙКИ ===
-PROXY_URL = "http://127.0.0.1:10808"
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or "http://127.0.0.1:10808"
 GROQ_MODEL = "llama-3.2-11b-vision-preview"
 GROQ_TIMEOUT = 45.0
 
@@ -274,18 +275,22 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
         # Пакетное обновление IP банов в БД
         if banned_ips:
             try:
-                current_fw = await get_pool()
-                async with current_fw.execute(
-                    "SELECT value FROM SystemSettings WHERE key = 'ip_blacklist'"
-                ) as c:
-                    row = await c.fetchone()
-                    blacklist = row[0] if row and row[0] else ""
+                db = await get_pool()
+                async with db_lock:
+                    async with db.execute("SELECT value FROM SystemSettings WHERE key = 'ip_blacklist'") as c:
+                        row = await c.fetchone()
+                        blacklist = row[0] if row and row[0] else ""
 
-                # Фильтруем те, которых еще нет в списке
-                new_ips = [ip for ip in banned_ips if ip not in blacklist]
-                if new_ips:
-                    new_blacklist = f"{blacklist},{','.join(new_ips)}".strip(",")
-                    await set_system_setting("ip_blacklist", new_blacklist)
+                    new_ips = [ip for ip in banned_ips if ip not in blacklist]
+                    if new_ips:
+                        new_blacklist = f"{blacklist},{','.join(new_ips)}".strip(",")
+                        # Атомарное обновление внутри db_lock без рекурсивного вызова set_system_setting
+                        await db.execute(
+                            "INSERT INTO SystemSettings (key, value) VALUES ('ip_blacklist', ?) "
+                            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                            (new_blacklist,)
+                        )
+                        await db.commit()
             except Exception as fw_err:
                 logger.error(f"Failed to sync IP bans to DB: {fw_err}")
 

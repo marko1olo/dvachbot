@@ -1,3 +1,4 @@
+import os
 import asyncio
 from common.http_utils import api_retry
 import logging
@@ -18,7 +19,7 @@ from common.database import (
 )
 
 # === НАСТРОЙКА ПРОКСИ ===
-PROXY_URL = "http://127.0.0.1:10808" 
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or "http://127.0.0.1:10808" 
 # ========================
 
 AI_CONFIG = {

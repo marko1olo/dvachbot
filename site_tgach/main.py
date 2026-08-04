@@ -167,6 +167,9 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
 )
+
+class XMLResponse(Response):
+    media_type = "application/xml"
 from starlette.background import BackgroundTask
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.inmemory import InMemoryBackend
@@ -800,7 +803,7 @@ class NoParsingFilter(logging.Filter):
         return True
 
 
-PROXY_URL = "http://127.0.0.1:10808"
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or "http://127.0.0.1:10808"
 BOT_VIOLATIONS = defaultdict(int)
 IP_WHITELIST = set()  # Сюда можно будет добавлять IP через админку (или пока вручную)
 GEO_IP_CLIENT = httpx.AsyncClient(
@@ -2478,7 +2481,7 @@ async def site_healthz():
     )
 
 
-@app.get("/sitemap.xml", response_class=Response)
+@app.get("/sitemap.xml", response_class=XMLResponse)
 @cache(expire=3600)
 async def sitemap_xml(request: Request):
     base_url = str(request.base_url).rstrip("/")
@@ -2568,7 +2571,7 @@ async def sitemap_xml(request: Request):
         )
 
     xml_content.append("</urlset>")
-    return Response(content="\n".join(xml_content), media_type="application/xml")
+    return "\n".join(xml_content)
 
 
 @app.get("/ads.txt", include_in_schema=False)
@@ -2729,6 +2732,7 @@ async def language_middleware(request: Request, call_next):
         try:
             return await call_next(request)
         except Exception as e:
+            logger.warning("⚠️ WebSocket/Static request exception", exc_info=e)
             return Response("OK", status_code=200)
     try:
         response = await call_next(request)
@@ -2744,7 +2748,7 @@ async def language_middleware(request: Request, call_next):
             or "exceptiongroup" in err_type.lower()
         ):
             return Response("OK", status_code=200)
-        logger.warning(f"⚠️ Handled request exception: {err_type}: {err_msg[:100]}")
+        logger.warning(f"⚠️ Handled request exception: {err_type}: {err_msg[:100]}", exc_info=e)
         return Response("Request processing error", status_code=500)
 
 

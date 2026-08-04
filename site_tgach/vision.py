@@ -45,6 +45,7 @@ if not logger.handlers:
 logger.propagate = True
 GROQ_COOLDOWN_UNTIL = 0
 _VISION_SEMAPHORE = None
+BANNED_GEMINI_KEYS = set()
 
 
 def _env_int(name, default):
@@ -163,6 +164,25 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 pool=5.0,
             )
 
+            # Pre-fetch and convert local URLs to Base64 to avoid 400 INVALID_ARGUMENT from Gemini
+            processed_image_urls = []
+            async with httpx.AsyncClient(verify=False, trust_env=False, timeout=timeout) as pre_client:
+                for iu in image_urls:
+                    if "127.0.0.1" in iu or "localhost" in iu:
+                        try:
+                            resp = await pre_client.get(iu)
+                            if resp.status_code == 200:
+                                b64 = base64.b64encode(resp.content).decode("utf-8")
+                                ext = iu.split('.')[-1].lower() if '.' in iu else 'jpeg'
+                                mime = f"image/{ext}" if ext in ["jpeg", "png", "webp", "gif"] else "image/jpeg"
+                                processed_image_urls.append(f"data:{mime};base64,{b64}")
+                            else:
+                                processed_image_urls.append(iu)
+                        except Exception:
+                            processed_image_urls.append(iu)
+                    else:
+                        processed_image_urls.append(iu)
+
             async with httpx.AsyncClient(verify=False, trust_env=False, timeout=timeout) as http_client:
                 for model_name, provider in models_cascade:
                     if provider == "gemini":
@@ -173,9 +193,9 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                         base_url = "https://api.groq.com/openai/v1"
 
                     if isinstance(raw_keys, list):
-                        keys = [k for k in raw_keys if k]
+                        keys = [k for k in raw_keys if k and k not in BANNED_GEMINI_KEYS]
                     else:
-                        keys = [k.strip() for k in str(raw_keys).split(",") if k.strip()]
+                        keys = [k.strip() for k in str(raw_keys).split(",") if k.strip() and k.strip() not in BANNED_GEMINI_KEYS]
                         
                     if not keys:
                         continue
@@ -198,7 +218,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 timeout=GROQ_HTTP_TIMEOUT_SECONDS,
                             )
                             content_arr = [{"type": "text", "text": system_prompt}]
-                            for iu in image_urls:
+                            for iu in processed_image_urls:
                                 content_arr.append({"type": "image_url", "image_url": {"url": iu}})
                             
                             resp = await client.chat.completions.create(
@@ -247,6 +267,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
                                 logger.info(f"ℹ️ [VISION] [{source}] {provider} key rate limited (429), cooling down 2.5s...")
                                 await asyncio.sleep(2.5)
+                                continue
+                            if provider == "gemini" and ("403" in err_str or "permission_denied" in err_str):
+                                logger.error(f"❌ [VISION] [{source}] Gemini key {api_key[:12]}... is permanently banned (403). Removing from pool.")
+                                BANNED_GEMINI_KEYS.add(api_key)
                                 continue
                             logger.warning(f"⚠️ [VISION] [{source}] {provider} key failed ({model_name}): {e}")
 

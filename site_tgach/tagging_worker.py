@@ -63,7 +63,7 @@ if not logger.handlers:
     logger.addHandler(_sh)
 logger.propagate = True
 
-PROXY_URL = "http://127.0.0.1:10808"
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or "http://127.0.0.1:10808"
 GROQ_MODEL = "qwen/qwen3.6-27b"
 GROQ_TIMEOUT = 40.0
 BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насиловать ключи
@@ -218,6 +218,12 @@ def extract_video_frame_cpu(video_bytes: bytes) -> bytes | None:
         )
         if res.returncode == 0 and res.stdout and len(res.stdout) > 100:
             return res.stdout
+            
+        # Если провалилось (возможно видео короче 0.5с), пробуем 00:00:00.000
+        cmd[3] = "00:00:00.000"
+        res2 = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        if res2.returncode == 0 and res2.stdout and len(res2.stdout) > 100:
+            return res2.stdout
     except FileNotFoundError:
         logger.warning(
             "⚠️ [TAGGER] ffmpeg не найден в PATH, кадры из видео не извлекаются."
@@ -763,7 +769,11 @@ async def tagging_loop():
                 should_deep_check = False
 
                 # 1. Проверка по типу файла (видео чекаем всегда, так как теги по первому кадру могут врать)
+<<<<<<< HEAD
                 if file_type in ["gif", "video_note"]:
+=======
+                if file_type in ['gif', 'video_note', 'video', 'animation']:
+>>>>>>> 5b69ed4e (sync: update local workspace changes)
                     should_deep_check = True
 
                 # 2. Проверка по тегам (если файл успешно сохранен и теги есть)

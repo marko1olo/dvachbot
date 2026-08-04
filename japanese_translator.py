@@ -27,7 +27,7 @@ PROXY_STATE = {'is_working': True}
 PROXY_STATE_LAST_FAILURE = 0
 PROXY_STATE_COOLDOWN = 60  # 60 секунд
 PROXY_STATE_LOCK = asyncio.Lock()
-PROXY_URL = "http://127.0.0.1:2334" 
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or "http://127.0.0.1:2334" 
 
 
 async def _get_proxy_usage_strategy() -> bool:

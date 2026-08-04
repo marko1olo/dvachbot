@@ -24,6 +24,13 @@ Key Components:ware: Determines the user's language stream and caches it.
 This module is designed to be extensible and maintainable, allowing for future enhancements and modifications.
 """
 import asyncio
+from post_processor import NewPostProcessor, NewPostContext
+from post_helpers import apply_shadow_autoreplace
+from media_utils import _download_image_with_proxy
+
+from shared_state import *
+from broadcaster import MessageBroadcaster, send_message_to_users, DeliveryResults, _trim_post_copy_maps_unlocked, _order_recipients_for_delivery, _build_lie_media_content, _format_message_body, add_you_to_my_posts_fast
+from utils import split_text
 import itertools
 from common.task_manager import spawn_task
 import faulthandler
@@ -329,7 +336,7 @@ class BoardMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any]
     ) -> Any:
-        global RAID_LOCKDOWN_UNTIL, NEW_USER_JOIN_HISTORY, RECENT_JOINERS_CACHE
+        global RAID_LOCKDOWN_UNTIL
         
         board_id = get_board_id(event)
         data['board_id'] = board_id
@@ -394,7 +401,6 @@ class BoardMiddleware(BaseMiddleware):
 
         return await handler(event, data)
 from common.board_config import BOARD_CONFIG
-THREAD_BOARDS = {'thread', 'test'} # Доски, на которых будет работать система тредов
 DATA_DIR = "data"  # Папка для хранения данных (например, архивов тредов)
 os.makedirs(DATA_DIR, exist_ok=True) # Гарантируем, что папка существует
 LOG_DIR = "logs"
@@ -562,17 +568,14 @@ class ThreadCreateStates(StatesGroup):
     waiting_for_confirmation = State() # Состояние ожидания подтверждения создания
 class PollCreationStates(StatesGroup):
     waiting_for_confirmation = State()
-BOARDS = list(BOARD_CONFIG.keys())
 ARCHIVE_CHANNEL_ID = int(os.getenv("ARCHIVE_CHANNEL_ID", -1002827087363))
 GITHUB_ARCHIVE_BASE_URL = "https://github.com/shlomapetia/dvachbot-backup/blob/main/archives"
 ARCHIVE_POSTING_BOT_ID = 'test' 
-message_queues = {board: asyncio.Queue(maxsize=0) for board in BOARDS}
 weekly_active_users = {board: set() for board in BOARDS}
 weekly_active_updated_at = {board: 0.0 for board in BOARDS}
 reply_coverage_stats = {}
 reply_coverage_updated_at = 0.0
 network_retry_state = defaultdict(lambda: {'attempt': 0, 'last_error_time': 0})
-GLOBAL_BOTS = {} # Словарь для хранения всех экземпляров ботов
 is_shutting_down = False
 shutdown_event = threading.Event()
 drain_shutdown_requested = False
@@ -582,7 +585,6 @@ stream_cache = {} # {(user_id, board_id): 'ru'}
 git_executor = ThreadPoolExecutor(max_workers=1)
 save_executor = ThreadPoolExecutor(max_workers=2) # Executor для сохранения файлов
 git_semaphore = asyncio.Semaphore(1)
-storage_lock = asyncio.Lock()  # Блокировка для доступа к messages_storage, post_to_messages и т.д.
 generate_locks = defaultdict(asyncio.Lock)
 graph_stats = {}  # Для хранения статистики по часам для графика
 delivery_metrics = defaultdict(lambda: deque(maxlen=100))
@@ -596,65 +598,11 @@ durable_delivery_stats = {
     "restore_deleted_empty": 0,
 }
 recent_messages_cache = deque(maxlen=200)
-locally_created_posts = deque(maxlen=500)
 MODE_FLAGS = [
     'anime_mode', 'zaputin_mode', 'slavaukraine_mode', 'suka_blyat_mode',
     'polish_mode', 'warhammer_mode', 'imperial_mode', 'gopnik_mode', 'schizo_mode',
     'matrix_mode', 'america_mode', 'holiday_mode', 'oldweb_mode', 'jewish_mode',
 ]
-board_data = defaultdict(lambda: {
-    'anime_mode': False,
-    'zaputin_mode': False,
-    'slavaukraine_mode': False,
-    'suka_blyat_mode': False,
-    'polish_mode': False,
-    'warhammer_mode': False,
-    'imperial_mode': False,
-    'gopnik_mode': False,
-    'schizo_mode': False,
-    'matrix_mode': False,
-    'america_mode': False,
-    'holiday_mode': False,
-    'oldweb_mode': False,
-    'jewish_mode': False,
-    'last_suka_blyat': None,
-    'suka_blyat_counter': 0,
-    'last_mode_activation': None,
-    'active_mode_task': None, # Хранит задачу на отключение текущего режима
-    'last_deanon_time': 0, # Время последнего успешного вызова /deanon
-    'last_summarize_time': 0, # Время последнего успешного вызова /summarize
-    'last_roll_time': defaultdict(float), # Время последнего ролла для кулдауна рулетки
-    'last_info_command_time': defaultdict(float), # Кулдаун для /stats, /active
-    'last_texts': defaultdict(lambda: deque(maxlen=5)),
-    'last_stickers': defaultdict(lambda: deque(maxlen=5)),
-    'last_animations': defaultdict(lambda: deque(maxlen=5)),
-    'last_audios': defaultdict(lambda: deque(maxlen=5)),
-    'spam_violations': defaultdict(dict),
-    'spam_tracker': defaultdict(list),
-    'spam_filter_words': set(),
-    'mutes': {},
-    'shadow_mutes': {},
-    'reaction_rate_tracker': defaultdict(lambda: deque(maxlen=5)), # Для глобального лимита скорости реакций
-    'reaction_banned_users': set(), # Пользователи, которым запрещено ставить реакции
-    'reaction_queue': defaultdict(deque), # Очередь post_num для отложенной обработки реакций
-    'last_reaction_process_time': defaultdict(float), # Время последней обработки из очереди
-    'users': {
-        'active': set(),
-        'banned': set()
-    },
-    'single_photo_counter': defaultdict(int), # Трекер для одиночных фото
-    'last_photo_group_id': defaultdict(str),  # Чтобы отличать разные группы
-    'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set(), 'lie_media': False}),
-    'active_pin': None, 
-    'message_counter': defaultdict(int),
-    'last_user_msgs': {},
-    'last_activity': {},
-    'threads_data': {},  # {thread_id: {'op_id', 'title', ...}}
-    'user_state': {},    # {user_id: {'location', 'last_seen_main', ...}}
-    'thread_locks': defaultdict(asyncio.Lock), #  Словарь для блокировок тредов
-    'anime_strict_limits': {5920818088}, # Список ID с жестким ограничением (ID спамера добавлен сразу)
-    'anime_daily_tracker': defaultdict(lambda: {'count': 0, 'reset_at': 0.0}), # Суточный счетчик
-})
 AUTHORIZED_ARCHIVE_BOTS = {'b', 'a', 'test', 'sex', 'int', 'po', 'vg', 'thread', 'meta', 'trash', 'ai', 'news', 'tech', 'me', 'sci', 'h', 'soc', 'bunker', 'fit', 'fa', 'biz', 'mu', 'tv', 'au', 'vt', 'x'}
 AUTHOR_NOTIFY_LIMIT_PER_MINUTE = 4
 author_reaction_notify_tracker = defaultdict(lambda: deque(maxlen=AUTHOR_NOTIFY_LIMIT_PER_MINUTE))
@@ -675,12 +623,6 @@ SPECIAL_NUMERALS_CONFIG = {
     7: {'label': 'Септипл', 'emojis': ('🤯', '🌌', '🌠', '🪐')},
     8: {'label': 'Октипл', 'emojis': ('🦄', '👽', '💠', '🔱')}
 }
-state = {
-    'post_counter': 0,
-}
-messages_storage = {}
-post_to_messages = {}
-message_to_post = {}
 shadow_fake_post_counters = defaultdict(int)
 last_messages = deque(maxlen=3) # Используется для генерации сообщений, можно оставить общим
 last_activity_time = datetime.now()
@@ -706,18 +648,6 @@ def _drop_post_copy_maps_unlocked(post_num: int) -> int:
                 removed += 1
     return removed
 
-def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
-    if max_posts < 0 or len(post_to_messages) <= max_posts:
-        return 0, 0
-    if max_posts == 0:
-        stale_posts = list(post_to_messages)
-    else:
-        keep_posts = set(sorted(post_to_messages.keys(), reverse=True)[:max_posts])
-        stale_posts = [post_num for post_num in post_to_messages if post_num not in keep_posts]
-    removed_reverse = 0
-    for post_num in stale_posts:
-        removed_reverse += _drop_post_copy_maps_unlocked(post_num)
-    return len(stale_posts), removed_reverse
 
 def _media_group_state_key(chat_id: int | str, media_group_id: str) -> str:
     return f"{chat_id}:{media_group_id}"
@@ -954,30 +884,11 @@ def _setup_runtime_logger() -> logging.Logger:
         add_secret_redaction_filter(handler)
         logger.addHandler(handler)
     return logger
-runtime_logger = _setup_runtime_logger()
 logger = runtime_logger
 aiohttp_log = logging.getLogger('aiohttp')
 aiohttp_log.setLevel(logging.CRITICAL) 
 aiogram_log = logging.getLogger('aiogram')
 aiogram_log.setLevel(logging.CRITICAL) # <--- ИЗМЕНЕНО НА CRITICAL, чтобы не видеть ошибки апдейтов
-def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, int]) -> str:
-    """Улучшенная версия: не использует замок, работает с переданным словарем авторов."""
-    if not text or ">>" not in text:
-        return text
-    
-    matches = RE_YOU_PATTERN.findall(text)
-    for post_str in matches:
-        try:
-            p_num = int(post_str)
-            author_id = post_authors.get(p_num)
-            if author_id and author_id > 0 and user_id > 0 and author_id == user_id:
-                target = f">>{p_num}"
-                replacement = f">>{p_num} (You)"
-                if target in text and replacement not in text:
-                    text = text.replace(target, replacement)
-        except ValueError:
-            continue
-    return text
 gc.set_threshold(
     600, 6, 6)  # Оптимальные настройки для баланса памяти/производительности
 SPAM_LIMIT = 14
@@ -1160,34 +1071,6 @@ def _summarize_delivery_metrics() -> dict:
             "last": records[-1],
         }
     return summary
-def _prepare_queue_item(board_id: str, item: dict) -> dict:
-
-    if isinstance(item, dict):
-        item.setdefault("board_id", board_id)
-        item.setdefault("enqueued_at", time.time())
-    return item
-async def enqueue_board_message(board_id: str, item: dict) -> bool:
-    """
-    Кладёт сообщение в очередь доставки доски.
-
-    Возвращает True при успехе. Неизвестная доска раньше давала голый KeyError:
-    вызывающий код к этому моменту уже успевал записать пост в БД и
-    messages_storage, поэтому пост оставался в базе, но никогда не доставлялся,
-    а исключение рвало хендлер. Теперь это громкая запись в лог и False.
-    """
-    queue = message_queues.get(board_id)
-    if queue is None:
-        print(f"⛔ enqueue_board_message: неизвестная доска '{board_id}', "
-              f"сообщение #{item.get('post_num') if isinstance(item, dict) else '?'} не поставлено в очередь.")
-        runtime_logger.error(
-            "enqueue_unknown_board board=%s post=%s known=%s",
-            board_id,
-            item.get("post_num") if isinstance(item, dict) else None,
-            ",".join(sorted(message_queues)),
-        )
-        return False
-    await queue.put(_prepare_queue_item(board_id, item))
-    return True
 def _contains_volatile_delivery_payload(value, depth: int = 0) -> bool:
 
     if depth > 8:
@@ -2206,7 +2089,6 @@ async def load_state():
     Сначала проверяет, была ли произведена миграция в SQLite.
     Если да - загружает из БД. Если нет - загружает из старых JSON-файлов.
     """
-    global state, messages_storage, board_data, post_to_messages, message_to_post
     if not await is_database_migrated():
         print("⚠️ База данных не заполнена. Загрузка из старых JSON-файлов больше не поддерживается.")
         print("⛔ Запуск невозможен. Пожалуйста, выполните миграцию или удалите старые JSON-файлы состояния для чистого старта.")
@@ -2962,6 +2844,7 @@ def _get_random_header_prefix(lang: str = 'ru') -> str:
     if rand_prefix < 0.150: return "Зеленский - "
     if rand_prefix < 0.152: return "Мыкола - "
     return ""
+<<<<<<< HEAD
 async def format_thread_post_header(board_id: str, local_post_num: int, author_id: int, thread_info: dict, stream: str = 'ru') -> str:
 
     b_data = board_data[board_id]
@@ -3035,6 +2918,8 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                     
     res = await _format_header_inner(board_id, post_num, stream)
     return custom_prefix + res
+=======
+>>>>>>> 5b69ed4e (sync: update local workspace changes)
 
 async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru') -> str:
     board_data[board_id].setdefault('board_post_count', 0)
@@ -3100,6 +2985,7 @@ async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru')
         return f"{circle}{prefix}レス番 {post_num_formatted}"
     else:
         return f"{circle}{prefix}Пост №{post_num_formatted}"
+<<<<<<< HEAD
 async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, stream: str):
     if user_id <= 0: return
     
@@ -3152,6 +3038,8 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
             await bot.send_message(user_id, msg_text, parse_mode="HTML")
         except Exception:
             pass
+=======
+>>>>>>> 5b69ed4e (sync: update local workspace changes)
 
 async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str) -> tuple[list[int], list, list]:
     async with db_lock:
@@ -3567,107 +3455,17 @@ async def process_shadow_reject(ctx: ShadowRejectContext):
     ))
     print(f"👻 [SHADOW] Теневой отброс медиа от {ctx.user_id} на доске {ctx.board_id}")
 
-SHADOW_REPLACEMENTS = [
-    "я люблю глотать сперму",
-    "моя мать — портовая шлюха",
-    "я тупой куколд",
-    "я сосу хуи за копейки",
-    "я обосрался прямо в штаны",
-    "я опущенный петух",
-    "я ем говно на завтрак",
-    "мой отчим меня ебет",
-    "я терпила и горжусь этим",
-    "я мамин пирожочек с хуем во рту",
-    "я порвался, несите зашивать",
-    "у меня сперматоксикоз и нет друзей",
-    "я фанат соловьева и пью мочу",
-    "меня вчера отпиздили школьники",
-    "я жалкий скуф с пивным пузом",
-    "мой iq равен температуре в комнате",
-    "я сижу на бутылке правосудия",
-    "я грязный хуесос без личной жизни",
-    "я макака, пустите меня в зоопарк",
-    "в моей голове насрано",
-    "я люблю, когда на меня ссут",
-    "я куколд-наблюдатель 80 левела",
-    "дайте мне хуй, я буду его сосать",
-    "я биомусор, извините что родился",
-    "я подзалупный творожок"
-]
+from moderation_config import SHADOW_REPLACEMENTS, SHADOW_WORDS_REGEX, DIE_WORDS_REGEX, POLITICAL_REPLACEMENTS
 
-SHADOW_WORDS_REGEX = re.compile(
-    r'(?i)(?<![а-яёa-z])('
-    r'к\s*а\s*л\s*(?:о\s*в\s*(?:ы\s*й|а\s*я|о\s*е|ы\s*е|о\s*г\s*о|о\s*м\s*у|у\s*ю|о\s*й|ы\s*м\s*и|ы\s*х|о\s*м)(?:\s+м\s*а\s*с\s*с\s*(?:а|ы|у|о\s*й|а\s*м\s*и|а\s*м|а\s*х))?)?|'
-    r'к\s*л\s*а\s*о\s*в\s*(?:ы\s*й|а\s*я|о\s*е|ы\s*е|о\s*г\s*о|о\s*м\s*у|у\s*ю|о\s*й|ы\s*м\s*и|ы\s*х|о\s*м)(?:\s+м\s*а\s*с\s*с\s*(?:а|ы|у|о\s*й|а\s*м\s*и|а\s*м|а\s*х))?|'
-    r'к\s*а\s*л(?:[ауеы]|о\s*м|о\s*в|а\s*м|а\s*м\s*и|а\s*х)?|'
-    r'k\s*a\s*l|б\s*а\s*я\s*н|б\s*о\s*я\s*н|b\s*a\s*y\s*a\s*n|b\s*o\s*y\s*a\s*n'
-    r')(?![а-яёa-z])'
-)
 
-DIE_WORDS_REGEX = re.compile(
-    r'(?i)(?<![а-яёa-z])(с\s*д\s*о\s*х\s*н\s*и(\s*т\s*е)?|у\s*м\s*р\s*и(\s*т\s*е)?)(?![а-яёa-z])'
-)
-
-POLITICAL_REPLACEMENTS = [
-    (re.compile(r'(?i)\bх\s*о\s*х\s*о\s*л\b'), ['великий укр']),
-    (re.compile(r'(?i)\bх\s*о\s*х\s*л\s*ы\b'), ['славные украинцы']),
-    (re.compile(r'(?i)\bх\s*о\s*х\s*л\s*о\s*в\b'), ['богоподобных украинцев']),
-    (re.compile(r'(?i)\bх\s*о\s*х\s*л\s*а\b'), ['великого укра']),
-    (re.compile(r'(?i)\bх\s*о\s*х\s*л\s*а\s*м\b'), ['великим украм']),
-    (re.compile(r'(?i)\bх\s*о\s*х\s*л\s*а\s*м\s*и\b'), ['великими украми']),
-    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*и\s*й\b'), ['руснявый', 'пидорусский']),
-    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*и\s*е\b'), ['руснявые', 'пидорусские']),
-    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*и\s*х\b'), ['руснявых', 'пидорусских']),
-    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*о\s*г\s*о\b'), ['руснявого', 'пидорусского']),
-    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*о\s*м\s*у\b'), ['руснявому', 'пидорусскому']),
-    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*и\s*м\b'), ['руснявым', 'пидорусским']),
-    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*а\s*я\b'), ['руснявая', 'пидорусская']),
-    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*о\s*й\b'), ['руснявой', 'пидорусской']),
-    (re.compile(r'(?i)\bр\s*у\s*с\s*с\s*к\s*у\s*ю\b'), ['руснявую', 'пидорусскую'])
-]
-
-def apply_shadow_autoreplace(content: dict) -> dict:
-    if not content:
-        return content
-        
-    modified = content.copy()
-    
-    def replacer(match):
-        return random.choice(SHADOW_REPLACEMENTS)
-        
-    def die_replacer(match):
-        matched_text = match.group(1).lower().replace(" ", "")
-        if "те" in matched_text:
-            return "обоссыте меня"
-        return "обоссы меня"
-        
-    for key in ('text', 'caption'):
-        text_val = modified.get(key)
-        if text_val:
-            words = text_val.split()
-            if len(words) <= 12:
-                text_val = SHADOW_WORDS_REGEX.sub(replacer, text_val)
-                text_val = DIE_WORDS_REGEX.sub(die_replacer, text_val)
-                for pattern, replacements in POLITICAL_REPLACEMENTS:
-                    text_val = pattern.sub(lambda m, reps=replacements: random.choice(reps), text_val)
-                modified[key] = text_val
-                
-    return modified
 
 
 from dataclasses import dataclass
 
 @dataclass
-class NewPostContext:
-    bot_instance: Bot
-    board_id: str
-    user_id: int
-    content: dict
-    reply_to_post: int | None
-    is_shadow_muted: bool
-    stream: str = 'ru'
 
 
+<<<<<<< HEAD
 class NewPostProcessor:
     def __init__(self, context: NewPostContext):
         self.bot_instance = context.bot_instance
@@ -3990,6 +3788,8 @@ class NewPostProcessor:
             import traceback
             print(f"🔥🔥🔥 ФАТАЛЬНАЯ ОШИБКА в process_new_post для user {self.user_id}: {e}\n{traceback.format_exc()}")
             return None
+=======
+>>>>>>> 5b69ed4e (sync: update local workspace changes)
 
 
 @dataclass
@@ -4184,38 +3984,6 @@ async def _update_archive_post_content(post_num: int, content: dict, content_typ
         await register_file_owner(new_files_data[0], sender_bot_id)
     await update_post_content(post_num, new_content)
 
-async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, post_num: int, content: dict, is_shadow_muted: bool, stream: str = 'ru'):
-    if is_shadow_muted:
-        return
-    from common.database import get_post_by_num
-    check_post = await get_post_by_num(post_num)
-    if not check_post:
-        return
-    archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-    sender_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else archive_bot
-    if not sender_bot:
-        return
-    sender_bot_id = getattr(sender_bot, 'id', 0)
-    lang = 'en' if board_id == 'int' else 'ru'
-
-    header_text = _build_archive_header(board_id, post_num, content, lang)
-    
-    content_type = content.get("type", "text")
-    text_to_send = _format_archive_text_content(content, header_text)
-    
-    db_updated = False
-    for channel_id in MIRROR_CHANNELS:
-        if not channel_id or channel_id == 0:
-            continue
-        sent_message, new_files_data = await _send_archive_media(sender_bot, channel_id, content, content_type, text_to_send, header_text)
-        if sent_message:
-            try:
-                await add_channel_copy(post_num, channel_id, sent_message.message_id)
-                if not db_updated and new_files_data:
-                    await _update_archive_post_content(post_num, content, content_type, new_files_data, sender_bot_id)
-                    db_updated = True
-            except Exception:
-                pass
 class ModeTransformer:
     def __init__(self, content: dict, board_id: str):
         self.content = content
@@ -4352,130 +4120,6 @@ async def _apply_mode_transformations(content: dict, board_id: str) -> dict:
     transformer = ModeTransformer(content, board_id)
     return await transformer.apply()
 
-async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0) -> tuple[bytes, int] | None:
-    if depth > 3: return None
-    import socket
-    import ssl
-    import aiohttp
-    import asyncio
-    import hashlib
-    from urllib.parse import urlparse
-
-    current_proxy = get_dynamic_proxy_url()
-    
-    # Настраиваем таймауты
-    timeout_config = aiohttp.ClientTimeout(total=timeout, connect=30, sock_connect=30, sock_read=timeout)
-    
-    # Парсим домен для Referer
-    parsed_url = urlparse(url)
-    domain = parsed_url.netloc
-    scheme = parsed_url.scheme
-    _, url_ext = os.path.splitext(parsed_url.path)
-    url_log = (
-        f"host={domain or 'unknown'} "
-        f"ext={(url_ext.lower()[:12] or 'none')} "
-        f"sha12={hashlib.sha256(url.encode('utf-8', 'ignore')).hexdigest()[:12]}"
-    )
-
-    # Базовые заголовки, маскируемся под Chrome
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Sec-Fetch-Dest": "image",
-        "Sec-Fetch-Mode": "no-cors",
-        "Sec-Fetch-Site": "cross-site",
-        "Pragma": "no-cache",
-        "Cache-Control": "no-cache",
-    }
-
-    # ДОБАВЛЯЕМ REFERER (ГЛАВНОЕ ИСПРАВЛЕНИЕ)
-    # Имиджборды требуют, чтобы реферер совпадал с их сайтом
-    if "gelbooru" in domain:
-        headers["Referer"] = "https://gelbooru.com/"
-    elif "konachan" in domain:
-        headers["Referer"] = "https://konachan.com/"
-    elif "yande.re" in domain:
-        headers["Referer"] = "https://yande.re/"
-    elif "danbooru" in domain:
-        headers["Referer"] = "https://danbooru.donmai.us/"
-    elif "aibooru" in domain:
-        headers["Referer"] = "https://aibooru.online/"
-    else:
-        # Универсальный фоллбек
-        headers["Referer"] = f"{scheme}://{domain}/"
-
-    for attempt in range(2):
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-        connector = aiohttp.TCPConnector(
-            family=socket.AF_INET,
-            ssl=ssl_context,
-            force_close=True,
-            enable_cleanup_closed=True,
-        )
-        try:
-            async with aiohttp.ClientSession(
-                timeout=timeout_config, 
-                headers=headers, 
-                connector=connector,
-                trust_env=False 
-            ) as session:
-                try:
-                    async with session.get(url, allow_redirects=True, proxy=current_proxy) as response:
-                        if response.status == 200:
-                            content_type = response.headers.get('Content-Type', '').lower()
-                            
-                            # Читаем данные
-                            data = await response.read()
-
-                            # Проверка на HTML-заглушку (Cloudflare или 403)
-                            # Некоторые сайты отдают 200 OK, но внутри HTML с капчей
-                            if 'text/html' in content_type or (len(data) > 0 and data.strip().startswith(b'<') and b'<html' in data[:500].lower()):
-                                try:
-                                    # Пытаемся прочитать текст ошибки для диагностики
-                                    error_text = data[:300].decode('utf-8', errors='ignore').replace('\n', ' ')
-                                except Exception:
-                                    error_text = "Binary/Unknown"
-                                    
-                                print(f"⚠️ [DEBUG_DL] Ссылка вернула HTML заглушку. Содержимое: {error_text}")
-                                return None
-
-                            if len(data) > 49.5 * 1024 * 1024:
-                                logger.debug(f"⚠️ [DEBUG_DL] Файл слишком велик ({len(data)} байт). Пропуск.")
-                                return None
-                                
-                            if len(data) > 0:
-                                logger.debug(f"✅ [DEBUG_DL] Скачано {len(data)} байт.")
-                                return data, len(data)
-                        else:
-                            logger.debug(f"⚠️ [DEBUG_DL] Статус ответа: {response.status} для {url_log}")
-
-                except (aiohttp.ClientConnectorError, asyncio.TimeoutError, OSError) as e:
-                    if current_proxy:
-                        logger.debug(f"⚠️ [DEBUG_DL] Сбой прокси ({e}). Пробую DIRECT...")
-                        # Попытка без прокси
-                        async with session.get(url, allow_redirects=True, proxy=None) as response:
-                            if response.status == 200:
-                                data = await response.read()
-                                if len(data) > 0 and not (data.strip().startswith(b'<') and b'<html' in data[:200].lower()):
-                                    logger.debug(f"✅ [DEBUG_DL] Успех через DIRECT.")
-                                    return data, len(data)
-                    raise e
-        except asyncio.TimeoutError:
-            if attempt == 0:
-                await asyncio.sleep(1)
-                continue
-            else:
-                logger.debug(f"⛔ [DEBUG_DL] Таймаут соединения.")
-        except Exception as e:
-            logger.debug(f"⛔ [DEBUG_DL] Исключение: {type(e).__name__}: {e}")
-            break
-            
-    return None
 async def admin_action_sync_worker():
 
     await asyncio.sleep(20)
@@ -4708,30 +4352,6 @@ def _format_main_text(content: dict) -> str | None:
     else:
          return convert_site_tags_to_telegram(main_text_raw)
 
-async def _format_message_body(
-    content: dict, 
-    user_id_for_context: int, 
-    post_data: dict,
-    reply_to_post_author_id: int | None,
-    quote_info: dict | None = None
-) -> str:
-    """
-    Формирует и форматирует тело сообщения (реакции, reply, опрос, greentext, (You)).
-    Версия 2.1: Добавлена поддержка "Быстрой цитаты" (Quick Quote) с защитой от None.
-    """
-    parts = []
-
-    parts.append(_format_quote_block(quote_info))
-    parts.append(_format_reply_line(content, user_id_for_context, reply_to_post_author_id, quote_info))
-    parts.append(_format_reactions_block(post_data))
-
-    poll_data = content.get('poll_data')
-    if poll_data:
-        parts.append(generate_poll_text_display(poll_data))
-
-    parts.append(_format_main_text(content))
-
-    return '\n\n'.join(filter(None, parts))
 def generate_poll_text_display(poll_data: dict) -> str:
     """
     Генерирует текстовое представление опроса с ASCII-барами.
@@ -4753,42 +4373,6 @@ def generate_poll_text_display(poll_data: dict) -> str:
         safe_option_text = escape_html(option_text)
         lines.append(f"<code>{i+1}. {safe_option_text}:</code>\n<code>[{bar}] {vote_count} ({percentage:.0f}%)</code>")
     return "\n".join(lines)
-def split_text(text: str, limit: int) -> list[str]:
-    """
-    Разбивает длинный текст на части, не превышающие лимит Telegram.
-    Добавляет нумерацию (1/N) к частям.
-    """
-    if len(text) <= limit:
-        return [text]
-    parts = []
-    lines = text.split('\n')
-    current_part = ""
-    for line in lines:
-        if len(current_part) + len(line) + 1 > limit:
-            if current_part:
-                parts.append(current_part)
-            current_part = ""
-        while len(line) > limit:
-            split_at = line.rfind(' ', 0, limit)
-            if split_at == -1: # Если пробелов нет, режем по лимиту
-                split_at = limit
-            parts.append(line[:split_at])
-            line = line[split_at:].lstrip()
-        if current_part:
-            current_part += "\n" + line
-        else:
-            current_part = line
-    if current_part:
-        parts.append(current_part)
-    total_parts = len(parts)
-    if total_parts > 1:
-        for i in range(total_parts):
-            suffix = f"\n({i+1}/{total_parts})"
-            part_limit = limit - len(suffix)
-            if len(parts[i]) > part_limit:
-                 parts[i] = parts[i][:part_limit] # Обрезаем, если нужно
-            parts[i] += suffix
-    return parts
 
 def _normalize_quote_file_type(raw_type) -> str:
     media_type = str(raw_type or 'file').split('.')[-1].lower()
@@ -4842,10 +4426,6 @@ async def build_quick_quote_info(reply_to_post: int | None) -> dict | None:
     if not replied_post_data:
         return None
     return _quote_info_from_content(replied_post_data.get('content'))
-def mark_weekly_active_delivery_user(board_id: str, user_id: int):
-    if not PRIORITY_DELIVERY_ENABLED or user_id <= 0:
-        return
-    weekly_active_users.setdefault(board_id, set()).add(user_id)
 
 def _split_recipients_for_delivery(board_id: str, recipients) -> tuple[list[int], list[int]]:
     recipient_list = list(recipients)
@@ -4863,17 +4443,7 @@ def _split_recipients_for_delivery(board_id: str, recipients) -> tuple[list[int]
             passive.append(uid)
     return priority, passive
 
-def _order_recipients_for_delivery(board_id: str, recipients) -> tuple[list[int], int, int]:
-    priority, passive = _split_recipients_for_delivery(board_id, recipients)
-    if not priority:
-        return passive, 0, len(passive)
-    return priority + passive, len(priority), len(passive)
 
-class DeliveryResults(list):
-    def __init__(self, values=(), remaining_recipients=None, interrupted_reason: str | None = None):
-        super().__init__(values)
-        self.remaining_recipients = set(remaining_recipients or ())
-        self.interrupted_reason = interrupted_reason
 
 def _phase_time_budget_sec(delivery_phase: str) -> float:
     if delivery_phase == "priority":
@@ -4994,89 +4564,12 @@ def _lie_allowed_send_types(raw_type: str, media_group: bool = False) -> set[str
         return {'document'}
     return set()
 
-async def _build_lie_media_content(content: dict, board_id: str) -> dict:
-    ctype = str(content.get('type') or '').split('.')[-1].lower()
-    avoid_post_num = content.get('post_num')
-    if ctype == 'media_group':
-        source_media = content.get('media') or []
-        if not source_media:
-            return content
-        replaced_any = False
-        lie_media = []
-        used_file_ids = set()
-        for item in source_media:
-            if not isinstance(item, dict):
-                lie_media.append(item)
-                continue
-            item_type = str(item.get('type') or '').split('.')[-1].lower()
-            desired_kind = _lie_media_kind(item_type, item)
-            allowed_types = _lie_allowed_send_types(item_type, media_group=True)
-            if desired_kind and allowed_types:
-                replacement = await _get_lie_archive_media(
-                    board_id,
-                    desired_kind,
-                    allowed_types,
-                    avoid_post_num,
-                    used_file_ids,
-                )
-                if replacement:
-                    new_item = {
-                        'type': replacement['type'],
-                        'file_id': replacement['file_id'],
-                        'media': replacement['file_id'],
-                    }
-                    if replacement.get('filename'):
-                        new_item['filename'] = replacement['filename']
-                    if replacement.get('mime_type'):
-                        new_item['mime_type'] = replacement['mime_type']
-                    lie_media.append(new_item)
-                    used_file_ids.add(replacement['file_id'])
-                    replaced_any = True
-                    continue
-            lie_media.append(item.copy())
-        if not replaced_any:
-            return content
-        lie_content = content.copy()
-        lie_content['media'] = lie_media
-        return lie_content
-
-    desired_kind = _lie_media_kind(ctype, content)
-    allowed_types = _lie_allowed_send_types(ctype)
-    if not desired_kind or not allowed_types:
-        return content
-    replacement = await _get_lie_archive_media(board_id, desired_kind, allowed_types, avoid_post_num)
-    if not replacement:
-        return content
-    lie_content = content.copy()
-    lie_content['type'] = replacement['type']
-    lie_content['file_id'] = replacement['file_id']
-    lie_content.pop('image_url', None)
-    lie_content.pop('image_bytes', None)
-    lie_content.pop('media', None)
-    if replacement.get('filename'):
-        lie_content['filename'] = replacement['filename']
-    if replacement.get('mime_type'):
-        lie_content['mime_type'] = replacement['mime_type']
-    return lie_content
 
 
 
-@dataclass
-class BroadcastConfig:
-    bot_instance: Bot
-    board_id: str
-    recipients: set
-    content: dict
-    reply_info: dict | None = None
-    keyboard: InlineKeyboardMarkup | None = None
-    verbose: bool = False
-    queue_enqueued_at: float | None = None
-    queue_wait_sec: float | None = None
-    delivery_phase: str = "full"
-    delivery_original_recipients: int | None = None
-    delivery_deferred_recipients: int = 0
 
 # Alias for backwards compat
+<<<<<<< HEAD
 BroadcasterConfig = BroadcastConfig
 
 @dataclass
@@ -6107,6 +5600,10 @@ async def send_message_to_users(config: BroadcastConfig) -> list:
     """
     broadcaster = MessageBroadcaster(config)
     return await broadcaster.broadcast()
+=======
+
+
+>>>>>>> 5b69ed4e (sync: update local workspace changes)
 async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
     """
     Находит все отправленные копии поста и редактирует их.
@@ -8096,7 +7593,6 @@ _stats_cooldown_tracker = {}
 @dp.message(Command("stats", "activity", "heatmap"))
 async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
-    global _stats_cache
 
     now = _time_module.time()
     user_id = message.from_user.id
@@ -9184,12 +8680,6 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                 _persona_processed_posts.clear()
 
         now_ts = time.time()
-        if not is_admin_trigger:
-            last_ts = _last_persona_board_ts.get(board_id, 0)
-            if now_ts - last_ts < 120.0:
-                print(f"ℹ️ [Persona Debounce] Skipping rapid trigger on board '{board_id}' (90s cooldown active).")
-                return
-            _last_persona_board_ts[board_id] = now_ts
 
         if not photo_file_id and target_post_num and target_post_num in messages_storage:
             p_data = messages_storage[target_post_num]
@@ -10041,26 +9531,6 @@ async def check_cooldown(message: Message, board_id: str) -> bool:
             pass     
         return False
     return True
-def check_post_numerals(post_num: int) -> int | None:
-    """
-    Проверяет номер поста на наличие повторяющихся цифр в конце.
-    Использует оптимизированный посимвольный анализ с конца.
-    Возвращает "уровень редкости" (количество повторов) или None.
-    """
-    s = str(post_num)
-    length = len(s)
-    if length < 4:
-        return None
-    last_char = s[-1]
-    count = 1
-    for i in range(length - 2, -1, -1):
-        if s[i] == last_char:
-            count += 1
-        else:
-            break
-    if count in SPECIAL_NUMERALS_CONFIG:
-        return count
-    return None
 def get_board_id(telegram_object: types.Message | types.CallbackQuery) -> str | None:
     """
     Мгновенно определяет ID доски ('b', 'po', etc.) по токену бота,
@@ -10949,107 +10419,9 @@ async def cmd_mode_punchup(message: types.Message, board_id: str | None, stream:
 async def cmd_contextual_replies(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id):
         return
-    global CONTEXTUAL_REPLIES_ENABLED
     args = (message.text or "").split()
     await message.delete()
 
-async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=None):
-    b_data = board_data.get(board_id)
-    if not b_data: return
-    now_ts = time.time()
-    
-    async with storage_lock:
-        last_usage = b_data.get('last_auto_roast_time', 0)
-        if now_ts - last_usage < ROAST_COOLDOWN:
-            return
-        b_data['last_auto_roast_time'] = now_ts
-
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    
-    msgs = []
-    cutoff = time.time() - 3600
-    
-    async with storage_lock:
-        for p_info in reversed(messages_storage.values()):
-            if len(msgs) >= 40: break
-            if p_info.get('board_id') == board_id:
-                ts = p_info.get('timestamp', 0)
-                if hasattr(ts, 'timestamp'):
-                    ts = ts.timestamp()
-                if ts > cutoff:
-                    if not p_info.get('thread_id'):
-                        msgs.append(p_info)
-                
-    msgs.sort(key=lambda x: x.get('timestamp').timestamp() if hasattr(x.get('timestamp'), 'timestamp') else x.get('timestamp', 0))
-    
-    if not msgs:
-        return
-        
-    chunk_parts = []
-    for p in msgs:
-        text = p.get('content', {}).get('text', '') if isinstance(p.get('content'), dict) else ''
-        if text:
-            chunk_parts.append(f"[Anon]: {text}")
-            
-    chunk = " | ".join(chunk_parts)
-    if len(chunk) < 50:
-        return
-        
-    if lang == 'en':
-        prompt = random.choice(ROAST_PROMPTS_EN)
-    elif lang == 'jp':
-        prompt = random.choice(ROAST_PROMPTS_JP)
-    else:
-        prompt = random.choice(ROAST_PROMPTS)
-        
-    hf_token = os.getenv("HF_TOKEN")
-    try:
-        summary = await summarize_text_with_hf(prompt, chunk, hf_token)
-        summary = clean_html_for_tg(summary)
-    except Exception as e:
-        print(f"[auto-roast] Error: {e}")
-        return
-        
-    if not summary:
-        return
-        
-    roast_text = f"🔥 <b>АВТО-ПРОЖАРКА СРАЧА</b> 🔥\n\n{summary}" if lang == 'ru' else f"🔥 <b>AUTO-ROAST</b> 🔥\n\n{summary}"
-    if lang == 'jp':
-        roast_text = f"🔥 <b>自動煽り</b> 🔥\n\n{summary}"
-    
-    content_payload = {
-        'type': 'text',
-        'text': roast_text,
-        'is_system_message': True,
-        'archive_allowed': True
-    }
-    
-    pnum = await create_post(
-        board_id=board_id,
-        author_id=0,
-        content=content_payload,
-        timestamp=time.time(),
-        is_from_site=False,
-        stream=stream
-    )
-    if pnum:
-        header = await format_header(board_id, pnum)
-        content_payload['header'] = header
-        await update_post_content(pnum, content_payload)
-        async with storage_lock:
-            messages_storage[pnum] = {'author_id': 0, 'timestamp': datetime.now(UTC), 'content': content_payload, 'board_id': board_id}
-            
-        base_recipients = b_data['users']['active'] - b_data['users']['banned']
-        if ENABLE_MULTILANG and board_id != 'int':
-            stream_users = await get_stream_active_users(board_id, stream)
-            base_recipients = base_recipients.intersection(stream_users)
-            
-        await enqueue_board_message(board_id, {
-            'recipients': base_recipients,
-            'content': content_payload,
-            'post_num': pnum,
-            'board_id': board_id
-        })
 
 @dp.message(Command("roast", "prozharka", "прожарка"))
 async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -13864,98 +13236,6 @@ async def post_archive_to_channel(bots: dict[str, Bot], file_path: str, board_id
                 print(f"🗑️ Временный файл архива удален: {file_path}")
         except Exception as e:
             print(f"⚠️ Не удалось удалить временный файл {file_path}: {e}")
-async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_num: int, level: int, content: dict, author_id: int):
-    """
-    (ИСПРАВЛЕННАЯ ВЕРСИЯ 3.0)
-    Отправляет уведомление о "счастливом" посте в канал архивов.
-    Надежно обрабатывает все типы медиа, отправляя сам файл, а не плейсхолдер.
-    """
-    try:
-        bot_instance = bots.get(board_id)
-        archive_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-        
-        if not archive_bot:
-            print(f"⛔ Ошибка: бот для постинга архивов не найден.")
-            return
-
-        config = SPECIAL_NUMERALS_CONFIG[level]
-        emoji = random.choice(config['emojis'])
-        label = config['label'].upper()
-        board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
-        
-        header = f"{emoji} <b>{label} #{post_num}</b> {emoji}\n\n<b>Доска:</b> {board_name}\n"
-        text_content = content.get('text') or content.get('caption') or ''
-        
-        caption_text = f"{header}\n{text_content}"
-        content_type_str = str(content.get("type", "")).split('.')[-1].lower()
-
-        max_attempts = 5
-        delay = 3.0
-        
-        for attempt in range(max_attempts):
-            try:
-                # --- НАЧАЛО ИСПРАВЛЕНИЙ (Надежная отправка медиа) ---
-                file_id = content.get('file_id')
-                if content_type_str == 'media_group':
-                    media_list = content.get('media', [])
-                    if media_list and media_list[0]:
-                        file_id = media_list[0].get('file_id')
-                        content_type_str = media_list[0].get('type', 'photo')
-
-                final_caption = caption_text[:1021] + "..." if len(caption_text) > 1024 else caption_text
-                
-                # Явная обработка каждого типа, чтобы избежать ошибок с аргументами
-                if content_type_str == 'photo' and file_id:
-                    await archive_bot.send_photo(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
-                elif content_type_str == 'video' and file_id:
-                    await archive_bot.send_video(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
-                elif content_type_str == 'animation' and file_id:
-                    await archive_bot.send_animation(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
-                elif content_type_str == 'document' and file_id:
-                    await archive_bot.send_document(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
-                elif content_type_str == 'audio' and file_id:
-                    await archive_bot.send_audio(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
-                elif content_type_str == 'voice' and file_id:
-                    await archive_bot.send_voice(ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
-                elif content_type_str == 'sticker' and file_id:
-                    await archive_bot.send_sticker(ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
-                elif content_type_str == 'video_note' and file_id:
-                    await archive_bot.send_video_note(ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
-                else: # Если это текст или медиа без file_id
-                    final_text_for_message = caption_text[:4093] + "..." if len(caption_text) > 4096 else caption_text
-                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
-                # --- КОНЕЦ ИСПРАВЛЕНИЙ ---
-                
-                print(f"✅ Уведомление о счастливом посте #{post_num} ({label}) отправлено в канал.")
-                return 
-
-            except TelegramRetryAfter as e:
-                wait_time = e.retry_after + 1
-                print(f"⚠️ API Limit on happy post #{post_num}. Waiting {wait_time}s...")
-                await asyncio.sleep(wait_time)
-            except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError) as e:
-                if attempt < max_attempts - 1:
-                    print(f"🌐 Network error on happy post #{post_num} (try {attempt + 1}). Retrying in {delay:.1f}s...")
-                    await asyncio.sleep(delay)
-                    delay *= 1.5
-                else:
-                    raise e
-            except TelegramBadRequest as e:
-                print(f"❌ BadRequest on happy post #{post_num}: {e}. No retry.")
-                # Если медиа не отправилось, пробуем отправить как текст
-                try:
-                    final_text_for_message = caption_text[:4093] + "..." if len(caption_text) > 4096 else caption_text
-                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
-                    print(f"✅ Уведомление о счастливом посте #{post_num} отправлено как текст после ошибки медиа.")
-                except Exception as final_e:
-                    print(f"❌ Финальная попытка отправки текста для #{post_num} также провалилась: {final_e}")
-                return # Выходим в любом случае после BadRequest
-    except Exception as e:
-        import traceback
-        print(f"⛔ Не удалось отправить счастливый пост #{post_num} в канал после всех попыток: {e}\n{traceback.format_exc()}")
 def get_quick_menu_keyboard(board_id: str, stream: str = 'ru') -> InlineKeyboardMarkup:
     """
     Генерирует главное меню для /start и /help с учетом потока (языка).
@@ -14291,72 +13571,6 @@ async def sync_boards_with_config():
                     continue
                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при синхронизации досок с БД: {e}")
                 break
-def _resize_image_if_needed(image_bytes: bytes) -> bytes:
-    """
-    (СИНХРОННАЯ) Оптимизированная проверка.
-    ВАЖНО: Пропускает видео (MP4, WebM) и GIF без изменений, чтобы не ломать кодировку.
-    """
-    MAX_DIMENSION_SUM = 10000
-    MAX_ASPECT_RATIO = 20.0
-    MAX_FILE_SIZE_BYTES = 9.5 * 1024 * 1024 
-    if not image_bytes: return image_bytes
-    header = image_bytes[:12]
-    is_media_format = (
-        b'ftyp' in header or 
-        header.startswith(b'\x1A\x45\xDF\xA3') or 
-        header.startswith(b'GIF8')
-    )
-
-    if is_media_format:
-        return image_bytes
-
-    try:
-        input_size = len(image_bytes)
-        with Image.open(io.BytesIO(image_bytes)) as img:
-            width, height = img.size
-            format_original = img.format
-            if getattr(img, "is_animated", False):
-                return image_bytes
-
-            needs_resize_dims = (
-                (width + height > MAX_DIMENSION_SUM) or 
-                (width / height > MAX_ASPECT_RATIO) or 
-                (height / width > MAX_ASPECT_RATIO)
-            )
-            if not needs_resize_dims and input_size <= MAX_FILE_SIZE_BYTES:
-                if format_original == 'PNG' and input_size > 5 * 1024 * 1024:
-                    pass 
-                else:
-                    return image_bytes
-            img = img.convert("RGB")
-            new_width, new_height = width, height
-            if width + height > MAX_DIMENSION_SUM:
-                scale_factor = MAX_DIMENSION_SUM / (width + height)
-                new_width = int(width * scale_factor)
-                new_height = int(height * scale_factor)
-            if new_width / new_height > MAX_ASPECT_RATIO:
-                new_width = int(new_height * MAX_ASPECT_RATIO)
-            elif new_height / new_width > MAX_ASPECT_RATIO:
-                new_height = int(new_width * MAX_ASPECT_RATIO)
-
-            if new_width != width or new_height != height:
-                img = img.resize((max(1, new_width), max(1, new_height)), Image.LANCZOS)
-            quality = 95
-            output_buffer = io.BytesIO()
-            img.save(output_buffer, format='JPEG', quality=quality)
-            current_size = output_buffer.tell()
-            while current_size > MAX_FILE_SIZE_BYTES and quality > 10:
-                output_buffer.seek(0)
-                output_buffer.truncate(0)
-                if quality < 60:
-                    img = img.resize((int(img.width * 0.85), int(img.height * 0.85)), Image.LANCZOS)
-                quality -= 10
-                img.save(output_buffer, format='JPEG', quality=quality)
-                current_size = output_buffer.tell()
-                
-            return output_buffer.getvalue()
-    except Exception as e:
-        return image_bytes
 def _contextual_reply_allowed(user_id: int, board_id: str) -> tuple[bool, str | None]:
     if not CONTEXTUAL_REPLIES_ENABLED:
         contextual_reply_stats["skipped_disabled"] += 1
@@ -14437,55 +13651,6 @@ async def check_and_send_contextual_reply(bot: Bot, user_id: int, text: str, boa
                 return
     except Exception as e:
         print(f"⛔ Ошибка в check_and_send_contextual_reply для user {user_id}: {e}")
-async def post_thread_notification_to_channel(bots: dict[str, Bot], board_id: str, thread_id: str, thread_info: dict, event_type: str, details: dict | None = None):
-    """
-    Отправляет унифицированное уведомление о событиях треда в служебный канал.
-    :param bots: Словарь с инстансами ботов.
-    :param board_id: ID доски.
-    :param thread_id: ID треда.
-    :param thread_info: Словарь с данными треда.
-    :param event_type: Тип события ('new_thread', 'milestone', 'high_activity').
-    :param details: Дополнительная информация (например, {'posts': 150} или {'activity': 25.5}).
-    """
-    bot_instance = bots.get(ARCHIVE_POSTING_BOT_ID)
-    if not bot_instance:
-        print(f"⛔ Ошибка: бот для постинга ('{ARCHIVE_POSTING_BOT_ID}') не найден.")
-        return
-    details = details or {}
-    title = escape_html(thread_info.get('title', 'Без названия'))
-    board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
-    message_text = ""
-    if event_type == 'new_thread':
-        message_text = (
-            f"<b>🌱 Создан новый тред</b>\n\n"
-            f"<b>Доска:</b> {board_name}\n"
-            f"<b>Заголовок:</b> {title}"
-        )
-    elif event_type == 'milestone':
-        posts_count = details.get('posts', 0)
-        message_text = (
-            f"<b>📈 Тред набрал {posts_count} постов</b>\n\n"
-            f"<b>Доска:</b> {board_name}\n"
-            f"<b>Заголовок:</b> {title}"
-        )
-    elif event_type == 'high_activity':
-        activity = details.get('activity', 0)
-        message_text = (
-            f"<b>🔥 Высокая активность в треде ({activity:.1f} п/ч)</b>\n\n"
-            f"<b>Доска:</b> {board_name}\n"
-            f"<b>Заголовок:</b> {title}"
-        )
-    else:
-        return
-    try:
-        await bot_instance.send_message(
-            chat_id=ARCHIVE_CHANNEL_ID,
-            text=message_text,
-            parse_mode="HTML"
-        )
-        print(f"✅ Уведомление о треде '{title}' (событие: {event_type}) отправлено в канал.")
-    except Exception as e:
-        print(f"⛔ Не удалось отправить уведомление о треде '{title}' в канал: {e}")
 def _sync_generate_thread_archive(board_id: str, thread_id: str, thread_info: dict, posts_data: list[dict]) -> str | None:
     """
     Синхронная, потокобезопасная функция для генерации HTML-архива.
@@ -19433,23 +18598,27 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
         if is_reply_to_bot:
             now_t = time.time()
             last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
-            if (now_t - last_user_t >= 120.0) and (random.random() < 0.15):
+            if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
                 should_reply = True
                 _last_persona_dialogue_user_ts[user_id] = now_t
         elif user_id in b_data.get('persona_favorites', {}):
             now_t_fav = time.time()
-            if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 120.0) and random.random() < 0.04:
+            if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and random.random() < 0.08:
                 should_reply = True
         else:
-            # Глобальный пассивный тригер: 2% на любой пост на борде
+            # Глобальный пассивный тригер: 4% на любой пост на борде
             now_t_glob = time.time()
-            if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and random.random() < 0.02:
+            if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and random.random() < 0.04:
                 should_reply = True
 
         if should_reply:
             _last_persona_board_ts[board_id] = time.time()  # заблокировать до spawn чтобы не было race condition
             text_chunk = original_caption or "[альбом изображений]"
             spawn_task(schedule_persona_reply(bot_instance, board_id, first_post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=first_photo_id, is_dialogue=is_reply_to_bot))
+        # --- THE ANCHOR (Мудрый Чед) ---
+        from anchor_bot import anchor_tick, trigger_anchor_post
+        if anchor_tick(board_id):
+            spawn_task(trigger_anchor_post(bot_instance, board_id, stream))
 def apply_greentext_formatting(text: str) -> str:
     """
     Применяет форматирование 'Greentext'.
@@ -19953,23 +19122,27 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     if is_reply_to_bot:
                         now_t = time.time()
                         last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
-                        if (now_t - last_user_t >= 120.0) and (random.random() < 0.15):
+                        if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
                             should_reply = True
                             _last_persona_dialogue_user_ts[user_id] = now_t
                     elif user_id in b_data.get('persona_favorites', {}):
                         now_t_fav = time.time()
-                        if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.04:
+                        if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.08:
                             should_reply = True
                     else:
-                        # Глобальный пассивный тригер: 2%
+                        # Глобальный пассивный тригер: 4%
                         now_t_glob = time.time()
-                        if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.02:
+                        if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.04:
                             should_reply = True
                     if should_reply:
                         _last_persona_board_ts[board_id] = time.time()  # race guard
                         text_payload = text_chunk or f"[{message.content_type}]"
                         photo_id = message.photo[-1].file_id if message.photo else None
                         spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_payload, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
+                    # --- THE ANCHOR (Мудрый Чед) ---
+                    from anchor_bot import anchor_tick, trigger_anchor_post
+                    if anchor_tick(board_id):
+                        spawn_task(trigger_anchor_post(message.bot, board_id, stream))
             await asyncio.sleep(0.33)
             
         if limit_hit:
@@ -20126,8 +19299,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             if is_reply_to_bot:
                 now_t = time.time()
                 last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
-                # 15% chance to reply in dialogue + minimum 60s cooldown per user
-                if (now_t - last_user_t >= 120.0) and (random.random() < 0.15):
+                # 35% chance to reply in dialogue + minimum 45s cooldown per user
+                if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
                     should_reply = True
                     _last_persona_dialogue_user_ts[user_id] = now_t
                 else:
@@ -20135,18 +19308,22 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             elif user_id in b_data.get('persona_favorites', {}):
                 text_clean = message.text or message.caption or (f"[фотография]" if photo_id else None)
                 now_t_fav = time.time()
-                if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.04:
+                if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.08:
                     should_reply = True
             else:
-                # Глобальный пассивный тригер: 2%
+                # Глобальный пассивный тригер: 4%
                 text_clean2 = message.text or message.caption or None
                 now_t_glob = time.time()
-                if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.02:
+                if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.04:
                     should_reply = True
             if should_reply:
                 _last_persona_board_ts[board_id] = time.time()  # race guard
                 text_chunk = message.text or message.caption or f"[{message.content_type}]"
                 spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
+            # --- THE ANCHOR (Мудрый Чед) ---
+            from anchor_bot import anchor_tick, trigger_anchor_post
+            if anchor_tick(board_id):
+                spawn_task(trigger_anchor_post(message.bot, board_id, stream))
 async def database_cleanup_task():
     """
     Периодически очищает таблицы-очереди от старых записей (Broadcast и Notifications).
@@ -21707,6 +20884,18 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
         pass
     await callback.answer()
 
+<<<<<<< HEAD
+=======
+import io
+try:
+    import ujson as json
+except ImportError:
+    import json
+import re
+import time
+
+
+>>>>>>> 5b69ed4e (sync: update local workspace changes)
 try:
     from wordcloud import WordCloud
     HAS_WORDCLOUD = True
@@ -21926,7 +21115,6 @@ async def main():
     global GLOBAL_BOTS
     background_tasks = []  # Храним задачи здесь
     try:
-        global is_shutting_down
         loop = asyncio.get_running_loop()
         loop.set_default_executor(ThreadPoolExecutor(max_workers=DEFAULT_EXECUTOR_WORKERS, thread_name_prefix="bot-default"))
         await warm_executor_pool(loop, None, DEFAULT_EXECUTOR_WORKERS, "default")
