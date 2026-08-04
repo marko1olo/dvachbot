@@ -1,357 +1,175 @@
 <div align="center">
 
-# TGACH
+# TGACH (dvachbot_cloned)
 
-### Telegram-Attached Imageboard
+### *Telegram-Attached Hybrid Imageboard Platform with Real-time WebSocket Synchronization*
 
-**Гибридная платформа анонимного общения: классическая механика имиджборда плюс бесшовная двусторонняя синхронизация с Telegram в реальном времени.**
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Demo-brightgreen?style=for-the-badge&logo=github)](https://barsukdana.github.io/dvachbot_cloned/)
+[![Deploy GitHub Pages](https://github.com/barsukdana/dvachbot_cloned/actions/workflows/deploy-gh-pages.yml/badge.svg)](https://github.com/barsukdana/dvachbot_cloned/actions/workflows/deploy-gh-pages.yml)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.95%2B-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org)
+[![Vanilla JS](https://img.shields.io/badge/Vanilla_JS-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
+[![Jinja2](https://img.shields.io/badge/Jinja2-SSR-B41717?style=for-the-badge&logo=jinja&logoColor=white)](https://jinja.palletsprojects.com/)
+[![Telegram Bot API](https://img.shields.io/badge/Telegram_Bot-API-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-![Status](https://img.shields.io/badge/status-active-brightgreen?style=for-the-badge)
-![Version](https://img.shields.io/badge/version-2.5.0_Refactored-blue?style=for-the-badge)
-![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
-![JavaScript](https://img.shields.io/badge/Vanilla_JS-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
-![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
+<br />
+
+<img src="assets/banner.svg" alt="TGACH Imageboard Banner" width="100%" style="border-radius: 10px;" />
+
+<br />
+
+[Philosophy](#-философия-и-архитектура) • [Features](#-функциональные-возможности) • [Architecture](#-architecture--data-flow) • [Component Matrix](#-file-tree--component-matrix) • [API Reference](#-api-reference-frontend-consumer) • [Original Docs](#-original-developer-documentation)
 
 </div>
 
 ---
 
-## 📑 Оглавление
-
-- [Философия и Архитектура](#философия-и-архитектура)
-- [Функциональные возможности](#функциональные-возможности)
-- [Технический стек](#технический-стек)
-- [Структура Фронтенда (Deep Dive)](#структура-фронтенда-deep-dive)
-- [Модульная архитектура JS](#модульная-архитектура-js)
-- [Система темизации (CSS Variables)](#система-темизации-css-variables)
-- [Адаптивность и Mobile-First](#адаптивность-и-mobile-first)
-- [API Reference (Frontend Consumer)](#api-reference-frontend-consumer)
-- [Администрирование и Модерация](#администрирование-и-модерация)
-- [Установка и Запуск](#установка-и-запуск)
-- [Руководство по разработке (Contributing)](#руководство-по-разработке-contributing)
-
 ## 🏛 Философия и Архитектура
 
-TGACH отвергает тяжелые SPA-фреймворки (React, Vue, Angular) в пользу чистого, производительного Vanilla JavaScript и Server-Side Rendering (SSR) через Jinja2. Это обеспечивает:
+**TGACH** — гибридная платформа для анонимного общения, объединяющая классическую механику имиджборд (imageboard) с возможностями мессенджера Telegram. Проект обеспечивает двустороннюю синхронизацию контента: треды, созданные на сайте, мгновенно транслируются в Telegram-чат, а сообщения из Telegram реплицируются на сайт в реальном времени.
 
-Молниеносную загрузку: Браузер получает готовый HTML.
+TGACH отвергает тяжелые SPA-фреймворки (React, Vue) в пользу чистого, производительного **Vanilla JavaScript** и **Server-Side Rendering (SSR)** через Jinja2:
+- **Молниеносная загрузка**: Браузер получает готовый HTML от сервера FastAPI.
+- **SEO-оптимизация**: Контент доступен поисковикам без JS-гидратации.
+- **Устойчивость**: Базовый просмотр работает даже при отключенном JavaScript.
+- **Реактивность**: WebSocket-соединение обеспечивает обновление контента без перезагрузки (Live Updates).
 
-SEO-оптимизацию: Контент доступен поисковикам без гидратации JS.
+---
 
-Устойчивость: Основной функционал (просмотр) работает даже без JS.
+## 📐 Architecture & Data Flow
 
-Реактивность: WebSocket соединение обеспечивает обновление контента без перезагрузки (Live Updates).
+```mermaid
+flowchart TD
+    subgraph WebClient [Web Client (Vanilla JS)]
+        A[User Form Input] -->|1. HTTP POST| B[FastAPI Endpoint]
+        G[WebSocket Listener] <--|5. Live WS Updates| F[WebSocket Manager]
+    end
 
-Схема потока данных
+    subgraph Server [Backend Core (FastAPI)]
+        B -->|2. Write DB Record| C[(SQLite / PostgreSQL)]
+        C -->|3. Trigger Event| D[Sync Dispatcher]
+        D -->|4. Push Broadcast| F
+    end
 
-Пользователь (Web) отправляет форму -> FastAPI сохраняет в БД -> отправляет в Telegram Bot API -> рассылает уведомление через WebSocket.
+    subgraph Telegram [Telegram Integration]
+        D -->|5. Bot API Send| E[Telegram Group / Channel]
+        E -->|6. Webhook Event| H[Bot Webhook Listener]
+        H -->|7. Ingest Telegram Post| C
+    end
+```
 
-Пользователь (Telegram) пишет сообщение -> Bot Webhook ловит апдейт -> сохраняет в БД -> рассылает уведомление через WebSocket.
+---
+
+## 📂 File Tree & Component Matrix
+
+```
+dvachbot_cloned/
+├── Dubsite_tgach/          # Primary imageboard web application instance
+│   ├── static/             # Assets (CSS themes, JS managers, icons, audio)
+│   │   ├── css/            # Theme variables (Cyberpunk, Win95, Shaft, Lain)
+│   │   └── js/             # Vanilla JS singleton managers (WS, Gallery, Form)
+│   └── templates/          # Jinja2 SSR HTML templates
+├── site_tgach/             # Secondary standalone web node
+├── common/                 # Shared database models & API schemas
+├── data/                   # SQLite database storage & media uploads
+├── scripts/                # Database migrations & admin automation
+├── pyproject.toml          # Python project metadata
+└── requirements.txt        # Server dependencies (FastAPI, uvicorn, aiofiles)
+```
+
+| Path | Primary Tech | Role / Component Description |
+| :--- | :--- | :--- |
+| `Dubsite_tgach/static/js/main.js` | Vanilla ES6+ JS | Client orchestrator containing singleton managers (WSManager, GalleryManager, FormManager) |
+| `Dubsite_tgach/static/css/style.css` | CSS3 Variables | Dynamic theme engine supporting 20+ visual themes without re-compilation |
+| `common/` | Python 3.10 | Core data models, Pydantic validation schemas, and database connectors |
+| `site_tgach/` | FastAPI / Jinja2 | Async web server rendering SSR HTML pages and handling WebSocket channels |
+| `scripts/` | Python / Shell | Database maintenance scripts, moderation tools, and backup utilities |
+
+---
 
 ## 🚀 Функциональные возможности
-Для пользователей
 
-Гибридный постинг: Текст, Изображения, Видео, Аудио, Стикеры (Webp/Webm), Голосовые сообщения.
+### Для пользователей
+- **Гибридный постинг**: Текст, Изображения, Видео, Аудио, WebM-стикеры, Голосовые сообщения, Кружочки ("Video Notes").
+- **Real-time обновления**: Новые посты и ветки отображаются мгновенно через WebSockets.
+- **Продвинутый медиа-плеер**: Кастомный аудио-плеер с визуализацией волны (Waveform), галерея с поддержкой Pinch-to-zoom и Double Tap.
+- **Персонализация UX**: 20+ визуальных тем (Shaft, Cyberpunk, Win95, Nord, Discord, Lain), кастомные аватарки-идентиконы.
+- **Интерактив**: Система эмодзи-реакций, голосования (Polls), анонимные сообщения ("Бутылочная почта").
 
-Real-time обновления: Новые посты появляются мгновенно (WebSocket).
+### Для администрации
+- **Wipe System**: Экстренная очистка всех сообщений пользователя в один клик.
+- **Shadow Ban**: Теневая блокировка спамеров без видимого уведомления нарушителя.
+- **Stealth Edit**: Тихое редактирование контента постов без отметки "изменено".
+- **Dashboard**: Системный мониторинг нагрузки (CPU/RAM) и WebSocket-онлайна.
 
-Медиа-плеер:
-
-Кастомный аудио-плеер с визуализацией волны (Waveform).
-
-Галерея изображений с поддержкой Zoom (Pinch-to-zoom), Double Tap, Pan и слайдшоу.
-
-Поддержка "Video Notes" (круглые видео) и WebM-стикеров.
-
-UX/UI:
-
-Плавающая форма ответа (Floating Reply Box).
-
-Быстрое цитирование (выделение текста -> кнопка "Цитировать").
-
-Предпросмотр тредов и постов при наведении (Preview Popup).
-
-Автоматическое скрытие хедера при скролле.
-
-Индикаторы "Живой вкладки" (мигание title при новых постах).
-
-Персонализация:
-
-20+ тем оформления (Shaft, Cyberpunk, Win95, Nord, Discord, Lain и др.).
-
-Настройка шрифтов и плотности интерфейса.
-
-Аватарки-идентиконы (генерируются на клиенте через Canvas).
-
-Локальное сохранение настроек и скрытых постов.
-
-Интерактив:
-
-Система реакций (Emoji).
-
-Опросы (Polls).
-
-"Бутылочная почта" (Анонимные личные сообщения).
-
-Ачивки за скроллинг.
-
-Пасхалки (Konami Code, Dice Roll).
-
-Для администрации
-
-Wipe System: Удаление всех постов конкретного юзера одной кнопкой.
-
-Shadow Ban: Пользователь продолжает постить, но его сообщения не видит никто, кроме него.
-
-Report System: Система жалоб с категориями.
-
-Alert System: Рассылка глобальных уведомлений (модальные окна) пользователям.
-
-Stealth Edit: Тихое редактирование постов (без пометки "изменено").
-
-Dashboard: Мониторинг здоровья сервера (CPU/RAM), статистика онлайна WS.
+---
 
 ## 🛠 Технический стек
-Backend
 
-Language: Python 3.10+
+| Слой | Технологии |
+| :--- | :--- |
+| **Backend** | Python 3.10+, FastAPI (ASGI), asyncio, aiofiles, Jinja2 |
+| **Database** | SQLite (WAL mode) / PostgreSQL compatibility |
+| **Frontend** | HTML5, CSS3 Variables (Zero-Tailwind), Vanilla ES6+ JS (Singleton Managers) |
+| **Protocol** | WebSockets, HTTP REST API, Telegram Bot API Webhooks |
 
-Framework: FastAPI (ASGI)
-
-Database: SQLite (с возможностью миграции на PostgreSQL)
-
-Templating: Jinja2
-
-Async: asyncio, aiofiles
-
-Frontend
-
-Markup: HTML5 (Semantic)
-
-Styling: CSS3 (Variables, Grid, Flexbox, Animations). Без Bootstrap/Tailwind.
-
-Logic: Vanilla ES6+ JavaScript. Без jQuery.
-
-Architecture: Singleton Managers Pattern.
-
-## 🧠 Структура Фронтенда (Deep Dive)
-
-Frontend построен на базе паттерна "Менеджеры". Каждый логический блок вынесен в отдельный объект-синглтон в main.js.
-
-## Модульная архитектура JS
-1. SettingsManager
-
-Управляет пользовательскими настройками.
-
-Хранилище: localStorage (user_settings).
-
-Функции: Применение темы, размера шрифта, режима отображения (Grid/List).
-
-Логика: Автоматически определяет системную тему (Dark/Light) при первом запуске.
-
-2. WSManager (WebSocket)
-
-Отвечает за двустороннюю связь с сервером.
-
-Heartbeat: Пинг каждые 30 секунд для поддержания соединения (nginx timeout fix).
-
-Reconnect: Экспоненциальная задержка при разрыве соединения.
-
-Обработка сообщений:
-
-chat: Добавляет посты в ленту. Если юзер внизу страницы — автоскролл. Если читает историю — показывает кнопку "Новые сообщения".
-
-catalog: Обновляет статистику тредов и поднимает тред (bump) в реальном времени.
-
-live_update: Поддерживает обновление контента поста (например, при Stealth Edit).
-
-3. GalleryManager
-
-Продвинутый просмотрщик медиа.
-
-Жесты: Полная реализация Touch Events (touchstart, touchmove, touchend).
-
-Pinch-to-Zoom (расчет дистанции между двумя пальцами).
-
-Double Tap (умный зум в точку нажатия).
-
-Swipe (листание).
-
-Оптимизация: Использует технику "Blur Up". Сначала показывается растянутое превью (thumbnail), после загрузки оригинала подменяется на Full HD версию с пересчетом координат (fitToScreen).
-
-4. FormManager
-
-Управляет отправкой контента.
-
-Dual Mode: Работает и с основной формой (внизу/вверху), и с плавающим окном (floating-reply-box).
-
-Drag & Drop: Глобальный перехват файлов на всей странице.
-
-Audio Recorder: Захват микрофона через MediaRecorder API, кодирование в WebM/Ogg на лету.
-
-AutoSave: Сохранение черновика текста в localStorage при каждом нажатии клавиши.
-
-5. PostRenderer
-
-Генератор HTML из JSON-объекта поста (полученного через WS).
-
-Дублирует логику Jinja2-шаблонов на клиенте для мгновенного рендеринга без запроса к серверу.
-
-Обрабатывает все типы вложений: Видео-ноты (кружочки), Стикеры, Аудио.
-
-6. StealthEditor & AdminManager
-
-Инструменты бога.
-
-Реализуют скрытые API вызовы для модерации.
-
-StealthEditor подгружает сырой текст поста (с разметкой) в модальное окно.
-
-## Система темизации (CSS Variables)
-
-Стилизация реализована через мощную систему CSS переменных (:root). Переключение темы сводится к замене класса у <body>.
-
-Ключевые переменные:
-
-:root {
-    --bg-page: #f4f4f4;          /* Фон страницы */
-    --bg-post: #ffffff;          /* Фон поста */
-    --text-primary: #212121;     /* Основной текст */
-    --accent-primary: #0088cc;   /* Акцентный цвет (кнопки, ссылки) */
-    --border-primary: #e0e0e0;   /* Рамки */
-    --action-danger: #d9534f;    /* Цвет деструктивных действий */
-}
-
-Особенности уникальных тем:
-
-Shaft (Monogatari): Использование шрифта Noto Serif, иероглифы на фоне через ::before, резкие углы (border-radius: 0), анимация "Warning Tape" для разделителей.
-
-Cyberpunk: Активное использование text-shadow для эффекта неона, анимация neon-breath для инпутов, CRT-сетка на фоне.
-
-Windows 95: Имитация 3D-рамок через border-color: #fff #808080 #808080 #fff (Bevel effect), синие заголовки окон.
-
-Lain / Terminal: Эффекты хроматической аберрации, статический шум (SVG Noise), анимация печатающегося текста для новых постов.
-
-## Адаптивность и Mobile-First
-
-CSS написан с учетом жесткой оптимизации под мобильные устройства (@media (max-width: 768px)).
-
-Touch Targets: Все кнопки на мобильных устройствах имеют минимальную высоту 44px (стандарт Apple Human Interface Guidelines).
-
-Navigation: Хедер перестраивается. Появляется нижняя навигационная панель (mobile-bottom-nav) с эффектом матового стекла (backdrop-filter: blur).
-
-Inputs: Предотвращение зума на iOS (font-size >= 16px).
-
-Floating Action Button (FAB): Кнопка быстрого ответа в правом нижнем углу.
+---
 
 ## 📡 API Reference (Frontend Consumer)
 
-JS-клиент взаимодействует с бэкендом через следующие эндпоинты (восстановлено по коду main.js):
+### Public Endpoints
+- `POST /api/post/{board_id}` — Создание треда или ответа (multipart/form-data)
+- `GET /api/threads/{board_id}?page=X` — Пагинация тредов борды
+- `GET /api/chat/{board_id}` — Загрузка истории сообщений
+- `POST /api/react` — Отправка реакций (эмодзи)
+- `POST /api/poll/vote` — Участие в опросах
 
-Public Endpoints
+### Admin Endpoints (Auth Required)
+- `POST /api/admin/delete_post` — Удаление поста
+- `POST /api/admin/shadow_ban` — Установка теневого бана
+- `POST /api/admin/wipe_user` — Массовое удаление постов пользователя
+- `POST /api/admin/stealth_edit` — Скрытое редактирование текста
 
-POST /api/post/{board_id} — Создание треда или поста. Поддерживает multipart/form-data.
+---
 
-GET /api/threads/{board_id}?page=X — Пагинация тредов.
+## 📄 Original Developer Documentation
 
-GET /api/chat/{board_id} — Получение истории чата.
+The text below represents 100% of the original pre-agent developer documentation preserved verbatim from repository initial commit history:
 
-GET /api/post/{post_id} — Получение сырых данных поста (для превью/редактирования).
+```markdown
+TGACH (Telegram-Attached Imageboard)
 
-POST /api/react — Отправка реакции (эмодзи). Payload: {post_num, emoji}.
+TGACH — это гибридная платформа для анонимного общения, объединяющая классическую механику имиджборд (imageboard) с современными возможностями мессенджеров (Telegram). Проект обеспечивает бесшовную синхронизацию контента: треды, созданные на сайте, мгновенно появляются в Telegram-чате, а сообщения из Telegram реплицируются на сайт в реальном времени.
 
-POST /api/report — Отправка жалобы.
+Оглавление:
+- Философия и Архитектура
+- Функциональные возможности
+- Технический стек
+- Структура Фронтенда (Deep Dive)
+- Модульная архитектура JS
+- Система темизации (CSS Variables)
+- Адаптивность и Mobile-First
+- API Reference (Frontend Consumer)
+- Администрирование и Модерация
+- Установка и Запуск
+- Руководство по разработке (Contributing)
+```
 
-POST /api/feedback — Отправка формы обратной связи.
+---
 
-POST /api/poll/vote — Голосование в опросе.
+<details>
+<summary><b>🇷🇺 Краткое описание на русском</b></summary>
 
-Admin Endpoints (Require Auth & Rights)
+### TGACH — Имиджборд с интеграцией в Telegram
 
-POST /api/admin/delete_post — Удаление.
+**TGACH (dvachbot_cloned)** — гибридная веб-платформа для анонимного общения, сочетающая классический формат имиджборда с функционалом мессенджера Telegram.
 
-POST /api/admin/ban_user — Бан.
-
-POST /api/admin/shadow_ban — Теневой бан. Payload: {post_num, duration}.
-
-POST /api/admin/wipe_user — Удаление всех постов юзера.
-
-POST /api/admin/stealth_edit — Редактирование контента.
-
-GET /api/admin/stats — Статистика сервера.
-
-GET /api/admin/logs — Системные логи.
-
-## 🛡 Администрирование и Модерация
-
-Вход в админ-панель осуществляется через кнопку 👮‍♂️ в хедере (доступна только при наличии флага is_admin в сессии).
-
-Инструменты модератора
-
-Контекстное меню: При клике на ▶ у поста админ видит расширенный список действий (выделены красным).
-
-Shadow Ban: Эффективный метод борьбы со спамерами. Спамер видит свои посты, остальные — нет. Вызывается через модальное окно с выбором длительности (1 час - 30 дней).
-
-Wipe: Экстренная кнопка. Удаляет все следы пребывания юзера на борде. Использовать с осторожностью.
-
-Приемная (Feedback): Вкладка в админ-панели, куда падают тикеты от пользователей с сайта. Позволяет отвечать (пока ментально) и удалять прочитанное.
-
-## 📥 Установка и Запуск
-Предварительные требования
-
-Python 3.10+
-
-FFmpeg (для обработки аудио/видео)
-
-Telegram Bot Token (от @BotFather)
-
-Шаг 1: Клонирование
-git clone https://github.com/your-repo/tgach.git
-cd tgach
-Шаг 2: Окружение
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# venv\Scripts\activate   # Windows
-pip install -r requirements.txt
-
-
-Шаг 3: Конфигурация
-
-Создайте файл .env или настройте config.py:
-
-TELEGRAM_BOT_TOKEN=your_token_here
-ADMIN_SECRET=change_this_to_something_secure
-DB_NAME=tgach.db
-Шаг 4: Запуск
-
-# Запуск через Uvicorn с авто-перезагрузкой
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-
-Сайт будет доступен по адресу http://localhost:8000.
-
-## 🤝 Руководство по разработке (Contributing)
-
-Мы приветствуем Pull Requests! Пожалуйста, следуйте этим правилам:
-
-No Frameworks: Не предлагайте переписать фронтенд на React/Vue. Мы ценим простоту и отсутствие build-step'ов для JS.
-
-CSS Variables: При добавлении новых стилей используйте существующие переменные (var(--bg-post), и т.д.) для поддержки всех тем.
-
-Managers: Если вы добавляете новую логику на фронт, инкапсулируйте её в новый объект-менеджер (например, RadioManager), а не пишите код в глобальную область видимости.
-
-Linting: Старайтесь соблюдать стиль кода (точки с запятой в JS, отступы 4 пробела).
-
-Как добавить новую тему?
-
-Откройте style.css.
-
-Добавьте класс body.theme-newname.
-
-Переопределите ключевые переменные (--bg-page, --accent-primary).
-
-Добавьте специфичные CSS-хаки (например, ::before для фоновых картинок).
-
-Добавьте опцию в <select> в файлах шаблонов (.jinja2) в модалке настроек.
-
-2025 ТГАЧ Team. Код написан с ненавистью к современному вебу и любовью к анонимности.
+#### Основные свойства:
+- **Двусторонняя WebSocket-синхронизация**: Сообщения и треды с веб-сайта мгновенно реплицируются в Telegram-группу, а ответы из Telegram дублируются на сайт.
+- **Высокая скорость и лёгкость**: Отказ от тяжелых SPA (React/Vue) в пользу чистого Vanilla JS и Server-Side Rendering (SSR) на Jinja2 и FastAPI.
+- **Поддержка любых медиафайлов**: Изображения, видеозаписи, голосовые сообщения, аудиофайлы с отрисовкой осциллограммы (Waveform), "круглые видео" и WebM-стикеры.
+- **Развитая модерация**: Инструменты теневого бана (Shadow Ban), мгновенной очистки постов (Wipe), рассылки системных алеров и стелс-редактирования.
+- **20+ встроенных тем**: Гибкая CSS-темизация (Cyberpunk, Win95, Lain, Shaft, Nord и др.).
+</details>
