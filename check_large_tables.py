@@ -4,13 +4,13 @@ import json
 
 
 def check_indexes():
-    conn = sqlite3.connect('dvach_bot.db')
+    conn = sqlite3.connect("dvach_bot.db")
     cursor = conn.cursor()
 
     # Analyze table sizes
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
     tables = [row[0] for row in cursor]
-    valid_tables = [t for t in tables if re.match(r"^[a-zA-Z0-9_]+$", t)]
+    valid_tables = [t for t in tables if re.fullmatch(r"[a-zA-Z0-9_]+", t)]
 
     query_indexes = (
         "SELECT j.value, p.seq, p.name, p.[unique], p.origin, p.partial "
@@ -24,9 +24,9 @@ def check_indexes():
     counts = {}
     chunk_size = 100
     for i in range(0, len(valid_tables), chunk_size):
-        chunk = valid_tables[i:i+chunk_size]
+        chunk = valid_tables[i : i + chunk_size]
         q = " UNION ALL ".join(
-            [f"SELECT '{t}', COUNT(*) FROM \"{t}\"" for t in chunk]
+            [f"SELECT '{t}', COUNT(*) FROM \"{t}\"" for t in chunk]  # nosec B608
         )
         try:
             cursor.execute(q)
@@ -34,6 +34,8 @@ def check_indexes():
                 counts[row[0]] = row[1]
         except sqlite3.Error:
             for t in chunk:
+                if not re.fullmatch(r"[a-zA-Z0-9_]+", t):
+                    continue
                 cursor.execute(f'SELECT COUNT(*) FROM "{t}"')  # nosec B608
                 counts[t] = cursor.fetchone()[0]
 
@@ -58,5 +60,5 @@ def check_indexes():
                     print(f"  Index: {idx[1]} -> Columns: {cols}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     check_indexes()
