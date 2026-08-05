@@ -5870,79 +5870,87 @@ _last_persona_board_ts: dict[str, float] = {}
 _last_persona_dialogue_user_ts: dict[int, float] = {}
 _persona_processed_posts: set[int] = set()
 
-async def schedule_persona_reply(bot, board_id: str, target_post_num: int, context_text: str, stream: str, is_admin_trigger: bool = False, photo_file_id: str = None, is_dialogue: bool = False):
+
+@dataclass
+class PersonaContext:
+    target_post_num: int
+    context_text: str
+    photo_file_id: str | None = None
+
+
+async def schedule_persona_reply(bot, board_id: str, ctx: PersonaContext, stream: str, is_admin_trigger: bool = False, is_dialogue: bool = False):
     try:
         from site_tgach.persona_bot import generate_anon_reply, is_valid_for_persona
 
-        if target_post_num and target_post_num in _persona_processed_posts:
-            print(f"ℹ️ [Persona Debounce] Reply for post #{target_post_num} already processed, skipping duplicate trigger.")
+        if ctx.target_post_num and ctx.target_post_num in _persona_processed_posts:
+            print(f"ℹ️ [Persona Debounce] Reply for post #{ctx.target_post_num} already processed, skipping duplicate trigger.")
             return
-        if target_post_num:
-            _persona_processed_posts.add(target_post_num)
+        if ctx.target_post_num:
+            _persona_processed_posts.add(ctx.target_post_num)
             if len(_persona_processed_posts) > 3000:
                 _persona_processed_posts.clear()
 
         now_ts = time.time()
 
-        if not photo_file_id and target_post_num and target_post_num in messages_storage:
-            p_data = messages_storage[target_post_num]
+        if not ctx.photo_file_id and ctx.target_post_num and ctx.target_post_num in messages_storage:
+            p_data = messages_storage[ctx.target_post_num]
             c = p_data.get('content', {})
             m_type = c.get('type')
             if m_type in {'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
-                photo_file_id = c.get('thumbnail_file_id') or c.get('file_id')
+                ctx.photo_file_id = c.get('thumbnail_file_id') or c.get('file_id')
             elif m_type == 'media_group' and c.get('media'):
                 for m in c.get('media', []):
                     if m.get('file_id'):
-                        photo_file_id = m.get('thumbnail_file_id') or m.get('file_id')
+                        ctx.photo_file_id = m.get('thumbnail_file_id') or m.get('file_id')
                         break
             # Если в самом посте нет картинки, проверим родительский пост, на который отвечают
-            if not photo_file_id:
+            if not ctx.photo_file_id:
                 reply_to_num = p_data.get('reply_to_post_num') or p_data.get('reply_to')
                 if reply_to_num and reply_to_num in messages_storage:
                     parent_c = messages_storage[reply_to_num].get('content', {})
                     pm_type = parent_c.get('type')
                     if pm_type in {'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
-                        photo_file_id = parent_c.get('thumbnail_file_id') or parent_c.get('file_id')
+                        ctx.photo_file_id = parent_c.get('thumbnail_file_id') or parent_c.get('file_id')
                     elif pm_type == 'media_group' and parent_c.get('media'):
                         for m in parent_c.get('media', []):
                             if m.get('file_id'):
-                                photo_file_id = m.get('thumbnail_file_id') or m.get('file_id')
+                                ctx.photo_file_id = m.get('thumbnail_file_id') or m.get('file_id')
                                 break
 
         vision_desc = None
-        if photo_file_id and not (context_text and "[ИЗОБРАЖЕНИЕ:" in context_text):
-            vision_desc = await analyze_telegram_photo(bot, photo_file_id, caption=context_text)
+        if ctx.photo_file_id and not (ctx.context_text and "[ИЗОБРАЖЕНИЕ:" in ctx.context_text):
+            vision_desc = await analyze_telegram_photo(bot, ctx.photo_file_id, caption=ctx.context_text)
             if vision_desc:
                 img_tag = f"\n[ИЗОБРАЖЕНИЕ: {vision_desc}]"
-                context_text = (context_text or "") + img_tag
+                ctx.context_text = (ctx.context_text or "") + img_tag
 
-        if not is_admin_trigger and not is_valid_for_persona(context_text):
+        if not is_admin_trigger and not is_valid_for_persona(ctx.context_text):
             return
             
         await asyncio.sleep(random.uniform(12.0, 35.0) if not is_admin_trigger else 0)
         
-        print(f"🤖 [Persona] Requesting reply generation for post {target_post_num} on {board_id} (is_dialogue={is_dialogue})...")
+        print(f"🤖 [Persona] Requesting reply generation for post {ctx.target_post_num} on {board_id} (is_dialogue={is_dialogue})...")
         
         # Строим общую атмосферу доски (25 последних постов)
-        atmosphere_context = await build_board_atmosphere_context(board_id, exclude_post_num=target_post_num, limit=25)
+        atmosphere_context = await build_board_atmosphere_context(board_id, exclude_post_num=ctx.target_post_num, limit=25)
         
         # Строим контекст всей цепочки ответов (до 25 уровней)
-        chain_context = await build_reply_chain_context(target_post_num, max_depth=25)
+        chain_context = await build_reply_chain_context(ctx.target_post_num, max_depth=25)
         if not chain_context:
-            chain_context = context_text
-        elif photo_file_id and vision_desc and "[ИЗОБРАЖЕНИЕ:" not in chain_context:
+            chain_context = ctx.context_text
+        elif ctx.photo_file_id and vision_desc and "[ИЗОБРАЖЕНИЕ:" not in chain_context:
             chain_context += f"\n[ИЗОБРАЖЕНИЕ: {vision_desc}]"
 
         replies = await generate_anon_reply(
             context_text=chain_context,
-            target_post=context_text,
+            target_post=ctx.context_text,
             is_dialogue=is_dialogue,
             atmosphere_text=atmosphere_context
         )
         
         # Гарантия от "замалчивания": если юзер вел диалог с ботом, но генератор сбросился — даем аноновский фаллбэк-ответ
         if not replies and is_dialogue:
-            print(f"⚠️ [Persona] Dialogue fallback for post {target_post_num} (preventing silence).")
+            print(f"⚠️ [Persona] Dialogue fallback for post {ctx.target_post_num} (preventing silence).")
             fallback_options = [
                 "Понял тебя, анон.",
                 "Ладно, проехали.",
@@ -6030,7 +6038,11 @@ async def cmd_admin_trigger(message: types.Message, board_id: str | None, stream
                 return
             await message.answer("🤖 [АДМИН ЛС] Пост не найден в БД, но текст получен. Запускаю генерацию...")
             photo_id = message.reply_to_message.photo[-1].file_id if message.reply_to_message.photo else None
-            spawn_task(schedule_persona_reply(message.bot, board_id, 0, text_chunk, stream, is_admin_trigger=True, photo_file_id=photo_id))
+            spawn_task(schedule_persona_reply(
+                message.bot, board_id,
+                PersonaContext(target_post_num=0, context_text=text_chunk, photo_file_id=photo_id),
+                stream, is_admin_trigger=True
+            ))
             return
             
         if not target_post_num:
@@ -6055,7 +6067,11 @@ async def cmd_admin_trigger(message: types.Message, board_id: str | None, stream
             return
             
         await message.answer("🤖 [АДМИН] Нейроанон принудительно разбужен. Запускаю генерацию...")
-        spawn_task(schedule_persona_reply(message.bot, board_id, target_post_num, text_chunk, stream, is_admin_trigger=True, photo_file_id=photo_id))
+        spawn_task(schedule_persona_reply(
+            message.bot, board_id,
+            PersonaContext(target_post_num=target_post_num, context_text=text_chunk, photo_file_id=photo_id),
+            stream, is_admin_trigger=True
+        ))
     else:
         candidates = []
         fav_candidates = []
@@ -6093,7 +6109,11 @@ async def cmd_admin_trigger(message: types.Message, board_id: str | None, stream
             
         target_post_num, text_chunk, photo_id = random.choice(candidates)
         await message.answer(f"🤖 [АДМИН] Выбран случайный пост #{target_post_num} для атаки. Запускаю генерацию...")
-        spawn_task(schedule_persona_reply(message.bot, board_id, target_post_num, text_chunk, stream, is_admin_trigger=True, photo_file_id=photo_id))
+        spawn_task(schedule_persona_reply(
+            message.bot, board_id,
+            PersonaContext(target_post_num=target_post_num, context_text=text_chunk, photo_file_id=photo_id),
+            stream, is_admin_trigger=True
+        ))
 
 @dp.message(Command("ans"))
 async def cmd_admin_answer(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -15644,7 +15664,11 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
         if should_reply:
             _last_persona_board_ts[board_id] = time.time()  # заблокировать до spawn чтобы не было race condition
             text_chunk = original_caption or "[альбом изображений]"
-            spawn_task(schedule_persona_reply(bot_instance, board_id, first_post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=first_photo_id, is_dialogue=is_reply_to_bot))
+            spawn_task(schedule_persona_reply(
+                bot_instance, board_id,
+                PersonaContext(target_post_num=first_post_num, context_text=text_chunk, photo_file_id=first_photo_id),
+                stream, is_admin_trigger=False, is_dialogue=is_reply_to_bot
+            ))
         # --- THE ANCHOR (Мудрый Чед) ---
         from anchor_bot import anchor_tick, trigger_anchor_post
         if anchor_tick(board_id):
@@ -16168,7 +16192,11 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                         _last_persona_board_ts[board_id] = time.time()  # race guard
                         text_payload = text_chunk or f"[{message.content_type}]"
                         photo_id = message.photo[-1].file_id if message.photo else None
-                        spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_payload, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
+                        spawn_task(schedule_persona_reply(
+                            message.bot, board_id,
+                            PersonaContext(target_post_num=post_num, context_text=text_payload, photo_file_id=photo_id),
+                            stream, is_admin_trigger=False, is_dialogue=is_reply_to_bot
+                        ))
                     # --- THE ANCHOR (Мудрый Чед) ---
                     from anchor_bot import anchor_tick, trigger_anchor_post
                     if anchor_tick(board_id):
@@ -16349,7 +16377,11 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             if should_reply:
                 _last_persona_board_ts[board_id] = time.time()  # race guard
                 text_chunk = message.text or message.caption or f"[{message.content_type}]"
-                spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
+                spawn_task(schedule_persona_reply(
+                    message.bot, board_id,
+                    PersonaContext(target_post_num=post_num, context_text=text_chunk, photo_file_id=photo_id),
+                    stream, is_admin_trigger=False, is_dialogue=is_reply_to_bot
+                ))
             # --- THE ANCHOR (Мудрый Чед) ---
             from anchor_bot import anchor_tick, trigger_anchor_post
             if anchor_tick(board_id):
