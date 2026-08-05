@@ -1,56 +1,60 @@
+import asyncio
 import time
-import re
-from ukrainian_mode import _stage1_dict_replace, _SORTED_KEYS, _get_replacement, _match_case
+import sqlite3
+import aiosqlite
+import json
 
-# Create the single big regex
-_BIG_REGEX = re.compile(r'\b(' + '|'.join(re.escape(k) for k in _SORTED_KEYS) + r')\b', re.IGNORECASE)
+async def setup_db():
+    conn = await aiosqlite.connect('test_perf.db')
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS Threads (
+            thread_id INTEGER PRIMARY KEY,
+            board_id TEXT,
+            title TEXT,
+            last_updated_at INTEGER,
+            is_archived INTEGER
+        )
+    """)
+    await conn.commit()
+    # Insert some data
+    await conn.execute("DELETE FROM Threads")
 
-# Mapping dictionary for the single big regex, ignoring case
-_LOWER_KEYS_MAP = {k.lower(): k for k in _SORTED_KEYS}
+    threads = []
+    for bid in [f"{i}" for i in range(10)]:
+        for j in range(100):
+            threads.append((bid, f"Thread {j}", time.time() - j, 0))
+    await conn.executemany("INSERT INTO Threads (board_id, title, last_updated_at, is_archived) VALUES (?, ?, ?, ?)", threads)
+    await conn.commit()
+    return conn
 
-def _stage1_dict_replace_optimized(text: str) -> tuple[str, set]:
-    replaced_spans = set()
-    result = []
-    last_end = 0
+async def run_optimized(db, stats):
+    start = time.perf_counter()
+    bids = list(stats.keys())
+    async with db.execute("""
+        SELECT board_id, thread_id, title, last_updated_at
+        FROM (
+            SELECT board_id, thread_id, title, last_updated_at,
+                   ROW_NUMBER() OVER(PARTITION BY board_id ORDER BY last_updated_at DESC) as rn
+            FROM Threads
+            WHERE is_archived = 0 AND board_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))
+        )
+        WHERE rn <= 5
+    """, (json.dumps(bids),)) as cursor:
+        async for row in cursor:
+            bid = str(row[0])
+            stats[bid]["top_threads"].append(row[1])
+    return time.perf_counter() - start
 
-    for m in _BIG_REGEX.finditer(text):
-        start = m.start()
-        end = m.end()
-        original = m.group(0)
+async def main():
+    db = await setup_db()
+    stats = {f"{i}": {"top_threads": []} for i in range(10)}
 
-        # We need the original key from the dictionary, preserving case in the mapping
-        key = _LOWER_KEYS_MAP[original.lower()]
+    o_time = await run_optimized(db, stats)
+    print(f"Optimized: {o_time:.6f}s")
+    for k, v in stats.items():
+        print(f"Board {k}: {len(v['top_threads'])} threads")
 
-        replacement = _get_replacement(key)
-        replacement = _match_case(original, replacement)
+    await db.close()
 
-        # Append unchanged text
-        result.append(text[last_end:start])
-
-        # Mark spans (relative to the new string)
-        current_offset = sum(len(s) for s in result)
-        for i in range(current_offset, current_offset + len(replacement)):
-            replaced_spans.add(i)
-
-        result.append(replacement)
-        last_end = end
-
-    result.append(text[last_end:])
-    final_result = "".join(result)
-
-    return final_result, replaced_spans
-
-text = "Привет, как дела? Я русский солдат, иду домой, мне нравится борщ и пельмени. Россия вперед! Москва столица!" * 100
-
-start = time.perf_counter()
-res1, spans1 = _stage1_dict_replace(text)
-end1 = time.perf_counter()
-print(f"Original Time: {end1 - start:.4f} seconds")
-
-start = time.perf_counter()
-res2, spans2 = _stage1_dict_replace_optimized(text)
-end2 = time.perf_counter()
-print(f"Optimized Time: {end2 - start:.4f} seconds")
-
-print(f"Results match: {res1 == res2}")
-print(f"Spans match: {spans1 == spans2}")
+if __name__ == '__main__':
+    asyncio.run(main())
