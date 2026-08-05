@@ -290,8 +290,8 @@ TROLL_PATTERNS_REGEX = re.compile('|'.join(map(re.escape, [
 def _get_spam_pattern(stop_words_frozenset):
     if not stop_words_frozenset:
         return None
-    sorted_words = sorted(list(stop_words_frozenset), key=len, reverse=True)
-    return re.compile('|'.join(map(re.escape, sorted_words)))
+    pattern_str = r'\b(?:' + '|'.join(map(re.escape, stop_words_frozenset)) + r')\b'
+    return re.compile(pattern_str, flags=re.IGNORECASE)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
