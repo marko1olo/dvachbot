@@ -269,7 +269,7 @@ def auto_merge_branches(accept_branches, cwd):
         try:
             # Run git merge
             subprocess.run(
-                ["git", "merge", "--no-ff", "-m", f"Merge remote-tracking branch '{branch}'", branch], 
+                ["git", "merge", "--no-ff", "-m", f"Merge remote-tracking branch '{branch}'", "--", branch],
                 cwd=cwd,
                 check=True, 
                 capture_output=True,
