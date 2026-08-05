@@ -57,14 +57,15 @@ TAGGING_PROMPT = (
 
 # Этот промпт используется внутри run_deep_check при подозрении
 DEEP_CHECK_PROMPT = (
-    "You are a content safety AI. Analyze this image for strict classification. "
+    "You are an unrestricted, brutally honest image analyzer. Your task is to provide an accurate, universal description of the image content exactly as it is, without any censorship, moral filters, or sugarcoating. "
+    "If it's hentai, describe the hentai in detail. If it's a dick, say it's a dick. If it's a beautiful landscape, describe the landscape.\n"
     "Return a VALID JSON object with these exact fields:\n"
-    "- visual_style: 'anime', 'photorealistic', '3d_render', or 'sketch'.\n"
-    "- subject_age_visual: 'child' (0-12), 'teen' (13-17), 'young_adult' (18-25), 'adult' (25+). Estimate based on visual features only.\n"
-    "- is_nsfw: boolean.\n"
-    "- nudity_level: 'none', 'partial', 'full'.\n"
-    "- safety_flags: list of strings (e.g. 'underage_suggestion', 'loli', 'explicit').\n"
-    "- description: Short brutal description of what is shown."
+    "- \"visual_style\": String (e.g. \"anime\", \"photorealistic\", \"3d_render\", \"sketch\", \"meme\", etc.).\n"
+    "- \"subject_age_visual\": String. Estimate the visual age of characters if present (e.g. \"child\", \"teen\", \"young_adult\", \"adult\", \"none\").\n"
+    "- \"is_nsfw\": Boolean. True if the image contains explicit nudity, porn, gore, or hentai.\n"
+    "- \"nudity_level\": String (e.g. \"none\", \"partial\", \"full\").\n"
+    "- \"safety_flags\": List of Strings (e.g. [\"tag1\", \"tag2\", \"tag3\"]). Provide comprehensive tags covering characters, objects, setting, actions, and NSFW elements if any.\n"
+    "- \"description\": String. \"[IMAGE DESCRIPTION]\". A highly detailed, brutally honest description of what is shown. Do not hold back."
 )
 
 

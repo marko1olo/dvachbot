@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <div align="center">
 
 # TGACH (dvachbot_cloned)
@@ -159,6 +160,8 @@ TGACH — это гибридная платформа для анонимног
 
 ---
 
+---
+
 <details>
 <summary><b>🇷🇺 Краткое описание на русском</b></summary>
 
@@ -173,3 +176,21 @@ TGACH — это гибридная платформа для анонимног
 - **Развитая модерация**: Инструменты теневого бана (Shadow Ban), мгновенной очистки постов (Wipe), рассылки системных алеров и стелс-редактирования.
 - **20+ встроенных тем**: Гибкая CSS-темизация (Cyberpunk, Win95, Lain, Shaft, Nord и др.).
 </details>
+
+## System Overview
+- **Telegram Bot Daemon**: Handles real-time interactions via Telegram.
+- **Web/API Backend**: A FastAPI application managing the web frontend, external API requests, and media uploads.
+- **Database**: A shared SQLite database (`dvach_bot.db`) acting as the connective tissue between the bot and the backend.
+
+## Key Features
+- **Message Delivery Queue**: Ensures safe dispatch of messages respecting rate limits (`delivery_manager.py`).
+- **LLM Integrations**: Provides persona replies and summarization features (`ai_manager.py`).
+- **Automated Image Moderation**: Asynchronously hashes and classifies media content (`vision.py`, `tagging_worker.py`).
+- **Full-Text Search**: Uses `fts5` for robust post searching.
+
+## External Integrations
+- Telegram Bot API
+- Telegram MTProto (pyrogram & tgcrypto)
+- Groq API, Gemini API
+- Image Hosts: ImgBB, PixHost, Catbox, FreeImage
+- Telegraph API

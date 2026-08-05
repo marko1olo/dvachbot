@@ -266,3 +266,173 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
             'post_num': pnum,
             'board_id': board_id
         })
+def _format_post_text(content: dict, msg_type: str) -> str | None:
+    text = content.get('text') or content.get('caption') or ""
+    text = re.sub(r'<[^>]+>', '', text).strip()
+    if text:
+        return text
+    if msg_type in ('photo', 'video', 'document', 'animation', 'media_group', 'sticker', 'voice', 'video_note'):
+        return f"[{msg_type}]"
+    return None
+
+def _get_author_name(post: dict, content: dict, board_id: str, lang: str | None) -> str:
+    name = content.get('username') or content.get('name') or content.get('author_name')
+    if not name:
+        if not lang:
+            lang = 'en' if board_id == 'int' else 'ru'
+        author_id = post.get('author_id')
+        if author_id and author_id != 0:
+            suffix = str(author_id)[-4:]
+            if lang == 'en':
+                name = f"Anon #{suffix}"
+            elif lang == 'jp':
+                name = f"名無し #{suffix}"
+            else:
+                name = f"Анон #{suffix}"
+        else:
+            if lang == 'en':
+                name = "Anon"
+            elif lang == 'jp':
+                name = "名無し"
+            else:
+                name = "Анон"
+    return name
+
+def _get_reply_suffix(post: dict, content: dict, board_id: str, lang: str | None) -> str:
+    reply_to = content.get('reply_to_post') or post.get('reply_to_post_num')
+    reply_suffix = ""
+    if reply_to:
+        if not lang:
+            lang = 'en' if board_id == 'int' else 'ru'
+        if lang == 'en':
+            reply_suffix = f" (reply to #{reply_to})"
+        elif lang == 'jp':
+            reply_suffix = f" (>>{reply_to})"
+        else:
+            reply_suffix = f" (Ответ на #{reply_to})"
+    return reply_suffix
+
+
+async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
+    """
+    Удаляет один конкретный пост отовсюду: из БД, RAM, ЛС пользователей и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
+    """
+    board_id = None
+    try:
+        db = await get_pool()
+        async with db.execute("SELECT board_id FROM Posts WHERE post_num = ?", (post_num,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                board_id = row[0]
+    except Exception:
+        pass
+
+    channel_copies = await get_all_channel_copies(post_num)
+    messages_to_delete_info = await get_post_copies(post_num)
+    deleted_from_db = await delete_post_by_num(post_num)
+    if not deleted_from_db and not messages_to_delete_info and not channel_copies:
+        return 0
+    async with storage_lock:
+        post_data = messages_storage.pop(post_num, None)
+        if post_data:
+            if not board_id:
+                board_id = post_data.get('board_id')
+            if board_id and board_id in THREAD_BOARDS:
+                thread_id = post_data.get('thread_id')
+                if thread_id:
+                    b_data = board_data.get(board_id, {})
+                    threads_data = b_data.get('threads_data', {})
+                    if thread_id in threads_data:
+                        try:
+                            if 'posts' in threads_data[thread_id]:
+                                threads_data[thread_id]['posts'].remove(post_num)
+                        except (ValueError, KeyError):
+                            pass
+        message_copies_in_mem = post_to_messages.pop(post_num, {})
+        for uid, mid_or_list in message_copies_in_mem.items():
+            if isinstance(mid_or_list, list):
+                for mid in mid_or_list:
+                    message_to_post.pop((uid, mid), None)
+            else:
+                message_to_post.pop((uid, mid_or_list), None)
+    if channel_copies:
+        archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
+        deleter = archive_bot if archive_bot else (GLOBAL_BOTS.get(board_id) or bot_instance)
+        for chan_id, msg_id in channel_copies:
+            try:
+                await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
+            except Exception:
+                pass
+    if not messages_to_delete_info:
+        return 0 if deleted_from_db else 0
+        
+    tasks = [_delete_message_with_retries(bot_instance, uid, mid, board_id) for uid, mid in messages_to_delete_info]
+    results = await asyncio.gather(*tasks)
+    deleted_count = sum(1 for res in results if res is True)
+    return deleted_count
+
+async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str, notify_users: bool = True, initiator_id: int = None):
+    """
+    Централизованное и производительное удаление треда.
+    """
+    b_data = board_data[board_id]
+    threads_data = b_data.get('threads_data', {})
+    thread_info = threads_data.get(thread_id)
+    if not thread_info:
+        print(f"[THREAD DELETE] Тред {thread_id} не найден на доске {board_id}.")
+        return
+    posts_to_delete = list(thread_info.get('posts', []))
+    users_in_thread = [uid for uid, ustate in b_data.get('user_state', {}).items() if ustate.get('location') == thread_id]
+    async with storage_lock:
+        for post_num in posts_to_delete:
+            messages_storage.pop(post_num, None)
+            message_copies = post_to_messages.pop(post_num, {})
+            if message_copies:
+                for user_id, message_id in message_copies.items():
+                    message_to_post.pop((user_id, message_id), None)
+        threads_data.pop(thread_id, None)
+        b_data.get('thread_locks', {}).pop(thread_id, None)
+        for uid in users_in_thread:
+            if uid in b_data['user_state']:
+                b_data['user_state'][uid]['location'] = 'main'
+    if notify_users:
+        lang = 'en' if board_id == 'int' else 'ru'
+        if lang == 'en':
+            notify_text = "Thread has been deleted by admin. You have been returned to the main board."
+        elif lang == 'jp':
+            notify_text = "管理人がスレッドを削除しました。メイン板に戻されました。"
+        else:
+            notify_text = "Тред был удалён администратором. Вы возвращены на главную доску."
+        for uid in users_in_thread:
+            try:
+                await bot_instance.send_message(uid, notify_text)
+            except Exception:
+                pass
+    print(f"[THREAD DELETE] [{board_id}] Тред {thread_id} удалён. Пользователей переведено: {len(users_in_thread)}. Инициатор: {initiator_id}")
+
+async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
+    """
+    Массовое удаление постов пользователя за период.
+    Удаляет из БД (с защитой транзакции), RAM, ЛС и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
+    Правильно удаляет целые треды из БД/архивов, если удаляется ОП-пост.
+    """
+    try:
+        time_threshold_ts = (datetime.now(UTC) - timedelta(minutes=time_period_minutes)).timestamp()
+
+        posts_to_delete_nums, messages_to_delete_from_api, channel_messages_to_delete = await _delete_user_posts_from_db(
+            user_id, time_threshold_ts, board_id
+        )
+
+        if not posts_to_delete_nums:
+            return 0
+
+        await _clean_posts_from_ram(posts_to_delete_nums, board_id)
+        _clean_posts_from_caches(posts_to_delete_nums)
+        await _delete_posts_from_channels(channel_messages_to_delete, bot_instance)
+        total_deleted_count = await _delete_posts_from_pm_api(messages_to_delete_from_api, bot_instance)
+        
+        return total_deleted_count
+    except Exception as e:
+        import traceback
+        print(f"Критическая ошибка в delete_user_posts: {e}\n{traceback.format_exc()}")
+        return 0

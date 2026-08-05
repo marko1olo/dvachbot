@@ -1,3 +1,4 @@
+from common.config import *
 from concurrent.futures import ThreadPoolExecutor
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup
@@ -35,7 +36,24 @@ def _prepare_queue_item(board_id: str, item: dict) -> dict:
 
 GLOBAL_BOTS = {} # Словарь для хранения всех экземпляров ботов
 
-storage_lock = asyncio.Lock()  # Блокировка для доступа к messages_storage, post_to_messages и т.д.
+class LazyStorageLock:
+    def __init__(self):
+        self._lock = None
+
+    @property
+    def lock(self):
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    async def __aenter__(self):
+        await self.lock.acquire()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.lock.release()
+
+storage_lock = LazyStorageLock()  # Ленивая блокировка для доступа к messages_storage, post_to_messages и т.д.
 
 board_data = defaultdict(lambda: {
     'anime_mode': False,
@@ -94,6 +112,10 @@ board_data = defaultdict(lambda: {
 state = {
     'post_counter': 0,
 }
+
+MODE_FLAGS = ['anime_mode', 'zaputin_mode', 'slavaukraine_mode', 'suka_blyat_mode', 'polish_mode', 'warhammer_mode', 'imperial_mode', 'gopnik_mode', 'schizo_mode', 'matrix_mode', 'america_mode', 'holiday_mode', 'oldweb_mode', 'jewish_mode']
+shadow_fake_post_counters = {}
+
 
 messages_storage = {}
 
@@ -173,3 +195,117 @@ SPECIAL_NUMERALS_CONFIG = {
 
 # --- Thread Pools ---
 save_executor = ThreadPoolExecutor(max_workers=2)
+
+ROULETTE_EVENTS = []
+
+def _safe_len(value) -> int:
+    try:
+        return len(value)
+    except Exception:
+        return -1
+
+# Globals Extracted
+_stats_cache: dict = {}   # board_id -> {ts: float, photos: list[bytes]}
+_stats_cooldown_tracker = {}
+_active_duels: dict = {}  # challenger_id -> {board_id, amount, ts, msg_id}
+_duel_cooldowns: dict = {} # user_id -> timestamp
+_PASSPORT_DATA = {
+    'ru': {
+        'mental': ["Вялотекущая шизофрения", "Педераст", "Газонюх", "Терминальная стадия двачевания", "ПТСР после /po/", "Синдром Туретта", "Одержимость трапами", "Асексуал (насильно)", "Зумер с деменцией", "Свидетель Вайпа", "Жертва психиатрии", "Пиздабол", "Мамкин анархист", "Солевой", "Овощ", "Гигачад (нет)"],
+        'inv': ["Справка из дурки", "Трусы с чиркашом", "Банка 'Ягуара'", "Диск с ЦП", "Онахол", "Дакимакура", "Вентилятор", "Флешка с ЦП", "Диплом шараги", "Усы Сталина", "Резиновая вагина (б/у)", "Пакет с пакетами", "Мать (продана)", "Шприц", "Носок (стоячий)", "Тетрадь смерти", "ЕОТ (в мечтах)", "Биткоин (нарисованный)", "15 рублей", "Вейп", "Повестка"],
+        'sec': ["Дрочит на фурри", "Любитель лоликона", "Стучит товарищу майору", "Любит унижения", "Мечтает стать модером", "Смотрит цп", "Не мылся год", "Не девственник (врет)", "Боится женщин", "Ест кал", "Хочет в Польшу", "Верит в плоскую землю", "Украл у мамки деньги", "Плачет после секса"]
+    },
+    'en': {
+        'mental': ["Chronic Schizophrenia", "Terminal 4chan addiction", "PTSD after /pol/", "Tourette's", "Trap obsession", "Incel (forced)", "Dementia Zoomer", "Wipe Witness", "Psych ward victim", "Pathological liar", "Basement anarchist", "Meth head", "Vegetable", "Gigachad (not)"],
+        'inv': ["Autism certificate", "Stained underwear", "Monster Energy", "Fan (for shit)", "CP Flash drive (fake)", "College debt", "Hitler's moustache", "Used waifu pillow", "Bag of bags", "Sold mom", "Syringe", "Cum sock (stiff)", "Death Note", "GF (imaginary)", "Bitcoin (drawn)", "0.01$", "Vape", "Draft notice"],
+        'sec': ["Jerks to furries", "Snitch for FBI", "Loves humiliation", "Wants to be janny", "Watches loli", "Hasn't showered in 2024", "Fake virgin", "Scared of women", "Eats bugs", "Wants to go to Brazil", "Flat earther", "Stole mom's credit card", "Cries while pooping"]
+    },
+    'jp': {
+        'mental': ["統合失調症", "2ch中毒末期", "政治厨PTSD", "トゥレット症候群", "男の娘中毒", "非モテ（強制）", "認知症ズーマー", "祭り目撃者", "精神科の犠牲者", "虚言癖", "ママのアナキスト", "ヤク中", "植物人間", "ギガチャド（嘘）"],
+        'inv': ["障害者手帳", "シミ付きパンツ", "ストロングゼロ", "扇風機（クソ用）", "ロリ画像USB", "Fラン大学の学位", "スターリンの髭", "中古オナホ", "レジ袋の山", "売られた母", "注射器", "カチカチの靴下", "デスノート", "脳内彼女", "ビットコイン（絵）", "15ルーブル", "Vape", "赤紙"],
+        'sec': ["ケモナー", "警察の犬", "ドM", "削除人になりたい", "ロリコン", "1年風呂入ってない", "童貞（嘘）", "女性恐怖症", "食糞", "異世界に行きたい", "地球平面説信者", "親の金盗んだ", "うんこ中に泣く"]
+    }
+}
+OP_COMMAND_COOLDOWN = 60 # 1 минута кулдауна для команд модерации ОПа в треде
+
+ANIME_CMD_COOLDOWN = 25 # 25 секунд
+
+anime_cmd_lock = asyncio.Lock()
+
+info_cmd_lock = asyncio.Lock() # Кулдаун для команд /stats, /active
+
+DEANON_COOLDOWN = 180  # 3 минуты
+
+deanon_lock = asyncio.Lock()
+
+roulette_lock = asyncio.Lock()
+
+WEEKLY_ACTIVE_DAYS = max(1, BOT_WEEKLY_ACTIVE_DAYS)
+
+ANIME_MEDIA_CONCURRENCY = max(1, BOT_ANIME_MEDIA_CONCURRENCY)
+
+ANIME_URL_FETCH_TIMEOUT_SEC = max(3.0, float(BOT_ANIME_URL_FETCH_TIMEOUT_SEC))
+
+ANIME_URL_FETCH_TOTAL_SEC = max(ANIME_URL_FETCH_TIMEOUT_SEC, float(BOT_ANIME_URL_FETCH_TOTAL_SEC))
+
+ANIME_URL_FETCH_PARALLEL = max(1, int(BOT_ANIME_URL_FETCH_PARALLEL))
+
+ANIME_DOWNLOAD_TIMEOUT_SEC = max(5.0, float(BOT_ANIME_DOWNLOAD_TIMEOUT_SEC))
+
+ANIME_DOWNLOAD_TOTAL_SEC = max(ANIME_DOWNLOAD_TIMEOUT_SEC, float(BOT_ANIME_DOWNLOAD_TOTAL_SEC))
+
+ANIME_DOWNLOAD_PARALLEL = max(1, int(BOT_ANIME_DOWNLOAD_PARALLEL))
+
+ANIME_REFILL_ROUNDS = max(0, int(BOT_ANIME_REFILL_ROUNDS))
+
+anime_media_gate = asyncio.Semaphore(ANIME_MEDIA_CONCURRENCY)
+
+@dataclass
+class ShadowRejectContext:
+    bot: Bot
+    board_id: str
+    user_id: int
+    content: dict
+    reply_to_post: int | None = None
+    stream: str = 'ru'
+
+@dataclass
+
+
+
+
+@dataclass
+class NewPostParams:
+    bot_instance: Bot
+    board_id: str
+    user_id: int
+    content: dict
+    reply_to_post: int | None
+    is_shadow_muted: bool
+    stream: str = 'ru'
+
+STOP_WORDS = set([
+    'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то', 
+    'все', 'она', 'так', 'его', 'но', 'да', 'ты', 'к', 'у', 'же', 'вы', 'за', 
+    'бы', 'по', 'только', 'ее', 'мне', 'было', 'вот', 'от', 'меня', 'еще', 
+    'нет', 'о', 'из', 'ему', 'теперь', 'когда', 'даже', 'ну', 'вдруг', 'ли', 
+    'если', 'уже', 'или', 'ни', 'быть', 'был', 'него', 'до', 'вас', 'нибудь', 
+    'опять', 'уж', 'вам', 'ведь', 'там', 'потом', 'себя', 'ничего', 'ей', 
+    'может', 'они', 'тут', 'где', 'есть', 'надо', 'ней', 'для', 'мы', 'тебя', 
+    'их', 'чем', 'была', 'сам', 'чтоб', 'без', 'будто', 'чего', 'раз', 'тоже', 
+    'себе', 'под', 'будет', 'ж', 'тогда', 'кто', 'этот', 'того', 'потому', 
+    'этого', 'какой', 'совсем', 'ним', 'здесь', 'этом', 'один', 'почти', 'мой', 
+    'тем', 'чтобы', 'нее', 'сейчас', 'были', 'куда', 'зачем', 'всех', 'никогда', 
+    'можно', 'при', 'наконец', 'два', 'об', 'другой', 'хоть', 'после', 'над', 
+    'больше', 'тот', 'через', 'эти', 'нас', 'про', 'всего', 'них', 'какая', 
+    'много', 'разве', 'три', 'эту', 'моя', 'впрочем', 'хорошо', 'свою', 'этой', 
+    'перед', 'иногда', 'лучше', 'чуть', 'том', 'нельзя', 'такой', 'им', 'более', 
+    'всегда', 'конечно', 'всю', 'между', 'это', 'просто', 'блин', 'бля', 'ебать'
+])
+
+
+# --- Extracted from main.py Phase 9 (Helpers) ---
+reaction_ratelimit = defaultdict(float)
+author_reaction_notify_tracker = defaultdict(lambda: deque(maxlen=AUTHOR_NOTIFY_LIMIT_PER_MINUTE))
+author_reaction_notify_lock = asyncio.Lock()
+_DUEL_TIMEOUT = 120       # секунд на принятие

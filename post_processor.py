@@ -470,3 +470,20 @@ async def post_thread_notification_to_channel(bots: dict[str, Bot], board_id: st
         print(f"✅ Уведомление о треде '{title}' (событие: {event_type}) отправлено в канал.")
     except Exception as e:
         print(f"⛔ Не удалось отправить уведомление о треде '{title}' в канал: {e}")
+
+async def process_new_post(params: NewPostParams) -> int | None:
+    """
+    Унифицированная функция для обработки, сохранения и постановки в очередь нового поста.
+    Версия 8.0: Гарантирует регистрацию поста в памяти даже при сбое отправки. НИКАКИХ УДАЛЕНИЙ.
+    """
+    context = NewPostContext(
+        bot_instance=params.bot_instance,
+        board_id=params.board_id,
+        user_id=params.user_id,
+        content=params.content,
+        reply_to_post=params.reply_to_post,
+        is_shadow_muted=params.is_shadow_muted,
+        stream=params.stream
+    )
+    processor = NewPostProcessor(context)
+    return await processor.execute()

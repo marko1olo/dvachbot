@@ -708,11 +708,24 @@ async def tagging_loop():
                     )
 
                 # 3. НЕЙРОНКА (Только если теги еще не найдены в БД)
+                description = None
                 if tags is None:
-                    tags = await get_neuro_tags(resized_bytes)
+                    ai_response = await get_neuro_tags(resized_bytes)
+                    if ai_response == "error_413" or ai_response == "error_too_large":
+                        tags = "error_too_large"
+                    elif ai_response and ai_response.startswith("{"):
+                        import json
+                        try:
+                            parsed = json.loads(ai_response)
+                            tags = parsed.get("tags", "")
+                            description = parsed.get("description", "")
+                        except json.JSONDecodeError:
+                            tags = ai_response
+                    else:
+                        tags = ai_response
 
-                if tags == "error_413":
-                    tags = "error_too_large"
+                if not tags:
+                    tags = "error_no_tags"
 
                 tag_mark = "🏷️" if (tags and "error" not in tags) else "⚪"
 
@@ -725,20 +738,21 @@ async def tagging_loop():
                             cursor = await db.execute(
                                 """
                                 UPDATE FileRegistry 
-                                SET tags = ?, phash = ?, blurhash = ?
+                                SET tags = ?, description = COALESCE(?, description), phash = ?, blurhash = ?
                                 WHERE file_id = ?
                             """,
-                                (tags, phash, b_hash, file_id),
+                                (tags, description, phash, b_hash, file_id),
                             )
 
                             if cursor.rowcount == 0:
                                 await db.execute(
                                     """
                                     INSERT INTO FileRegistry 
-                                    (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                    (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags, description)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                                     ON CONFLICT(sha256) DO UPDATE SET
                                         tags = excluded.tags,
+                                        description = COALESCE(excluded.description, FileRegistry.description),
                                         phash = excluded.phash
                                 """,
                                     (
@@ -750,6 +764,7 @@ async def tagging_loop():
                                         time.time(),
                                         b_hash,
                                         tags,
+                                        description
                                     ),
                                 )
 
@@ -771,15 +786,11 @@ async def tagging_loop():
                 # === МОДЕРАЦИЯ (Deep Check) ===
                 should_deep_check = False
 
-                # 1. Проверка по типу файла (видео чекаем всегда, так как теги по первому кадру могут врать)
-                if file_type in ['gif', 'video_note', 'video', 'animation']:
-                    should_deep_check = True
-
-                # 2. Проверка по тегам (если файл успешно сохранен и теги есть)
-                elif save_success and tags and "error" not in tags:
-                    tags_lower = tags.lower()
-                    has_suspicious = any(w in tags_lower for w in SUSPICIOUS_KEYWORDS)
-                    is_safe_style = any(s in tags_lower for s in SAFE_KEYWORDS)
+                # Проверка исключительно по ключевым словам в тегах и описании (без слепого триггера на все видео)
+                if save_success and tags and "error" not in tags:
+                    full_text = f"{tags} {description or ''}".lower()
+                    has_suspicious = any(w in full_text for w in SUSPICIOUS_KEYWORDS)
+                    is_safe_style = any(s in full_text for s in SAFE_KEYWORDS)
 
                     # Чекаем только если есть подозрительные слова И ЭТО НЕ безопасный стиль (аниме/арт)
                     if has_suspicious and not is_safe_style:

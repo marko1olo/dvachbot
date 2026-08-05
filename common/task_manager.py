@@ -10,16 +10,6 @@ logger = logging.getLogger("task_manager")
 def _on_task_done(task: asyncio.Task) -> None:
     """
     Снимает ссылку на завершённую задачу и ОБЯЗАТЕЛЬНО забирает исключение.
-
-    Раньше callback только выбрасывал задачу из множества. Исключение
-    оставалось в объекте задачи невостребованным: при завершении не
-    логировалось ничего, а стандартное предупреждение asyncio «Task exception
-    was never retrieved» появлялось лишь когда объект собирал GC — без имени
-    задачи и мимо логгеров проекта. То есть упавшая fire-and-forget работа
-    была фактически неотслеживаемой, а таких вызовов в проекте 125.
-
-    Отмена задачи — штатная ситуация (например замена таймера альбома или
-    остановка бота), поэтому она не логируется.
     """
     _background_tasks.discard(task)
     if task.cancelled():
@@ -37,14 +27,6 @@ def _on_task_done(task: asyncio.Task) -> None:
 
 
 def _derive_name(coro: Coroutine) -> str | None:
-    """
-    Имя задачи из самой корутины.
-
-    Все 159 вызовов spawn_task в проекте идут без name, поэтому по умолчанию
-    задача получила бы бесполезное «Task-42», и лог ошибки не позволял бы
-    понять, ЧТО именно упало. Берём имя функции — так сообщение сразу
-    указывает на источник, и не нужно править каждый вызов.
-    """
     qualname = getattr(coro, "__qualname__", None)
     if qualname:
         return qualname
@@ -65,9 +47,22 @@ def spawn_task(coro: Coroutine, name: str = None) -> asyncio.Task:
     try:
         task = asyncio.create_task(coro, name=name)
     except TypeError:
-        # Fallback for older python versions if name isn't supported
         task = asyncio.create_task(coro)
 
     _background_tasks.add(task)
     task.add_done_callback(_on_task_done)
     return task
+
+async def cancel_all_background_tasks():
+    """
+    Cancels all background tasks currently tracked by the task manager.
+    Should be called during graceful shutdown.
+    """
+    logger.info(f"Cancelling {len(_background_tasks)} active background tasks...")
+    for task in list(_background_tasks):
+        if not task.done():
+            task.cancel()
+    
+    if _background_tasks:
+        await asyncio.gather(*_background_tasks, return_exceptions=True)
+    logger.info("All background tasks have been cancelled and awaited.")
