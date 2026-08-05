@@ -70,5 +70,32 @@ class TestCleanZalgo(unittest.TestCase):
         zalgo_expected = "\u0300" * 4
         self.assertEqual(clean_zalgo(zalgo_input), zalgo_expected)
 
+    def test_whitespace_zalgo(self):
+        """Test that whitespaces with combining characters are handled."""
+        # space + 10 combining characters -> should become space + 4 combining characters
+        text = " " + ("\u0301" * 10)
+        expected = " " + ("\u0301" * 4)
+        self.assertEqual(clean_zalgo(text), expected)
+
+    def test_emoji_zalgo(self):
+        """Test that emojis with combining characters are handled."""
+        # thumbs up + 10 combining characters -> should become thumbs up + 4 combining characters
+        text = "👍" + ("\u0301" * 10)
+        expected = "👍" + ("\u0301" * 4)
+        self.assertEqual(clean_zalgo(text), expected)
+
+    def test_newline_zalgo(self):
+        """Test that newlines with combining characters are handled."""
+        # newline + 10 combining characters + newline -> should truncate combining characters
+        text = "\n" + ("\u0301" * 10) + "\n"
+        expected = "\n" + ("\u0301" * 4) + "\n"
+        self.assertEqual(clean_zalgo(text), expected)
+
+    def test_large_string(self):
+        """Test that a large string with many zalgo sections is handled without performance issues."""
+        text = ("a" + ("\u0301" * 20)) * 1000
+        expected = ("a" + ("\u0301" * 4)) * 1000
+        self.assertEqual(clean_zalgo(text), expected)
+
 if __name__ == '__main__':
     unittest.main()
