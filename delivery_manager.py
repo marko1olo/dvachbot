@@ -1227,7 +1227,8 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
         # альбомы исключает, поэтому они оставались без проверки.
         album_unique_ids = []
         for msg in raw_messages:
-            media_data = {'type': msg.content_type, 'file_id': None}
+            c_type = str(msg.content_type).split('.')[-1].lower() if msg.content_type else 'photo'
+            media_data = {'type': c_type, 'file_id': None}
             media_obj = None
             if msg.photo:
                 media_obj = msg.photo[-1]

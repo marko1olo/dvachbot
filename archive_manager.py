@@ -143,8 +143,8 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
     async def _build_group(force_download=False):
         builder = MediaGroupBuilder()
         for i, media_item in enumerate(media_list):
-            orig_fid = media_item.get('file_id') or media_item.get('media')
-            m_type = media_item['type']
+            orig_fid = media_item.get('file_id') or media_item.get('media') or media_item.get('path') or media_item.get('tg_file_id')
+            m_type = str(media_item.get('type') or '').split('.')[-1].lower()
             caption = full_caption if i == 0 else None
             
             if force_download:

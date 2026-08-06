@@ -1122,7 +1122,7 @@ class MessageBroadcaster:
                     for idx, item in enumerate(current_content['media']):
                         media_src = item.get('media') or item.get('file_id')
                         if not media_src: continue
-                        m_type = item['type']
+                        m_type = str(item.get('type') or '').split('.')[-1].lower()
                         cap = caption_for_group if idx == 0 else None
                         
                         if m_type == 'photo':
