@@ -59,16 +59,19 @@ def _format_quote_block(quote_info: dict | None) -> str | None:
 
     files_in_quote = quote_info.get('files', [])
     if files_in_quote:
-        photo_count = sum(1 for f in files_in_quote if f.get('type') == 'photo')
-        video_count = sum(1 for f in files_in_quote if f.get('type') == 'video')
-        gif_count = sum(1 for f in files_in_quote if f.get('type') == 'animation')
-        document_count = sum(1 for f in files_in_quote if f.get('type') == 'document')
-        audio_count = sum(1 for f in files_in_quote if f.get('type') == 'audio')
-        voice_count = sum(1 for f in files_in_quote if f.get('type') == 'voice')
-        sticker_count = sum(1 for f in files_in_quote if f.get('type') == 'sticker')
-        video_note_count = sum(1 for f in files_in_quote if f.get('type') == 'video_note')
+        def _get_ftype(f):
+            return str(f.get('type') or '').split('.')[-1].lower()
+
+        photo_count = sum(1 for f in files_in_quote if _get_ftype(f) == 'photo')
+        video_count = sum(1 for f in files_in_quote if _get_ftype(f) == 'video')
+        gif_count = sum(1 for f in files_in_quote if _get_ftype(f) == 'animation')
+        document_count = sum(1 for f in files_in_quote if _get_ftype(f) == 'document')
+        audio_count = sum(1 for f in files_in_quote if _get_ftype(f) == 'audio')
+        voice_count = sum(1 for f in files_in_quote if _get_ftype(f) == 'voice')
+        sticker_count = sum(1 for f in files_in_quote if _get_ftype(f) == 'sticker')
+        video_note_count = sum(1 for f in files_in_quote if _get_ftype(f) == 'video_note')
         known_quote_types = {'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'}
-        other_count = sum(1 for f in files_in_quote if f.get('type') not in known_quote_types)
+        other_count = sum(1 for f in files_in_quote if _get_ftype(f) not in known_quote_types)
 
         media_counts = []
         if photo_count > 0: media_counts.append(f"{photo_count} фото")
