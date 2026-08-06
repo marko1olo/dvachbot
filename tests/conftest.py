@@ -21,7 +21,7 @@ for _module_name in ("numpy", "scipy", "scipy.stats", "pandas", "matplotlib",
     try:
         __import__(_module_name)
     except ImportError:
-        pass  # опциональная зависимость — соответствующие тесты сами разберутся
+        import traceback; traceback.print_exc()  # опциональная зависимость — соответствующие тесты сами разберутся
 del _module_name
 
 # Снимок настоящих модулей, пока ни один тестовый файл ещё не импортирован.

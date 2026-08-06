@@ -93,7 +93,7 @@ def directory_item(path: Path, root: Path, category: str) -> dict[str, Any]:
             try:
                 total_bytes += child.stat().st_size
             except OSError:
-                pass
+                import traceback; traceback.print_exc()
 
     stat = path.stat()
     return {

@@ -45,7 +45,7 @@ for mod_name in sys.modules:
         try:
             sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
         except AttributeError:
-            pass
+            import traceback; traceback.print_exc()
 
 # Instead of MagicMocking async_lru which makes get_country_by_ip non-awaitable, just bypass it
 sys.modules['async_lru'] = types.ModuleType('async_lru')

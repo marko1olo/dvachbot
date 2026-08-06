@@ -17,14 +17,14 @@ new_func = """async def _delete_message_with_retries(bot_instance, uid: int, mid
                     await bot_instance.delete_message(uid, mid)
                     return True
                 except Exception:
-                    pass
+                    import traceback; traceback.print_exc()
             for other_bid, other_bot in GLOBAL_BOTS.items():
                 if other_bot != deleter and other_bot != bot_instance:
                     try:
                         await other_bot.delete_message(uid, mid)
                         return True
                     except Exception:
-                        pass
+                        import traceback; traceback.print_exc()
             return False
         except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
             if attempt < max_attempts - 1:

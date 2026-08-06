@@ -4,6 +4,24 @@ from __future__ import annotations
 import re
 
 
+def apply_greentext_formatting(text: str) -> str:
+    """
+    Применяет форматирование 'Greentext'.
+    Работает с уже экранированным HTML-текстом (где > может быть &gt;).
+    """
+    if not text:
+        return text
+    processed_lines = []
+    lines = text.split('\n')
+    for line in lines:
+        stripped_line = line.lstrip()
+        if stripped_line.startswith('>') or stripped_line.startswith('&gt;'):
+            processed_lines.append(f"<code>{line}</code>")
+        else:
+            processed_lines.append(line)
+    return '\n'.join(processed_lines)
+
+
 def escape_html(text: str) -> str:
     if not text:
         return text

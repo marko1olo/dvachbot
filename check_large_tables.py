@@ -4,7 +4,9 @@ import json
 
 
 def check_indexes():
-    conn = sqlite3.connect('dvach_bot.db')
+    conn = sqlite3.connect('dvach_bot.db', timeout=15.0)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=15000;")
     cursor = conn.cursor()
 
     # Analyze table sizes

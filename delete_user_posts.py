@@ -134,7 +134,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                                     if 'posts' in threads_data[thread_id]:
                                         threads_data[thread_id]['posts'].remove(post_num)
                                 except (ValueError, KeyError):
-                                    pass
+                                    import traceback; traceback.print_exc()
                 message_copies_in_mem = post_to_messages.pop(post_num, {})
                 for uid, mid_or_list in message_copies_in_mem.items():
                     if isinstance(mid_or_list, list):
@@ -164,7 +164,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                 try:
                     await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
                 except Exception:
-                    pass
+                    import traceback; traceback.print_exc()
 
         # 5. Удаление из ЛС пользователей (API)
         async def _delete_one_message(uid: int, mid: int, b_id: str) -> bool:
@@ -182,7 +182,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                             await bot_instance.delete_message(uid, mid)
                             return True
                         except Exception:
-                            pass
+                            import traceback; traceback.print_exc()
                     # Пробуем вообще всеми активными ботами по очереди
                     for other_bid, other_bot in GLOBAL_BOTS.items():
                         if other_bot != deleter and other_bot != bot_instance:
@@ -190,7 +190,7 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
                                 await other_bot.delete_message(uid, mid)
                                 return True
                             except Exception:
-                                pass
+                                import traceback; traceback.print_exc()
                     return False
                 except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
                     if attempt < max_attempts - 1:

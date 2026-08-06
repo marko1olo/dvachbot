@@ -1,3 +1,4 @@
+import contextlib
 # Файл: maintenance.py
 import sqlite3
 import os
@@ -14,7 +15,13 @@ def run_maintenance():
 
     print(f"Подключение к базе данных: {DB_NAME}")
     try:
-        with sqlite3.connect(DB_NAME) as con:
+        with contextlib.closing(sqlite3.connect(DB_NAME, timeout=15.0)) as con:
+            try: con.execute('PRAGMA journal_mode=WAL')
+            except Exception: pass
+            try: con.execute('PRAGMA synchronous=NORMAL')
+            except Exception: pass
+            try: con.execute('PRAGMA busy_timeout=120000')
+            except Exception: pass
             print("⏳ Запуск VACUUM для сжатия файла базы данных...")
             con.execute("VACUUM;")
             print("✅ VACUUM успешно завершен.")

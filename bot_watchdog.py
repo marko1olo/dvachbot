@@ -8,7 +8,7 @@ try:
         sys.stdout.reconfigure(encoding='utf-8')
         sys.stderr.reconfigure(encoding='utf-8')
 except Exception:
-    pass
+    import traceback; traceback.print_exc()
 import threading
 import time
 import urllib.error
@@ -301,16 +301,16 @@ def _pump_child_output(process: subprocess.Popen, stdout_fh) -> None:
             try:
                 stdout_fh.write(line)
             except OSError:
-                pass
+                import traceback; traceback.print_exc()
             try:
                 print(line, end="", flush=True)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
     finally:
         try:
             stream.close()
         except OSError:
-            pass
+            import traceback; traceback.print_exc()
 
 
 def _close_child_log(process: subprocess.Popen) -> None:
@@ -319,13 +319,13 @@ def _close_child_log(process: subprocess.Popen) -> None:
         try:
             pump_thread.join(timeout=2)
         except RuntimeError:
-            pass
+            import traceback; traceback.print_exc()
     fh = getattr(process, "_stdout_fh", None)
     if fh is not None:
         try:
             fh.close()
         except OSError:
-            pass
+            import traceback; traceback.print_exc()
 
 
 def _monitor_child(child: subprocess.Popen) -> bool:
@@ -436,9 +436,10 @@ def _monitor_child(child: subprocess.Popen) -> bool:
             except subprocess.TimeoutExpired:
                 pass
     except KeyboardInterrupt:
+        log("Supervisor stopped by user (KeyboardInterrupt)")
         _kill_tree(child, "supervisor_keyboard_interrupt")
         _close_child_log(child)
-        raise
+        return True
     except Exception as exc:
         log(f"Supervisor loop error: {type(exc).__name__}: {exc}")
         _kill_tree(child, "supervisor_exception")
@@ -478,8 +479,16 @@ def main() -> int:
             log("Stop request detected before restart; supervisor exits")
             return 0
         log(f"Restarting after {RESTART_DELAY_SEC}s")
-        time.sleep(RESTART_DELAY_SEC)
+        try:
+            time.sleep(RESTART_DELAY_SEC)
+        except KeyboardInterrupt:
+            log("Supervisor stopped by user during restart delay")
+            return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        log("Supervisor stopped by user (KeyboardInterrupt)")
+        raise SystemExit(0)

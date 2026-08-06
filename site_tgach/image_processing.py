@@ -365,7 +365,7 @@ async def process_and_upload_image(
                                 thumb_id = get_fid(sent_original.document.thumbnail)
                         
                 except Exception as e:
-                    logger.error(f"Image sub-upload failed: {e}")
+                    logger.error(f"Image sub-upload failed: {e}", exc_info=True)
                     raise e
             
             elif file_type == "video":
@@ -441,7 +441,7 @@ async def process_and_upload_image(
             break
 
         except Exception as e:
-            logger.error(f"Bot {current_bot_id} upload failed: {e}")
+            logger.error(f"Bot {current_bot_id} upload failed: {e}", exc_info=True)
             last_error = e
             continue
 
@@ -458,7 +458,7 @@ async def process_and_upload_image(
             blurhash_str
         )
     except Exception as e:
-        logger.error(f"DB Register error: {e}")
+        logger.error(f"DB Register error: {e}", exc_info=True)
 
     spawn_task(_upload_mirrors_task(
         current_bot, 
@@ -504,7 +504,7 @@ def _create_thumbnail_sync_in_memory(image_bytes: bytes) -> bytes | None:
         logger.warning("💣 Detected Decompression Bomb attempt!")
         return None
     except Exception as e:
-        logger.error(f"Thumbnail error: {e}")
+        logger.error(f"Thumbnail error: {e}", exc_info=True)
         return None
 async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filename: str, related_id: str = None, thumb_bytes: bytes = None):
     # 1. Теневой канал (Shadow)
@@ -541,14 +541,14 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
                         shadow_fid = msg.animation.file_id
                         if msg.animation.thumbnail: shadow_thumb_fid = msg.animation.thumbnail.file_id
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
 
             if shadow_fid:
                 await add_file_mirror(file_id, 'tg_shadow', shadow_fid)
             if related_id and shadow_thumb_fid:
                 await add_file_mirror(related_id, 'tg_shadow', shadow_thumb_fid)
     except Exception as e:
-        logger.error(f"Shadow task error: {e}")
+        logger.error(f"Shadow task error: {e}", exc_info=True)
 
     # 2. Логика зеркал (Catbox + HF + 0x0)
     hf_available = has_available_hf_repo()

@@ -104,7 +104,7 @@ async def get_country_by_ip(ip: str) -> str:
             if os.path.exists(db_full_path):
                 GEOIP_READER = geoip2.database.Reader(db_full_path)
         except Exception as e:
-            logger.error(f"Failed to load GeoIP DB: {e}")
+            logger.error(f"Failed to load GeoIP DB: {e}", exc_info=True)
             logging.warning(f"Failed to initialize GeoIP reader: {e}")
             logging.warning(f"Failed to load GeoIP database: {e}")
 
@@ -113,7 +113,7 @@ async def get_country_by_ip(ip: str) -> str:
             response = GEOIP_READER.country(ip)
             return response.country.iso_code or "XX"
         except Exception as e:
-            logger.error(f"GeoIP country lookup failed for IP {ip}: {e}")
+            logger.error(f"GeoIP country lookup failed for IP {ip}: {e}", exc_info=True)
             logging.warning(f"GeoIP reader failed for IP {ip}: {e}")
             logging.warning(f"Failed to lookup IP {ip} in GeoIP database: {e}")
 
@@ -438,7 +438,7 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
         from japanese_translator import get_dynamic_proxy_url
         current_proxy = get_dynamic_proxy_url()
     except ImportError:
-        pass
+        import traceback; traceback.print_exc()
     timeout_config = aiohttp.ClientTimeout(total=timeout, connect=30, sock_connect=30, sock_read=timeout)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -642,7 +642,7 @@ async def check_and_punish_site_spam(board_id: str, user_id: int, text: str, fil
                     h = hashlib.sha256(content).hexdigest()
                     file_hashes.append(h)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
                 
         if file_hashes:
             file_window = SITE_SPAM_RULES.get('files', {}).get('window_sec', 60)
@@ -680,7 +680,7 @@ async def captcha_cleanup_task():
             if expired:
                 logger.info(f"🧹 [Captcha] Cleaned {len(expired)} expired sessions.")
         except Exception as e:
-            logger.error(f"⚠️ Captcha cleanup error: {e}")  
+            logger.error(f"⚠️ Captcha cleanup error: {e}", exc_info=True)  
 async def site_spam_cleanup_task():
     while True:
         await asyncio.sleep(3600)
@@ -700,7 +700,7 @@ async def site_spam_cleanup_task():
                     del site_spam_tracker[board_id]
             logger.info("✅ [Site] Spam tracker cleaned.")
         except Exception as e:
-            logger.error(f"⚠️ Error cleaning site spam tracker: {e}")
+            logger.error(f"⚠️ Error cleaning site spam tracker: {e}", exc_info=True)
 async def shadow_cleanup_task():
 
     while True:
@@ -710,7 +710,7 @@ async def shadow_cleanup_task():
             await cleanup_shadow_posts_db(hours=24)
             logger.info("✅ [Shadow] Cleanup complete.")
         except Exception as e:
-            logger.error(f"⚠️ Shadow cleanup error: {e}")            
+            logger.error(f"⚠️ Shadow cleanup error: {e}", exc_info=True)            
 def get_user_id_from_session(request: Request) -> str:
     user = request.session.get('user')
     if user and user.get('id'):
@@ -731,11 +731,11 @@ async def notify_admins(bot: Bot, text: str):
             try:
                 await bot.send_message(admin_id, text, parse_mode="HTML")
             except Exception:
-                pass 
+                import traceback; traceback.print_exc() 
         except TelegramForbiddenError:
             logger.warning(f"❌ Админ {admin_id} заблокировал бота! Сообщение не доставлено.")
         except Exception as e:
-            logger.error(f"⚠️ Ошибка доставки админу {admin_id}: {e}")
+            logger.error(f"⚠️ Ошибка доставки админу {admin_id}: {e}", exc_info=True)
 limiter = Limiter(key_func=get_user_id_from_session)
 signer = TimestampSigner(SECRET_KEY)
 def generate_negative_id(token: str) -> int:
@@ -940,7 +940,7 @@ async def lifespan(app: FastAPI):
                 if val_now == "true":
                     await neuro_manager.run_cycle()
             except Exception as e:
-                logger.error(f"Neuro loop crash: {e}")
+                logger.error(f"Neuro loop crash: {e}", exc_info=True)
                 await asyncio.sleep(60)
     backup_task = spawn_task(backup_loop(app.state.file_uploader_bot))
     neuro_task = spawn_task(neuro_loop())
@@ -950,7 +950,7 @@ async def lifespan(app: FastAPI):
     try:
         tasks = [db_task, ws_task, spam_task, shadow_task, maintenance_task, neuro_task, batcher_task, backup_task, mirror_task, captcha_task, tagging_task, sim_task, scanner_task]
     except UnboundLocalError:
-        pass
+        import traceback; traceback.print_exc()
     logger.info("INFO:     System started.")
     try:
         yield
@@ -969,7 +969,7 @@ async def lifespan(app: FastAPI):
         try:
             await app.state.file_uploader_bot.session.close()
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
         await close_pool()
 app = FastAPI(
     lifespan=lifespan,
@@ -997,7 +997,7 @@ async def country_cookie_middleware(request: Request, call_next):
             samesite="lax"
         )
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
         
     return response
 class BlockBadBots:
@@ -1557,7 +1557,7 @@ async def check_post_cooldown(request: Request, user: dict):
             if elapsed < limit_seconds:
                 raise HTTPException(status_code=429, detail=f"Подожди {int(limit_seconds - elapsed) + 1} сек.")
         except (ValueError, TypeError):
-            pass
+            import traceback; traceback.print_exc()
     await backend.set(key, str(time.time()), expire=limit_seconds)
 def to_makaba_post(post_data: dict, board_id: str) -> dict:
     files_makaba = []
@@ -2116,10 +2116,10 @@ async def queue_listener(manager: 'ConnectionManager'):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"Queue listener error: {e}")
+                logger.error(f"Queue listener error: {e}", exc_info=True)
                 await asyncio.sleep(5)
     except asyncio.CancelledError:
-        pass
+        import traceback; traceback.print_exc()
 async def db_maintenance_task():
     await asyncio.sleep(60)
     # Импортируем лок из пула (он общий, если site_tgach импортирует common)
@@ -2175,11 +2175,11 @@ async def db_maintenance_task():
                         await db.execute("ROLLBACK")
                     except Exception as rollback_err:
                         logger.error(f"⚠️ FTS Maintenance ROLLBACK error: {rollback_err}")
-                    logger.error(f"⚠️ FTS Maintenance error: {e}")
+                    logger.error(f"⚠️ FTS Maintenance error: {e}", exc_info=True)
             
             logger.info("✅ [DB] Maintenance complete.")
         except Exception as e:
-            logger.error(f"⚠️ DB Maintenance error: {e}")
+            logger.error(f"⚠️ DB Maintenance error: {e}", exc_info=True)
         
         await asyncio.sleep(43200)
 async def websocket_broadcaster(queue: asyncio.Queue, manager: 'ConnectionManager'):
@@ -2193,10 +2193,10 @@ async def websocket_broadcaster(queue: asyncio.Queue, manager: 'ConnectionManage
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"Broadcaster error: {e}")
+                logger.error(f"Broadcaster error: {e}", exc_info=True)
                 await asyncio.sleep(1)
     except asyncio.CancelledError:
-        pass
+        import traceback; traceback.print_exc()
 async def enrich_heavy_data(posts: List[dict]):
     """
     ТЯЖЕЛАЯ ФАЗА: Загрузка всех метаданных из БД.
@@ -2733,7 +2733,7 @@ async def gzip_bomb_generator():
             yield _COMPRESSED_ZEROS
             await asyncio.sleep(0.05) # Не грузим свой канал, держим бота на крючке
     except asyncio.CancelledError:
-        pass
+        import traceback; traceback.print_exc()
 
 async def html_depth_charge_generator():
     """Ломает DOM-парсеры бесконечной вложенностью."""
@@ -2743,7 +2743,7 @@ async def html_depth_charge_generator():
             yield _HTML_CHUNK
             await asyncio.sleep(0.1)
     except asyncio.CancelledError:
-        pass
+        import traceback; traceback.print_exc()
 
 async def xml_tarpit_generator():
     """Ловушка для XML/RSS сканеров."""
@@ -2753,7 +2753,7 @@ async def xml_tarpit_generator():
             yield _XML_CHUNK
             await asyncio.sleep(0.1)
     except asyncio.CancelledError:
-        pass
+        import traceback; traceback.print_exc()
 
 async def js_infinite_stream_generator():
     """Вешает JS-движки, ожидающие конца файла."""
@@ -2763,7 +2763,7 @@ async def js_infinite_stream_generator():
             yield _JS_CHUNK
             await asyncio.sleep(0.1)
     except asyncio.CancelledError:
-        pass
+        import traceback; traceback.print_exc()
 
 async def slow_death_generator():
     """Классический Slow Loris: 1 байт раз в 20 секунд."""
@@ -2772,7 +2772,7 @@ async def slow_death_generator():
             yield b' '
             await asyncio.sleep(20)
     except asyncio.CancelledError:
-        pass
+        import traceback; traceback.print_exc()
 
 @app.exception_handler(404)
 async def custom_404_handler(request: Request, exc):
@@ -3257,7 +3257,7 @@ async def admin_feed_websocket(websocket: WebSocket):
         while True:
             await websocket.receive_text()
     except (WebSocketDisconnect, Exception):
-        pass
+        import traceback; traceback.print_exc()
     finally:
         manager.disconnect(websocket, "admin_feed", "feed", "ru")
 @app.get("/api/media-feed/{board_id}")
@@ -3369,7 +3369,7 @@ async def api_random_image_next(request: Request, boards: Optional[str] = None):
             "filename": target_file.get('filename', 'file.jpg')
         }
     except Exception as e:
-        logger.error(f"Random Image API Error: {e}")
+        logger.error(f"Random Image API Error: {e}", exc_info=True)
         await asyncio.sleep(0.5)
         return JSONResponse({"error": "Server error"}, status_code=500)
 @app.get("/archive/threads/")
@@ -3509,7 +3509,7 @@ async def api_makaba_posting(
                     res = await func(f, TELEGRAM_SINGLE_FILE_LIMIT, bot_inst, target_channel_id)
                     return (res, bot_id)
                 except Exception as e:
-                    local_logger.error(f"Upload error: {e}")
+                    local_logger.error(f"Upload error: {e}", exc_info=True)
                     return (None, None)
         
         tasks = [upload_task(f) for f in files_to_process]
@@ -4052,7 +4052,7 @@ async def api_get_meta(url: str):
                 return JSONResponse({"error": "Access to local/private network is forbidden"}, status_code=403)
 
     except Exception as e:
-        logger.error(f"Meta validation error for {url}: {e}")
+        logger.error(f"Meta validation error for {url}: {e}", exc_info=True)
         return JSONResponse({}, status_code=400)
 
     # Дальнейшая логика запросов (strategies) остается без изменений
@@ -4403,7 +4403,7 @@ async def api_force_neuro(data: NeuroForceRequest, request: Request, user: dict 
         )
         return {"status": "ok", "log": result_log}
     except Exception as e:
-        logger.error(f"Manual neuro error: {e}")
+        logger.error(f"Manual neuro error: {e}", exc_info=True)
         return {"status": "error", "log": str(e)}
 @app.post("/api/admin/restore_thread")
 async def api_admin_restore_thread(data: AdminRestoreRequest, user: dict = Depends(get_required_user)):
@@ -4452,7 +4452,7 @@ async def api_admin_set_banner(data: BoardBannerRequest, user: dict = Depends(ge
             try: await db.execute("ROLLBACK")
             except Exception as rollback_err:
                 logger.warning(f"Rollback failed during banner update: {rollback_err}")
-            logger.error(f"Banner update error: {e}")
+            logger.error(f"Banner update error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="DB Error")
 
     if data.board_id in BOARD_CONFIG:
@@ -4492,7 +4492,7 @@ async def api_admin_stealth_edit(
             indices_to_delete = set(json.loads(delete_files))
             current_files = [f for i, f in enumerate(current_files) if i not in indices_to_delete]
         except json.JSONDecodeError:
-            pass
+            import traceback; traceback.print_exc()
     if new_images:
         if post.get('board_id') == 'wh40k':
             processed_images_list = []
@@ -4512,7 +4512,7 @@ async def api_admin_stealth_edit(
                             img.size = len(processed)
                         processed_images_list.append(img)
                     except Exception as e:
-                        logger.error(f"WH40k Stealth Filter Error: {e}")
+                        logger.error(f"WH40k Stealth Filter Error: {e}", exc_info=True)
                         processed_images_list.append(img)
                 else:
                     processed_images_list.append(img)
@@ -4541,7 +4541,7 @@ async def api_admin_stealth_edit(
                         file_owners_to_save.append((res_data['thumbnail_file_id'], u_bot_id))
                     current_files.append(res_data)
             except Exception as e:
-                logger.error(f"Error processing image in stealth_edit: {e}")
+                logger.error(f"Error processing image in stealth_edit: {e}", exc_info=True)
     
     content['text'] = clean_zalgo(text or "")
     
@@ -4590,7 +4590,7 @@ async def websocket_endpoint(websocket: WebSocket, board_id: str, mode: str):
             if data == 'ping':
                 await websocket.send_text('pong')
     except (WebSocketDisconnect, Exception):
-        pass
+        import traceback; traceback.print_exc()
     finally:
         manager.disconnect(websocket, board_id, mode, stream)
 @app.post("/api/admin/lockdown")
@@ -4794,7 +4794,7 @@ async def api_create_post(
                     headers={"Retry-After": str(wait_time)}
                 )
         except (ValueError, TypeError):
-            pass
+            import traceback; traceback.print_exc()
     stop_words = SPAM_WORDS_CACHE.get('all', set()) | SPAM_WORDS_CACHE.get(board_id, set())
     text or ""
     if text is None:
@@ -5092,7 +5092,7 @@ async def api_create_post(
                         await db.execute("INSERT OR IGNORE INTO ThreadUnlocks (thread_id, user_id) VALUES (?, ?)", (str(thread_op_num), author_id))
                         await db.commit()
                     except Exception as e:
-                        local_logger.error(f"Failed to unlock thread for user: {e}")
+                        local_logger.error(f"Failed to unlock thread for user: {e}", exc_info=True)
             elif not is_unlocked:
                 # Получаем локализованные названия
                 type_names = {
@@ -5186,11 +5186,11 @@ async def api_create_post(
                     try:
                         await manager.make_post(bid, stream=s, forced_mode="reply", forced_thread_id=tid)
                     except Exception as e:
-                        logger.error(f"Delayed bump failed: {e}")
+                        logger.error(f"Delayed bump failed: {e}", exc_info=True)
 
                 spawn_task(delayed_bump(board_id, final_thread_id, stream, nm))
         except Exception as e:
-            logger.error(f"Failed to setup delayed bump: {e}")
+            logger.error(f"Failed to setup delayed bump: {e}", exc_info=True)
     elif post_mode == 'reply' and thread_op_num:
         async with get_db_connection() as conn:
             row = await (await conn.execute("SELECT is_endless FROM Threads WHERE thread_id = ?", (str(thread_op_num),))).fetchone()
@@ -5748,7 +5748,7 @@ async def api_transcribe_voice(file_id: str, request: Request):
                 if row:
                     transcription = row[0]
     except Exception as e:
-        logger.error(f"DB error in VoiceTranscriptions lookup: {e}")
+        logger.error(f"DB error in VoiceTranscriptions lookup: {e}", exc_info=True)
 
     if transcription:
         return {"transcription": transcription}
@@ -5849,7 +5849,7 @@ async def api_transcribe_voice(file_id: str, request: Request):
             )
             await conn.commit()
     except Exception as e:
-        logger.error(f"Failed to save transcription to DB: {e}")
+        logger.error(f"Failed to save transcription to DB: {e}", exc_info=True)
 
     return {"transcription": transcription_text}
 
@@ -6126,7 +6126,7 @@ async def api_admin_delete_post(data: AdminAction, request: Request, user: dict 
                 except Exception as e:
                     try: await db.execute("ROLLBACK")
                     except: pass
-                    logger.error(f"Counter decrement error: {e}")
+                    logger.error(f"Counter decrement error: {e}", exc_info=True)
         
         log_system_event(f"🗑️ DEL: Post #{data.post_num} deleted by {user.get('id')} ({user.get('role')})")
         # Мгновенное удаление у всех пользователей
@@ -6192,7 +6192,7 @@ async def api_admin_ban_image(data: BanImageRequest, user: dict = Depends(get_re
                         await ban_hash(phash, 'phash', data.reason)
         await delete_post_by_num(data.post_num)
     except Exception as e:
-        logger.error(f"Image Ban Error: {e}")
+        logger.error(f"Image Ban Error: {e}", exc_info=True)
         raise HTTPException(500, "DB Error")
     log_system_event(f"🚫 IMG BAN: Banned files from post #{data.post_num} by {user['id']}")
     return {"status": "ok", "count": banned_count}
@@ -6439,7 +6439,7 @@ async def get_telegram_file(file_id: str, request: Request, filename: str = None
                     if row:
                         orig_fid = row[0]
         except Exception as e:
-            logger.error(f"Error querying original file for thumbnail fallback: {e}")
+            logger.error(f"Error querying original file for thumbnail fallback: {e}", exc_info=True)
             
         if orig_fid and orig_fid != file_id:
             logger.info(f"Fallback thumbnail {file_id[:10]} -> original {orig_fid[:10]}")
@@ -6585,7 +6585,7 @@ async def api_admin_wipe(data: dict = Body(...), user: dict | None = Depends(get
         except Exception as e:
             try: await db.execute("ROLLBACK")
             except: pass
-            logger.error(f"Wipe error: {e}")
+            logger.error(f"Wipe error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="DB Error")
 @app.get("/api/admin/alerts_history")
 async def api_admin_alerts_history(user: dict = Depends(get_required_user)):
@@ -6665,7 +6665,7 @@ async def api_shadow_ban(data: ShadowBanRequest, user: dict = Depends(get_requir
             "expires": expires_at
         }
     except Exception as e:
-        logger.error(f"Shadow ban error: {e}")
+        logger.error(f"Shadow ban error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Ошибка базы данных.")
 @app.post("/api/admin/lift_ban")
 async def api_lift_ban(data: LiftBanRequest, user: dict = Depends(get_required_user)):

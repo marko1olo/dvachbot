@@ -868,6 +868,6 @@ def ukrainian_transform(text: str, header: str | None = None) -> tuple[str, str 
             if image_bytes:
                 return ('image', image_bytes)
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 
     return ('text', transformed_text)

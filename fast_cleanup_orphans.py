@@ -2,6 +2,14 @@ import sqlite3
 
 def clean_post_copies():
     conn = sqlite3.connect('dvach_bot.db')
+    try: conn.execute('PRAGMA journal_mode=WAL')
+    except: pass
+    try: conn.execute('PRAGMA synchronous=NORMAL')
+    except: pass
+    try: conn.execute('PRAGMA busy_timeout=15000')
+    except: pass
+    try: conn.execute('PRAGMA wal_autocheckpoint=1000')
+    except: pass
     cursor = conn.cursor()
     
     print("Checking for orphans in PostCopies...")
@@ -30,10 +38,24 @@ def clean_post_copies():
         conn.execute("COMMIT")
         print(f"Deleted {deleted} orphans.")
         
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    conn.execute("VACUUM")
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception as e:
+        print(f"WAL checkpoint non-fatal error: {e}")
+
+    try:
+        conn.execute("VACUUM")
+        print("VACUUM completed successfully.")
+    except sqlite3.OperationalError as e:
+        print(f"VACUUM skipped due to lock contention: {e}")
+        try:
+            conn.execute("PRAGMA optimize")
+            print("PRAGMA optimize executed as fallback.")
+        except Exception:
+            pass
+
     conn.close()
-    print("Cleanup and vacuum done.")
+    print("Cleanup done.")
 
 if __name__ == '__main__':
     clean_post_copies()

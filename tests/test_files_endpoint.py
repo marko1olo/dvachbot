@@ -8,7 +8,7 @@ from site_tgach.main import app, _mark_random_dead_file, _is_random_dead_file, s
 try:
     FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")
 except Exception:
-    pass
+    import traceback; traceback.print_exc()
 
 client = TestClient(app, raise_server_exceptions=False)
 

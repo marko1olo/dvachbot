@@ -16,7 +16,7 @@ def search_weak_spots():
                             if re.search(patterns, line, re.IGNORECASE):
                                 out.write(f"{path}:{i+1}:{line.strip()}\n")
                 except Exception:
-                    pass
+                    import traceback; traceback.print_exc()
 
 if __name__ == '__main__':
     search_weak_spots()

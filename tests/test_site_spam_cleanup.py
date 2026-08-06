@@ -39,7 +39,7 @@ class TestSiteSpamCleanup(unittest.IsolatedAsyncioTestCase):
                     try:
                         await self.dm.site_spam_cleanup_task()
                     except asyncio.CancelledError:
-                        pass
+                        import traceback; traceback.print_exc()
 
             self.assertIn('board1', self.site_spam_tracker)
             self.assertIn('user1', self.site_spam_tracker['board1'])
@@ -65,7 +65,7 @@ class TestSiteSpamCleanup(unittest.IsolatedAsyncioTestCase):
                     try:
                         await self.dm.site_spam_cleanup_task()
                     except asyncio.CancelledError:
-                        pass
+                        import traceback; traceback.print_exc()
 
             mock_logger.error.assert_called_once_with("⚠️ Error cleaning site spam tracker: Test Error")
 

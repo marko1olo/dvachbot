@@ -273,7 +273,7 @@ async def get_tasks(db) -> list[dict]:
             async for row in cursor:
                 tasks.append({"fid": row[0], "type": row[1]})
     except Exception as e:
-        logger.error(f"DB Error getting registry tasks: {e}")
+        logger.error(f"DB Error getting registry tasks: {e}", exc_info=True)
 
     # 2. Поиск пропущенных файлов (Gaps) в последних 200 постах
     if len(tasks) < BATCH_SIZE:
@@ -306,7 +306,7 @@ async def get_tasks(db) -> list[dict]:
                 async for row in cursor:
                     file_owners[row[0]] = row[1]
         except Exception as e:
-            logger.error(f"DB Error getting file owners: {e}")
+            logger.error(f"DB Error getting file owners: {e}", exc_info=True)
     for t in tasks:
         t["bot_id"] = file_owners.get(t["fid"])
 
@@ -453,7 +453,7 @@ async def tagging_loop():
                 except Exception as e:
                     logger.error(
                         f"DB Error checking existing tags for SHA {sha[:8]}: {e}"
-                    )
+                    , exc_info=True)
 
                 # 3. НЕЙРОНКА (Только если теги еще не найдены в БД)
                 if tags is None:
@@ -512,7 +512,7 @@ async def tagging_loop():
                         if "locked" in str(e).lower():
                             await asyncio.sleep(0.5 * (attempt + 1))
                             continue
-                        logger.error(f"❌ DB Save error for {file_id[:8]}: {e}")
+                        logger.error(f"❌ DB Save error for {file_id[:8]}: {e}", exc_info=True)
                         break
 
                 if not save_success:
@@ -523,7 +523,7 @@ async def tagging_loop():
                     TEMP_FAILED_FILES[file_id] = time.time() + 60
 
             except Exception as e:
-                logger.error(f"💥 Crit fail {file_id}: {e}")
+                logger.error(f"💥 Crit fail {file_id}: {e}", exc_info=True)
                 TEMP_FAILED_FILES[file_id] = time.time() + 300
 
             # Пауза между файлами (чтобы не спамить в Groq)

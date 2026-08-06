@@ -1,3 +1,5 @@
+from __future__ import annotations
+import contextlib
 #!/usr/bin/env python3
 """
 Дымовой прогон: поднимается ли бот на ЧИСТОЙ базе и корректно ли он
@@ -25,8 +27,6 @@ common.db_pool и common.database. Сеть не задействована - в
 aiosqlite недемонический, и интерпретатор ждёт его вечно. Такое
 зависание было бы артефактом теста, а не находкой.
 """
-
-from __future__ import annotations
 
 import argparse
 import os
@@ -108,7 +108,7 @@ def stage_schema(ctx):
         import common.database as D, common.db_pool as pool
         with contextlib.redirect_stdout(io.StringIO()):
             asyncio.run(D.initialize_database())
-        con = sqlite3.connect(D.DB_NAME)
+        with contextlib.closing(sqlite3.connect(D.DB_NAME)) as con:
         missing = []
         for table, cols in {need}.items():
             have = [r[1] for r in con.execute(f"PRAGMA table_info({{table}})")]

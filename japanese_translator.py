@@ -15,6 +15,24 @@ import json
 import time
 import hashlib
 
+def classify_media_url(url: Optional[str]) -> str:
+    """Classify Booru media URLs for Telegram dispatch.
+    Returns: 'photo', 'video', 'animation', or 'unsupported'.
+    .webm is explicitly unsupported — Telegram cannot stream webm by URL.
+    """
+    if not url:
+        return 'unsupported'
+    clean_url = url.split('?')[0].lower()
+    if clean_url.endswith(('.jpg', '.jpeg', '.png', '.webp')):
+        return 'photo'
+    elif clean_url.endswith('.mp4'):
+        return 'video'
+    elif clean_url.endswith('.gif'):
+        return 'animation'
+    elif clean_url.endswith('.webm'):
+        return 'unsupported'  # Telegram API cannot stream webm by URL
+    return 'unsupported'
+
 
 @dataclass
 class BooruAPIParams:
@@ -1614,6 +1632,7 @@ GELBOORU_NEGATIVE_TAGS = [
     "-shota", "-cub", "-guro", "-gore", "-vore", "-scat", "-feces", "-pampers", "-toddler", "-diaper", "-baby", "-sagging breasts", "-gigantic_breasts",
     "-femdom", "-inflation", "-huge_breasts", "-pee", "-peeing", "-pregnant", "-cream_the_rabbit", "-sonic_(series)",
     "-large_penis", "-huge_penis", "-monster_cock", "-amputation", "-amputee", "-injury", "-2boys", "-1boy", "-gay", "-yaoi", "-furry", "-bara", "-bdsm", "-impaled",
+    "-sex", "-penetration", "-intercourse", "-paizuri", "-fellatio", "-cunnilingus", "-fingering", "-vaginal"
 ]
 
 # AIBooru использует схожую систему тегов, поэтому мы можем использовать проверенный список
@@ -2256,7 +2275,7 @@ async def get_monogatari_image() -> Optional[str]:
 
 async def get_loli_image() -> Optional[str]:
     """Legacy /loli image command: loli tag, non-explicit ratings, no shota."""
-    loli_query = "loli " + " ".join(LOLI_IMAGE_NEGATIVE_TAGS)
+    loli_query = "loli score:>5 " + " ".join(LOLI_IMAGE_NEGATIVE_TAGS)
     apis = [
         {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": loli_query, "rating_tag": "rating:questionable"})}},
         {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "danbooru", "base_tags": loli_query, "rating_tag": "rating:questionable"})}},
@@ -2345,7 +2364,11 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
 
     try:
         main_params = config['params'].copy()
+        # QUALITY GATE: Add score filter if not loli/explicit (loli uses it too but manually)
         tags_query = f'{base_tags} {rating_tag}'
+        if "score:>" not in tags_query:
+             tags_query += " score:>5"
+             
         neg = " ".join(_merge_negative_tags(config.get('negative_tags', []))) if apply_negative_tags else ""
         final_tags = f'{tags_query} {neg}'.strip()
         
@@ -2384,7 +2407,7 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
             return url
 
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
         
     return None
 
@@ -2416,3 +2439,77 @@ async def _process_fallback_api_response(api_source: str, response: aiohttp.Clie
         return None
 
     return url
+
+
+from anime_events_data import ANIME_EVENTS, LOLI_EVENTS
+
+async def get_event_anime_images(is_nsfw: bool, is_loli: bool = False, count: int = 5) -> list[str]:
+    """Fetch event anime images from Gelbooru with Danbooru fallback.
+    Requests (count*2) raw URLs to have buffer after filtering unsupported formats.
+    Filters out .webm and other unsupported media before returning.
+    Falls back to Danbooru if Gelbooru returns 0 results.
+    Returns list of up to `count` supported media URLs (photo/video/animation only).
+    """
+    import random
+    import aiohttp
+    pool = LOLI_EVENTS if is_loli else ANIME_EVENTS
+    event = random.choice(pool)
+    base_tags = event['nsfw_tags'] if is_nsfw else event['sfw_tags']
+    rating_tag = 'rating:explicit' if is_nsfw else 'rating:questionable'
+
+    neg = " ".join(_merge_negative_tags(GELBOORU_NEGATIVE_TAGS))
+    tags_query = f"{base_tags} {rating_tag} {neg} score:>30 sort:random".strip()
+    config = BOORU_API_CONFIGS['gelbooru']
+
+    params = {
+        'page': 'dapi', 's': 'post', 'q': 'index', 'json': '1', 'limit': str(count * 2),
+        'tags': tags_query, 'api_key': config.get('key'), 'user_id': config.get('user')
+    }
+
+    raw_urls = []
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                "https://gelbooru.com/index.php", params=params,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    posts = data.get('post', [])
+                    for p in posts:
+                        url = p.get('file_url') or p.get('large_file_url')
+                        if url:
+                            raw_urls.append(url)
+    except Exception as e:
+        print(f"[events] Gelbooru failed for '{base_tags}': {e}")
+
+    # Danbooru fallback when Gelbooru returns nothing useful
+    if not raw_urls:
+        try:
+            db_rating = 'e' if is_nsfw else 'q'
+            db_params = {
+                'tags': f"{base_tags} rating:{db_rating} order:random",
+                'limit': str(count * 2)
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://danbooru.donmai.us/posts.json", params=db_params,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status == 200:
+                        posts = await resp.json()
+                        for p in posts:
+                            url = p.get('file_url') or p.get('large_file_url')
+                            if url:
+                                raw_urls.append(url)
+        except Exception as e:
+            print(f"[events] Danbooru fallback failed for '{base_tags}': {e}")
+
+    # Filter: only supported Telegram media types — drop .webm and unknown formats
+    urls = [
+        u for u in raw_urls
+        if classify_media_url(u) in ('photo', 'video', 'animation')
+    ][:count]
+
+    return urls
+

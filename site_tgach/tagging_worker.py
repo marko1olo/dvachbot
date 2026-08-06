@@ -106,7 +106,7 @@ def _remove_temp_file(path: str | None) -> None:
     try:
         os.remove(path)
     except OSError:
-        pass
+        import traceback; traceback.print_exc()
 
 
 # ==========================================
@@ -377,7 +377,7 @@ async def get_tasks(db) -> list[dict]:
                     {"fid": row[0], "type": row[1], "thumb_id": row[2], "bot_id": None}
                 )
     except Exception as e:
-        logger.error(f"DB Error getting registry tasks: {e}")
+        logger.error(f"DB Error getting registry tasks: {e}", exc_info=True)
 
     # 2. Поиск пропущенных файлов (Gaps) в последних 250 постах (включая видео, фото, стикеры и альбомы)
     if len(tasks) < BATCH_SIZE:
@@ -429,7 +429,7 @@ async def get_tasks(db) -> list[dict]:
                             }
                         )
         except Exception as e:
-            logger.error(f"Gaps query error: {e}")
+            logger.error(f"Gaps query error: {e}", exc_info=True)
 
     tasks = tasks[:BATCH_SIZE]
 
@@ -446,7 +446,7 @@ async def get_tasks(db) -> list[dict]:
                 for t in tasks:
                     t["bot_id"] = owners_map.get(t["fid"])
         except Exception as e:
-            logger.error(f"DB Error getting file owners: {e}")
+            logger.error(f"DB Error getting file owners: {e}", exc_info=True)
 
     return tasks
 
@@ -631,11 +631,16 @@ async def tagging_loop():
                             f"⛔ [TAGGER] DL failed 3 times for {file_id[:15]} across all bots. Marking as 'download_failed'."
                         )
                         async with db_lock:
-                            await db.execute(
-                                "UPDATE FileRegistry SET tags='download_failed' WHERE file_id=?",
-                                (file_id,),
-                            )
-                            await db.commit()
+                            await db.execute("BEGIN IMMEDIATE")
+                            try:
+                                await db.execute(
+                                    "UPDATE FileRegistry SET tags='download_failed' WHERE file_id=?",
+                                    (file_id,),
+                                )
+                                await db.execute("COMMIT")
+                            except Exception:
+                                await db.execute("ROLLBACK")
+                                raise
                         if file_id in TEMP_FAILED_FILES:
                             del TEMP_FAILED_FILES[file_id]
                     else:
@@ -658,37 +663,52 @@ async def tagging_loop():
                         f"🎨 [BG_TAGGER] Lottie Sticker {file_id[:12]} -> marked as 'sticker_animated'"
                     )
                     async with db_lock:
-                        await db.execute(
-                            "UPDATE FileRegistry SET tags='sticker_animated' WHERE file_id=?",
-                            (file_id,),
-                        )
-                        await db.commit()
+                        await db.execute("BEGIN IMMEDIATE")
+                        try:
+                            await db.execute(
+                                "UPDATE FileRegistry SET tags='sticker_animated' WHERE file_id=?",
+                                (file_id,),
+                            )
+                            await db.execute("COMMIT")
+                        except Exception:
+                            await db.execute("ROLLBACK")
+                            raise
                     continue
                 elif error_msg and "unsupported_format" in error_msg:
                     logger.info(
                         f"📁 [BG_TAGGER] Media {file_id[:12]} -> marked as 'format_unsupported'"
                     )
                     async with db_lock:
-                        await db.execute(
-                            "UPDATE FileRegistry SET tags='format_unsupported' WHERE file_id=?",
-                            (file_id,),
-                        )
-                        await db.commit()
+                        await db.execute("BEGIN IMMEDIATE")
+                        try:
+                            await db.execute(
+                                "UPDATE FileRegistry SET tags='format_unsupported' WHERE file_id=?",
+                                (file_id,),
+                            )
+                            await db.execute("COMMIT")
+                        except Exception:
+                            await db.execute("ROLLBACK")
+                            raise
                     continue
                 elif not res:
                     logger.error(f"⚠️ Bad File {file_id}: {error_msg}")
                     # Сохраняем как ошибку, чтобы не долбить
                     sha_fail = hashlib.sha256(img_bytes).hexdigest()
                     async with db_lock:
-                        await db.executemany(
-                            "UPDATE FileRegistry SET tags='error' WHERE file_id=?",
-                            [(file_id,)],
-                        )
-                        await db.executemany(
-                            "INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)",
-                            [(sha_fail, file_id, time.time())],
-                        )
-                        await db.commit()
+                        await db.execute("BEGIN IMMEDIATE")
+                        try:
+                            await db.execute(
+                                "UPDATE FileRegistry SET tags='error' WHERE file_id=?",
+                                (file_id,),
+                            )
+                            await db.execute(
+                                "INSERT OR IGNORE INTO FileRegistry (sha256, file_id, tags, created_at) VALUES (?, ?, 'error', ?)",
+                                (sha_fail, file_id, time.time()),
+                            )
+                            await db.execute("COMMIT")
+                        except Exception:
+                            await db.execute("ROLLBACK")
+                            raise
                     continue
 
                 sha, phash, b_hash, resized_bytes = res
@@ -705,7 +725,7 @@ async def tagging_loop():
                 except Exception as e:
                     logger.error(
                         f"DB Error checking existing tags for SHA {sha[:8]}: {e}"
-                    )
+                    , exc_info=True)
 
                 # 3. НЕЙРОНКА (Только если теги еще не найдены в БД)
                 description = None
@@ -735,40 +755,46 @@ async def tagging_loop():
                 for attempt in range(10):
                     try:
                         async with db_lock:
-                            cursor = await db.execute(
-                                """
-                                UPDATE FileRegistry 
-                                SET tags = ?, description = COALESCE(?, description), phash = ?, blurhash = ?
-                                WHERE file_id = ?
-                            """,
-                                (tags, description, phash, b_hash, file_id),
-                            )
-
-                            if cursor.rowcount == 0:
-                                await db.execute(
+                            await db.execute("BEGIN IMMEDIATE")
+                            try:
+                                async with db.execute(
                                     """
-                                    INSERT INTO FileRegistry 
-                                    (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags, description)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                    ON CONFLICT(sha256) DO UPDATE SET
-                                        tags = excluded.tags,
-                                        description = COALESCE(excluded.description, FileRegistry.description),
-                                        phash = excluded.phash
+                                    UPDATE FileRegistry 
+                                    SET tags = ?, description = COALESCE(?, description), phash = ?, blurhash = ?
+                                    WHERE file_id = ?
                                 """,
-                                    (
-                                        sha,
-                                        phash,
-                                        file_id,
-                                        None,
-                                        file_type,
-                                        time.time(),
-                                        b_hash,
-                                        tags,
-                                        description
-                                    ),
-                                )
+                                    (tags, description, phash, b_hash, file_id),
+                                ) as cursor:
+                                    updated_rows = cursor.rowcount
 
-                            await db.commit()
+                                if updated_rows == 0:
+                                    await db.execute(
+                                        """
+                                        INSERT INTO FileRegistry 
+                                        (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash, tags, description)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        ON CONFLICT(sha256) DO UPDATE SET
+                                            tags = excluded.tags,
+                                            description = COALESCE(excluded.description, FileRegistry.description),
+                                            phash = excluded.phash
+                                    """,
+                                        (
+                                            sha,
+                                            phash,
+                                            file_id,
+                                            None,
+                                            file_type,
+                                            time.time(),
+                                            b_hash,
+                                            tags,
+                                            description
+                                        ),
+                                    )
+
+                                await db.execute("COMMIT")
+                            except Exception:
+                                await db.execute("ROLLBACK")
+                                raise
                         save_success = True
                         logger.info(
                             f"🖼 [BG_TAGGER] ✅ {file_type.upper()} {file_id[:12]} | {tag_mark} | Tags: '{tags[:200] if tags else 'none'}...'"
@@ -780,7 +806,7 @@ async def tagging_loop():
                             continue
                         logger.error(
                             f"❌ [BG_TAGGER] DB Save error for {file_id[:12]}: {e}"
-                        )
+                        , exc_info=True)
                         break
 
                 # === МОДЕРАЦИЯ (Deep Check) ===
@@ -806,22 +832,32 @@ async def tagging_loop():
                     if fail_cnt >= 5:
                         logger.warning(f"⛔ [TAGGER] No tags 5 times for {file_id[:15]}. Marking as 'error_no_tags'.")
                         async with db_lock:
-                            await db.execute("UPDATE FileRegistry SET tags='error_no_tags' WHERE file_id=?", (file_id,))
-                            await db.commit()
+                            await db.execute("BEGIN IMMEDIATE")
+                            try:
+                                await db.execute("UPDATE FileRegistry SET tags='error_no_tags' WHERE file_id=?", (file_id,))
+                                await db.execute("COMMIT")
+                            except Exception:
+                                await db.execute("ROLLBACK")
+                                raise
                         if file_id in TEMP_FAILED_FILES:
                             del TEMP_FAILED_FILES[file_id]
                     else:
                         TEMP_FAILED_FILES[file_id] = {"until": time.time() + 60, "cnt": fail_cnt}
 
             except Exception as e:
-                logger.error(f"💥 Crit fail {file_id}: {e}")
+                logger.error(f"💥 Crit fail {file_id}: {e}", exc_info=True)
                 entry = TEMP_FAILED_FILES.get(file_id)
                 fail_cnt = (entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1
                 if fail_cnt >= 3:
                     logger.warning(f"⛔ [TAGGER] Crit fail 3 times for {file_id[:15]}. Marking as 'error'.")
                     async with db_lock:
-                        await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
-                        await db.commit()
+                        await db.execute("BEGIN IMMEDIATE")
+                        try:
+                            await db.execute("UPDATE FileRegistry SET tags='error' WHERE file_id=?", (file_id,))
+                            await db.execute("COMMIT")
+                        except Exception:
+                            await db.execute("ROLLBACK")
+                            raise
                     if file_id in TEMP_FAILED_FILES:
                         del TEMP_FAILED_FILES[file_id]
                 else:

@@ -259,7 +259,7 @@ def check_sql(report):
                     if "no such column" in msg or "no such table" in msg or "has no column" in msg:
                         report(path, getattr(node, "lineno", 0), f"{msg}: {key[:70]}")
                 except Exception:
-                    pass
+                    import traceback; traceback.print_exc()
     finally:
         con.close()
         import shutil

@@ -40,7 +40,7 @@ def cleanup_stale_temp_dirs():
         if count > 0:
             logger.info(f"🧹 Startup Cleanup: Removed {count} stale temp folders.")
     except Exception as e:
-        logger.error(f"Startup cleanup error: {e}")
+        logger.error(f"Startup cleanup error: {e}", exc_info=True)
 
 async def find_file_message_info(file_id):
     try:
@@ -125,7 +125,7 @@ async def _download_http_safe(url, path):
                     if r.status_code == 200:
                         await write_async_iter_bytes_to_file(r.aiter_bytes(), path)
                         return True
-        except:
+        except Exception:
             continue
     return False
 
@@ -229,7 +229,7 @@ async def process_queue_batch():
                     logger.error(f"❌ All download methods failed for {fid[:10]}. Removal.")
                     return (fid, "deleted", sub)
                 except Exception as e:
-                    logger.error(f"Download task error for {fid}: {e}")
+                    logger.error(f"Download task error for {fid}: {e}", exc_info=True)
                     return None
 
         tasks = [_download_task(fid, file_details.get(fid)) for fid in file_ids]
@@ -246,7 +246,12 @@ async def process_queue_batch():
                     success_ids.add(r[0])
                 else:
                     failed_ids.add(original_fid)
+            elif isinstance(r, Exception):
+                # gather() re-raised exception — treat as transient, keep in queue
+                logger.warning(f"⏳ Download exception for {original_fid[:10]}: {r}. Keeping in queue.")
             else:
+                # _download_task returned None — transient failure (no bot, no MTProto source).
+                # Do NOT add to failed_ids; keep in queue for next batch cycle.
                 logger.warning(f"⏳ Temporary download failure for {original_fid[:10]}. Keeping in queue.")
 
         if failed_ids:
@@ -268,7 +273,7 @@ async def process_queue_batch():
             logger.warning("⚠️ Batch upload failed. Files remain in queue for retry.")
     
     except Exception as e:
-        logger.error(f"❌ Batch processing critical error: {e}")
+        logger.error(f"❌ Batch processing critical error: {e}", exc_info=True)
     finally:
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)

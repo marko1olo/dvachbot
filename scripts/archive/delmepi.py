@@ -310,7 +310,7 @@ async def get_neuro_tags(image_bytes):
             elif "400" in err:
                 return None
             else:
-                logger.error(f"💥 [Groq] Error: {e}")
+                logger.error(f"💥 [Groq] Error: {e}", exc_info=True)
             continue
             
     return None
@@ -386,7 +386,7 @@ async def worker(sem, input_queue, output_queue):
                     logger.error(f"⚠️ Ошибка данных {file_id}: {error_msg}")
                     
             except Exception as e:
-                logger.error(f"💥 Сбой {file_id}: {e}")
+                logger.error(f"💥 Сбой {file_id}: {e}", exc_info=True)
             
             await asyncio.sleep(0.1)
             input_queue.task_done()
@@ -405,7 +405,7 @@ async def db_writer(queue):
                 batch.append(item)
                 queue.task_done()
             except asyncio.TimeoutError:
-                pass 
+                import traceback; traceback.print_exc() 
             
             if len(batch) >= DB_BATCH_SIZE or (SHUTDOWN_FLAG and batch):
                 try:
@@ -432,7 +432,7 @@ async def db_writer(queue):
                     logger.info(f"💾 Сохранена пачка: {len(batch)} шт.")
                     batch = []
                 except Exception as e:
-                    logger.error(f"DB Write Error: {e}")
+                    logger.error(f"DB Write Error: {e}", exc_info=True)
             
             if SHUTDOWN_FLAG and queue.empty() and not batch:
                 break
@@ -492,4 +492,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        import traceback; traceback.print_exc()

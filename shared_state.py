@@ -3,10 +3,17 @@ from concurrent.futures import ThreadPoolExecutor
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup
 import os
+import re
 import asyncio
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Any, Optional
+from common.db_pool import LazyLock
+
+RE_REPLY_QUOTE = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
+RE_REPLY_QUOTE_FORMAT = re.compile(r'(Пост №|Post No\.)(<[^>]+>)*(\s*<[^>]+>)*(\d+)')
+RE_MULTI_REPLY = re.compile(r'>>(\d+)')
+RE_MULTI_REPLY_LOCAL = re.compile(r'>>(\d+)')
 
 
 from common.board_config import BOARD_CONFIG
@@ -17,9 +24,208 @@ BOARDS = list(BOARD_CONFIG.keys())
 message_queues = {board: asyncio.Queue(maxsize=0) for board in BOARDS}
 runtime_logger = logging.getLogger('runtime')
 
+POSITIVE_REACTIONS = {'👍', '❤', '🔥', '❤‍🔥', '😍', '👌', '💯', '🙏', '🎉', '❤️', '♥️', '🥰', '🤩'}
+LAUGHING_REACTIONS = {'😂', '🤣', '😁', '😄', '😆'}
+NEGATIVE_REACTIONS = {'👎', '💩', '🤮', '🤢', '😡', '🤬', '🖕'}
+CLOWN_REACTION = {'🤡'}
+THINKING_REACTIONS = {'🤔', '🧐', '🤨'}
+SHOCK_REACTIONS = {'🤯', '😱', '😮', '😯', '😲'}
+SAD_REACTIONS = {'😢', '😭', '💔'}
+POLITICAL_REACTIONS = {'🇷🇺', '🇺🇦'}
+SYMBOLIC_REACTIONS = {'🏴‍☠️', '♂️'}
+INSULT_REACTIONS = {'🐓', '🐖'}
+MAT_WORDS = ["сука", "блядь", "пиздец", "ебать", "нах", "пизда", "хуйня", "ебал", "блять", "отъебись", "ебаный", "еблан", "ХУЙ", "ПИЗДА", "хуйло", "долбаёб", "пидорас"]
+
+BEST_CHANNEL_ID = -1001234567890
+LIKES_THRESHOLD = 5
+AUTHOR_NOTIFY_LIMIT_PER_MINUTE = 3
+ENABLE_MULTILANG = False
+QUICK_QUOTE_POST_DISTANCE = 50
+PRIORITY_DELIVERY_ENABLED = BOT_PRIORITY_DELIVERY
+DELIVERY_INITIAL_CHUNK_SIZE = BOT_DELIVERY_INITIAL_CHUNK_SIZE
+DELIVERY_MIN_CHUNK_SIZE = BOT_DELIVERY_MIN_CHUNK_SIZE
+DELIVERY_PER_RECIPIENT_TIMEOUT_SEC = BOT_DELIVERY_PER_RECIPIENT_TIMEOUT_SEC
+DELIVERY_PHASE_GUARD_SEC = BOT_DELIVERY_PHASE_GUARD_SEC
+DELIVERY_MAX_RECIPIENT_RETRIES = BOT_DELIVERY_MAX_RECIPIENT_RETRIES
+DELIVERY_SLOW_PHASE_SEC = BOT_DELIVERY_SLOW_PHASE_SEC
+DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC = float(os.getenv("BOT_DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC", "15.0"))
+DURABLE_DELIVERY_QUEUE_ENABLED = BOT_DURABLE_DELIVERY_QUEUE
+MAX_COPY_MAP_POSTS_IN_MEMORY = BOT_COPY_CACHE_POST_LIMIT
+PRIORITY_PHASE_BUDGET_SEC = BOT_PRIORITY_PHASE_BUDGET_SEC
+PASSIVE_PHASE_BUDGET_SEC = BOT_PASSIVE_PHASE_BUDGET_SEC
+
+author_reaction_notify_lock = LazyLock()
+author_reaction_notify_tracker = defaultdict(list)
+pending_edit_lock = LazyLock()
+pending_edit_tasks = {}
+current_media_groups = {}
+media_group_creation_lock = LazyLock()
+media_group_timers = {}
+sent_media_groups = deque(maxlen=10000)  # deque supports .append() and auto-evicts old entries
+_last_persona_dialogue_user_ts = {}
+_last_persona_board_ts = {}
+_persona_processed_posts: set[int] = set()
+last_persona_dialogue_user_ts = _last_persona_dialogue_user_ts
+last_persona_board_ts = _last_persona_board_ts
+_active_duels = {}
+last_messages = deque(maxlen=200)
+reaction_ratelimit = defaultdict(float)
+
+# Explicitly export private helpers so 'from shared_state import *' in
+# broadcaster.py, delivery_manager.py, post_processor.py, archive_manager.py
+# picks them up. Without __all__, Python excludes names starting with '_'.
+__all__ = [
+    'RE_REPLY_QUOTE',
+    'RE_REPLY_QUOTE_FORMAT',
+    'RE_MULTI_REPLY',
+    'RE_MULTI_REPLY_LOCAL',
+    'BOARDS',
+    'message_queues',
+    'runtime_logger',
+    'POSITIVE_REACTIONS',
+    'LAUGHING_REACTIONS',
+    'NEGATIVE_REACTIONS',
+    'CLOWN_REACTION',
+    'THINKING_REACTIONS',
+    'SHOCK_REACTIONS',
+    'SAD_REACTIONS',
+    'POLITICAL_REACTIONS',
+    'SYMBOLIC_REACTIONS',
+    'INSULT_REACTIONS',
+    'MAT_WORDS',
+    'BEST_CHANNEL_ID',
+    'LIKES_THRESHOLD',
+    'AUTHOR_NOTIFY_LIMIT_PER_MINUTE',
+    'ENABLE_MULTILANG',
+    'QUICK_QUOTE_POST_DISTANCE',
+    'PRIORITY_DELIVERY_ENABLED',
+    'DELIVERY_INITIAL_CHUNK_SIZE',
+    'DELIVERY_MIN_CHUNK_SIZE',
+    'DELIVERY_PER_RECIPIENT_TIMEOUT_SEC',
+    'DELIVERY_PHASE_GUARD_SEC',
+    'DELIVERY_MAX_RECIPIENT_RETRIES',
+    'DELIVERY_SLOW_PHASE_SEC',
+    'DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC',
+    'DURABLE_DELIVERY_QUEUE_ENABLED',
+    'MAX_COPY_MAP_POSTS_IN_MEMORY',
+    'PRIORITY_PHASE_BUDGET_SEC',
+    'PASSIVE_PHASE_BUDGET_SEC',
+    'author_reaction_notify_lock',
+    'author_reaction_notify_tracker',
+    'pending_edit_lock',
+    'pending_edit_tasks',
+    'current_media_groups',
+    'media_group_creation_lock',
+    'media_group_timers',
+    'sent_media_groups',
+    '_last_persona_dialogue_user_ts',
+    '_last_persona_board_ts',
+    'last_persona_dialogue_user_ts',
+    'last_persona_board_ts',
+    '_active_duels',
+    'last_messages',
+    'reaction_ratelimit',
+    '_media_group_state_key',
+    '_iter_message_ids_for_copy',
+    '_drop_post_copy_maps_unlocked',
+    '_trim_post_copy_maps_unlocked',
+    'is_shutting_down',
+    'drain_shutdown_requested',
+    'durable_delivery_stats',
+    'weekly_active_users',
+    '_prepare_queue_item',
+    'GLOBAL_BOTS',
+    'LazyStorageLock',
+    'storage_lock',
+    'board_data',
+    'state',
+    'MODE_FLAGS',
+    'shadow_fake_post_counters',
+    'messages_storage',
+    'post_to_messages',
+    'message_to_post',
+    'BroadcastConfig',
+    'THREAD_BOARDS',
+    'locally_created_posts',
+    'enqueue_board_message',
+    'current_deliveries',
+    'posts_pending_deletion',
+    'MIRROR_CHANNELS',
+    'ARCHIVE_CHANNEL_ID',
+    'ARCHIVE_POSTING_BOT_ID',
+    'AUTHORIZED_ARCHIVE_BOTS',
+    'SPECIAL_NUMERALS_CONFIG',
+    'save_executor',
+    'ROULETTE_EVENTS',
+    '_safe_len',
+    '_stats_cooldown_tracker',
+    '_PASSPORT_DATA',
+    'OP_COMMAND_COOLDOWN',
+    'ANIME_CMD_COOLDOWN',
+    'anime_cmd_lock',
+    'info_cmd_lock',
+    'DEANON_COOLDOWN',
+    'deanon_lock',
+    'roulette_lock',
+    'WEEKLY_ACTIVE_DAYS',
+    'ANIME_MEDIA_CONCURRENCY',
+    'ANIME_URL_FETCH_TIMEOUT_SEC',
+    'ANIME_URL_FETCH_TOTAL_SEC',
+    'ANIME_URL_FETCH_PARALLEL',
+    'ANIME_DOWNLOAD_TIMEOUT_SEC',
+    'ANIME_DOWNLOAD_TOTAL_SEC',
+    'ANIME_DOWNLOAD_PARALLEL',
+    'ANIME_REFILL_ROUNDS',
+    'anime_media_gate',
+    'ShadowRejectContext',
+    'NewPostParams',
+    'STOP_WORDS',
+    '_DUEL_TIMEOUT'
+]
+
+def _media_group_state_key(chat_id: int, media_group_id: str) -> str:
+    return f"{chat_id}:{media_group_id}"
+
+def _iter_message_ids_for_copy(mid_or_list):
+    if isinstance(mid_or_list, list):
+        return mid_or_list
+    return (mid_or_list,)
+
+def _drop_post_copy_maps_unlocked(post_num: int) -> int:
+    copies_map = post_to_messages.pop(post_num, None)
+    if not copies_map:
+        return 0
+    removed = 0
+    for uid, mid_or_list in copies_map.items():
+        for mid in _iter_message_ids_for_copy(mid_or_list):
+            if message_to_post.pop((uid, mid), None) is not None:
+                removed += 1
+    return removed
+
+def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
+    if max_posts < 0 or len(post_to_messages) <= max_posts:
+        return 0, 0
+    if max_posts == 0:
+        stale_posts = list(post_to_messages)
+    else:
+        keep_posts = set(sorted(post_to_messages.keys(), reverse=True)[:max_posts])
+        stale_posts = [post_num for post_num in post_to_messages if post_num not in keep_posts]
+    removed_reverse = 0
+    for post_num in stale_posts:
+        removed_reverse += _drop_post_copy_maps_unlocked(post_num)
+    return len(stale_posts), removed_reverse
+
+
 is_shutting_down = False
 drain_shutdown_requested = False
 durable_delivery_stats = {
+    'enabled': True,
+    'persisted': 0,
+    'persist_failed': 0,
+    'deleted': 0,
+    'restored_items': 0,
+    'restored_recipients': 0,
+    'restore_deleted_empty': 0,
     'db_loads': 0,
     'failed_queue_upserts': 0,
     'failed_queue_deletes': 0,
@@ -123,6 +329,7 @@ post_to_messages = {}
 
 message_to_post = {}
 
+@dataclass
 class BroadcastConfig:
     bot_instance: Bot
     board_id: str
@@ -167,7 +374,7 @@ async def enqueue_board_message(board_id: str, item: dict) -> bool:
     return True
 current_deliveries = {}
 pending_edit_tasks = {}  # Словарь для хранения активных задач редактирования {post_num: asyncio.Task}
-pending_edit_lock = asyncio.Lock()
+pending_edit_lock = LazyLock()
 posts_pending_deletion = set()
 
 
@@ -230,15 +437,15 @@ OP_COMMAND_COOLDOWN = 60 # 1 минута кулдауна для команд �
 
 ANIME_CMD_COOLDOWN = 25 # 25 секунд
 
-anime_cmd_lock = asyncio.Lock()
+anime_cmd_lock = LazyLock()
 
-info_cmd_lock = asyncio.Lock() # Кулдаун для команд /stats, /active
+info_cmd_lock = LazyLock() # Кулдаун для команд /stats, /active
 
 DEANON_COOLDOWN = 180  # 3 минуты
 
-deanon_lock = asyncio.Lock()
+deanon_lock = LazyLock()
 
-roulette_lock = asyncio.Lock()
+roulette_lock = LazyLock()
 
 WEEKLY_ACTIVE_DAYS = max(1, BOT_WEEKLY_ACTIVE_DAYS)
 
@@ -307,5 +514,5 @@ STOP_WORDS = set([
 # --- Extracted from main.py Phase 9 (Helpers) ---
 reaction_ratelimit = defaultdict(float)
 author_reaction_notify_tracker = defaultdict(lambda: deque(maxlen=AUTHOR_NOTIFY_LIMIT_PER_MINUTE))
-author_reaction_notify_lock = asyncio.Lock()
+author_reaction_notify_lock = LazyLock()
 _DUEL_TIMEOUT = 120       # секунд на принятие

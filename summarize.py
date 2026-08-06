@@ -39,6 +39,16 @@ def get_shared_http_client() -> httpx.AsyncClient:
         )
     return _SHARED_HTTP_CLIENT
 
+async def close_shared_http_client() -> None:
+    global _SHARED_HTTP_CLIENT
+    if _SHARED_HTTP_CLIENT is not None and not getattr(_SHARED_HTTP_CLIENT, "is_closed", False):
+        try:
+            await _SHARED_HTTP_CLIENT.aclose()
+        except Exception:
+            pass
+        _SHARED_HTTP_CLIENT = None
+
+
 def _load_google_keys() -> list[str]:
     # Check .envgoogle
     if os.path.exists(".envgoogle"):
@@ -339,7 +349,7 @@ def get_telegraph_token() -> str:
                     _telegraph_token_cache = token
                     return token
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
     try:
         token = _telegraph_create_account_sync()
         if token:
@@ -349,7 +359,7 @@ def get_telegraph_token() -> str:
             _telegraph_token_cache = token
             return token
     except Exception as e:
-        logger.error(f"Failed to generate Telegraph token: {e}")
+        logger.error(f"Failed to generate Telegraph token: {e}", exc_info=True)
     return ""
 
 class TelegraphHTMLParser(HTMLParser):
@@ -397,7 +407,7 @@ def _text_to_telegraph_nodes(html_content: str) -> list:
         parser.feed(html_content)
         parser.close()
     except Exception as e:
-        logger.error(f"HTML parsing failed for Telegraph node conversion: {e}")
+        logger.error(f"HTML parsing failed for Telegraph node conversion: {e}", exc_info=True)
         return [{"tag": "p", "children": [html_content]}]
     
     root_children = parser.stack[0]["children"]
@@ -496,6 +506,6 @@ async def create_telegraph_page_async(title: str, html_content: str, author: str
         url = await asyncio.to_thread(_create_telegraph_page_blocking, title, html_content, author)
         return url
     except Exception as e:
-        logger.error(f"Failed to create Telegraph page: {e}")
+        logger.error(f"Failed to create Telegraph page: {e}", exc_info=True)
         return None
 

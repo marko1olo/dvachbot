@@ -1,3 +1,4 @@
+import shared_state
 import asyncio
 import logging
 import re
@@ -16,14 +17,17 @@ import aiohttp
 from common.board_config import BOARD_CONFIG
 from common.html_utils import escape_html
 from common.task_manager import spawn_task
-from common.database import update_post_content, add_channel_copy
+from common.database import update_post_content, add_channel_copy, create_post, get_stream_active_users
 
+from text_assets import VERIFICATION_SUCCESS_MESSAGES
 from shared_state import *
 from archive_manager import _forward_post_to_realtime_archive, post_special_num_to_channel
 from broadcaster import send_message_to_users
 from media_utils import _download_image_with_proxy, _resize_image_if_needed
 from post_helpers import format_header, format_thread_post_header, apply_shadow_autoreplace, check_post_numerals, execute_auto_roast
+from thread_texts import thread_messages
 from utils import split_text
+import __main__ as main
 
 UTC = timezone.utc
 
@@ -70,7 +74,7 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
             try:
                 await db.execute("ROLLBACK")
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
             print(f"⚠️ Ошибка верификации для {user_id}: {e}")
 
     if should_notify:
@@ -79,8 +83,9 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
         try:
             await bot.send_message(user_id, msg_text, parse_mode="HTML")
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 
+@dataclass
 class NewPostContext:
     bot_instance: Bot
     board_id: str
@@ -123,7 +128,7 @@ class NewPostProcessor:
                 try:
                     await self.bot_instance.send_message(self.user_id, random.choice(thread_messages[lang]['thread_not_found']))
                 except Exception:
-                    pass
+                    import traceback; traceback.print_exc()
                 return False
             if self.user_id in thread_info.get('local_mutes', {}) and time.time() < thread_info['local_mutes'][self.user_id]:
                 return False
@@ -140,7 +145,11 @@ class NewPostProcessor:
         return True
 
     async def _apply_content_transformations(self):
-        self.author_content = await _apply_mode_transformations(self.content, self.board_id)
+        apply_transform = getattr(main, '_apply_mode_transformations', None)
+        if apply_transform:
+            self.author_content = await apply_transform(self.content, self.board_id)
+        else:
+            self.author_content = self.content.copy()
         if self.user_id > 0:
             from common.db_pool import get_pool
             import time
@@ -156,7 +165,7 @@ class NewPostProcessor:
                             if itms.get("cursed_until", 0) > int(time.time()):
                                 is_cursed = True
                         except Exception:
-                            pass
+                            import traceback; traceback.print_exc()
                     if is_cursed:
                         if 'text' in self.author_content and self.author_content['text']:
                             if "[Я ХУЕСОС 🤮]" not in self.author_content['text']:
@@ -192,7 +201,7 @@ class NewPostProcessor:
                     error_text = "Error: The post you are replying to has been deleted." if lang == 'en' else "Ошибка: пост, на который вы отвечаете, был удален."
                     await self.bot_instance.send_message(self.user_id, error_text)
                 except (TelegramForbiddenError, TelegramBadRequest):
-                    pass
+                    import traceback; traceback.print_exc()
             return False
 
         if not self.is_shadow_muted:
@@ -247,7 +256,7 @@ class NewPostProcessor:
                 fallback_content = self.author_content.copy()
                 fallback_content.pop('image_url', None)
                 fallback_content['image_bytes'] = processed_bytes
-                self.author_results = await send_message_to_users(BroadcastConfig(
+                self.author_results = await send_message_to_users(shared_state.BroadcastConfig(
                     bot_instance=self.bot_instance, board_id=self.board_id, recipients={self.user_id},
                     content=fallback_content, reply_info=self.reply_info_for_author
                 ))
@@ -267,7 +276,7 @@ class NewPostProcessor:
 
     async def _send_to_author_with_fallback(self):
         try:
-            self.author_results = await send_message_to_users(BroadcastConfig(
+            self.author_results = await send_message_to_users(shared_state.BroadcastConfig(
                 bot_instance=self.bot_instance,
                 board_id=self.board_id,
                 recipients={self.user_id},
@@ -319,7 +328,7 @@ class NewPostProcessor:
         # Вторая фаза вынесена из-под storage_lock: внутри неё идёт
         # update_post_content — запись в БД, а это ГОРЯЧИЙ путь, он исполняется
         # на КАЖДЫЙ пост. Раньше на время этого запроса замирал весь доступ к
-        # messages_storage / post_to_messages / message_to_post, то есть
+        # messages_storage / main.post_to_messages / main.message_to_post, то есть
         # доставка и реакции на всех досках.
         if self.author_results and self.author_results[0] and self.author_results[0][1]:
                 sent_messages = self.author_results[0][1]
@@ -363,6 +372,7 @@ class NewPostProcessor:
 
     async def _enqueue_and_notify(self):
         if not self.is_shadow_muted and self.recipients:
+            from delivery_manager import enqueue_board_message
             await enqueue_board_message(self.board_id, {
                 'recipients': self.recipients, 'content': self.final_content, 'post_num': self.current_post_num,
                 'board_id': self.board_id, 'thread_id': self.thread_id
@@ -471,7 +481,7 @@ async def post_thread_notification_to_channel(bots: dict[str, Bot], board_id: st
     except Exception as e:
         print(f"⛔ Не удалось отправить уведомление о треде '{title}' в канал: {e}")
 
-async def process_new_post(params: NewPostParams) -> int | None:
+async def process_new_post(params: shared_state.NewPostParams) -> int | None:
     """
     Унифицированная функция для обработки, сохранения и постановки в очередь нового поста.
     Версия 8.0: Гарантирует регистрацию поста в памяти даже при сбое отправки. НИКАКИХ УДАЛЕНИЙ.

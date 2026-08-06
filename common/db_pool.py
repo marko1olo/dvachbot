@@ -5,14 +5,46 @@ from common.config import DB_NAME
 # Глобальная переменная соединения
 _db_connection = None
 
+class LazyLock:
+    def __init__(self):
+        self._lock = None
+        self._loop = None
+
+    def _get_lock(self):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if self._lock is None or (loop and self._loop is not loop):
+            self._lock = asyncio.Lock()
+            self._loop = loop
+        return self._lock
+
+    async def acquire(self):
+        return await self._get_lock().acquire()
+
+    def release(self):
+        if self._lock:
+            self._lock.release()
+
+    def locked(self):
+        return self._get_lock().locked()
+
+    async def __aenter__(self):
+        await self.acquire()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+
 # ГАРАНТИЯ БЕЗОПАСНОСТИ:
 # Этот замок (Lock) не даст боту и сайту одновременно пытаться пересоздать подключение.
-_reconnect_lock = asyncio.Lock()
+_reconnect_lock = LazyLock()
 
 # Глобальный замок для синхронизации задач внутри одного процесса (Task-Safety).
 # Обязателен при использовании ручных транзакций (BEGIN IMMEDIATE), 
 # чтобы задачи не вклинивались в чужие транзакции.
-db_lock = asyncio.Lock()
+db_lock = LazyLock()
 
 async def get_pool():
     """
@@ -28,7 +60,7 @@ async def get_pool():
             if _db_connection._running and _db_connection._conn:
                 return _db_connection
         except Exception:
-            pass # Если проверка не удалась, идем на восстановление
+            import traceback; traceback.print_exc() # Если проверка не удалась, идем на восстановление
 
     # 2. Если соединения нет или оно мертвое — входим в режим восстановления
     async with _reconnect_lock:
@@ -38,7 +70,7 @@ async def get_pool():
                 if _db_connection._running and _db_connection._conn:
                     return _db_connection
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
             print("⚠️ [DB] Обнаружен разрыв соединения. Запуск безопасного восстановления...")
         
         # 3. Аккуратное закрытие старого трупа (если есть)
@@ -46,7 +78,7 @@ async def get_pool():
             try:
                 await _db_connection.close()
             except Exception: 
-                pass
+                import traceback; traceback.print_exc()
             _db_connection = None
         
         retries = 3
@@ -64,6 +96,7 @@ async def get_pool():
                 await conn.execute("PRAGMA mmap_size = 1073741824;")
                 await conn.execute("PRAGMA cache_size = -819200;")
                 await conn.execute("PRAGMA foreign_keys = ON;")
+                await conn.execute("PRAGMA wal_autocheckpoint=1000;")
                 # Нет await conn.commit(), так как мы в режиме autocommit (isolation_level=None)
                 
                 _db_connection = conn

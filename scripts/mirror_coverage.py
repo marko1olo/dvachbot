@@ -5,7 +5,9 @@ Run: python scripts/mirror_coverage.py
 import sys, sqlite3, time
 sys.stdout.reconfigure(encoding='utf-8')
 
-db = sqlite3.connect('dvach_bot.db')
+db = sqlite3.connect('dvach_bot.db', timeout=30.0)
+db.execute("PRAGMA journal_mode=WAL;")
+db.execute("PRAGMA busy_timeout=30000;")
 c = db.cursor()
 
 print("=" * 60)

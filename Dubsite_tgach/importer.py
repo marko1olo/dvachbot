@@ -247,7 +247,7 @@ class ThreadImporter:
                     thread_id = parts[idx + 1].split(".")[0]
                     target_url = f"https://a.4cdn.org/{board}/thread/{thread_id}.json"
             except ValueError:
-                pass
+                import traceback; traceback.print_exc()
         if "dobrochan" in target_url:
             if target_url.endswith(".xhtml") or target_url.endswith(".html"):
                 target_url = target_url.replace(".xhtml", ".json").replace(
@@ -276,7 +276,7 @@ class ThreadImporter:
                         raise Exception("JSON too large (Limit 10MB)")
                 return json.loads(data_accumulated)
         except Exception as e:
-            logger.error(f"Fetch error: {e}")
+            logger.error(f"Fetch error: {e}", exc_info=True)
             raise e
         except json.JSONDecodeError:
             raise Exception("Server returned non-JSON response")
@@ -469,7 +469,7 @@ class ThreadImporter:
                         if tid and not str(tid).startswith("http"):
                             await register_file_owner(tid, uploader_bot_id)
             except Exception as e:
-                logger.error(f"⚠️ Upload error for file {file_data['name']}: {e}")
+                logger.error(f"⚠️ Upload error for file {file_data['name']}: {e}", exc_info=True)
                 continue
 
         return uploaded_files

@@ -140,7 +140,7 @@ async def _safe_groq_json(messages, max_tokens=300):
                         f"❌ Groq key {token[:12]}... is unauthorized (401 Exception). Removing from rotation pool."
                     )
                     groq_pool.remove_token(token)
-                logger.error(f"DeepCheck Req Failed: {e}")
+                logger.error(f"DeepCheck Req Failed: {e}", exc_info=True)
                 continue
     return None
 
@@ -180,7 +180,7 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
         b64_image = base64.b64encode(image_bytes).decode("utf-8")
         image_data_url = f"data:image/jpeg;base64,{b64_image}"
     except Exception as e:
-        logger.error(f"❌ [DeepCheck] Base64 conversion failed: {e}")
+        logger.error(f"❌ [DeepCheck] Base64 conversion failed: {e}", exc_info=True)
         return
 
     # Формируем запрос к ИИ

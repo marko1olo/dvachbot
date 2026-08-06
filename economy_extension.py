@@ -202,11 +202,11 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
         
     active_items["partyvan_gun"] = False
     
-    from main import apply_regular_mute, board_data, storage_lock
-    async with storage_lock:
-        if board_id in board_data and 'mutes' in board_data[board_id]:
-            board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=12*3600)
-    await apply_regular_mute(target_id, board_id, 12*3600)
+    import __main__ as _main
+    async with _main.storage_lock:
+        if board_id in _main.board_data and 'mutes' in _main.board_data[board_id]:
+            _main.board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=12*3600)
+    await _main.apply_regular_mute(target_id, board_id, 12*3600)
     
     async with db_lock:
         await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",

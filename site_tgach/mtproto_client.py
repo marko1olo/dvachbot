@@ -135,7 +135,7 @@ async def get_active_client(bot_token: str):
             logger.info(f"🔌 [MTProto] Client started (In-Memory) for bot {short_token}")
             return client
         except Exception as e:
-            logger.error(f"❌ Failed to start MTProto client: {e}")
+            logger.error(f"❌ Failed to start MTProto client: {e}", exc_info=True)
             _CONNECTION_COOLDOWN[bot_token] = time.time() + 60
             return None
 
@@ -214,7 +214,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
         elif "THUMBNAIL_SOURCE" in err_str:
             logger.warning(f"⚠️ [MTProto] Pyrogram failed to parse thumb source for {file_id[:10]}")
         else:
-            logger.error(f"❌ [MTProto] Download Error: {e}")
+            logger.error(f"❌ [MTProto] Download Error: {e}", exc_info=True)
         return False
 
 async def upload_file_mtproto(bot_token: str, chat_id: int, file_bytes: bytes, filename: str, file_type: str) -> dict | None:
@@ -253,5 +253,5 @@ async def upload_file_mtproto(bot_token: str, chat_id: int, file_bytes: bytes, f
         return res
 
     except Exception as e:
-        logger.error(f"❌ [MTProto] Upload failed: {e}")
+        logger.error(f"❌ [MTProto] Upload failed: {e}", exc_info=True)
         return None

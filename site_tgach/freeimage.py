@@ -37,6 +37,7 @@ async def upload_file_to_freeimage(file_path: str) -> str | None:
     if PROXY_URL:
         strategies.append({"proxy": PROXY_URL, "name": "Proxy"})
 
+    file_bytes = await asyncio.to_thread(lambda: open(file_path, "rb").read())
     for strategy in strategies:
         try:
             transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
@@ -45,8 +46,7 @@ async def upload_file_to_freeimage(file_path: str) -> str | None:
                 proxy=strategy["proxy"], transport=transport,
                 headers={"User-Agent": USER_AGENTS[0]}
             ) as client:
-                with open(file_path, "rb") as f:
-                    file_bytes = f.read()
+
 
                 fname = os.path.basename(file_path)
                 data = {"key": FREEIMAGE_API_KEY, "action": "upload", "format": "json"}

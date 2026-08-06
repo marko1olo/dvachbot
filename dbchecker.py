@@ -372,7 +372,13 @@ def print_startup_info(db_path):
 
 def get_db_connection(db_path):
     try:
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=15.0)
+        try: conn.execute('PRAGMA journal_mode=WAL')
+        except Exception: pass
+        try: conn.execute('PRAGMA synchronous=NORMAL')
+        except Exception: pass
+        try: conn.execute('PRAGMA busy_timeout=15000')
+        except Exception: pass
         conn.row_factory = sqlite3.Row
         return conn
     except Exception as e:

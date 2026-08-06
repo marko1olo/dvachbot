@@ -1,0 +1,25 @@
+Line 271: FONTS_CACHE = []
+Line 325: RECENT_JOINERS_CACHE = {}
+Line 447: user_last_thread_action = defaultdict(float) # Для отслеживания времени последнего действия
+Line 448: reaction_ratelimit = defaultdict(float)
+Line 499: reply_coverage_stats = {}
+Line 501: network_retry_state = defaultdict(lambda: {'attempt': 0, 'last_error_time': 0})
+Line 505: stream_cache = {} # {(user_id, board_id): 'ru'}
+Line 508: generate_locks = defaultdict(asyncio.Lock)
+Line 509: graph_stats = {}  # Для хранения статистики по часам для графика
+Line 510: delivery_metrics = defaultdict(lambda: deque(maxlen=100))
+Line 518: author_reaction_notify_tracker = defaultdict(lambda: deque(maxlen=AUTHOR_NOTIFY_LIMIT_PER_MINUTE))
+Line 520: user_hourly_image_count = defaultdict(int)
+Line 521: user_hourly_image_reset = defaultdict(float)
+Line 527: shadow_fake_post_counters = defaultdict(int)
+Line 531: current_media_groups = {}
+Line 532: media_group_timers = {}
+Line 555: unknown_command_tracker = defaultdict(list)
+Line 560: ROULETTE_EVENTS = [] # Будет хранить все события из рулеток
+Line 563: last_poll_creation_time = defaultdict(float)
+Line 564: last_poll_vote_time = defaultdict(float) # Новая переменная для кулдауна голосования
+Line 816: mode_punchup_stats = defaultdict(lambda: {
+Line 827: contextual_reply_tracker = defaultdict(lambda: {"last": 0.0, "window_start": 0.0, "count": 0})
+Line 828: contextual_reply_stats = defaultdict(int)
+Line 4721: _stats_cooldown_tracker = {}
+Line 17795: STOP_WORDS = set([

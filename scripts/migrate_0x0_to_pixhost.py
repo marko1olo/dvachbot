@@ -11,7 +11,11 @@ sys.stdout.reconfigure(encoding='utf-8')
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'dvach_bot.db')
 
 print(f"Opening DB: {DB_PATH}")
-db = sqlite3.connect(DB_PATH)
+conn = sqlite3.connect(DB_PATH)
+conn.execute("PRAGMA journal_mode=WAL;")
+conn.execute("PRAGMA busy_timeout=60000;")
+conn.execute("PRAGMA synchronous=NORMAL;")
+db = conn
 c = db.cursor()
 
 # Show current state

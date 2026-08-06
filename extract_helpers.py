@@ -29,7 +29,7 @@ from shared_state import *
 try:
     from moderation_config import *
 except ImportError:
-    pass
+    import traceback; traceback.print_exc()
 from broadcaster import MessageBroadcaster, DeliveryResults, _trim_post_copy_maps_unlocked, _order_recipients_for_delivery, _build_lie_media_content, _format_message_body, add_you_to_my_posts_fast
 from utils import split_text
 import itertools

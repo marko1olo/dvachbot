@@ -51,6 +51,7 @@ async def upload_file_to_imgbb(file_path: str) -> str | None:
     if PROXY_URL:
         strategies.append({"proxy": PROXY_URL, "name": "Proxy"})
 
+    file_bytes = await asyncio.to_thread(lambda: open(file_path, "rb").read())
     for strategy in strategies:
         try:
             transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
@@ -59,11 +60,9 @@ async def upload_file_to_imgbb(file_path: str) -> str | None:
                 proxy=strategy["proxy"], transport=transport,
                 headers={"User-Agent": USER_AGENTS[0]}
             ) as client:
-                with open(file_path, "rb") as f:
-                    file_bytes = f.read()
-
                 # ImgBB accepts base64 encoded image
                 image_b64 = base64.b64encode(file_bytes).decode("utf-8")
+
                 data = {"key": IMGBB_API_KEY, "image": image_b64}
 
                 resp = await client.post(url, data=data)

@@ -153,7 +153,7 @@ async def get_media_stats(conn):
         async for row in type_cursor:
             stats["by_type"][row[0] or "unknown"] = row[1]
     except aiosqlite.OperationalError:
-        pass
+        import traceback; traceback.print_exc()
 
     return stats
 
@@ -233,6 +233,8 @@ async def main():
     )
 
     async with aiosqlite.connect(DB_NAME) as conn:
+        await conn.execute("PRAGMA journal_mode=WAL;")
+        await conn.execute("PRAGMA busy_timeout=15000;")
         data = await asyncio.gather(
             get_queue_details(conn),
             get_activity(conn),

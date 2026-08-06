@@ -272,7 +272,7 @@ class NeuroManager:
                 
                 await asyncio.sleep(random.randint(5, 15)) 
             except Exception as e:
-                logger.error(f"Neuro-posting error on /{board_id}/ [{current_stream}]: {e}")
+                logger.error(f"Neuro-posting error on /{board_id}/ [{current_stream}]: {e}", exc_info=True)
 
     async def analyze_vibe(self, text: str, stream: str) -> str:
         if not text.strip(): return "Neutral"
@@ -543,7 +543,7 @@ class NeuroManager:
             if result and "Нейронка сдохла" not in result:
                 return result
         except Exception as e:
-            logger.error(f"Fallback to summarize_text_with_hf failed: {e}")
+            logger.error(f"Fallback to summarize_text_with_hf failed: {e}", exc_info=True)
 
         messages = [
             {"role": "system", "content": system_msg},

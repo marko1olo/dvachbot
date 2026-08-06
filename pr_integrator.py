@@ -198,7 +198,7 @@ def count_test_issues(test_output):
             try:
                 issues += int(part.split('=')[1])
             except ValueError:
-                pass
+                import traceback; traceback.print_exc()
     return issues
 
 def verify_syntax_locally(files, cwd="."):

@@ -3,8 +3,6 @@ import asyncio
 import io
 import logging
 import aiohttp
-import cv2
-import numpy as np
 from PIL import Image
 from typing import Optional, Tuple
 from japanese_translator import get_dynamic_proxy_url

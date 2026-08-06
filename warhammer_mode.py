@@ -2156,7 +2156,7 @@ def warhammer_transform(text: str, header: str | None = None, allow_image: bool 
             if image_bytes:
                 return ('image', image_bytes)
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 
     # 3. Строгая привязка к ОДНОЙ фракции в сообщении (стили не мешаются!)
     roll = random.random()

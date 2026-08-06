@@ -30,7 +30,7 @@ class TestCaptchaCleanupTask(unittest.IsolatedAsyncioTestCase):
             try:
                 await main.captcha_cleanup_task()
             except asyncio.CancelledError:
-                pass
+                import traceback; traceback.print_exc()
 
         self.assertNotIn('test1', main.CAPTCHA_SESSIONS)
         self.assertIn('test2', main.CAPTCHA_SESSIONS)
@@ -45,7 +45,7 @@ class TestCaptchaCleanupTask(unittest.IsolatedAsyncioTestCase):
             try:
                 await main.captcha_cleanup_task()
             except asyncio.CancelledError:
-                pass
+                import traceback; traceback.print_exc()
 
             mock_log_error.assert_called_once()
             self.assertIn("Test Error", mock_log_error.call_args[0][0])

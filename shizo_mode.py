@@ -1264,7 +1264,7 @@ def _stage_numerology(text: str) -> str:
             digit_sum = sum(int(d) for d in number)
             interpretation = f"СУММА ЦИФР = {digit_sum}. ЭТО ЧТО-ТО ЗНАЧИТ."
         except ValueError:
-            pass
+            import traceback; traceback.print_exc()
 
     return text.replace(number, f"{number} ({interpretation})", 1)
 

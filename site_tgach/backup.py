@@ -74,6 +74,9 @@ async def create_db_backup(bot) -> bool:
         # 1. Создание атомарного бэкапа (IO bound, асинхронно)
         source_db = await get_pool()
         async with aiosqlite.connect(backup_db_path) as backup_db:
+            await backup_db.execute("PRAGMA journal_mode=WAL;")
+            await backup_db.execute("PRAGMA busy_timeout=60000;")
+            await backup_db.execute("PRAGMA synchronous=NORMAL;")
             await source_db.backup(backup_db)
         created_files.append(backup_db_path)
         
@@ -103,7 +106,7 @@ async def create_db_backup(bot) -> bool:
                         await asyncio.sleep(e.retry_after + 2)
                     except Exception as e:
                         if attempt == max_retries:
-                            logger.error(f"Failed to send {part_path} to {admin_id} after {max_retries} attempts: {e}")
+                            logger.error(f"Failed to send {part_path} to {admin_id} after {max_retries} attempts: {e}", exc_info=True)
                         else:
                             backoff = attempt * 10
                             logger.warning(f"Attempt {attempt} failed to send {part_path} to {admin_id}: {e}. Retrying in {backoff}s...")

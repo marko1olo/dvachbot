@@ -32,7 +32,7 @@ def probe_media_endpoints():
     try:
         FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
 
     passed_checks = 0
     total_checks = 0

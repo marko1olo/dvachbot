@@ -1,4 +1,5 @@
 import sqlite3
+import contextlib
 import time
 import json
 from dataclasses import dataclass
@@ -25,6 +26,21 @@ SNS_THEME_RC = {
     "grid.color": "#333333",
     "font.family": "sans-serif"
 }
+
+
+def connect_stats_db(uri_path='file:dvach_bot.db?mode=ro', timeout=15.0):
+    conn = sqlite3.connect(uri_path, uri=True, timeout=timeout)
+    try:
+        try:
+            conn.execute('PRAGMA journal_mode=WAL;')
+            conn.execute('PRAGMA synchronous=NORMAL;')
+            conn.execute('PRAGMA busy_timeout=15000;')
+        except Exception:
+            pass
+        return conn
+    except Exception:
+        conn.close()
+        raise
 
 
 def apply_dark_theme():
@@ -1134,281 +1150,275 @@ def _generate_chart_23(c, images):
 
     # ── 25. Кумулятивный рост постов (всё время) ─────────────────────────────
     try:
-        conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-        conn2.row_factory = dict_factory
-        c2 = conn2.cursor()
-        c2.execute('''
-            SELECT date(timestamp, 'unixepoch', 'localtime') as d, COUNT(*) as cnt
-            FROM Posts GROUP BY d ORDER BY d
-        ''')
-        data = c2.fetchall()
-        conn2.close()
-        if data:
-            df = pd.DataFrame(data)
-            df['cumsum'] = df['cnt'].cumsum()
-            fig, ax = plt.subplots(figsize=(12, 8))
-            ax.fill_between(range(len(df)), df['cumsum'], alpha=0.25, color='#58a6ff')
-            ax.plot(range(len(df)), df['cumsum'], color='#58a6ff', linewidth=2)
-            step = max(1, len(df) // 8)
-            ax.set_xticks(range(0, len(df), step))
-            ax.set_xticklabels([df['d'].iloc[i] for i in range(0, len(df), step)], rotation=30, fontsize=7.5)
-            ax.set_title('25. Кумулятивный рост постов (всё время)', fontsize=13, fontweight='bold', color='#58a6ff')
-            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{int(v):,}'))
-            plt.tight_layout()
-            save_chart(images, '25_cumulative.png')
+        with contextlib.closing(connect_stats_db()) as conn2:
+            conn2.row_factory = dict_factory
+            with contextlib.closing(conn2.cursor()) as c2:
+                c2.execute('''
+                    SELECT date(timestamp, 'unixepoch', 'localtime') as d, COUNT(*) as cnt
+                    FROM Posts GROUP BY d ORDER BY d
+                ''')
+                data = c2.fetchall()
+                if data:
+                    df = pd.DataFrame(data)
+                    df['cumsum'] = df['cnt'].cumsum()
+                    fig, ax = plt.subplots(figsize=(12, 8))
+                    ax.fill_between(range(len(df)), df['cumsum'], alpha=0.25, color='#58a6ff')
+                    ax.plot(range(len(df)), df['cumsum'], color='#58a6ff', linewidth=2)
+                    step = max(1, len(df) // 8)
+                    ax.set_xticks(range(0, len(df), step))
+                    ax.set_xticklabels([df['d'].iloc[i] for i in range(0, len(df), step)], rotation=30, fontsize=7.5)
+                    ax.set_title('25. Кумулятивный рост постов (всё время)', fontsize=13, fontweight='bold', color='#58a6ff')
+                    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{int(v):,}'))
+                    plt.tight_layout()
+                    save_chart(images, '25_cumulative.png')
     except Exception as e:
         print(f"Error Chart 25: {e}")
 
 def _generate_chart_24(c, images):
     # ── 26. Глубина цепочек ответов (30д) ────────────────────────────────────
     try:
-        conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-        conn2.row_factory = dict_factory
-        c2 = conn2.cursor()
-        thirty_d = time.time() - 30 * 86400
-        c2.execute('''
-            SELECT p.post_num,
-                   COUNT(r.post_num) as reply_count
-            FROM Posts p
-            LEFT JOIN Posts r ON r.reply_to_post_num = p.post_num AND r.board_id = p.board_id
-            WHERE p.timestamp > ?
-            GROUP BY p.post_num
-        ''', (thirty_d,))
-        data = c2.fetchall()
-        conn2.close()
-        if data:
-            counts = [row['reply_count'] for row in data]
-            buckets = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
-            for c in counts:
-                k = min(c, 4)
-                buckets[k] += 1
-            labels = ['0 ответов', '1 ответ', '2 ответа', '3 ответа', '4+']
-            vals   = [buckets[k] for k in range(5)]
-            colors = ['#373b41', '#58a6ff', '#79c0ff', '#d2a8ff', '#ff7b72']
-            fig, ax = plt.subplots(figsize=(7, 4))
-            bars = ax.bar(labels, vals, color=colors, edgecolor='#21262d', linewidth=1.2)
-            for bar, v in zip(bars, vals):
-                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(vals)*0.01,
-                        f'{v:,}', ha='center', va='bottom', fontsize=8, color='#e6edf3')
-            ax.set_title('26. Глубина цепочек ответов (30д)', fontsize=13, fontweight='bold', color='#d2a8ff')
-            ax.set_ylabel('Количество постов')
-            plt.tight_layout()
-            save_chart(images, '26_reply_depth.png')
+        with contextlib.closing(connect_stats_db()) as conn2:
+            conn2.row_factory = dict_factory
+            with contextlib.closing(conn2.cursor()) as c2:
+                thirty_d = time.time() - 30 * 86400
+                c2.execute('''
+                    SELECT p.post_num,
+                           COUNT(r.post_num) as reply_count
+                    FROM Posts p
+                    LEFT JOIN Posts r ON r.reply_to_post_num = p.post_num AND r.board_id = p.board_id
+                    WHERE p.timestamp > ?
+                    GROUP BY p.post_num
+                ''', (thirty_d,))
+                data = c2.fetchall()
+                if data:
+                    counts = [row['reply_count'] for row in data]
+                    buckets = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
+                    for c in counts:
+                        k = min(c, 4)
+                        buckets[k] += 1
+                    labels = ['0 ответов', '1 ответ', '2 ответа', '3 ответа', '4+']
+                    vals   = [buckets[k] for k in range(5)]
+                    colors = ['#373b41', '#58a6ff', '#79c0ff', '#d2a8ff', '#ff7b72']
+                    fig, ax = plt.subplots(figsize=(7, 4))
+                    bars = ax.bar(labels, vals, color=colors, edgecolor='#21262d', linewidth=1.2)
+                    for bar, v in zip(bars, vals):
+                        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(vals)*0.01,
+                                f'{v:,}', ha='center', va='bottom', fontsize=8, color='#e6edf3')
+                    ax.set_title('26. Глубина цепочек ответов (30д)', fontsize=13, fontweight='bold', color='#d2a8ff')
+                    ax.set_ylabel('Количество постов')
+                    plt.tight_layout()
+                    save_chart(images, '26_reply_depth.png')
     except Exception as e:
         print(f"Error Chart 26: {e}")
 
 def _generate_chart_25(images):
     # ── 27. Радар здоровья борды ──────────────────────────────────────────────
     try:
-        conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-        conn2.row_factory = dict_factory
-        c2 = conn2.cursor()
-        t30 = time.time() - 30 * 86400
-        t7  = time.time() - 7 * 86400
-        c2.execute('SELECT COUNT(*) as n FROM Posts WHERE timestamp > ?', (t30,))
-        posts30 = c2.fetchone()['n']
-        c2.execute('SELECT COUNT(*) as n FROM Posts WHERE timestamp > ?', (t7,))
-        posts7 = c2.fetchone()['n']
-        c2.execute('SELECT COUNT(DISTINCT author_id) as n FROM Posts WHERE timestamp > ?', (t30,))
-        uniq30 = c2.fetchone()['n']
-        c2.execute('SELECT COUNT(*) as n FROM Posts WHERE reply_to_post_num IS NOT NULL AND timestamp > ?', (t30,))
-        replies30 = c2.fetchone()['n']
-        c2.execute('SELECT AVG(LENGTH(json_extract(content, "$.text"))) as n FROM Posts WHERE timestamp > ?', (t30,))
-        avg_len = c2.fetchone()['n'] or 0
-        conn2.close()
+        with contextlib.closing(connect_stats_db()) as conn2:
+            conn2.row_factory = dict_factory
+            with contextlib.closing(conn2.cursor()) as c2:
+                t30 = time.time() - 30 * 86400
+                t7  = time.time() - 7 * 86400
+                c2.execute('SELECT COUNT(*) as n FROM Posts WHERE timestamp > ?', (t30,))
+                posts30 = c2.fetchone()['n']
+                c2.execute('SELECT COUNT(*) as n FROM Posts WHERE timestamp > ?', (t7,))
+                posts7 = c2.fetchone()['n']
+                c2.execute('SELECT COUNT(DISTINCT author_id) as n FROM Posts WHERE timestamp > ?', (t30,))
+                uniq30 = c2.fetchone()['n']
+                c2.execute('SELECT COUNT(*) as n FROM Posts WHERE reply_to_post_num IS NOT NULL AND timestamp > ?', (t30,))
+                replies30 = c2.fetchone()['n']
+                c2.execute('SELECT AVG(LENGTH(json_extract(content, "$.text"))) as n FROM Posts WHERE timestamp > ?', (t30,))
+                avg_len = c2.fetchone()['n'] or 0
 
-        # Normalise each metric against absolute reference baselines
-        # 500 posts/30d, 20% unique, 40% reply rate, 150 chars avg = 100%
-        categories = ['Активность\n(30д)', 'Темп\n(7д/30д)', 'Уник.\nавторы', 'Диалог\n(%)', 'Длина\nпостов']
-        ref_vals = [
-            min(posts30 / 500.0, 1.0),
-            min((posts7 * 4.3) / max(posts30, 1), 1.0),
-            min((uniq30 / max(posts30, 1)) / 0.20, 1.0),
-            min((replies30 / max(posts30, 1)) / 0.40, 1.0),
-            min(avg_len / 150.0, 1.0),
-        ]
-        N = len(categories)
-        angles = [n / float(N) * 2 * 3.14159 for n in range(N)]
-        angles += angles[:1]
-        vals_r = ref_vals + ref_vals[:1]
-        fig = plt.figure(figsize=(6, 6))
-        ax = fig.add_subplot(111, polar=True)
-        ax.set_facecolor('#0d1117')
-        ax.plot(angles, vals_r, color='#39d353', linewidth=2)
-        ax.fill(angles, vals_r, color='#39d353', alpha=0.25)
-        ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(categories, fontsize=8.5, color='#e6edf3')
-        ax.set_ylim(0, 1)
-        ax.set_yticks([0.25, 0.5, 0.75, 1.0])
-        ax.set_yticklabels(['25%', '50%', '75%', '100%'], fontsize=6, color='#8b949e')
-        ax.grid(color='#21262d', linewidth=0.7)
-        ax.spines['polar'].set_color('#21262d')
-        ax.set_title('27. Радар здоровья борды', fontsize=13, fontweight='bold',
-                     color='#39d353', pad=18)
-        plt.tight_layout()
-        save_chart(images, '27_radar.png')
+                # Normalise each metric against absolute reference baselines
+                # 500 posts/30d, 20% unique, 40% reply rate, 150 chars avg = 100%
+                categories = ['Активность\n(30д)', 'Темп\n(7д/30д)', 'Уник.\nавторы', 'Диалог\n(%)', 'Длина\nпостов']
+                ref_vals = [
+                    min(posts30 / 500.0, 1.0),
+                    min((posts7 * 4.3) / max(posts30, 1), 1.0),
+                    min((uniq30 / max(posts30, 1)) / 0.20, 1.0),
+                    min((replies30 / max(posts30, 1)) / 0.40, 1.0),
+                    min(avg_len / 150.0, 1.0),
+                ]
+                N = len(categories)
+                angles = [n / float(N) * 2 * 3.14159 for n in range(N)]
+                angles += angles[:1]
+                vals_r = ref_vals + ref_vals[:1]
+                fig = plt.figure(figsize=(6, 6))
+                ax = fig.add_subplot(111, polar=True)
+                ax.set_facecolor('#0d1117')
+                ax.plot(angles, vals_r, color='#39d353', linewidth=2)
+                ax.fill(angles, vals_r, color='#39d353', alpha=0.25)
+                ax.set_xticks(angles[:-1])
+                ax.set_xticklabels(categories, fontsize=8.5, color='#e6edf3')
+                ax.set_ylim(0, 1)
+                ax.set_yticks([0.25, 0.5, 0.75, 1.0])
+                ax.set_yticklabels(['25%', '50%', '75%', '100%'], fontsize=6, color='#8b949e')
+                ax.grid(color='#21262d', linewidth=0.7)
+                ax.spines['polar'].set_color('#21262d')
+                ax.set_title('27. Радар здоровья борды', fontsize=13, fontweight='bold',
+                             color='#39d353', pad=18)
+                plt.tight_layout()
+                save_chart(images, '27_radar.png')
     except Exception as e:
         print(f"Error Chart 27: {e}")
 
 def _generate_chart_26(c, images):
     # ── 28. Топ тредов — пузырьковая диаграмма ───────────────────────────────
     try:
-        conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-        conn2.row_factory = dict_factory
-        c2 = conn2.cursor()
-        t90 = time.time() - 90 * 86400
-        c2.execute('''
-            SELECT thread_id, COUNT(*) as posts,
-                   COUNT(DISTINCT author_id) as authors,
-                   MAX(timestamp) as last_ts
-            FROM Posts
-            WHERE timestamp > ? AND thread_id IS NOT NULL AND thread_id != 0
-            GROUP BY thread_id
-            ORDER BY posts DESC LIMIT 20
-        ''', (t90,))
-        data = c2.fetchall()
-        conn2.close()
-        if data and len(data) >= 3:
-            posts   = [row['posts']   for row in data]
-            authors = [row['authors'] for row in data]
-            freshness = [(time.time() - row['last_ts']) / 3600 for row in data]  # hours ago
-            labels  = [f"#{row['thread_id']}" for row in data]
-            sizes   = [max(30, p * 1.5) for p in posts]
-            colors  = [1 - min(f / (7 * 24), 1) for f in freshness]  # freshness → 0..1
-            cmap    = plt.get_cmap('RdYlGn')
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sc = ax.scatter(authors, posts, s=sizes, c=colors, cmap=cmap,
-                            alpha=0.85, edgecolors='#21262d', linewidths=0.8)
-            for i, label in enumerate(labels):
-                ax.annotate(label, (authors[i], posts[i]), fontsize=6.5,
-                            ha='center', va='bottom', color='#e6edf3')
-            plt.colorbar(sc, ax=ax, label='Свежесть (1=только что)')
-            ax.set_xlabel('Уникальных авторов')
-            ax.set_ylabel('Постов в треде')
-            ax.set_title('28. Топ тредов (90д) — размер = активность', fontsize=12,
-                         fontweight='bold', color='#ffa657')
-            plt.tight_layout()
-            save_chart(images, '28_threads_bubble.png')
+        with contextlib.closing(connect_stats_db()) as conn2:
+            conn2.row_factory = dict_factory
+            with contextlib.closing(conn2.cursor()) as c2:
+                t90 = time.time() - 90 * 86400
+                c2.execute('''
+                    SELECT thread_id, COUNT(*) as posts,
+                           COUNT(DISTINCT author_id) as authors,
+                           MAX(timestamp) as last_ts
+                    FROM Posts
+                    WHERE timestamp > ? AND thread_id IS NOT NULL AND thread_id != 0
+                    GROUP BY thread_id
+                    ORDER BY posts DESC LIMIT 20
+                ''', (t90,))
+                data = c2.fetchall()
+                if data and len(data) >= 3:
+                    posts   = [row['posts']   for row in data]
+                    authors = [row['authors'] for row in data]
+                    freshness = [(time.time() - row['last_ts']) / 3600 for row in data]  # hours ago
+                    labels  = [f"#{row['thread_id']}" for row in data]
+                    sizes   = [max(30, p * 1.5) for p in posts]
+                    colors  = [1 - min(f / (7 * 24), 1) for f in freshness]  # freshness → 0..1
+                    cmap    = plt.get_cmap('RdYlGn')
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    sc = ax.scatter(authors, posts, s=sizes, c=colors, cmap=cmap,
+                                    alpha=0.85, edgecolors='#21262d', linewidths=0.8)
+                    for i, label in enumerate(labels):
+                        ax.annotate(label, (authors[i], posts[i]), fontsize=6.5,
+                                    ha='center', va='bottom', color='#e6edf3')
+                    plt.colorbar(sc, ax=ax, label='Свежесть (1=только что)')
+                    ax.set_xlabel('Уникальных авторов')
+                    ax.set_ylabel('Постов в треде')
+                    ax.set_title('28. Топ тредов (90д) — размер = активность', fontsize=12,
+                                 fontweight='bold', color='#ffa657')
+                    plt.tight_layout()
+                    save_chart(images, '28_threads_bubble.png')
     except Exception as e:
         print(f"Error Chart 28: {e}")
 
 def _generate_chart_27(images):
     # ── 29. Тренд медиа vs текст по дням (30д) ─────────────────────────────
     try:
-        conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-        conn2.row_factory = dict_factory
-        c2 = conn2.cursor()
-        t30_29 = time.time() - 30 * 86400
-        c2.execute('''
-            SELECT date(timestamp, 'unixepoch', 'localtime') as d,
-                   SUM(CASE WHEN content LIKE '%"type": "text"%' THEN 1 ELSE 0 END) as txt,
-                   SUM(CASE WHEN content LIKE '%"type": "photo"%' OR content LIKE '%"type": "video"%' OR content LIKE '%"type": "animation"%' OR content LIKE '%"type": "sticker"%' THEN 1 ELSE 0 END) as med
-            FROM Posts WHERE timestamp > ? GROUP BY d ORDER BY d
-        ''', (t30_29,))
-        rows29 = c2.fetchall()
-        conn2.close()
-        if rows29:
-            df29 = pd.DataFrame(rows29)
-            xs29 = list(range(len(df29)))
-            fig, ax = plt.subplots(figsize=(11, 4))
-            ax.stackplot(xs29, df29['txt'], df29['med'],
-                         labels=['Текст', 'Медиа'],
-                         colors=['#58a6ff', '#ff3399'], alpha=0.82)
-            step29 = max(1, len(df29) // 10)
-            ax.set_xticks(xs29[::step29])
-            ax.set_xticklabels(df29['d'].tolist()[::step29], rotation=30, ha='right', fontsize=7.5)
-            ax.set_ylabel('Постов в день')
-            ax.legend(loc='upper left', fontsize=9)
-            ax.set_title('29. Тренд медиа vs текст по дням (30д)', fontsize=13,
-                         fontweight='bold', color='#ff3399')
-            plt.tight_layout()
-            save_chart(images, '29_media_trend.png')
+        with contextlib.closing(connect_stats_db()) as conn2:
+            conn2.row_factory = dict_factory
+            with contextlib.closing(conn2.cursor()) as c2:
+                t30_29 = time.time() - 30 * 86400
+                c2.execute('''
+                    SELECT date(timestamp, 'unixepoch', 'localtime') as d,
+                           SUM(CASE WHEN content LIKE '%"type": "text"%' THEN 1 ELSE 0 END) as txt,
+                           SUM(CASE WHEN content LIKE '%"type": "photo"%' OR content LIKE '%"type": "video"%' OR content LIKE '%"type": "animation"%' OR content LIKE '%"type": "sticker"%' THEN 1 ELSE 0 END) as med
+                    FROM Posts WHERE timestamp > ? GROUP BY d ORDER BY d
+                ''', (t30_29,))
+                rows29 = c2.fetchall()
+                if rows29:
+                    df29 = pd.DataFrame(rows29)
+                    xs29 = list(range(len(df29)))
+                    fig, ax = plt.subplots(figsize=(11, 4))
+                    ax.stackplot(xs29, df29['txt'], df29['med'],
+                                 labels=['Текст', 'Медиа'],
+                                 colors=['#58a6ff', '#ff3399'], alpha=0.82)
+                    step29 = max(1, len(df29) // 10)
+                    ax.set_xticks(xs29[::step29])
+                    ax.set_xticklabels(df29['d'].tolist()[::step29], rotation=30, ha='right', fontsize=7.5)
+                    ax.set_ylabel('Постов в день')
+                    ax.legend(loc='upper left', fontsize=9)
+                    ax.set_title('29. Тренд медиа vs текст по дням (30д)', fontsize=13,
+                                 fontweight='bold', color='#ff3399')
+                    plt.tight_layout()
+                    save_chart(images, '29_media_trend.png')
     except Exception as e:
         print(f"Error Chart 29: {e}")
 
 def _generate_chart_28(images):
     # ── 30. Когорты новых авторов по неделям (13 нед) ─────────────────────────
     try:
-        conn2 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-        conn2.row_factory = dict_factory
-        c2 = conn2.cursor()
-        t91 = time.time() - 91 * 86400
-        c2.execute('''
-            SELECT author_id,
-                   strftime('%Y-%W', datetime(MIN(timestamp), 'unixepoch', 'localtime')) as first_week,
-                   COUNT(*) as posts
-            FROM Posts
-            WHERE timestamp > ? AND author_id IS NOT NULL AND author_id != 0
-            GROUP BY author_id
-        ''', (t91,))
-        data = c2.fetchall()
-        conn2.close()
-        if data:
-            from collections import defaultdict
-            cohort = defaultdict(lambda: {'new': 0, 'posts': 0})
-            for row in data:
-                wk = row['first_week']
-                cohort[wk]['new']   += 1
-                cohort[wk]['posts'] += row['posts']
-            weeks_sorted = sorted(cohort.keys())[-13:]
-            new_users = [cohort[w]['new']   for w in weeks_sorted]
-            avg_posts = [cohort[w]['posts'] / max(cohort[w]['new'], 1) for w in weeks_sorted]
-            x = range(len(weeks_sorted))
-            fig, ax1 = plt.subplots(figsize=(11, 4))
-            ax2 = ax1.twinx()
-            ax1.bar(x, new_users, color='#58a6ff', alpha=0.75, label='Новых авторов')
-            ax2.plot(x, avg_posts, color='#ffa657', linewidth=2, marker='o', label='Ср. постов')
-            ax1.set_xticks(list(x))
-            ax1.set_xticklabels([w.replace('20', '') for w in weeks_sorted], rotation=30, fontsize=7.5)
-            ax1.set_ylabel('Новых авторов', color='#58a6ff')
-            ax2.set_ylabel('Ср. постов на автора', color='#ffa657')
-            ax1.set_title('30. Когорты новых авторов (13 нед)', fontsize=13,
-                          fontweight='bold', color='#58a6ff')
-            lines1, labels1 = ax1.get_legend_handles_labels()
-            lines2, labels2 = ax2.get_legend_handles_labels()
-            ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=8, loc='upper left')
-            plt.tight_layout()
-            save_chart(images, '30_cohorts.png')
+        with contextlib.closing(connect_stats_db()) as conn2:
+            conn2.row_factory = dict_factory
+            with contextlib.closing(conn2.cursor()) as c2:
+                t91 = time.time() - 91 * 86400
+                c2.execute('''
+                    SELECT author_id,
+                           strftime('%Y-%W', datetime(MIN(timestamp), 'unixepoch', 'localtime')) as first_week,
+                           COUNT(*) as posts
+                    FROM Posts
+                    WHERE timestamp > ? AND author_id IS NOT NULL AND author_id != 0
+                    GROUP BY author_id
+                ''', (t91,))
+                data = c2.fetchall()
+                if data:
+                    from collections import defaultdict
+                    cohort = defaultdict(lambda: {'new': 0, 'posts': 0})
+                    for row in data:
+                        wk = row['first_week']
+                        cohort[wk]['new']   += 1
+                        cohort[wk]['posts'] += row['posts']
+                    weeks_sorted = sorted(cohort.keys())[-13:]
+                    new_users = [cohort[w]['new']   for w in weeks_sorted]
+                    avg_posts = [cohort[w]['posts'] / max(cohort[w]['new'], 1) for w in weeks_sorted]
+                    x = range(len(weeks_sorted))
+                    fig, ax1 = plt.subplots(figsize=(11, 4))
+                    ax2 = ax1.twinx()
+                    ax1.bar(x, new_users, color='#58a6ff', alpha=0.75, label='Новых авторов')
+                    ax2.plot(x, avg_posts, color='#ffa657', linewidth=2, marker='o', label='Ср. постов')
+                    ax1.set_xticks(list(x))
+                    ax1.set_xticklabels([w.replace('20', '') for w in weeks_sorted], rotation=30, fontsize=7.5)
+                    ax1.set_ylabel('Новых авторов', color='#58a6ff')
+                    ax2.set_ylabel('Ср. постов на автора', color='#ffa657')
+                    ax1.set_title('30. Когорты новых авторов (13 нед)', fontsize=13,
+                                  fontweight='bold', color='#58a6ff')
+                    lines1, labels1 = ax1.get_legend_handles_labels()
+                    lines2, labels2 = ax2.get_legend_handles_labels()
+                    ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=8, loc='upper left')
+                    plt.tight_layout()
+                    save_chart(images, '30_cohorts.png')
     except Exception as e:
         print(f"Error Chart 30: {e}")
 
 def _generate_chart_29(images):
     # ── 31. Активность борд по неделям (12 нед) stacked area ─────────────────
     try:
-        _conn31 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-        _conn31.row_factory = dict_factory
-        _c31 = _conn31.cursor()
-        _t84 = time.time() - 84 * 86400
-        _c31.execute('''
-            SELECT strftime('%Y-%W', datetime(timestamp, 'unixepoch', 'localtime')) as wk,
-                   board_id, COUNT(*) as cnt
-            FROM Posts WHERE timestamp > ? AND board_id IS NOT NULL
-            GROUP BY wk, board_id ORDER BY wk
-        ''', (_t84,))
-        _rows31 = _c31.fetchall(); _conn31.close()
-        if _rows31:
-            _df31 = pd.DataFrame(_rows31)
-            _bt31 = _df31.groupby('board_id')['cnt'].sum().sort_values(ascending=False)
-            _top_b31 = _bt31.index[:7].tolist()
-            _df31['board_id'] = _df31['board_id'].apply(lambda b: b if b in _top_b31 else 'other')
-            _df31 = _df31.groupby(['wk', 'board_id'], as_index=False)['cnt'].sum()
-            _piv31 = _df31.pivot(index='wk', columns='board_id', values='cnt').fillna(0)
-            _piv31 = _piv31.reindex(sorted(_piv31.index))
-            _bords31 = list(_piv31.columns)
-            _xs31 = list(range(len(_piv31)))
-            _cl31 = list(plt.cm.Set2.colors[:len(_bords31)])
-            fig, ax = plt.subplots(figsize=(13, 5))
-            ax.stackplot(_xs31, [_piv31[b].values for b in _bords31],
-                         labels=_bords31, colors=_cl31[:len(_bords31)], alpha=0.85)
-            _step31 = max(1, len(_piv31) // 10)
-            ax.set_xticks(_xs31[::_step31])
-            ax.set_xticklabels(_piv31.index.tolist()[::_step31], rotation=30, ha='right', fontsize=8)
-            ax.set_ylabel('Постов в неделю')
-            ax.legend(loc='upper left', fontsize=9, framealpha=0.7)
-            ax.set_title('31. Активность борд по неделям (12 нед)',
-                         fontsize=13, fontweight='bold', color='#ffa657')
-            plt.tight_layout()
-            save_chart(images, '31_boards_weekly.png')
+        with contextlib.closing(connect_stats_db()) as _conn31:
+            _conn31.row_factory = dict_factory
+            with contextlib.closing(_conn31.cursor()) as _c31:
+                _t84 = time.time() - 84 * 86400
+                _c31.execute('''
+                    SELECT strftime('%Y-%W', datetime(timestamp, 'unixepoch', 'localtime')) as wk,
+                           board_id, COUNT(*) as cnt
+                    FROM Posts WHERE timestamp > ? AND board_id IS NOT NULL
+                    GROUP BY wk, board_id ORDER BY wk
+                ''', (_t84,))
+                _rows31 = _c31.fetchall()
+                if _rows31:
+                    _df31 = pd.DataFrame(_rows31)
+                    _bt31 = _df31.groupby('board_id')['cnt'].sum().sort_values(ascending=False)
+                    _top_b31 = _bt31.index[:7].tolist()
+                    _df31['board_id'] = _df31['board_id'].apply(lambda b: b if b in _top_b31 else 'other')
+                    _df31 = _df31.groupby(['wk', 'board_id'], as_index=False)['cnt'].sum()
+                    _piv31 = _df31.pivot(index='wk', columns='board_id', values='cnt').fillna(0)
+                    _piv31 = _piv31.reindex(sorted(_piv31.index))
+                    _bords31 = list(_piv31.columns)
+                    _xs31 = list(range(len(_piv31)))
+                    _cl31 = list(plt.cm.Set2.colors[:len(_bords31)])
+                    fig, ax = plt.subplots(figsize=(13, 5))
+                    ax.stackplot(_xs31, [_piv31[b].values for b in _bords31],
+                                 labels=_bords31, colors=_cl31[:len(_bords31)], alpha=0.85)
+                    _step31 = max(1, len(_piv31) // 10)
+                    ax.set_xticks(_xs31[::_step31])
+                    ax.set_xticklabels(_piv31.index.tolist()[::_step31], rotation=30, ha='right', fontsize=8)
+                    ax.set_ylabel('Постов в неделю')
+                    ax.legend(loc='upper left', fontsize=9, framealpha=0.7)
+                    ax.set_title('31. Активность борд по неделям (12 нед)',
+                                 fontsize=13, fontweight='bold', color='#ffa657')
+                    plt.tight_layout()
+                    save_chart(images, '31_boards_weekly.png')
     except Exception as e:
         print(f"Error Chart 31: {e}")
 
@@ -1417,58 +1427,58 @@ def _generate_chart_30(images):
     try:
         import datetime as _dt32
         from collections import defaultdict as _dd32
-        _conn32 = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-        _conn32.row_factory = dict_factory
-        _c32 = _conn32.cursor()
-        _t60 = time.time() - 60 * 86400
-        _c32.execute('''
-            SELECT author_id, date(timestamp, 'unixepoch', 'localtime') as d
-            FROM Posts
-            WHERE timestamp > ? AND author_id IS NOT NULL AND author_id != 0
-            GROUP BY author_id, d ORDER BY author_id, d
-        ''', (_t60,))
-        _rows32 = _c32.fetchall(); _conn32.close()
-        if _rows32:
-            _ud32 = _dd32(list)
-            for _r32 in _rows32:
-                _ud32[_r32['author_id']].append(_r32['d'])
-            _streaks32 = []
-            for _uid32, _days32 in _ud32.items():
-                _ds32 = sorted(set(_days32)); _mx32 = 1; _cur32 = 1
-                for _i32 in range(1, len(_ds32)):
-                    _d0_32 = _dt32.date.fromisoformat(_ds32[_i32-1])
-                    _d1_32 = _dt32.date.fromisoformat(_ds32[_i32])
-                    if (_d1_32 - _d0_32).days == 1:
-                        _cur32 += 1; _mx32 = max(_mx32, _cur32)
-                    else:
-                        _cur32 = 1
-                _streaks32.append({'author_id': _uid32, 'streak': _mx32, 'days': len(_ds32)})
-            _streaks32 = sorted(_streaks32, key=lambda x: x['streak'], reverse=True)[:20]
-            _df32 = pd.DataFrame(_streaks32)
-            _df32['author_name'] = _df32['author_id'].apply(generate_schizo_name)
-            _half32 = len(_df32) // 2
-            _df32l = _df32.iloc[:_half32].reset_index(drop=True)
-            _df32r = _df32.iloc[_half32:].reset_index(drop=True)
-            _mx_s32 = _df32['streak'].max() or 1
-            fig, (_ax32l, _ax32r) = plt.subplots(1, 2, figsize=(18, 7))
-            for _ax32, _d32, _t32 in [(_ax32l, _df32l.iloc[::-1].reset_index(drop=True), 'Топ 1–10'),
-                                        (_ax32r, _df32r.iloc[::-1].reset_index(drop=True), 'Топ 11–20')]:
-                _colors32 = [plt.cm.RdYlGn(v / _mx_s32) for v in _d32['streak']]
-                _bars32 = _ax32.barh(_d32['author_name'], _d32['streak'],
-                                     color=_colors32, edgecolor='#1c2128', linewidth=0.7)
-                for _bar32, _row32 in zip(_bars32, _d32.itertuples()):
-                    _ax32.text(_bar32.get_width() + _mx_s32 * 0.01,
-                               _bar32.get_y() + _bar32.get_height() / 2,
-                               f'{_row32.streak}д  ({_row32.days} активных)',
-                               va='center', ha='left', fontsize=8, color='#e6edf3')
-                _ax32.set_xlim(0, _mx_s32 * 1.35)
-                _ax32.set_xlabel('Серия (дней подряд)')
-                _ax32.set_ylabel('')
-                _ax32.set_title(_t32, fontsize=12, color='#39d353')
-            plt.suptitle('32. Стрик-чемпионы (60д) — самые стойкие аноны  Top-20',
-                         fontsize=14, fontweight='bold', color='#39d353', y=1.01)
-            plt.tight_layout()
-            save_chart(images, '32_streak_champions.png', bbox_inches='tight')
+        with contextlib.closing(connect_stats_db()) as _conn32:
+            _conn32.row_factory = dict_factory
+            with contextlib.closing(_conn32.cursor()) as _c32:
+                _t60 = time.time() - 60 * 86400
+                _c32.execute('''
+                    SELECT author_id, date(timestamp, 'unixepoch', 'localtime') as d
+                    FROM Posts
+                    WHERE timestamp > ? AND author_id IS NOT NULL AND author_id != 0
+                    GROUP BY author_id, d ORDER BY author_id, d
+                ''', (_t60,))
+                _rows32 = _c32.fetchall()
+                if _rows32:
+                    _ud32 = _dd32(list)
+                    for _r32 in _rows32:
+                        _ud32[_r32['author_id']].append(_r32['d'])
+                    _streaks32 = []
+                    for _uid32, _days32 in _ud32.items():
+                        _ds32 = sorted(set(_days32)); _mx32 = 1; _cur32 = 1
+                        for _i32 in range(1, len(_ds32)):
+                            _d0_32 = _dt32.date.fromisoformat(_ds32[_i32-1])
+                            _d1_32 = _dt32.date.fromisoformat(_ds32[_i32])
+                            if (_d1_32 - _d0_32).days == 1:
+                                _cur32 += 1; _mx32 = max(_mx32, _cur32)
+                            else:
+                                _cur32 = 1
+                        _streaks32.append({'author_id': _uid32, 'streak': _mx32, 'days': len(_ds32)})
+                    _streaks32 = sorted(_streaks32, key=lambda x: x['streak'], reverse=True)[:20]
+                    _df32 = pd.DataFrame(_streaks32)
+                    _df32['author_name'] = _df32['author_id'].apply(generate_schizo_name)
+                    _half32 = len(_df32) // 2
+                    _df32l = _df32.iloc[:_half32].reset_index(drop=True)
+                    _df32r = _df32.iloc[_half32:].reset_index(drop=True)
+                    _mx_s32 = _df32['streak'].max() or 1
+                    fig, (_ax32l, _ax32r) = plt.subplots(1, 2, figsize=(18, 7))
+                    for _ax32, _d32, _t32 in [(_ax32l, _df32l.iloc[::-1].reset_index(drop=True), 'Топ 1–10'),
+                                                (_ax32r, _df32r.iloc[::-1].reset_index(drop=True), 'Топ 11–20')]:
+                        _colors32 = [plt.cm.RdYlGn(v / _mx_s32) for v in _d32['streak']]
+                        _bars32 = _ax32.barh(_d32['author_name'], _d32['streak'],
+                                             color=_colors32, edgecolor='#1c2128', linewidth=0.7)
+                        for _bar32, _row32 in zip(_bars32, _d32.itertuples()):
+                            _ax32.text(_bar32.get_width() + _mx_s32 * 0.01,
+                                       _bar32.get_y() + _bar32.get_height() / 2,
+                                       f'{_row32.streak}д  ({_row32.days} активных)',
+                                       va='center', ha='left', fontsize=8, color='#e6edf3')
+                        _ax32.set_xlim(0, _mx_s32 * 1.35)
+                        _ax32.set_xlabel('Серия (дней подряд)')
+                        _ax32.set_ylabel('')
+                        _ax32.set_title(_t32, fontsize=12, color='#39d353')
+                    plt.suptitle('32. Стрик-чемпионы (60д) — самые стойкие аноны  Top-20',
+                                 fontsize=14, fontweight='bold', color='#39d353', y=1.01)
+                    plt.tight_layout()
+                    save_chart(images, '32_streak_champions.png', bbox_inches='tight')
     except Exception as e:
         print(f"Error Chart 32: {e}")
 
@@ -1482,111 +1492,106 @@ def generate_all_charts():
 
 
 def _generate_all_charts_locked():
-    conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-    conn.row_factory = dict_factory
-    c = conn.cursor()
-
     thirty_days_ago = time.time() - (30 * 24 * 3600)
     images = []
-
-
     edges_data = None
-    try:
-            _generate_chart_1(thirty_days_ago, c, images)
-            _generate_chart_2(c, images)
-            _generate_chart_3(thirty_days_ago, c, images)
-            _generate_chart_4(thirty_days_ago, c, images)
-            _generate_chart_5(thirty_days_ago, c, images)
-            _generate_chart_6(thirty_days_ago, c, images)
-            _generate_chart_7(thirty_days_ago, c, images)
-            _generate_chart_8(thirty_days_ago, c, images)
-            edges_data = _generate_chart_9(thirty_days_ago, c, images)
-            _generate_chart_10(edges_data, images)
-            _generate_chart_11(edges_data, images)
-            _generate_chart_12(thirty_days_ago, c, images)
-            _generate_chart_13(c, images)
-            _generate_chart_14(thirty_days_ago, c, images)
-            _generate_chart_15(thirty_days_ago, c, images)
-            _generate_chart_16(thirty_days_ago, c, images)
-            _generate_chart_17(thirty_days_ago, c, images)
-            _generate_chart_18(thirty_days_ago, c, images)
-            _generate_chart_19(c, images)
-            _generate_chart_20(c, images)
-            _generate_chart_21(c, images)
-            _generate_chart_22(c, images)
-            _generate_chart_23(c, images)
-            _generate_chart_24(c, images)
-            _generate_chart_25(images)
-            _generate_chart_26(c, images)
-            _generate_chart_27(images)
-            _generate_chart_28(images)
-            _generate_chart_29(images)
-            _generate_chart_30(images)
 
-    finally:
-        if 'conn' in locals() and conn:
-            conn.close()
+    with contextlib.closing(connect_stats_db()) as conn:
+        conn.row_factory = dict_factory
+        with contextlib.closing(conn.cursor()) as c:
+            try:
+                _generate_chart_1(thirty_days_ago, c, images)
+                _generate_chart_2(c, images)
+                _generate_chart_3(thirty_days_ago, c, images)
+                _generate_chart_4(thirty_days_ago, c, images)
+                _generate_chart_5(thirty_days_ago, c, images)
+                _generate_chart_6(thirty_days_ago, c, images)
+                _generate_chart_7(thirty_days_ago, c, images)
+                _generate_chart_8(thirty_days_ago, c, images)
+                edges_data = _generate_chart_9(thirty_days_ago, c, images)
+                _generate_chart_10(edges_data, images)
+                _generate_chart_11(edges_data, images)
+                _generate_chart_12(thirty_days_ago, c, images)
+                _generate_chart_13(c, images)
+                _generate_chart_14(thirty_days_ago, c, images)
+                _generate_chart_15(thirty_days_ago, c, images)
+                _generate_chart_16(thirty_days_ago, c, images)
+                _generate_chart_17(thirty_days_ago, c, images)
+                _generate_chart_18(thirty_days_ago, c, images)
+                _generate_chart_19(c, images)
+                _generate_chart_20(c, images)
+                _generate_chart_21(c, images)
+                _generate_chart_22(c, images)
+                _generate_chart_23(c, images)
+                _generate_chart_24(c, images)
+                _generate_chart_25(images)
+                _generate_chart_26(c, images)
+                _generate_chart_27(images)
+                _generate_chart_28(images)
+                _generate_chart_29(images)
+                _generate_chart_30(images)
+            except Exception as e:
+                print(f"Error generating charts: {e}")
 
     return images
 def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
-    conn = sqlite3.connect('file:dvach_bot.db?mode=ro', uri=True)
-    c = conn.cursor()
+    with contextlib.closing(connect_stats_db()) as conn:
+        with contextlib.closing(conn.cursor()) as c:
 
-    # 1. Fetch user profile
-    c.execute("SELECT balance, role, created_at, lie_media, custom_prefix FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-    profile = c.fetchone()
-    if profile:
-        balance, role, created_at, lie_media, custom_prefix = profile
-    else:
-        balance, role, created_at, lie_media, custom_prefix = 0.0, 'user', time.time(), 0, None
+            # 1. Fetch user profile
+            c.execute("SELECT balance, role, created_at, lie_media, custom_prefix FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            profile = c.fetchone()
+            if profile:
+                balance, role, created_at, lie_media, custom_prefix = profile
+            else:
+                balance, role, created_at, lie_media, custom_prefix = 0.0, 'user', time.time(), 0, None
 
-    # 2. Count actual posts
-    c.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ? AND board_id = ?", (user_id, board_id))
-    posts_count = c.fetchone()[0]
+            # 2. Count actual posts
+            c.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ? AND board_id = ?", (user_id, board_id))
+            posts_count = c.fetchone()[0]
 
-    # 3. Count reactions received
-    c.execute("""
-        SELECT COUNT(*) FROM ReactionQueue rq
-        JOIN Posts p ON rq.post_num = p.post_num
-        WHERE p.author_id = ? AND p.board_id = ?
-    """, (user_id, board_id))
-    rx_received = c.fetchone()[0]
+            # 3. Count reactions received
+            c.execute("""
+                SELECT COUNT(*) FROM ReactionQueue rq
+                JOIN Posts p ON rq.post_num = p.post_num
+                WHERE p.author_id = ? AND p.board_id = ?
+            """, (user_id, board_id))
+            rx_received = c.fetchone()[0]
 
-    # 4. Count reactions given
-    c.execute("SELECT COUNT(*) FROM ReactionQueue WHERE user_id = ?", (user_id,))
-    rx_given = c.fetchone()[0]
+            # 4. Count reactions given
+            c.execute("SELECT COUNT(*) FROM ReactionQueue WHERE user_id = ?", (user_id,))
+            rx_given = c.fetchone()[0]
 
-    # 5. Count mutes
-    c.execute("SELECT COUNT(*) FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-    mutes_count = c.fetchone()[0]
+            # 5. Count mutes
+            c.execute("SELECT COUNT(*) FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            mutes_count = c.fetchone()[0]
 
-    # 6. Rank among other users on this board
-    c.execute("""
-        SELECT user_id FROM Users
-        WHERE board_id = ?
-        ORDER BY posts_count DESC, balance DESC;
-    """, (board_id,))
-    all_users = [r[0] for r in c]
-    try:
-        rank = all_users.index(user_id) + 1
-    except ValueError:
-        rank = len(all_users) + 1
+            # 6. Rank among other users on this board
+            c.execute("""
+                SELECT user_id FROM Users
+                WHERE board_id = ?
+                ORDER BY posts_count DESC, balance DESC;
+            """, (board_id,))
+            all_users = [r[0] for r in c]
+            try:
+                rank = all_users.index(user_id) + 1
+            except ValueError:
+                rank = len(all_users) + 1
 
-    conn.close()
 
-    return {
-        'balance': balance,
-        'role': role,
-        'created_at': created_at,
-        'lie_media': lie_media,
-        'custom_prefix': custom_prefix,
-        'posts_count': posts_count,
-        'rx_received': rx_received,
-        'rx_given': rx_given,
-        'mutes_count': mutes_count,
-        'rank': rank,
-        'total_users': len(all_users)
-    }
+            return {
+                'balance': balance,
+                'role': role,
+                'created_at': created_at,
+                'lie_media': lie_media,
+                'custom_prefix': custom_prefix,
+                'posts_count': posts_count,
+                'rx_received': rx_received,
+                'rx_given': rx_given,
+                'mutes_count': mutes_count,
+                'rank': rank,
+                'total_users': len(all_users)
+            }
 
 
 def _get_role_name(role: str) -> str:

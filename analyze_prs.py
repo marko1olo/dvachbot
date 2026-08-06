@@ -26,7 +26,7 @@ for branch in branches:
             'diffstat': diffstat
         })
     except subprocess.CalledProcessError:
-        pass
+        import traceback; traceback.print_exc()
 
 # Group and print
 prs.sort(key=lambda x: x['branch'])

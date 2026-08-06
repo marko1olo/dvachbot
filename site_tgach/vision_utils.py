@@ -57,6 +57,6 @@ async def describe_image_for_bot(img_bytes: bytes, caption: str = "") -> str:
         )
         return resp.choices[0].message.content.strip()
     except Exception as e:
-        logger.error(f"Error describing image: {e}")
+        logger.error(f"Error describing image: {e}", exc_info=True)
         return f"[?? ??????? ?????????? ?????: {e}]"
 

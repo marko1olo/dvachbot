@@ -51,7 +51,7 @@ for mod_name in sys.modules:
         try:
             sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
         except AttributeError:
-            pass
+            import traceback; traceback.print_exc()
 
 # Stub async_lru.alru_cache so it acts as an identity decorator instead of returning MagicMock.
 # Without this, @alru_cache(...) wraps async functions and replaces them with MagicMock

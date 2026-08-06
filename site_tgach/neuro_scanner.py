@@ -56,7 +56,7 @@ class NeuroScanner:
                 
             data = resp.json()
         except Exception as e:
-            logger.error(f"Catalog fetch error: {e}")
+            logger.error(f"Catalog fetch error: {e}", exc_info=True)
             return False
 
         threads = data.get('threads', [])
@@ -113,7 +113,7 @@ class NeuroScanner:
                 try:
                     score = await self._evaluate_thread_ai(cand['subject'], cand['comment'])
                 except Exception as e:
-                    logger.error(f"AI Eval error for {cand['num']}: {e}")
+                    logger.error(f"AI Eval error for {cand['num']}: {e}", exc_info=True)
                     score = 0
                 cand['score'] = score
                 logger.info(f"   > Thread {cand['num']} score: {score}")
@@ -302,7 +302,7 @@ async def scanner_loop(app_state):
                 await asyncio.sleep(wait_seconds)
 
             except Exception as e:
-                logger.error(f"Scanner loop crash: {e}")
+                logger.error(f"Scanner loop crash: {e}", exc_info=True)
                 await asyncio.sleep(300)
     finally:
         await scanner.close()

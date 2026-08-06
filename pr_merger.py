@@ -36,7 +36,7 @@ def main():
                 
             valid_branches.append(branch)
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 
     print(f"Found {len(valid_branches)} valid branches to attempt merging.")
     

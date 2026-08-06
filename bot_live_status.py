@@ -1,3 +1,4 @@
+import contextlib
 
 import json
 import sqlite3
@@ -116,29 +117,36 @@ def _db_counts() -> dict:
         return {"error": "db missing"}
     result: dict[str, object] = {}
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=5)
-        cur = conn.cursor()
-        result["quick_check"] = cur.execute("PRAGMA quick_check").fetchone()[0]
-        result["Users"] = cur.execute("SELECT COUNT(*) FROM Users").fetchone()[0]
-        result["Posts"] = cur.execute("SELECT COUNT(*) FROM Posts").fetchone()[0]
-        result["PostCopies"] = cur.execute("SELECT COUNT(*) FROM PostCopies").fetchone()[0]
-        result["BroadcastQueue"] = cur.execute("SELECT COUNT(*) FROM BroadcastQueue").fetchone()[0]
-        try:
-            result["Users_active"] = cur.execute("SELECT COUNT(*) FROM Users WHERE status='active'").fetchone()[0]
-            result["Users_banned"] = cur.execute("SELECT COUNT(*) FROM Users WHERE status='banned'").fetchone()[0]
-        except sqlite3.OperationalError:
-            pass
-        try:
-            result["BroadcastQueue_unsent"] = cur.execute(
-                "SELECT COUNT(*) FROM BroadcastQueue WHERE COALESCE(is_sent_to_tg, 0)=0"
-            ).fetchone()[0]
-        except sqlite3.OperationalError:
-            pass
-        try:
-            result["DeliveryQueue"] = cur.execute("SELECT COUNT(*) FROM DeliveryQueue WHERE status='pending'").fetchone()[0]
-        except sqlite3.OperationalError:
-            result["DeliveryQueue"] = "table_missing_until_new_build_starts"
-        conn.close()
+        with contextlib.closing(sqlite3.connect(DB_PATH, timeout=15.0)) as conn:
+            try: conn.execute('PRAGMA journal_mode=WAL')
+            except: pass
+            try: conn.execute('PRAGMA synchronous=NORMAL')
+            except: pass
+            try: conn.execute('PRAGMA busy_timeout=15000')
+            except: pass
+            try: conn.execute('PRAGMA wal_autocheckpoint=1000')
+            except: pass
+            cur = conn.cursor()
+            result["quick_check"] = cur.execute("PRAGMA quick_check").fetchone()[0]
+            result["Users"] = cur.execute("SELECT COUNT(*) FROM Users").fetchone()[0]
+            result["Posts"] = cur.execute("SELECT COUNT(*) FROM Posts").fetchone()[0]
+            result["PostCopies"] = cur.execute("SELECT COUNT(*) FROM PostCopies").fetchone()[0]
+            result["BroadcastQueue"] = cur.execute("SELECT COUNT(*) FROM BroadcastQueue").fetchone()[0]
+            try:
+                result["Users_active"] = cur.execute("SELECT COUNT(*) FROM Users WHERE status='active'").fetchone()[0]
+                result["Users_banned"] = cur.execute("SELECT COUNT(*) FROM Users WHERE status='banned'").fetchone()[0]
+            except sqlite3.OperationalError:
+                import traceback; traceback.print_exc()
+            try:
+                result["BroadcastQueue_unsent"] = cur.execute(
+                    "SELECT COUNT(*) FROM BroadcastQueue WHERE COALESCE(is_sent_to_tg, 0)=0"
+                ).fetchone()[0]
+            except sqlite3.OperationalError:
+                import traceback; traceback.print_exc()
+            try:
+                result["DeliveryQueue"] = cur.execute("SELECT COUNT(*) FROM DeliveryQueue WHERE status='pending'").fetchone()[0]
+            except sqlite3.OperationalError:
+                result["DeliveryQueue"] = "table_missing_until_new_build_starts"
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
     return result

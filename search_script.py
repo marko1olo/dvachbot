@@ -8,6 +8,7 @@ for root, dirs, files in os.walk('C:\\Users\\danat\\Desktop\\dvachbot'):
                     for i, line in enumerate(lines):
                         if '???' in line.lower() or '????' in line.lower():
                             # Only print if surrounded by quotes
-                            if '\"???\"' in line.lower() or \"'???'\" in line.lower() or '\"????\"' in line.lower() or \"'????'\" in line.lower():
+                            if '"???"' in line.lower() or "'???'" in line.lower() or '"????"' in line.lower() or "'????'" in line.lower():
                                 print(f'{os.path.join(root, file)}:{i+1}:{line.strip()}')
             except: pass
+

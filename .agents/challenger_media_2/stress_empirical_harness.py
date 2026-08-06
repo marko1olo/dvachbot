@@ -99,7 +99,7 @@ def run_empirical_harness():
     try:
         FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
 
     results = []
 

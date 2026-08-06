@@ -1,9 +1,10 @@
 import asyncio
+from aiogram import Bot
 from shared_state import *
 try:
     from moderation_config import *
 except ImportError:
-    pass
+    import traceback; traceback.print_exc()
 from broadcaster import MessageBroadcaster, DeliveryResults, _trim_post_copy_maps_unlocked, _order_recipients_for_delivery, _build_lie_media_content, _format_message_body, add_you_to_my_posts_fast
 from utils import split_text
 from common.text_utils import clean_html_for_tg
@@ -36,13 +37,14 @@ import re
 import html
 import random
 import math
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+UTC = timezone.utc
 
 from shared_state import *
 try:
     from moderation_config import *
 except ImportError:
-    pass
+    import traceback; traceback.print_exc()
 
 async def format_thread_post_header(board_id: str, local_post_num: int, author_id: int, thread_info: dict, stream: str = 'ru') -> str:
 
@@ -109,7 +111,7 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                         if items.get("shit_until", 0) > int(time.time()):
                             has_poop = True
                     except Exception:
-                        pass
+                        import traceback; traceback.print_exc()
                 if row[1] and row[2] and int(time.time()) < row[2]:
                     prefix_str = f"<b>{row[1]}</b> "
         if has_poop:
@@ -325,7 +327,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
             if row:
                 board_id = row[0]
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
 
     channel_copies = await get_all_channel_copies(post_num)
     messages_to_delete_info = await get_post_copies(post_num)
@@ -347,7 +349,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
                             if 'posts' in threads_data[thread_id]:
                                 threads_data[thread_id]['posts'].remove(post_num)
                         except (ValueError, KeyError):
-                            pass
+                            import traceback; traceback.print_exc()
         message_copies_in_mem = post_to_messages.pop(post_num, {})
         for uid, mid_or_list in message_copies_in_mem.items():
             if isinstance(mid_or_list, list):
@@ -362,7 +364,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
             try:
                 await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
     if not messages_to_delete_info:
         return 0 if deleted_from_db else 0
         
@@ -407,7 +409,7 @@ async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str,
             try:
                 await bot_instance.send_message(uid, notify_text)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
     print(f"[THREAD DELETE] [{board_id}] Тред {thread_id} удалён. Пользователей переведено: {len(users_in_thread)}. Инициатор: {initiator_id}")
 
 async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
@@ -436,3 +438,145 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
         import traceback
         print(f"Критическая ошибка в delete_user_posts: {e}\n{traceback.format_exc()}")
         return 0
+
+def _get_random_header_prefix(lang: str = 'ru') -> str:
+
+    rand_prefix = random.random()
+    if lang == 'en':
+        if rand_prefix < 0.005: return "### ADMIN ### "
+        if rand_prefix < 0.008: return "Me - "
+        if rand_prefix < 0.01: return "Faggot - "
+        if rand_prefix < 0.012: return "### DEGENERATE ### "
+        if rand_prefix < 0.016: return "Biden - "
+        if rand_prefix < 0.021: return "EMPEROR CONAN - "
+        if rand_prefix < 0.023: return "### TRANNY ### "
+        if rand_prefix < 0.05: return "Anon - " # Чаще для английского
+        return ""
+    if lang == 'jp':
+        if rand_prefix < 0.005: return "### 管理人 ### " # Kanrinin (Admin)
+        if rand_prefix < 0.008: return "俺 - " # Ore (Me)
+        if rand_prefix < 0.01: return "ホモ - " # Homo (Faggot)
+        if rand_prefix < 0.012: return "### 変質者 ### " # Henshitsu-sha (Degenerate)
+        if rand_prefix < 0.016: return "岸田 - " # Kishida (PM context)
+        if rand_prefix < 0.021: return "コナン皇帝 - " # Emperor Conan
+        if rand_prefix < 0.023: return "### オカマ ### " # Okama (Tranny)
+        if rand_prefix < 0.030: return "お前 - " # Omae (You)
+        if rand_prefix < 0.040: return "暇人 - " # Himajin (Bitard/Neet)
+        if rand_prefix < 0.08: return "名無し - " # Nanashi (Anon) - самый частый
+        return ""
+    if rand_prefix < 0.005: return "### АДМИН ### "
+    if rand_prefix < 0.008: return "Абу - "
+    if rand_prefix < 0.01: return "Пидор - "
+    if rand_prefix < 0.012: return "### ДЖУЛУП ### "
+    if rand_prefix < 0.014: return "### Хуесос ### "
+    if rand_prefix < 0.016: return "Пыня - "
+    if rand_prefix < 0.018: return "Нариман Намазов - "
+    if rand_prefix < 0.021: return "ИМПЕРАТОР КОНАН - "
+    if rand_prefix < 0.023: return "Антон Бабкин - "
+    if rand_prefix < 0.025: return "НАРИМАН НАМАЗОВ - "
+    if rand_prefix < 0.027: return "ПУТИН - "
+    if rand_prefix < 0.028: return "Гей - "
+    if rand_prefix < 0.030: return "Анархист - "
+    if rand_prefix < 0.033: return "Имбецил - "
+    if rand_prefix < 0.035: return "### ЧМО ### "
+    if rand_prefix < 0.037: return "### ОНАНИСТ ### "
+    if rand_prefix < 0.040: return "### ЧЕЧЕНЕЦ ### "
+    if rand_prefix < 0.042: return "АААААААА - "
+    if rand_prefix < 0.044: return "### Аниме девочка ### "
+    if rand_prefix < 0.046: return "ChatGPT 5.4 - "
+    if rand_prefix < 0.048: return "Безумец - "
+    if rand_prefix < 0.050: return "Битард - "
+    if rand_prefix < 0.052: return "Мегумин - "
+    if rand_prefix < 0.054: return "Гопник - "
+    if rand_prefix < 0.056: return "Шизик - "
+    if rand_prefix < 0.058: return "Джефри Эпштейн - "
+    if rand_prefix < 0.060: return "Максим Тесак - "
+    if rand_prefix < 0.062: return "Навальный - "
+    if rand_prefix < 0.064: return "Рамзанка дыров - "
+    if rand_prefix < 0.066: return "СВОШНИК - "
+    if rand_prefix < 0.068: return "Герой Украины - "
+    if rand_prefix < 0.070: return "Claude Opus 4.6 - "
+    if rand_prefix < 0.076: return "Администратор - "
+    if rand_prefix < 0.08: return "Админ - "
+    if rand_prefix < 0.085: return "Модератор - "
+    if rand_prefix < 0.1: return "Анон - "
+    if rand_prefix < 0.115: return "Анонимус - "
+    if rand_prefix < 0.13: return "Анонимный пользователь - "
+    if rand_prefix < 0.132: return "Мочекрад - "
+    if rand_prefix < 0.134: return "Семён - "
+    if rand_prefix < 0.136: return "Макака - "
+    if rand_prefix < 0.138: return "РНН-господин - "
+    if rand_prefix < 0.140: return "Омеган - "
+    if rand_prefix < 0.142: return "Сыч - "
+    if rand_prefix < 0.144: return "Куколд - "
+    if rand_prefix < 0.146: return "Хач - "
+    if rand_prefix < 0.148: return "Педофил - "
+    if rand_prefix < 0.150: return "Зеленский - "
+    if rand_prefix < 0.152: return "Мыкола - "
+    return ""
+
+async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru') -> str:
+    board_data[board_id].setdefault('board_post_count', 0)
+    board_data[board_id]['board_post_count'] += 1
+    post_num_formatted = str(post_num)
+    msk_now = datetime.now(UTC) + timedelta(hours=3)
+    hour = msk_now.hour
+    is_night = hour >= 23 or hour < 6
+    circle = ""
+    rand = random.random()
+    if is_night:
+        if rand < 0.003: circle = "🌑 "
+        elif rand < 0.006: circle = "🌒 "
+        elif rand < 0.009: circle = "🌓 "
+        elif rand < 0.012: circle = "🌔 "
+        elif rand < 0.015: circle = "🌝 "
+        elif rand < 0.018: circle = "🌌 "
+    else:
+        if rand < 0.003: circle = "🔴 "
+        elif rand < 0.006: circle = "🟢 "
+        elif rand < 0.009: circle = "☢️ "
+        elif rand < 0.012: circle = "🟡 "
+        elif rand < 0.015: circle = "🔵 "
+        elif rand < 0.018: circle = "⭕ "
+    if board_id == 'int':
+        prefix = _get_random_header_prefix(lang='en')
+        return f"{circle}{prefix}Post No.{post_num_formatted}"
+    b_data = board_data[board_id]
+    if b_data['slavaukraine_mode']:
+        headers = [f"💙💛 Пiст №{post_num_formatted}", f"🇺🇦 Повiдомлення №{post_num_formatted}"]
+        return random.choice(headers)
+    if b_data['zaputin_mode']:
+        return f"🇷🇺 Пост №{post_num_formatted}"
+    if b_data['anime_mode']:
+        return f"🌸 投稿 {post_num_formatted} 番"
+    if b_data['suka_blyat_mode']:
+        return f"💢 Пост №{post_num_formatted}"
+    if b_data['gopnik_mode']:
+        return f"🤙 Малява №{post_num_formatted}"
+    if b_data.get('schizo_mode'):
+        return f"++ СИГНАЛ #{post_num_formatted} ++"
+    if b_data['polish_mode']:
+        return f"🇵🇱 Post №{post_num_formatted}"
+    if b_data['warhammer_mode']:
+        return f"⚔️ Донесение №{post_num_formatted}"
+    if b_data['imperial_mode']:
+        return f"📜 Депеша №{post_num_formatted}"
+    if b_data.get('matrix_mode'):
+        return f"🟩 Пакет №{post_num_formatted}"
+    if b_data.get('america_mode'):
+        return f"🦅 Freedom Post №{post_num_formatted}"
+    if b_data.get('holiday_mode'):
+        return f"🎄 Подарок №{post_num_formatted}"
+    if b_data.get('oldweb_mode'):
+        return f"🖥️ Сообщение #{post_num_formatted}"
+    if b_data.get('jewish_mode'):
+        return f"📜 Казус №{post_num_formatted}"
+    prefix_lang = 'en' if stream == 'en' else 'ru' 
+    prefix = _get_random_header_prefix(lang=prefix_lang)
+    if stream == 'en':
+        return f"{circle}{prefix}Post No.{post_num_formatted}"
+    elif stream == 'jp':
+        return f"{circle}{prefix}レス番 {post_num_formatted}"
+    else:
+        return f"{circle}{prefix}Пост №{post_num_formatted}"
+

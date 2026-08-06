@@ -30,7 +30,7 @@ def run_edge_case_tests():
     try:
         FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
 
     results = []
 

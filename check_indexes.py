@@ -6,7 +6,9 @@ if not os.path.exists(db_path):
     print("No DB found")
     exit()
 
-conn = sqlite3.connect(db_path)
+conn = sqlite3.connect(db_path, timeout=15.0)
+conn.execute("PRAGMA journal_mode=WAL;")
+conn.execute("PRAGMA busy_timeout=15000;")
 cur = conn.cursor()
 
 def print_indexes(table):

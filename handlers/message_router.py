@@ -1,3 +1,4 @@
+import shared_state
 from aiogram.types import Message
 from aiogram import Router, types
 from aiogram.filters import Command
@@ -5,7 +6,7 @@ from aiogram.filters import Command
 message_router = Router()
 
 import asyncio
-import datetime
+from datetime import datetime, timedelta, timezone, UTC
 import random
 import re
 import time
@@ -13,20 +14,34 @@ from typing import Optional
 from aiogram import Bot, F, types
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
+import itertools
 from common.config import *
 from common.board_config import BOARD_CONFIG
 from common.html_utils import escape_html
 from common.text_utils import clean_html_tags, sanitize_html
-from common.database import get_post_by_num, update_post_content, get_pool
+from common.database import get_post_by_num, update_post_content, get_pool, get_max_post_num, add_or_activate_user
+from common.db_pool import db_lock
 from shared_state import *
+from shared_state import _media_group_state_key
 
 from common.task_manager import spawn_task
-from delivery_manager import execute_delayed_edit
+from delivery_manager import execute_delayed_edit, complete_media_group_after_delay
+from broadcaster import send_message_to_users
+from post_helpers import format_header
+from common.thread_manager import get_thread_info
 from common.bot_helpers import _get_user_active_items
 from common.bot_helpers import delete_message_after_delay
 from common.database import get_post_info_by_copy
 from common.bot_helpers import process_new_post
 from common.bot_helpers import accept_duel_logic, decline_duel_logic
+from bot_helpers import is_admin, _get_msg_content_and_type
+from common.spam_filter import analyze_message_for_spam, SpamResult, is_spam_filtered, acquire_spam_lock, get_spam_violation_level
+from text_assets import (
+    EARNING_NOTIFICATIONS, REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES, 
+    CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP
+)
+from ai_manager import schedule_persona_reply, check_and_send_contextual_reply
+import __main__ as main
 
 # Some functions like `spawn_task` and `execute_delayed_edit` are in main.py, 
 # but they might cause cyclic imports if imported directly. We will try importing them.
@@ -284,7 +299,10 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
 @message_router.message(~F.media_group_id)
 async def handle_message(message: Message, board_id: str | None, stream: str = 'ru'):
     user_id = message.from_user.id
-    if not board_id: return
+    print(f"📩 [MSG RECEIVED] user={user_id} chat={message.chat.id} board={board_id} text={repr(message.text or message.caption or message.content_type)}")
+    if not board_id:
+        print(f"⚠️ [MSG REJECTED] board_id is None for user={user_id} bot={message.bot.id}")
+        return
     if board_id in THREAD_BOARDS:
         if await ensure_user_in_valid_thread(message.bot, board_id, user_id):
             try: await message.delete()
@@ -324,7 +342,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             try:
                 await message.delete()
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
             last_insult_time = b_data.get('last_roll_time', {}).get(user_id, 0)
             now = time.time()
             if now - last_insult_time > 5:
@@ -341,7 +359,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     spawn_task(delete_message_after_delay(sent_msg, 7))
                     b_data.setdefault('last_roll_time', {})[user_id] = now
                 except Exception: 
-                    pass
+                    import traceback; traceback.print_exc()
             return
         supported_types = ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'] 
         if message.content_type not in supported_types:
@@ -396,10 +414,12 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             try:
                 spawn_task(message.answer(phrase))
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
                 
         is_sage = False 
-        html_text_content = message.html_text or getattr(message, 'caption_html_text', None) or ""
+        h_val = getattr(message, 'html_text', None)
+        c_val = getattr(message, 'caption_html_text', None)
+        html_text_content = (h_val if isinstance(h_val, str) else None) or (c_val if isinstance(c_val, str) else None) or message.text or message.caption or ""
         plain_text_check = (message.text or message.caption or "").lower().strip()
         if plain_text_check.startswith("sage") or plain_text_check.startswith("сажа"):
             is_sage = True
@@ -463,13 +483,13 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             if is_sage: content['is_sage'] = True
             
             if not is_shadow_muted and text_chunk:
-                if _is_spam_filtered(text_chunk, board_id, user_id):
+                if is_spam_filtered(text_chunk, board_id, user_id):
                     is_shadow_muted = True 
                 else:
-                    spawn_task(main.check_and_send_contextual_reply(message.bot, user_id, text_chunk, board_id, stream=stream))
+                    spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_chunk, board_id, stream=stream))
             
             if is_shadow_muted:
-                await process_shadow_reject(ShadowRejectContext(
+                await process_shadow_reject(shared_state.ShadowRejectContext(
                     bot=message.bot,
                     board_id=board_id,
                     user_id=user_id,
@@ -478,7 +498,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     stream=stream
                 ))
             else:
-                post_num = await process_new_post(NewPostParams(
+                post_num = await process_new_post(shared_state.NewPostParams(
                     bot_instance=message.bot,
                     board_id=board_id,
                     user_id=user_id,
@@ -491,24 +511,24 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     should_reply = False
                     if is_reply_to_bot:
                         now_t = time.time()
-                        last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
+                        last_user_t = last_persona_dialogue_user_ts.get(user_id, 0)
                         if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
                             should_reply = True
-                            _last_persona_dialogue_user_ts[user_id] = now_t
+                            last_persona_dialogue_user_ts[user_id] = now_t
                     elif user_id in b_data.get('persona_favorites', {}):
                         now_t_fav = time.time()
-                        if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.08:
+                        if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 90.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.08:
                             should_reply = True
                     else:
                         # Глобальный пассивный тригер: 4%
                         now_t_glob = time.time()
-                        if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.04:
+                        if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.04:
                             should_reply = True
                     if should_reply:
-                        _last_persona_board_ts[board_id] = time.time()  # race guard
+                        last_persona_board_ts[board_id] = time.time()  # race guard
                         text_payload = text_chunk or f"[{message.content_type}]"
                         photo_id = message.photo[-1].file_id if message.photo else None
-                        spawn_task(main.schedule_persona_reply(message.bot, board_id, post_num, text_payload, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
+                        spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_payload, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
                     # --- THE ANCHOR (Мудрый Чед) ---
                     from anchor_bot import anchor_tick, trigger_anchor_post
                     if anchor_tick(board_id):
@@ -579,13 +599,17 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     _media_unique_id = None
     if message.content_type == 'text':
         text_for_corpus = message.text
-        safe_html_text = sanitize_html(processed_html_text)
+        html_val = getattr(message, 'html_text', None)
+        raw_text_html = html_val if isinstance(html_val, str) else (message.text or "")
+        safe_html_text = sanitize_html(raw_text_html)
         content.update({'text': safe_html_text})
     elif message.content_type in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
         text_for_corpus = message.caption
         file_id_obj = getattr(message, message.content_type, [])
         if isinstance(file_id_obj, list): file_id_obj = file_id_obj[-1]
-        safe_caption_html = sanitize_html(processed_html_text)
+        caption_html_val = getattr(message, 'caption_html_text', None)
+        raw_caption_html = caption_html_val if isinstance(caption_html_val, str) else (message.caption or "")
+        safe_caption_html = sanitize_html(raw_caption_html)
         content.update({'file_id': file_id_obj.file_id, 'caption': safe_caption_html})
         _media_unique_id = getattr(file_id_obj, 'file_unique_id', None)
         file_name = getattr(file_id_obj, 'file_name', None)
@@ -603,9 +627,9 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     if text_for_corpus:
         async with storage_lock: last_messages.append(text_for_corpus)
         if board_id != 'trash':
-            spawn_task(main.check_and_send_contextual_reply(message.bot, user_id, text_for_corpus, board_id, stream=stream))
+            spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_for_corpus, board_id, stream=stream))
     if not is_shadow_muted and text_for_corpus:
-        if _is_spam_filtered(text_for_corpus, board_id, user_id):
+        if is_spam_filtered(text_for_corpus, board_id, user_id):
             is_shadow_muted = True
     user_settings = b_data.get('user_settings', {}).get(user_id, {})
     if (message.content_type == 'animation' and user_settings.get('shadow_gif')) or \
@@ -628,7 +652,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             content['repost_count'] = _times
 
     if is_shadow_muted:
-        await process_shadow_reject(ShadowRejectContext(
+        await process_shadow_reject(shared_state.ShadowRejectContext(
             bot=message.bot,
             board_id=board_id,
             user_id=user_id,
@@ -637,7 +661,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             stream=stream
         ))
     else:
-        post_num = await process_new_post(NewPostParams(
+        post_num = await process_new_post(shared_state.NewPostParams(
             bot_instance=message.bot,
             board_id=board_id,
             user_id=user_id,
@@ -668,28 +692,28 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             photo_id = extract_msg_media_file_id(message) or extract_msg_media_file_id(message.reply_to_message)
             if is_reply_to_bot:
                 now_t = time.time()
-                last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
+                last_user_t = last_persona_dialogue_user_ts.get(user_id, 0)
                 # 35% chance to reply in dialogue + minimum 45s cooldown per user
                 if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
                     should_reply = True
-                    _last_persona_dialogue_user_ts[user_id] = now_t
+                    last_persona_dialogue_user_ts[user_id] = now_t
                 else:
                     print(f"ℹ️ [Persona Dialogue] Ignored dialogue trigger for user {user_id} (cooldown or chance check).")
             elif user_id in b_data.get('persona_favorites', {}):
                 text_clean = message.text or message.caption or (f"[фотография]" if photo_id else None)
                 now_t_fav = time.time()
-                if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.08:
+                if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 90.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.08:
                     should_reply = True
             else:
                 # Глобальный пассивный тригер: 4%
                 text_clean2 = message.text or message.caption or None
                 now_t_glob = time.time()
-                if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.04:
+                if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 120.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.04:
                     should_reply = True
             if should_reply:
-                _last_persona_board_ts[board_id] = time.time()  # race guard
+                last_persona_board_ts[board_id] = time.time()  # race guard
                 text_chunk = message.text or message.caption or f"[{message.content_type}]"
-                spawn_task(main.check_and_send_contextual_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
+                spawn_task(schedule_persona_reply(message.bot, board_id, post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=photo_id, is_dialogue=is_reply_to_bot))
             # --- THE ANCHOR (Мудрый Чед) ---
             from anchor_bot import anchor_tick, trigger_anchor_post
             if anchor_tick(board_id):
@@ -768,7 +792,7 @@ async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id
         print(log_msg)
         spawn_task(log_global_event('bot', log_msg))
 
-async def process_shadow_reject(ctx: ShadowRejectContext):
+async def process_shadow_reject(ctx: shared_state.ShadowRejectContext):
 
     """
     Эмулирует успешную публикацию поста, но отправляет его ТОЛЬКО автору.
@@ -786,7 +810,7 @@ async def process_shadow_reject(ctx: ShadowRejectContext):
     user_content['is_shadow_reject'] = True
     user_content['reply_to_post'] = ctx.reply_to_post
     await asyncio.sleep(random.uniform(0.5, 1.5))
-    await send_message_to_users(BroadcastConfig(
+    await send_message_to_users(shared_state.BroadcastConfig(
         bot_instance=ctx.bot,
         board_id=ctx.board_id,
         recipients={ctx.user_id}, # Только автор!
@@ -825,7 +849,7 @@ async def ensure_user_in_valid_thread(bot: Bot, board_id: str, user_id: int) -> 
             try:
                 await bot.send_message(user_id, notify_text)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
             return True
     return False
 
@@ -876,7 +900,7 @@ async def _send_notification_quietly(bot: Bot, chat_id: int, text: str) -> None:
     try:
         await bot.send_message(chat_id, text, parse_mode="HTML", disable_notification=True)
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
 
 @message_router.message(F.media_group_id)
 async def handle_media_group_init(message: Message, board_id: str | None, stream: str = 'ru'):
@@ -892,7 +916,7 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
         
     if media_group_key in sent_media_groups:
         return

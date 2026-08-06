@@ -15,7 +15,7 @@ class TestMainUjsonFallback(unittest.TestCase):
             # but we only care about the top-level json assignment.
             spec.loader.exec_module(main_mod)
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
         return main_mod
 
     @patch.dict('sys.modules', {'ujson': None})

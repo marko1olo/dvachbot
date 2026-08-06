@@ -65,7 +65,7 @@ def remove_files_best_effort(paths: Iterable[str]) -> None:
         try:
             os.remove(path)
         except OSError:
-            pass
+            import traceback; traceback.print_exc()
 
 
 async def remove_files_best_effort_async(paths: Iterable[str]) -> None:

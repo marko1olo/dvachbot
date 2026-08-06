@@ -1,67 +1,9 @@
-from post_processor import NewPostProcessor, NewPostContext
-from post_helpers import apply_shadow_autoreplace
-from media_utils import _download_image_with_proxy
+# Scratch file from extraction pass
+"""
+This module was created as a scratch pad during function extraction.
+All active functions live in post_processor.py, post_helpers.py, and main.py.
+"""
 
-from shared_state import *
-from broadcaster import MessageBroadcaster, send_message_to_users, DeliveryResults, _trim_post_copy_maps_unlocked, _order_recipients_for_delivery, _build_lie_media_content, _format_message_body, add_you_to_my_posts_fast
-from utils import split_text
-        global RAID_LOCKDOWN_UNTIL
-<<<<<<< HEAD
-=======
->>>>>>> 5b69ed4e (sync: update local workspace changes)
-<<<<<<< HEAD
-=======
->>>>>>> 5b69ed4e (sync: update local workspace changes)
-from moderation_config import SHADOW_REPLACEMENTS, SHADOW_WORDS_REGEX, DIE_WORDS_REGEX, POLITICAL_REPLACEMENTS
-<<<<<<< HEAD
-=======
->>>>>>> 5b69ed4e (sync: update local workspace changes)
-<<<<<<< HEAD
-=======
-
-
->>>>>>> 5b69ed4e (sync: update local workspace changes)
-            if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
-            if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and random.random() < 0.08:
-            # ╨ô╨╗╨╛╨▒╨░╨╗╤î╨╜╤ï╨╣ ╨┐╨░╤ü╤ü╨╕╨▓╨╜╤ï╨╣ ╤é╤Ç╨╕╨│╨╡╤Ç: 4% ╨╜╨░ ╨╗╤Ä╨▒╨╛╨╣ ╨┐╨╛╤ü╤é ╨╜╨░ ╨▒╨╛╤Ç╨┤╨╡
-            if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and random.random() < 0.04:
-        # --- THE ANCHOR (╨£╤â╨┤╤Ç╤ï╨╣ ╨º╨╡╨┤) ---
-        from anchor_bot import anchor_tick, trigger_anchor_post
-        if anchor_tick(board_id):
-            spawn_task(trigger_anchor_post(bot_instance, board_id, stream))
-                        if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
-                        if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.08:
-                        # ╨ô╨╗╨╛╨▒╨░╨╗╤î╨╜╤ï╨╣ ╨┐╨░╤ü╤ü╨╕╨▓╨╜╤ï╨╣ ╤é╤Ç╨╕╨│╨╡╤Ç: 4%
-                        if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_chunk and len(text_chunk) > 5 and random.random() < 0.04:
-                    # --- THE ANCHOR (╨£╤â╨┤╤Ç╤ï╨╣ ╨º╨╡╨┤) ---
-                    from anchor_bot import anchor_tick, trigger_anchor_post
-                    if anchor_tick(board_id):
-                        spawn_task(trigger_anchor_post(message.bot, board_id, stream))
-                # 35% chance to reply in dialogue + minimum 45s cooldown per user
-                if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
-                if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.08:
-                # ╨ô╨╗╨╛╨▒╨░╨╗╤î╨╜╤ï╨╣ ╨┐╨░╤ü╤ü╨╕╨▓╨╜╤ï╨╣ ╤é╤Ç╨╕╨│╨╡╤Ç: 4%
-                if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.04:
-            # --- THE ANCHOR (╨£╤â╨┤╤Ç╤ï╨╣ ╨º╨╡╨┤) ---
-            from anchor_bot import anchor_tick, trigger_anchor_post
-            if anchor_tick(board_id):
-                spawn_task(trigger_anchor_post(message.bot, board_id, stream))
-<<<<<<< HEAD
-=======
-import io
-try:
-    import ujson as json
-except ImportError:
-    import json
-import re
-import time
-
-
->>>>>>> 5b69ed4e (sync: update local workspace changes)
-        print("Γä╣∩╕Å ╨ù╨░╨▓╨╡╤Ç╤ê╨╡╨╜╨╕╨╡ ╤Ç╨░╨▒╨╛╤é╤ï ╨┐╨╛ ╨╖╨░╨┐╤Ç╨╛╤ü╤â...")
-import re
-import html
-import random
 import math
 from datetime import datetime
 
@@ -69,7 +11,7 @@ from shared_state import *
 try:
     from moderation_config import *
 except ImportError:
-    pass
+    import traceback; traceback.print_exc()
 
 async def format_thread_post_header(board_id: str, local_post_num: int, author_id: int, thread_info: dict, stream: str = 'ru') -> str:
 
@@ -136,7 +78,7 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                         if items.get("shit_until", 0) > int(time.time()):
                             has_poop = True
                     except Exception:
-                        pass
+                        import traceback; traceback.print_exc()
                 if row[1] and row[2] and int(time.time()) < row[2]:
                     prefix_str = f"<b>{row[1]}</b> "
         if has_poop:

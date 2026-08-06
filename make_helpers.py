@@ -113,7 +113,7 @@ async def _clean_posts_from_ram(posts_to_delete_nums: list[int], board_id: str):
                                 if 'posts' in threads_data[thread_id]:
                                     threads_data[thread_id]['posts'].remove(post_num)
                             except (ValueError, KeyError):
-                                pass
+                                import traceback; traceback.print_exc()
             message_copies_in_mem = post_to_messages.pop(post_num, {})
             for uid, mid_or_list in message_copies_in_mem.items():
                 if isinstance(mid_or_list, list):
@@ -144,7 +144,7 @@ async def _delete_posts_from_channels(channel_messages_to_delete: list, bot_inst
         try:
             await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 
 async def _delete_posts_from_pm_api(messages_to_delete_from_api: list, bot_instance) -> int:
     import asyncio

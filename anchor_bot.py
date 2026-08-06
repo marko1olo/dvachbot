@@ -134,8 +134,8 @@ async def trigger_anchor_post(bot: "Bot", board_id: str, stream: str) -> bool:
     Fetches the board atmosphere context and triggers fire_anchor_post.
     """
     try:
-        from main import build_board_atmosphere_context
-        atmosphere = await build_board_atmosphere_context(board_id, limit=15)
+        import __main__ as _main
+        atmosphere = await _main.build_board_atmosphere_context(board_id, limit=15)
         return await fire_anchor_post(bot, board_id, stream, atmosphere)
     except Exception as e:
         print(f"[Anchor] trigger_anchor_post error: {e}", flush=True)
@@ -165,7 +165,7 @@ async def fire_anchor_post(
     try:
         from datetime import datetime, timezone
         from common.database import create_post, update_post_content
-        import main as _main
+        import __main__ as _main
 
         now_dt = datetime.now(timezone.utc)
         content = {

@@ -44,7 +44,7 @@ async def main():
         logger.info("The hf_batcher daemon will process them automatically.")
         
     except Exception as e:
-        logger.error(f"❌ Error during recovery: {e}")
+        logger.error(f"❌ Error during recovery: {e}", exc_info=True)
     finally:
         await close_pool()
 

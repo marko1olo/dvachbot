@@ -28,7 +28,7 @@ with contextlib.redirect_stdout(stdout):
     try:
         import Dubsite_tgach.main
     except Exception as e:
-        pass
+        import traceback; traceback.print_exc()
 
 print(stdout.getvalue().strip())
 """

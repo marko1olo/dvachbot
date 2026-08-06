@@ -32,7 +32,7 @@ async def run_victory_audit():
     try:
         FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
 
     results = []
 

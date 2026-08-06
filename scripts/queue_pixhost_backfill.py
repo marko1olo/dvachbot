@@ -23,8 +23,11 @@ IMAGE_PREFIXES = ('AgAC', 'BQAC')
 
 
 print(f"Opening DB: {DB_PATH}")
-db = sqlite3.connect(DB_PATH)
-db.execute("PRAGMA journal_mode=WAL")
+conn = sqlite3.connect(DB_PATH)
+conn.execute("PRAGMA journal_mode=WAL;")
+conn.execute("PRAGMA busy_timeout=60000;")
+conn.execute("PRAGMA synchronous=NORMAL;")
+db = conn
 c = db.cursor()
 
 # Count candidates: files in FileOwners matching image prefixes

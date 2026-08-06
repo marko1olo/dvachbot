@@ -102,7 +102,7 @@ def _drain_chart_buffers(images: Sequence[tuple]) -> list[tuple[str, bytes]]:
             try:
                 buf.close()
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
         if not payload:
             logger.warning("Пустой буфер графика %s, пропускаю.", name)
             continue
@@ -233,12 +233,12 @@ def _rewind_media_group(media_group: Iterable[InputMediaPhoto]) -> None:
             try:
                 data.seek(0)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
         elif hasattr(media, "seek"):
             try:
                 media.seek(0)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
 
 
 async def send_stats_to_user(bot: Bot, chat_id: int):
@@ -276,7 +276,7 @@ async def send_stats_to_user(bot: Bot, chat_id: int):
         try:
             await bot.send_message(chat_id, f"❌ Ошибка при генерации статистики: {e}")
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 
 
 def _seconds_until_next_sunday_2000(now_msk: datetime) -> tuple[datetime, float]:

@@ -39,7 +39,7 @@ def _detect_real_ext(filepath: str) -> str:
         if header[:2] == b'BM':
             return ".bmp"
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
     return ""
 
 def _bot_id_from_token(token: str | None) -> int | None:
@@ -84,7 +84,7 @@ async def close_internal_file_bots():
         try:
             await bot.session.close()
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
     _INTERNAL_FILE_BOTS.clear()
 
 async def _find_msg_info(file_id: str):
@@ -104,7 +104,7 @@ async def _find_msg_info(file_id: str):
             async with db.execute(query, (file_id,)) as cursor:
                 return await cursor.fetchone()
     except Exception as e:
-        logger.error(f"DB lookup error: {e}")
+        logger.error(f"DB lookup error: {e}", exc_info=True)
         return None
 
 async def _process_single_task(task):
@@ -248,7 +248,7 @@ async def _process_single_task(task):
                              logger.error("❌ HTTP Fallback failed: Could not get file_path")
 
                     except Exception as e:
-                        logger.error(f"❌ HTTP Fallback crashed: {e}")
+                        logger.error(f"❌ HTTP Fallback crashed: {e}", exc_info=True)
 
                 # 3. Загрузка (если скачали)
                 if download_success:
@@ -325,7 +325,7 @@ async def _process_single_task(task):
                 await reschedule_mirror_task(task_id, attempt)
 
     except Exception as e:
-        logger.error(f"Task {task_id} error: {e}")
+        logger.error(f"Task {task_id} error: {e}", exc_info=True)
         await reschedule_mirror_task(task_id, attempt)
 async def process_mirror_queue():
     logger.info("mirror_worker started (Parallel Mode)")
@@ -357,7 +357,7 @@ async def process_mirror_queue():
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"Mirror worker loop crash: {e}")
+                logger.error(f"Mirror worker loop crash: {e}", exc_info=True)
                 await asyncio.sleep(10)
     finally:
         await close_internal_file_bots()

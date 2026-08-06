@@ -1,0 +1,136 @@
+import asyncio
+import time
+import random
+import logging
+from aiogram import Bot, types
+from shared_state import *
+from shared_state import NewPostParams
+from common.config import *
+from common.database import *
+from post_processor import NewPostContext, NewPostProcessor
+import json
+
+
+async def process_new_post(params: NewPostParams) -> int | None:
+    """
+    Унифицированная функция для обработки, сохранения и постановки в очередь нового поста.
+    Версия 8.0: Гарантирует регистрацию поста в памяти даже при сбое отправки. НИКАКИХ УДАЛЕНИЙ.
+    """
+    context = NewPostContext(
+        bot_instance=params.bot_instance,
+        board_id=params.board_id,
+        user_id=params.user_id,
+        content=params.content,
+        reply_to_post=params.reply_to_post,
+        is_shadow_muted=params.is_shadow_muted,
+        stream=params.stream
+    )
+    processor = NewPostProcessor(context)
+    return await processor.execute()
+
+async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
+    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+        row = await c.fetchone()
+        active_items_str = row[0] if row and row[0] else "{}"
+    try:
+        return json.loads(active_items_str)
+    except:
+        return {}
+
+async def accept_duel_logic(message: types.Message, challenger_id: int, board_id: str):
+    import time
+    db = await get_pool()
+    user_id = message.from_user.id
+    time.time()
+    
+    if challenger_id == user_id:
+        await message.answer("Нельзя принять собственный вызов, трус.")
+        return
+
+    async with db_lock:
+        # Проверяем балансы обоих под локом
+        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (challenger_id, board_id)) as c:
+            row = await c.fetchone()
+            ch_bal = row[0] if row and row[0] is not None else 0
+        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+            op_bal = row[0] if row and row[0] is not None else 0
+
+        # Ответ юзеру откладываем до выхода из лока: db_lock сериализует ВЕСЬ
+        # доступ к базе в процессе, и держать его на время сетевого вызова
+        # Telegram — значит остановить создание постов и любые запросы во всём
+        # боте. Решение (проверка балансов, изъятие дуэли из пула и перевод)
+        # целиком остаётся под локом, иначе одну дуэль приняли бы дважды.
+        reject_msg = None
+        if challenger_id not in _active_duels:
+            reject_msg = "⚔️ Эта дуэль уже была принята или истекла."
+        else:
+            duel = _active_duels.pop(challenger_id)
+            amount = duel["amount"]
+            if ch_bal < amount:
+                reject_msg = f"⚔️ Вызывающий Анон-{challenger_id%10000:04d} уже не потянет ставку — слился."
+            elif op_bal < amount:
+                # Возвращаем дуэль обратно в пул
+                _active_duels[challenger_id] = duel
+                reject_msg = f"❌ У тебя недостаточно бабок. Нужно {amount} RUB, есть {int(op_bal)}."
+            else:
+                import random
+                winner_id = random.choice([challenger_id, user_id])
+                loser_id  = challenger_id if winner_id == user_id else user_id
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
+                    (winner_id, board_id, amount, amount)
+                )
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?",
+                    (loser_id, board_id, -amount, amount)
+                )
+                await db.commit()
+
+    if reject_msg is not None:
+        await message.answer(reject_msg)
+        return
+
+    w_tag = f"Анон-{winner_id%10000:04d}"
+    l_tag = f"Анон-{loser_id%10000:04d}"
+    you_w = " (ты)" if winner_id == user_id else ""
+    you_l = " (ты)" if loser_id  == user_id else ""
+    await message.answer(
+        f"⚔️ <b>ДУЭЛЬ!</b>\n\n"
+        f"🎲 Монета летит...\n\n"
+        f"🏆 Победитель: <b>{w_tag}</b>{you_w} +{amount} RUB\n"
+        f"💀 Проигравший: <b>{l_tag}</b>{you_l} -{amount} RUB",
+        parse_mode="HTML"
+    )
+
+async def decline_duel_logic(message: types.Message, challenger_id: int):
+    user_id = message.from_user.id
+    if challenger_id not in _active_duels:
+        return False
+        
+    # Отклонить дуэль может либо создатель (отмена), либо любой другой пользователь (отклонение)
+    if user_id == challenger_id:
+        _active_duels.pop(challenger_id, None)
+        await message.answer("⚔️ Вызов на дуэль успешно отменен создателем.")
+        return True
+    else:
+        _active_duels.pop(challenger_id, None)
+        await message.answer(f"⚔️ Вызов на дуэль отклонен Аноном-{user_id%10000:04d}.")
+        return True
+
+
+
+async def delete_message_after_delay(message: types.Message, delay: int):
+
+    try:
+        await asyncio.sleep(delay)
+        await asyncio.wait_for(message.delete(), timeout=15.0)
+    except asyncio.CancelledError:
+        import traceback; traceback.print_exc()
+    except asyncio.TimeoutError:
+        print(f"⚠️ Таймаут при удалении сообщения {message.message_id} в чате {message.chat.id}")
+    except Exception as e:
+        if "message to delete not found" not in str(e).lower():
+            print(f"🔥 Непредвиденная ошибка в delete_message_after_delay: {type(e).__name__}: {e}")

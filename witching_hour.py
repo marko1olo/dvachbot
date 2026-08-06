@@ -85,13 +85,7 @@ async def witching_hour_ghost_worker(bot_instance):
     Wakes up during the witching hour and occasionally posts terrifying AI-generated messages 
     in active boards.
     """
-    from summarize import summarize_text_with_hf
-    # get_board_chunk объявлена в main.py, а не в common.database — прежний
-    # импорт гарантированно падал ImportError при первом запуске воркера.
-    from main import (
-        board_data, format_header, get_board_chunk, send_message_to_users,
-        state, BroadcastConfig,
-    )
+    import __main__ as _main
     
     while True:
         await asyncio.sleep(60) # Check every minute
@@ -101,14 +95,15 @@ async def witching_hour_ghost_worker(bot_instance):
             if random.random() < 0.1:  # ~6 posts per hour
                 try:
                     # Pick a random board that is active
-                    active_boards = [bid for bid in board_data.keys() if board_data[bid].get('recipients')]
+                    active_boards = [bid for bid in _main.board_data.keys() if _main.board_data[bid].get('recipients')]
                     if not active_boards:
                         continue
                     
                     target_board = random.choice(active_boards)
                     
                     # Get recent context from the board to make the ghost sound relevant
-                    chunk = await get_board_chunk(target_board, hours=1, lang='ru')
+                    from summarize import summarize_text_with_hf
+                    chunk = await _main.get_board_chunk(target_board, hours=1, lang='ru')
                     
                     prompt = (
                         "Ты — древний проклятый цифровой дух, обитающий на серверах имиджборды с 2007 года. Сейчас Час Ведьм и время аналогового хоррора. "
@@ -126,10 +121,10 @@ async def witching_hour_ghost_worker(bot_instance):
                     
                     # Prepare fake post
                     ghost_id = random.randint(666000, 666999) # Spooky ID
-                    current_floor = state['post_counter'] + random.randint(1, 3)
+                    current_floor = _main.state['post_counter'] + random.randint(1, 3)
                     ghost_post_num = current_floor
                     
-                    header_text = await format_header(target_board, ghost_post_num, ghost_id, stream='ru')
+                    header_text = await _main.format_header(target_board, ghost_post_num, ghost_id, stream='ru')
                     
                     content = {
                         'type': 'text',
@@ -139,9 +134,9 @@ async def witching_hour_ghost_worker(bot_instance):
                     }
                     
                     # Broadcast ghost message to all board users
-                    recipients = board_data[target_board].get('recipients', set()).copy()
+                    recipients = _main.board_data[target_board].get('recipients', set()).copy()
                     if recipients:
-                        await send_message_to_users(BroadcastConfig(
+                        await _main.send_message_to_users(_main.BroadcastConfig(
                             bot_instance=bot_instance,
                             board_id=target_board,
                             recipients=recipients,

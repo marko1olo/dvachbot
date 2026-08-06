@@ -4,6 +4,7 @@ Persistent loop - runs until killed.
 Usage: python scripts/backfill_imgbb.py
 """
 import asyncio
+import contextlib
 import os
 import sys
 import sqlite3
@@ -48,7 +49,7 @@ async def download_file_http(token, file_path_tg, dest_path):
                             f.write(chunk)
                     return True
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
     return False
 
 
@@ -63,22 +64,24 @@ async def main():
         from common.db_pool import create_pool
         await create_pool()
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
 
     while True:
         try:
-            db = sqlite3.connect(DB_PATH)
-            c = db.cursor()
-            c.execute("""
-                SELECT r.file_id, r.file_type 
-                FROM FileRegistry r
-                LEFT JOIN FileMirrors m ON r.file_id = m.file_id AND m.mirror_type = 'imgbb'
-                WHERE r.file_type IN ('image', 'photo')
-                  AND m.file_id IS NULL
-                LIMIT ?
-            """, (BATCH_SIZE,))
-            rows = c.fetchall()
-            db.close()
+            with contextlib.closing(sqlite3.connect(DB_PATH)) as db:
+                db.execute('PRAGMA journal_mode=WAL')
+                db.execute('PRAGMA busy_timeout=60000')
+                db.execute('PRAGMA synchronous=NORMAL')
+                c = db.cursor()
+                c.execute("""
+                    SELECT r.file_id, r.file_type 
+                    FROM FileRegistry r
+                    LEFT JOIN FileMirrors m ON r.file_id = m.file_id AND m.mirror_type = 'imgbb'
+                    WHERE r.file_type IN ('image', 'photo')
+                      AND m.file_id IS NULL
+                    LIMIT ?
+                """, (BATCH_SIZE,))
+                rows = c.fetchall()
 
             if not rows:
                 flush_print(f"[SUCCESS] No missing mirrors for ImgBB. Sleeping for {SLEEP_ON_EMPTY} seconds...")
@@ -183,7 +186,7 @@ async def main():
                             try:
                                 os.remove(lpath)
                             except Exception:
-                                pass
+                                import traceback; traceback.print_exc()
 
                 except Exception as e:
                     flush_print(f"[FATAL] Error processing {file_id[:15]}: {e}")

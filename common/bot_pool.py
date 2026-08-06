@@ -97,7 +97,7 @@ class MultiStreamBotPool:
                 
             except Exception as e:
                 safe_token = secret_fingerprint(t)
-                logger.error(f"❌ Error loading bot token '{safe_token}' for {stream_code}: {e}")
+                logger.error(f"❌ Error loading bot token '{safe_token}' for {stream_code}: {e}", exc_info=True)
 
         if bots_list:
             self.iterators[stream_code] = itertools.cycle(bots_list)
@@ -189,7 +189,7 @@ class MultiStreamBotPool:
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                pass
+                import traceback; traceback.print_exc()
             else:
                 from common.task_manager import spawn_task
                 spawn_task(self._close_bot_session(bot))
@@ -214,14 +214,14 @@ class MultiStreamBotPool:
             bot_id = int(str(token).split(':', 1)[0])
             self.mark_bot_dead(bot_id)
         except (TypeError, ValueError):
-            pass
+            import traceback; traceback.print_exc()
 
     async def _close_bot_session(self, bot: Bot):
         try:
             await bot.session.close()
             logger.info("🔌 Closed session for disabled bot")
         except Exception as e:
-            logger.error(f"Error closing disabled bot session: {e}")
+            logger.error(f"Error closing disabled bot session: {e}", exc_info=True)
 
     async def close_all(self):
         logger.info("🔌 Closing all bot sessions...")
