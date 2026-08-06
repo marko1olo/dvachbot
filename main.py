@@ -16414,16 +16414,25 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
 
         now_ts = time.time()
 
+        attach_file_id = None
+        attach_media_type = None
+
         if not photo_file_id and target_post_num and target_post_num in messages_storage:
             p_data = messages_storage[target_post_num]
             c = p_data.get('content', {})
             m_type = c.get('type')
+            if m_type == 'image': m_type = 'photo'
             if m_type in {'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
                 photo_file_id = c.get('thumbnail_file_id') or c.get('file_id')
+                attach_file_id = c.get('file_id')
+                attach_media_type = m_type
             elif m_type == 'media_group' and c.get('media'):
                 for m in c.get('media', []):
                     if m.get('file_id'):
                         photo_file_id = m.get('thumbnail_file_id') or m.get('file_id')
+                        attach_file_id = m.get('file_id')
+                        sub_type = m.get('type') or 'photo'
+                        attach_media_type = 'photo' if sub_type == 'image' else sub_type
                         break
             # Если в самом посте нет картинки, проверим родительский пост, на который отвечают
             if not photo_file_id:
@@ -16431,12 +16440,18 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
                 if reply_to_num and reply_to_num in messages_storage:
                     parent_c = messages_storage[reply_to_num].get('content', {})
                     pm_type = parent_c.get('type')
+                    if pm_type == 'image': pm_type = 'photo'
                     if pm_type in {'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
                         photo_file_id = parent_c.get('thumbnail_file_id') or parent_c.get('file_id')
+                        attach_file_id = parent_c.get('file_id')
+                        attach_media_type = pm_type
                     elif pm_type == 'media_group' and parent_c.get('media'):
                         for m in parent_c.get('media', []):
                             if m.get('file_id'):
                                 photo_file_id = m.get('thumbnail_file_id') or m.get('file_id')
+                                attach_file_id = m.get('file_id')
+                                sub_type = m.get('type') or 'photo'
+                                attach_media_type = 'photo' if sub_type == 'image' else sub_type
                                 break
 
         vision_desc = None
@@ -16492,15 +16507,15 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
         for i, text in enumerate(replies):
             now_dt = datetime.now(UTC)
             # Прикрепляем картинку только в 30% случаев чтобы не спамить медиа
-            attach_photo = photo_file_id and i == 0 and random.random() < 0.30
+            attach_media = attach_file_id and attach_media_type in {'photo', 'video', 'animation', 'gif'} and i == 0 and random.random() < 0.30
             content = {
-                'type': 'photo' if attach_photo else 'text',
+                'type': attach_media_type if attach_media else 'text',
                 'is_system_message': True,
                 'archive_allowed': True
             }
-            if content['type'] == 'photo':
+            if attach_media:
                 content['caption'] = text
-                content['file_id'] = photo_file_id
+                content['file_id'] = attach_file_id
             else:
                 content['text'] = text
                 
