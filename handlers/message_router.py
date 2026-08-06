@@ -198,7 +198,10 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
         rate_tracker = b_data['reaction_rate_tracker'][user_id]
         now = time.time()
         while rate_tracker and now - rate_tracker[0] > REACTION_WINDOW_SECONDS:
-            rate_tracker.popleft()
+            if isinstance(rate_tracker, list):
+                rate_tracker.pop(0)
+            else:
+                rate_tracker.popleft()
         if len(rate_tracker) >= REACTION_LIMIT_PER_MINUTE:
             should_trigger_edit = False
             if post_num not in b_data['reaction_queue'][user_id]:
@@ -291,7 +294,11 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                 async with author_reaction_notify_lock:
                     now_n = time.time()
                     a_timestamps = author_reaction_notify_tracker[author_id]
-                    while a_timestamps and a_timestamps[0] <= now_n - 60: a_timestamps.popleft()
+                    while a_timestamps and a_timestamps[0] <= now_n - 60:
+                        if isinstance(a_timestamps, list):
+                            a_timestamps.pop(0)
+                        else:
+                            a_timestamps.popleft()
                     if len(a_timestamps) < AUTHOR_NOTIFY_LIMIT_PER_MINUTE:
                         a_timestamps.append(now_n)
                         author_id_for_notify = author_id
@@ -737,8 +744,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             if is_reply_to_bot:
                 now_t = time.time()
                 last_user_t = last_persona_dialogue_user_ts.get(user_id, 0)
-                # 35% chance to reply in dialogue + minimum 45s cooldown per user
-                if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
+                # Уменьшено в 10 раз: 3.5% шанс на ответ, минимальный кулдаун 300 секунд
+                if (now_t - last_user_t >= 300.0) and (random.random() < 0.035):
                     should_reply = True
                     last_persona_dialogue_user_ts[user_id] = now_t
                 else:
@@ -746,13 +753,14 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             elif user_id in b_data.get('persona_favorites', {}):
                 text_clean = message.text or message.caption or (f"[фотография]" if photo_id else None)
                 now_t_fav = time.time()
-                if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 90.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.08:
+                # Уменьшено в 10 раз: шанс 0.8%, кулдаун 600 секунд
+                if (now_t_fav - last_persona_board_ts.get(board_id, 0) >= 600.0) and text_clean and len(text_clean) >= 4 and random.random() < 0.008:
                     should_reply = True
             else:
-                # Глобальный пассивный тригер: 4%
+                # Глобальный пассивный тригер: 0.4%
                 text_clean2 = message.text or message.caption or None
                 now_t_glob = time.time()
-                if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 120.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.04:
+                if (now_t_glob - last_persona_board_ts.get(board_id, 0) >= 900.0) and text_clean2 and len(text_clean2) >= 4 and random.random() < 0.004:
                     should_reply = True
             if should_reply:
                 last_persona_board_ts[board_id] = time.time()  # race guard

@@ -51,6 +51,7 @@ DELIVERY_SLOW_PHASE_SEC = BOT_DELIVERY_SLOW_PHASE_SEC
 DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC = float(os.getenv("BOT_DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC", "15.0"))
 DURABLE_DELIVERY_QUEUE_ENABLED = BOT_DURABLE_DELIVERY_QUEUE
 MAX_COPY_MAP_POSTS_IN_MEMORY = BOT_COPY_CACHE_POST_LIMIT
+MAX_MESSAGES_IN_MEMORY = BOT_POST_CACHE_LIMIT
 PRIORITY_PHASE_BUDGET_SEC = BOT_PRIORITY_PHASE_BUDGET_SEC
 PASSIVE_PHASE_BUDGET_SEC = BOT_PASSIVE_PHASE_BUDGET_SEC
 
@@ -110,6 +111,7 @@ __all__ = [
     'DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC',
     'DURABLE_DELIVERY_QUEUE_ENABLED',
     'MAX_COPY_MAP_POSTS_IN_MEMORY',
+    'MAX_MESSAGES_IN_MEMORY',
     'PRIORITY_PHASE_BUDGET_SEC',
     'PASSIVE_PHASE_BUDGET_SEC',
     'author_reaction_notify_lock',
@@ -133,6 +135,7 @@ __all__ = [
     '_iter_message_ids_for_copy',
     '_drop_post_copy_maps_unlocked',
     '_trim_post_copy_maps_unlocked',
+    '_trim_messages_storage_unlocked',
     'is_shutting_down',
     'drain_shutdown_requested',
     'durable_delivery_stats',
@@ -218,6 +221,20 @@ def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
     for post_num in stale_posts:
         removed_reverse += _drop_post_copy_maps_unlocked(post_num)
     return len(stale_posts), removed_reverse
+
+def _trim_messages_storage_unlocked(max_posts: int) -> int:
+    if max_posts < 0 or len(messages_storage) <= max_posts:
+        return 0
+    if max_posts == 0:
+        stale_posts = list(messages_storage)
+    else:
+        keep_posts = set(sorted(messages_storage.keys(), reverse=True)[:max_posts])
+        stale_posts = [post_num for post_num in messages_storage if post_num not in keep_posts]
+    removed = 0
+    for post_num in stale_posts:
+        if messages_storage.pop(post_num, None) is not None:
+            removed += 1
+    return removed
 
 
 is_shutting_down = False

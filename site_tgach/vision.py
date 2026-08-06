@@ -231,8 +231,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 "model": model_name,
                                 "messages": [{"role": "user", "content": content_arr}],
                                 "max_tokens": 1500,
-                                "response_format": {"type": "json_object"}
                             }
+                            if provider == "gemini":
+                                kwargs["response_format"] = {"type": "json_object"}
+                                
                             if provider == "groq":
                                 kwargs["temperature"] = 0.2
                                 
@@ -247,7 +249,15 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 content = content.replace("```json", "").replace("```", "").strip()
                                 
                                 try:
-                                    parsed = json.loads(content)
+                                    # Extract JSON substring if the model added conversational text
+                                    start_idx = content.find('{')
+                                    end_idx = content.rfind('}')
+                                    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                                        json_str = content[start_idx:end_idx+1]
+                                    else:
+                                        json_str = content
+                                        
+                                    parsed = json.loads(json_str)
                                     if "tags" in parsed and "description" in parsed:
                                         logger.info(f"👁️ [VISION] [{source}] ✅ Success via {provider} ({model_name}).")
                                         return json.dumps(parsed, ensure_ascii=False)

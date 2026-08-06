@@ -15,7 +15,7 @@ from datetime import datetime
 from common.text_utils import clean_html_tags, RE_YOU_PATTERN
 from common.database import get_post_by_num, get_post_copies, add_post_copies
 from shared_state import *
-from shared_state import _drop_post_copy_maps_unlocked, _trim_post_copy_maps_unlocked
+from shared_state import _drop_post_copy_maps_unlocked, _trim_post_copy_maps_unlocked, _trim_messages_storage_unlocked
 from utils import split_text
 import html
 import __main__ as main
@@ -654,6 +654,7 @@ class MessageBroadcaster:
             copies_for_db = []
             trimmed_copy_posts = 0
             trimmed_copy_refs = 0
+            trimmed_msg_storage = 0
             async with storage_lock:
                 keep_copy_maps_in_ram = self.post_num in messages_storage and MAX_COPY_MAP_POSTS_IN_MEMORY > 0
                 for uid, msg_obj_or_list in self.all_results:
@@ -668,14 +669,17 @@ class MessageBroadcaster:
                                 message_to_post[(uid, m.message_id)] = self.post_num
                 if keep_copy_maps_in_ram:
                     trimmed_copy_posts, trimmed_copy_refs = _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
-            if trimmed_copy_posts:
+                    trimmed_msg_storage = _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
+            if trimmed_copy_posts or trimmed_msg_storage:
                 main.runtime_logger.info(
-                    "copy_map_ram_trim %s",
+                    "ram_trim %s",
                     json.dumps(
                         {
-                            "removed_posts": trimmed_copy_posts,
-                            "removed_reverse": trimmed_copy_refs,
-                            "limit": MAX_COPY_MAP_POSTS_IN_MEMORY,
+                            "copy_posts_rm": trimmed_copy_posts,
+                            "copy_refs_rm": trimmed_copy_refs,
+                            "copy_limit": MAX_COPY_MAP_POSTS_IN_MEMORY,
+                            "msg_storage_rm": trimmed_msg_storage,
+                            "msg_limit": MAX_MESSAGES_IN_MEMORY,
                         },
                         ensure_ascii=False,
                         separators=(",", ":"),
