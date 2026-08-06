@@ -135,6 +135,58 @@ async def check_and_send_contextual_reply(bot, user_id: int, text: str, board_id
     except Exception as e:
         print(f"⛔ Ошибка в check_and_send_contextual_reply для user {user_id}: {e}")
 
+async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str = 'b', stream: str = 'ru'):
+    """
+    Автоматическая транскрипция ГС и кружочков (Whisper/Gemini API Mockup)
+    с красивой ответом-расшифровкой в чат и уничтожающим 2ch-роастом.
+    """
+    if not message:
+        return
+    try:
+        content_type = message.content_type
+        if content_type not in ('voice', 'video_note'):
+            return
+
+        is_video_note = (content_type == 'video_note')
+        media_obj = getattr(message, content_type, None)
+        if not media_obj:
+            return
+
+        duration = getattr(media_obj, 'duration', 0)
+
+        # Мокап транскрипции (точка подключения Whisper / Gemini Audio API)
+        mock_transcripts = [
+            "Слушай анон, короче я вчера зашел в магазин и там такая альтушка стояла на кассе, пиздец просто...",
+            "Ало анон, зацени мою тему, короче я придумал как поднять 100К за день без смс и регистрации...",
+            "Ну че вы тут разнылись в треде, нормальная же тема, просто вы нищеброды и не шарите...",
+            "Послушай мое ГС, братан, я тут нагуглил схемы заработка на крипте, надо срочно заходить...",
+            "Короче ребятушки, я проснулся в три часа дня, пиво кончилось, че делать дальше не знаю...",
+            "Анончик, зацени голосок, я тут трек записал на микрофон от наушников за 100 рублей..."
+        ]
+
+        transcript = random.choice(mock_transcripts)
+
+        # Получаем двачевский роаст из CONTEXTUAL_REPLIES
+        roasts = CONTEXTUAL_REPLIES.get(r'\b(голосов[ауи]|кружоч[еик]|гс|записал|послушай|аудио)\b', [
+            "засунь свое ГС себе в жопу и напиши текстом, шепелявый"
+        ])
+        roast = random.choice(roasts)
+
+        icon = "📹" if is_video_note else "🎙"
+        title = "Кружочек" if is_video_note else "Голосовое сообщение"
+
+        formatted_response = (
+            f"<b>{icon} {title}</b> (<i>{duration} сек</i>)\n"
+            f"📝 <b>Транскрипция:</b> <i>«{escape_html(transcript)}»</i>\n\n"
+            f"🔥 <b>Вердикт /b/ AI:</b>\n"
+            f"{escape_html(roast)}"
+        )
+
+        await message.reply(formatted_response, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"❌ Ошибка в transcribe_and_roast_voice_note: {e}", exc_info=True)
+
+
 def _summarize_delivery_metrics() -> dict:
 
     summary = {}

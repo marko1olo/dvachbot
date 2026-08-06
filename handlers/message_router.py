@@ -46,7 +46,7 @@ from text_assets import (
     EARNING_NOTIFICATIONS, REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES, 
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP
 )
-from ai_manager import schedule_persona_reply, check_and_send_contextual_reply
+from ai_manager import schedule_persona_reply, check_and_send_contextual_reply, transcribe_and_roast_voice_note
 import __main__ as main
 
 # Some functions like `spawn_task` and `execute_delayed_edit` are in main.py, 
@@ -669,6 +669,9 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         async with storage_lock: last_messages.append(text_for_corpus)
         if board_id != 'trash':
             spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_for_corpus, board_id, stream=stream))
+    elif message.content_type in ('voice', 'video_note'):
+        if board_id != 'trash':
+            spawn_task(transcribe_and_roast_voice_note(message.bot, message, board_id, stream=stream))
     if not is_shadow_muted and text_for_corpus:
         if is_spam_filtered(text_for_corpus, board_id, user_id):
             is_shadow_muted = True

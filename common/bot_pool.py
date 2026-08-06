@@ -37,6 +37,9 @@ class MultiStreamBotPool:
         
         # Множество отключенных/неактивных bot_id
         self.disabled_bot_ids = set()
+        
+        # Кулдауны ботов по времени (bot_id -> timestamp истечения)
+        self.cooldown_bots: Dict[int, float] = {}
 
     def _get_stream_pool(self, stream_code: str) -> str:
         if stream_code == 'en':
@@ -105,8 +108,16 @@ class MultiStreamBotPool:
         else:
             logger.warning(f"⚠️ No valid bots found for stream '{stream_code}'")
 
+    def mark_bot_cooldown(self, bot_id: int, duration_sec: float = 15.0):
+        """Отправляет бота в кулдаун при TelegramRetryAfter/FloodWait (по умолчанию 15 секунд)."""
+        import time
+        cooldown_until = time.time() + max(15.0, duration_sec)
+        self.cooldown_bots[bot_id] = cooldown_until
+        logger.warning(f"⏳ Bot {bot_id} put on FloodWait cooldown for {max(15.0, duration_sec):.1f}s (until {cooldown_until:.1f})")
+
     def get_next_bot(self, stream: str = 'ru') -> Tuple[int, Bot]:
-        """Возвращает следующего бота для загрузки (Round-Robin)."""
+        """Возвращает следующего доступного бота для загрузки (Round-Robin с обходом кулдауна)."""
+        import time
         # Грузим только запрошенный поток
         self.init_stream(stream)
         
@@ -118,7 +129,29 @@ class MultiStreamBotPool:
             
         if target_stream not in self.iterators:
             raise ValueError(f"No bots available for stream {stream} or ru!")
+
+        now = time.time()
+        bots_map = self.bots_map.get(target_stream, {})
+        total_bots = len(bots_map)
+        
+        # Проверяем ботов по кругу, пропуская находящихся на кулдауне
+        best_candidate = None
+        earliest_expiry = float('inf')
+
+        for _ in range(max(1, total_bots)):
+            bot_id, bot = next(self.iterators[target_stream])
+            cooldown_until = self.cooldown_bots.get(bot_id, 0)
+            if cooldown_until <= now:
+                return bot_id, bot
             
+            if cooldown_until < earliest_expiry:
+                earliest_expiry = cooldown_until
+                best_candidate = (bot_id, bot)
+
+        # Если все боты на кулдауне, берем того, у кого кулдаун истекает раньше всех
+        if best_candidate:
+            return best_candidate
+
         return next(self.iterators[target_stream])
 
     def get_bot_by_id(self, bot_id: int) -> Optional[Bot]:

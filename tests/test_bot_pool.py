@@ -60,5 +60,24 @@ class TestBotPool(unittest.TestCase):
 
             self.assertIn("No bots available for stream en or ru!", str(context.exception))
 
+    def test_mark_bot_cooldown_failover(self):
+        """Test that a bot placed on 15s FloodWait cooldown is skipped in round-robin failover."""
+        bot1 = MagicMock()
+        bot2 = MagicMock()
+        self.pool._loaded_streams.add('ru')
+        self.pool.bots_map['ru'] = {101: bot1, 102: bot2}
+        self.pool.iterators['ru'] = itertools.cycle([(101, bot1), (102, bot2)])
+        
+        # Initially, bot1 is returned
+        bot_id1, _ = self.pool.get_next_bot('ru')
+        self.assertEqual(bot_id1, 101)
+
+        # Place bot1 on 15s FloodWait cooldown
+        self.pool.mark_bot_cooldown(101, 15.0)
+
+        # Next call must skip bot1 and return bot2
+        bot_id2, _ = self.pool.get_next_bot('ru')
+        self.assertEqual(bot_id2, 102)
+
 if __name__ == '__main__':
     unittest.main()
