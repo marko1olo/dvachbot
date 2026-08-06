@@ -1,3 +1,4 @@
+import __main__ as main
 import asyncio
 import os
 import re
@@ -49,30 +50,130 @@ def _build_archive_header(board_id: str, post_num: int, content: dict, lang: str
         header_text = f"<b>/{board_id}/</b> | {raw_header}{reply_suffix}"
     return header_text
 
+import io
+from aiogram.types import BufferedInputFile, URLInputFile
+from common.database import get_file_mirrors, get_file_owner_id, add_file_mirror
+
+async def _download_media_bytes(file_id: str) -> tuple[bytes | None, str]:
+    """Downloads file bytes via the owning bot or any active bot in GLOBAL_BOTS."""
+    owner_bot = None
+    try:
+        owner_id = await get_file_owner_id(file_id)
+        if owner_id:
+            for b in main.GLOBAL_BOTS.values():
+                if getattr(b, 'id', None) == owner_id:
+                    owner_bot = b
+                    break
+    except Exception:
+        import traceback; traceback.print_exc()
+
+    candidate_bots = []
+    if owner_bot:
+        candidate_bots.append(owner_bot)
+    if hasattr(main, 'GLOBAL_BOTS') and isinstance(main.GLOBAL_BOTS, dict):
+        for b in main.GLOBAL_BOTS.values():
+            if b not in candidate_bots:
+                candidate_bots.append(b)
+
+    for bot_inst in candidate_bots:
+        try:
+            buf = io.BytesIO()
+            await bot_inst.download(file_id, destination=buf)
+            buf.seek(0)
+            data = buf.read()
+            if data:
+                return data, "media.dat"
+        except Exception:
+            continue
+    return None, ""
+
+async def _resolve_media_source(sender_bot: Bot, orig_fid: str, media_item: dict = None):
+    """
+    Resolves the best media input for sender_bot:
+    1. Returns tg_shadow file_id if present in FileMirrors.
+    2. Returns URLInputFile if catbox/pixhost/HTTP URL mirror exists.
+    3. Downloads file via owner bot and returns BufferedInputFile.
+    4. Defaults to orig_fid string.
+    """
+    if not orig_fid:
+        return None
+
+    try:
+        mirrors = await get_file_mirrors(orig_fid)
+        if mirrors:
+            if 'tg_shadow' in mirrors and mirrors['tg_shadow']:
+                return mirrors['tg_shadow']
+            for m_type in ['catbox', 'pixhost', 'huggingface', '0x0', 'imgbb']:
+                if m_type in mirrors and mirrors[m_type]:
+                    return URLInputFile(mirrors[m_type])
+            for m_type, url in mirrors.items():
+                if isinstance(url, str) and (url.startswith('http://') or url.startswith('https://')):
+                    return URLInputFile(url)
+    except Exception as e:
+        logger.warning(f"Failed to query file mirrors for {orig_fid}: {e}")
+
+    if media_item:
+        for url_key in ['original_url', 'url', 'catbox_url', 'pixhost_url', 'link']:
+            u = media_item.get(url_key)
+            if u and isinstance(u, str) and u.startswith('http'):
+                return URLInputFile(u)
+
+    sender_id = getattr(sender_bot, 'id', None)
+    owner_id = await get_file_owner_id(orig_fid)
+    if owner_id and sender_id and owner_id != sender_id:
+        file_bytes, _ = await _download_media_bytes(orig_fid)
+        if file_bytes:
+            m_type = (media_item.get('type') if media_item else '') or ''
+            ext = 'jpg' if 'photo' in m_type else ('mp4' if 'video' in m_type or 'anim' in m_type else 'dat')
+            return BufferedInputFile(file_bytes, filename=f"media.{ext}")
+
+    return orig_fid
+
 async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, header_text: str):
     from aiogram.utils.media_group import MediaGroupBuilder
-    from common.database import add_file_mirror
-    builder = MediaGroupBuilder()
+    media_list = content.get('media', [])
+    if not media_list:
+        return None, []
+
     raw_cap = content.get('caption', '')
     converted_cap = convert_site_tags_to_telegram(raw_cap)
     full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
     if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
-    media_list = content.get('media', [])
-    if not media_list:
-        return None, []
-    for i, media_item in enumerate(media_list):
-        file_id = media_item.get('file_id') or media_item.get('media')
-        m_type = media_item['type']
-        caption = full_caption if i == 0 else None
-        if m_type == 'photo': builder.add_photo(media=file_id, caption=caption, parse_mode="HTML")
-        elif m_type == 'video': builder.add_video(media=file_id, caption=caption, parse_mode="HTML")
-        elif m_type == 'document': builder.add_document(media=file_id, caption=caption, parse_mode="HTML")
-        elif m_type == 'audio': builder.add_audio(media=file_id, caption=caption, parse_mode="HTML")
+
+    async def _build_group(force_download=False):
+        builder = MediaGroupBuilder()
+        for i, media_item in enumerate(media_list):
+            orig_fid = media_item.get('file_id') or media_item.get('media')
+            m_type = media_item['type']
+            caption = full_caption if i == 0 else None
+            
+            if force_download:
+                file_bytes, _ = await _download_media_bytes(orig_fid)
+                media_src = BufferedInputFile(file_bytes, filename="media.dat") if file_bytes else orig_fid
+            else:
+                media_src = await _resolve_media_source(sender_bot, orig_fid, media_item)
+
+            if m_type == 'photo': builder.add_photo(media=media_src, caption=caption, parse_mode="HTML")
+            elif m_type == 'video': builder.add_video(media=media_src, caption=caption, parse_mode="HTML")
+            elif m_type == 'document': builder.add_document(media=media_src, caption=caption, parse_mode="HTML")
+            elif m_type == 'audio': builder.add_audio(media=media_src, caption=caption, parse_mode="HTML")
+        return builder.build()
+
     try:
-        sent_msgs = await sender_bot.send_media_group(channel_id, media=builder.build())
+        group = await _build_group(force_download=False)
+        sent_msgs = await sender_bot.send_media_group(channel_id, media=group)
+    except TelegramBadRequest as e:
+        logger.warning(f"⚠️ TelegramBadRequest on media group ({e}). Forcing download fallback...")
+        try:
+            group = await _build_group(force_download=True)
+            sent_msgs = await sender_bot.send_media_group(channel_id, media=group)
+        except Exception as ex:
+            logger.error(f"❌ Media group fallback failed: {ex}")
+            return None, []
     except Exception as e:
-        logger.error(f"⚠️ Failed to send archive media group to channel {channel_id}: {e}")
+        logger.error(f"⚠️ Failed to send archive media group to channel {channel_id}: {e}", exc_info=True)
         return None, []
+
     sent_message = None
     new_files_data = []
     if sent_msgs:
@@ -90,8 +191,23 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
     return sent_message, new_files_data
 
 async def _send_archive_single_media(sender_bot, channel_id: int, content: dict, content_type: str, header_text: str):
-    from common.database import add_file_mirror
     orig_fid = content.get('file_id')
+    if not orig_fid and content.get('files'):
+        files = content.get('files')
+        if isinstance(files, list) and files:
+            first_f = files[0]
+            if isinstance(first_f, dict):
+                orig_fid = first_f.get('file_id') or first_f.get('tg_file_id') or first_f.get('path') or first_f.get('file_path')
+            elif isinstance(first_f, str):
+                orig_fid = first_f
+    if not orig_fid and content.get('media'):
+        media = content.get('media')
+        if isinstance(media, list) and media:
+            first_m = media[0]
+            if isinstance(first_m, dict):
+                orig_fid = first_m.get('file_id') or first_m.get('tg_file_id')
+            elif isinstance(first_m, str):
+                orig_fid = first_m
     if not orig_fid:
         return None, []
     raw_cap = content.get('caption', '')
@@ -100,23 +216,42 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
     if len(caption) > 1024: caption = caption[:1021] + "..."
     ct_str = str(content_type).split('.')[-1].lower()
     common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
+    
+    media_source = await _resolve_media_source(sender_bot, orig_fid, content)
+
+    async def _do_send(src):
+        if ct_str == 'photo': return await sender_bot.send_photo(photo=src, **common_args)
+        elif ct_str == 'video': return await sender_bot.send_video(video=src, **common_args)
+        elif ct_str == 'animation': return await sender_bot.send_animation(animation=src, **common_args)
+        elif ct_str == 'document': return await sender_bot.send_document(document=src, **common_args)
+        elif ct_str == 'audio': return await sender_bot.send_audio(audio=src, **common_args)
+        elif ct_str == 'voice': return await sender_bot.send_voice(voice=src, **common_args)
+        elif ct_str == 'sticker':
+            await sender_bot.send_sticker(channel_id, sticker=src)
+            return await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+        elif ct_str == 'video_note':
+            await sender_bot.send_video_note(channel_id, video_note=src)
+            return await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+        return None
+
     sent_message = None
     try:
-        if ct_str == 'photo': sent_message = await sender_bot.send_photo(photo=orig_fid, **common_args)
-        elif ct_str == 'video': sent_message = await sender_bot.send_video(video=orig_fid, **common_args)
-        elif ct_str == 'animation': sent_message = await sender_bot.send_animation(animation=orig_fid, **common_args)
-        elif ct_str == 'document': sent_message = await sender_bot.send_document(document=orig_fid, **common_args)
-        elif ct_str == 'audio': sent_message = await sender_bot.send_audio(audio=orig_fid, **common_args)
-        elif ct_str == 'voice': sent_message = await sender_bot.send_voice(voice=orig_fid, **common_args)
-        elif ct_str == 'sticker':
-            await sender_bot.send_sticker(channel_id, sticker=orig_fid)
-            sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
-        elif ct_str == 'video_note':
-            await sender_bot.send_video_note(channel_id, video_note=orig_fid)
-            sent_message = await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+        sent_message = await _do_send(media_source)
+    except TelegramBadRequest as e:
+        logger.warning(f"⚠️ TelegramBadRequest sending {ct_str} ({e}). Downloading file buffer fallback...")
+        file_bytes, filename = await _download_media_bytes(orig_fid)
+        if file_bytes:
+            try:
+                sent_message = await _do_send(BufferedInputFile(file_bytes, filename=filename))
+            except Exception as ex:
+                logger.error(f"❌ Single media fallback failed for {orig_fid}: {ex}")
+                return None, []
+        else:
+            return None, []
     except Exception as e:
         logger.error(f"⚠️ Failed to send single archive media ({ct_str}) to channel {channel_id}: {e}")
         return None, []
+
     new_files_data = []
     if sent_message:
         fid = None
@@ -136,19 +271,26 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
         try:
             sent_message = None
             new_files_data = []
-            if text_to_send:
+            ct_str = str(content_type).split('.')[-1].lower()
+            has_media = bool(
+                content.get('file_id') 
+                or content.get('media') 
+                or content.get('files') 
+                or ct_str in ('photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note', 'media_group')
+            )
+            if ct_str == 'media_group':
+                sent_message, new_files_data = await _send_archive_media_group(sender_bot, channel_id, content, header_text)
+                if sent_message is None and not new_files_data:
+                    sent_message, new_files_data = await _send_archive_single_media(sender_bot, channel_id, content, content_type, header_text)
+            elif has_media:
+                sent_message, new_files_data = await _send_archive_single_media(sender_bot, channel_id, content, content_type, header_text)
+            else:
                 sent_message = await sender_bot.send_message(
                     chat_id=channel_id,
                     text=text_to_send,
                     parse_mode="HTML",
                     disable_web_page_preview=True
                 )
-            elif content_type == 'media_group':
-                sent_message, new_files_data = await _send_archive_media_group(sender_bot, channel_id, content, header_text)
-                if sent_message is None and not new_files_data:
-                    break
-            else:
-                sent_message, new_files_data = await _send_archive_single_media(sender_bot, channel_id, content, content_type, header_text)
             return sent_message, new_files_data
         except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
             if attempt < 2: await asyncio.sleep(2)
@@ -187,9 +329,9 @@ async def _update_archive_post_content(post_num: int, content: dict, content_typ
 
 async def post_archive_to_channel(bots: dict[str, Bot], file_path: str, board_id: str, thread_info: dict) -> None:
 
-    bot_instance = bots.get(ARCHIVE_POSTING_BOT_ID)
+    bot_instance = bots.get(main.ARCHIVE_POSTING_BOT_ID)
     if not bot_instance:
-        print(f"⛔ Ошибка: бот для постинга архивов ('{ARCHIVE_POSTING_BOT_ID}') не найден в списке активных ботов.")
+        print(f"⛔ Ошибка: бот для постинга архивов ('{main.ARCHIVE_POSTING_BOT_ID}') не найден в списке активных ботов.")
         try:
             os.remove(file_path)
         except OSError: pass
@@ -205,14 +347,14 @@ async def post_archive_to_channel(bots: dict[str, Bot], file_path: str, board_id
         )
         document = FSInputFile(file_path)
         await bot_instance.send_document(
-            chat_id=ARCHIVE_CHANNEL_ID,
+            chat_id=main.ARCHIVE_CHANNEL_ID,
             document=document,
             caption=caption,
             parse_mode="HTML"
         )
-        print(f"✅ Архив треда '{title}' отправлен в канал {ARCHIVE_CHANNEL_ID}.")
+        print(f"✅ Архив треда '{title}' отправлен в канал {main.ARCHIVE_CHANNEL_ID}.")
     except Exception as e:
-        print(f"⛔ Не удалось отправить архив в канал {ARCHIVE_CHANNEL_ID}: {e}")
+        print(f"⛔ Не удалось отправить архив в канал {main.ARCHIVE_CHANNEL_ID}: {e}")
     finally:
         try:
             if os.path.exists(file_path):
@@ -301,10 +443,10 @@ def _sync_generate_thread_archive(board_id: str, thread_id: str, thread_info: di
 async def archive_thread(bots: dict[str, Bot], board_id: str, thread_id: str, thread_info: dict):
 
     posts_data_copy = []
-    async with storage_lock:
+    async with main.storage_lock:
         post_nums = thread_info.get('posts', [])
         for post_num in post_nums:
-            post_data = messages_storage.get(post_num)
+            post_data = main.messages_storage.get(post_num)
             if post_data:
                 data_copy = {
                     'content': post_data.get('content', {}).copy(),
@@ -313,7 +455,7 @@ async def archive_thread(bots: dict[str, Bot], board_id: str, thread_id: str, th
                 posts_data_copy.append(data_copy)
     loop = asyncio.get_running_loop()
     filepath = await loop.run_in_executor(
-        save_executor,
+        main.save_executor,
         _sync_generate_thread_archive,
         board_id, thread_id, thread_info, posts_data_copy
     )
@@ -357,20 +499,15 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
     Отправляет уведомление о "счастливом" посте в канал архивов.
     Надежно обрабатывает все типы медиа, отправляя сам файл, а не плейсхолдер.
     """
-    import main as _main
-    _AUTHORIZED_ARCHIVE_BOTS = getattr(_main, 'AUTHORIZED_ARCHIVE_BOTS', set())
-    _ARCHIVE_POSTING_BOT_ID = getattr(_main, 'ARCHIVE_POSTING_BOT_ID', None)
-    _SPECIAL_NUMERALS_CONFIG = getattr(_main, 'SPECIAL_NUMERALS_CONFIG', {})
-    _ARCHIVE_CHANNEL_ID = getattr(_main, 'ARCHIVE_CHANNEL_ID', None)
     try:
         bot_instance = bots.get(board_id)
-        archive_bot = bot_instance if board_id in _AUTHORIZED_ARCHIVE_BOTS else GLOBAL_BOTS.get(_ARCHIVE_POSTING_BOT_ID)
+        archive_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
         
         if not archive_bot:
             print("⛔ Ошибка: бот для постинга архивов не найден.")
             return
 
-        config = _SPECIAL_NUMERALS_CONFIG.get(level, {'label': 'Get', 'emojis': ('🎯',)})
+        config = SPECIAL_NUMERALS_CONFIG.get(level, {'label': 'Get', 'emojis': ('🎯',)})
         emoji = random.choice(config['emojis'])
         label = config['label'].upper()
         board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
@@ -388,37 +525,41 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
             try:
                 # --- НАЧАЛО ИСПРАВЛЕНИЙ (Надежная отправка медиа) ---
                 file_id = content.get('file_id')
-                if content_type_str == 'media_group':
-                    media_list = content.get('media', [])
-                    if media_list and media_list[0]:
-                        file_id = media_list[0].get('file_id')
-                        content_type_str = media_list[0].get('type', 'photo')
+                if not file_id and content.get('files'):
+                    files = content.get('files')
+                    if isinstance(files, list) and files and isinstance(files[0], dict):
+                        file_id = files[0].get('file_id') or files[0].get('tg_file_id')
+                if content_type_str == 'media_group' or not file_id:
+                    media_list = content.get('media', []) or content.get('files', [])
+                    if media_list and isinstance(media_list[0], dict):
+                        file_id = media_list[0].get('file_id') or media_list[0].get('tg_file_id')
+                        content_type_str = media_list[0].get('type', content_type_str or 'photo')
 
                 final_caption = caption_text[:1021] + "..." if len(caption_text) > 1024 else caption_text
                 
                 # Явная обработка каждого типа, чтобы избежать ошибок с аргументами
                 if content_type_str == 'photo' and file_id:
-                    await archive_bot.send_photo(_ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
+                    await archive_bot.send_photo(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
                 elif content_type_str == 'video' and file_id:
-                    await archive_bot.send_video(_ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
+                    await archive_bot.send_video(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
                 elif content_type_str == 'animation' and file_id:
-                    await archive_bot.send_animation(_ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
+                    await archive_bot.send_animation(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
                 elif content_type_str == 'document' and file_id:
-                    await archive_bot.send_document(_ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
+                    await archive_bot.send_document(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
                 elif content_type_str == 'audio' and file_id:
-                    await archive_bot.send_audio(_ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
+                    await archive_bot.send_audio(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
                 elif content_type_str == 'voice' and file_id:
-                    await archive_bot.send_voice(_ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(_ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
+                    await archive_bot.send_voice(ARCHIVE_CHANNEL_ID, file_id)
+                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
                 elif content_type_str == 'sticker' and file_id:
-                    await archive_bot.send_sticker(_ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(_ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
+                    await archive_bot.send_sticker(ARCHIVE_CHANNEL_ID, file_id)
+                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
                 elif content_type_str == 'video_note' and file_id:
-                    await archive_bot.send_video_note(_ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(_ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
+                    await archive_bot.send_video_note(ARCHIVE_CHANNEL_ID, file_id)
+                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
                 else: # Если это текст или медиа без file_id
                     final_text_for_message = caption_text[:4093] + "..." if len(caption_text) > 4096 else caption_text
-                    await archive_bot.send_message(_ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
+                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
                 # --- КОНЕЦ ИСПРАВЛЕНИЙ ---
                 
                 print(f"✅ Уведомление о счастливом посте #{post_num} ({label}) отправлено в канал.")
@@ -453,42 +594,32 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
     if is_shadow_muted:
         return
     from common.database import get_post_by_num
-    import main as _main
-    _ARCHIVE_POSTING_BOT_ID = getattr(_main, 'ARCHIVE_POSTING_BOT_ID', None)
-    _AUTHORIZED_ARCHIVE_BOTS = getattr(_main, 'AUTHORIZED_ARCHIVE_BOTS', set())
-    _MIRROR_CHANNELS = getattr(_main, 'MIRROR_CHANNELS', [])
-    _build_archive_header = getattr(_main, '_build_archive_header', None)
-    _fmt_archive_text = getattr(_main, '_format_archive_text_content', None)
-    _send_archive_media = getattr(_main, '_send_archive_media', None)
-    _update_archive_post_content = getattr(_main, '_update_archive_post_content', None)
 
     check_post = await get_post_by_num(post_num)
     if not check_post:
         return
-    archive_bot = GLOBAL_BOTS.get(_ARCHIVE_POSTING_BOT_ID)
-    sender_bot = bot_instance if board_id in _AUTHORIZED_ARCHIVE_BOTS else archive_bot
+    archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
+    sender_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else archive_bot
     if not sender_bot:
         return
     sender_bot_id = getattr(sender_bot, 'id', 0)
     lang = 'en' if board_id == 'int' else 'ru'
 
-    header_text = _build_archive_header(board_id, post_num, content, lang) if _build_archive_header else ''
+    header_text = _build_archive_header(board_id, post_num, content, lang)
     
     content_type = content.get("type", "text")
-    text_to_send = _fmt_archive_text(content, header_text) if _fmt_archive_text else header_text
+    text_to_send = _format_archive_text_content(content, header_text) or header_text
     
     db_updated = False
-    for channel_id in _MIRROR_CHANNELS:
+    for channel_id in MIRROR_CHANNELS:
         if not channel_id or channel_id == 0:
-            continue
-        if not _send_archive_media:
             continue
         sent_message, new_files_data = await _send_archive_media(sender_bot, channel_id, content, content_type, text_to_send, header_text)
         if sent_message:
             try:
                 await add_channel_copy(post_num, channel_id, sent_message.message_id)
-                if not db_updated and new_files_data and _update_archive_post_content:
+                if not db_updated and new_files_data:
                     await _update_archive_post_content(post_num, content, content_type, new_files_data, sender_bot_id)
                     db_updated = True
             except Exception:
-                pass
+                import traceback; traceback.print_exc()

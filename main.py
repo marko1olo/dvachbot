@@ -25,13 +25,14 @@ This module is designed to be extensible and maintainable, allowing for future e
 """
 import asyncio
 from common.thread_manager import get_threads_data, get_thread_info, set_thread_info, delete_thread_data, acquire_thread_lock, get_thread_locks_count, get_active_threads, trim_thread_posts, save_threads_data, initialize_board_threads
-from common.spam_filter import analyze_message_for_spam, SpamResult, check_image_spam_limit, update_image_spam_tracker, acquire_spam_lock, get_spam_violation_level, is_spam_filtered
+from common.spam_filter import analyze_message_for_spam, SpamResult, check_image_spam_limit, update_image_spam_tracker, acquire_spam_lock, get_spam_violation_level, is_spam_filtered, user_spam_locks, image_spam_tracker
 from archive_manager import archive_thread, _forward_post_to_realtime_archive, _site_file_send_type
-from delivery_manager import message_broadcaster, send_missed_messages, execute_delayed_edit, edit_post_for_all_recipients, _get_thread_entry_keyboard, validate_message_format
+from delivery_manager import message_broadcaster, send_missed_messages, execute_delayed_edit, edit_post_for_all_recipients, _get_thread_entry_keyboard, validate_message_format, board_help_worker, _remove_already_delivered_recipients, _delete_durable_delivery_item
 from post_processor import NewPostProcessor, NewPostContext
-from post_helpers import apply_shadow_autoreplace
+from post_helpers import apply_shadow_autoreplace, _format_header_inner
 from media_utils import _download_image_with_proxy
 
+import shared_state
 from shared_state import *
 from broadcaster import MessageBroadcaster, send_message_to_users, DeliveryResults, _trim_post_copy_maps_unlocked, _order_recipients_for_delivery, _build_lie_media_content, _format_message_body, add_you_to_my_posts_fast
 from utils import split_text
@@ -61,14 +62,14 @@ from common.bot_helpers import _get_user_active_items, delete_message_after_dela
 
 from handlers.message_router import check_spam, apply_penalty, process_shadow_reject
 from handlers.message_router import build_quick_quote_info, handle_message_reaction
-from delivery_manager import site_posts_broadcaster, thread_notifier, current_media_groups, media_group_timers
+from delivery_manager import site_posts_broadcaster, thread_notifier, current_media_groups, media_group_timers, get_board_activity_last_hours
 
 try:
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding='utf-8')
         sys.stderr.reconfigure(encoding='utf-8')
 except Exception:
-    pass
+    import traceback; traceback.print_exc()
 import io
 import time
 import periodic_publisher
@@ -111,7 +112,7 @@ from common.database import (
 )
 from site_tgach.admin_config import ADMIN_IDS
 from site_tgach.tagging_worker import tagging_loop
-from common.db_pool import create_pool, get_pool, db_lock, close_pool
+from common.db_pool import create_pool, get_pool, db_lock, close_pool, LazyLock
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from text_assets import (
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP,
@@ -221,7 +222,8 @@ from help_text import (
 )
 from japanese_translator import (
     anime_transform, get_random_anime_image, get_monogatari_image, 
-    get_nsfw_anime_image, get_loli_image, get_dynamic_proxy_url
+    get_nsfw_anime_image, get_loli_image, get_dynamic_proxy_url,
+    get_event_anime_images, classify_media_url
 )
 from summarize import summarize_text_with_hf, create_telegraph_page_async
 from thread_texts import thread_messages
@@ -363,7 +365,7 @@ class BoardMiddleware(BaseMiddleware):
                             elif isinstance(event, types.CallbackQuery):
                                 pass 
                         except Exception: 
-                            pass
+                            import traceback; traceback.print_exc()
                         return 
                         
                     # Анти-рейд
@@ -434,12 +436,15 @@ def _enable_fatal_crash_dump() -> None:
         )
         _fatal_crash_dump_file.flush()
         faulthandler.enable(file=_fatal_crash_dump_file, all_threads=True)
+        import atexit
+        atexit.register(lambda: _fatal_crash_dump_file.close() if _fatal_crash_dump_file else None)
     except Exception as exc:
+
         _fatal_crash_dump_file = None
         try:
             print(f"⚠️ Fatal crash dump disabled: {type(exc).__name__}: {exc}")
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 
 _enable_fatal_crash_dump()
 REALTIME_ARCHIVE_CHANNEL_ID = MIRROR_CHANNELS[0] if MIRROR_CHANNELS else 0
@@ -510,7 +515,7 @@ event_loop_stall_watchdog_started = False
 stream_cache = {} # {(user_id, board_id): 'ru'}
 git_executor = ThreadPoolExecutor(max_workers=1)
 git_semaphore = asyncio.Semaphore(1)
-generate_locks = defaultdict(asyncio.Lock)
+generate_locks = defaultdict(LazyLock)
 graph_stats = {}  # Для хранения статистики по часам для графика
 delivery_metrics = defaultdict(lambda: deque(maxlen=100))
 recent_messages_cache = deque(maxlen=200)
@@ -525,41 +530,29 @@ user_hourly_image_reset = defaultdict(float)
 HOURLY_IMAGE_LIMIT = 110
 MODE_COOLDOWN = 3600  # 1 час в секундах
 ANIME_CMD_COOLDOWN = 25 # 25 секунд
-anime_cmd_lock = asyncio.Lock()
-info_cmd_lock = asyncio.Lock() # Кулдаун для команд /stats, /active
+anime_cmd_lock = LazyLock()
+info_cmd_lock = LazyLock() # Кулдаун для команд /stats, /active
 shadow_fake_post_counters = defaultdict(int)
 last_messages = deque(maxlen=3) # Используется для генерации сообщений, можно оставить общим
 last_activity_time = datetime.now()
 sent_media_groups = deque(maxlen=1000)
-media_group_creation_lock = asyncio.Lock()
+media_group_creation_lock = LazyLock()
 
-def _iter_message_ids_for_copy(mid_or_list):
-    if isinstance(mid_or_list, list):
-        return mid_or_list
-    return (mid_or_list,)
-
-def _drop_post_copy_maps_unlocked(post_num: int) -> int:
-    copies_map = post_to_messages.pop(post_num, None)
-    if not copies_map:
-        return 0
-    removed = 0
-    for uid, mid_or_list in copies_map.items():
-        for mid in _iter_message_ids_for_copy(mid_or_list):
-            if message_to_post.pop((uid, mid), None) is not None:
-                removed += 1
-    return removed
-
+# NOTE: _iter_message_ids_for_copy, _drop_post_copy_maps_unlocked,
+# and _media_group_state_key are canonical in shared_state.py
+# and imported via 'from shared_state import *' above.
 
 def _media_group_state_key(chat_id: int | str, media_group_id: str) -> str:
     return f"{chat_id}:{media_group_id}"
 
 unknown_command_tracker = defaultdict(list)
+cross_board_spam_tracker = defaultdict(lambda: deque(maxlen=3))
 os.environ["AIORGRAM_DISABLE_SIGNAL_HANDLERS"] = "1"
 DEANON_COOLDOWN = 180  # 3 минуты
 last_deanon_time = 0
-deanon_lock = asyncio.Lock()
+deanon_lock = LazyLock()
 ROULETTE_EVENTS = [] # Будет хранить все события из рулеток
-roulette_lock = asyncio.Lock()
+roulette_lock = LazyLock()
 POLL_VOTE_COOLDOWN = 2  # Секунды
 last_poll_creation_time = defaultdict(float)
 last_poll_vote_time = defaultdict(float) # Новая переменная для кулдауна голосования
@@ -641,7 +634,7 @@ class _RawHealthcheckServer:
                 try:
                     conn.close()
                 except OSError:
-                    pass
+                    import traceback; traceback.print_exc()
 
     def _safe_handle_connection(self, conn: socket.socket):
         try:
@@ -660,11 +653,11 @@ class _RawHealthcheckServer:
                     ),
                 )
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
             try:
                 conn.close()
             except OSError:
-                pass
+                import traceback; traceback.print_exc()
 
     def _handle_connection(self, conn: socket.socket):
         with conn:
@@ -673,11 +666,11 @@ class _RawHealthcheckServer:
                 try:
                     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 except OSError:
-                    pass
+                    import traceback; traceback.print_exc()
                 try:
                     conn.recv(2048)
                 except (socket.timeout, OSError):
-                    pass
+                    import traceback; traceback.print_exc()
                 status_code, body = _build_healthcheck_body()
                 status_text = "OK" if status_code == 200 else "Service Unavailable"
                 headers = (
@@ -692,7 +685,7 @@ class _RawHealthcheckServer:
                 try:
                     conn.shutdown(socket.SHUT_RDWR)
                 except OSError:
-                    pass
+                    import traceback; traceback.print_exc()
             except OSError:
                 return
 
@@ -701,7 +694,7 @@ class _RawHealthcheckServer:
         try:
             self._sock.close()
         except OSError:
-            pass
+            import traceback; traceback.print_exc()
 
     def server_close(self):
         self.shutdown()
@@ -800,6 +793,7 @@ DELIVERY_PHASE_GUARD_SEC = max(0.0, float(BOT_DELIVERY_PHASE_GUARD_SEC))
 CONTROLLED_STOP_DRAIN_TIMEOUT_SEC = max(0.0, float(BOT_CONTROLLED_STOP_DRAIN_TIMEOUT_SEC))
 CONTROLLED_STOP_LOG_INTERVAL_SEC = max(1.0, float(BOT_CONTROLLED_STOP_LOG_INTERVAL_SEC))
 DURABLE_DELIVERY_QUEUE_ENABLED = BOT_DURABLE_DELIVERY_QUEUE
+durable_delivery_stats: dict = shared_state.durable_delivery_stats
 B_MAX_STACKED_ANIME_IMAGES = max(1, BOT_B_MAX_STACKED_ANIME_IMAGES)
 ANIME_MEDIA_CONCURRENCY = max(1, BOT_ANIME_MEDIA_CONCURRENCY)
 ANIME_URL_FETCH_TIMEOUT_SEC = max(3.0, float(BOT_ANIME_URL_FETCH_TIMEOUT_SEC))
@@ -1103,7 +1097,7 @@ def _mode_punchup_queue_pressure_sec(board_id: str) -> float:
                     continue
                 max_age = max(max_age, max(0.0, now - float(enqueued_at)))
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
     try:
         current = current_deliveries.get(board_id)
         if isinstance(current, dict):
@@ -1111,7 +1105,7 @@ def _mode_punchup_queue_pressure_sec(board_id: str) -> float:
             if enqueued_at is not None:
                 max_age = max(max_age, max(0.0, now - float(enqueued_at)))
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
     return max_age
 def _mode_punchup_can_run(board_id: str) -> tuple[bool, str | None, float]:
 
@@ -1399,11 +1393,11 @@ def _build_delivery_priority_snapshot(priority_counts: dict) -> dict:
         "enabled": PRIORITY_DELIVERY_ENABLED,
         "split_fanout": PRIORITY_SPLIT_FANOUT_ENABLED,
         "split_min_passive": PRIORITY_SPLIT_MIN_PASSIVE,
-        "passive_slice_size": PRIORITY_PASSIVE_SLICE_SIZE,
-        "passive_media_slice_size": PRIORITY_PASSIVE_MEDIA_SLICE_SIZE,
-        "pressure_slice_age_sec": PRIORITY_PRESSURE_SLICE_AGE_SEC,
-        "pressure_passive_slice_size": PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
-        "pressure_passive_media_slice_size": PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
+        "passive_slice_size": BOT_PRIORITY_PASSIVE_SLICE_SIZE,
+        "passive_media_slice_size": BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE,
+        "pressure_slice_age_sec": BOT_PRIORITY_PRESSURE_SLICE_AGE_SEC,
+        "pressure_passive_slice_size": BOT_PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
+        "pressure_passive_media_slice_size": BOT_PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
         "passive_max_preemptions": PASSIVE_MAX_PREEMPTIONS,
         "priority_phase_budget_sec": PRIORITY_PHASE_BUDGET_SEC,
         "passive_phase_budget_sec": PASSIVE_PHASE_BUDGET_SEC,
@@ -1665,7 +1659,7 @@ async def _handle_telegram_bad_request(exception: Exception, update) -> None:
             else:
                 await chat_obj.answer("⚠️ Телега послала нахуй твой запрос. Пробуй снова.", parse_mode=None)
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 
     # Always clear locks if a command aborted due to BadRequest
     user_id = chat_obj.from_user.id if chat_obj else None
@@ -1695,13 +1689,13 @@ async def _handle_unhandled_exception(exception: Exception, update) -> None:
             try:
                 await update.callback_query.answer("Ошибка. Попробуй ещё раз.", show_alert=True)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
 
         if chat_obj:
             try:
                 await chat_obj.answer("⚠️ Произошла ошибка при выполнении команды.\nРазработчик уже уведомлен.", parse_mode=None)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
 
         # Always clear locks if a command crashed!
         user_id = chat_obj.from_user.id if chat_obj else None
@@ -1823,7 +1817,7 @@ async def _drain_save_executor(timeout: float = SAVE_EXECUTOR_DRAIN_SEC) -> None
             try:
                 loop.call_soon_threadsafe(finished.set)
             except RuntimeError:
-                pass  # цикл уже закрыт — ждать всё равно некому
+                import traceback; traceback.print_exc()  # цикл уже закрыт — ждать всё равно некому
 
     threading.Thread(target=_shutdown_and_signal, name="save-executor-drain", daemon=True).start()
     try:
@@ -2331,147 +2325,6 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
 
 
         # Уведомление пользователю отключено по просьбе админа
-def _get_random_header_prefix(lang: str = 'ru') -> str:
-
-    rand_prefix = random.random()
-    if lang == 'en':
-        if rand_prefix < 0.005: return "### ADMIN ### "
-        if rand_prefix < 0.008: return "Me - "
-        if rand_prefix < 0.01: return "Faggot - "
-        if rand_prefix < 0.012: return "### DEGENERATE ### "
-        if rand_prefix < 0.016: return "Biden - "
-        if rand_prefix < 0.021: return "EMPEROR CONAN - "
-        if rand_prefix < 0.023: return "### TRANNY ### "
-        if rand_prefix < 0.05: return "Anon - " # Чаще для английского
-        return ""
-    if lang == 'jp':
-        if rand_prefix < 0.005: return "### 管理人 ### " # Kanrinin (Admin)
-        if rand_prefix < 0.008: return "俺 - " # Ore (Me)
-        if rand_prefix < 0.01: return "ホモ - " # Homo (Faggot)
-        if rand_prefix < 0.012: return "### 変質者 ### " # Henshitsu-sha (Degenerate)
-        if rand_prefix < 0.016: return "岸田 - " # Kishida (PM context)
-        if rand_prefix < 0.021: return "コナン皇帝 - " # Emperor Conan
-        if rand_prefix < 0.023: return "### オカマ ### " # Okama (Tranny)
-        if rand_prefix < 0.030: return "お前 - " # Omae (You)
-        if rand_prefix < 0.040: return "暇人 - " # Himajin (Bitard/Neet)
-        if rand_prefix < 0.08: return "名無し - " # Nanashi (Anon) - самый частый
-        return ""
-    if rand_prefix < 0.005: return "### АДМИН ### "
-    if rand_prefix < 0.008: return "Абу - "
-    if rand_prefix < 0.01: return "Пидор - "
-    if rand_prefix < 0.012: return "### ДЖУЛУП ### "
-    if rand_prefix < 0.014: return "### Хуесос ### "
-    if rand_prefix < 0.016: return "Пыня - "
-    if rand_prefix < 0.018: return "Нариман Намазов - "
-    if rand_prefix < 0.021: return "ИМПЕРАТОР КОНАН - "
-    if rand_prefix < 0.023: return "Антон Бабкин - "
-    if rand_prefix < 0.025: return "НАРИМАН НАМАЗОВ - "
-    if rand_prefix < 0.027: return "ПУТИН - "
-    if rand_prefix < 0.028: return "Гей - "
-    if rand_prefix < 0.030: return "Анархист - "
-    if rand_prefix < 0.033: return "Имбецил - "
-    if rand_prefix < 0.035: return "### ЧМО ### "
-    if rand_prefix < 0.037: return "### ОНАНИСТ ### "
-    if rand_prefix < 0.040: return "### ЧЕЧЕНЕЦ ### "
-    if rand_prefix < 0.042: return "АААААААА - "
-    if rand_prefix < 0.044: return "### Аниме девочка ### "
-    if rand_prefix < 0.046: return "ChatGPT 5.4 - "
-    if rand_prefix < 0.048: return "Безумец - "
-    if rand_prefix < 0.050: return "Битард - "
-    if rand_prefix < 0.052: return "Мегумин - "
-    if rand_prefix < 0.054: return "Гопник - "
-    if rand_prefix < 0.056: return "Шизик - "
-    if rand_prefix < 0.058: return "Джефри Эпштейн - "
-    if rand_prefix < 0.060: return "Максим Тесак - "
-    if rand_prefix < 0.062: return "Навальный - "
-    if rand_prefix < 0.064: return "Рамзанка дыров - "
-    if rand_prefix < 0.066: return "СВОШНИК - "
-    if rand_prefix < 0.068: return "Герой Украины - "
-    if rand_prefix < 0.070: return "Claude Opus 4.6 - "
-    if rand_prefix < 0.076: return "Администратор - "
-    if rand_prefix < 0.08: return "Админ - "
-    if rand_prefix < 0.085: return "Модератор - "
-    if rand_prefix < 0.1: return "Анон - "
-    if rand_prefix < 0.115: return "Анонимус - "
-    if rand_prefix < 0.13: return "Анонимный пользователь - "
-    if rand_prefix < 0.132: return "Мочекрад - "
-    if rand_prefix < 0.134: return "Семён - "
-    if rand_prefix < 0.136: return "Макака - "
-    if rand_prefix < 0.138: return "РНН-господин - "
-    if rand_prefix < 0.140: return "Омеган - "
-    if rand_prefix < 0.142: return "Сыч - "
-    if rand_prefix < 0.144: return "Куколд - "
-    if rand_prefix < 0.146: return "Хач - "
-    if rand_prefix < 0.148: return "Педофил - "
-    if rand_prefix < 0.150: return "Зеленский - "
-    if rand_prefix < 0.152: return "Мыкола - "
-    return ""
-
-async def _format_header_inner(board_id: str, post_num: int, stream: str = 'ru') -> str:
-    board_data[board_id].setdefault('board_post_count', 0)
-    board_data[board_id]['board_post_count'] += 1
-    post_num_formatted = str(post_num)
-    msk_now = datetime.now(UTC) + timedelta(hours=3)
-    hour = msk_now.hour
-    is_night = hour >= 23 or hour < 6
-    circle = ""
-    rand = random.random()
-    if is_night:
-        if rand < 0.003: circle = "🌑 "
-        elif rand < 0.006: circle = "🌒 "
-        elif rand < 0.009: circle = "🌓 "
-        elif rand < 0.012: circle = "🌔 "
-        elif rand < 0.015: circle = "🌝 "
-        elif rand < 0.018: circle = "🌌 "
-    else:
-        if rand < 0.003: circle = "🔴 "
-        elif rand < 0.006: circle = "🟢 "
-        elif rand < 0.009: circle = "☢️ "
-        elif rand < 0.012: circle = "🟡 "
-        elif rand < 0.015: circle = "🔵 "
-        elif rand < 0.018: circle = "⭕ "
-    if board_id == 'int':
-        prefix = _get_random_header_prefix(lang='en')
-        return f"{circle}{prefix}Post No.{post_num_formatted}"
-    b_data = board_data[board_id]
-    if b_data['slavaukraine_mode']:
-        headers = [f"💙💛 Пiст №{post_num_formatted}", f"🇺🇦 Повiдомлення №{post_num_formatted}"]
-        return random.choice(headers)
-    if b_data['zaputin_mode']:
-        return f"🇷🇺 Пост №{post_num_formatted}"
-    if b_data['anime_mode']:
-        return f"🌸 投稿 {post_num_formatted} 番"
-    if b_data['suka_blyat_mode']:
-        return f"💢 Пост №{post_num_formatted}"
-    if b_data['gopnik_mode']:
-        return f"🤙 Малява №{post_num_formatted}"
-    if b_data.get('schizo_mode'):
-        return f"++ СИГНАЛ #{post_num_formatted} ++"
-    if b_data['polish_mode']:
-        return f"🇵🇱 Post №{post_num_formatted}"
-    if b_data['warhammer_mode']:
-        return f"⚔️ Донесение №{post_num_formatted}"
-    if b_data['imperial_mode']:
-        return f"📜 Депеша №{post_num_formatted}"
-    if b_data.get('matrix_mode'):
-        return f"🟩 Пакет №{post_num_formatted}"
-    if b_data.get('america_mode'):
-        return f"🦅 Freedom Post №{post_num_formatted}"
-    if b_data.get('holiday_mode'):
-        return f"🎄 Подарок №{post_num_formatted}"
-    if b_data.get('oldweb_mode'):
-        return f"🖥️ Сообщение #{post_num_formatted}"
-    if b_data.get('jewish_mode'):
-        return f"📜 Казус №{post_num_formatted}"
-    prefix_lang = 'en' if stream == 'en' else 'ru' 
-    prefix = _get_random_header_prefix(lang=prefix_lang)
-    if stream == 'en':
-        return f"{circle}{prefix}Post No.{post_num_formatted}"
-    elif stream == 'jp':
-        return f"{circle}{prefix}レス番 {post_num_formatted}"
-    else:
-        return f"{circle}{prefix}Пост №{post_num_formatted}"
-
 async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str) -> tuple[list[int], list, list]:
     async with db_lock:
         for attempt in range(10):
@@ -2581,7 +2434,7 @@ async def _clean_posts_from_ram(posts_to_delete_nums: list[int], board_id: str):
                                 if 'posts' in threads_data[thread_id]:
                                     threads_data[thread_id]['posts'].remove(post_num)
                             except (ValueError, KeyError):
-                                pass
+                                import traceback; traceback.print_exc()
             message_copies_in_mem = post_to_messages.pop(post_num, {})
             for uid, mid_or_list in message_copies_in_mem.items():
                 if isinstance(mid_or_list, list):
@@ -2612,7 +2465,7 @@ async def _delete_posts_from_channels(channel_messages_to_delete: list, bot_inst
         try:
             await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 
 async def _delete_posts_from_pm_api(messages_to_delete_from_api: list, bot_instance) -> int:
     import asyncio
@@ -2642,14 +2495,14 @@ async def _delete_message_with_retries(bot_instance, uid: int, mid: int, b_id: s
                     await bot_instance.delete_message(uid, mid)
                     return True
                 except Exception:
-                    pass
+                    import traceback; traceback.print_exc()
             for other_bid, other_bot in GLOBAL_BOTS.items():
                 if other_bot != deleter and other_bot != bot_instance:
                     try:
                         await other_bot.delete_message(uid, mid)
                         return True
                     except Exception:
-                        pass
+                        import traceback; traceback.print_exc()
             return False
         except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
             if attempt < max_attempts - 1:
@@ -2699,7 +2552,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
             if row:
                 board_id = row[0]
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
 
     channel_copies = await get_all_channel_copies(post_num)
     messages_to_delete_info = await get_post_copies(post_num)
@@ -2721,7 +2574,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
                             if 'posts' in threads_data[thread_id]:
                                 threads_data[thread_id]['posts'].remove(post_num)
                         except (ValueError, KeyError):
-                            pass
+                            import traceback; traceback.print_exc()
         message_copies_in_mem = post_to_messages.pop(post_num, {})
         for uid, mid_or_list in message_copies_in_mem.items():
             if isinstance(mid_or_list, list):
@@ -2736,7 +2589,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
             try:
                 await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
     if not messages_to_delete_info:
         return 0 if deleted_from_db else 0
         
@@ -3388,7 +3241,7 @@ async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: s
         try:
             await bot.send_message(chat_id, secondary_message, parse_mode="HTML", disable_web_page_preview=True)
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 async def send_active_pin_to_new_user(bot: Bot, user_id: int, board_id: str):
     """
     Проверяет, есть ли на доске активный глобальный закреп.
@@ -3452,7 +3305,7 @@ def throttle(rate: int):
                 try:
                     await message.answer(f"⚠️ Пожалуйста, подождите {int(rate - (now - cooldowns[user_id]))} сек.", disable_notification=True)
                 except Exception:
-                    pass
+                    import traceback; traceback.print_exc()
                 return
             cooldowns[user_id] = now
             return await func(message, *args, **kwargs)
@@ -4452,7 +4305,7 @@ def _generate_calendar_heatmap(ctx: ChartContext):
         start = _dt.date.fromisoformat(dates_sorted[0])
         end   = _dt.date.fromisoformat(dates_sorted[-1])
     except Exception as e:
-        logger.error(f"⚠️ Failed to parse dates for activity calendar: {e}")
+        logger.error(f"⚠️ Failed to parse dates for activity calendar: {e}", exc_info=True)
         return None
     start_mon = start - _dt.timedelta(days=start.weekday())
     end_sun   = end   + _dt.timedelta(days=6 - end.weekday())
@@ -4527,6 +4380,14 @@ def _generate_stats_charts_locked(board_id: str) -> list[bytes]:
     import os
     db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvach_bot.db')
     con = _sqlite3.connect(db_path)
+    try: con.execute('PRAGMA journal_mode=WAL')
+    except: pass
+    try: con.execute('PRAGMA synchronous=NORMAL')
+    except: pass
+    try: con.execute('PRAGMA busy_timeout=15000')
+    except: pass
+    try: con.execute('PRAGMA wal_autocheckpoint=1000')
+    except: pass
     try:
         cur = con.cursor()
 
@@ -4606,7 +4467,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
                 sent = await message.answer(f"⏳ Команда /stats на кулдауне. Ты можешь вызвать её через {min_left} мин {sec_left} сек.")
                 spawn_task(delete_message_after_delay(sent, 10))
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
             try: await message.delete()
             except Exception: pass
             return
@@ -5430,7 +5291,7 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
         try:
             await message.answer(passport_text, parse_mode="HTML")
         except (TelegramBadRequest, TelegramForbiddenError):
-            pass
+            import traceback; traceback.print_exc()
     try: await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError): pass
 async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = None, limit: int = 25) -> str:
@@ -5571,14 +5432,14 @@ async def analyze_telegram_photo(bot, photo_file_id: str, caption: str = None) -
         try:
             os.remove(tmp_path)
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
         if description:
             logger.info(f"✅ [TG_BOT] Photo analysis complete (desc='{description[:60]}...')")
         else:
             logger.warning(f"⚠️ [TG_BOT] Photo analysis produced no description.")
         return description
     except Exception as e:
-        logger.error(f"⚠️ [TG_BOT] Telegram Vision Error: {e}")
+        logger.error(f"⚠️ [TG_BOT] Telegram Vision Error: {e}", exc_info=True)
         return None
 
 _last_persona_board_ts: dict[str, float] = {}
@@ -5798,7 +5659,7 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
                 await update_shadow_mute(target_id, b_id, 0)
                 count += 1
         except Exception as e:
-            runtime_logger.error(f"Error during global unban on board {b_id} for user {target_id}: {e}")
+            runtime_logger.error(f"Error during global unban on board {b_id} for user {target_id}: {e}", exc_info=True)
     await log_global_event('bot', f"🕊️ GUNBAN: Админ {message.from_user.id} ГЛОБАЛЬНО РАЗБАНИЛ {target_id} на {count} досках")
     if lang == 'en': final = f"✅ User <code>{target_id}</code> unbanned/unmuted on {count} boards."
     elif lang == 'jp': final = f"✅ ユーザー <code>{target_id}</code> を {count} 個の板でBAN/ミュート解除しました。"
@@ -5825,7 +5686,7 @@ async def cmd_menu(message: types.Message, board_id: str | None, stream: str = '
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("whois", "info"))
 async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id): return
@@ -6273,11 +6134,11 @@ async def check_cooldown(message: Message, board_id: str) -> bool:
             sent_msg = await message.answer(text, parse_mode="HTML")
             spawn_task(delete_message_after_delay(sent_msg, 11))
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
         try:
             await message.delete()
         except TelegramBadRequest:
-            pass     
+            import traceback; traceback.print_exc()     
         return False
     return True
 def get_board_id(telegram_object: types.Message | types.CallbackQuery) -> str | None:
@@ -6332,7 +6193,7 @@ def _sync_save_graph_stats(data_to_save: dict) -> bool:
             try:
                 os.remove(tmp_path)
             except OSError:
-                pass
+                import traceback; traceback.print_exc()
 
 
 def _coerce_graph_stats(raw) -> dict:
@@ -6632,7 +6493,7 @@ async def _send_thread_info_if_applicable(message: types.Message, board_id: str,
     try:
         await message.answer(info_text, reply_markup=keyboard, parse_mode="HTML")
     except (TelegramForbiddenError, TelegramBadRequest):
-        pass
+        import traceback; traceback.print_exc()
 
 def detect_suggested_stream(lang_code: str | None) -> str:
     """
@@ -6807,7 +6668,7 @@ async def cmd_show_board_info(message: types.Message, board_id: str | None, stre
         await message.answer(full_response_text, parse_mode="HTML", disable_web_page_preview=True)
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        pass
+        import traceback; traceback.print_exc()
     except Exception as e:
         print(f"Ошибка в cmd_show_board_info: {e}")
 async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str, notify_users: bool = True, initiator_id: int = None):
@@ -6846,7 +6707,7 @@ async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str,
             try:
                 await bot_instance.send_message(uid, notify_text)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
     print(f"[THREAD DELETE] [{board_id}] Тред {thread_id} удалён. Пользователей переведено: {len(users_in_thread)}. Инициатор: {initiator_id}")
 
 _RE_ANIME_STACK = RE_ANIME_STACK
@@ -6895,12 +6756,14 @@ class StackedAnimeHandler:
 
         final_caption = self._generate_caption(command_counts)
 
+        is_loli_cmd = 'loli' in command_counts
         await _process_stacked_anime_command(
             message=self.message,
             board_id=self.board_id,
             fetcher_tasks=fetcher_tasks,
             caption=final_caption,
-            stream=self.stream
+            stream=self.stream,
+            is_loli=is_loli_cmd
         )
 
     def _reset_hourly_counters(self):
@@ -6957,7 +6820,7 @@ class StackedAnimeHandler:
                     spawn_task(delete_message_after_delay(sent, 15))
                     await self.message.delete()
                 except Exception:
-                    pass
+                    import traceback; traceback.print_exc()
                 return True
             tracker['count'] += requested_count
         return False
@@ -6975,7 +6838,7 @@ class StackedAnimeHandler:
                 spawn_task(delete_message_after_delay(sent, 15))
                 await self.message.delete()
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
             return True
         return False
 
@@ -7006,7 +6869,7 @@ class StackedAnimeHandler:
                 spawn_task(delete_message_after_delay(sent_msg, 10))
                 await self.message.delete()
             except (TelegramBadRequest, TelegramForbiddenError):
-                pass
+                import traceback; traceback.print_exc()
             return True
         return False
 
@@ -7560,7 +7423,7 @@ def _parse_summarize_args(text: str | None) -> tuple[int | None, str, str, str]:
                         paragraph_count = val
                         continue
                 except ValueError:
-                    pass
+                    import traceback; traceback.print_exc()
                 
                 # Check keywords
                 if arg in ['short', 'краткое', 'короткое', 'быстрое', 'к']:
@@ -7645,7 +7508,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             await message.answer(cooldown_text)
             await message.delete()
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
         return
     thread_id = None
     thread_info = {}
@@ -8066,7 +7929,7 @@ async def cq_show_active_threads(callback: types.CallbackQuery, board_id: str | 
         try:
             await callback.answer("This action is not available here.", show_alert=True)
         except TelegramBadRequest:
-            pass # Игнорируем, если даже ответ на колбэк не прошел
+            import traceback; traceback.print_exc() # Игнорируем, если даже ответ на колбэк не прошел
         return
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
@@ -8097,7 +7960,7 @@ async def cq_show_active_threads(callback: types.CallbackQuery, board_id: str | 
         else:
             print(f"⛔ Ошибка TelegramBadRequest в cq_show_active_threads: {e}")
     except (TelegramForbiddenError, TelegramNetworkError):
-        pass
+        import traceback; traceback.print_exc()
     except Exception as e:
         print(f"⛔ Непредвиденная ошибка в cq_show_active_threads: {e}")
 @dp.message(Command("tags", "tagcloud", "╤é╨╡╨│╨╕", "╤é╨╡╨│"))
@@ -8255,7 +8118,7 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("dice", "roll100", "d100"))
 async def cmd_dice(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -8275,7 +8138,7 @@ async def cmd_dice(message: types.Message, board_id: str | None, stream: str = '
         await message.answer(roll_text)
         await message.delete()
     except (TelegramForbiddenError, TelegramBadRequest):
-        pass
+        import traceback; traceback.print_exc()
 
 
 @dp.message(Command("quote", "╤å╨╕╤é╨░╤é╨░", "random_post"))
@@ -8317,7 +8180,7 @@ async def cmd_quote(message: types.Message, board_id: str | None, stream: str = 
         await message.answer(text, parse_mode="HTML")
         await message.delete()
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
 
 
 @dp.message(Command("addmoney"))
@@ -8345,7 +8208,7 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
         try:
             await message.bot.send_message(target_id, f"🎁 <b>Администрация начислила вам бонус: {amount} RUB! Кошелек - /wallet </b>", parse_mode="HTML")
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
     except Exception as e:
         await message.answer(f"Ошибка: {e}", parse_mode=None)
 @dp.message(Command("slavaukraine", "slava_ukraine", "ukraine", "ukraina", "hohol"))
@@ -8538,7 +8401,7 @@ async def activate_lightweight_mode(
         try:
             await message.delete()
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
         return
     b_data = board_data[board_id]
     if not await check_cooldown(message, board_id):
@@ -8559,7 +8422,7 @@ async def activate_lightweight_mode(
         try:
             await message.delete()
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         return
     header = await format_header(board_id, pnum)
     prefix = prefix_by_stream.get(stream, prefix_by_stream.get('ru', "### АДМИН ###"))
@@ -8584,7 +8447,7 @@ async def activate_lightweight_mode(
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 
 MODE_END_PHRASES = {
     'slavaukraine_mode': [
@@ -8756,7 +8619,7 @@ async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("wh40k", "waha", "warhammer", "warhamer"))
 async def cmd_wh40k(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -9099,7 +8962,7 @@ async def cmd_graph(message: types.Message, board_id: str | None, stream: str = 
                 days = int(arg[:-1])
                 days = max(1, min(30, days))
             except ValueError:
-                pass
+                import traceback; traceback.print_exc()
     working_msg = None
     try:
         await message.delete()
@@ -9142,7 +9005,7 @@ async def cmd_graph(message: types.Message, board_id: str | None, stream: str = 
                 error_text = "Произошла ошибка при создании графика."
             await message.answer(error_text)
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 @dp.message(Command("create"))
 async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -9165,7 +9028,7 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
             await message.answer(text)
             await message.delete()
         except (TelegramForbiddenError, TelegramBadRequest):
-            pass
+            import traceback; traceback.print_exc()
         return
     command_args = (message.text or message.caption or "").split(maxsplit=1)
     if len(command_args) > 1 and command_args[1].strip():
@@ -9203,7 +9066,7 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 
 async def _handle_quick_menu_ruletka(callback, board_id: str, user_id: int, lang: str):
     if not ROULETTE_EVENTS:
@@ -9226,7 +9089,7 @@ async def _handle_quick_menu_ruletka(callback, board_id: str, user_id: int, lang
         try:
             await callback.message.answer(cooldown_msg)
         except (TelegramBadRequest, TelegramForbiddenError):
-            pass
+            import traceback; traceback.print_exc()
         return
     event = get_random_event(ROULETTE_EVENTS)
     if event:
@@ -9381,7 +9244,7 @@ async def _handle_quick_menu_anime(callback, board_id: str, action: str, lang: s
         try:
             await search_msg.edit_text("Error occurred.")
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
     finally:
         if gate_acquired:
             anime_media_gate.release()
@@ -9399,7 +9262,7 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
     try:
         await callback.answer(activation_text)
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
     class SafeMessageProxy:
         def __init__(self, original_msg, user):
             self._msg = original_msg
@@ -9430,7 +9293,7 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         try:
             await callback.message.edit_text(menu_text, reply_markup=get_quick_menu_keyboard(board_id, stream=stream), parse_mode="HTML")
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
     elif action == "profile":
         fake_msg = SafeMessageProxy(callback.message, callback.from_user)
         await cmd_passport(fake_msg, board_id)
@@ -9482,7 +9345,7 @@ async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | No
         try:
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except TelegramBadRequest: 
-            pass # Если меню устарело, не страшно, настройки применились
+            import traceback; traceback.print_exc() # Если меню устарело, не страшно, настройки применились
         if lang == 'en': alert = "NSFW updated"
         elif lang == 'jp': alert = "NSFW更新"
         else: alert = "NSFW обновлен"
@@ -9519,7 +9382,7 @@ async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | No
             await callback.message.edit_text(title, reply_markup=kb, parse_mode="HTML")
             await callback.answer()
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
 async def _check_create_thread_cooldown(callback: types.CallbackQuery, user_s: dict, lang: str, now_ts: float) -> bool:
     """Checks if the user is on cooldown for creating a thread."""
     last_creation_ts = user_s.get('last_thread_creation', 0)
@@ -9613,7 +9476,7 @@ async def _process_op_post_and_enter(callback: types.CallbackQuery, user_id: int
     try:
         await callback.bot.send_message(user_id, enter_message, reply_markup=entry_keyboard, parse_mode="HTML")
     except (TelegramForbiddenError, TelegramBadRequest):
-        pass
+        import traceback; traceback.print_exc()
     spawn_task(post_thread_notification_to_channel(
         bots=GLOBAL_BOTS, board_id=board_id, thread_id=thread_id,
         thread_info=thread_info, event_type='new_thread'
@@ -9630,7 +9493,7 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
     try:
         await callback.answer()
     except TelegramBadRequest:
-        pass # Игнорируем, если запрос устарел, продолжаем выполнение
+        import traceback; traceback.print_exc() # Игнорируем, если запрос устарел, продолжаем выполнение
     if not isinstance(callback.message, types.Message):
         return
     user_id = callback.from_user.id
@@ -9651,13 +9514,13 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
             await callback.message.answer("Error: Post data not found. Please start over.")
             await callback.message.delete()
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         return
 
     try:
         await callback.message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 
     threads_data = get_threads_data(board_id)
     thread_id = secrets.token_hex(4)
@@ -10140,7 +10003,7 @@ async def reply_notifier_task():
                     try:
                         await bot_instance.send_message(recipient_id, text, reply_markup=keyboard)
                     except (TelegramForbiddenError, TelegramBadRequest):
-                        pass 
+                        import traceback; traceback.print_exc() 
                     except Exception as e:
                         print(f"Ошибка уведомления {recipient_id}: {e}")
                 tasks = [send_one_notification(n) for n in notifications]
@@ -10232,7 +10095,7 @@ async def cmd_cancel_fsm(message: types.Message, state: FSMContext, board_id: st
         try:
             await message.delete()
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         return
     await state.clear()
     if board_id:
@@ -10242,7 +10105,7 @@ async def cmd_cancel_fsm(message: types.Message, state: FSMContext, board_id: st
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 async def thread_lifecycle_manager(bots: dict[str, Bot]):
 
     while True:
@@ -10587,7 +10450,7 @@ async def runtime_telemetry_task():
                 private_delta = round(private_mb - previous_private_mb, 2)
             if isinstance(private_mb, (int, float)):
                 previous_private_mb = private_mb
-            runtime_logger.info(
+            runtime_logger.debug(
                 "runtime_snapshot %s",
                 json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
             )
@@ -10608,8 +10471,8 @@ async def runtime_telemetry_task():
                 f"wal={snapshot.get('db_files', {}).get('wal_mb')}MB"
             )
             if warnings:
-                runtime_logger.warning("runtime_warning %s %s", ",".join(warnings), line)
-                print(f"⚠️ {line}")
+                runtime_logger.debug("runtime_warning %s %s", ",".join(warnings), line)
+                print(line)
             else:
                 print(line)
         except Exception as e:
@@ -10632,7 +10495,7 @@ async def weekly_active_refresh_task():
                 counts[board_id] = len(users)
             total = sum(counts.values())
             top = sorted(counts.items(), key=lambda item: item[1], reverse=True)[:5]
-            runtime_logger.info(
+            runtime_logger.debug(
                 "weekly_active_refresh %s",
                 json.dumps(
                     {
@@ -10657,7 +10520,7 @@ async def reply_coverage_refresh_task():
             stats = await get_reply_coverage_stats()
             reply_coverage_stats = stats
             reply_coverage_updated_at = time.time()
-            runtime_logger.info(
+            runtime_logger.debug(
                 "reply_coverage %s",
                 json.dumps(
                     {
@@ -10726,7 +10589,7 @@ async def memory_restarter(bots: list[Bot], healthcheck_site: web.TCPSite | None
                     json.dumps(_collect_runtime_snapshot(), ensure_ascii=False, separators=(",", ":"))
                 )
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
             try:
                 await asyncio.wait_for(
                     graceful_shutdown(bots, healthcheck_site, emergency=True),
@@ -10794,7 +10657,7 @@ async def process_op_post_invalid(message: types.Message, state: FSMContext, boa
         await message.answer(response_text)
         await message.delete()
     except (TelegramForbiddenError, TelegramBadRequest):
-        pass
+        import traceback; traceback.print_exc()
 @dp.callback_query(F.data == "create_thread_start")
 async def cb_create_thread_start(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -10817,13 +10680,13 @@ async def cb_create_thread_start(callback: types.CallbackQuery, state: FSMContex
     try:
         await callback.answer()
     except TelegramBadRequest:
-        pass # Игнорируем, если кнопка устарела, главное отправить сообщение
+        import traceback; traceback.print_exc() # Игнорируем, если кнопка устарела, главное отправить сообщение
     if isinstance(callback.message, types.Message):
         try:
             await callback.message.answer(prompt_text)
             await callback.message.delete()
         except (TelegramForbiddenError, TelegramBadRequest):
-            pass
+            import traceback; traceback.print_exc()
 @dp.callback_query(F.data.startswith("threads_page_"))
 async def cq_threads_page(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     """
@@ -10837,7 +10700,7 @@ async def cq_threads_page(callback: types.CallbackQuery, board_id: str | None, s
         try:
             await callback.answer("Слишком быстро! / Too fast!", show_alert=False)
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         return
     user_last_thread_action[user_id] = now
     try:
@@ -10858,7 +10721,7 @@ async def cq_threads_page(callback: types.CallbackQuery, board_id: str | None, s
             try:
                 await callback.message.delete()
             except TelegramBadRequest:
-                pass # Сообщение уже удалено или слишком старое
+                import traceback; traceback.print_exc() # Сообщение уже удалено или слишком старое
             await callback.bot.send_message(user_id, text, reply_markup=keyboard, parse_mode="HTML")
     except (ValueError, IndexError):
         try:
@@ -10873,7 +10736,7 @@ async def cq_threads_page(callback: types.CallbackQuery, board_id: str | None, s
         try:
             await callback.answer()
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
 @dp.callback_query(F.data.startswith("view_thread_"))
 async def cq_view_thread(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
 
@@ -10900,7 +10763,7 @@ async def cq_view_thread(callback: types.CallbackQuery, board_id: str | None, st
     try:
         await callback.answer(load_txt)
     except TelegramBadRequest:
-        pass # Игнорируем, если запрос устарел, главное показать тред
+        import traceback; traceback.print_exc() # Игнорируем, если запрос устарел, главное показать тред
     thread_data = await get_thread_by_op_post(op_post_num)
     if not thread_data:
         err_txt = "Thread not found." if lang == 'en' else ("スレッドが見つかりません。" if lang == 'jp' else "Тред не найден.")
@@ -10951,7 +10814,7 @@ async def cq_thread_history(callback: types.CallbackQuery, board_id: str | None,
         try:
             await callback.answer(cooldown_msg, show_alert=True)
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         return
     thread_info = get_thread_info(board_id, thread_id)
     if not thread_info:
@@ -10966,7 +10829,7 @@ async def cq_thread_history(callback: types.CallbackQuery, board_id: str | None,
     try:
         await callback.answer(load_txt)
     except TelegramBadRequest:
-        pass # Игнорируем, главное отправить историю
+        import traceback; traceback.print_exc() # Игнорируем, главное отправить историю
     temp_user_state = user_s.copy()
     temp_user_state.setdefault('last_seen_threads', {})[thread_id] = 0
     b_data['user_state'][user_id] = temp_user_state
@@ -10991,7 +10854,7 @@ async def _enter_thread_logic(bot: Bot, board_id: str, user_id: int, thread_id: 
             sent_msg = await bot.send_message(user_id, cooldown_msg)
             spawn_task(delete_message_after_delay(sent_msg, 5))
         except (TelegramForbiddenError, TelegramBadRequest):
-            pass
+            import traceback; traceback.print_exc()
         return
     current_location = user_s.get('location', 'main')
     if current_location == thread_id:
@@ -11006,7 +10869,7 @@ async def _enter_thread_logic(bot: Bot, board_id: str, user_id: int, thread_id: 
         try:
             await message_to_delete.delete()
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
     was_missed, show_history_button = await send_missed_messages(bot, board_id, user_id, thread_id, stream=stream)
     if not was_missed:
         thread_title = threads_data[thread_id].get('title', '...')
@@ -11021,7 +10884,7 @@ async def _enter_thread_logic(bot: Bot, board_id: str, user_id: int, thread_id: 
         try:
             await bot.send_message(user_id, response_text, reply_markup=entry_keyboard, parse_mode="HTML")
         except (TelegramForbiddenError, TelegramBadRequest):
-            pass
+            import traceback; traceback.print_exc()
     await _send_op_commands_info(bot, user_id, board_id)
 @dp.callback_query(F.data.startswith("enter_thread_"))
 async def cq_enter_thread(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
@@ -11041,7 +10904,7 @@ async def cq_enter_thread(callback: types.CallbackQuery, board_id: str | None, s
     try:
         await callback.answer()
     except TelegramBadRequest:
-        pass # Если запрос устарел, всё равно пытаемся войти
+        import traceback; traceback.print_exc() # Если запрос устарел, всё равно пытаемся войти
     await _enter_thread_logic(
         bot=callback.bot,
         board_id=board_id,
@@ -11071,14 +10934,14 @@ async def cb_leave_thread(callback: types.CallbackQuery, board_id: str | None, s
     try:
         await callback.answer()
     except TelegramBadRequest:
-        pass # Игнорируем, продолжаем выполнение логику выхода
+        import traceback; traceback.print_exc() # Игнорируем, продолжаем выполнение логику выхода
     user_s = b_data['user_state'].setdefault(user_id, {})
     current_location = user_s.get('location', 'main')
     if current_location == 'main':
         try:
             await callback.message.delete()
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         return
     thread_id = current_location
     thread_info = get_thread_info(board_id, thread_id)
@@ -11100,11 +10963,11 @@ async def cb_leave_thread(callback: types.CallbackQuery, board_id: str | None, s
     try:
         await callback.message.answer(response_text, reply_markup=leave_keyboard)
     except Exception:
-        pass # Если не удалось отправить, юзер все равно перемещен логически
+        import traceback; traceback.print_exc() # Если не удалось отправить, юзер все равно перемещен логически
     try:
         await callback.message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
     await send_missed_messages(callback.bot, board_id, user_id, 'main', stream=stream)
 @dp.message(Command("leave"))
 async def cmd_leave(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -11307,7 +11170,7 @@ async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = '
             if len(args) > 1:
                 duration_str = args[1]
         except ValueError:
-            pass
+            import traceback; traceback.print_exc()
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         if lang == 'en':
@@ -11564,7 +11427,7 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
     try:
         await message.delete()
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("invite"))
 async def cmd_invite(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -11716,7 +11579,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
         )
         delivered = True
     except Exception as e:
-        runtime_logger.error(f"Whisper send failed: {e}")
+        runtime_logger.error(f"Whisper send failed: {e}", exc_info=True)
         await message.answer("❌ Не удалось доставить шёпот (пользователь не запустил бота или заблокировал его).")
         
     if delivered:
@@ -11799,11 +11662,11 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                             parse_mode="HTML"
                         )
                     except Exception:
-                        pass
+                        import traceback; traceback.print_exc()
             success_count += 1
             await asyncio.sleep(0.04)
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 
     # Get and update all channel copies (mirrors)
     from common.database import get_all_channel_copies
@@ -11832,11 +11695,11 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                                 parse_mode="HTML"
                             )
                         except Exception:
-                            pass
+                            import traceback; traceback.print_exc()
                 success_count += 1
                 await asyncio.sleep(0.04)
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
 
     async with storage_lock:
         if post_num in messages_storage:
@@ -12061,7 +11924,7 @@ async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 async def check_anime_cmd_cooldown(message: types.Message, board_id: str) -> bool:
     current_time = time.time()
     async with anime_cmd_lock:
@@ -12079,11 +11942,11 @@ async def check_anime_cmd_cooldown(message: types.Message, board_id: str) -> boo
                 sent_msg = await message.answer(cooldown_msg)
                 spawn_task(delete_message_after_delay(sent_msg, 15))
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
             try:
                 await message.delete()
             except TelegramBadRequest:
-                pass
+                import traceback; traceback.print_exc()
             return False
         return True
 def detect_media_type(data: bytes, url: str) -> str:
@@ -12345,25 +12208,40 @@ async def _collect_stacked_anime_downloads(
     return [successful_by_slot[slot] for slot in sorted(successful_by_slot)]
 
 def _prepare_anime_content(successful_downloads: list, caption: str) -> dict:
-    from aiogram.types import BufferedInputFile
+    """Build the content dict passed to process_new_post → broadcaster.
+
+    Key contract (see broadcaster.py lines 827-962):
+      - Single item: broadcaster reads 'image_bytes' first, then 'file_id', then 'image_url'.
+        Store raw bytes under 'image_bytes' for all types; broadcaster picks the right
+        filename/send_method based on content['type'].
+      - Multi-item: broadcaster reads each item's 'media' key as InputMedia* source.
+        Telegram media_group only supports 'photo' and 'video' — animation is coerced to 'video'.
+    """
     content = {}
     if len(successful_downloads) == 1:
         ibytes, mtype, ext = successful_downloads[0]
-        input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
-        content = {'type': mtype, 'media': input_file, 'caption': caption}
-        if mtype == 'video' or mtype == 'animation':
-             content = {'type': mtype, 'file_id': input_file, 'caption': caption}
-        else:
-             content = {'type': mtype, 'image_bytes': ibytes, 'caption': caption}
+        # All single-item types: store raw bytes. Broadcaster wraps in BufferedInputFile
+        # using the correct filename based on content['type']:
+        #   photo -> file.jpg, animation -> file.gif, video/other -> video.mp4
+        content = {'type': mtype, 'image_bytes': ibytes, 'caption': caption}
     else:
         media_items = []
         for ibytes, mtype, ext in successful_downloads:
+            # Telegram sendMediaGroup only supports InputMediaPhoto and InputMediaVideo.
+            # 'animation' (GIF/mp4 loop) is coerced to 'video' so it fits the group.
+            if mtype == 'animation':
+                import logging
+                logging.warning(
+                    "_prepare_anime_content: animation item coerced to 'video' "
+                    "for media_group (Telegram does not support 'animation' type in groups)."
+                )
             tg_type = 'video' if mtype in ['video', 'animation'] else 'photo'
             input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
             media_items.append({'type': tg_type, 'media': input_file})
 
         content = {'type': 'media_group', 'media': media_items, 'caption': caption}
     return content
+
 
 async def _publish_anime_post(message: types.Message, board_id: str, user_id: int, content: dict, stream: str, num_downloads: int):
     b_data = board_data[board_id]
@@ -12404,7 +12282,8 @@ async def _process_stacked_anime_command(
     board_id: str,
     fetcher_tasks: list[Callable[[], Awaitable[Optional[str]]]],
     caption: str,
-    stream: str = 'ru'
+    stream: str = 'ru',
+    is_loli: bool = False
 ):
     """
     Универсальный обработчик для "стакающихся" аниме-команд.
@@ -12452,6 +12331,55 @@ async def _process_stacked_anime_command(
         content = _prepare_anime_content(successful_downloads, caption)
 
         await _publish_anime_post(message, board_id, user_id, content, stream, len(successful_downloads))
+        
+        # --- EVENT LOGIC ---
+        if random.random() < 0.15:
+            is_nsfw_board = board_id in ['b', 'h', 'a']
+            event_urls = await get_event_anime_images(is_nsfw=is_nsfw_board, is_loli=is_loli, count=5)
+            if event_urls:
+                from aiogram.types import InputMediaPhoto, InputMediaVideo
+                media = []
+                gif_urls = []
+                for u in event_urls:
+                    kind = classify_media_url(u)
+                    if kind == 'video':
+                        media.append(InputMediaVideo(media=u, supports_streaming=True))
+                    elif kind == 'photo':
+                        media.append(InputMediaPhoto(media=u))
+                    elif kind == 'animation':
+                        gif_urls.append(u)
+                if media:
+                    try:
+                        if len(media) == 1:
+                            # Telegram API sendMediaGroup requires minimum 2 items.
+                            # With 1 item, fall back to single-message dispatch.
+                            item = media[0]
+                            if isinstance(item, InputMediaVideo):
+                                await message.bot.send_video(
+                                    chat_id=message.chat.id,
+                                    video=item.media,
+                                    supports_streaming=True
+                                )
+                            else:
+                                await message.bot.send_photo(
+                                    chat_id=message.chat.id,
+                                    photo=item.media
+                                )
+                        else:
+                            await message.bot.send_media_group(
+                                chat_id=message.chat.id,
+                                media=media
+                            )
+                    except Exception as e:
+                        runtime_logger.error(f"Failed to send event media group: {e}", exc_info=True)
+                for gif_url in gif_urls:
+                    try:
+                        await message.bot.send_animation(
+                            chat_id=message.chat.id,
+                            animation=gif_url
+                        )
+                    except Exception as e:
+                        runtime_logger.error(f"Failed to send event GIF animation ({gif_url}): {e}")
     except ValueError as e:
         print(f"[{board_id}] Не удалось обработать команду для user {user_id}: {e}")
         fail_text = "Не удалось получить контент. API недоступны или лимит исчерпан."
@@ -12468,7 +12396,7 @@ async def _safe_delete_user_message(message: types.Message):
         if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
             await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 
 @dp.message(Command("deanon"))
 async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru'):
@@ -12644,7 +12572,7 @@ async def cmd_zaputin(message: types.Message, board_id: str | None, stream: str 
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("app"))
 async def cmd_app(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -12681,7 +12609,7 @@ async def cmd_suka_blyat(message: types.Message, board_id: str | None, stream: s
         try:
             await message.delete()
         except (TelegramBadRequest, TelegramForbiddenError):
-            pass
+            import traceback; traceback.print_exc()
         return
     if not await check_cooldown(message, board_id):
         return
@@ -12749,7 +12677,7 @@ async def cmd_suka_blyat(message: types.Message, board_id: str | None, stream: s
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("say"))
 async def cmd_admin_say(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -12837,7 +12765,7 @@ async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str =
         try:
             target_id = int(parts[1])
         except ValueError:
-            pass
+            import traceback; traceback.print_exc()
 
     if not target_id:
         await message.answer("⚠️ Ответьте на сообщение юзера или укажите его ID: <code>/troll &lt;ID&gt;</code>", parse_mode="HTML")
@@ -13016,7 +12944,7 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
         await message.answer(response_text, parse_mode="HTML")
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("reactions"))
 async def cmd_reactions(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -13078,7 +13006,7 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
         await message.answer(response_text, parse_mode="HTML")
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("filter"))
 async def cmd_filter(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -13185,7 +13113,7 @@ async def admin_save_all(callback: types.CallbackQuery):
     try:
         await callback.answer(start_txt)
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
     try:
         db = await get_pool()
         await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
@@ -13240,7 +13168,7 @@ async def admin_stats_board(callback: types.CallbackQuery):
     try:
         await callback.message.edit_text(stats_text, reply_markup=keyboard)
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
     try: await callback.answer()
     except TelegramBadRequest: pass
 @dp.callback_query(F.data.startswith("restrictions_"))
@@ -13380,7 +13308,7 @@ async def admin_filter_list(callback: types.CallbackQuery):
     try:
         await callback.message.edit_text(final_text, parse_mode="HTML", reply_markup=keyboard)
     except TelegramBadRequest: 
-        pass
+        import traceback; traceback.print_exc()
     try: await callback.answer()
     except TelegramBadRequest: pass
 @dp.callback_query(F.data.startswith("reaction_bans_"))
@@ -13420,7 +13348,7 @@ async def admin_reaction_bans(callback: types.CallbackQuery):
     try:
         await callback.message.edit_text(response_text, parse_mode="HTML", reply_markup=keyboard)
     except TelegramBadRequest: 
-        pass
+        import traceback; traceback.print_exc()
     try: await callback.answer()
     except TelegramBadRequest: pass
 @dp.callback_query(F.data.startswith("admin_main_"))
@@ -13510,7 +13438,7 @@ async def admin_back_to_main(callback: types.CallbackQuery):
     try:
         await callback.answer()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 async def get_author_id_by_reply(msg: types.Message) -> int | None:
     if not msg.reply_to_message:
         return None
@@ -13577,7 +13505,7 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
     try:
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        pass
+        import traceback; traceback.print_exc()
 
 @dp.message(Command("ban"))
 async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -13760,7 +13688,7 @@ async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str
     try:
         await message.delete()
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("shadowmute_threads"))
 async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream: str = 'ru'):
 
@@ -13826,7 +13754,7 @@ async def cmd_delete_thread(message: Message, board_id: str | None, stream: str 
         try:
             await message.delete()
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         return
 
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -13895,7 +13823,7 @@ async def cmd_delete_thread(message: Message, board_id: str | None, stream: str 
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("sdel", "swipe"))
 async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -13949,7 +13877,7 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
     try:
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("unban"))
 async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id):
@@ -13964,7 +13892,7 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
         try:
             target_id = int(args[1])
         except ValueError:
-            pass
+            import traceback; traceback.print_exc()
             
     if target_id is None:
         if lang == 'en': usage = "Usage: <code>/unban &lt;user_id&gt;</code> or reply to user message."
@@ -14113,7 +14041,7 @@ async def cmd_token(message: types.Message, board_id: str | None, stream: str = 
     try:
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        pass
+        import traceback; traceback.print_exc()
 @dp.message(Command("poll", "opros"))
 async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -14140,7 +14068,7 @@ async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | No
             sent = await message.answer(cooldown_msg)
             spawn_task(delete_message_after_delay(sent, 5))
         except (TelegramForbiddenError, TelegramBadRequest):
-            pass
+            import traceback; traceback.print_exc()
         return
     full_text = message.text or message.caption or ""
     if message.reply_to_message and message.reply_to_message.media_group_id:
@@ -14159,7 +14087,7 @@ async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | No
         try:
             await message.answer(error_text)
         except (TelegramForbiddenError, TelegramBadRequest):
-            pass
+            import traceback; traceback.print_exc()
         return
     command_part, *data_parts = full_text.split('|', 1)
     question_text = command_part.replace("/poll", "").replace("/opros", "").strip()
@@ -14193,7 +14121,7 @@ async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | No
         try:
             await message.answer(usage_text, parse_mode="HTML")
         except (TelegramForbiddenError, TelegramBadRequest):
-            pass
+            import traceback; traceback.print_exc()
         return
     attached_media = None
     reply_to_check = message
@@ -14256,7 +14184,7 @@ async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | No
             await message.answer(err_msg)
             await message.delete()
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 @dp.callback_query(F.data == "poll_cancel_create", PollCreationStates.waiting_for_confirmation)
 async def cq_poll_cancel_create(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -14275,7 +14203,7 @@ async def cq_poll_cancel_create(callback: types.CallbackQuery, state: FSMContext
         await callback.answer(text) 
         await callback.message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 @dp.callback_query(F.data == "poll_confirm_create", PollCreationStates.waiting_for_confirmation)
 async def cq_poll_confirm_create(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -14286,7 +14214,7 @@ async def cq_poll_confirm_create(callback: types.CallbackQuery, state: FSMContex
         try:
             await callback.answer("Ошибка: не удалось определить доску.")
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         await state.clear()
         return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -14344,7 +14272,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         try:
             await callback.answer("Какая-то хуйня. Проголосовать не вышло", show_alert=True)
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         return
     user_id = callback.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -14353,7 +14281,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         try:
             await callback.answer()
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         return
     last_poll_vote_time[user_id] = now
     b_data = board_data[board_id]
@@ -14366,7 +14294,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         try:
             await callback.answer(random.choice(success_phrases))
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         return # ВАЖНО: Выходим, не трогая базу данных!
     try:
         parts = callback.data.split('_')
@@ -14376,7 +14304,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         try:
             await callback.answer("Error: Invalid poll data.", show_alert=True)
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         return
     post_updated = False
     content_for_db = None
@@ -14418,7 +14346,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
             if clear_markup:
                 await callback.message.edit_reply_markup(reply_markup=None)
         except (TelegramBadRequest, TelegramForbiddenError):
-            pass
+            import traceback; traceback.print_exc()
         return
 
     if post_updated:
@@ -14428,7 +14356,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         try:
             await callback.answer(random.choice(phrases))
         except TelegramBadRequest:
-            pass
+            import traceback; traceback.print_exc()
         if content_for_db:
             await update_post_content(post_num, content_for_db)
         async with pending_edit_lock:
@@ -14537,7 +14465,7 @@ async def handle_unknown_command_spam(message: types.Message):
             try:
                 await message.delete()
             except TelegramBadRequest:
-                pass
+                import traceback; traceback.print_exc()
             return
     unknown_command_tracker[user_id].append(current_time)
     command_timestamps = [t for t in unknown_command_tracker[user_id] if isinstance(t, (int, float))]
@@ -14554,11 +14482,11 @@ async def handle_unknown_command_spam(message: types.Message):
                 msg = "Too many unknown commands. Wait 20 seconds."
             await message.answer(msg, disable_notification=True)
         except (TelegramForbiddenError, TelegramBadRequest):
-            pass
+            import traceback; traceback.print_exc()
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 
 @dp.message(F.audio, ~F.media_group_id)
 async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru'): 
@@ -14815,11 +14743,11 @@ async def handle_poll(message: types.Message, board_id: str | None, stream: str 
     try:
         await message.answer(text, parse_mode="HTML")
     except (TelegramForbiddenError, TelegramBadRequest):
-        pass
+        import traceback; traceback.print_exc()
     try:
         await message.delete()
     except TelegramBadRequest:
-        pass
+        import traceback; traceback.print_exc()
 
 async def database_cleanup_task():
     """
@@ -15185,19 +15113,6 @@ async def periodic_shop_broadcast():
 
 SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
 
-def _site_public_url(raw_url: str | None) -> str | None:
-    if not raw_url:
-        return None
-    url = str(raw_url).strip()
-    if not url:
-        return None
-    if url.startswith(("http://", "https://")):
-        return url
-    if url.startswith("/"):
-        return f"{SITE_PUBLIC_BASE_URL}{url}"
-    return f"{SITE_PUBLIC_BASE_URL}/{url.lstrip('/')}"
-
-
 def _site_file_source(file_info: dict, prefer_url: bool = False) -> str | None:
     file_id = file_info.get("original_file_id") or file_info.get("file_id") or file_info.get("media")
     if isinstance(file_id, str) and file_id.startswith("shadowbanned"):
@@ -15207,53 +15122,6 @@ def _site_file_source(file_info: dict, prefer_url: bool = False) -> str | None:
     if not source:
         source = file_id or public_url
     return str(source) if source else None
-
-def _site_media_item(file_info: dict) -> dict | None:
-    send_type = _site_file_send_type(file_info)
-    source = _site_file_source(file_info)
-    if not send_type or not source:
-        return None
-    return {
-        "type": send_type,
-        "media": source,
-        "file_id": source,
-        "mime_type": file_info.get("mime_type"),
-        "filename": file_info.get("filename"),
-    }
-
-def _attach_site_media_for_delivery(content: dict, source_content: dict | None = None) -> dict:
-    files = (source_content or content).get("files")
-    if not isinstance(files, list) or not files:
-        return content
-
-    media_items = [
-        item for item in (_site_media_item(file_info) for file_info in files if isinstance(file_info, dict))
-        if item
-    ]
-    if not media_items:
-        return content
-
-    delivery_content = content.copy()
-    delivery_content["caption"] = delivery_content.get("caption") or delivery_content.get("text") or ""
-    delivery_content["files"] = files
-
-    album_supported = {"photo", "video", "document", "audio"}
-    album_items = [item for item in media_items if item["type"] in album_supported]
-    if len(album_items) > 1:
-        delivery_content["type"] = "media_group"
-        delivery_content["media"] = album_items[:10]
-        delivery_content.pop("file_id", None)
-        delivery_content.pop("image_url", None)
-        return delivery_content
-
-    first_item = media_items[0]
-    delivery_content["type"] = first_item["type"]
-    delivery_content["file_id"] = first_item["file_id"]
-    first_file = files[0] if isinstance(files[0], dict) else {}
-    public_url = _site_public_url(first_file.get("original_url") or first_file.get("thumbnail_url"))
-    if public_url:
-        delivery_content["image_url"] = public_url
-    return delivery_content
 
 async def site_reaction_processor():
     """
@@ -15372,7 +15240,7 @@ async def event_loop_health_tick_task():
                 await asyncio.to_thread(_write_heartbeat_payload, payload)
                 event_loop_last_tick = time.time()
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
         await asyncio.sleep(1)
 
 def _write_heartbeat_payload(payload: dict) -> None:
@@ -15519,7 +15387,7 @@ def _event_loop_stall_watchdog_loop():
                 try:
                     print(f"⚠️ [WATCHDOG] Failed to write event-loop stall dump: {type(exc).__name__}: {exc}")
                 except Exception:
-                    pass
+                    import traceback; traceback.print_exc()
         shutdown_event.wait(5)
 
 def start_event_loop_stall_watchdog():
@@ -15545,7 +15413,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "message_broadcaster": lambda: message_broadcaster(bots),
         "conan_roaster": lambda: conan_roaster(
             state, messages_storage, post_to_messages, message_to_post,
-            message_queues, format_header, board_data, storage_lock
+            message_queues, _format_header_inner, board_data, storage_lock
         ),
         "motivation_broadcaster": lambda: motivation_broadcaster(),
         "help_broadcaster": lambda: help_broadcaster(),
@@ -15760,6 +15628,7 @@ def _write_text_file_atomic(path: str, text: str, tmp_path: str) -> None:
 
 async def setup_bot_commands(bots: dict):
     from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+    from aiogram.exceptions import TelegramBadRequest
     
     user_commands = [
         BotCommand(command="start", description="Запустить бота"),
@@ -15872,10 +15741,12 @@ async def setup_bot_commands(bots: dict):
             for admin_id in ADMIN_IDS:
                 try:
                     await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
-                except Exception:
+                except TelegramBadRequest:
                     pass
+                except Exception as e:
+                    runtime_logger.warning(f"Failed setting admin commands for {admin_id}: {e}")
         except Exception as e:
-            print(f"Ошибка при установке команд: {e}")
+            runtime_logger.warning(f"Failed setting user commands: {e}")
 
 @dp.message(Command("report", "mods", "admin", "moderator"))
 async def cmd_report(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -15936,7 +15807,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
                 parse_mode="HTML"
             )
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
 
 @dp.callback_query(F.data.startswith("rep:"))
 async def process_report_action(callback: types.CallbackQuery, board_id: str | None):
@@ -15961,7 +15832,7 @@ async def process_report_action(callback: types.CallbackQuery, board_id: str | N
         try:
             await callback.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
         await callback.message.edit_text(callback.message.html_text + "\n\n<i>🗑 Пост удален модератором.</i>", parse_mode="HTML")
         await callback.answer("Пост удален")
         return
@@ -15985,7 +15856,7 @@ async def process_report_action(callback: types.CallbackQuery, board_id: str | N
         try:
             await callback.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
         except Exception:
-            pass
+            import traceback; traceback.print_exc()
             
         await callback.message.edit_text(callback.message.html_text + f"\n\n<i>🔨 Автор забанен на {duration_hours}ч модератором.</i>", parse_mode="HTML")
         await callback.answer(f"Пользователь забанен на {duration_hours}ч")
@@ -16097,7 +15968,7 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
     try:
         await callback.message.edit_text(text, reply_markup=get_help_keyboard(cat, board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
     except Exception:
-        pass
+        import traceback; traceback.print_exc()
     await callback.answer()
 
 try:
@@ -16389,7 +16260,7 @@ async def main():
                 await session.close()
                 print("✅ Общая HTTP сессия закрыта.")
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
             if hasattr(session, '_connector') and session._connector and not session._connector.closed:
                 await session._connector.close()
                 print("✅ Коннектор закрыт.")
@@ -16399,24 +16270,6 @@ async def main():
                 if pid_in_file == current_pid: os.remove(lock_file)
             except (IOError, ValueError):
                 print("⚠️ Lock-файл нечитаемый при shutdown; не удаляю чужой возможный live-lock.")
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("ℹ️ Завершение работы по запросу...")
-    except SystemExit as exc:
-        # SystemExit ловили вместе с KeyboardInterrupt и молча гасили, поэтому
-        # процесс ВСЕГДА завершался кодом 0 - даже когда main() звал
-        # sys.exit(1). А зовёт он его на двух фатальных путях: незаполненная
-        # БД (load_state) и «бот с таким PID уже запущен». Супервизору оба
-        # выглядели как успешный штатный выход: systemd с Restart=on-failure
-        # не перезапустил бы бота, а деплой счёл бы запуск удавшимся.
-        # Штатную остановку (код 0 или None) по-прежнему гасим тихо.
-        if exc.code:
-            print(f"⛔ Аварийное завершение, код выхода {exc.code}.")
-            raise
-        print("ℹ️ Завершение работы по запросу...")
 
 async def schedule_persona_reply(bot, board_id: str, target_post_num: int, context_text: str, stream: str, is_admin_trigger: bool = False, photo_file_id: str = None, is_dialogue: bool = False):
     try:
@@ -16604,3 +16457,22 @@ async def check_and_send_contextual_reply(bot: Bot, user_id: int, text: str, boa
                 return
     except Exception as e:
         print(f"⛔ Ошибка в check_and_send_contextual_reply для user {user_id}: {e}")
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("ℹ️ Завершение работы по запросу...")
+    except SystemExit as exc:
+        # SystemExit ловили вместе с KeyboardInterrupt и молча гасили, поэтому
+        # процесс ВСЕГДА завершался кодом 0 - даже когда main() звал
+        # sys.exit(1). А зовёт он его на двух фатальных путях: незаполненная
+        # БД (load_state) и «бот с таким PID уже запущен». Супервизору оба
+        # выглядели как успешный штатный выход: systemd с Restart=on-failure
+        # не перезапустил бы бота, а деплой счёл бы запуск удавшимся.
+        # Штатную остановку (код 0 или None) по-прежнему гасим тихо.
+        if exc.code:
+            print(f"⛔ Аварийное завершение, код выхода {exc.code}.")
+            raise
+        print("ℹ️ Завершение работы по запросу...")
+

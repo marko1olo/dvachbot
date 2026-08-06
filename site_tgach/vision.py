@@ -97,7 +97,7 @@ def prepare_image_for_groq(file_path):
             try:
                 img.close()
             except Exception:
-                pass
+                import traceback; traceback.print_exc()
 
 
 _LAST_VISION_CALL_TIME = 0.0
@@ -222,16 +222,19 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 max_retries=0,
                                 timeout=GROQ_HTTP_TIMEOUT_SECONDS,
                             )
-                            content_arr = [{"type": "text", "text": system_prompt}]
+                            prompt_text = system_prompt + "\nDo NOT generate thinking tags or reasoning. Output only JSON immediately."
+                            content_arr = [{"type": "text", "text": prompt_text}]
                             for iu in processed_image_urls:
                                 content_arr.append({"type": "image_url", "image_url": {"url": iu}})
                             
                             kwargs = {
                                 "model": model_name,
                                 "messages": [{"role": "user", "content": content_arr}],
-                                "max_tokens": 600,
+                                "max_tokens": 1500,
                                 "response_format": {"type": "json_object"}
                             }
+                            if provider == "groq":
+                                kwargs["temperature"] = 0.2
                                 
                             resp = await client.chat.completions.create(**kwargs)
                             content = resp.choices[0].message.content
@@ -256,6 +259,9 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                         except Exception as e:
                             err_str = str(e).lower()
                             if "413" in err_str: return None
+                            if "json_validate" in err_str or "max completion tokens" in err_str or "400" in err_str:
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} failed ({err_str[:120]}). Trying next model...")
+                                break
                             if "503" in err_str or "504" in err_str or "unavailable" in err_str or "500" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} server overloaded ({err_str}). Skipping model {model_name}.")
                                 break
@@ -273,7 +279,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             return None
 
         except Exception as e:
-            logger.error(f"❌ [VISION] [{source}] Critical error in Vision module: {e}")
+            logger.error(f"❌ [VISION] [{source}] Critical error in Vision module: {e}", exc_info=True)
             return None
         finally:
             resized_bytes = None

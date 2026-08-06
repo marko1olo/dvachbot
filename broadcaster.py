@@ -1,3 +1,4 @@
+import shared_state
 import asyncio
 import json
 import time
@@ -11,22 +12,14 @@ from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, Teleg
 import aiohttp
 import re
 from datetime import datetime
-from common.text_utils import clean_html_tags
+from common.text_utils import clean_html_tags, RE_YOU_PATTERN
+from common.database import get_post_by_num, get_post_copies, add_post_copies
 from shared_state import *
+from shared_state import _drop_post_copy_maps_unlocked, _trim_post_copy_maps_unlocked
 from utils import split_text
+import html
+import __main__ as main
 
-def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
-    if max_posts < 0 or len(post_to_messages) <= max_posts:
-        return 0, 0
-    if max_posts == 0:
-        stale_posts = list(post_to_messages)
-    else:
-        keep_posts = set(sorted(post_to_messages.keys(), reverse=True)[:max_posts])
-        stale_posts = [post_num for post_num in post_to_messages if post_num not in keep_posts]
-    removed_reverse = 0
-    for post_num in stale_posts:
-        removed_reverse += _drop_post_copy_maps_unlocked(post_num)
-    return len(stale_posts), removed_reverse
 
 def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, int]) -> str:
     """Улучшенная версия: не использует замок, работает с переданным словарем авторов."""
@@ -47,6 +40,119 @@ def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, in
             continue
     return text
 
+from common.html_utils import escape_html, convert_site_tags_to_telegram, apply_greentext_formatting
+from common.text_utils import generate_poll_text_display
+
+def _format_quote_block(quote_info: dict | None) -> str | None:
+    if not quote_info:
+        return None
+    quote_text_raw = quote_info.get('text') or ''
+    quote_text_clean = clean_html_tags(quote_text_raw) or ''
+
+    quote_parts = []
+    if quote_text_clean:
+        if len(quote_text_clean) > 140:
+            quote_text = escape_html(quote_text_clean[:140]) + "..."
+        else:
+            quote_text = escape_html(quote_text_clean)
+        quote_parts.append(quote_text)
+
+    files_in_quote = quote_info.get('files', [])
+    if files_in_quote:
+        photo_count = sum(1 for f in files_in_quote if f.get('type') == 'photo')
+        video_count = sum(1 for f in files_in_quote if f.get('type') == 'video')
+        gif_count = sum(1 for f in files_in_quote if f.get('type') == 'animation')
+        document_count = sum(1 for f in files_in_quote if f.get('type') == 'document')
+        audio_count = sum(1 for f in files_in_quote if f.get('type') == 'audio')
+        voice_count = sum(1 for f in files_in_quote if f.get('type') == 'voice')
+        sticker_count = sum(1 for f in files_in_quote if f.get('type') == 'sticker')
+        video_note_count = sum(1 for f in files_in_quote if f.get('type') == 'video_note')
+        known_quote_types = {'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'}
+        other_count = sum(1 for f in files_in_quote if f.get('type') not in known_quote_types)
+
+        media_counts = []
+        if photo_count > 0: media_counts.append(f"{photo_count} фото")
+        if video_count > 0: media_counts.append(f"{video_count} видео")
+        if gif_count > 0: media_counts.append(f"{gif_count} GIF")
+        if document_count > 0: media_counts.append(f"{document_count} doc")
+        if audio_count > 0: media_counts.append(f"{audio_count} audio")
+        if voice_count > 0: media_counts.append(f"{voice_count} voice")
+        if sticker_count > 0: media_counts.append(f"{sticker_count} sticker")
+        if video_note_count > 0: media_counts.append(f"{video_note_count} video note")
+        if other_count > 0: media_counts.append(f"{other_count} file")
+
+        if media_counts:
+            quote_parts.append(f"<i>[{', '.join(media_counts)}]</i>")
+
+    final_quote_text = "\n".join(quote_parts).strip()
+    if final_quote_text:
+        return f"<blockquote expandable>{final_quote_text}</blockquote>"
+    return None
+
+def _format_reply_line(content: dict, user_id_for_context: int, reply_to_post_author_id: int | None, quote_info: dict | None) -> str | None:
+    reply_to_post = content.get('reply_to_post')
+    if not reply_to_post:
+        return None
+    is_author_match = (
+        reply_to_post_author_id is not None 
+        and reply_to_post_author_id > 0 
+        and user_id_for_context > 0 
+        and user_id_for_context == reply_to_post_author_id
+    )
+    you_marker = " (You)" if is_author_match else ""
+    reply_line = f">>{reply_to_post}{you_marker}"
+    return reply_line if quote_info else f"<code>{escape_html(reply_line)}</code>"
+
+def _format_reactions_block(post_data: dict) -> str | None:
+    reactions_data = post_data.get('reactions')
+    if not reactions_data:
+        return None
+    reaction_lines = []
+    user_reactions = reactions_data.get('users', {})
+    if isinstance(user_reactions, dict):
+        all_emojis = [emoji for user_emojis in user_reactions.values() for emoji in user_emojis]
+        categories = [
+            POSITIVE_REACTIONS, LAUGHING_REACTIONS, THINKING_REACTIONS,
+            SHOCK_REACTIONS, SAD_REACTIONS, NEGATIVE_REACTIONS, CLOWN_REACTION,
+            POLITICAL_REACTIONS, SYMBOLIC_REACTIONS, INSULT_REACTIONS
+        ]
+        known_emojis = set().union(*categories)
+        display_groups = {
+            'positive': sorted([e for e in all_emojis if e in POSITIVE_REACTIONS]),
+            'laughing': sorted([e for e in all_emojis if e in LAUGHING_REACTIONS]),
+            'thinking': sorted([e for e in all_emojis if e in THINKING_REACTIONS]),
+            'shock': sorted([e for e in all_emojis if e in SHOCK_REACTIONS]),
+            'sad': sorted([e for e in all_emojis if e in SAD_REACTIONS]),
+            'negative': sorted([e for e in all_emojis if e in NEGATIVE_REACTIONS]),
+            'clown': sorted([e for e in all_emojis if e in CLOWN_REACTION]),
+            'political': sorted([e for e in all_emojis if e in POLITICAL_REACTIONS]),
+            'symbolic': sorted([e for e in all_emojis if e in SYMBOLIC_REACTIONS]),
+            'insult': sorted([e for e in all_emojis if e in INSULT_REACTIONS]),
+            'neutral': sorted([e for e in all_emojis if e not in known_emojis]),
+        }
+        for group_name, group_emojis in display_groups.items():
+            if group_emojis:
+                reaction_lines.append("".join(group_emojis))
+    elif 'positive' in reactions_data or 'negative' in reactions_data:
+        if reactions_data.get('positive'): reaction_lines.append("".join(reactions_data['positive']))
+        if reactions_data.get('neutral'): reaction_lines.append("".join(reactions_data['neutral']))
+        if reactions_data.get('negative'): reaction_lines.append("".join(reactions_data['negative']))
+    if reaction_lines:
+        return "\n".join(reaction_lines)
+    return None
+
+def _format_main_text(content: dict) -> str | None:
+    main_text_raw = content.get('text') or content.get('caption') or ''
+    if not main_text_raw:
+        return None
+    poll_data = content.get('poll_data')
+    if not poll_data:
+         safe_text = main_text_raw
+         text_with_tags = convert_site_tags_to_telegram(safe_text)
+         return apply_greentext_formatting(text_with_tags)
+    else:
+         return convert_site_tags_to_telegram(main_text_raw)
+
 async def _format_message_body(
     content: dict, 
     user_id_for_context: int, 
@@ -54,12 +160,7 @@ async def _format_message_body(
     reply_to_post_author_id: int | None,
     quote_info: dict | None = None
 ) -> str:
-    """
-    Формирует и форматирует тело сообщения (реакции, reply, опрос, greentext, (You)).
-    Версия 2.1: Добавлена поддержка "Быстрой цитаты" (Quick Quote) с защитой от None.
-    """
     parts = []
-
     parts.append(_format_quote_block(quote_info))
     parts.append(_format_reply_line(content, user_id_for_context, reply_to_post_author_id, quote_info))
     parts.append(_format_reactions_block(post_data))
@@ -72,7 +173,15 @@ async def _format_message_body(
 
     return '\n\n'.join(filter(None, parts))
 
+def _phase_time_budget_sec(delivery_phase: str) -> float:
+    if delivery_phase == "priority":
+        return PRIORITY_PHASE_BUDGET_SEC
+    if delivery_phase in {"passive", "passive_slice"}:
+        return PASSIVE_PHASE_BUDGET_SEC
+    return 0.0
+
 def _order_recipients_for_delivery(board_id: str, recipients) -> tuple[list[int], int, int]:
+    from delivery_manager import _split_recipients_for_delivery
     priority, passive = _split_recipients_for_delivery(board_id, recipients)
     if not priority:
         return passive, 0, len(passive)
@@ -150,7 +259,7 @@ async def _build_lie_media_content(content: dict, board_id: str) -> dict:
     return lie_content
 
 class MessageBroadcaster:
-    def __init__(self, config: BroadcastConfig):
+    def __init__(self, config: shared_state.BroadcastConfig):
         self.bot_instance = config.bot_instance
         self.board_id = config.board_id
         self.recipients = config.recipients
@@ -384,7 +493,7 @@ class MessageBroadcaster:
                             self.stats['retries'] += 1
                         else:
                             self.stats['errors'] += 1
-                            runtime_logger.warning(
+                            main.runtime_logger.warning(
                                 "delivery_recipient_retry_exhausted %s",
                                 json.dumps(
                                     {
@@ -411,7 +520,7 @@ class MessageBroadcaster:
                             self.stats['retries'] += 1
                         else:
                             self.stats['errors'] += 1
-                            runtime_logger.warning(
+                            main.runtime_logger.warning(
                                 "delivery_recipient_retry_exhausted %s",
                                 json.dumps(
                                     {
@@ -516,18 +625,18 @@ class MessageBroadcaster:
                 "queue_wait_sec": round(self.queue_wait_sec, 3) if self.queue_wait_sec is not None else None,
                 "queue_total_sec": round(queue_total_sec, 3) if queue_total_sec is not None else None,
             }
-            delivery_metrics[self.board_id].append(delivery_record)
-            runtime_logger.info(
+            main.delivery_metrics[self.board_id].append(delivery_record)
+            main.runtime_logger.debug(
                 "delivery_result %s",
                 json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
             )
             if time_taken >= DELIVERY_SLOW_PHASE_SEC or (queue_total_sec is not None and queue_total_sec >= DELIVERY_SLOW_PHASE_SEC):
-                runtime_logger.warning(
+                main.runtime_logger.debug(
                     "delivery_slow %s",
                     json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
                 )
             if remaining_recipients_for_later:
-                runtime_logger.warning(
+                main.runtime_logger.debug(
                     "delivery_phase_budget_deferred %s",
                     json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
                 )
@@ -553,7 +662,7 @@ class MessageBroadcaster:
                 if keep_copy_maps_in_ram:
                     trimmed_copy_posts, trimmed_copy_refs = _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
             if trimmed_copy_posts:
-                runtime_logger.info(
+                main.runtime_logger.info(
                     "copy_map_ram_trim %s",
                     json.dumps(
                         {
@@ -587,7 +696,7 @@ class MessageBroadcaster:
             # spam_violations — три хранилища из двенадцати. Это массовый путь,
             # именно он находит большинство заблокировавших бота, поэтому
             # остальное (включая deque с текстами сообщений) утекало.
-            freed = await purge_users_from_board_ram(self.board_id, users_to_remove_db)
+            freed = await main.purge_users_from_board_ram(self.board_id, users_to_remove_db)
 
             if users_to_remove_db:
                 from common.database import remove_users_from_board_batch
@@ -607,7 +716,7 @@ class MessageBroadcaster:
                 timeout=timeout_sec,
             )
         except asyncio.TimeoutError as exc:
-            runtime_logger.warning(
+            main.runtime_logger.warning(
                 "delivery_recipient_timeout %s",
                 json.dumps(
                     {
@@ -665,7 +774,7 @@ class MessageBroadcaster:
                         quote_info=send_content.get('quote_info')
                     )
             except Exception as exc:
-                runtime_logger.warning(
+                main.runtime_logger.warning(
                     "lie_media_replacement_failed %s",
                     json.dumps(
                         {
@@ -729,7 +838,7 @@ class MessageBroadcaster:
             if media_url and str(media_url) not in fallback_text:
                 fallback_text = f"{fallback_text}\n\n{escape_html(str(media_url))}"
             if not self.media_url_fallback_logged:
-                runtime_logger.warning(
+                main.runtime_logger.warning(
                     "delivery_media_url_text_fallback %s",
                     json.dumps(
                         {
@@ -782,7 +891,7 @@ class MessageBroadcaster:
         def _log_plain_fallback(reason: str) -> None:
             if self.html_plain_fallback_logged:
                 return
-            runtime_logger.warning(
+            main.runtime_logger.warning(
                 "delivery_html_plain_fallback %s",
                 json.dumps(
                     {
@@ -1123,7 +1232,7 @@ class MessageBroadcaster:
                                                 print(f"   🗑 Исключена жирная ссылка: {size/1024/1024:.2f} MB")
                                                 continue 
                                     except Exception:
-                                        pass 
+                                        import traceback; traceback.print_exc() 
                                 clean_media_list.append(item)
                         if not clean_media_list:
                             self.stats['errors'] += 1
@@ -1142,10 +1251,9 @@ class MessageBroadcaster:
                 elif "voice_messages_forbidden" in err_low:
                     self.stats['errors'] += 1
                     return None
-                elif "wrong remote file identifier" in err_low or "unserialize" in err_low:
-                    runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID] Skip bad media for user {uid}: {e}")
-                    self.stats['errors'] += 1
-                    return None
+                elif "wrong remote file identifier" in err_low or "unserialize" in err_low or "wrong padding" in err_low or "invalid file_id" in err_low or "wrong file identifier" in err_low:
+                    main.runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID] Fallback text for bad media user {uid}: {e}")
+                    return await _send_plain_media_fallback("bad_file_id")
                 else:
                     print(f"⚠️ BadRequest отправки user {uid}: {e}")
                     self.stats['errors'] += 1
@@ -1165,7 +1273,7 @@ class MessageBroadcaster:
         return None
 
 
-async def send_message_to_users(config: BroadcastConfig) -> list:
+async def send_message_to_users(config: shared_state.BroadcastConfig) -> list:
     """
     Оптимизированная функция массовой рассылки.
     Сложность снижена с O(N*M) до O(N + M) за счет выноса форматирования.

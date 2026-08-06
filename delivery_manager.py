@@ -1,17 +1,19 @@
 from common.config import BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE, BOT_PRIORITY_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_SLICE_AGE_SEC
 
-from shared_state import (
-    storage_lock, post_to_messages, is_shutting_down, drain_shutdown_requested, 
-    durable_delivery_stats, weekly_active_users, BroadcastConfig, enqueue_board_message
-)
+from shared_state import *
 from common.database import (
     upsert_delivery_queue_item, delete_delivery_queue_item, get_post_copies, 
-    create_post, update_post_content, get_stream_active_users
+    create_post, update_post_content, get_stream_active_users,
+    get_and_clear_broadcast_queue, mark_broadcast_posts_sent
 )
 from common.board_config import BOARD_CONFIG
 from post_helpers import format_header
 from help_text import HELP_TEXT_EN_COMMANDS, THREAD_PROMO_TEXT_EN
-from datetime import timezone
+from common.thread_manager import get_threads_data
+from thread_texts import thread_messages
+from common.bot_helpers import process_new_post
+from datetime import timezone, datetime
+import __main__ as main
 UTC = timezone.utc
 
 PRIORITY_PASSIVE_MEDIA_SLICE_SIZE = max(10, BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE)
@@ -35,7 +37,7 @@ def _durable_recipients_from_item(item: dict) -> list[int]:
 
 def _queue_item_can_be_durable(item: dict) -> bool:
 
-    if not DURABLE_DELIVERY_QUEUE_ENABLED:
+    if not main.DURABLE_DELIVERY_QUEUE_ENABLED:
         return False
     if not isinstance(item, dict):
         return False
@@ -48,7 +50,7 @@ def _queue_item_can_be_durable(item: dict) -> bool:
     content = item.get("content")
     if not isinstance(content, dict):
         return False
-    if _contains_volatile_delivery_payload(content):
+    if main._contains_volatile_delivery_payload(content):
         return False
     return bool(item.get("post_num")) and bool(_durable_recipients_from_item(item))
 
@@ -85,7 +87,7 @@ def _board_queue_oldest_age_sec(board_id: str | None) -> float:
 
 async def get_board_activity_last_hours(board_id: str, hours: int = 2) -> float:
     if hours <= 0: return 0.0
-    time_threshold = datetime.now(UTC) - timedelta(hours=hours)
+    time_threshold = datetime.now(UTC) - main.timedelta(hours=hours)
     post_count = 0
     async with storage_lock:
         for post_data in reversed(messages_storage.values()):
@@ -108,7 +110,7 @@ from collections import defaultdict
 import traceback
 
 from shared_state import (
-    board_data, messages_storage,
+    board_data, messages_storage, state,
     message_queues, current_deliveries, pending_edit_tasks,
     pending_edit_lock, posts_pending_deletion, runtime_logger
 )
@@ -138,6 +140,7 @@ def _get_random_header_prefix(lang='ru'):
     if lang == 'en': return "Anon - "
     return "Анон - "
 
+@dataclass
 class PassiveQueueItemParams:
     source_item: dict
     recipients: set[int]
@@ -177,8 +180,8 @@ async def _persist_durable_delivery_item(board_id: str, item: dict, reason: str)
     )
     if durable_id:
         item["durable_delivery_id"] = durable_id
-        durable_delivery_stats["persisted"] += 1
-        runtime_logger.info(
+        durable_delivery_stats["persisted"] = durable_delivery_stats.get("persisted", 0) + 1
+        runtime_logger.debug(
             "delivery_durable_saved %s",
             json.dumps(
                 {
@@ -195,7 +198,7 @@ async def _persist_durable_delivery_item(board_id: str, item: dict, reason: str)
             ),
         )
         return durable_id
-    durable_delivery_stats["persist_failed"] += 1
+    durable_delivery_stats["persist_failed"] = durable_delivery_stats.get("persist_failed", 0) + 1
     return None
 
 
@@ -207,8 +210,8 @@ async def _delete_durable_delivery_item(item_or_id, reason: str) -> None:
     if not durable_id:
         return
     if await delete_delivery_queue_item(int(durable_id)):
-        durable_delivery_stats["deleted"] += 1
-        runtime_logger.info(
+        durable_delivery_stats["deleted"] = durable_delivery_stats.get("deleted", 0) + 1
+        runtime_logger.debug(
             "delivery_durable_deleted %s",
             json.dumps(
                 {
@@ -342,7 +345,7 @@ def _lie_file_from_random_post(
             if candidate_post_num == int(avoid_post_num):
                 return None
         except (TypeError, ValueError):
-            pass
+            import traceback; traceback.print_exc()
     files = post['content'].get('files') or []
     if not files:
         return None
@@ -375,7 +378,7 @@ async def _get_lie_archive_media(
     avoid_post_num: int | None = None,
     exclude_file_ids: set[str] | None = None,
 ) -> dict | None:
-    getter = get_random_video_post if desired_kind == 'video' else get_random_image_post
+    getter = main.get_random_video_post if desired_kind == 'video' else main.get_random_image_post
     for _ in range(12):
         post = await getter([board_id])
         media = _lie_file_from_random_post(post, desired_kind, allowed_send_types, avoid_post_num, exclude_file_ids)
@@ -553,7 +556,7 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                     else:
                         return
                 return 
-            except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError) as e:
+            except (main.TelegramNetworkError, asyncio.TimeoutError, main.aiohttp.ClientError) as e:
                 if attempt < max_attempts - 1:
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 10) 
@@ -600,10 +603,10 @@ async def execute_delayed_edit(
                     reply_to_message_id=reply_to_message_id
                 )
             except (TelegramForbiddenError, TelegramBadRequest):
-                pass
-        await edit_post_for_all_recipients(post_num, bot_instance)
+                import traceback; traceback.print_exc()
+        await main.edit_post_for_all_recipients(post_num, bot_instance)
     except asyncio.CancelledError:
-        pass
+        import traceback; traceback.print_exc()
     except Exception as e:
         print(f"❌ Ошибка в execute_delayed_edit для поста #{post_num}: {e}")
     finally:
@@ -668,7 +671,7 @@ class MessageDeliveryTask:
 
     async def process(self):
         """Основной метод оркестрации обработки сообщения."""
-        if not await validate_message_format(self.msg_data):
+        if not await main.validate_message_format(self.msg_data):
             return
 
         # Delayed initialization to ensure msg_data is valid
@@ -687,7 +690,7 @@ class MessageDeliveryTask:
             try:
                 self.queue_wait_sec = max(0.0, self.started_at - float(self.enqueued_at))
             except (TypeError, ValueError):
-                pass
+                import traceback; traceback.print_exc()
 
         self.passive_slice_size = _passive_slice_size_for_content(self.content, self.board_id)
 
@@ -818,7 +821,7 @@ class MessageDeliveryTask:
                 passive_item["durable_delivery_id"] = planned_passive_durable_id
             await _persist_durable_delivery_item(self.board_id, passive_item, "deferred_after_send")
             await self.queue.put(passive_item)
-            runtime_logger.info(
+            runtime_logger.debug(
                 "delivery_passive_deferred %s",
                 json.dumps(
                     {
@@ -856,7 +859,7 @@ class MessageDeliveryTask:
             if preemptions < PASSIVE_MAX_PREEMPTIONS:
                 self.msg_data["passive_preemptions"] = preemptions + 1
                 await self.queue.put(self.msg_data)
-                runtime_logger.warning(
+                runtime_logger.debug(
                     "delivery_passive_preempted %s",
                     json.dumps(
                         {
@@ -1011,8 +1014,8 @@ async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_loc
                 loading_text = "🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n<b>ТРЕД ЗАГРУЖЕН</b>\n🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴"
             await bot.send_message(user_id, loading_text, parse_mode="HTML")
             await asyncio.sleep(0.5)
-        except (TelegramForbiddenError, TelegramBadRequest):
-            pass
+        except (TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter):
+            import traceback; traceback.print_exc()
     if op_post_num:
         op_post_data = next((p for p in posts_to_send_data if p['content'].get('post_num') == op_post_num), None)
         if op_post_data:
@@ -1038,7 +1041,7 @@ async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_loc
     try:
         await bot.send_message(user_id, final_text, reply_markup=entry_keyboard, parse_mode="HTML")
     except (TelegramForbiddenError, TelegramBadRequest):
-        pass
+        import traceback; traceback.print_exc()
     if missed_post_nums_full:
         new_last_seen = missed_post_nums_full[-1]
         if target_location == 'main':
@@ -1058,7 +1061,7 @@ async def board_help_worker(board_id: str):
         try:
             delay = random.randint(10800, 72000)  # от 3 до 20 часов
             await asyncio.sleep(delay)
-            activity = await get_board_activity_last_hours(board_id, hours=24)
+            activity = await main.get_board_activity_last_hours(board_id, hours=24)
             if activity < 15: # Если меньше 15 постов за сутки - доска мертва
                 print(f"💀 [{board_id}] Доска полудохлая (акт: {activity}), пропускаем рассылку помощи.")
                 continue
@@ -1084,25 +1087,25 @@ async def board_help_worker(board_id: str):
                 choice = random.randint(1, 6)
                 if stream == 'en':
                     if choice == 1: message_text = random.choice(HELP_TEXT_EN_COMMANDS)
-                    elif choice == 2: message_text = generate_boards_list(BOARD_CONFIG, 'en')
+                    elif choice == 2: message_text = main.generate_boards_list(BOARD_CONFIG, 'en')
                     elif choice == 3: message_text = random.choice(THREAD_PROMO_TEXT_EN)
-                    elif choice == 4: message_text = random.choice(MODE_INFO_TEXT_EN)
-                    elif choice == 5: message_text = random.choice(CHANNEL_PROMO_TEXT_EN)
-                    else: message_text = random.choice(MECHANICS_INFO_TEXT_EN)
+                    elif choice == 4: message_text = random.choice(main.MODE_INFO_TEXT_EN)
+                    elif choice == 5: message_text = random.choice(main.CHANNEL_PROMO_TEXT_EN)
+                    else: message_text = random.choice(main.MECHANICS_INFO_TEXT_EN)
                 elif stream == 'jp':
-                    if choice == 1: message_text = random.choice(HELP_TEXT_JP_COMMANDS)
-                    elif choice == 2: message_text = generate_boards_list(BOARD_CONFIG, 'jp')
-                    elif choice == 3: message_text = random.choice(THREAD_PROMO_TEXT_JP)
-                    elif choice == 4: message_text = random.choice(MODE_INFO_TEXT_JP)
-                    elif choice == 5: message_text = random.choice(CHANNEL_PROMO_TEXT_JP)
-                    else: message_text = random.choice(MECHANICS_INFO_TEXT_JP)
+                    if choice == 1: message_text = random.choice(main.HELP_TEXT_JP_COMMANDS)
+                    elif choice == 2: message_text = main.generate_boards_list(BOARD_CONFIG, 'jp')
+                    elif choice == 3: message_text = random.choice(main.THREAD_PROMO_TEXT_JP)
+                    elif choice == 4: message_text = random.choice(main.MODE_INFO_TEXT_JP)
+                    elif choice == 5: message_text = random.choice(main.CHANNEL_PROMO_TEXT_JP)
+                    else: message_text = random.choice(main.MECHANICS_INFO_TEXT_JP)
                 else: # ru
-                    if choice == 1: message_text = random.choice(HELP_TEXT_COMMANDS)
-                    elif choice == 2: message_text = generate_boards_list(BOARD_CONFIG, 'ru')
-                    elif choice == 3: message_text = random.choice(THREAD_PROMO_TEXT_RU)
-                    elif choice == 4: message_text = random.choice(MODE_INFO_TEXT_RU)
-                    elif choice == 5: message_text = random.choice(CHANNEL_PROMO_TEXT_RU)
-                    else: message_text = random.choice(MECHANICS_INFO_TEXT_RU)
+                    if choice == 1: message_text = random.choice(main.HELP_TEXT_COMMANDS)
+                    elif choice == 2: message_text = main.generate_boards_list(BOARD_CONFIG, 'ru')
+                    elif choice == 3: message_text = random.choice(main.THREAD_PROMO_TEXT_RU)
+                    elif choice == 4: message_text = random.choice(main.MODE_INFO_TEXT_RU)
+                    elif choice == 5: message_text = random.choice(main.CHANNEL_PROMO_TEXT_RU)
+                    else: message_text = random.choice(main.MECHANICS_INFO_TEXT_RU)
                 now_dt = datetime.now(UTC)
                 content = {'type': 'text', 'text': message_text, 'is_system_message': True}
                 post_num = await create_post(
@@ -1200,7 +1203,7 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
     try:
         await asyncio.sleep(delay)
         group = current_media_groups.pop(media_group_key, None)
-        if not group or media_group_key in sent_media_groups:
+        if not group or media_group_key in main.sent_media_groups:
             # Раньше выход отсюда происходил ДО media_group_timers.pop ниже,
             # и запись таймера оставалась висеть навсегда (замерено: утечка на
             # каждом дубликате альбома и на каждой гонке двух таймеров).
@@ -1214,7 +1217,7 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
         for msg in raw_messages:
             if msg.caption:
                 raw_caption_html = getattr(msg, 'caption_html_text', msg.caption)
-                found_caption = sanitize_html(raw_caption_html)
+                found_caption = main.sanitize_html(raw_caption_html)
                 break
         group['caption'] = found_caption
         final_media_list = []
@@ -1278,7 +1281,7 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
 async def process_complete_media_group(media_group_key: str, group: dict, bot_instance: Bot):
     if not group or not group.get('media'):
         return
-    sent_media_groups.append(media_group_key)
+    main.sent_media_groups.append(media_group_key)
     user_id = group['author_id']
     board_id = group['board_id']
     stream = group.get('stream', 'ru')
@@ -1320,13 +1323,14 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
             content['repost_count'] = album_repost_count
         
         # --- НАЧАЛО ИЗМЕНЕНИЙ (Добавлена Быстрая цитата для альбомов) ---
+        from handlers.message_router import process_shadow_reject, build_quick_quote_info
         quote_info = await build_quick_quote_info(reply_to_post)
         if quote_info:
             content['quote_info'] = quote_info
         # --- КОНЕЦ ИЗМЕНЕНИЙ ---
         
         if is_shadow_muted:
-            await process_shadow_reject(ShadowRejectContext(
+            await process_shadow_reject(shared_state.ShadowRejectContext(
                 bot=bot_instance,
                 board_id=board_id,
                 user_id=user_id,
@@ -1336,7 +1340,7 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
             ))
             if is_large_group: await asyncio.sleep(1)
             continue
-        post_num = await process_new_post(NewPostParams(
+        post_num = await process_new_post(shared_state.NewPostParams(
             bot_instance=bot_instance,
             board_id=board_id,
             user_id=user_id,
@@ -1353,7 +1357,7 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
     if send_caption_separately and original_caption:
         text_content = {'type': 'text', 'text': original_caption}
         if is_shadow_muted:
-            await process_shadow_reject(ShadowRejectContext(
+            await process_shadow_reject(shared_state.ShadowRejectContext(
                 bot=bot_instance,
                 board_id=board_id,
                 user_id=user_id,
@@ -1362,7 +1366,7 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
                 stream=stream
             ))
         elif first_post_num:
-            await process_new_post(NewPostParams(
+            await process_new_post(shared_state.NewPostParams(
                 bot_instance=bot_instance,
                 board_id=board_id,
                 user_id=user_id,
@@ -1381,25 +1385,25 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
         should_reply = False
         if is_reply_to_bot:
             now_t = time.time()
-            last_user_t = _last_persona_dialogue_user_ts.get(user_id, 0)
+            last_user_t = main._last_persona_dialogue_user_ts.get(user_id, 0)
             if (now_t - last_user_t >= 45.0) and (random.random() < 0.35):
                 should_reply = True
-                _last_persona_dialogue_user_ts[user_id] = now_t
+                main._last_persona_dialogue_user_ts[user_id] = now_t
         elif user_id in b_data.get('persona_favorites', {}):
             now_t_fav = time.time()
-            if (now_t_fav - _last_persona_board_ts.get(board_id, 0) >= 90.0) and random.random() < 0.08:
+            if (now_t_fav - main._last_persona_board_ts.get(board_id, 0) >= 90.0) and random.random() < 0.08:
                 should_reply = True
         else:
             # Глобальный пассивный тригер: 4% на любой пост на борде
             now_t_glob = time.time()
-            if (now_t_glob - _last_persona_board_ts.get(board_id, 0) >= 120.0) and random.random() < 0.04:
+            if (now_t_glob - main._last_persona_board_ts.get(board_id, 0) >= 120.0) and random.random() < 0.04:
                 should_reply = True
 
         if should_reply:
-            _last_persona_board_ts[board_id] = time.time()  # заблокировать до spawn чтобы не было race condition
+            main._last_persona_board_ts[board_id] = time.time()  # заблокировать до spawn чтобы не было race condition
             text_chunk = original_caption or "[альбом изображений]"
-            spawn_task(schedule_persona_reply(bot_instance, board_id, first_post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=first_photo_id, is_dialogue=is_reply_to_bot))
-        # --- THE ANCHOR (Мудрый Чед) ---
+            spawn_task(main.schedule_persona_reply(bot_instance, board_id, first_post_num, text_chunk, stream, is_admin_trigger=False, photo_file_id=first_photo_id, is_dialogue=is_reply_to_bot))
+            # --- THE ANCHOR (Мудрый Чед) ---
         from anchor_bot import anchor_tick, trigger_anchor_post
         if anchor_tick(board_id):
             spawn_task(trigger_anchor_post(bot_instance, board_id, stream))
@@ -1410,6 +1414,8 @@ async def thread_notifier():
     """
     global last_checked_post_counter_for_notify
     await asyncio.sleep(45)
+    import shared_state
+    state = shared_state.state
     last_checked_post_counter_for_notify = state.get('post_counter', 0)
     while True:
         await asyncio.sleep(300) # Проверка каждые 5 минут
@@ -1433,7 +1439,7 @@ async def thread_notifier():
                     if u_state.get('location', 'main') == 'main'
                 }
                 for thread_id, count in threads.items():
-                    if count >= THREAD_NOTIFY_THRESHOLD:
+                    if count >= main.THREAD_NOTIFY_THRESHOLD:
                         thread_info = threads_data.get(thread_id)
                         if not thread_info or thread_info.get('is_archived'): continue
                         thread_stream = thread_info.get('stream', 'ru')
@@ -1482,8 +1488,8 @@ async def thread_notifier():
                 if thread_info.get('is_archived') or thread_info.get('bump_limit_notified'):
                     continue
                 current_posts = len(thread_info.get('posts', []))
-                remaining = MAX_POSTS_PER_THREAD - current_posts
-                if 0 < remaining <= THREAD_BUMP_LIMIT_WARNING_THRESHOLD:
+                remaining = main.MAX_POSTS_PER_THREAD - current_posts
+                if 0 < remaining <= main.THREAD_BUMP_LIMIT_WARNING_THRESHOLD:
                     thread_info['bump_limit_notified'] = True
                     title = thread_info.get('title', '...')
                     notification_text = random.choice(thread_messages[lang]['thread_reaching_bump_limit']).format(title=title, remaining=remaining)
@@ -1521,7 +1527,8 @@ async def site_posts_broadcaster():
             if drain_shutdown_requested:
                 await asyncio.sleep(2)
                 continue
-            new_posts = await get_and_clear_broadcast_queue()
+            import common.database
+            new_posts = await common.database.get_and_clear_broadcast_queue()
             if new_posts:
                 new_posts.sort(key=lambda p: p.get('timestamp', 0))
                 for post in new_posts:
@@ -1529,10 +1536,10 @@ async def site_posts_broadcaster():
                     if not post_num:
                         continue
                     if post.get('_broadcast_decode_failed'):
-                        await mark_broadcast_posts_sent([post_num])
+                        await common.database.mark_broadcast_posts_sent([post_num])
                         continue
                     if post_num in messages_storage or post_num in locally_created_posts:
-                        await mark_broadcast_posts_sent([post_num])
+                        await common.database.mark_broadcast_posts_sent([post_num])
                         continue
                     board_id = post.get('board_id')
                     author_id = post.get('author_id')
@@ -1571,7 +1578,7 @@ async def site_posts_broadcaster():
                             if is_new_thread:
                                 raw_text = source_content.get('text', '')
                                 clean_text_no_tags = re.sub(r'<[^>]+>', '', raw_text)
-                                decoded_text = html.unescape(clean_text_no_tags)
+                                decoded_text = main.html.unescape(clean_text_no_tags)
                                 title_preview = (decoded_text[:120] + '...') if len(decoded_text) > 120 else decoded_text
                                 if not title_preview.strip():
                                     title_preview = "Новый тред (медиа-контент)"
@@ -1579,19 +1586,19 @@ async def site_posts_broadcaster():
                                 if post_stream == 'en':
                                     notify_text = (
                                         f"🌱 <b>New thread on website!</b>\n\n"
-                                        f"📝 {html.escape(title_preview)}\n\n"
+                                        f"📝 {main.html.escape(title_preview)}\n\n"
                                         f"🔗 <a href='{site_url}'>Open on Website</a>"
                                     )
                                 elif post_stream == 'jp':
                                     notify_text = (
                                         f"🌱 <b>サイトで新しいスレが作成されました！</b>\n\n"
-                                        f"📝 {html.escape(title_preview)}\n\n"
+                                        f"📝 {main.html.escape(title_preview)}\n\n"
                                         f"🔗 <a href='{site_url}'>サイトで開く</a>"
                                     )
                                 else:
                                     notify_text = (
                                         f"🌱 <b>На сайте создан новый тред!</b>\n\n"
-                                        f"📝 {html.escape(title_preview)}\n\n"
+                                        f"📝 {main.html.escape(title_preview)}\n\n"
                                         f"🔗 <a href='{site_url}'>Читать на сайте</a>"
                                     )
                                 content = {
@@ -1630,24 +1637,27 @@ async def site_posts_broadcaster():
                     if is_new_thread or not thread_id:
                         recipients = base_recipients
                     else:
-                        thread_info = get_thread_info(board_id, str(thread_id))
+                        thread_info = main.get_thread_info(board_id, str(thread_id))
                         if thread_info:
                             subs = thread_info.get('subscribers', set())
                             recipients = subs.intersection(base_recipients)
                     if recipients:
-                        await enqueue_board_message(board_id, {
+                        enqueued = await enqueue_board_message(board_id, {
                             'recipients': recipients,
                             'content': content,
                             'post_num': post_num,
                             'board_id': board_id,
                             'thread_id': thread_id if not is_new_thread else None
                         })
-                        await mark_broadcast_posts_sent([post_num])
+                        if enqueued:
+                            await mark_broadcast_posts_sent([post_num])
+                        else:
+                            runtime_logger.error(f"[site_posts_broadcaster] enqueue FAILED for #{post_num} board={board_id} — NOT marking as sent")
                         
                         if not content.get('is_system_message') or content.get('archive_allowed'):
-                            bot_to_use = GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
+                            bot_to_use = main.GLOBAL_BOTS.get(board_id) or main.GLOBAL_BOTS.get('b')
                             if bot_to_use:
-                                spawn_task(_forward_post_to_realtime_archive(
+                                spawn_task(main._forward_post_to_realtime_archive(
                                     bot_instance=bot_to_use,
                                     board_id=board_id,
                                     post_num=post_num,
@@ -1662,3 +1672,63 @@ async def site_posts_broadcaster():
         except Exception as e:
             print(f"⛔ ОШИБКА в site_posts_broadcaster: {e}")
             await asyncio.sleep(10)
+def _site_public_url(raw_url: str | None) -> str | None:
+    if not raw_url:
+        return None
+    url = str(raw_url).strip()
+    if not url:
+        return None
+    if url.startswith(("http://", "https://")):
+        return url
+    if url.startswith("/"):
+        return f"{main.SITE_PUBLIC_BASE_URL}{url}"
+    return f"{main.SITE_PUBLIC_BASE_URL}/{url.lstrip('/')}"
+
+
+def _site_media_item(file_info: dict) -> dict | None:
+    send_type = main._site_file_send_type(file_info)
+    source = main._site_file_source(file_info)
+    if not send_type or not source:
+        return None
+    return {
+        "type": send_type,
+        "media": source,
+        "file_id": source,
+        "mime_type": file_info.get("mime_type"),
+        "filename": file_info.get("filename"),
+    }
+
+def _attach_site_media_for_delivery(content: dict, source_content: dict | None = None) -> dict:
+    files = (source_content or content).get("files")
+    if not isinstance(files, list) or not files:
+        return content
+
+    media_items = [
+        item for item in (_site_media_item(file_info) for file_info in files if isinstance(file_info, dict))
+        if item
+    ]
+    if not media_items:
+        return content
+
+    delivery_content = content.copy()
+    delivery_content["caption"] = delivery_content.get("caption") or delivery_content.get("text") or ""
+    delivery_content["files"] = files
+
+    album_supported = {"photo", "video", "document", "audio"}
+    album_items = [item for item in media_items if item["type"] in album_supported]
+    if len(album_items) > 1:
+        delivery_content["type"] = "media_group"
+        delivery_content["media"] = album_items[:10]
+        delivery_content.pop("file_id", None)
+        delivery_content.pop("image_url", None)
+        return delivery_content
+
+    first_item = media_items[0]
+    delivery_content["type"] = first_item["type"]
+    delivery_content["file_id"] = first_item["file_id"]
+    first_file = files[0] if isinstance(files[0], dict) else {}
+    public_url = _site_public_url(first_file.get("original_url") or first_file.get("thumbnail_url"))
+    if public_url:
+        delivery_content["image_url"] = public_url
+    return delivery_content
+
