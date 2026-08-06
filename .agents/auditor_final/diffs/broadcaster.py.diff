@@ -1,0 +1,64 @@
+diff --git a/broadcaster.py b/broadcaster.py
+index 1e5fc3f0..00f426ca 100644
+--- a/broadcaster.py
++++ b/broadcaster.py
+@@ -108,12 +108,16 @@ def _format_reply_line(content: dict, user_id_for_context: int, reply_to_post_au
+ 
+ def _format_reactions_block(post_data: dict) -> str | None:
+     reactions_data = post_data.get('reactions')
++    if not reactions_data and isinstance(post_data.get('content'), dict):
++        reactions_data = post_data['content'].get('reactions')
+     if not reactions_data:
+         return None
+     reaction_lines = []
+     user_reactions = reactions_data.get('users', {})
+-    if isinstance(user_reactions, dict):
+-        all_emojis = [emoji for user_emojis in user_reactions.values() for emoji in user_emojis]
++    if isinstance(user_reactions, dict) and user_reactions:
++        all_emojis = [emoji for user_emojis in user_reactions.values() for emoji in user_emojis if isinstance(user_emojis, (list, set))]
++        if not all_emojis:
++            return None
+         categories = [
+             POSITIVE_REACTIONS, LAUGHING_REACTIONS, THINKING_REACTIONS,
+             SHOCK_REACTIONS, SAD_REACTIONS, NEGATIVE_REACTIONS, CLOWN_REACTION,
+@@ -752,7 +756,17 @@ class MessageBroadcaster:
+                     )
+                     self.stats['success'] += 1
+                     return res
+-                except Exception:
++                except TelegramForbiddenError:
++                    self.blocked_users.add(uid)
++                    self.stats['blocked'] += 1
++                    return None
++                except TelegramRetryAfter:
++                    raise
++                except TelegramBadRequest as e:
++                    self.stats['errors'] += 1
++                    return None
++                except Exception as e:
++                    main.runtime_logger.warning(f"Hide check send error for {uid}: {e}")
+                     self.stats['errors'] += 1
+                     return None
+                     
+@@ -1234,8 +1248,8 @@ class MessageBroadcaster:
+                                             if size > 9_500_000:
+                                                 print(f"   🗑 Исключена жирная ссылка: {size/1024/1024:.2f} MB")
+                                                 continue 
+-                                    except Exception:
+-                                        import traceback; traceback.print_exc() 
++                                    except Exception as head_err:
++                                        main.runtime_logger.debug(f"HEAD check failed for {media_obj}: {head_err}")
+                                 clean_media_list.append(item)
+                         if not clean_media_list:
+                             self.stats['errors'] += 1
+@@ -1270,7 +1284,10 @@ class MessageBroadcaster:
+             except (aiohttp.ServerDisconnectedError, aiohttp.ClientPayloadError) as e:
+                 self.stats['ghosts'] += 1
+                 return None
++            except asyncio.CancelledError:
++                raise
+             except Exception as e:
++                main.runtime_logger.error(f"Unexpected error in _send_one for user {uid}: {e}", exc_info=True)
+                 self.stats['errors'] += 1
+                 return None
+         return None

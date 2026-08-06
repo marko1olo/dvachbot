@@ -1,5 +1,5 @@
 from urllib.parse import urlparse
-from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest
 from common.database import update_thread_last_updated, create_board, approve_board, delete_board
 import sys
 
@@ -432,7 +432,7 @@ def is_ip_restricted(ip_str: str) -> bool:
         for subnet in BANNED_SUBNETS:
             if ip_obj in subnet:
                 return True
-    except:
+    except Exception:
         pass
     return False
 
@@ -1089,7 +1089,7 @@ async def _download_image_with_proxy(
                             if response.status == 200:
                                 data = await response.read()
                                 return data, len(data)
-        except:
+        except Exception:
             continue
     return None
 
@@ -1477,25 +1477,41 @@ async def notify_admins(bot: Bot, text: str):
     Рассылает уведомления админам.
     Устойчива к блокировкам и лимитам (FloodWait).
     """
-    for admin_id in ADMIN_IDS:
+    blocked_admins = []
+    for admin_id in list(ADMIN_IDS):
         try:
             await bot.send_message(admin_id, text, parse_mode="HTML")
             await asyncio.sleep(0.05)
         except TelegramRetryAfter as e:
+            delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
             logger.warning(
-                f"⏳ FloodWait {e.retry_after}s при отправке админу {admin_id}"
+                f"⏳ FloodWait {delay}s при отправке админу {admin_id}"
             )
-            await asyncio.sleep(e.retry_after + 1)
+            await asyncio.sleep(delay)
             try:
                 await bot.send_message(admin_id, text, parse_mode="HTML")
-            except Exception:
-                import traceback; traceback.print_exc()
+            except TelegramForbiddenError:
+                logger.warning(f"❌ Админ {admin_id} заблокировал бота при повторе!")
+                blocked_admins.append(admin_id)
+            except TelegramBadRequest as e:
+                logger.warning(f"⚠️ TelegramBadRequest при повторной отправке админу {admin_id}: {e}")
+            except Exception as e:
+                logger.error(f"⚠️ Ошибка повторной доставки админу {admin_id}: {e}", exc_info=True)
         except TelegramForbiddenError:
             logger.warning(
                 f"❌ Админ {admin_id} заблокировал бота! Сообщение не доставлено."
             )
+            blocked_admins.append(admin_id)
+        except TelegramBadRequest as e:
+            logger.warning(f"⚠️ TelegramBadRequest при отправке админу {admin_id}: {e}")
         except Exception as e:
             logger.error(f"⚠️ Ошибка доставки админу {admin_id}: {e}", exc_info=True)
+
+    for b_admin in blocked_admins:
+        if isinstance(ADMIN_IDS, list) and b_admin in ADMIN_IDS:
+            ADMIN_IDS.remove(b_admin)
+        elif isinstance(ADMIN_IDS, set) and b_admin in ADMIN_IDS:
+            ADMIN_IDS.discard(b_admin)
 
 
 limiter = Limiter(key_func=get_user_id_from_session)
@@ -1531,7 +1547,7 @@ class ConnectionManager:
 
         try:
             await websocket.accept()
-        except:
+        except Exception:
             self.ip_counts[client_ip] -= 1
             return
 
@@ -1630,7 +1646,7 @@ class ConnectionManager:
                     self.active_connections[key].discard(connection)
                     if not self.active_connections[key]:
                         del self.active_connections[key]
-            except:
+            except Exception:
                 pass
 
     async def broadcast_post(self, post_data: dict, board_id: str):
@@ -1726,7 +1742,7 @@ async def lifespan(app: FastAPI):
                 if bid in BOARD_CONFIG and bdata:
                     try:
                         BOARD_CONFIG[bid]["banner_data"] = json.loads(bdata)
-                    except:
+                    except Exception:
                         pass
     startup_mark("load board banners done", step_started)
     if not FILE_UPLOADER_BOT_TOKEN or not FILE_STORAGE_CHANNEL_ID:
@@ -2586,12 +2602,12 @@ async def global_data_middleware(request: Request, call_next):
         try:
             announcement = await get_setting_cached("global_announcement")
             request.state.global_announcement = announcement
-        except:
+        except Exception:
             request.state.global_announcement = ""
         try:
             lock = await get_setting_cached("lockdown_enabled")
             request.state.is_lockdown = lock == "true"
-        except:
+        except Exception:
             request.state.is_lockdown = False
         user = request.session.get("user")
         if user:
@@ -2604,7 +2620,7 @@ async def global_data_middleware(request: Request, call_next):
                     try:
                         token_uns = signer.unsign(raw_token, max_age=31536000).decode()
                         guest_id = generate_negative_id(token_uns)
-                    except:
+                    except Exception:
                         pass
             request.state.user_hash = get_user_hash(guest_id) if guest_id else ""
     return await call_next(request)
@@ -3260,7 +3276,7 @@ def format_iso_time(ts: float) -> str:
 
     try:
         return datetime.fromtimestamp(ts).isoformat()
-    except:
+    except Exception:
         return ""
 
 
@@ -3532,7 +3548,7 @@ def _process_single_media(content: dict) -> None:
             file_info["original_file_id"] = content["photo"][-1].get("file_id")
             file_info["thumbnail_file_id"] = content["photo"][0].get("file_id")
             file_info["type"] = "image"
-        except:
+        except Exception:
             pass
     else:
         f_obj = content.get(ctype) or content
@@ -3632,7 +3648,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
         if isinstance(post.get("content"), str):
             try:
                 post["content"] = json.loads(post["content"])
-            except:
+            except Exception:
                 post["content"] = {"text": str(post.get("content", "")), "type": "text"}
 
         if not isinstance(post.get("content"), dict):
@@ -3809,7 +3825,7 @@ async def db_maintenance_task():
                 except Exception as e:
                     try:
                         await db.execute("ROLLBACK")
-                    except:
+                    except Exception:
                         pass
                     logger.error(f"⚠️ FTS Maintenance error: {e}", exc_info=True)
 
@@ -3824,15 +3840,16 @@ async def websocket_broadcaster(queue: asyncio.Queue, manager: "ConnectionManage
     logger.info("INFO:     WebSocket broadcaster started.")
     try:
         while True:
+            post_data = await queue.get()
             try:
-                post_data = await queue.get()
                 await manager.broadcast_post(post_data, post_data["board_id"])
-                queue.task_done()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error(f"Broadcaster error: {e}", exc_info=True)
                 await asyncio.sleep(1)
+            finally:
+                queue.task_done()
     except asyncio.CancelledError:
         pass
 
@@ -3909,7 +3926,7 @@ async def enrich_heavy_data(posts: List[dict]):
                     async for row in cursor:
                         res[row[0]].append(row[1])
                 return res
-            except:
+            except Exception:
                 return {}
 
         tasks.append(fetch_backlinks_task(all_post_ids))
@@ -4691,7 +4708,7 @@ async def api_makaba_index(request: Request, board_id: str, page: str = "index")
     if page != "index":
         try:
             page_num = int(page)
-        except:
+        except Exception:
             if page == "catalog":
                 return await api_makaba_catalog(board_id)
             raise HTTPException(404)
@@ -5676,7 +5693,7 @@ async def api_random_image_next(request: Request, boards: Optional[str] = None):
             if isinstance(post_data["content"], str):
                 try:
                     post_data["content"] = json.loads(post_data["content"])
-                except:
+                except Exception:
                     continue
 
             enriched_list = _convert_and_enrich_posts([post_data])
@@ -6799,7 +6816,7 @@ async def api_get_scanner_status(user: dict = Depends(get_required_user)):
     interval = await get_system_setting("neuro_scanner_interval")
     try:
         interval = int(interval)
-    except:
+    except Exception:
         interval = 60
     return {"enabled": enabled, "interval": interval}
 
@@ -6938,7 +6955,7 @@ async def api_server_pulse():
             if name.lower() in ["coretemp", "cpu_thermal", "k10temp", "zenpower"]:
                 stats["temp"] = entries[0].current
                 break
-    except:
+    except Exception:
         pass
     return stats
 
@@ -7241,7 +7258,7 @@ async def api_admin_set_banner(
         except Exception as e:
             try:
                 await db.execute("ROLLBACK")
-            except:
+            except Exception:
                 pass
             logger.error(f"Banner update error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="DB Error")
@@ -7627,7 +7644,7 @@ async def api_create_post(
                         or angle_diff(user_m, target_m) > 15
                     ):
                         raise HTTPException(400, t("err_cap_clock"))
-                except:
+                except Exception:
                     raise HTTPException(400, t("err_cap_clock"))
             elif mode == "can":
                 if str(captcha_value) != "opened":
@@ -7764,7 +7781,7 @@ async def api_create_post(
                     match = re.search(r"/res/(\d+)\.html", referer)
                     if match:
                         reply_to = int(match.group(1))
-                except:
+                except Exception:
                     pass
         if not reply_to:
             raise HTTPException(
@@ -7802,7 +7819,7 @@ async def api_create_post(
                     count_str = num1 or num2 or "1"
                     try:
                         req_count = int(count_str)
-                    except:
+                    except Exception:
                         req_count = 1
 
                     to_take = min(req_count, files_to_generate_count)
@@ -8151,7 +8168,7 @@ async def api_create_post(
                 log_system_event(
                     f"🚨 ANTI-RAID: Captcha AUTO-ENABLED (Rate: {len(POST_RATE_LIMITER)} posts/min)"
                 )
-        except:
+        except Exception:
             pass
 
     if post_mode == "new_thread":
@@ -8191,7 +8208,7 @@ async def api_create_post(
                         logger.error(f"Delayed bump failed: {e}", exc_info=True)
 
                 spawn_task(delayed_bump(board_id, final_thread_id, stream, nm))
-        except:
+        except Exception:
             pass
     elif post_mode == "reply" and thread_op_num:
         async with get_db_connection() as conn:
@@ -9056,7 +9073,7 @@ async def api_get_thread(
     if cached_data:
         try:
             posts_flat = orjson.loads(cached_data)
-        except:
+        except Exception:
             posts_flat = []
 
     if not posts_flat:
@@ -9142,7 +9159,7 @@ async def api_thread_summary(thread_id: int, request: Request):
             cached_count = cached_data.get("count", 0)
             if (current_count - cached_count) < 8:
                 return {"summary": cached_data.get("text")}
-        except:
+        except Exception:
             pass
     thread_data = await get_thread_by_op_post(thread_id)
     if not thread_data:
@@ -9322,7 +9339,7 @@ async def api_thread_vibe(thread_id: int, request: Request):
                     "vibe": cached_data.get("vibe"),
                     "icon": cached_data.get("icon"),
                 }
-        except:
+        except Exception:
             pass
     thread_data = await get_thread_by_op_post(thread_id)
     if not thread_data:
@@ -9424,7 +9441,7 @@ async def api_get_threads(
     if cached_data:
         try:
             posts_container = orjson.loads(cached_data)
-        except:
+        except Exception:
             posts_container = []
 
     if not posts_container:
@@ -9662,7 +9679,7 @@ async def api_admin_delete_post(
                 except Exception as e:
                     try:
                         await db.execute("ROLLBACK")
-                    except:
+                    except Exception:
                         pass
                     logger.error(f"Counter decrement error: {e}", exc_info=True)
 
@@ -10368,7 +10385,7 @@ async def check_url_alive(url: str) -> bool:
             is_alive = resp.status_code == 200
             URL_STATUS_CACHE[url] = (is_alive, now)
             return is_alive
-    except:
+    except Exception:
         URL_STATUS_CACHE[url] = (False, now)
         return False
 
@@ -10437,7 +10454,7 @@ async def get_telegram_file(
             if cached:
                 try:
                     mirrors = json.loads(cached)
-                except:
+                except Exception:
                     mirrors = {}
 
         if not mirrors:
@@ -10616,6 +10633,8 @@ async def api_add_reaction(
         user_reactions.append(data.emoji)
     content["reactions"]["users"][str(uid)] = user_reactions
     await update_post_content(data.post_num, content)
+    from common.database import add_reaction_to_queue
+    await add_reaction_to_queue(uid, data.post_num, data.emoji)
     broadcast_data = await get_post_for_broadcast(data.post_num)
     if broadcast_data:
         await request.app.state.broadcast_queue.put(broadcast_data)
@@ -10677,7 +10696,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
             for r in rows:
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
-                except:
+                except Exception:
                     content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
 
                 res.append(
@@ -10759,7 +10778,7 @@ async def api_admin_wipe(
         except Exception as e:
             try:
                 await db.execute("ROLLBACK")
-            except:
+            except Exception:
                 pass
             logger.error(f"Wipe error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="DB Error")

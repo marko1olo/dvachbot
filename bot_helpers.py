@@ -280,6 +280,9 @@ async def _safe_delete_user_message(message: types.Message):
     except TelegramBadRequest:
         import traceback; traceback.print_exc()
 
+NICK_PREFIXES = ["Базированный", "Всратый", "Мамкин", "Поехавший", "Соевый", "Диванный", "Опущенный", "Гойский", "Толстый", "Порватый", "Латентный", "Просветленный", "Элитный", "Подпивасный", "Двачевский", "Педальный", "Токсичный", "Кринжовый", "Аутичный", "Думерский", "Рядовой", "Школьный", "Отбитый", "Метаироничный", "Скрытый", "Сигма", "Альфа", "Омега", "Сажный", "Вайбовый", "Копиумный", "Попущенный", "Лютый", "Абсолютный", "Печальный", "Нищуковский", "Душный", "Шизоидный", "Паленый", "Забивной", "Плюшевый", "Астральный", "Комнатный"]
+NICK_SUFFIXES = ["Битард", "Скуф", "Шиз", "Анон", "Ньюфаг", "Олдфаг", "Омеган", "Шитпостер", "Сыч", "Двачер", "Чухан", "Куколд", "Нормис", "Гигачад", "Подпивас", "Зумер", "Бумер", "Сояк", "Инцел", "Думер", "Говноед", "Симп", "Чмоня", "Байтер", "Ноулайфер", "Тролль", "Моралфаг", "Альтушка", "Масик", "Школьник", "Дед", "Хиккан", "Скуфидон", "Терпила", "Вахтер", "Тентакль", "Мыслитель", "Философ", "Дворник", "Эрудит", "Чел"]
+
 def generate_anon_name(user_id: int) -> str:
     if not user_id: return "Анонимус"
     rng = random.Random(user_id)
@@ -484,13 +487,21 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
     target_chat_id = msg.reply_to_message.chat.id
     reply_mid = msg.reply_to_message.message_id
     lookup_key = (target_chat_id, reply_mid)
-    post_num = message_to_post.get(lookup_key)
-    if post_num and post_num in messages_storage:
-        return messages_storage[post_num].get("author_id")
+    async with storage_lock:
+        post_num = message_to_post.get(lookup_key)
+        if post_num and post_num in messages_storage:
+            return messages_storage[post_num].get("author_id")
+    if not post_num:
+        info = await get_post_info_by_copy(target_chat_id, reply_mid)
+        if info:
+            post_num = info[0]
+    if post_num:
+        db_post = await get_post_by_num(post_num)
+        if db_post and 'author_id' in db_post:
+            return db_post['author_id']
     db_author_id = await get_post_author_by_copy(target_chat_id, reply_mid)
     if db_author_id is not None:
         return db_author_id
-        
     return None
 
 def get_help_keyboard(category: str, board_id: str, stream: str = 'ru') -> InlineKeyboardMarkup:

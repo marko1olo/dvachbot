@@ -37,10 +37,10 @@ INSULT_REACTIONS = {'🐓', '🐖'}
 MAT_WORDS = ["сука", "блядь", "пиздец", "ебать", "нах", "пизда", "хуйня", "ебал", "блять", "отъебись", "ебаный", "еблан", "ХУЙ", "ПИЗДА", "хуйло", "долбаёб", "пидорас"]
 
 BEST_CHANNEL_ID = -1001234567890
-LIKES_THRESHOLD = 5
-AUTHOR_NOTIFY_LIMIT_PER_MINUTE = 3
+LIKES_THRESHOLD = 3
+AUTHOR_NOTIFY_LIMIT_PER_MINUTE = 4
 ENABLE_MULTILANG = False
-QUICK_QUOTE_POST_DISTANCE = 50
+QUICK_QUOTE_POST_DISTANCE = 330
 PRIORITY_DELIVERY_ENABLED = BOT_PRIORITY_DELIVERY
 DELIVERY_INITIAL_CHUNK_SIZE = BOT_DELIVERY_INITIAL_CHUNK_SIZE
 DELIVERY_MIN_CHUNK_SIZE = BOT_DELIVERY_MIN_CHUNK_SIZE
@@ -70,6 +70,8 @@ last_persona_board_ts = _last_persona_board_ts
 _active_duels = {}
 last_messages = deque(maxlen=200)
 reaction_ratelimit = defaultdict(float)
+current_deliveries = {}
+posts_pending_deletion = set()
 
 # Explicitly export private helpers so 'from shared_state import *' in
 # broadcaster.py, delivery_manager.py, post_processor.py, archive_manager.py
@@ -123,6 +125,8 @@ __all__ = [
     'last_persona_dialogue_user_ts',
     'last_persona_board_ts',
     '_active_duels',
+    '_duel_cooldowns',
+    '_stats_cache',
     'last_messages',
     'reaction_ratelimit',
     '_media_group_state_key',
@@ -372,10 +376,7 @@ async def enqueue_board_message(board_id: str, item: dict) -> bool:
         return False
     await queue.put(_prepare_queue_item(board_id, item))
     return True
-current_deliveries = {}
-pending_edit_tasks = {}  # Словарь для хранения активных задач редактирования {post_num: asyncio.Task}
-pending_edit_lock = LazyLock()
-posts_pending_deletion = set()
+# (pending_edit_tasks and pending_edit_lock are defined at top of shared_state.py)
 
 
 # --- Archive Config ---
@@ -414,7 +415,7 @@ def _safe_len(value) -> int:
 # Globals Extracted
 _stats_cache: dict = {}   # board_id -> {ts: float, photos: list[bytes]}
 _stats_cooldown_tracker = {}
-_active_duels: dict = {}  # challenger_id -> {board_id, amount, ts, msg_id}
+# _active_duels defined at top of file
 _duel_cooldowns: dict = {} # user_id -> timestamp
 _PASSPORT_DATA = {
     'ru': {
@@ -477,11 +478,6 @@ class ShadowRejectContext:
     stream: str = 'ru'
 
 @dataclass
-
-
-
-
-@dataclass
 class NewPostParams:
     bot_instance: Bot
     board_id: str
@@ -512,7 +508,5 @@ STOP_WORDS = set([
 
 
 # --- Extracted from main.py Phase 9 (Helpers) ---
-reaction_ratelimit = defaultdict(float)
-author_reaction_notify_tracker = defaultdict(lambda: deque(maxlen=AUTHOR_NOTIFY_LIMIT_PER_MINUTE))
-author_reaction_notify_lock = LazyLock()
+# reaction_ratelimit, author_reaction_notify_tracker, author_reaction_notify_lock initialized at top of file
 _DUEL_TIMEOUT = 120       # секунд на принятие

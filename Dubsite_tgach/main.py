@@ -470,7 +470,7 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
                             if response.status == 200:
                                 data = await response.read()
                                 return data, len(data)
-        except:
+        except Exception:
             continue
     return None
 class BottleSendRequest(BaseModel):
@@ -836,7 +836,7 @@ class ConnectionManager:
                     self.active_connections[key].discard(connection)
                     if not self.active_connections[key]:
                         del self.active_connections[key]
-            except: pass
+            except Exception: pass
 
     async def broadcast_post(self, post_data: dict, board_id: str):
         stream = post_data.get('stream', 'ru')
@@ -898,7 +898,7 @@ async def lifespan(app: FastAPI):
                 if bid in BOARD_CONFIG and bdata:
                     try:
                         BOARD_CONFIG[bid]['banner_data'] = json.loads(bdata)
-                    except: pass
+                    except Exception: pass
     if not FILE_UPLOADER_BOT_TOKEN or not FILE_STORAGE_CHANNEL_ID:
         raise ValueError("Missing FILE_UPLOADER_BOT_TOKEN or FILE_STORAGE_CHANNEL_ID in .env")
     try:
@@ -1355,11 +1355,11 @@ async def global_data_middleware(request: Request, call_next):
         try:
             announcement = await get_setting_cached('global_announcement')
             request.state.global_announcement = announcement
-        except: request.state.global_announcement = ""
+        except Exception: request.state.global_announcement = ""
         try:
             lock = await get_setting_cached('lockdown_enabled')
             request.state.is_lockdown = (lock == "true")
-        except: request.state.is_lockdown = False
+        except Exception: request.state.is_lockdown = False
         user = request.session.get('user')
         if user:
             request.state.user_hash = get_user_hash(user['id'])
@@ -1666,7 +1666,7 @@ def format_post_text(text: str) -> str:
             s = int(match.group(1))
             s = max(10, min(30, s)) 
             return f'<span style="font-size: {s}px;">{match.group(2)}</span>'
-        except: return match.group(2)
+        except Exception: return match.group(2)
     processed_text = re.sub(r'\[size=(\d+)\](.*?)\[/size\]', size_replacer, processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[s\](.*?)\[/s\]', r'<s>\1</s>', processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[u\](.*?)\[/u\]', r'<u>\1</u>', processed_text, flags=re.DOTALL)
@@ -1736,7 +1736,7 @@ def format_iso_time(ts: float) -> str:
 
     try:
         return datetime.fromtimestamp(ts).isoformat()
-    except:
+    except Exception:
         return ""
 def format_timestamp(ts: float) -> str:
     try:
@@ -1939,7 +1939,7 @@ def _process_single_media(content: dict) -> None:
             file_info['original_file_id'] = content['photo'][-1].get('file_id')
             file_info['thumbnail_file_id'] = content['photo'][0].get('file_id')
             file_info['type'] = 'image'
-        except: pass
+        except Exception: pass
     else:
         f_obj = content.get(ctype) or content
         f_id = f_obj.get('file_id')
@@ -2028,7 +2028,7 @@ def _convert_and_enrich_posts(posts: List[dict]) -> List[dict]:
         if isinstance(post.get('content'), str):
             try:
                 post['content'] = json.loads(post['content'])
-            except:
+            except Exception:
                 post['content'] = {"text": str(post.get('content', '')), "type": "text"}
         
         if not isinstance(post.get('content'), dict):
@@ -2186,15 +2186,16 @@ async def websocket_broadcaster(queue: asyncio.Queue, manager: 'ConnectionManage
     logger.info("INFO:     WebSocket broadcaster started.")
     try:
         while True:
+            post_data = await queue.get()
             try:
-                post_data = await queue.get()
                 await manager.broadcast_post(post_data, post_data['board_id'])
-                queue.task_done()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error(f"Broadcaster error: {e}", exc_info=True)
                 await asyncio.sleep(1)
+            finally:
+                queue.task_done()
     except asyncio.CancelledError:
         import traceback; traceback.print_exc()
 async def enrich_heavy_data(posts: List[dict]):
@@ -2258,7 +2259,7 @@ async def enrich_heavy_data(posts: List[dict]):
                     async for row in cursor:
                         res[row[0]] = json.loads(row[1])
                 return res
-            except: return {}
+            except Exception: return {}
         tasks.append(fetch_backlinks_task(all_post_ids))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -2618,7 +2619,7 @@ async def api_makaba_index(request: Request, board_id: str, page: str = "index")
     if page != "index":
         try:
             page_num = int(page)
-        except:
+        except Exception:
             if page == "catalog": return await api_makaba_catalog(board_id)
             raise HTTPException(404)
     threads = await get_op_posts_for_board(board_id, page=page_num + 1, page_size=20)
@@ -3331,7 +3332,7 @@ async def api_random_image_next(request: Request, boards: Optional[str] = None):
         if isinstance(post_data['content'], str):
             try:
                 post_data['content'] = json.loads(post_data['content'])
-            except:
+            except Exception:
                 # Если сбой парсинга, пробуем еще раз (рекурсия с теми же параметрами)
                 # Чтобы не зациклилось, можно ограничить, но для простоты вернем ошибку или ретрай
                 return JSONResponse({"error": "Content parse error"}, status_code=500)
@@ -4158,7 +4159,7 @@ async def api_get_scanner_status(user: dict = Depends(get_required_user)):
     interval = await get_system_setting('neuro_scanner_interval')
     try:
         interval = int(interval)
-    except:
+    except Exception:
         interval = 60
     return {"enabled": enabled, "interval": interval}
 
@@ -4253,7 +4254,7 @@ async def api_server_pulse():
             if name.lower() in ['coretemp', 'cpu_thermal', 'k10temp', 'zenpower']:
                 stats["temp"] = entries[0].current
                 break
-    except:
+    except Exception:
         pass 
     return stats
 @app.post("/api/settings/stream")
@@ -4729,7 +4730,7 @@ async def api_create_post(
                         return min(diff, 360 - diff)
                     if angle_diff(user_h, target_h) > 15 or angle_diff(user_m, target_m) > 15:
                         raise HTTPException(400, t('err_cap_clock'))
-                except:
+                except Exception:
                     raise HTTPException(400, t('err_cap_clock'))
             elif mode == 'can':
                 if str(captcha_value) != "opened":
@@ -4884,7 +4885,7 @@ async def api_create_post(
                     count_str = num1 or num2 or "1"
                     try:
                         req_count = int(count_str)
-                    except: req_count = 1
+                    except Exception: req_count = 1
                     
                     to_take = min(req_count, files_to_generate_count)
                     
@@ -5164,7 +5165,7 @@ async def api_create_post(
             if current_captcha != 'true':
                 await set_system_setting('captcha_enabled', 'true')
                 log_system_event(f"🚨 ANTI-RAID: Captcha AUTO-ENABLED (Rate: {len(POST_RATE_LIMITER)} posts/min)")
-        except: pass
+        except Exception: pass
 
     if post_mode == 'new_thread':
         title = sanitized_text[:255]
@@ -5648,7 +5649,7 @@ async def api_get_thread(
     if cached_data:
         try:
             posts_flat = orjson.loads(cached_data)
-        except: 
+        except Exception: 
             posts_flat = []
     
     if not posts_flat:
@@ -5874,7 +5875,7 @@ async def api_thread_vibe(thread_id: int, request: Request):
             cached_count = cached_data.get('count', 0)
             if (current_count - cached_count) < 10:
                 return {"vibe": cached_data.get('vibe'), "icon": cached_data.get('icon')}
-        except: pass
+        except Exception: pass
     thread_data = await get_thread_by_op_post(thread_id)
     if not thread_data: 
         raise HTTPException(404, "Thread not found")
@@ -5965,7 +5966,7 @@ async def api_get_threads(
         # CACHE HIT
         try:
             posts_container = orjson.loads(cached_data)
-        except: 
+        except Exception: 
             posts_container = []
     
     if not posts_container:
@@ -6125,7 +6126,7 @@ async def api_admin_delete_post(data: AdminAction, request: Request, user: dict 
                     await db.execute("COMMIT")
                 except Exception as e:
                     try: await db.execute("ROLLBACK")
-                    except: pass
+                    except Exception: pass
                     logger.error(f"Counter decrement error: {e}", exc_info=True)
         
         log_system_event(f"🗑️ DEL: Post #{data.post_num} deleted by {user.get('id')} ({user.get('role')})")
@@ -6274,7 +6275,7 @@ async def _fetch_telegram_path(file_id: str, bot_token: str):
                 if resp.status != 200: return None
                 data = await resp.json()
                 return data["result"]["file_path"] if data.get("ok") else None
-        except: return None
+        except Exception: return None
 async def get_cached_file_path(
     file_id: str, allow_protected_tokens: bool = False
 ) -> tuple[str, str] | None:
@@ -6347,7 +6348,7 @@ async def check_url_alive(url: str) -> bool:
             is_alive = resp.status_code == 200
             URL_STATUS_CACHE[url] = (is_alive, now)
             return is_alive
-    except:
+    except Exception:
         URL_STATUS_CACHE[url] = (False, now)
         return False
 @app.api_route("/files/{file_id:path}", methods=["GET", "HEAD"])
@@ -6463,6 +6464,8 @@ async def api_add_reaction(data: ReactionRequest, request: Request, user: dict =
         user_reactions.append(data.emoji)
     content['reactions']['users'][str(uid)] = user_reactions
     await update_post_content(data.post_num, content)
+    from common.database import add_reaction_to_queue
+    await add_reaction_to_queue(uid, data.post_num, data.emoji)
     broadcast_data = await get_post_for_broadcast(data.post_num)
     if broadcast_data: await request.app.state.broadcast_queue.put(broadcast_data)
     return {"status": "success"}
@@ -6516,7 +6519,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
             for r in rows:
                 try:
                     content = json.loads(r[2]) if isinstance(r[2], str) else r[2]
-                except:
+                except Exception:
                     content = {"text": "❌ Какая-то хуйня с данными.", "type": "text"}
                 
                 res.append({
@@ -6584,7 +6587,7 @@ async def api_admin_wipe(data: dict = Body(...), user: dict | None = Depends(get
             raise
         except Exception as e:
             try: await db.execute("ROLLBACK")
-            except: pass
+            except Exception: pass
             logger.error(f"Wipe error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="DB Error")
 @app.get("/api/admin/alerts_history")

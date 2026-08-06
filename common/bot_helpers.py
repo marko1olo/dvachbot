@@ -1,32 +1,14 @@
 import asyncio
 import time
 import random
+import json
 import logging
 from aiogram import Bot, types
 from shared_state import *
 from shared_state import NewPostParams
 from common.config import *
 from common.database import *
-from post_processor import NewPostContext, NewPostProcessor
-import json
-
-
-async def process_new_post(params: NewPostParams) -> int | None:
-    """
-    Унифицированная функция для обработки, сохранения и постановки в очередь нового поста.
-    Версия 8.0: Гарантирует регистрацию поста в памяти даже при сбое отправки. НИКАКИХ УДАЛЕНИЙ.
-    """
-    context = NewPostContext(
-        bot_instance=params.bot_instance,
-        board_id=params.board_id,
-        user_id=params.user_id,
-        content=params.content,
-        reply_to_post=params.reply_to_post,
-        is_shadow_muted=params.is_shadow_muted,
-        stream=params.stream
-    )
-    processor = NewPostProcessor(context)
-    return await processor.execute()
+from post_processor import NewPostContext, NewPostProcessor, process_new_post
 
 async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:

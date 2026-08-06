@@ -920,7 +920,7 @@ class ThreadImporter:
                                     target_id = int(ref)
                                     if target_id != new_id:
                                         all_backlink_pairs.add((target_id, new_id))
-                                except:
+                                except Exception:
                                     pass
 
                     if update_params:
@@ -1161,7 +1161,7 @@ async def process_import_queue(app_state_broadcast_queue):
                                 processed_ids,
                             )
                             await conn.commit()
-                    except:
+                    except Exception:
                         pass
 
         except Exception:

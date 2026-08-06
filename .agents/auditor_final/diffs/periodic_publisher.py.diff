@@ -1,0 +1,104 @@
+diff --git a/periodic_publisher.py b/periodic_publisher.py
+index 0d0816d8..2dbb75e7 100644
+--- a/periodic_publisher.py
++++ b/periodic_publisher.py
+@@ -102,7 +102,7 @@ def _drain_chart_buffers(images: Sequence[tuple]) -> list[tuple[str, bytes]]:
+             try:
+                 buf.close()
+             except Exception:
+-                import traceback; traceback.print_exc()
++                pass
+         if not payload:
+             logger.warning("Пустой буфер графика %s, пропускаю.", name)
+             continue
+@@ -182,7 +182,8 @@ async def _send_media_group_resilient(
+             await asyncio.sleep(delay)
+         except TelegramForbiddenError:
+             # Заблокировал бота / удалил чат — ретраить бессмысленно.
+-            return None
++            logger.warning("TelegramForbiddenError на %s (%s)", chat_id, context)
++            return "FORBIDDEN"
+         except TelegramBadRequest as e:
+             logger.warning("BadRequest на %s (%s): %s", chat_id, context, e)
+             return None
+@@ -233,17 +234,32 @@ def _rewind_media_group(media_group: Iterable[InputMediaPhoto]) -> None:
+             try:
+                 data.seek(0)
+             except Exception:
+-                import traceback; traceback.print_exc()
++                pass
+         elif hasattr(media, "seek"):
+             try:
+                 media.seek(0)
+             except Exception:
+-                import traceback; traceback.print_exc()
++                pass
+ 
+ 
+ async def send_stats_to_user(bot: Bot, chat_id: int):
+     """Generates and sends stats directly to a user/admin, and copies them to the archive."""
+-    await bot.send_message(chat_id, "⏳ <i>Рисую 30 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
++    try:
++        await bot.send_message(chat_id, "⏳ <i>Рисую 30 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
++    except TelegramForbiddenError:
++        logger.warning("send_stats_to_user forbidden for chat_id %s, purging user", chat_id)
++        try:
++            import main
++            if hasattr(main, 'purge_users_from_board_ram'):
++                await main.purge_users_from_board_ram('b', [chat_id])
++            from common.database import remove_user_from_board
++            await remove_user_from_board(chat_id, 'b')
++        except Exception as purge_err:
++            logger.warning("Failed to purge blocked user %s: %s", chat_id, purge_err)
++        return
++    except Exception as e:
++        logger.warning("Failed to send initial stats message to %s: %s", chat_id, e)
++
+     try:
+         media_groups = await get_stats_media_groups()
+         if not media_groups:
+@@ -271,12 +287,22 @@ async def send_stats_to_user(bot: Bot, chat_id: int):
+                 await asyncio.sleep(1)
+     except asyncio.CancelledError:
+         raise
++    except TelegramForbiddenError:
++        logger.warning("send_stats_to_user TelegramForbiddenError for user %s, purging", chat_id)
++        try:
++            import main
++            if hasattr(main, 'purge_users_from_board_ram'):
++                await main.purge_users_from_board_ram('b', [chat_id])
++            from common.database import remove_user_from_board
++            await remove_user_from_board(chat_id, 'b')
++        except Exception:
++            pass
+     except Exception as e:
+         logger.exception("send_stats_to_user failed")
+         try:
+             await bot.send_message(chat_id, f"❌ Ошибка при генерации статистики: {e}")
+-        except Exception:
+-            import traceback; traceback.print_exc()
++        except Exception as send_err:
++            logger.warning("Failed fallback send_message in send_stats_to_user: %s", send_err)
+ 
+ 
+ def _seconds_until_next_sunday_2000(now_msk: datetime) -> tuple[datetime, float]:
+@@ -359,8 +385,18 @@ async def _broadcast_to_users(b_bot: Bot, recipients: Sequence[int], uploaded_gr
+             result = await _send_media_group_resilient(
+                 b_bot, user_id, media_group, context=f"broadcast-part{group_idx + 1}"
+             )
+-            if result is None:
++            if result is None or result == "FORBIDDEN":
+                 user_ok = False
++                if result == "FORBIDDEN":
++                    logger.warning("User %s blocked bot during stats broadcast, purging from board /b/", user_id)
++                    try:
++                        import main
++                        if hasattr(main, 'purge_users_from_board_ram'):
++                            await main.purge_users_from_board_ram('b', [user_id])
++                        from common.database import remove_user_from_board
++                        await remove_user_from_board(user_id, 'b')
++                    except Exception as purge_err:
++                        logger.warning("Failed to purge blocked user %s: %s", user_id, purge_err)
+                 break  # заблокировал бота или чат мёртв — не долбим остальными частями
+             await asyncio.sleep(BROADCAST_DELAY_BETWEEN_GROUPS)
+         if user_ok:

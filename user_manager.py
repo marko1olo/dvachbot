@@ -1,14 +1,22 @@
 import asyncio
 import time
 import math
+from typing import Callable, Awaitable, Optional
 from aiogram.filters import Command
 from bot_helpers import *
 from post_helpers import *
 from shared_state import *
 from media_utils import _download_image_with_proxy, _resize_image_if_needed
-from aiogram import Router
-from aiogram import types
-from aiogram.types import Message
+from aiogram import Router, F, types
+from aiogram.types import Message, WebAppInfo
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, TelegramAPIError
+from deanonymizer import generate_deanon_info
+from common.database import get_post_info_by_copy, get_post_by_num, get_post_author_by_copy, get_pool
+from common.html_utils import escape_html
+from thread_texts import thread_messages
+from text_assets import INVITE_TEXTS, INVITE_TEXTS_EN, INVITE_TEXTS_JP, DEANON_COOLDOWN_PHRASES
+from common.db_pool import db_lock
+import io
 
 router = Router()
 
@@ -29,7 +37,7 @@ async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = '
             if len(args) > 1:
                 duration_str = args[1]
         except ValueError:
-            import traceback; traceback.print_exc()
+            runtime_logger.warning(f"Invalid target_id for shadowmute: {args[0]}")
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         if lang == 'en':
@@ -288,8 +296,10 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
         await message.answer(resp, parse_mode="HTML")
     try:
         await message.delete()
+    except TelegramBadRequest:
+        pass
     except Exception as e:
-        import traceback; traceback.print_exc()
+        runtime_logger.warning(f"cmd_unshadowmute message.delete failed: {e}")
 
 @router.message(Command("invite"))
 async def cmd_invite(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -336,7 +346,8 @@ async def cmd_check_queues(message: types.Message, board_id: str | None, stream:
     if not board_id or not is_admin(message.from_user.id, board_id): return
     from common.database import get_system_queue_counts
     db_stats = await get_system_queue_counts()
-    runtime_snapshot = _collect_runtime_snapshot()
+    import __main__ as main
+    runtime_snapshot = main._collect_runtime_snapshot()
     queues = runtime_snapshot.get("queues", {})
     delivery_priority = runtime_snapshot.get("delivery_priority", {})
     recipients_snapshot = runtime_snapshot.get("recipients", {})
@@ -436,15 +447,40 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
 
     # Send to target
     delivered = False
-    try:
-        await message.bot.send_message(
-            target_id, 
-            f"🤫 <b>Тебе анонимно шепчут в /{board_id}/:</b>\n<i>{escape_html(text)}</i>", 
-            parse_mode="HTML"
-        )
-        delivered = True
-    except Exception as e:
-        runtime_logger.error(f"Whisper send failed: {e}", exc_info=True)
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            await message.bot.send_message(
+                target_id, 
+                f"🤫 <b>Тебе анонимно шепчут в /{board_id}/:</b>\n<i>{escape_html(text)}</i>", 
+                parse_mode="HTML"
+            )
+            delivered = True
+            break
+        except TelegramForbiddenError:
+            runtime_logger.warning(f"Whisper send target {target_id} blocked bot on {board_id}")
+            try:
+                import __main__ as main
+                if hasattr(main, 'purge_users_from_board_ram'):
+                    await main.purge_users_from_board_ram(board_id, [target_id])
+                if board_id in board_data and 'users' in board_data[board_id]:
+                    board_data[board_id]['users']['active'].discard(target_id)
+                await remove_user_from_board(target_id, board_id)
+            except Exception as purge_err:
+                runtime_logger.warning(f"Failed to purge blocked whisper user {target_id}: {purge_err}")
+            break
+        except TelegramRetryAfter as e:
+            delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
+            runtime_logger.warning(f"Whisper TelegramRetryAfter {delay}s for target {target_id}")
+            await asyncio.sleep(delay)
+        except TelegramBadRequest as e:
+            runtime_logger.warning(f"Whisper TelegramBadRequest for target {target_id}: {e}")
+            break
+        except Exception as e:
+            runtime_logger.error(f"Whisper send failed: {e}", exc_info=True)
+            break
+
+    if not delivered:
         await message.answer("❌ Не удалось доставить шёпот (пользователь не запустил бота или заблокировал его).")
         
     if delivered:
@@ -459,13 +495,21 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
                     f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\nОт: <code>{sender_nick}</code>\nКому: <code>{target_nick}</code>\nТекст: <i>{escape_html(text)}</i>",
                     parse_mode="HTML"
                 )
-            except Exception as e: pass
+            except TelegramForbiddenError:
+                runtime_logger.warning(f"Admin {admin_id} blocked bot on {board_id} during whisper notify")
+            except TelegramBadRequest as e:
+                runtime_logger.warning(f"Admin whisper notify TelegramBadRequest for {admin_id}: {e}")
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5))
+            except Exception as e:
+                runtime_logger.warning(f"Admin whisper notify failed for {admin_id}: {e}")
 
 @router.message(Command("redact"))
 async def cmd_redact(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     try: await message.delete()
-    except Exception as e: pass
+    except TelegramBadRequest: pass
+    except Exception as e: runtime_logger.warning(f"cmd_redact message.delete failed: {e}")
     if not message.reply_to_message:
         await message.answer("❌ Используй /redact в ответ на свое сообщение.")
         return
@@ -527,11 +571,11 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                             parse_mode="HTML"
                         )
                     except Exception as e:
-                        import traceback; traceback.print_exc()
+                        runtime_logger.warning(f"Caption edit error: {e}")
             success_count += 1
             await asyncio.sleep(0.04)
         except Exception as e:
-            import traceback; traceback.print_exc()
+            runtime_logger.warning(f"Message edit error: {e}")
 
     # Get and update all channel copies (mirrors)
     from common.database import get_all_channel_copies
@@ -560,11 +604,11 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                                 parse_mode="HTML"
                             )
                         except Exception as e:
-                            import traceback; traceback.print_exc()
+                            runtime_logger.warning(f"Caption edit error in channel copy: {e}")
                 success_count += 1
                 await asyncio.sleep(0.04)
             except Exception as e:
-                import traceback; traceback.print_exc()
+                runtime_logger.warning(f"Message edit error in channel copy: {e}")
 
     async with storage_lock:
         if post_num in messages_storage:
@@ -789,7 +833,9 @@ async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
+    except Exception as e:
+        runtime_logger.warning(f"Failed to delete message in cmd_anime: {e}")
 
 async def check_anime_cmd_cooldown(message: types.Message, board_id: str) -> bool:
     current_time = time.time()
@@ -808,11 +854,13 @@ async def check_anime_cmd_cooldown(message: types.Message, board_id: str) -> boo
                 sent_msg = await message.answer(cooldown_msg)
                 spawn_task(delete_message_after_delay(sent_msg, 15))
             except Exception as e:
-                import traceback; traceback.print_exc()
+                runtime_logger.warning(f"Failed to send anime cooldown message: {e}")
             try:
                 await message.delete()
             except TelegramBadRequest:
-                import traceback; traceback.print_exc()
+                pass
+            except Exception as e:
+                runtime_logger.warning(f"Failed to delete message during anime cooldown: {e}")
             return False
         return True
 
@@ -1333,7 +1381,7 @@ async def cmd_zaputin(message: types.Message, board_id: str | None, stream: str 
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 
 @router.message(Command("app"))
 async def cmd_app(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -1372,7 +1420,7 @@ async def cmd_suka_blyat(message: types.Message, board_id: str | None, stream: s
         try:
             await message.delete()
         except (TelegramBadRequest, TelegramForbiddenError):
-            import traceback; traceback.print_exc()
+            pass
         return
     if not await check_cooldown(message, board_id):
         return
@@ -1440,7 +1488,7 @@ async def cmd_suka_blyat(message: types.Message, board_id: str | None, stream: s
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 
 @router.message(Command("roll", "roulette", "ruletka", "rulet", "fortune", "фортуна"))
 async def cmd_roll(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -1687,9 +1735,24 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
 
     try:
         await callback.message.edit_text(text, reply_markup=get_help_keyboard(cat, board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            runtime_logger.warning(f"process_help_menu edit_text TelegramBadRequest: {e}")
     except Exception as e:
-        import traceback; traceback.print_exc()
+        runtime_logger.warning(f"process_help_menu edit_text failed: {e}")
     await callback.answer()
+
+try:
+    from wordcloud import WordCloud
+    HAS_WORDCLOUD = True
+except ImportError:
+    HAS_WORDCLOUD = False
+
+try:
+    import matplotlib
+    GRAPH_LIBS_AVAILABLE = True
+except ImportError:
+    GRAPH_LIBS_AVAILABLE = False
 
 @router.message(Command("wordcloud", "words", "облако"))
 async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -1779,6 +1842,8 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
         await status_message.delete()
         
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        await status_message.edit_text(f"Произошла ошибка при генерации облака слов: {e}", parse_mode=None)
+        runtime_logger.exception(f"Error generating wordcloud: {e}")
+        try:
+            await status_message.edit_text(f"Произошла ошибка при генерации облака слов: {e}", parse_mode=None)
+        except Exception:
+            pass

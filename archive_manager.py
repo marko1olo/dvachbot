@@ -185,7 +185,8 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
             elif sm.document: fid = sm.document.file_id
             elif sm.audio: fid = sm.audio.file_id
             if fid:
-                new_files_data.append({'type': sm.content_type, 'file_id': fid})
+                norm_type = str(sm.content_type).split('.')[-1].lower() if sm.content_type else 'photo'
+                new_files_data.append({'type': norm_type, 'file_id': fid})
                 orig_fid = media_list[idx].get('file_id') or media_list[idx].get('media')
                 if orig_fid: await add_file_mirror(orig_fid, 'tg_shadow', fid)
     return sent_message, new_files_data

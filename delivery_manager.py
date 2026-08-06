@@ -1,5 +1,6 @@
 from common.config import BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE, BOT_PRIORITY_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_SLICE_AGE_SEC
 
+import shared_state
 from shared_state import *
 from common.database import (
     upsert_delivery_queue_item, delete_delivery_queue_item, get_post_copies, 
@@ -12,7 +13,7 @@ from help_text import HELP_TEXT_EN_COMMANDS, THREAD_PROMO_TEXT_EN
 from common.thread_manager import get_threads_data
 from thread_texts import thread_messages
 from common.bot_helpers import process_new_post
-from datetime import timezone, datetime
+from datetime import timezone, datetime, timedelta
 import __main__ as main
 UTC = timezone.utc
 
@@ -87,7 +88,7 @@ def _board_queue_oldest_age_sec(board_id: str | None) -> float:
 
 async def get_board_activity_last_hours(board_id: str, hours: int = 2) -> float:
     if hours <= 0: return 0.0
-    time_threshold = datetime.now(UTC) - main.timedelta(hours=hours)
+    time_threshold = datetime.now(UTC) - timedelta(hours=hours)
     post_count = 0
     async with storage_lock:
         for post_data in reversed(messages_storage.values()):
@@ -132,7 +133,7 @@ PRIORITY_SPLIT_MIN_PASSIVE = 200
 WORKER_RESTART_DELAY_SEC = 5.0
 WORKER_RESTART_MAX_DELAY_SEC = 60.0
 PASSIVE_MAX_PREEMPTIONS = 5
-ENABLE_MULTILANG = True
+# ENABLE_MULTILANG is canonical in shared_state.py (imported via *)
 RE_YOU_PATTERN = re.compile(r'>>(\d+)')
 
 def _get_random_header_prefix(lang='ru'):
@@ -439,12 +440,33 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
     board_id = None
     async with storage_lock:
         post_data = messages_storage.get(post_num)
-        if not post_data: return
+    if not post_data:
+        db_post = await main.get_post_by_num(post_num)
+        if db_post:
+            content_dict = db_post['content'] if isinstance(db_post['content'], dict) else {}
+            reactions_dict = content_dict.get('reactions', {'users': {}})
+            async with storage_lock:
+                messages_storage[post_num] = {
+                    'author_id': db_post['author_id'],
+                    'timestamp': datetime.fromtimestamp(db_post['timestamp'], UTC) if isinstance(db_post['timestamp'], (int, float)) else db_post['timestamp'],
+                    'content': content_dict,
+                    'reactions': reactions_dict,
+                    'board_id': db_post['board_id'],
+                    'thread_id': db_post.get('thread_id')
+                }
+                post_data = messages_storage.get(post_num)
+
+    if not post_data:
+        return
+
+    async with storage_lock:
         content_type = post_data.get('content', {}).get('type')
         can_be_edited = content_type in ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'media_group']
         if not can_be_edited: return
         post_data_copy = post_data.copy()
         content_copy = post_data.get('content', {}).copy()
+        if 'reactions' not in post_data_copy and 'reactions' in content_copy:
+            post_data_copy['reactions'] = content_copy['reactions']
         board_id = post_data.get('board_id')
         reply_to_post_num = content_copy.get('reply_to_post')
         if reply_to_post_num:
@@ -604,7 +626,7 @@ async def execute_delayed_edit(
                 )
             except (TelegramForbiddenError, TelegramBadRequest):
                 import traceback; traceback.print_exc()
-        await main.edit_post_for_all_recipients(post_num, bot_instance)
+        await edit_post_for_all_recipients(post_num, bot_instance)
     except asyncio.CancelledError:
         import traceback; traceback.print_exc()
     except Exception as e:
@@ -627,6 +649,7 @@ async def _supervise_message_worker(worker_name: str, board_id: str, bot_instanc
     """
     delay = WORKER_RESTART_DELAY_SEC
     while not (is_shutting_down or drain_shutdown_requested):
+        start_time = time.time()
         try:
             await message_worker(worker_name, board_id, bot_instance)
             if is_shutting_down or drain_shutdown_requested:
@@ -639,8 +662,12 @@ async def _supervise_message_worker(worker_name: str, board_id: str, bot_instanc
                 return
             print(f"⛔ {worker_name} упал: {type(e).__name__}: {str(e)[:200]}. Перезапуск через {delay:.0f} с.")
             runtime_logger.exception("message_worker_crashed board=%s", board_id)
+
+        if time.time() - start_time >= 120:
+            delay = WORKER_RESTART_DELAY_SEC
+        else:
+            delay = min(delay * 2, WORKER_RESTART_MAX_DELAY_SEC)
         await asyncio.sleep(delay)
-        delay = min(delay * 2, WORKER_RESTART_MAX_DELAY_SEC)
 
 
 async def message_broadcaster(bots: dict[str, Bot]):
@@ -671,7 +698,7 @@ class MessageDeliveryTask:
 
     async def process(self):
         """Основной метод оркестрации обработки сообщения."""
-        if not await main.validate_message_format(self.msg_data):
+        if not await validate_message_format(self.msg_data):
             return
 
         # Delayed initialization to ensure msg_data is valid
@@ -932,6 +959,7 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
     Воркер обработки очереди сообщений.
     Исправлено: queue.get() вынесен из try-блока, чтобы избежать ошибки task_done() при отмене задачи.
     Рефакторинг: Использован паттерн Method Object (MessageDeliveryTask) для инкапсуляции логики обработки сообщения.
+    Улучшено: Добавлена обработка ошибок с экспоненциальным повтором и сохранением в надежное хранилище.
     """
     queue = message_queues[board_id]
     while True:
@@ -956,10 +984,31 @@ async def message_worker(worker_name: str, board_id: str, bot_instance: Bot):
                 print(f"{worker_name} | ⚠️ Соединение с БД было закрыто, жду переподключения пула...")
                 runtime_logger.warning("message_worker_db_closed board=%s", board_id)
                 await asyncio.sleep(5)
+                try:
+                    await queue.put(msg_data)
+                except Exception:
+                    pass
                 continue
-            print(f"{worker_name} | ⛔ Критическая ошибка: {str(e)[:200]}")
+            print(f"{worker_name} | ⛔ Ошибка обработки элемента: {str(e)[:200]}")
             import traceback
             traceback.print_exc()
+
+            retries = msg_data.get("_retry_count", 0)
+            max_retries = 3
+            if retries < max_retries:
+                msg_data["_retry_count"] = retries + 1
+                backoff = 2 ** retries
+                print(f"{worker_name} | 🔄 Повторная попытка ({retries + 1}/{max_retries}) для поста #{msg_data.get('post_num')} через {backoff}с...")
+                await asyncio.sleep(backoff)
+                try:
+                    await queue.put(msg_data)
+                except Exception as put_err:
+                    print(f"{worker_name} | ⚠️ Не удалось повторно добавить элемент в очередь: {put_err}")
+                    await _persist_durable_delivery_item(board_id, msg_data, "worker_retry_put_failed")
+            else:
+                print(f"{worker_name} | ❌ Превышен лимит попыток для поста #{msg_data.get('post_num')}. Сохраняю в надежное хранилище.")
+                await _persist_durable_delivery_item(board_id, msg_data, "worker_max_retries_exceeded")
+
             await asyncio.sleep(1)
         finally:
             queue.task_done()
@@ -1174,9 +1223,9 @@ def _get_thread_entry_keyboard(board_id: str, show_history_button: bool = False,
     return InlineKeyboardMarkup(inline_keyboard=keyboard_layout)
 
 
-# --- Extracted Media Group and Broadcaster Logic ---
-current_media_groups = {}
-media_group_timers = {}
+# --- Media Group and Broadcaster Logic ---
+# current_media_groups and media_group_timers come from shared_state (imported via *)
+# DO NOT redefine them here — that would create local shadows disconnected from message_router.py
 
 
 def _release_media_group_timer(media_group_key: str) -> None:
@@ -1203,14 +1252,15 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
     try:
         await asyncio.sleep(delay)
         group = current_media_groups.pop(media_group_key, None)
-        if not group or media_group_key in main.sent_media_groups:
-            # Раньше выход отсюда происходил ДО media_group_timers.pop ниже,
-            # и запись таймера оставалась висеть навсегда (замерено: утечка на
-            # каждом дубликате альбома и на каждой гонке двух таймеров).
-            # Теперь уборкой занимается finally.
+        if not group:
+            print(f"⚠️ [MEDIAGRP] {media_group_key}: group уже удалена (race/duplicate timer), пропускаем.")
+            return
+        if media_group_key in sent_media_groups:
+            print(f"ℹ️ [MEDIAGRP] {media_group_key}: уже обработана (dedup), пропускаем.")
             return
         raw_messages = group.get('raw_messages', [])
         if not raw_messages:
+            print(f"⚠️ [MEDIAGRP] {media_group_key}: raw_messages пустой! board={group.get('board_id')} author={group.get('author_id')} — альбом потерян.")
             return
         raw_messages.sort(key=lambda m: m.message_id)
         found_caption = ""
@@ -1274,7 +1324,9 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
         # НЕ трогаем — группу продолжает собирать новая задача.
         pass
     except Exception as e:
-        print(f"❌ Ошибка в complete_media_group_after_delay для {media_group_key}: {e}")
+        import traceback
+        print(f"❌ [MEDIAGRP] Ошибка в complete_media_group_after_delay для {media_group_key}: {e}")
+        traceback.print_exc()
         current_media_groups.pop(media_group_key, None)
     finally:
         _release_media_group_timer(media_group_key)
@@ -1283,6 +1335,7 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
     if not group or not group.get('media'):
         return
     main.sent_media_groups.append(media_group_key)
+    sent_media_groups.append(media_group_key)  # shared_state deque — read by message_router for dedup
     user_id = group['author_id']
     board_id = group['board_id']
     stream = group.get('stream', 'ru')
@@ -1415,7 +1468,6 @@ async def thread_notifier():
     """
     global last_checked_post_counter_for_notify
     await asyncio.sleep(45)
-    import shared_state
     state = shared_state.state
     last_checked_post_counter_for_notify = state.get('post_counter', 0)
     while True:
@@ -1533,140 +1585,143 @@ async def site_posts_broadcaster():
             if new_posts:
                 new_posts.sort(key=lambda p: p.get('timestamp', 0))
                 for post in new_posts:
-                    post_num = post.get('post_num')
-                    if not post_num:
-                        continue
-                    if post.get('_broadcast_decode_failed'):
-                        await common.database.mark_broadcast_posts_sent([post_num])
-                        continue
-                    if post_num in messages_storage or post_num in locally_created_posts:
-                        await common.database.mark_broadcast_posts_sent([post_num])
-                        continue
-                    board_id = post.get('board_id')
-                    author_id = post.get('author_id')
-                    post_stream = post.get('stream', 'ru')
-                    post_mode = post.get('post_mode') 
-                    thread_id = post.get('thread_id')
-                    is_new_thread = (
-                        post_mode == 'new_thread'
-                        or bool(post.get('is_op_post'))
-                        or (thread_id is not None and str(thread_id) == str(post_num))
-                    )
-                    if not board_id or board_id not in BOARD_CONFIG:
-                        await mark_broadcast_posts_sent([post_num])
-                        continue
-                    b_data = board_data[board_id]
-                    content = post.get('content', {})
-                    skip_broadcast = False
-                    # Под локом только решение и обновление счётчика постов.
-                    # format_header ниже — обращение к БД, и раньше оно
-                    # выполнялось УДЕРЖИВАЯ storage_lock: фоновый цикл трансляции
-                    # постов с сайта подвешивал доставку и реакции на всех
-                    # досках на время запроса к базе, на каждый пост из очереди.
-                    async with storage_lock:
-                        is_banned = author_id in b_data.get('users', {}).get('banned', set())
-                        m_until = b_data.get('mutes', {}).get(author_id)
-                        is_muted = m_until and m_until > datetime.now(UTC)
-                        sm_until = b_data.get('shadow_mutes', {}).get(author_id)
-                        is_shadow_muted = sm_until and sm_until > datetime.now(UTC)
-                        if is_banned or is_muted or is_shadow_muted:
-                            skip_broadcast = True
-                        else:
-                            state['post_counter'] = max(state.get('post_counter', 0), post_num)
-                    if not skip_broadcast:
-                            header = await format_header(board_id, post_num, stream=post_stream)
-                            source_content = content
-                            if is_new_thread:
-                                raw_text = source_content.get('text', '')
-                                clean_text_no_tags = re.sub(r'<[^>]+>', '', raw_text)
-                                decoded_text = main.html.unescape(clean_text_no_tags)
-                                title_preview = (decoded_text[:120] + '...') if len(decoded_text) > 120 else decoded_text
-                                if not title_preview.strip():
-                                    title_preview = "Новый тред (медиа-контент)"
-                                site_url = f"https://tgach.top/{board_id}/res/{post_num}.html"
-                                if post_stream == 'en':
-                                    notify_text = (
-                                        f"🌱 <b>New thread on website!</b>\n\n"
-                                        f"📝 {main.html.escape(title_preview)}\n\n"
-                                        f"🔗 <a href='{site_url}'>Open on Website</a>"
-                                    )
-                                elif post_stream == 'jp':
-                                    notify_text = (
-                                        f"🌱 <b>サイトで新しいスレが作成されました！</b>\n\n"
-                                        f"📝 {main.html.escape(title_preview)}\n\n"
-                                        f"🔗 <a href='{site_url}'>サイトで開く</a>"
-                                    )
-                                else:
-                                    notify_text = (
-                                        f"🌱 <b>На сайте создан новый тред!</b>\n\n"
-                                        f"📝 {main.html.escape(title_preview)}\n\n"
-                                        f"🔗 <a href='{site_url}'>Читать на сайте</a>"
-                                    )
-                                content = {
-                                    'type': 'text',
-                                    'text': notify_text,
-                                    'is_system_message': True,
-                                    'header': f"### WEBSITE ###\n{header}",
-                                    'post_num': post_num,
-                                }
-                                content = _attach_site_media_for_delivery(content, source_content)
-                            else:
-                                content = _attach_site_media_for_delivery(content)
-                                content['header'] = header
-                                content['post_num'] = post_num
-                            if post.get('reply_to_post_num'):
-                                content['reply_to_post'] = post['reply_to_post_num']
-                            # Запись в messages_storage — единственное, что здесь
-                            # действительно требует storage_lock. Короткий блок,
-                            # без обращений к БД и сети.
-                            async with storage_lock:
-                                messages_storage[post_num] = {
-                                    'author_id': author_id,
-                                    'timestamp': datetime.fromtimestamp(post['timestamp'], UTC),
-                                    'content': content,
-                                    'board_id': board_id,
-                                    'thread_id': post.get('thread_id'),
-                                }
-                    if skip_broadcast:
-                        await mark_broadcast_posts_sent([post_num])
-                        continue
-                    base_recipients = b_data['users']['active'] - b_data['users']['banned']
-                    if ENABLE_MULTILANG and board_id != 'int':
-                        stream_users = await get_stream_active_users(board_id, post_stream)
-                        base_recipients = base_recipients.intersection(stream_users)
-                    recipients = set()
-                    if is_new_thread or not thread_id:
-                        recipients = base_recipients
-                    else:
-                        thread_info = main.get_thread_info(board_id, str(thread_id))
-                        if thread_info:
-                            subs = thread_info.get('subscribers', set())
-                            recipients = subs.intersection(base_recipients)
-                    if recipients:
-                        enqueued = await enqueue_board_message(board_id, {
-                            'recipients': recipients,
-                            'content': content,
-                            'post_num': post_num,
-                            'board_id': board_id,
-                            'thread_id': thread_id if not is_new_thread else None
-                        })
-                        if enqueued:
+                    try:
+                        post_num = post.get('post_num')
+                        if not post_num:
+                            continue
+                        if post.get('_broadcast_decode_failed'):
+                            await common.database.mark_broadcast_posts_sent([post_num])
+                            continue
+                        if post_num in messages_storage or post_num in locally_created_posts:
+                            await common.database.mark_broadcast_posts_sent([post_num])
+                            continue
+                        board_id = post.get('board_id')
+                        author_id = post.get('author_id')
+                        post_stream = post.get('stream', 'ru')
+                        post_mode = post.get('post_mode') 
+                        thread_id = post.get('thread_id')
+                        is_new_thread = (
+                            post_mode == 'new_thread'
+                            or bool(post.get('is_op_post'))
+                            or (thread_id is not None and str(thread_id) == str(post_num))
+                        )
+                        if not board_id or board_id not in BOARD_CONFIG:
                             await mark_broadcast_posts_sent([post_num])
+                            continue
+                        b_data = board_data[board_id]
+                        content = post.get('content', {})
+                        skip_broadcast = False
+                        # Под локом только решение и обновление счётчика постов.
+                        # format_header ниже — обращение к БД, и раньше оно
+                        # выполнялось УДЕРЖИВАЯ storage_lock: фоновый цикл трансляции
+                        # постов с сайта подвешивал доставку и реакции на всех
+                        # досках на время запроса к базе, на каждый пост из очереди.
+                        async with storage_lock:
+                            is_banned = author_id in b_data.get('users', {}).get('banned', set())
+                            m_until = b_data.get('mutes', {}).get(author_id)
+                            is_muted = m_until and m_until > datetime.now(UTC)
+                            sm_until = b_data.get('shadow_mutes', {}).get(author_id)
+                            is_shadow_muted = sm_until and sm_until > datetime.now(UTC)
+                            if is_banned or is_muted or is_shadow_muted:
+                                skip_broadcast = True
+                            else:
+                                state['post_counter'] = max(state.get('post_counter', 0), post_num)
+                        if not skip_broadcast:
+                                header = await format_header(board_id, post_num, stream=post_stream)
+                                source_content = content
+                                if is_new_thread:
+                                    raw_text = source_content.get('text', '')
+                                    clean_text_no_tags = re.sub(r'<[^>]+>', '', raw_text)
+                                    decoded_text = main.html.unescape(clean_text_no_tags)
+                                    title_preview = (decoded_text[:120] + '...') if len(decoded_text) > 120 else decoded_text
+                                    if not title_preview.strip():
+                                        title_preview = "Новый тред (медиа-контент)"
+                                    site_url = f"https://tgach.top/{board_id}/res/{post_num}.html"
+                                    if post_stream == 'en':
+                                        notify_text = (
+                                            f"🌱 <b>New thread on website!</b>\n\n"
+                                            f"📝 {main.html.escape(title_preview)}\n\n"
+                                            f"🔗 <a href='{site_url}'>Open on Website</a>"
+                                        )
+                                    elif post_stream == 'jp':
+                                        notify_text = (
+                                            f"🌱 <b>サイトで新しいスレが作成されました！</b>\n\n"
+                                            f"📝 {main.html.escape(title_preview)}\n\n"
+                                            f"🔗 <a href='{site_url}'>サイトで開く</a>"
+                                        )
+                                    else:
+                                        notify_text = (
+                                            f"🌱 <b>На сайте создан новый тред!</b>\n\n"
+                                            f"📝 {main.html.escape(title_preview)}\n\n"
+                                            f"🔗 <a href='{site_url}'>Читать на сайте</a>"
+                                        )
+                                    content = {
+                                        'type': 'text',
+                                        'text': notify_text,
+                                        'is_system_message': True,
+                                        'header': f"### WEBSITE ###\n{header}",
+                                        'post_num': post_num,
+                                    }
+                                    content = _attach_site_media_for_delivery(content, source_content)
+                                else:
+                                    content = _attach_site_media_for_delivery(content)
+                                    content['header'] = header
+                                    content['post_num'] = post_num
+                                if post.get('reply_to_post_num'):
+                                    content['reply_to_post'] = post['reply_to_post_num']
+                                # Запись в messages_storage — единственное, что здесь
+                                # действительно требует storage_lock. Короткий блок,
+                                # без обращений к БД и сети.
+                                async with storage_lock:
+                                    messages_storage[post_num] = {
+                                        'author_id': author_id,
+                                        'timestamp': datetime.fromtimestamp(post['timestamp'], UTC),
+                                        'content': content,
+                                        'board_id': board_id,
+                                        'thread_id': post.get('thread_id'),
+                                    }
+                        if skip_broadcast:
+                            await mark_broadcast_posts_sent([post_num])
+                            continue
+                        base_recipients = b_data['users']['active'] - b_data['users']['banned']
+                        if ENABLE_MULTILANG and board_id != 'int':
+                            stream_users = await get_stream_active_users(board_id, post_stream)
+                            base_recipients = base_recipients.intersection(stream_users)
+                        recipients = set()
+                        if is_new_thread or not thread_id:
+                            recipients = base_recipients
                         else:
-                            runtime_logger.error(f"[site_posts_broadcaster] enqueue FAILED for #{post_num} board={board_id} — NOT marking as sent")
-                        
-                        if not content.get('is_system_message') or content.get('archive_allowed'):
-                            bot_to_use = main.GLOBAL_BOTS.get(board_id) or main.GLOBAL_BOTS.get('b')
-                            if bot_to_use:
-                                spawn_task(main._forward_post_to_realtime_archive(
-                                    bot_instance=bot_to_use,
-                                    board_id=board_id,
-                                    post_num=post_num,
-                                    content=content,
-                                    is_shadow_muted=is_shadow_muted
-                                ))
-                    else:
-                        await mark_broadcast_posts_sent([post_num])
+                            thread_info = main.get_thread_info(board_id, str(thread_id))
+                            if thread_info:
+                                subs = thread_info.get('subscribers', set())
+                                recipients = subs.intersection(base_recipients)
+                        if recipients:
+                            enqueued = await enqueue_board_message(board_id, {
+                                'recipients': recipients,
+                                'content': content,
+                                'post_num': post_num,
+                                'board_id': board_id,
+                                'thread_id': thread_id if not is_new_thread else None
+                            })
+                            if enqueued:
+                                await mark_broadcast_posts_sent([post_num])
+                            else:
+                                runtime_logger.error(f"[site_posts_broadcaster] enqueue FAILED for #{post_num} board={board_id} — NOT marking as sent")
+                            
+                            if not content.get('is_system_message') or content.get('archive_allowed'):
+                                bot_to_use = main.GLOBAL_BOTS.get(board_id) or main.GLOBAL_BOTS.get('b')
+                                if bot_to_use:
+                                    spawn_task(main._forward_post_to_realtime_archive(
+                                        bot_instance=bot_to_use,
+                                        board_id=board_id,
+                                        post_num=post_num,
+                                        content=content,
+                                        is_shadow_muted=is_shadow_muted
+                                    ))
+                        else:
+                            await mark_broadcast_posts_sent([post_num])
+                    except Exception as item_err:
+                        runtime_logger.error(f"[site_posts_broadcaster] Error processing broadcast item {post}: {item_err}", exc_info=True)
             await asyncio.sleep(5) 
         except asyncio.CancelledError:
             break

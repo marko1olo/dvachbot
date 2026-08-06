@@ -29,7 +29,19 @@ import re
 import asyncio
 from summarize import summarize_text_with_hf, create_telegraph_page_async
 from post_processor import NewPostProcessor, NewPostContext
-from text_assets import CONTEXTUAL_REPLIES, CONTEXTUAL_REPLIES_EN, CONTEXTUAL_REPLIES_JP
+from text_assets import (
+    CONTEXTUAL_REPLIES, CONTEXTUAL_REPLIES_EN, CONTEXTUAL_REPLIES_JP,
+    ROAST_PROMPTS, ROAST_PROMPTS_EN, ROAST_PROMPTS_JP,
+    SUMMARIZE_PROMPTS_BOARD, SUMMARIZE_PROMPTS_BOARD_EN, SUMMARIZE_PROMPTS_BOARD_JP,
+    SUMMARIZE_PROMPTS_BOARD_SHORT, SUMMARIZE_PROMPTS_BOARD_LONG,
+    SUMMARIZE_PROMPTS_BOARD_SHORT_EN, SUMMARIZE_PROMPTS_BOARD_LONG_EN
+)
+from shizo_mode import SCHIZO_PHRASES_START
+from warhammer_mode import WH40K_PHRASES_START
+
+import __main__ as main
+ROAST_COOLDOWN = getattr(main, 'ROAST_COOLDOWN', 300)
+SUMMARIZE_COOLDOWN = getattr(main, 'SUMMARIZE_COOLDOWN', 600)
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from collections import defaultdict
 

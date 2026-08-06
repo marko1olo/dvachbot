@@ -1,0 +1,29 @@
+diff --git a/media_utils.py b/media_utils.py
+index 3bd07260..d0567037 100644
+--- a/media_utils.py
++++ b/media_utils.py
+@@ -87,6 +87,24 @@ async def _download_image_with_proxy(url: str, timeout: int=90, depth: int=0) ->
+             break
+     return None
+ 
++def extract_msg_media_file_id(msg):
++    if not msg: return None
++    if getattr(msg, 'photo', None): return msg.photo[-1].file_id
++    if getattr(msg, 'video', None):
++        thumb = getattr(msg.video, 'thumbnail', None) or getattr(msg.video, 'thumb', None)
++        return thumb.file_id if thumb else msg.video.file_id
++    if getattr(msg, 'animation', None):
++        thumb = getattr(msg.animation, 'thumbnail', None) or getattr(msg.animation, 'thumb', None)
++        return thumb.file_id if thumb else msg.animation.file_id
++    if getattr(msg, 'video_note', None):
++        thumb = getattr(msg.video_note, 'thumbnail', None) or getattr(msg.video_note, 'thumb', None)
++        return thumb.file_id if thumb else msg.video_note.file_id
++    if getattr(msg, 'sticker', None): return msg.sticker.file_id
++    if getattr(msg, 'document', None):
++        thumb = getattr(msg.document, 'thumbnail', None) or getattr(msg.document, 'thumb', None)
++        return thumb.file_id if thumb else msg.document.file_id
++    return None
++
+ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
+     """
+     (СИНХРОННАЯ) Оптимизированная проверка.

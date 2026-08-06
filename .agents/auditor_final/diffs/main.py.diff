@@ -1,0 +1,447 @@
+diff --git a/main.py b/main.py
+index d0d54be3..c462644a 100644
+--- a/main.py
++++ b/main.py
+@@ -266,6 +266,12 @@ ANIME_COMMAND_MAP = {
+     "LOLI": get_loli_image,
+     "LOLICON": get_loli_image,
+     "LOLIS": get_loli_image,
++    "lol1": get_loli_image,
++    "lolico": get_loli_image,
++    "Lol1": get_loli_image,
++    "Lolico": get_loli_image,
++    "LOL1": get_loli_image,
++    "LOLICO": get_loli_image,
+ }
+ from common.text_utils import clean_html_tags, sanitize_html, RE_YOU_PATTERN, unwrap_tg_emoji, clean_html_for_tg
+ RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
+@@ -3061,13 +3067,17 @@ def _format_reply_line(content: dict, user_id_for_context: int, reply_to_post_au
+ 
+ def _format_reactions_block(post_data: dict) -> str | None:
+     reactions_data = post_data.get('reactions')
++    if not reactions_data and isinstance(post_data.get('content'), dict):
++        reactions_data = post_data['content'].get('reactions')
+     if not reactions_data:
+         return None
+-    reaction_lines =[]
++    reaction_lines = []
+     user_reactions = reactions_data.get('users', {})
+-    if isinstance(user_reactions, dict):
+-        all_emojis =[emoji for user_emojis in user_reactions.values() for emoji in user_emojis]
+-        categories =[
++    if isinstance(user_reactions, dict) and user_reactions:
++        all_emojis = [emoji for user_emojis in user_reactions.values() for emoji in user_emojis if isinstance(user_emojis, (list, set))]
++        if not all_emojis:
++            return None
++        categories = [
+             POSITIVE_REACTIONS, LAUGHING_REACTIONS, THINKING_REACTIONS,
+             SHOCK_REACTIONS, SAD_REACTIONS, NEGATIVE_REACTIONS, CLOWN_REACTION,
+             POLITICAL_REACTIONS, SYMBOLIC_REACTIONS, INSULT_REACTIONS
+@@ -3757,11 +3767,15 @@ async def _handle_shoot_bounce(ctx: ShootContext):
+             "Ты в муте на 1 час.",
+             parse_mode="HTML"
+         )
+-    except:
++    except TelegramForbiddenError:
++        await purge_users_from_board_ram(ctx.board_id, [ctx.user_id])
++    except TelegramRetryAfter as e:
++        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++    except (TelegramBadRequest, TelegramAPIError, Exception):
+         pass
+     try:
+         await ctx.message.delete()
+-    except:
++    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
+         pass
+ 
+ async def _handle_shoot_success(ctx: ShootContext):
+@@ -3794,11 +3808,15 @@ async def _handle_shoot_success(ctx: ShootContext):
+             "Защититься от будущих выстрелов можно купив Зеркальный Щит в /shop.",
+             parse_mode="HTML"
+         )
+-    except:
++    except TelegramForbiddenError:
++        await purge_users_from_board_ram(ctx.board_id, [ctx.target_id])
++    except TelegramRetryAfter as e:
++        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++    except (TelegramBadRequest, TelegramAPIError, Exception):
+         pass
+     try:
+         await ctx.message.delete()
+-    except:
++    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
+         pass
+ 
+ 
+@@ -3952,8 +3970,14 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
+             parse_mode="HTML")
+         return
+     await message.answer(f"🔪 <b>ОГРАБЛЕНИЕ УДАЛОСЬ!</b>\nТы подкрался и спиздил <code>{stolen}</code> шекелей у жертвы.", parse_mode="HTML")
+-    try: await message.bot.send_message(target_id, f"🔪 <b>Тебя ограбили в /b/!</b>\nКакой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей. Защититься можно, купив Шапочку из фольги в /shop.", parse_mode="HTML")
+-    except: pass
++    try:
++        await message.bot.send_message(target_id, f"🔪 <b>Тебя ограбили в /b/!</b>\nКакой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей. Защититься можно, купив Шапочку из фольги в /shop.", parse_mode="HTML")
++    except TelegramForbiddenError:
++        await purge_users_from_board_ram(board_id, [target_id])
++    except TelegramRetryAfter as e:
++        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++    except (TelegramBadRequest, TelegramAPIError, Exception):
++        pass
+ 
+ @dp.message(Command("shit"))
+ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = 'ru'):
+@@ -4006,8 +4030,14 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
+         )
+         await db.commit()
+     await message.answer("🐒 <b>ПОПАДАНИЕ!</b>\nТы метко кинул кусок говна! Жертва обмазана на 1 час и получит иконку 💩 во всех своих постах.", parse_mode="HTML")
+-    try: await message.bot.send_message(target_id, "🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\nКакой-то анон обмазал тебя. У тебя статус 💩 на 1 час.\nЛекарство от статуса: Аминазин в /shop.", parse_mode="HTML")
+-    except: pass
++    try:
++        await message.bot.send_message(target_id, "🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\nКакой-то анон обмазал тебя. У тебя статус 💩 на 1 час.\nЛекарство от статуса: Аминазин в /shop.", parse_mode="HTML")
++    except TelegramForbiddenError:
++        await purge_users_from_board_ram(board_id, [target_id])
++    except TelegramRetryAfter as e:
++        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++    except (TelegramBadRequest, TelegramAPIError, Exception):
++        pass
+ 
+ @dp.message(Command("curse", "vomit"))
+ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
+@@ -8075,15 +8105,26 @@ async def show_tagged_photos_gallery(event: types.Message | types.CallbackQuery,
+             await event.answer()
+             try:
+                 await bot.send_photo(chat_id, photo=target_fid, caption=caption, parse_mode="HTML", reply_markup=kb)
+-            except Exception:
+-                await bot.send_message(chat_id, text=caption, parse_mode="HTML", reply_markup=kb)
++            except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter, Exception):
++                try:
++                    await bot.send_message(chat_id, text=caption, parse_mode="HTML", reply_markup=kb)
++                except (TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, Exception) as inner_e:
++                    runtime_logger.warning("Failed fallback message in show_tagged_photos_gallery: %s", inner_e)
+         else:
+             try:
+                 await event.answer_photo(photo=target_fid, caption=caption, parse_mode="HTML", reply_markup=kb)
+-            except Exception:
+-                await event.answer(caption, parse_mode="HTML", reply_markup=kb)
++            except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter, Exception):
++                try:
++                    await event.answer(caption, parse_mode="HTML", reply_markup=kb)
++                except (TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, Exception) as inner_e:
++                    runtime_logger.warning("Failed fallback message in show_tagged_photos_gallery: %s", inner_e)
++    except TelegramForbiddenError:
++        runtime_logger.warning(f"User {chat_id} blocked bot in show_tagged_photos_gallery")
++    except TelegramRetryAfter as e:
++        delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
++        await asyncio.sleep(delay)
+     except Exception as e:
+-        print(f"⚠️ Ошибка в show_tagged_photos_gallery: {e}")
++        runtime_logger.warning(f"⚠️ Ошибка в show_tagged_photos_gallery: {e}")
+ 
+ 
+ @dp.callback_query(F.data.startswith("tagview:"))
+@@ -10002,10 +10043,27 @@ async def reply_notifier_task():
+                     ])
+                     try:
+                         await bot_instance.send_message(recipient_id, text, reply_markup=keyboard)
+-                    except (TelegramForbiddenError, TelegramBadRequest):
+-                        import traceback; traceback.print_exc() 
++                    except TelegramForbiddenError:
++                        try:
++                            await purge_users_from_board_ram(board_id, [recipient_id])
++                        except Exception:
++                            pass
++                    except TelegramRetryAfter as e:
++                        delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
++                        await asyncio.sleep(delay)
++                        try:
++                            await bot_instance.send_message(recipient_id, text, reply_markup=keyboard)
++                        except TelegramForbiddenError:
++                            try:
++                                await purge_users_from_board_ram(board_id, [recipient_id])
++                            except Exception:
++                                pass
++                        except Exception as inner_e:
++                            runtime_logger.warning("Failed retry notification to %s: %s", recipient_id, inner_e)
++                    except TelegramBadRequest as e:
++                        runtime_logger.warning("TelegramBadRequest notifying recipient %s: %s", recipient_id, e)
+                     except Exception as e:
+-                        print(f"Ошибка уведомления {recipient_id}: {e}")
++                        runtime_logger.warning("Ошибка уведомления %s: %s", recipient_id, e)
+                 tasks = [send_one_notification(n) for n in notifications]
+                 await asyncio.gather(*tasks)
+             await asyncio.sleep(25)
+@@ -10013,8 +10071,7 @@ async def reply_notifier_task():
+             print("ℹ️ Обработчик уведомлений об ответах остановлен.")
+             break
+         except Exception as e:
+-            import traceback
+-            print(f"⛔ ОШИБКА в reply_notifier_task: {e}\n{traceback.format_exc()}")
++            runtime_logger.exception("⛔ ОШИБКА в reply_notifier_task: %s", e)
+             await asyncio.sleep(15)
+ async def sync_boards_with_config():
+     """
+@@ -11578,7 +11635,26 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str
+             parse_mode="HTML"
+         )
+         delivered = True
+-    except Exception as e:
++    except TelegramForbiddenError:
++        runtime_logger.warning(f"Whisper send target {target_id} blocked bot on {board_id}")
++        try:
++            await purge_users_from_board_ram(board_id, [target_id])
++        except Exception:
++            pass
++        await message.answer("❌ Не удалось доставить шёпот (пользователь не запустил бота или заблокировал его).")
++    except TelegramRetryAfter as e:
++        delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
++        await asyncio.sleep(delay)
++        try:
++            await message.bot.send_message(
++                target_id, 
++                f"🤫 <b>Тебе анонимно шепчут в /{board_id}/:</b>\n<i>{escape_html(text)}</i>", 
++                parse_mode="HTML"
++            )
++            delivered = True
++        except Exception:
++            await message.answer("❌ Не удалось доставить шёпот.")
++    except (TelegramBadRequest, Exception) as e:
+         runtime_logger.error(f"Whisper send failed: {e}", exc_info=True)
+         await message.answer("❌ Не удалось доставить шёпот (пользователь не запустил бота или заблокировал его).")
+         
+@@ -11594,7 +11670,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str
+                     f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\nОт: <code>{sender_nick}</code>\nКому: <code>{target_nick}</code>\nТекст: <i>{escape_html(text)}</i>",
+                     parse_mode="HTML"
+                 )
+-            except Exception: pass
++            except (TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, Exception): pass
+ 
+ @dp.message(Command("redact"))
+ async def cmd_redact(message: types.Message, board_id: str | None, stream: str = 'ru'):
+@@ -12370,6 +12446,24 @@ async def _process_stacked_anime_command(
+                                 chat_id=message.chat.id,
+                                 media=media
+                             )
++                    except TelegramForbiddenError:
++                        runtime_logger.warning("TelegramForbiddenError sending event media group")
++                    except TelegramRetryAfter as e:
++                        delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
++                        await asyncio.sleep(delay)
++                        try:
++                            if len(media) == 1:
++                                item = media[0]
++                                if isinstance(item, InputMediaVideo):
++                                    await message.bot.send_video(chat_id=message.chat.id, video=item.media, supports_streaming=True)
++                                else:
++                                    await message.bot.send_photo(chat_id=message.chat.id, photo=item.media)
++                            else:
++                                await message.bot.send_media_group(chat_id=message.chat.id, media=media)
++                        except Exception as retry_err:
++                            runtime_logger.error(f"Failed retry sending event media group: {retry_err}")
++                    except TelegramBadRequest as e:
++                        runtime_logger.warning(f"TelegramBadRequest sending event media group: {e}")
+                     except Exception as e:
+                         runtime_logger.error(f"Failed to send event media group: {e}", exc_info=True)
+                 for gif_url in gif_urls:
+@@ -12378,6 +12472,17 @@ async def _process_stacked_anime_command(
+                             chat_id=message.chat.id,
+                             animation=gif_url
+                         )
++                    except TelegramForbiddenError:
++                        runtime_logger.warning(f"TelegramForbiddenError sending event GIF animation ({gif_url})")
++                    except TelegramRetryAfter as e:
++                        delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
++                        await asyncio.sleep(delay)
++                        try:
++                            await message.bot.send_animation(chat_id=message.chat.id, animation=gif_url)
++                        except Exception as retry_err:
++                            runtime_logger.error(f"Failed retry sending GIF animation ({gif_url}): {retry_err}")
++                    except TelegramBadRequest as e:
++                        runtime_logger.warning(f"TelegramBadRequest sending event GIF animation ({gif_url}): {e}")
+                     except Exception as e:
+                         runtime_logger.error(f"Failed to send event GIF animation ({gif_url}): {e}")
+     except ValueError as e:
+@@ -12969,9 +13074,24 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
+     if not post_num:
+         info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
+         if info: post_num = info[0]
+-    if post_num and post_num in messages_storage:
+-        post_data = messages_storage[post_num]
+-        reactions_data = post_data.get('reactions', {}).get('users', {})
++    if post_num:
++        if post_num not in messages_storage:
++            db_post = await get_post_by_num(post_num)
++            if db_post:
++                content_dict = db_post['content'] if isinstance(db_post['content'], dict) else {}
++                reactions_dict = content_dict.get('reactions', {'users': {}})
++                async with storage_lock:
++                    messages_storage[post_num] = {
++                        'author_id': db_post['author_id'],
++                        'timestamp': datetime.fromtimestamp(db_post['timestamp'], UTC) if isinstance(db_post['timestamp'], (int, float)) else db_post['timestamp'],
++                        'content': content_dict,
++                        'reactions': reactions_dict,
++                        'board_id': db_post['board_id'],
++                        'thread_id': db_post.get('thread_id')
++                    }
++        post_data = messages_storage.get(post_num, {})
++        reactions_obj = post_data.get('reactions') or post_data.get('content', {}).get('reactions') or {}
++        reactions_data = reactions_obj.get('users', {})
+     if not post_num:
+         if lang == 'en': err = "Post not found in DB."
+         elif lang == 'jp': err = "データベースに投稿が見つかりません。"
+@@ -13445,13 +13565,21 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
+     target_chat_id = msg.reply_to_message.chat.id
+     reply_mid = msg.reply_to_message.message_id
+     lookup_key = (target_chat_id, reply_mid)
+-    post_num = message_to_post.get(lookup_key)
+-    if post_num and post_num in messages_storage:
+-        return messages_storage[post_num].get("author_id")
++    async with storage_lock:
++        post_num = message_to_post.get(lookup_key)
++        if post_num and post_num in messages_storage:
++            return messages_storage[post_num].get("author_id")
++    if not post_num:
++        info = await get_post_info_by_copy(target_chat_id, reply_mid)
++        if info:
++            post_num = info[0]
++    if post_num:
++        db_post = await get_post_by_num(post_num)
++        if db_post and 'author_id' in db_post:
++            return db_post['author_id']
+     db_author_id = await get_post_author_by_copy(target_chat_id, reply_mid)
+     if db_author_id is not None:
+         return db_author_id
+-        
+     return None
+ @dp.message(Command("id"))
+ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str = 'ru'):
+@@ -14824,15 +14952,14 @@ async def _run_background_task(task_factory: Callable[[], Awaitable[Any]], task_
+     MAX_RESTART_DELAY = 600
+     current_delay = INITIAL_RESTART_DELAY
+     while True:
++        start_time = time.time()
+         try:
+             task_coro = task_factory()
+             await task_coro
+             if is_shutting_down or drain_shutdown_requested:
+                 print(f"ℹ️ Фоновая задача '{task_name}' завершилась при остановке.")
+                 break
+-            print(f"⚠️ Фоновая задача '{task_name}' неожиданно завершилась. Перезапуск через {current_delay} секунд...")
+-            await asyncio.sleep(current_delay)
+-            current_delay = min(current_delay * 2, MAX_RESTART_DELAY)
++            print(f"⚠️ Фоновая задача '{task_name}' неожиданно завершилась.")
+         except asyncio.CancelledError:
+             print(f"ℹ️ Фоновая задача '{task_name}' была отменена.")
+             break
+@@ -14844,10 +14971,15 @@ async def _run_background_task(task_factory: Callable[[], Awaitable[Any]], task_
+             print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА в фоновой задаче '{task_name}': {e}")
+             runtime_logger.exception("background_task_failed task=%s", task_name)
+             traceback.print_exc()
+-            print(f"🔁 Перезапуск задачи '{task_name}' через {current_delay} секунд...")
+-            await asyncio.sleep(current_delay)
++
++        if time.time() - start_time >= 120:
++            current_delay = INITIAL_RESTART_DELAY
++        else:
+             current_delay = min(current_delay * 2, MAX_RESTART_DELAY)
+ 
++        print(f"🔁 Перезапуск задачи '{task_name}' через {current_delay} секунд...")
++        await asyncio.sleep(current_delay)
++
+ async def periodic_board_summary():
+     """
+     Автоматическое саммари для борды /b/, которое вызывает ровно ту же логику,
+@@ -15135,36 +15267,65 @@ async def site_reaction_processor():
+             if reactions_to_process:
+                 print(f"⚙️ Обнаружено {len(reactions_to_process)} реакций с сайта. Обрабатываю...")
+                 for reaction_info in reactions_to_process:
+-                    user_id = reaction_info['user_id']
+-                    post_num = reaction_info['post_num']
+-                    emoji = reaction_info['emoji']
+-                    board_id, message_id = None, None
+-                    async with storage_lock:
+-                        post_data = messages_storage.get(post_num)
+-                        if not post_data: continue
++                    try:
++                        user_id = reaction_info['user_id']
++                        post_num = reaction_info['post_num']
++                        emoji = reaction_info['emoji']
++                        board_id, message_id = None, None
++                        async with storage_lock:
++                            post_data = messages_storage.get(post_num)
++                        if not post_data:
++                            db_post = await get_post_by_num(post_num)
++                            if db_post:
++                                content_dict = db_post['content'] if isinstance(db_post['content'], dict) else {}
++                                reactions_dict = content_dict.get('reactions', {'users': {}})
++                                async with storage_lock:
++                                    messages_storage[post_num] = {
++                                        'author_id': db_post['author_id'],
++                                        'timestamp': datetime.fromtimestamp(db_post['timestamp'], UTC) if isinstance(db_post['timestamp'], (int, float)) else db_post['timestamp'],
++                                        'content': content_dict,
++                                        'reactions': reactions_dict,
++                                        'board_id': db_post['board_id'],
++                                        'thread_id': db_post.get('thread_id')
++                                    }
++                                    post_data = messages_storage.get(post_num)
++                        if not post_data:
++                            continue
+                         board_id = post_data.get('board_id')
+-                        copies = post_to_messages.get(post_num, {})
+-                        user_copy = copies.get(user_id)
+-                        if isinstance(user_copy, list):
+-                            message_id = user_copy[0] if user_copy else None
+-                        else:
+-                            message_id = user_copy
+-                    if not board_id or not message_id:
+-                        continue
+-                    bot_for_reaction = GLOBAL_BOTS.get(board_id)
+-                    if not bot_for_reaction:
+-                        print(f"⛔ ОШИБКА: не найден бот для доски '{board_id}' при обработке реакции с сайта.")
+-                        continue
+-                    fake_reaction_update = types.MessageReactionUpdated(
+-                        chat=types.Chat(id=user_id, type='private'),
+-                        message_id=message_id,
+-                        user=types.User(id=user_id, is_bot=False, first_name="SiteUser"),
+-                        date=datetime.now(UTC),
+-                        old_reaction=[],
+-                        new_reaction=[types.ReactionTypeEmoji(type='emoji', emoji=emoji)]
+-                    )
+-                    await handle_message_reaction(fake_reaction_update, board_id=board_id, bot_instance=bot_for_reaction)
+-                    await asyncio.sleep(0.1)
++                        async with storage_lock:
++                            copies = post_to_messages.get(post_num, {})
++                            user_copy = copies.get(user_id)
++                            if isinstance(user_copy, list):
++                                message_id = user_copy[0] if user_copy else None
++                            else:
++                                message_id = user_copy
++                        if not message_id:
++                            db_copies = await get_post_copies(post_num)
++                            if db_copies:
++                                for uid, mid in db_copies:
++                                    if uid == user_id:
++                                        message_id = mid
++                                        break
++                                if not message_id and db_copies:
++                                    message_id = db_copies[0][1]
++                        if not board_id or not message_id:
++                            continue
++                        bot_for_reaction = GLOBAL_BOTS.get(board_id)
++                        if not bot_for_reaction:
++                            print(f"⛔ ОШИБКА: не найден бот для доски '{board_id}' при обработке реакции с сайта.")
++                            continue
++                        fake_reaction_update = types.MessageReactionUpdated(
++                            chat=types.Chat(id=user_id, type='private'),
++                            message_id=message_id,
++                            user=types.User(id=user_id, is_bot=False, first_name="SiteUser"),
++                            date=datetime.now(UTC),
++                            old_reaction=[],
++                            new_reaction=[types.ReactionTypeEmoji(type='emoji', emoji=emoji)]
++                        )
++                        await handle_message_reaction(fake_reaction_update, board_id=board_id, bot_instance=bot_for_reaction)
++                        await asyncio.sleep(0.1)
++                    except Exception as item_err:
++                        print(f"❌ Ошибка при обработке реакции с сайта ({reaction_info}): {item_err}")
+             await asyncio.sleep(3)
+         except asyncio.CancelledError:
+             print("ℹ️ Обработчик реакций с сайта остановлен.")

@@ -314,7 +314,7 @@ async def _process_single_task(task):
         finally:
             if os.path.exists(lpath):
                 try: os.remove(lpath)
-                except: pass
+                except Exception: pass
             
         if success_link:
             await add_file_mirror(file_id, mirror_type, success_link)
@@ -336,7 +336,7 @@ async def process_mirror_queue():
 
     async def runner(task):
         async with SEM:
-            await asyncio.create_task(_process_single_task(task))
+            await _process_single_task(task)
 
     try:
         while True:

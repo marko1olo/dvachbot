@@ -1,0 +1,54 @@
+diff --git a/post_helpers.py b/post_helpers.py
+index b8490082..8060ae16 100644
+--- a/post_helpers.py
++++ b/post_helpers.py
+@@ -19,6 +19,49 @@ try:
+     import ujson as json
+ except ImportError:
+     import json
++def _normalize_quote_file_type(raw_type: str | None) -> str:
++    if not raw_type: return 'file'
++    kind = str(raw_type).lower().strip()
++    if kind in {'photo', 'image', 'picture'}: return 'photo'
++    if kind in {'video', 'mp4', 'mov'}: return 'video'
++    if kind in {'sticker'}: return 'sticker'
++    if kind in {'voice', 'audio'}: return 'voice'
++    if kind in {'video_note'}: return 'video_note'
++    if kind in {'animation', 'gif'}: return 'animation'
++    return 'file'
++
++def _quote_info_from_content(replied_content: dict | None) -> dict | None:
++    if not isinstance(replied_content, dict):
++        return None
++    quote_text = replied_content.get('text') or replied_content.get('caption') or ''
++    files = []
++    content_type = _normalize_quote_file_type(replied_content.get('type'))
++    media_items = replied_content.get('media')
++    if isinstance(media_items, list):
++        for item in media_items:
++            if isinstance(item, dict):
++                files.append({'type': _normalize_quote_file_type(item.get('type'))})
++            else:
++                files.append({'type': 'file'})
++    elif media_items:
++        files.append({'type': content_type})
++    file_items = replied_content.get('files')
++    if isinstance(file_items, list):
++        for item in file_items:
++            if isinstance(item, dict):
++                files.append({'type': _normalize_quote_file_type(item.get('type'))})
++            else:
++                files.append({'type': 'file'})
++    if replied_content.get('file_id') or replied_content.get('image_bytes') or replied_content.get('image_url'):
++        files.append({'type': content_type})
++    if content_type in {'sticker', 'video_note', 'voice'} and not files:
++        files.append({'type': content_type})
++    if replied_content.get('poll_data'):
++        files.append({'type': 'poll'})
++    return {
++        'quote_text': quote_text,
++        'files': files
++    }
+ import logging
+ import os
+ import shutil

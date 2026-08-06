@@ -1,0 +1,41 @@
+diff --git a/post_processor.py b/post_processor.py
+index 200410d9..1ce4ecea 100644
+--- a/post_processor.py
++++ b/post_processor.py
+@@ -413,16 +413,31 @@ class NewPostProcessor:
+             if not await self._create_post_record(now_dt):
+                 return None
+ 
+-            await self._format_and_update_headers()
+-            await self._send_to_author_with_fallback()
+-            await self._save_to_memory(now_dt)
+-            await self._enqueue_and_notify()
++            try:
++                await self._format_and_update_headers()
++            except Exception as e:
++                print(f"⚠️ Ошибка при форматировании заголовков для поста #{self.current_post_num}: {e}")
++
++            try:
++                await self._send_to_author_with_fallback()
++            except Exception as e:
++                print(f"⚠️ Ошибка при отправке подтверждения автору поста #{self.current_post_num}: {e}")
++
++            try:
++                await self._save_to_memory(now_dt)
++            except Exception as e:
++                print(f"⚠️ Ошибка при сохранении в память поста #{self.current_post_num}: {e}")
++
++            try:
++                await self._enqueue_and_notify()
++            except Exception as e:
++                print(f"⚠️ Ошибка при добавлении в очередь поста #{self.current_post_num}: {e}")
+ 
+             return self.current_post_num
+         except Exception as e:
+             import traceback
+             print(f"🔥🔥🔥 ФАТАЛЬНАЯ ОШИБКА в process_new_post для user {self.user_id}: {e}\n{traceback.format_exc()}")
+-            return None
++            return self.current_post_num if getattr(self, 'current_post_num', None) else None
+ 
+ 
+ def mark_weekly_active_delivery_user(board_id: str, user_id: int):

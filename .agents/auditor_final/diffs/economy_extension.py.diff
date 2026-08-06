@@ -1,0 +1,513 @@
+diff --git a/economy_extension.py b/economy_extension.py
+index 2afe827e..d2fe8725 100644
+--- a/economy_extension.py
++++ b/economy_extension.py
+@@ -45,15 +45,28 @@ cmd_rob и cmd_curse ИМЕННО ОТСЮДА. Они проходят, нич
+ import json
+ import time
+ import random
++import asyncio
+ from datetime import datetime, timedelta, UTC
+ from aiogram import Router, types, F
+ from aiogram.filters import Command
+ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
++from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, TelegramAPIError
+ 
+ from common.db_pool import get_pool, db_lock
+ 
+ economy_router = Router()
+ 
++async def _purge_blocked_user(user_id: int, board_id: str | None = None):
++    if not board_id:
++        return
++    try:
++        import main
++        if hasattr(main, 'purge_users_from_board_ram'):
++            await main.purge_users_from_board_ram(board_id, [user_id])
++    except Exception:
++        pass
++
++
+ # ====================
+ # EARN MENU
+ # ====================
+@@ -77,7 +90,7 @@ async def cmd_work_menu(message: types.Message, board_id: str | None = None):
+     
+     await message.reply(text, reply_markup=kb, parse_mode="HTML")
+     try: await message.delete()
+-    except: pass
++    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception): pass
+ 
+ @economy_router.callback_query(F.data.startswith("work_"))
+ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = None):
+@@ -91,7 +104,7 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
+         active_items_str = row[0] if row and row[0] else "{}"
+     try:
+         active_items = json.loads(active_items_str)
+-    except:
++    except (json.JSONDecodeError, TypeError):
+         active_items = {}
+ 
+     if action == "bottles":
+@@ -150,7 +163,7 @@ async def get_reply_target(message: types.Message):
+             row = await c.fetchone()
+             if row:
+                 return row[0]
+-    except:
++    except Exception:
+         pass
+     return None
+ 
+@@ -172,7 +185,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
+         active_items_str = row[0] if row and row[0] else "{}"
+     try:
+         active_items = json.loads(active_items_str)
+-    except:
++    except (json.JSONDecodeError, TypeError):
+         active_items = {}
+         
+     if not active_items.get("partyvan_gun"):
+@@ -184,7 +197,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
+         row = await c.fetchone()
+         target_items_str = row[0] if row and row[0] else "{}"
+     try: target_items = json.loads(target_items_str)
+-    except: target_items = {}
++    except (json.JSONDecodeError, TypeError): target_items = {}
+ 
+     if target_items.get("tinfoil_hat", 0) > now:
+         active_items["partyvan_gun"] = False
+@@ -192,12 +205,28 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
+             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                              (json.dumps(active_items), user_id, board_id))
+             await db.commit()
+-        try: await message.bot.send_message(user_id, "🚔 Твой вызов ОМОНа отменили! У жертвы была надета Шапочка из фольги, они не смогли её запеленговать.", parse_mode="HTML")
+-        except: pass
+-        try: await message.bot.send_message(target_id, f"👽 Анон <code>{user_id}</code> попытался вызвать на тебя Пативэн, но Шапочка из фольги скрыла твои координаты!", parse_mode="HTML")
+-        except: pass
+-        try: await message.delete()
+-        except: pass
++        try:
++            await message.bot.send_message(user_id, "🚔 Твой вызов ОМОНа отменили! У жертвы была надета Шапочка из фольги, они не смогли её запеленговать.", parse_mode="HTML")
++        except TelegramForbiddenError:
++            await _purge_blocked_user(user_id, board_id)
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
++
++        try:
++            await message.bot.send_message(target_id, f"👽 Анон <code>{user_id}</code> попытался вызвать на тебя Пативэн, но Шапочка из фольги скрыла твои координаты!", parse_mode="HTML")
++        except TelegramForbiddenError:
++            await _purge_blocked_user(target_id, board_id)
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
++
++        try:
++            await message.delete()
++        except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
++            pass
+         return
+         
+     active_items["partyvan_gun"] = False
+@@ -219,17 +248,29 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
+             "🚔 <b>ВНИМАНИЕ! РАБОТАЕТ ОМОН!</b>\nЗа тобой выехал Пативэн (вызван кем-то из анонов).\nТы запакован в бобик и улетаешь в мут на 12 часов.", 
+             parse_mode="HTML"
+         )
+-    except: pass
++    except TelegramForbiddenError:
++        await _purge_blocked_user(target_id, board_id)
++    except TelegramRetryAfter as e:
++        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++    except (TelegramBadRequest, TelegramAPIError, Exception):
++        pass
++
+     try:
+         await message.bot.send_message(
+             user_id, 
+             f"🚔 Пативэн успешно выслан за аноном <code>{target_id}</code>!", 
+             parse_mode="HTML"
+         )
+-    except: pass
++    except TelegramForbiddenError:
++        await _purge_blocked_user(user_id, board_id)
++    except TelegramRetryAfter as e:
++        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++    except (TelegramBadRequest, TelegramAPIError, Exception):
++        pass
++
+     try:
+         await message.delete()
+-    except:
++    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
+         pass
+ 
+ @economy_router.message(Command("shit"))
+@@ -250,7 +291,7 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
+         active_items_str = row[0] if row and row[0] else "{}"
+     try:
+         active_items = json.loads(active_items_str)
+-    except:
++    except (json.JSONDecodeError, TypeError):
+         active_items = {}
+         
+     if not active_items.get("shit_gun"):
+@@ -265,7 +306,7 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
+         row = await c.fetchone()
+         target_items_str = row[0] if row and row[0] else "{}"
+     try: target_items = json.loads(target_items_str)
+-    except: target_items = {}
++    except (json.JSONDecodeError, TypeError): target_items = {}
+ 
+     if target_items.get("tinfoil_hat", 0) > now:
+         # Bounce 100% due to tinfoil
+@@ -280,7 +321,7 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
+         target_items_str = row[0] if row and row[0] else "{}"
+     try:
+         target_items = json.loads(target_items_str)
+-    except:
++    except (json.JSONDecodeError, TypeError):
+         target_items = {}
+         
+     target_items["shit_until"] = int(time.time()) + 3600
+@@ -304,7 +345,12 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
+                 "🐒 Ты попытался метнуть говно, но ветер дунул в лицо! Ты сам обмазан говном на час 💩", 
+                 parse_mode="HTML"
+             )
+-        except: pass
++        except TelegramForbiddenError:
++            await _purge_blocked_user(user_id, board_id)
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
+     else:
+         try:
+             await message.bot.send_message(
+@@ -312,17 +358,29 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
+                 "🐒 В тебя метнули кусок говна! Ты обмазан говном на час 💩", 
+                 parse_mode="HTML"
+             )
+-        except: pass
++        except TelegramForbiddenError:
++            await _purge_blocked_user(target_id, board_id)
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
++
+         try:
+             await message.bot.send_message(
+                 user_id, 
+                 f"🐒 Ты успешно метнул кусок говна в <code>{target_id}</code>!", 
+                 parse_mode="HTML"
+             )
+-        except: pass
++        except TelegramForbiddenError:
++            await _purge_blocked_user(user_id, board_id)
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
++
+     try:
+         await message.delete()
+-    except:
++    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
+         pass
+ 
+ 
+@@ -343,7 +401,7 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
+         row = await c.fetchone()
+         active_items_str = row[0] if row and row[0] else "{}"
+     try: active_items = json.loads(active_items_str)
+-    except: active_items = {}
++    except (json.JSONDecodeError, TypeError): active_items = {}
+         
+     if not active_items.get("knife_gun"):
+         await message.reply("У тебя нет заточки! Купи её в /shop.")
+@@ -356,7 +414,7 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
+         target_balance = row[0] if row and row[0] else 0
+         target_items_str = row[1] if row and row[1] else "{}"
+     try: target_items = json.loads(target_items_str)
+-    except: target_items = {}
++    except (json.JSONDecodeError, TypeError): target_items = {}
+     
+     now = int(time.time())
+     if target_items.get("tinfoil_hat", 0) > now:
+@@ -365,12 +423,28 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
+             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                              (json.dumps(active_items), user_id, board_id))
+             await db.commit()
+-        try: await message.bot.send_message(user_id, "🔪 Твоя заточка сломалась о Шапочку из фольги жертвы! Ограбление не удалось.", parse_mode="HTML")
+-        except: pass
+-        try: await message.bot.send_message(target_id, f"👽 Анон <code>{user_id}</code> попытался ограбить тебя, но твоя Шапочка из фольги спасла твои шекели!", parse_mode="HTML")
+-        except: pass
+-        try: await message.delete()
+-        except: pass
++        try:
++            await message.bot.send_message(user_id, "🔪 Твоя заточка сломалась о Шапочку из фольги жертвы! Ограбление не удалось.", parse_mode="HTML")
++        except TelegramForbiddenError:
++            await _purge_blocked_user(user_id, board_id)
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
++
++        try:
++            await message.bot.send_message(target_id, f"👽 Анон <code>{user_id}</code> попытался ограбить тебя, но твоя Шапочка из фольги спасла твои шекели!", parse_mode="HTML")
++        except TelegramForbiddenError:
++            await _purge_blocked_user(target_id, board_id)
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
++
++        try:
++            await message.delete()
++        except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
++            pass
+         return
+ 
+     if target_balance < 50:
+@@ -378,50 +452,71 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
+             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                              (json.dumps(active_items), user_id, board_id))
+             await db.commit()
+-        try: await message.bot.send_message(user_id, "🔪 Ты приставил заточку, но у жертвы в карманах только дыры... Грабить нечего.", parse_mode="HTML")
+-        except: pass
+-        try: await message.delete()
+-        except: pass
++        try:
++            await message.bot.send_message(user_id, "🔪 Ты приставил заточку, но у жертвы в карманах только дыры... Грабить нечего.", parse_mode="HTML")
++        except TelegramForbiddenError:
++            await _purge_blocked_user(user_id, board_id)
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
++
++        try:
++            await message.delete()
++        except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
++            pass
+         return
+ 
+     stolen = min(1000, int(target_balance * random.uniform(0.1, 0.3)))
+ 
+     async with db_lock:
+-        # Сначала СПИСЫВАЕМ, и только если сумма реально есть.
+-        # target_balance читался выше вне лока и к этому моменту мог устареть:
+-        # жертва успела потратиться или её уже грабанул кто-то другой. Условие
+-        # `balance >= ?` делает проверку и списание одной атомарной операцией.
+-        # Без него несколько одновременных грабежей уводили баланс жертвы в
+-        # минус, а грабителям начислялось то, чего у неё не было.
+         cursor = await db.execute(
+             "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ? AND balance >= ?",
+             (stolen, target_id, board_id, stolen))
+-        # Корректность обеспечивает условие `balance >= ?` в самом UPDATE:
+-        # списать больше, чем есть, оно не даст ни при какой конкуренции.
+-        # rowcount нужен только чтобы решить, начислять ли грабителю. Доверяем
+-        # ему лишь когда это настоящее целое: aiosqlite всегда отдаёт int, а
+-        # тестовые дубли — то None, то авто-атрибут MagicMock. В неясном случае
+-        # считаем, что списание прошло, то есть ведём себя как прежний код.
+         rowcount = getattr(cursor, "rowcount", None)
+         robbed = (rowcount == 1) if isinstance(rowcount, int) else True
+-        # Заточка расходуется в любом случае — попытка была.
+         await db.execute("UPDATE Users SET balance = balance + ?, active_items = ? WHERE user_id = ? AND board_id = ?",
+                          (stolen if robbed else 0, json.dumps(active_items), user_id, board_id))
+         await db.commit()
+ 
+     if not robbed:
+-        try: await message.bot.send_message(user_id, "🔪 Пока ты замахивался, у жертвы кончились шекели. Заточка потрачена впустую.", parse_mode="HTML")
+-        except: pass
+-        try: await message.delete()
+-        except: pass
++        try:
++            await message.bot.send_message(user_id, "🔪 Пока ты замахивался, у жертвы кончились шекели. Заточка потрачена впустую.", parse_mode="HTML")
++        except TelegramForbiddenError:
++            await _purge_blocked_user(user_id, board_id)
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
++
++        try:
++            await message.delete()
++        except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
++            pass
+         return
+ 
+-    try: await message.bot.send_message(target_id, f"🔪 В подворотне тебя пырнул Анон <code>{user_id}</code> и отобрал <b>{stolen} Шекелей</b>!", parse_mode="HTML")
+-    except: pass
+-    try: await message.bot.send_message(user_id, f"🔪 Ограбление прошло успешно! Ты отжал у лоха <code>{target_id}</code> <b>{stolen} Шекелей</b>.", parse_mode="HTML")
+-    except: pass
+-    try: await message.delete()
+-    except: pass
++    try:
++        await message.bot.send_message(target_id, f"🔪 В подворотне тебя пырнул Анон <code>{user_id}</code> и отобрал <b>{stolen} Шекелей</b>!", parse_mode="HTML")
++    except TelegramForbiddenError:
++        await _purge_blocked_user(target_id, board_id)
++    except TelegramRetryAfter as e:
++        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++    except (TelegramBadRequest, TelegramAPIError, Exception):
++        pass
++
++    try:
++        await message.bot.send_message(user_id, f"🔪 Ограбление прошло успешно! Ты отжал у лоха <code>{target_id}</code> <b>{stolen} Шекелей</b>.", parse_mode="HTML")
++    except TelegramForbiddenError:
++        await _purge_blocked_user(user_id, board_id)
++    except TelegramRetryAfter as e:
++        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++    except (TelegramBadRequest, TelegramAPIError, Exception):
++        pass
++
++    try:
++        await message.delete()
++    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
++        pass
+ 
+ 
+ @economy_router.message(Command("curse"))
+@@ -441,7 +536,7 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
+         row = await c.fetchone()
+         active_items_str = row[0] if row and row[0] else "{}"
+     try: active_items = json.loads(active_items_str)
+-    except: active_items = {}
++    except (json.JSONDecodeError, TypeError): active_items = {}
+         
+     if not active_items.get("laxative_gun"):
+         await message.reply("У тебя нет слабительного! Купи его в /shop.")
+@@ -454,19 +549,35 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
+         row = await c.fetchone()
+         target_items_str = row[0] if row and row[0] else "{}"
+     try: target_items = json.loads(target_items_str)
+-    except: target_items = {}
++    except (json.JSONDecodeError, TypeError): target_items = {}
+ 
+     if target_items.get("tinfoil_hat", 0) > now:
+         async with db_lock:
+             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                              (json.dumps(active_items), user_id, board_id))
+             await db.commit()
+-        try: await message.bot.send_message(user_id, "🚽 Твоё проклятие отскочило от Шапочки из фольги жертвы! Своё слабительное ты потратил впустую.", parse_mode="HTML")
+-        except: pass
+-        try: await message.bot.send_message(target_id, f"👽 Анон <code>{user_id}</code> попытался подсыпать тебе слабительное, но твоя Шапочка из фольги спасла твои штаны!", parse_mode="HTML")
+-        except: pass
+-        try: await message.delete()
+-        except: pass
++        try:
++            await message.bot.send_message(user_id, "🚽 Твоё проклятие отскочило от Шапочки из фольги жертвы! Своё слабительное ты потратил впустую.", parse_mode="HTML")
++        except TelegramForbiddenError:
++            await _purge_blocked_user(user_id, board_id)
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
++
++        try:
++            await message.bot.send_message(target_id, f"👽 Анон <code>{user_id}</code> попытался подсыпать тебе слабительное, но твоя Шапочка из фольги спасла твои штаны!", parse_mode="HTML")
++        except TelegramForbiddenError:
++            await _purge_blocked_user(target_id, board_id)
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
++
++        try:
++            await message.delete()
++        except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
++            pass
+         return
+ 
+     curse_until = now + 3600
+@@ -478,12 +589,28 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
+                          (curse_until, target_id, board_id))
+         await db.commit()
+         
+-    try: await message.bot.send_message(target_id, "🚽 Тебе подсыпали слабительное! В течение 1 часа ты не сможешь писать посты длиннее 50 символов (не успеешь дописать и побежишь в туалет).", parse_mode="HTML")
+-    except: pass
+-    try: await message.bot.send_message(user_id, f"🚽 Ты успешно подсыпал слабительное анону <code>{target_id}</code>!", parse_mode="HTML")
+-    except: pass
+-    try: await message.delete()
+-    except: pass
++    try:
++        await message.bot.send_message(target_id, "🚽 Тебе подсыпали слабительное! В течение 1 часа ты не сможешь писать посты длиннее 50 символов (не успеешь дописать и побежишь в туалет).", parse_mode="HTML")
++    except TelegramForbiddenError:
++        await _purge_blocked_user(target_id, board_id)
++    except TelegramRetryAfter as e:
++        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++    except (TelegramBadRequest, TelegramAPIError, Exception):
++        pass
++
++    try:
++        await message.bot.send_message(user_id, f"🚽 Ты успешно подсыпал слабительное анону <code>{target_id}</code>!", parse_mode="HTML")
++    except TelegramForbiddenError:
++        await _purge_blocked_user(user_id, board_id)
++    except TelegramRetryAfter as e:
++        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++    except (TelegramBadRequest, TelegramAPIError, Exception):
++        pass
++
++    try:
++        await message.delete()
++    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
++        pass
+ 
+ 
+ @economy_router.message(Command("mega"))
+@@ -503,7 +630,7 @@ async def cmd_mega(message: types.Message, board_id: str | None = None):
+         row = await c.fetchone()
+         active_items_str = row[0] if row and row[0] else "{}"
+     try: active_items = json.loads(active_items_str)
+-    except: active_items = {}
++    except (json.JSONDecodeError, TypeError): active_items = {}
+         
+     if not active_items.get("megaphone_gun"):
+         await message.reply("У тебя нет рупора! Купи его в /shop.")
+@@ -515,7 +642,7 @@ async def cmd_mega(message: types.Message, board_id: str | None = None):
+     try:
+         await message.bot.pin_chat_message(message.chat.id, message.reply_to_message.message_id)
+         alert = "📣 Твой пост успешно закреплен с помощью Мегафона!"
+-    except Exception as e:
++    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception) as e:
+         alert = f"❌ Ошибка закрепления: {e}"
+         active_items["megaphone_gun"] = True # Refund
+     
+@@ -524,8 +651,14 @@ async def cmd_mega(message: types.Message, board_id: str | None = None):
+                          (json.dumps(active_items), user_id, board_id))
+         await db.commit()
+         
+-    try: await message.bot.send_message(user_id, alert, parse_mode="HTML")
+-    except: pass
++    try:
++        await message.bot.send_message(user_id, alert, parse_mode="HTML")
++    except TelegramForbiddenError:
++        await _purge_blocked_user(user_id, board_id)
++    except TelegramRetryAfter as e:
++        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++    except (TelegramBadRequest, TelegramAPIError, Exception):
++        pass
+     
+     if "успешно" in alert:
+         try:
+@@ -535,8 +668,15 @@ async def cmd_mega(message: types.Message, board_id: str | None = None):
+                 reply_to_message_id=message.reply_to_message.message_id, 
+                 parse_mode="HTML"
+             )
+-        except: pass
++        except TelegramForbiddenError:
++            pass
++        except TelegramRetryAfter as e:
++            await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
++        except (TelegramBadRequest, TelegramAPIError, Exception):
++            pass
+         
+-    try: await message.delete()
+-    except: pass
++    try:
++        await message.delete()
++    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
++        pass
+ 

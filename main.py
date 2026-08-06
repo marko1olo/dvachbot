@@ -266,6 +266,12 @@ ANIME_COMMAND_MAP = {
     "LOLI": get_loli_image,
     "LOLICON": get_loli_image,
     "LOLIS": get_loli_image,
+    "lol1": get_loli_image,
+    "lolico": get_loli_image,
+    "Lol1": get_loli_image,
+    "Lolico": get_loli_image,
+    "LOL1": get_loli_image,
+    "LOLICO": get_loli_image,
 }
 from common.text_utils import clean_html_tags, sanitize_html, RE_YOU_PATTERN, unwrap_tg_emoji, clean_html_for_tg
 RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
@@ -448,8 +454,7 @@ def _enable_fatal_crash_dump() -> None:
 
 _enable_fatal_crash_dump()
 REALTIME_ARCHIVE_CHANNEL_ID = MIRROR_CHANNELS[0] if MIRROR_CHANNELS else 0
-BEST_CHANNEL_ID = -1001234567890  # ЗАМЕНИ НА СВОЙ ID
-LIKES_THRESHOLD = 3 # Сколько лайков нужно для репоста
+# BEST_CHANNEL_ID, LIKES_THRESHOLD are canonical in shared_state.py
 THREAD_NOTIFY_THRESHOLD = 30 # Порог постов для отправки уведомления об активности
 last_checked_post_counter_for_notify = 0 # Глобальный счетчик для уведомителя
 THREAD_BUMP_LIMIT_WARNING_THRESHOLD = 40 # За сколько постов до лимита слать уведомление
@@ -460,7 +465,7 @@ MAX_ACTIVE_THREADS = 100 # Макс. активных тредов на доск
 MAX_POSTS_PER_THREAD = 500 # Макс. постов в треде до архивации
 THREAD_CREATE_COOLDOWN_USER = 1800  # 30 минут в секундах
 THREAD_HISTORY_COOLDOWN = 60 # 1 минут в секундах
-OP_COMMAND_COOLDOWN = 60 # 1 минута кулдауна для команд модерации ОПа в треде
+# OP_COMMAND_COOLDOWN is canonical in shared_state.py
 LOCATION_SWITCH_COOLDOWN = 5 # 5 секунд на смену локации (вход/выход)
 SUMMARIZE_COOLDOWN = 600
 ROAST_COOLDOWN = 300
@@ -498,7 +503,7 @@ def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
 DB_POST_LIMIT = CONFIG_DB_POST_LIMIT  # Максимальное количество постов, которое будет храниться в БД
 DB_CLEANUP_INTERVAL = timedelta(hours=2) # Как часто проводить очистку БД
 MEMORY_LIMIT_GB = 3.2
-QUICK_QUOTE_POST_DISTANCE = 330
+# QUICK_QUOTE_POST_DISTANCE is canonical in shared_state.py
 class ThreadCreateStates(StatesGroup):
     waiting_for_op_post = State()      # Состояние ожидания текста ОП-поста
     waiting_for_confirmation = State() # Состояние ожидания подтверждения создания
@@ -519,28 +524,15 @@ generate_locks = defaultdict(LazyLock)
 graph_stats = {}  # Для хранения статистики по часам для графика
 delivery_metrics = defaultdict(lambda: deque(maxlen=100))
 recent_messages_cache = deque(maxlen=200)
-MODE_FLAGS = [
-    'anime_mode', 'zaputin_mode', 'slavaukraine_mode', 'suka_blyat_mode',
-    'polish_mode', 'warhammer_mode', 'imperial_mode', 'gopnik_mode', 'schizo_mode',
-    'matrix_mode', 'america_mode', 'holiday_mode', 'oldweb_mode', 'jewish_mode',
-]
-AUTHOR_NOTIFY_LIMIT_PER_MINUTE = 4
+# MODE_FLAGS, AUTHOR_NOTIFY_LIMIT_PER_MINUTE are canonical in shared_state.py
 user_hourly_image_count = defaultdict(int)
 user_hourly_image_reset = defaultdict(float)
 HOURLY_IMAGE_LIMIT = 110
 MODE_COOLDOWN = 3600  # 1 час в секундах
-ANIME_CMD_COOLDOWN = 25 # 25 секунд
-anime_cmd_lock = LazyLock()
-info_cmd_lock = LazyLock() # Кулдаун для команд /stats, /active
-shadow_fake_post_counters = defaultdict(int)
-last_messages = deque(maxlen=3) # Используется для генерации сообщений, можно оставить общим
+# ANIME_CMD_COOLDOWN, anime_cmd_lock, info_cmd_lock, shadow_fake_post_counters,
+# last_messages, sent_media_groups, media_group_creation_lock, deanon_lock, roulette_lock
+# are canonical in shared_state.py and imported via 'from shared_state import *' above.
 last_activity_time = datetime.now()
-sent_media_groups = deque(maxlen=1000)
-media_group_creation_lock = LazyLock()
-
-# NOTE: _iter_message_ids_for_copy, _drop_post_copy_maps_unlocked,
-# and _media_group_state_key are canonical in shared_state.py
-# and imported via 'from shared_state import *' above.
 
 def _media_group_state_key(chat_id: int | str, media_group_id: str) -> str:
     return f"{chat_id}:{media_group_id}"
@@ -548,11 +540,8 @@ def _media_group_state_key(chat_id: int | str, media_group_id: str) -> str:
 unknown_command_tracker = defaultdict(list)
 cross_board_spam_tracker = defaultdict(lambda: deque(maxlen=3))
 os.environ["AIORGRAM_DISABLE_SIGNAL_HANDLERS"] = "1"
-DEANON_COOLDOWN = 180  # 3 минуты
+# DEANON_COOLDOWN is canonical in shared_state.py
 last_deanon_time = 0
-deanon_lock = LazyLock()
-ROULETTE_EVENTS = [] # Будет хранить все события из рулеток
-roulette_lock = LazyLock()
 POLL_VOTE_COOLDOWN = 2  # Секунды
 last_poll_creation_time = defaultdict(float)
 last_poll_vote_time = defaultdict(float) # Новая переменная для кулдауна голосования
@@ -802,8 +791,7 @@ ANIME_URL_FETCH_PARALLEL = max(1, int(BOT_ANIME_URL_FETCH_PARALLEL))
 ANIME_DOWNLOAD_TIMEOUT_SEC = max(5.0, float(BOT_ANIME_DOWNLOAD_TIMEOUT_SEC))
 ANIME_DOWNLOAD_TOTAL_SEC = max(ANIME_DOWNLOAD_TIMEOUT_SEC, float(BOT_ANIME_DOWNLOAD_TOTAL_SEC))
 ANIME_DOWNLOAD_PARALLEL = max(1, int(BOT_ANIME_DOWNLOAD_PARALLEL))
-ANIME_REFILL_ROUNDS = max(0, int(BOT_ANIME_REFILL_ROUNDS))
-anime_media_gate = asyncio.Semaphore(ANIME_MEDIA_CONCURRENCY)
+# anime_media_gate, POSITIVE_REACTIONS, etc. are canonical in shared_state.py
 MODE_PUNCHUP_ENABLED = BOT_MODE_PUNCHUP_ENABLED
 MODE_PUNCHUP_QUEUE_SHED_SEC = max(0.0, BOT_MODE_PUNCHUP_QUEUE_SHED_SEC)
 MODE_PUNCHUP_SLOW_LOG_US = max(0, BOT_MODE_PUNCHUP_SLOW_LOG_US)
@@ -821,17 +809,6 @@ CONTEXTUAL_REPLY_COOLDOWN_SEC = max(0.0, float(BOT_CONTEXTUAL_REPLY_COOLDOWN_SEC
 CONTEXTUAL_REPLY_DAILY_LIMIT = max(0, int(BOT_CONTEXTUAL_REPLY_DAILY_LIMIT))
 contextual_reply_tracker = defaultdict(lambda: {"last": 0.0, "window_start": 0.0, "count": 0})
 contextual_reply_stats = defaultdict(int)
-POSITIVE_REACTIONS = {'👍', '❤', '🔥', '❤‍🔥', '😍', '👌', '💯', '🙏', '🎉', '❤️', '♥️', '🥰', '🤩'}
-LAUGHING_REACTIONS = {'😂', '🤣', '😁', '😄', '😆'}
-NEGATIVE_REACTIONS = {'👎', '💩', '🤮', '🤢', '😡', '🤬', '🖕'}
-CLOWN_REACTION = {'🤡'}
-THINKING_REACTIONS = {'🤔', '🧐', '🤨'}
-SHOCK_REACTIONS = {'🤯', '😱', '😮', '😯', '😲'}
-SAD_REACTIONS = {'😢', '😭', '💔'}
-POLITICAL_REACTIONS = {'🇷🇺', '🇺🇦'}
-SYMBOLIC_REACTIONS = {'🏴‍☠️', '♂️'}
-INSULT_REACTIONS = {'🐓', '🐖'}
-MAT_WORDS = ["сука", "блядь", "пиздец", "ебать", "нах", "пизда", "хуйня", "ебал", "блять", "отъебись", "ебаный", "еблан", "ХУЙ", "ПИЗДА", "хуйло", "долбаёб", "пидорас"]
 MSK = timezone(timedelta(hours=3))
 def _safe_len(value) -> int:
 
@@ -2450,7 +2427,7 @@ def _clean_posts_from_caches(posts_to_delete_nums: list[int]):
         for b in list(_THREAD_CACHE.keys()):
             if post_id_str in _THREAD_CACHE[b]:
                 try: _THREAD_CACHE[b].remove(post_id_str)
-                except: pass
+                except Exception: pass
         for b in list(_VIDEO_CACHE.keys()):
             _VIDEO_CACHE[b] = [item for item in _VIDEO_CACHE[b] if item[0] != post_id_int]
         for b in list(_IMAGE_CACHE.keys()):
@@ -3061,13 +3038,17 @@ def _format_reply_line(content: dict, user_id_for_context: int, reply_to_post_au
 
 def _format_reactions_block(post_data: dict) -> str | None:
     reactions_data = post_data.get('reactions')
+    if not reactions_data and isinstance(post_data.get('content'), dict):
+        reactions_data = post_data['content'].get('reactions')
     if not reactions_data:
         return None
-    reaction_lines =[]
+    reaction_lines = []
     user_reactions = reactions_data.get('users', {})
-    if isinstance(user_reactions, dict):
-        all_emojis =[emoji for user_emojis in user_reactions.values() for emoji in user_emojis]
-        categories =[
+    if isinstance(user_reactions, dict) and user_reactions:
+        all_emojis = [emoji for user_emojis in user_reactions.values() for emoji in user_emojis if isinstance(user_emojis, (list, set))]
+        if not all_emojis:
+            return None
+        categories = [
             POSITIVE_REACTIONS, LAUGHING_REACTIONS, THINKING_REACTIONS,
             SHOCK_REACTIONS, SAD_REACTIONS, NEGATIVE_REACTIONS, CLOWN_REACTION,
             POLITICAL_REACTIONS, SYMBOLIC_REACTIONS, INSULT_REACTIONS
@@ -3547,7 +3528,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     import random
     try:
         active_items = json.loads(active_items_str)
-    except:
+    except Exception:
         active_items = {}
     msg = ""
     # 0. Janitor Ticket
@@ -3697,7 +3678,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     text = callback.message.html_text.replace(f"{int(balance)}.00", f"{int(new_bal)}.00")
     try:
         await callback.message.edit_text(text, reply_markup=callback.message.reply_markup, parse_mode="HTML")
-    except:
+    except Exception:
         pass
 
 @dataclass
@@ -3757,11 +3738,15 @@ async def _handle_shoot_bounce(ctx: ShootContext):
             "Ты в муте на 1 час.",
             parse_mode="HTML"
         )
-    except:
+    except TelegramForbiddenError:
+        await purge_users_from_board_ram(ctx.board_id, [ctx.user_id])
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
+    except (TelegramBadRequest, TelegramAPIError, Exception):
         pass
     try:
         await ctx.message.delete()
-    except:
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
         pass
 
 async def _handle_shoot_success(ctx: ShootContext):
@@ -3794,11 +3779,15 @@ async def _handle_shoot_success(ctx: ShootContext):
             "Защититься от будущих выстрелов можно купив Зеркальный Щит в /shop.",
             parse_mode="HTML"
         )
-    except:
+    except TelegramForbiddenError:
+        await purge_users_from_board_ram(ctx.board_id, [ctx.target_id])
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
+    except (TelegramBadRequest, TelegramAPIError, Exception):
         pass
     try:
         await ctx.message.delete()
-    except:
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
         pass
 
 
@@ -3952,8 +3941,14 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
             parse_mode="HTML")
         return
     await message.answer(f"🔪 <b>ОГРАБЛЕНИЕ УДАЛОСЬ!</b>\nТы подкрался и спиздил <code>{stolen}</code> шекелей у жертвы.", parse_mode="HTML")
-    try: await message.bot.send_message(target_id, f"🔪 <b>Тебя ограбили в /b/!</b>\nКакой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей. Защититься можно, купив Шапочку из фольги в /shop.", parse_mode="HTML")
-    except: pass
+    try:
+        await message.bot.send_message(target_id, f"🔪 <b>Тебя ограбили в /b/!</b>\nКакой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей. Защититься можно, купив Шапочку из фольги в /shop.", parse_mode="HTML")
+    except TelegramForbiddenError:
+        await purge_users_from_board_ram(board_id, [target_id])
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
+    except (TelegramBadRequest, TelegramAPIError, Exception):
+        pass
 
 @dp.message(Command("shit"))
 async def cmd_shit(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -4006,8 +4001,14 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         )
         await db.commit()
     await message.answer("🐒 <b>ПОПАДАНИЕ!</b>\nТы метко кинул кусок говна! Жертва обмазана на 1 час и получит иконку 💩 во всех своих постах.", parse_mode="HTML")
-    try: await message.bot.send_message(target_id, "🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\nКакой-то анон обмазал тебя. У тебя статус 💩 на 1 час.\nЛекарство от статуса: Аминазин в /shop.", parse_mode="HTML")
-    except: pass
+    try:
+        await message.bot.send_message(target_id, "🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\nКакой-то анон обмазал тебя. У тебя статус 💩 на 1 час.\nЛекарство от статуса: Аминазин в /shop.", parse_mode="HTML")
+    except TelegramForbiddenError:
+        await purge_users_from_board_ram(board_id, [target_id])
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
+    except (TelegramBadRequest, TelegramAPIError, Exception):
+        pass
 
 @dp.message(Command("curse", "vomit"))
 async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -4381,13 +4382,13 @@ def _generate_stats_charts_locked(board_id: str) -> list[bytes]:
     db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dvach_bot.db')
     con = _sqlite3.connect(db_path)
     try: con.execute('PRAGMA journal_mode=WAL')
-    except: pass
+    except Exception: pass
     try: con.execute('PRAGMA synchronous=NORMAL')
-    except: pass
+    except Exception: pass
     try: con.execute('PRAGMA busy_timeout=15000')
-    except: pass
+    except Exception: pass
     try: con.execute('PRAGMA wal_autocheckpoint=1000')
-    except: pass
+    except Exception: pass
     try:
         cur = con.cursor()
 
@@ -4503,7 +4504,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
         await message.answer_media_group(media)
 
     try: await message.delete()
-    except: pass
+    except Exception: pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4528,7 +4529,7 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
     balance = (row[1] if row and row[1] else 0) if row else 0
     try:
         ai = json.loads(ai_str)
-    except:
+    except Exception:
         ai = {}
 
     now   = int(time.time())
@@ -4578,7 +4579,7 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
         parse_mode="HTML"
     )
     try: await message.delete()
-    except: pass
+    except Exception: pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4619,15 +4620,13 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
     lines.append(f"\n<i>Имена не раскрываются. Заработай в реакциях или /shop.</i>")
     await message.answer("\n".join(lines), parse_mode="HTML")
     try: await message.delete()
-    except: pass
+    except Exception: pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # /duel — вызов на дуэль (PvP ставка)
 # active_duels: {challenger_id: {board_id, amount, ts, target_id or None}}
-# ══════════════════════════════════════════════════════════════════════════════
-_active_duels: dict = {}  # challenger_id -> {board_id, amount, ts, msg_id}
-_duel_cooldowns: dict = {} # user_id -> timestamp
+# _active_duels and _duel_cooldowns are canonical in shared_state.py
 
 
 
@@ -4700,7 +4699,7 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
 
     try:
         amount = int(args[0]) if args else 0
-    except:
+    except Exception:
         amount = 0
 
     if amount < 50 or amount > 100000:
@@ -4757,7 +4756,7 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
     }
     
     try: await message.delete()
-    except: pass
+    except Exception: pass
 
 @dp.message(Command("duel"))
 async def cmd_duel(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -5268,7 +5267,7 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     try:
         import json
         active_items = json.loads(active_items_str)
-    except:
+    except Exception:
         active_items = {}
 
     rank, role = _get_passport_rank_and_role(lang, post_count)
@@ -5442,9 +5441,8 @@ async def analyze_telegram_photo(bot, photo_file_id: str, caption: str = None) -
         logger.error(f"⚠️ [TG_BOT] Telegram Vision Error: {e}", exc_info=True)
         return None
 
-_last_persona_board_ts: dict[str, float] = {}
-_last_persona_dialogue_user_ts: dict[int, float] = {}
-_persona_processed_posts: set[int] = set()
+# _last_persona_board_ts, _last_persona_dialogue_user_ts, _persona_processed_posts
+# are canonical in shared_state.py and imported via 'from shared_state import *'
 
 
 @dp.message(Command("trigger"))
@@ -8075,15 +8073,26 @@ async def show_tagged_photos_gallery(event: types.Message | types.CallbackQuery,
             await event.answer()
             try:
                 await bot.send_photo(chat_id, photo=target_fid, caption=caption, parse_mode="HTML", reply_markup=kb)
-            except Exception:
-                await bot.send_message(chat_id, text=caption, parse_mode="HTML", reply_markup=kb)
+            except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter, Exception):
+                try:
+                    await bot.send_message(chat_id, text=caption, parse_mode="HTML", reply_markup=kb)
+                except (TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, Exception) as inner_e:
+                    runtime_logger.warning("Failed fallback message in show_tagged_photos_gallery: %s", inner_e)
         else:
             try:
                 await event.answer_photo(photo=target_fid, caption=caption, parse_mode="HTML", reply_markup=kb)
-            except Exception:
-                await event.answer(caption, parse_mode="HTML", reply_markup=kb)
+            except (TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter, Exception):
+                try:
+                    await event.answer(caption, parse_mode="HTML", reply_markup=kb)
+                except (TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, Exception) as inner_e:
+                    runtime_logger.warning("Failed fallback message in show_tagged_photos_gallery: %s", inner_e)
+    except TelegramForbiddenError:
+        runtime_logger.warning(f"User {chat_id} blocked bot in show_tagged_photos_gallery")
+    except TelegramRetryAfter as e:
+        delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
+        await asyncio.sleep(delay)
     except Exception as e:
-        print(f"⚠️ Ошибка в show_tagged_photos_gallery: {e}")
+        runtime_logger.warning(f"⚠️ Ошибка в show_tagged_photos_gallery: {e}")
 
 
 @dp.callback_query(F.data.startswith("tagview:"))
@@ -10002,10 +10011,27 @@ async def reply_notifier_task():
                     ])
                     try:
                         await bot_instance.send_message(recipient_id, text, reply_markup=keyboard)
-                    except (TelegramForbiddenError, TelegramBadRequest):
-                        import traceback; traceback.print_exc() 
+                    except TelegramForbiddenError:
+                        try:
+                            await purge_users_from_board_ram(board_id, [recipient_id])
+                        except Exception:
+                            pass
+                    except TelegramRetryAfter as e:
+                        delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
+                        await asyncio.sleep(delay)
+                        try:
+                            await bot_instance.send_message(recipient_id, text, reply_markup=keyboard)
+                        except TelegramForbiddenError:
+                            try:
+                                await purge_users_from_board_ram(board_id, [recipient_id])
+                            except Exception:
+                                pass
+                        except Exception as inner_e:
+                            runtime_logger.warning("Failed retry notification to %s: %s", recipient_id, inner_e)
+                    except TelegramBadRequest as e:
+                        runtime_logger.warning("TelegramBadRequest notifying recipient %s: %s", recipient_id, e)
                     except Exception as e:
-                        print(f"Ошибка уведомления {recipient_id}: {e}")
+                        runtime_logger.warning("Ошибка уведомления %s: %s", recipient_id, e)
                 tasks = [send_one_notification(n) for n in notifications]
                 await asyncio.gather(*tasks)
             await asyncio.sleep(25)
@@ -10013,8 +10039,7 @@ async def reply_notifier_task():
             print("ℹ️ Обработчик уведомлений об ответах остановлен.")
             break
         except Exception as e:
-            import traceback
-            print(f"⛔ ОШИБКА в reply_notifier_task: {e}\n{traceback.format_exc()}")
+            runtime_logger.exception("⛔ ОШИБКА в reply_notifier_task: %s", e)
             await asyncio.sleep(15)
 async def sync_boards_with_config():
     """
@@ -11578,7 +11603,26 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
             parse_mode="HTML"
         )
         delivered = True
-    except Exception as e:
+    except TelegramForbiddenError:
+        runtime_logger.warning(f"Whisper send target {target_id} blocked bot on {board_id}")
+        try:
+            await purge_users_from_board_ram(board_id, [target_id])
+        except Exception:
+            pass
+        await message.answer("❌ Не удалось доставить шёпот (пользователь не запустил бота или заблокировал его).")
+    except TelegramRetryAfter as e:
+        delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
+        await asyncio.sleep(delay)
+        try:
+            await message.bot.send_message(
+                target_id, 
+                f"🤫 <b>Тебе анонимно шепчут в /{board_id}/:</b>\n<i>{escape_html(text)}</i>", 
+                parse_mode="HTML"
+            )
+            delivered = True
+        except Exception:
+            await message.answer("❌ Не удалось доставить шёпот.")
+    except (TelegramBadRequest, Exception) as e:
         runtime_logger.error(f"Whisper send failed: {e}", exc_info=True)
         await message.answer("❌ Не удалось доставить шёпот (пользователь не запустил бота или заблокировал его).")
         
@@ -11594,7 +11638,7 @@ async def cmd_whisper(message: types.Message, board_id: str | None, stream: str 
                     f"🕵️‍♂️ <b>(ЭТО СЕКРЕТ) Шёпот в /{board_id}/:</b>\nОт: <code>{sender_nick}</code>\nКому: <code>{target_nick}</code>\nТекст: <i>{escape_html(text)}</i>",
                     parse_mode="HTML"
                 )
-            except Exception: pass
+            except (TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, Exception): pass
 
 @dp.message(Command("redact"))
 async def cmd_redact(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -12370,6 +12414,24 @@ async def _process_stacked_anime_command(
                                 chat_id=message.chat.id,
                                 media=media
                             )
+                    except TelegramForbiddenError:
+                        runtime_logger.warning("TelegramForbiddenError sending event media group")
+                    except TelegramRetryAfter as e:
+                        delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
+                        await asyncio.sleep(delay)
+                        try:
+                            if len(media) == 1:
+                                item = media[0]
+                                if isinstance(item, InputMediaVideo):
+                                    await message.bot.send_video(chat_id=message.chat.id, video=item.media, supports_streaming=True)
+                                else:
+                                    await message.bot.send_photo(chat_id=message.chat.id, photo=item.media)
+                            else:
+                                await message.bot.send_media_group(chat_id=message.chat.id, media=media)
+                        except Exception as retry_err:
+                            runtime_logger.error(f"Failed retry sending event media group: {retry_err}")
+                    except TelegramBadRequest as e:
+                        runtime_logger.warning(f"TelegramBadRequest sending event media group: {e}")
                     except Exception as e:
                         runtime_logger.error(f"Failed to send event media group: {e}", exc_info=True)
                 for gif_url in gif_urls:
@@ -12378,6 +12440,17 @@ async def _process_stacked_anime_command(
                             chat_id=message.chat.id,
                             animation=gif_url
                         )
+                    except TelegramForbiddenError:
+                        runtime_logger.warning(f"TelegramForbiddenError sending event GIF animation ({gif_url})")
+                    except TelegramRetryAfter as e:
+                        delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
+                        await asyncio.sleep(delay)
+                        try:
+                            await message.bot.send_animation(chat_id=message.chat.id, animation=gif_url)
+                        except Exception as retry_err:
+                            runtime_logger.error(f"Failed retry sending GIF animation ({gif_url}): {retry_err}")
+                    except TelegramBadRequest as e:
+                        runtime_logger.warning(f"TelegramBadRequest sending event GIF animation ({gif_url}): {e}")
                     except Exception as e:
                         runtime_logger.error(f"Failed to send event GIF animation ({gif_url}): {e}")
     except ValueError as e:
@@ -12969,9 +13042,24 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
     if not post_num:
         info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
         if info: post_num = info[0]
-    if post_num and post_num in messages_storage:
-        post_data = messages_storage[post_num]
-        reactions_data = post_data.get('reactions', {}).get('users', {})
+    if post_num:
+        if post_num not in messages_storage:
+            db_post = await get_post_by_num(post_num)
+            if db_post:
+                content_dict = db_post['content'] if isinstance(db_post['content'], dict) else {}
+                reactions_dict = content_dict.get('reactions', {'users': {}})
+                async with storage_lock:
+                    messages_storage[post_num] = {
+                        'author_id': db_post['author_id'],
+                        'timestamp': datetime.fromtimestamp(db_post['timestamp'], UTC) if isinstance(db_post['timestamp'], (int, float)) else db_post['timestamp'],
+                        'content': content_dict,
+                        'reactions': reactions_dict,
+                        'board_id': db_post['board_id'],
+                        'thread_id': db_post.get('thread_id')
+                    }
+        post_data = messages_storage.get(post_num, {})
+        reactions_obj = post_data.get('reactions') or post_data.get('content', {}).get('reactions') or {}
+        reactions_data = reactions_obj.get('users', {})
     if not post_num:
         if lang == 'en': err = "Post not found in DB."
         elif lang == 'jp': err = "データベースに投稿が見つかりません。"
@@ -13445,13 +13533,21 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
     target_chat_id = msg.reply_to_message.chat.id
     reply_mid = msg.reply_to_message.message_id
     lookup_key = (target_chat_id, reply_mid)
-    post_num = message_to_post.get(lookup_key)
-    if post_num and post_num in messages_storage:
-        return messages_storage[post_num].get("author_id")
+    async with storage_lock:
+        post_num = message_to_post.get(lookup_key)
+        if post_num and post_num in messages_storage:
+            return messages_storage[post_num].get("author_id")
+    if not post_num:
+        info = await get_post_info_by_copy(target_chat_id, reply_mid)
+        if info:
+            post_num = info[0]
+    if post_num:
+        db_post = await get_post_by_num(post_num)
+        if db_post and 'author_id' in db_post:
+            return db_post['author_id']
     db_author_id = await get_post_author_by_copy(target_chat_id, reply_mid)
     if db_author_id is not None:
         return db_author_id
-        
     return None
 @dp.message(Command("id"))
 async def cmd_get_id(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -13945,7 +14041,7 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
             ai_str = row[0] if row and row[0] else "{}"
         try:
             active_items = json.loads(ai_str)
-        except:
+        except Exception:
             active_items = {}
         janitor_until = active_items.get("janitor_until", 0)
         janitor_deletes_left = active_items.get("janitor_deletes_left", 0)
@@ -14824,15 +14920,14 @@ async def _run_background_task(task_factory: Callable[[], Awaitable[Any]], task_
     MAX_RESTART_DELAY = 600
     current_delay = INITIAL_RESTART_DELAY
     while True:
+        start_time = time.time()
         try:
             task_coro = task_factory()
             await task_coro
             if is_shutting_down or drain_shutdown_requested:
                 print(f"ℹ️ Фоновая задача '{task_name}' завершилась при остановке.")
                 break
-            print(f"⚠️ Фоновая задача '{task_name}' неожиданно завершилась. Перезапуск через {current_delay} секунд...")
-            await asyncio.sleep(current_delay)
-            current_delay = min(current_delay * 2, MAX_RESTART_DELAY)
+            print(f"⚠️ Фоновая задача '{task_name}' неожиданно завершилась.")
         except asyncio.CancelledError:
             print(f"ℹ️ Фоновая задача '{task_name}' была отменена.")
             break
@@ -14844,9 +14939,14 @@ async def _run_background_task(task_factory: Callable[[], Awaitable[Any]], task_
             print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА в фоновой задаче '{task_name}': {e}")
             runtime_logger.exception("background_task_failed task=%s", task_name)
             traceback.print_exc()
-            print(f"🔁 Перезапуск задачи '{task_name}' через {current_delay} секунд...")
-            await asyncio.sleep(current_delay)
+
+        if time.time() - start_time >= 120:
+            current_delay = INITIAL_RESTART_DELAY
+        else:
             current_delay = min(current_delay * 2, MAX_RESTART_DELAY)
+
+        print(f"🔁 Перезапуск задачи '{task_name}' через {current_delay} секунд...")
+        await asyncio.sleep(current_delay)
 
 async def periodic_board_summary():
     """
@@ -15135,36 +15235,65 @@ async def site_reaction_processor():
             if reactions_to_process:
                 print(f"⚙️ Обнаружено {len(reactions_to_process)} реакций с сайта. Обрабатываю...")
                 for reaction_info in reactions_to_process:
-                    user_id = reaction_info['user_id']
-                    post_num = reaction_info['post_num']
-                    emoji = reaction_info['emoji']
-                    board_id, message_id = None, None
-                    async with storage_lock:
-                        post_data = messages_storage.get(post_num)
-                        if not post_data: continue
+                    try:
+                        user_id = reaction_info['user_id']
+                        post_num = reaction_info['post_num']
+                        emoji = reaction_info['emoji']
+                        board_id, message_id = None, None
+                        async with storage_lock:
+                            post_data = messages_storage.get(post_num)
+                        if not post_data:
+                            db_post = await get_post_by_num(post_num)
+                            if db_post:
+                                content_dict = db_post['content'] if isinstance(db_post['content'], dict) else {}
+                                reactions_dict = content_dict.get('reactions', {'users': {}})
+                                async with storage_lock:
+                                    messages_storage[post_num] = {
+                                        'author_id': db_post['author_id'],
+                                        'timestamp': datetime.fromtimestamp(db_post['timestamp'], UTC) if isinstance(db_post['timestamp'], (int, float)) else db_post['timestamp'],
+                                        'content': content_dict,
+                                        'reactions': reactions_dict,
+                                        'board_id': db_post['board_id'],
+                                        'thread_id': db_post.get('thread_id')
+                                    }
+                                    post_data = messages_storage.get(post_num)
+                        if not post_data:
+                            continue
                         board_id = post_data.get('board_id')
-                        copies = post_to_messages.get(post_num, {})
-                        user_copy = copies.get(user_id)
-                        if isinstance(user_copy, list):
-                            message_id = user_copy[0] if user_copy else None
-                        else:
-                            message_id = user_copy
-                    if not board_id or not message_id:
-                        continue
-                    bot_for_reaction = GLOBAL_BOTS.get(board_id)
-                    if not bot_for_reaction:
-                        print(f"⛔ ОШИБКА: не найден бот для доски '{board_id}' при обработке реакции с сайта.")
-                        continue
-                    fake_reaction_update = types.MessageReactionUpdated(
-                        chat=types.Chat(id=user_id, type='private'),
-                        message_id=message_id,
-                        user=types.User(id=user_id, is_bot=False, first_name="SiteUser"),
-                        date=datetime.now(UTC),
-                        old_reaction=[],
-                        new_reaction=[types.ReactionTypeEmoji(type='emoji', emoji=emoji)]
-                    )
-                    await handle_message_reaction(fake_reaction_update, board_id=board_id, bot_instance=bot_for_reaction)
-                    await asyncio.sleep(0.1)
+                        async with storage_lock:
+                            copies = post_to_messages.get(post_num, {})
+                            user_copy = copies.get(user_id)
+                            if isinstance(user_copy, list):
+                                message_id = user_copy[0] if user_copy else None
+                            else:
+                                message_id = user_copy
+                        if not message_id:
+                            db_copies = await get_post_copies(post_num)
+                            if db_copies:
+                                for uid, mid in db_copies:
+                                    if uid == user_id:
+                                        message_id = mid
+                                        break
+                                if not message_id and db_copies:
+                                    message_id = db_copies[0][1]
+                        if not board_id or not message_id:
+                            continue
+                        bot_for_reaction = GLOBAL_BOTS.get(board_id)
+                        if not bot_for_reaction:
+                            print(f"⛔ ОШИБКА: не найден бот для доски '{board_id}' при обработке реакции с сайта.")
+                            continue
+                        fake_reaction_update = types.MessageReactionUpdated(
+                            chat=types.Chat(id=user_id, type='private'),
+                            message_id=message_id,
+                            user=types.User(id=user_id, is_bot=False, first_name="SiteUser"),
+                            date=datetime.now(UTC),
+                            old_reaction=[],
+                            new_reaction=[types.ReactionTypeEmoji(type='emoji', emoji=emoji)]
+                        )
+                        await handle_message_reaction(fake_reaction_update, board_id=board_id, bot_instance=bot_for_reaction)
+                        await asyncio.sleep(0.1)
+                    except Exception as item_err:
+                        print(f"❌ Ошибка при обработке реакции с сайта ({reaction_info}): {item_err}")
             await asyncio.sleep(3)
         except asyncio.CancelledError:
             print("ℹ️ Обработчик реакций с сайта остановлен.")

@@ -5,10 +5,21 @@ from aiogram.filters import Command
 from bot_helpers import *
 from post_helpers import *
 from shared_state import *
-from aiogram import Router
-from shared_state import *
-from aiogram import types
+from aiogram import Router, F, types
 from aiogram.types import Message
+from aiogram.exceptions import TelegramForbiddenError
+from html import escape as escape_html
+from post_helpers import delete_user_posts
+from thread_texts import thread_messages
+from common.db_pool import db_lock
+from common.token_generator import generate_unique_token
+from common.database import (
+    get_pool, get_post_author_by_copy, get_post_by_num, get_post_copies,
+    get_post_info_by_copy, add_or_activate_user, update_user_status,
+    set_system_setting, add_reaction_ban, remove_reaction_ban,
+    add_spam_word, remove_spam_word, get_or_create_api_token, archive_thread_in_db,
+    log_global_event
+)
 
 router = Router()
 
@@ -116,7 +127,6 @@ async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str =
         await message.answer(f"Shadow-Troll ON for {target_id}")
         
     # Also log global event
-    from common.database import log_global_event
     await log_global_event('bot', f"🤡 TROLL: Admin {message.from_user.id} toggled troll for {target_id} on {board_id}")
 
 @router.message(Command("admin"))
@@ -306,9 +316,24 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
     if not post_num:
         info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
         if info: post_num = info[0]
-    if post_num and post_num in messages_storage:
-        post_data = messages_storage[post_num]
-        reactions_data = post_data.get('reactions', {}).get('users', {})
+    if post_num:
+        if post_num not in messages_storage:
+            db_post = await get_post_by_num(post_num)
+            if db_post:
+                content_dict = db_post['content'] if isinstance(db_post['content'], dict) else {}
+                reactions_dict = content_dict.get('reactions', {'users': {}})
+                async with storage_lock:
+                    messages_storage[post_num] = {
+                        'author_id': db_post['author_id'],
+                        'timestamp': datetime.fromtimestamp(db_post['timestamp'], UTC) if isinstance(db_post['timestamp'], (int, float)) else db_post['timestamp'],
+                        'content': content_dict,
+                        'reactions': reactions_dict,
+                        'board_id': db_post['board_id'],
+                        'thread_id': db_post.get('thread_id')
+                    }
+        post_data = messages_storage.get(post_num, {})
+        reactions_obj = post_data.get('reactions') or post_data.get('content', {}).get('reactions') or {}
+        reactions_data = reactions_obj.get('users', {})
     if not post_num:
         if lang == 'en': err = "Post not found in DB."
         elif lang == 'jp': err = "データベースに投稿が見つかりません。"
@@ -444,8 +469,8 @@ async def admin_save_all(callback: types.CallbackQuery):
     start_txt = "Запуск внепланового бэкапа БД..." if is_ru else "Starting manual DB backup..."
     try:
         await callback.answer(start_txt)
-    except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+    except (TelegramBadRequest, TelegramForbiddenError):
+        pass
     try:
         db = await get_pool()
         await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
@@ -500,8 +525,8 @@ async def admin_stats_board(callback: types.CallbackQuery):
     ])
     try:
         await callback.message.edit_text(stats_text, reply_markup=keyboard)
-    except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+    except (TelegramBadRequest, TelegramForbiddenError):
+        pass
     try: await callback.answer()
     except TelegramBadRequest: pass
 
@@ -642,8 +667,8 @@ async def admin_filter_list(callback: types.CallbackQuery):
     ])
     try:
         await callback.message.edit_text(final_text, parse_mode="HTML", reply_markup=keyboard)
-    except TelegramBadRequest: 
-        import traceback; traceback.print_exc()
+    except (TelegramBadRequest, TelegramForbiddenError): 
+        pass
     try: await callback.answer()
     except TelegramBadRequest: pass
 
@@ -683,8 +708,8 @@ async def admin_reaction_bans(callback: types.CallbackQuery):
     ])
     try:
         await callback.message.edit_text(response_text, parse_mode="HTML", reply_markup=keyboard)
-    except TelegramBadRequest: 
-        import traceback; traceback.print_exc()
+    except (TelegramBadRequest, TelegramForbiddenError): 
+        pass
     try: await callback.answer()
     except TelegramBadRequest: pass
 
@@ -774,8 +799,8 @@ async def admin_back_to_main(callback: types.CallbackQuery):
              print(f"Admin menu update error: {e}")
     try:
         await callback.answer()
-    except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+    except (TelegramBadRequest, TelegramForbiddenError):
+        pass
 
 async def get_author_id_by_reply(msg: types.Message) -> int | None:
     if not msg.reply_to_message:
@@ -783,13 +808,21 @@ async def get_author_id_by_reply(msg: types.Message) -> int | None:
     target_chat_id = msg.reply_to_message.chat.id
     reply_mid = msg.reply_to_message.message_id
     lookup_key = (target_chat_id, reply_mid)
-    post_num = message_to_post.get(lookup_key)
-    if post_num and post_num in messages_storage:
-        return messages_storage[post_num].get("author_id")
+    async with storage_lock:
+        post_num = message_to_post.get(lookup_key)
+        if post_num and post_num in messages_storage:
+            return messages_storage[post_num].get("author_id")
+    if not post_num:
+        info = await get_post_info_by_copy(target_chat_id, reply_mid)
+        if info:
+            post_num = info[0]
+    if post_num:
+        db_post = await get_post_by_num(post_num)
+        if db_post and 'author_id' in db_post:
+            return db_post['author_id']
     db_author_id = await get_post_author_by_copy(target_chat_id, reply_mid)
     if db_author_id is not None:
         return db_author_id
-        
     return None
 
 @router.message(Command("id"))
@@ -838,13 +871,16 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
         else:
             info += f"\nℹ️ {status_lbl}: Inactive"
         await message.answer(info, parse_mode="HTML")
+    except (TelegramBadRequest, TelegramForbiddenError) as e:
+        msg = f"User ID: <code>{target_id}</code>" if lang == 'en' else (f"ユーザーID: <code>{target_id}</code>" if lang == 'jp' else f"ID пользователя: <code>{target_id}</code>")
+        await message.answer(msg, parse_mode="HTML")
     except Exception as e:
         msg = f"User ID: <code>{target_id}</code>" if lang == 'en' else (f"ユーザーID: <code>{target_id}</code>" if lang == 'jp' else f"ID пользователя: <code>{target_id}</code>")
         await message.answer(msg, parse_mode="HTML")
     try:
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        import traceback; traceback.print_exc()
+        pass
 
 @router.message(Command("ban"))
 async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -1027,8 +1063,8 @@ async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str
     await message.answer(res, parse_mode="HTML")
     try:
         await message.delete()
-    except Exception as e:
-        import traceback; traceback.print_exc()
+    except (TelegramBadRequest, TelegramForbiddenError, Exception):
+        pass
 
 @router.message(Command("shadowmute_threads"))
 async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream: str = 'ru'):
@@ -1164,8 +1200,8 @@ async def cmd_delete_thread(message: Message, board_id: str | None, stream: str 
     await message.answer(done, parse_mode="HTML")
     try:
         await message.delete()
-    except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+    except (TelegramBadRequest, TelegramForbiddenError):
+        pass
 
 @router.message(Command("sdel", "swipe"))
 async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -1220,7 +1256,7 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
     try:
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        import traceback; traceback.print_exc()
+        pass
 
 @router.message(Command("unban"))
 async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -1290,7 +1326,7 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
             ai_str = row[0] if row and row[0] else "{}"
         try:
             active_items = json.loads(ai_str)
-        except:
+        except Exception:
             active_items = {}
         janitor_until = active_items.get("janitor_until", 0)
         janitor_deletes_left = active_items.get("janitor_deletes_left", 0)
@@ -1386,7 +1422,7 @@ async def cmd_token(message: types.Message, board_id: str | None, stream: str = 
     try:
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        import traceback; traceback.print_exc()
+        pass
 
 @router.callback_query(F.data.startswith("admin_menu:"))
 async def process_admin_menu(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):

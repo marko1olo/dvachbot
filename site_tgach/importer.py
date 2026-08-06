@@ -960,7 +960,7 @@ class ThreadImporter:
                                     target_id = int(ref)
                                     if target_id != new_id:
                                         all_backlink_pairs.append((target_id, new_id))
-                                except:
+                                except Exception:
                                     pass
 
                     if update_posts_params:
@@ -1192,10 +1192,18 @@ async def process_import_queue(app_state_broadcast_queue):
                             logger.error(
                                 f"❌ [Sim] Failed to create post for queue item {q_id}"
                             )
-                            processed_ids.append(q_id)
+                            logger.critical(
+                                f"CRITICAL [DLQ]: Failed to create post for ImportQueue item {q_id} (task_id={task_id}, orig_num={orig_num})"
+                            )
 
                     except Exception as e:
-                        processed_ids.append(q_id)
+                        logger.error(
+                            f"❌ [Sim] Exception while processing ImportQueue item {q_id}: {e}",
+                            exc_info=True,
+                        )
+                        logger.critical(
+                            f"CRITICAL [DLQ]: ImportQueue item {q_id} failed with exception: {e}"
+                        )
 
                 if processed_ids:
                     try:
@@ -1206,7 +1214,7 @@ async def process_import_queue(app_state_broadcast_queue):
                                 processed_ids,
                             )
                             await conn.commit()
-                    except:
+                    except Exception:
                         pass
 
         except Exception:
