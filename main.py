@@ -241,39 +241,32 @@ from typing import Callable, Dict, Any, Awaitable, Optional
 from roulette_logic import load_roulette_data, get_random_event, ROULETTE_COOLDOWN_PHRASES, ROULETTE_RESULT_PHRASES
 ANIME_COMMAND_MAP = {
     "fap": get_random_anime_image,
-    "fap1": get_random_anime_image,
-    "fapp": get_random_anime_image,
-    "fapping": get_random_anime_image,
+    "Fap": get_random_anime_image,
+    "FAP": get_random_anime_image,
     "hent": get_random_anime_image,
     "hentai": get_random_anime_image,
     "hentay": get_random_anime_image,
-    "hent1": get_random_anime_image,
-    "hentai1": get_random_anime_image,
+    "Hent": get_random_anime_image,
+    "Hentai": get_random_anime_image,
+    "Hentay": get_random_anime_image,
     "nsfw": get_nsfw_anime_image,
-    "nsfw1": get_nsfw_anime_image,
+    "NSFW": get_nsfw_anime_image,
+    "Nsfw": get_nsfw_anime_image,
     "gatari": get_monogatari_image,
-    "gatari1": get_monogatari_image,
     "monogatari": get_monogatari_image,
-    "monogatari1": get_monogatari_image,
+    "Monogatari": get_monogatari_image,
+    "MONOGATARI": get_monogatari_image,
+    "Gatari": get_monogatari_image,
     "loli": get_loli_image,
     "lolicon": get_loli_image,
     "lolis": get_loli_image,
-    "lolico": get_loli_image,
-    "lolic": get_loli_image,
-    "lolicomp": get_loli_image,
-    "lolicom": get_loli_image,
-    "lolita": get_loli_image,
-    "lol1": get_loli_image,
-    "loli1": get_loli_image,
-    "lolik": get_loli_image,
-    "lolishka": get_loli_image,
-    "lolo": get_loli_image,
-    "lol": get_loli_image,
+    "Loli": get_loli_image,
+    "Lolicon": get_loli_image,
+    "Lolis": get_loli_image,
+    "LOLI": get_loli_image,
+    "LOLICON": get_loli_image,
+    "LOLIS": get_loli_image,
 }
-_base_anime_map = dict(ANIME_COMMAND_MAP)
-for _k, _v in _base_anime_map.items():
-    ANIME_COMMAND_MAP[_k.capitalize()] = _v
-    ANIME_COMMAND_MAP[_k.upper()] = _v
 from common.text_utils import clean_html_tags, sanitize_html, RE_YOU_PATTERN, unwrap_tg_emoji, clean_html_for_tg
 RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
 RE_SYSTEM_HEADER_CLEAN = re.compile(r'^(###.*?###|<i>.*?</i>)\s*\n?', flags=re.MULTILINE)
@@ -6886,9 +6879,9 @@ class StackedAnimeHandler:
         command_counts = defaultdict(int)
         
         canonical_map = {
-            **{k: 'fap' for k in ["fap", "fap1", "fapp", "fapping", "hent", "hentai", "hentay", "hent1", "hentai1", "nsfw", "nsfw1"]},
-            **{k: 'gatari' for k in ["gatari", "monogatari", "gatari1", "monogatari1"]},
-            **{k: 'loli' for k in ["loli", "lolicon", "lolis", "lolico", "lolic", "lolicomp", "lolicom", "lolita", "lol1", "loli1", "lolik", "lolishka", "lolo", "lol"]},
+            **{k: 'fap' for k in ["fap", "hent", "hentai", "hentay", "nsfw", "FAP", "HENT", "HENTAI", "HENTAY", "NSFW"]},
+            **{k: 'gatari' for k in ["gatari", "monogatari", "GATARI"]},
+            **{k: 'loli' for k in ["loli", "lolicon", "lolis", "LOLI", "LOLICON", "LOLIS"]},
         }
 
         for command, num_no_space, num_with_space in self.matches:
@@ -6897,7 +6890,7 @@ class StackedAnimeHandler:
             if number_str and number_str.strip().isdigit():
                 count = int(number_str.strip())
 
-            command_lower = command.lower().split('@')[0]
+            command_lower = command.lower()
             cmd_func = ANIME_COMMAND_MAP.get(command_lower)
             if not cmd_func: continue
 
