@@ -30,7 +30,7 @@ from archive_manager import archive_thread, _forward_post_to_realtime_archive, _
 from delivery_manager import message_broadcaster, send_missed_messages, execute_delayed_edit, edit_post_for_all_recipients, _get_thread_entry_keyboard, validate_message_format, board_help_worker, _remove_already_delivered_recipients, _delete_durable_delivery_item
 from post_processor import NewPostProcessor, NewPostContext
 from post_helpers import apply_shadow_autoreplace, _format_header_inner
-from media_utils import _download_image_with_proxy
+from media_utils import _download_image_with_proxy, _resize_image_if_needed
 
 import shared_state
 from shared_state import *

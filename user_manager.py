@@ -5,8 +5,8 @@ from aiogram.filters import Command
 from bot_helpers import *
 from post_helpers import *
 from shared_state import *
+from media_utils import _download_image_with_proxy, _resize_image_if_needed
 from aiogram import Router
-from shared_state import *
 from aiogram import types
 from aiogram.types import Message
 
