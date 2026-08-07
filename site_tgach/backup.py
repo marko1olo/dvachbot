@@ -123,8 +123,10 @@ async def create_db_backup(bot) -> bool:
         # 4. Очистка временных файлов
         for f in created_files:
             if os.path.exists(f):
-                try: os.remove(f)
-                except: pass
+                try:
+                    os.remove(f)
+                except Exception as e:
+                    logger.warning("Failed to remove temp backup file %s: %s", f, e)
 
 async def backup_loop(bot):
     """Фоновая задача"""

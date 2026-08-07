@@ -333,7 +333,9 @@ class NeuroManager:
             target_thread['id'] = forced_thread_id
             if isinstance(target_thread.get('content'), str):
                  try: target_thread['content'] = json.loads(target_thread['content'])
-                 except: target_thread['content'] = {}
+                 except Exception as e:
+                     logger.debug(f"JSON decode failed for target_thread content: {e}")
+                     target_thread['content'] = {}
         else:
             threads = await get_op_posts_for_board(
                 board_id, sort_by="bump", page=1, page_size=15, stream=stream

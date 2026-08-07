@@ -234,7 +234,8 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
         # Получаем бота для уведомлений
         try:
             bot = global_bot_pool.get_main_bot()
-        except:
+        except Exception as e:
+            logger.warning("Failed to get main bot: %s", e)
             bot = None
 
         # 2. Обрабатываем каждого автора, загрузившего это
@@ -346,8 +347,8 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
                         (pid, time.time()),
                     )
                     await db.commit()
-            except:
-                pass
+            except Exception as e:
+                logger.warning("Failed to insert into BroadcastQueue: %s", e)
 
     # === ЛОГИКА NSFW ДЛЯ МОЛОДЫХ ВЗРОСЛЫХ ===
 
@@ -367,8 +368,8 @@ async def run_deep_check(image_bytes: bytes, file_id: str):
                         (pid, time.time()),
                     )
                     await db.commit()
-            except:
-                pass
+            except Exception as e:
+                logger.warning("Failed to insert into BroadcastQueue: %s", e)
 
     logger.info(
         f"✅ [DeepCheck] Finished for {file_id}. Verdict: {age} | {visual_style} | NSFW: {is_nsfw}"

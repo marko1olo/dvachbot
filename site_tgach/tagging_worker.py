@@ -550,8 +550,8 @@ async def tagging_loop():
         ) as cursor:
             total_backlog = (await cursor.fetchone())[0]
         logger.info(f"📊 GLOBAL STATUS: {total_backlog} files waiting.")
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to query tagging backlog: {e}")
 
     loop = asyncio.get_running_loop()
 

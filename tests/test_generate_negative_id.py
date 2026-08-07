@@ -36,7 +36,7 @@ try:
     from site_tgach.main import generate_negative_id as generate_negative_id_site
 except ImportError as e:
     print(f"Import failed: {e}")
-    sys.exit(1)
+    raise
 
 class TestGenerateNegativeId(unittest.TestCase):
     def test_deterministic_output(self):

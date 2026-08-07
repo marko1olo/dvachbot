@@ -53,7 +53,10 @@ def spawn_task(coro: Any, name: str = None) -> asyncio.Task:
         except Exception:
             name = None
 
-    task = asyncio.create_task(coro, name=name)
+    try:
+        task = asyncio.create_task(coro, name=name)
+    except TypeError:
+        task = asyncio.create_task(coro)
     _background_tasks.add(task)
     task.add_done_callback(_on_task_done)
     return task

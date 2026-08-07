@@ -167,7 +167,8 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
                         try:
                             await client.get_chat(chat_id)
                             await asyncio.sleep(1)
-                        except:
+                        except Exception as get_chat_err:
+                            logger.warning(f"MTProto get_chat failed for {chat_id}: {get_chat_err}")
                             break
                         continue
                     break

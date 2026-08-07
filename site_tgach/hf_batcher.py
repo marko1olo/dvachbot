@@ -36,7 +36,8 @@ def cleanup_stale_temp_dirs():
                 try:
                     shutil.rmtree(name, ignore_errors=True)
                     count += 1
-                except: pass
+                except Exception as e:
+                    logger.debug("Failed to remove directory %s: %s", name, e)
         if count > 0:
             logger.info(f"🧹 Startup Cleanup: Removed {count} stale temp folders.")
     except Exception as e:
@@ -55,7 +56,8 @@ async def find_file_message_info(file_id):
         """
         async with db.execute(query, (file_id,)) as cursor:
             return await cursor.fetchone()
-    except:
+    except Exception as e:
+        logger.warning("find_file_message_info failed for %s: %s", file_id, e)
         return None
 
 async def refresh_reference_by_send(bot, file_id):
@@ -63,12 +65,13 @@ async def refresh_reference_by_send(bot, file_id):
         target = STORAGE_CHANNELS.get('ru')
         msg = await bot.send_video(chat_id=target, video=file_id, disable_notification=True)
         return target, msg.message_id
-    except:
+    except Exception as send_vid_err:
         try:
             target = STORAGE_CHANNELS.get('ru')
             msg = await bot.send_document(chat_id=target, document=file_id, disable_notification=True)
             return target, msg.message_id
-        except:
+        except Exception as send_doc_err:
+            logger.warning("refresh_reference_by_send failed for %s: vid_err=%s, doc_err=%s", file_id, send_vid_err, send_doc_err)
             return None
 
 def upload_folder_sync(folder, token, repo):

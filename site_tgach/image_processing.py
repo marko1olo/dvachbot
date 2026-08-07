@@ -293,8 +293,8 @@ async def process_and_upload_image(
                         with Image.open(BytesIO(thumbnail_bytes)) as im:
                             small = im.resize((32, 32))
                             return encode_blurhash_internal(small, 4, 3)
-                    blurhash_str = await asyncio.to_thread(_calc_blur)
-                except: pass
+                except Exception as e:
+                    logger.debug(f"Blurhash calculation failed: {e}")
         except Exception as e:
             logger.warning(f"Image processing error: {e}")
 
@@ -525,7 +525,9 @@ async def _upload_mirrors_task(bot: Bot, file_id: str, file_bytes: bytes, filena
                     try:
                         msg = await method(chat_id=SHADOW_CHANNEL_ID, **kwargs)
                         if msg: break
-                    except: continue
+                    except Exception as e:
+                        logger.debug(f"Shadow send method failed: {e}")
+                        continue
 
                 if msg:
                     # Извлекаем ID из результата

@@ -252,7 +252,8 @@ class NeuroScanner:
         for admin_id in ADMIN_IDS:
             try:
                 await self.bot.send_message(admin_id, msg, parse_mode="HTML")
-            except: pass
+            except Exception as e:
+                logger.debug(f"Failed to notify admin {admin_id} in neuro_scanner: {e}")
 
 async def scanner_loop(app_state):
     await asyncio.sleep(60)
