@@ -137,8 +137,8 @@ async def check_and_send_contextual_reply(bot, user_id: int, text: str, board_id
 
 async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str = 'b', stream: str = 'ru'):
     """
-    Автоматическая транскрипция ГС и кружочков (Whisper/Gemini API Mockup)
-    с красивой ответом-расшифровкой в чат и уничтожающим 2ch-роастом.
+    Автоматическая транскрипция ГС и кружочков (Whisper/Groq STT)
+    с красивым ответом-расшифровкой в чат и уничтожающим 2ch-роастом.
     """
     if not message:
         return
@@ -153,24 +153,67 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
             return
 
         duration = getattr(media_obj, 'duration', 0)
+        file_id = getattr(media_obj, 'file_id', None)
 
-        # Мокап транскрипции (точка подключения Whisper / Gemini Audio API)
-        mock_transcripts = [
-            "Слушай анон, короче я вчера зашел в магазин и там такая альтушка стояла на кассе, пиздец просто...",
-            "Ало анон, зацени мою тему, короче я придумал как поднять 100К за день без смс и регистрации...",
-            "Ну че вы тут разнылись в треде, нормальная же тема, просто вы нищеброды и не шарите...",
-            "Послушай мое ГС, братан, я тут нагуглил схемы заработка на крипте, надо срочно заходить...",
-            "Короче ребятушки, я проснулся в три часа дня, пиво кончилось, че делать дальше не знаю...",
-            "Анончик, зацени голосок, я тут трек записал на микрофон от наушников за 100 рублей..."
-        ]
+        transcript = None
 
-        transcript = random.choice(mock_transcripts)
+        # 1. Попытка скачивания аудио и распознавания речи через Groq Whisper STT
+        if file_id and bot:
+            try:
+                from common.token_pool import groq_pool
+                file_info = await bot.get_file(file_id)
+                file_bytes_io = await bot.download_file(file_info.file_path)
+                audio_bytes = file_bytes_io.read() if hasattr(file_bytes_io, 'read') else file_bytes_io.getvalue()
 
-        # Получаем двачевский роаст из CONTEXTUAL_REPLIES
-        roasts = CONTEXTUAL_REPLIES.get(r'\b(голосов[ауи]|кружоч[еик]|гс|записал|послушай|аудио)\b', [
-            "засунь свое ГС себе в жопу и напиши текстом, шепелявый"
-        ])
-        roast = random.choice(roasts)
+                token = groq_pool.get_token() or os.getenv("GROQ_API_KEY")
+                if token and audio_bytes:
+                    ext = ".mp4" if is_video_note else ".ogg"
+                    filename = f"speech{ext}"
+                    headers = {"Authorization": f"Bearer {token}"}
+                    files = {"file": (filename, audio_bytes, "application/octet-stream")}
+                    data = {"model": "whisper-large-v3-turbo", "response_format": "json"}
+                    
+                    async with httpx.AsyncClient(timeout=25.0) as client:
+                        resp = await client.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files, data=data)
+                        if resp.status_code == 200:
+                            transcript = resp.json().get("text", "").strip()
+            except Exception as stt_err:
+                logger.warning(f"⚠️ Ошибка STT транскрипции ГС/кружочка: {stt_err}")
+
+        # Фолбэк мокап при отсутствии API ключей или ошибке сети
+        if not transcript:
+            mock_transcripts = [
+                "Слушай анон, короче я вчера зашел в магазин и там такая альтушка стояла на кассе...",
+                "Ало анон, зацени мою тему, короче я придумал как поднять 100К за день...",
+                "Ну че вы тут разнылись в треде, нормальная же тема, просто вы нищеброды...",
+                "Послушай мое ГС, братан, я тут нагуглил схемы заработка на крипте...",
+                "Короче ребятушки, я проснулся в три часа дня, пиво кончилось, че делать дальше...",
+                "Анончик, зацени голосок, я тут трек записал на микрофон от наушников..."
+            ]
+            transcript = random.choice(mock_transcripts)
+
+        # 2. Генерация уничтожающего двачевского роаста
+        roast = None
+        if transcript:
+            try:
+                from site_tgach.neuro_poster import _execute_groq_post
+                prompt = (
+                    "Ты циничный, ядовитый старый двачер из /b/. Твоя задача — жестко, с юмором "
+                    "и суровым сленгом 2ch (без ИИ-вежливости) высмеять (отроастить) автора голосовухи на основе его слов.\n"
+                    f"Слова автора: «{transcript}»\n"
+                    "Напиши 1-2 ядовитых, смешных предложения ответа."
+                )
+                raw_roast = await _execute_groq_post(prompt, max_tokens=150)
+                if raw_roast and len(raw_roast.strip()) > 5:
+                    roast = raw_roast.strip()
+            except Exception as roast_err:
+                logger.warning(f"⚠️ Ошибка генерации роаста: {roast_err}")
+
+        if not roast:
+            roasts = CONTEXTUAL_REPLIES.get(r'\b(голосов[ауи]|кружоч[еик]|гс|записал|послушай|аудио)\b', [
+                "засунь свое ГС себе в жопу и напиши текстом, шепелявый"
+            ])
+            roast = random.choice(roasts)
 
         icon = "📹" if is_video_note else "🎙"
         title = "Кружочек" if is_video_note else "Голосовое сообщение"

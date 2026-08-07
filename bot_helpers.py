@@ -79,6 +79,7 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
     """
     await asyncio.sleep(delay)
     stream = 'en' if board_id == 'int' else 'ru'
+    all_modes = MODE_FLAGS
     try:
         import main
         mode_end_dict = getattr(main, 'MODE_END_PHRASES', {})

@@ -544,10 +544,8 @@ def _mark_random_dead_file(file_id: str | None):
         if backend:
             key = f"dead_file:public:{file_id}"
             try:
-                loop = asyncio.get_running_loop()
-                task = loop.create_task(backend.set(key, "1", expire=RANDOM_DEAD_FILE_TTL_SEC))
-                task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-            except RuntimeError:
+                spawn_task(backend.set(key, "1", expire=RANDOM_DEAD_FILE_TTL_SEC), name=f"dead_file_{file_id}")
+            except Exception:
                 import traceback; traceback.print_exc()
     except Exception:
         import traceback; traceback.print_exc()
