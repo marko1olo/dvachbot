@@ -260,11 +260,11 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     continue  # retry same key with smaller input
                 if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower() or "exhausted" in err_str.lower():
                     _key_cooldowns[(provider, api_key)] = time.time() + 90.0
-                    logger.warning(f"⚠️ {provider} Rate Limit on key ...{api_key[-6:]}. Cooldown set 90s, waiting 3.0s before trying next key...")
-                    await asyncio.sleep(3.0)
-                    continue  # try NEXT KEY for same model
+                    logger.warning(f"⚠️ {provider} Rate Limit on key ...{api_key[-6:]} for model {model_name}. Switching to next model in cascade immediately.")
+                    skip_model = True
+                    break
                 # Any other error: skip this key, try next
-                logger.warning(f"\u26a0\ufe0f Unhandled error for {model_name}, skipping to next model in cascade...")
+                logger.warning(f"⚠️ Unhandled error for {model_name}, skipping to next model in cascade...")
                 break
 
     return "Нейронка сдохла. Не удалось сгенерировать саммари."
