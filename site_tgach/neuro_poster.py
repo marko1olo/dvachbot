@@ -19,7 +19,7 @@ from common.database import (
 )
 
 # === НАСТРОЙКА ПРОКСИ ===
-PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or "http://127.0.0.1:10808" 
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or None 
 # ========================
 
 AI_CONFIG = {
@@ -190,11 +190,11 @@ class NeuroManager:
                 logger.error("❌ No Groq API keys available.")
                 return None
 
-            # Стратегии подключения: Прокси -> Прямое (для TUN)
-            strategies = [
-                {"proxy": PROXY_URL, "name": "Proxy"},
-                {"proxy": None, "name": "Direct"}
-            ]
+            # Стратегии подключения: Прокси (если задан) -> Прямое
+            strategies = []
+            if PROXY_URL:
+                strategies.append({"proxy": PROXY_URL, "name": "Proxy"})
+            strategies.append({"proxy": None, "name": "Direct"})
 
             for strategy in strategies:
                 try:

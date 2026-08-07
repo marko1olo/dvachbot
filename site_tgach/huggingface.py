@@ -9,7 +9,7 @@ from site_tgach.mirror_health import clear_hf_failure, is_hf_repo_available, mar
 
 logger = logging.getLogger("huggingface")
 
-PROXY_URL = os.getenv("HTTPS_PROXY") or "http://127.0.0.1:10808"
+PROXY_URL = os.getenv("HTTPS_PROXY") or None
 
 def _upload_sync(file_bytes: bytes, filename: str) -> str | None:
     token, repo_id = hf_accounts.get_pair()

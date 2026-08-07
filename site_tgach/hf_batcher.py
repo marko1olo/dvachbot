@@ -25,7 +25,7 @@ BATCH_SIZE = 77
 MAX_WAIT_TIME = 3 * 60
 CONCURRENCY_LIMIT = 20
 HF_COOLDOWN_UNTIL = 0
-PROXY_URL = os.getenv("HTTPS_PROXY") or "http://127.0.0.1:10808"
+PROXY_URL = os.getenv("HTTPS_PROXY") or None
 
 def cleanup_stale_temp_dirs():
     try:

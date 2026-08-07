@@ -804,7 +804,7 @@ class NoParsingFilter(logging.Filter):
         return True
 
 
-PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or "http://127.0.0.1:10808"
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or None
 BOT_VIOLATIONS = defaultdict(int)
 IP_WHITELIST = set()  # Сюда можно будет добавлять IP через админку (или пока вручную)
 GEO_IP_CLIENT = httpx.AsyncClient(

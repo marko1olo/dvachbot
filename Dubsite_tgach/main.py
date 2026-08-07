@@ -258,7 +258,7 @@ class NoParsingFilter(logging.Filter):
         ):
             return False
         return True
-PROXY_URL = "http://127.0.0.1:10808"
+PROXY_URL = None
 BOT_VIOLATIONS = defaultdict(int)
 IP_WHITELIST = set() # Сюда можно будет добавлять IP через админку (или пока вручную)
 GEO_IP_CLIENT = httpx.AsyncClient(timeout=3.0, verify=False, transport=httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=5))

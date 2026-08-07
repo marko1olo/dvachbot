@@ -37,8 +37,8 @@ from site_tgach.admin_config import ADMIN_IDS, IP_BAN_LIST
 logger = logging.getLogger("neuro_mod")
 
 # === НАСТРОЙКИ ===
-PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or "http://127.0.0.1:10808"
-GROQ_MODEL = "llama-3.2-11b-vision-preview"
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or None
+GROQ_MODEL = "qwen/qwen3.6-27b"
 GROQ_TIMEOUT = 45.0
 
 # === ПРОМПТЫ (Централизованное хранение) ===
@@ -73,62 +73,68 @@ async def _safe_groq_json(messages, max_tokens=300):
     """
     Выполняет запрос к Groq и пытается вернуть JSON.
     """
+    strategies = []
+    if PROXY_URL:
+        strategies.append({"proxy": PROXY_URL, "name": "Proxy"})
+    strategies.append({"proxy": None, "name": "Direct"})
+
     for i in range(3):
         token = groq_pool.get_token()
         if not token:
             logger.error("❌ No Groq tokens available.")
             return None
 
-        transport = AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
-        async with httpx.AsyncClient(
-            timeout=GROQ_TIMEOUT, proxy=PROXY_URL, transport=transport, verify=False
-        ) as client:
+        for strategy in strategies:
             try:
-                resp = await _execute_groq_post(
-                    client,
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {token}"},
-                    json_data={
-                        "model": GROQ_MODEL,
-                        "messages": messages,
-                        "max_tokens": max_tokens,
-                        "temperature": 0.1,  # Минимальная температура для строгого JSON
-                        "response_format": {"type": "json_object"},
-                    },
-                )
-
-                if resp.status_code == 200:
-                    content = resp.json()["choices"][0]["message"]["content"].strip()
-                    # Чистим markdown
-                    if "```" in content:
-                        match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
-                        if match:
-                            content = match.group(1)
-                    return json.loads(content)
-
-                elif resp.status_code == 429:
-                    await asyncio.sleep(1)
-                    continue
-                elif resp.status_code == 401:
-                    logger.error(
-                        f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool."
+                transport = AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
+                async with httpx.AsyncClient(
+                    timeout=GROQ_TIMEOUT, proxy=strategy["proxy"], transport=transport, verify=False
+                ) as client:
+                    resp = await _execute_groq_post(
+                        client,
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {token}"},
+                        json_data={
+                            "model": GROQ_MODEL,
+                            "messages": messages,
+                            "max_tokens": max_tokens,
+                            "temperature": 0.1,  # Минимальная температура для строгого JSON
+                            "response_format": {"type": "json_object"},
+                        },
                     )
-                    groq_pool.remove_token(token)
-                    continue
-                else:
-                    logger.warning(
-                        f"DeepCheck HTTP Error {resp.status_code}: {resp.text}"
-                    )
-                    # Если модель отказалась отвечать (400 Bad Request часто при Refusal на Vision)
-                    if resp.status_code == 400 and "refusal" in resp.text.lower():
-                        return {
-                            "visual_style": "photorealistic",
-                            "subject_age_visual": "child",
-                            "safety_flags": ["REFUSAL_HARD_CSAM"],
-                        }
 
+                    if resp.status_code == 200:
+                        content = resp.json()["choices"][0]["message"]["content"].strip()
+                        # Чистим markdown
+                        if "```" in content:
+                            match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
+                            if match:
+                                content = match.group(1)
+                        return json.loads(content)
+
+                    elif resp.status_code == 429:
+                        await asyncio.sleep(1)
+                        break
+                    elif resp.status_code == 401:
+                        logger.error(
+                            f"❌ Groq key {token[:12]}... is unauthorized (401). Removing from rotation pool."
+                        )
+                        groq_pool.remove_token(token)
+                        break
+                    else:
+                        logger.warning(
+                            f"DeepCheck HTTP Error {resp.status_code}: {resp.text}"
+                        )
+                        if resp.status_code == 400 and "refusal" in resp.text.lower():
+                            return {
+                                "visual_style": "photorealistic",
+                                "subject_age_visual": "child",
+                                "safety_flags": ["REFUSAL_HARD_CSAM"],
+                            }
+                        break
             except json.JSONDecodeError:
-                logger.error(f"DeepCheck JSON Parse Error: {content}")
+                logger.error("DeepCheck JSON Parse Error")
+                return None
             except Exception as e:
                 err_str = str(e).lower()
                 if (
@@ -140,8 +146,13 @@ async def _safe_groq_json(messages, max_tokens=300):
                         f"❌ Groq key {token[:12]}... is unauthorized (401 Exception). Removing from rotation pool."
                     )
                     groq_pool.remove_token(token)
-                logger.error(f"DeepCheck Req Failed: {e}", exc_info=True)
-                continue
+                    break
+                if strategy["proxy"] is not None:
+                    logger.warning(f"⚠️ [DeepCheck] Proxy connection failed ({e}), falling back to Direct connection...")
+                    continue
+                else:
+                    logger.error(f"DeepCheck Req Failed ({strategy['name']}): {e}")
+                    break
     return None
 
 

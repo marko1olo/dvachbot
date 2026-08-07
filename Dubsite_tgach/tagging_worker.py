@@ -18,7 +18,7 @@ from aiogram.exceptions import TelegramBadRequest
 
 # === НАСТРОЙКИ ===
 logger = logging.getLogger("tagger")
-PROXY_URL = "http://127.0.0.1:10808"
+PROXY_URL = None
 GROQ_MODEL = "llama-3.3-70b-versatile"
 GROQ_TIMEOUT = 40.0
 BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насиловать ключи

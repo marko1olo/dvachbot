@@ -44,7 +44,7 @@ logging.basicConfig(
 install_logging_redaction()
 logger = logging.getLogger("importer")
 
-PROXY_URL = "http://127.0.0.1:10808"
+PROXY_URL = None
 RE_LINK_REF = re.compile(r"(?:>>|&gt;&gt;)(\d+)")
 
 

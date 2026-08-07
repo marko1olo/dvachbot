@@ -63,7 +63,7 @@ if not logger.handlers:
     logger.addHandler(_sh)
 logger.propagate = True
 
-PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or "http://127.0.0.1:10808"
+PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or None
 GROQ_MODEL = "qwen/qwen3.6-27b"
 GROQ_TIMEOUT = 40.0
 BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насиловать ключи
