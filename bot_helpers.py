@@ -79,8 +79,12 @@ async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: s
     """
     await asyncio.sleep(delay)
     stream = 'en' if board_id == 'int' else 'ru'
-    all_modes = MODE_FLAGS
-    phrases = MODE_END_PHRASES.get(mode_to_disable, ["Режим отключен."])
+    try:
+        import main
+        mode_end_dict = getattr(main, 'MODE_END_PHRASES', {})
+    except Exception:
+        mode_end_dict = {}
+    phrases = mode_end_dict.get(mode_to_disable, ["Режим отключен."])
     end_text = random.choice(phrases) if isinstance(phrases, list) else "Режим отключен."
     now_dt = datetime.now(UTC)
     content = {"type": "text", "text": end_text, "is_system_message": True, "archive_allowed": True}

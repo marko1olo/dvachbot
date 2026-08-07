@@ -1818,7 +1818,10 @@ def transliterate_word(word, kana_map):
         for length in range(min(3, len(word)), 0, -1):
             syllable = word[:length]
             if syllable in kana_map:
-                result.append(kana_map[syllable])
+                val = kana_map[syllable]
+                if isinstance(val, (list, tuple)):
+                    val = random.choice(val)
+                result.append(str(val))
                 word = word[length:]
                 found = True
                 break

@@ -1,3 +1,5 @@
+import sys
+sys.modules['main'] = sys.modules[__name__]
 import dataclasses
 from typing import Any
 from dataclasses import dataclass
@@ -234,6 +236,13 @@ from warhammer_mode import WH40K_PHRASES_START, WH40K_PHRASES_END, warhammer_tra
 from imperial_mode import IMPERIAL_PHRASES_START, IMPERIAL_PHRASES_END, imperial_transform
 from gopnik_mode import GOPNIK_PHRASES_START, GOPNIK_PHRASES_END, gopnik_transform
 from shizo_mode import SCHIZO_PHRASES_START, SCHIZO_PHRASES_END, shizo_transform
+from new_modes import (
+    MATRIX_PHRASES_START, MATRIX_PHRASES_END, matrix_transform,
+    AMERICA_PHRASES_START, AMERICA_PHRASES_END, america_transform,
+    HOLIDAY_PHRASES_START, HOLIDAY_PHRASES_END, holiday_transform,
+    OLDWEB_PHRASES_START, OLDWEB_PHRASES_END, oldweb_transform,
+    JEWISH_PHRASES_START, JEWISH_PHRASES_END, jewish_transform,
+)
 from mode_punchup import punch_up_mode_text
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
@@ -2731,13 +2740,7 @@ class ModeTransformer:
         self.header = self.modified_content.get('header')
 
     def _check_active_mode(self) -> bool:
-        return (
-            self.b_data.get('anime_mode') or self.b_data.get('slavaukraine_mode') or
-            self.b_data.get('zaputin_mode') or self.b_data.get('suka_blyat_mode') or
-            self.b_data.get('polish_mode') or self.b_data.get('warhammer_mode') or
-            self.b_data.get('imperial_mode') or self.b_data.get('gopnik_mode') or
-            self.b_data.get('schizo_mode')
-        )
+        return any(self.b_data.get(mode) for mode in MODE_FLAGS)
 
     def _determine_text_key(self) -> bool:
         self.text_key = 'text' if 'text' in self.modified_content and self.modified_content['text'] else \
@@ -2762,6 +2765,16 @@ class ModeTransformer:
             return await loop.run_in_executor(None, polish_transform, self.plain_text, self.header)
         elif self.b_data.get('slavaukraine_mode'):
             return await loop.run_in_executor(None, ukrainian_transform, self.plain_text, self.header)
+        elif self.b_data.get('matrix_mode'):
+            return await loop.run_in_executor(None, matrix_transform, self.plain_text, self.header)
+        elif self.b_data.get('america_mode'):
+            return await loop.run_in_executor(None, america_transform, self.plain_text, self.header)
+        elif self.b_data.get('holiday_mode'):
+            return await loop.run_in_executor(None, holiday_transform, self.plain_text, self.header)
+        elif self.b_data.get('oldweb_mode'):
+            return await loop.run_in_executor(None, oldweb_transform, self.plain_text, self.header)
+        elif self.b_data.get('jewish_mode'):
+            return await loop.run_in_executor(None, jewish_transform, self.plain_text, self.header)
         return None
 
     def _handle_transform_result(self, transform_result):
@@ -8523,11 +8536,11 @@ MODE_END_PHRASES = {
     'imperial_mode': IMPERIAL_PHRASES_END,
     'gopnik_mode': GOPNIK_PHRASES_END,
     'schizo_mode': SCHIZO_PHRASES_END,
-    # 'matrix_mode': MATRIX_PHRASES_END,
-    # 'america_mode': AMERICA_PHRASES_END,
-    # 'holiday_mode': HOLIDAY_PHRASES_END,
-    # 'oldweb_mode': OLDWEB_PHRASES_END,
-    # 'jewish_mode': JEWISH_PHRASES_END,
+    'matrix_mode': MATRIX_PHRASES_END,
+    'america_mode': AMERICA_PHRASES_END,
+    'holiday_mode': HOLIDAY_PHRASES_END,
+    'oldweb_mode': OLDWEB_PHRASES_END,
+    'jewish_mode': JEWISH_PHRASES_END,
 }
 
 async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: str):
@@ -8711,6 +8724,67 @@ async def cmd_yer(message: types.Message, board_id: str | None, stream: str = 'r
     b_data['active_mode_task'] = disable_task
     try: await message.delete()
     except TelegramBadRequest: pass
+
+async def _trigger_generic_mode(message: types.Message, board_id: str | None, stream: str, mode_key: str, start_phrases: list, duration_sec: int, prefix_title: str):
+    if not board_id or board_id == 'int':
+        try: await message.delete()
+        except Exception: pass
+        return
+    b_data = board_data[board_id]
+    if not await check_cooldown(message, board_id):
+        return
+    activation_text = random.choice(start_phrases) if start_phrases else "Режим активирован!"
+    now_dt = datetime.now(UTC)
+    content = {"type": "text", "text": activation_text, "is_system_message": True, "archive_allowed": True}
+    pnum = await create_post(
+        board_id=board_id, author_id=0, content=content,
+        timestamp=now_dt.timestamp(), is_from_site=False, stream=stream
+    )
+    if not pnum:
+        try: await message.delete()
+        except TelegramBadRequest: pass
+        return
+    header = await format_header(board_id, pnum)
+    content['header'] = f"### {prefix_title} ###\n{header}"
+    await update_post_content(pnum, content)
+    async with storage_lock:
+        messages_storage[pnum] = {
+            'author_id': 0, 'timestamp': now_dt,
+            'content': content, 'board_id': board_id
+        }
+    await enqueue_board_message(board_id, {
+        "recipients": b_data['users']['active'],
+        "content": content, "post_num": pnum,
+    })
+    await _activate_mode(board_id, mode_key)
+    disable_task = spawn_task(disable_mode_after_delay(duration_sec, board_id, mode_key))
+    b_data['active_mode_task'] = disable_task
+    try: await message.delete()
+    except TelegramBadRequest: pass
+
+@dp.message(Command("matrix", "matrica", "matriza", "redpill", "neo"))
+async def cmd_matrix(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    await _trigger_generic_mode(message, board_id, stream, 'matrix_mode', MATRIX_PHRASES_START, 300, "МА ТРИ ЦА")
+
+@dp.message(Command("america", "usa", "liberty", "freedom"))
+async def cmd_america(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    await _trigger_generic_mode(message, board_id, stream, 'america_mode', AMERICA_PHRASES_START, 300, "GOD BLESS AMERICA")
+
+@dp.message(Command("holiday", "newyear", "xmas", "christmas", "ny"))
+async def cmd_holiday(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    await _trigger_generic_mode(message, board_id, stream, 'holiday_mode', HOLIDAY_PHRASES_START, 300, "ПРАЗДНИК К НАМ ПРИХОДИТ")
+
+@dp.message(Command("oldweb", "oldnet", "icq", "winamp", "forum"))
+async def cmd_oldweb(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    await _trigger_generic_mode(message, board_id, stream, 'oldweb_mode', OLDWEB_PHRASES_START, 300, "ОЛДВЕБ 2007")
+
+@dp.message(Command("jewish", "talmud", "odessa", "shabbat", "rabbi", "evrei", "evrey"))
+async def cmd_jewish(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    await _trigger_generic_mode(message, board_id, stream, 'jewish_mode', JEWISH_PHRASES_START, 300, "ТАЛМУД И ГЕШЕФТ")
+
+@dp.message(Command("anime"))
+async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    await _trigger_generic_mode(message, board_id, stream, 'anime_mode', ["Аниме режим активирован! 🌸"], 300, "ANIME MODE")
 @dp.message(Command("stop"))
 async def cmd_stop(message: types.Message, board_id: str | None, stream: str = 'ru'):
 

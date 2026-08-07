@@ -145,7 +145,19 @@ class NewPostProcessor:
         return True
 
     async def _apply_content_transformations(self):
-        apply_transform = getattr(main, '_apply_mode_transformations', None)
+        apply_transform = None
+        try:
+            import main
+            apply_transform = getattr(main, '_apply_mode_transformations', None)
+        except Exception:
+            pass
+        if not apply_transform:
+            try:
+                import __main__ as main_entry
+                apply_transform = getattr(main_entry, '_apply_mode_transformations', None)
+            except Exception:
+                pass
+
         if apply_transform:
             self.author_content = await apply_transform(self.content, self.board_id)
         else:
