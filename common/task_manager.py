@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Coroutine, Set
+from typing import Coroutine, Set, Any
 
 _background_tasks: Set[asyncio.Task] = set()
 
@@ -26,7 +26,7 @@ def _on_task_done(task: asyncio.Task) -> None:
         )
 
 
-def _derive_name(coro: Coroutine) -> str | None:
+def _derive_name(coro: Any) -> str | None:
     qualname = getattr(coro, "__qualname__", None)
     if qualname:
         return qualname
@@ -34,21 +34,26 @@ def _derive_name(coro: Coroutine) -> str | None:
     return getattr(code, "co_name", None)
 
 
-def spawn_task(coro: Coroutine, name: str = None) -> asyncio.Task:
+async def _wrap_awaitable(awaitable: Any) -> Any:
+    return await awaitable
+
+
+def spawn_task(coro: Any, name: str = None) -> asyncio.Task:
     """
     Creates an asyncio Task and retains a hard reference to it
     until it completes, preventing accidental GC during heavy load.
+    Supports standard coroutines and Aiogram SendMessage/TelegramMethod awaitables.
     """
+    if not asyncio.iscoroutine(coro):
+        coro = _wrap_awaitable(coro)
+
     if name is None:
         try:
             name = _derive_name(coro)
         except Exception:
             name = None
-    try:
-        task = asyncio.create_task(coro, name=name)
-    except TypeError:
-        task = asyncio.create_task(coro)
 
+    task = asyncio.create_task(coro, name=name)
     _background_tasks.add(task)
     task.add_done_callback(_on_task_done)
     return task
