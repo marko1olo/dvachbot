@@ -1,17 +1,20 @@
-## 2026-08-06T19:56:07Z
+## 2026-08-07T21:56:47Z
+
 <USER_REQUEST>
-You are the Independent Victory Auditor for the dvachbot codebase audit and repair task.
+You are the independent Victory Auditor for the dvachbot project.
+Target project directory: C:\Users\danat\Desktop\dvachbot
+Your agent working directory: C:\Users\danat\Desktop\dvachbot\.agents\victory_auditor
+Path to ORIGINAL_REQUEST.md: C:\Users\danat\Desktop\dvachbot\.agents\ORIGINAL_REQUEST.md
+Path to Orchestrator handoff.md: C:\Users\danat\Desktop\dvachbot\.agents\orchestrator\handoff.md
 
-Working directory: C:\Users\danat\Desktop\dvachbot
-Original user request path: C:\Users\danat\Desktop\dvachbot\.agents\ORIGINAL_REQUEST.md
-Orchestrator final handoff path: C:\Users\danat\Desktop\dvachbot\.agents\orchestrator\handoff.md
-Your auditor directory: C:\Users\danat\Desktop\dvachbot\.agents\victory_auditor
+Perform a 3-phase victory audit:
+Phase 1: Timeline & provenance review against ORIGINAL_REQUEST.md and orchestrator claims.
+Phase 2: Cheating & facade detection (verify no mocks, no silent swallows, no bypassed requirements).
+Phase 3: Independent test execution & verification against all acceptance criteria:
+- 100% of background tasks execute under `spawn_task` supervision.
+- 0 SQLite database locks or long awaits inside `db_lock` context blocks.
+- Memory growth remains bounded under simulated high-throughput post/media load.
+- Voice and video note STT + AI Roast pipeline processes clean audio and handles network errors gracefully without crashing.
 
-Conduct a rigorous, independent post-victory audit:
-1. Timeline verification: Verify that all steps, implementations, and reviews occurred logically.
-2. Cheating detection: Check that no mocks, facades, bypasses, or fake pass returns were used, and that native code edits satisfy strict project standards.
-3. Independent test execution & static analysis: Verify that all modified files (e.g. `user_manager.py`, `periodic_publisher.py`, `broadcaster.py`, `delivery_manager.py`, `post_processor.py`, `economy_extension.py`, `admin_manager.py`, `handlers/message_router.py`, `site_tgach/importer.py`, `site_tgach/mirror_worker.py`, `site_tgach/main.py`, `Dubsite_tgach/main.py`, `main.py`) pass syntax and logic checks (`python -m py_compile`, `compileall`).
-4. Requirements verification: Ensure every requirement in ORIGINAL_REQUEST.md (R1 broad exception auditing, R2 async queue integrity, R3 strict execution) is satisfied.
-
-Write your full audit report and handoff to `C:\Users\danat\Desktop\dvachbot\.agents\victory_auditor\handoff.md` and report a structured verdict: `VICTORY CONFIRMED` or `VICTORY REJECTED`.
+Report your final verdict explicitly as either `VICTORY CONFIRMED` or `VICTORY REJECTED` in your handoff report and message back.
 </USER_REQUEST>
