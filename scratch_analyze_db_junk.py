@@ -47,17 +47,21 @@ def print_top_tables(cur, tables):
     for i in range(0, len(tables), chunk_size):
         chunk = tables[i:i + chunk_size]
         query_parts = []
+        params = []
         for tbl in chunk:
-            query_parts.append(f"SELECT '{tbl}', (SELECT COUNT(*) FROM \"{tbl}\")")
+            tbl_escaped = tbl.replace('"', '""')
+            query_parts.append(f"SELECT ?, (SELECT COUNT(*) FROM \"{tbl_escaped}\")")
+            params.append(tbl)
         query = " UNION ALL ".join(query_parts)
         try:
-            cur.execute(query)
+            cur.execute(query, params)
             for row in cur.fetchall():
                 table_counts[row[0]] = row[1]
         except Exception:
             for tbl in chunk:
                 try:
-                    cur.execute(f"SELECT COUNT(*) FROM \"{tbl}\"")
+                    tbl_escaped = tbl.replace('"', '""')
+                    cur.execute(f"SELECT COUNT(*) FROM \"{tbl_escaped}\"")
                     table_counts[tbl] = cur.fetchone()[0]
                 except Exception:
                     table_counts[tbl] = -1
