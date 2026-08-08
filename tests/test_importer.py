@@ -48,5 +48,20 @@ class TestImporter(unittest.TestCase):
         normalized = importer_instance._normalize_html_sync(raw_html)
         self.assertEqual(normalized, "Text ||hidden||")
 
+
+    def test_normalize_html_sync_replacements(self):
+        from Dubsite_tgach.importer import ThreadImporter
+        importer_instance = ThreadImporter(bot=None, file_storage_channel_id=123)
+
+        # Test replacements dictionary logic (case-insensitive)
+        raw_html = "Привет, ДваЧ! Это 4chan.org и mAiLrU. Абу - молодец. 2ch.su 2chan харкач сосач двощ 2ch"
+        expected = "Привет, тгач! Это tgach.site и tganon. админ - молодец. tgach.site tgach тгач тгач тгач tgach"
+        normalized = importer_instance._normalize_html_sync(raw_html)
+        self.assertEqual(normalized, expected)
+
+        # Edge cases: empty string
+        self.assertEqual(importer_instance._normalize_html_sync(""), "")
+        self.assertEqual(importer_instance._normalize_html_sync(None), "")
+
 if __name__ == "__main__":
     unittest.main()
