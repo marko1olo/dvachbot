@@ -41,6 +41,8 @@ logger.setLevel(logging.INFO)
 GROQ_COOLDOWN_UNTIL = 0
 _VISION_SEMAPHORE = None
 BANNED_GEMINI_KEYS = set()
+BANNED_GROQ_KEYS = set()
+_LAST_VISION_CALL_TIME: dict[str, float] = {"groq": 0.0, "gemini": 0.0}
 
 
 def _env_int(name, default):
@@ -97,15 +99,14 @@ def prepare_image_for_groq(file_path):
             try:
                 img.close()
             except Exception:
-                import traceback; traceback.print_exc()
+                pass  # Image cleanup failure is not actionable
 
 
-_LAST_VISION_CALL_TIME = 0.0
+# Per-provider timestamps moved to module-level dict above
 
 async def describe_image(file_paths, caption: str = None, is_passive: bool = False, source: str = "SITE") -> str:
     """Анализирует изображение(я) через каскад Vision (Gemini 3.5 -> Qwen 3.6 -> Llama 4 Scout)."""
     global GROQ_COOLDOWN_UNTIL
-    global _LAST_VISION_CALL_TIME
 
     if time.time() < GROQ_COOLDOWN_UNTIL:
         logger.warning(f"⚠️ [VISION] [{source}] Skipped analysis due to active cooldown.")
@@ -197,10 +198,11 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                         raw_keys = os.getenv("GROQ_API_KEYS", "") or os.getenv("GROQ_KEYS", "") or os.getenv("GROQ_API_KEY", "")
                         base_url = "https://api.groq.com/openai/v1"
 
+                    banned = BANNED_GEMINI_KEYS if provider == "gemini" else BANNED_GROQ_KEYS
                     if isinstance(raw_keys, list):
-                        keys = [k for k in raw_keys if k and k not in BANNED_GEMINI_KEYS]
+                        keys = [k for k in raw_keys if k and k not in banned]
                     else:
-                        keys = [k.strip() for k in str(raw_keys).split(",") if k.strip() and k.strip() not in BANNED_GEMINI_KEYS]
+                        keys = [k.strip() for k in str(raw_keys).split(",") if k.strip() and k.strip() not in banned]
                         
                     if not keys:
                         continue
@@ -209,11 +211,11 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     
                     for api_key in keys:
                         try:
-                            # Enforce global cooldown of 3 seconds between requests per provider
-                            time_since_last_call = time.time() - _LAST_VISION_CALL_TIME
+                            # Enforce per-provider cooldown of 3 seconds between requests
+                            time_since_last_call = time.time() - _LAST_VISION_CALL_TIME.get(provider, 0.0)
                             if time_since_last_call < 3.0:
                                 await asyncio.sleep(3.0 - time_since_last_call)
-                            _LAST_VISION_CALL_TIME = time.time()
+                            _LAST_VISION_CALL_TIME[provider] = time.time()
 
                             client = AsyncOpenAI(
                                 api_key=api_key,
@@ -276,8 +278,12 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} server overloaded ({err_str}). Skipping model {model_name}.")
                                 break
                             if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
-                                logger.info(f"ℹ️ [VISION] [{source}] {provider} key rate limited (429), cooling down 2.5s...")
-                                await asyncio.sleep(2.5)
+                                logger.info(f"ℹ️ [VISION] [{source}] {provider} model {model_name} rate limited (429). Switching to next model immediately.")
+                                break  # stop cycling keys — the whole model/provider is rate-limited
+                            if "401" in err_str or "invalid api key" in err_str or "unauthorized" in err_str:
+                                if provider == "groq":
+                                    logger.error(f"❌ [VISION] [{source}] Groq key {api_key[:12]}... unauthorized (401). Removing from pool.")
+                                    BANNED_GROQ_KEYS.add(api_key)
                                 continue
                             if provider == "gemini" and ("403" in err_str or "permission_denied" in err_str):
                                 logger.error(f"❌ [VISION] [{source}] Gemini key {api_key[:12]}... is permanently banned (403). Removing from pool.")
