@@ -748,8 +748,8 @@ async def tagging_loop():
                     else:
                         tags = ai_response
 
-                if tags is None and ai_response == "error_api_exhausted":
-                    logger.warning(f"\u26a0\ufe0f [TAGGER] API exhausted. Skipping DB update for {file_id} to retry later.")
+                if tags is None and ai_response in (None, "error_api_exhausted"):
+                    logger.warning(f"⚠️ [TAGGER] API exhausted or internal error. Skipping DB update for {file_id} to retry later.")
                     continue
                     
                 if not tags:
