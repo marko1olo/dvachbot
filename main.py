@@ -77,7 +77,7 @@ import time
 import periodic_publisher
 import threading
 import socket
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 import numpy as np
 try:
     import pandas as pd
