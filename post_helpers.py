@@ -176,9 +176,9 @@ def apply_shadow_autoreplace(content: dict) -> dict:
         
     def die_replacer(match):
         matched_text = match.group(1).lower().replace(" ", "")
-        if "╤é╨╡" in matched_text:
-            return "╨╛╨▒╨╛╤ü╤ü╤ï╤é╨╡ ╨╝╨╡╨╜╤Å"
-        return "╨╛╨▒╨╛╤ü╤ü╤ï ╨╝╨╡╨╜╤Å"
+        if "те" in matched_text:
+            return "обоссыте меня"
+        return "обоссы меня"
         
     for key in ('text', 'caption'):
         text_val = modified.get(key)
