@@ -48,13 +48,14 @@ async def find_file_message_info(file_id):
         db = await get_pool()
         query = """
             SELECT cc.channel_id, cc.message_id, p.post_num
-            FROM Posts p
+            FROM PostFiles pf
+            JOIN Posts p ON pf.post_num = p.post_num
             JOIN ChannelCopies cc ON p.post_num = cc.post_num
-            WHERE instr(p.content, ?) > 0
+            WHERE (pf.original_file_id = ? OR pf.thumbnail_file_id = ?)
             ORDER BY p.post_num DESC
             LIMIT 1
         """
-        async with db.execute(query, (file_id,)) as cursor:
+        async with db.execute(query, (file_id, file_id)) as cursor:
             return await cursor.fetchone()
     except Exception as e:
         logger.warning("find_file_message_info failed for %s: %s", file_id, e)

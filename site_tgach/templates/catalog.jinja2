@@ -21,7 +21,7 @@
     <meta property="og:description" content="Каталог тредов раздела /{{ board_id }}/ — {{ board_info.description }}">
     <meta property="og:url" content="{{ request.url }}">
     <meta property="og:image" content="{{ request.base_url }}static/logo.png">
-    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.8">
     <link rel="icon" href="/static/favicon.ico">
     <link rel="alternate" type="application/rss+xml" title="RSS ТГАЧ - {{ board_info.name }}" href="/{{ board_id }}/rss.xml">
     <link rel="preconnect" href="https://api.telegram.org" crossorigin>
@@ -75,7 +75,7 @@
         })();
     </script>
     <header>
-        <div class="board-nav-top">
+        <div class="board-nav-top" spellcheck="false">
             <a href="/overboard/" class="nav-item-all active">ALL</a>
             {% for b_key, b_val in boards.items() %}
                 {% if b_key != 'test' %}
@@ -110,7 +110,7 @@
                 </div>
             </div>
         </div>
-        <nav class="board-header-nav">
+        <nav class="board-header-nav" spellcheck="false">
             <a href="/">[{{ request.state.t('nav_home') }}]</a>
             <span class="nav-sep">|</span>
             <a href="/{{ board_id }}/mode/">[{{ request.state.t('nav_mode_select') }}]</a>
@@ -126,10 +126,6 @@
             <a href="#" class="gallery-trigger">[{{ request.state.t('nav_gallery') }}]</a>
         </nav>
     </header>
-    <div style="max-width: 960px; margin: 10px auto; padding: 0 15px;">
-        <input type="text" id="catalog-filter" placeholder="{{ request.state.t('filter_placeholder') }}" 
-               style="width: 100%; padding: 10px; border: 1px solid var(--accent-primary); border-radius: 4px; box-sizing: border-box; background-color: var(--bg-input); color: var(--text-primary);">
-    </div>
 <main>
         <!-- Панель управления каталогом -->
         <div class="catalog-controls">
@@ -162,37 +158,62 @@
                 {% set hue = (thread.id|int * 137) % 360 %}
                 {% set bg_color = 'hsl(' ~ hue ~ ', 60%, 40%)' %}
                 <div class="catalog-thumb" style="background-color: {{ bg_color }};">
-                    {% if thread.content.files and thread.content.files[0].thumbnail_url %}
-                        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
-                             data-src="{{ thread.content.files[0].thumbnail_url }}" 
-                             class="lazy-load{% if thread.content.is_censored %} blurred-media{% endif %}" 
-                             alt="[Тред /{{ board_id }}/ #{{ thread.id }}] {{ thread.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"
-                             loading="lazy"
-                             referrerpolicy="no-referrer">
-                    {% elif thread.content.files and thread.content.files[0].type in ['video', 'video_note', 'animation'] %}
-                        <div class="catalog-thumb lazy-media-wrapper" 
-                             data-src="{{ thread.content.files[0].original_url }}" 
-                             data-type="{{ 'gif' if thread.content.files[0].type in ['gif', 'animation'] else 'video' }}"
-                             style="background-color: #000;">
-                            
-                            {% if thread.content.files[0].blurhash %}
-                                <canvas class="blurhash-canvas" data-hash="{{ thread.content.files[0].blurhash }}" width="32" height="32" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover;"></canvas>
+                    {% if thread.content.files and thread.content.files[0] %}
+                        {% set file0 = thread.content.files[0] %}
+                        {# thumb_strict: ONLY real thumbnail, never falls back to video original - avoids black poster #}
+                        {% set thumb_strict = (file0.thumbnail_file_id and '/files/' ~ file0.thumbnail_file_id) or (file0.thumbnail_url and not 'api.telegram.org' in file0.thumbnail_url and file0.thumbnail_url) %}
+                        {% set thumb_url = thumb_strict or (file0.original_file_id and '/files/' ~ file0.original_file_id) or (file0.original_url and not 'api.telegram.org' in file0.original_url and file0.original_url) %}
+                        {% set orig_url = (file0.original_file_id and '/files/' ~ file0.original_file_id) or (file0.original_url and not 'api.telegram.org' in file0.original_url and file0.original_url) %}
+                        {% if thumb_url or orig_url %}
+                            {% if file0.type in ['video', 'video_note', 'animation', 'gif'] %}
+                                <div class="catalog-thumb lazy-media-wrapper"
+                                     data-src="{{ orig_url }}"
+                                     data-file-id="{{ file0.original_file_id or '' }}"
+                                     data-type="{{ 'gif' if file0.type in ['gif', 'animation'] else 'video' }}"
+                                     style="background-color: {{ bg_color }};">
+
+                                    {# Overlay placeholder: visible until video loads or if thumb fails #}
+                                    {% if file0.blurhash %}
+                                        <canvas class="blurhash-canvas" data-hash="{{ file0.blurhash }}" width="32" height="32" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; z-index:1;"></canvas>
+                                    {% elif thumb_strict %}
+                                        {# img overlay — if 404, hides itself revealing colored bg_color wrapper #}
+                                        <img src="{{ thumb_strict }}" style="position:absolute; top:0; left:0; width:100%; height:100%; object-fit:cover; z-index:1;" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">
+                                    {% else %}
+                                        {# No thumbnail: colored placeholder with icon #}
+                                        <div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:1; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:4px;">
+                                            <span style="font-size:2em;">{{ '🎞' if file0.type in ['gif','animation'] else '🎬' }}</span>
+                                        </div>
+                                    {% endif %}
+
+                                    {# No poster= : browser won't paint a black rect. Video stays transparent (opacity:0) until lazy-loader loads it. #}
+                                    <video class="lazy-load{% if thread.content.is_censored %} blurred-media{% endif %}"
+                                           preload="none"
+                                           muted
+                                           playsinline
+                                           loop
+                                           data-src="{{ orig_url }}"
+                                           style="width: 100%; height: 100%; object-fit: cover; position:absolute; top:0; left:0; z-index:2; opacity:0; transition:opacity 0.3s;">
+                                    </video>
+
+                                    <span class="lazy-badge" style="position:absolute; bottom:5px; right:5px; background:rgba(0,0,0,0.6); color:white; padding:2px 4px; font-size:10px; border-radius:3px; z-index:3;">
+                                        {{ 'GIF' if file0.type in ['gif', 'animation'] else 'VIDEO' }}
+                                    </span>
+                                </div>
+                            {% else %}
+                                <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                                     data-src="{{ thumb_url or orig_url }}" 
+                                     class="lazy-load{% if thread.content.is_censored %} blurred-media{% endif %}" 
+                                     alt="[Тред /{{ board_id }}/ #{{ thread.id }}] {{ thread.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"
+                                     loading="lazy"
+                                     onerror="handleImageError(this)"
+                                     referrerpolicy="no-referrer">
                             {% endif %}
-                            
-                            <video class="lazy-load{% if thread.content.is_censored %} blurred-media{% endif %}" 
-                                   preload="metadata" 
-                                   muted 
-                                   playsinline 
-                                   loop
-                                   data-src="{{ thread.content.files[0].original_url }}"
-                                   {% if thread.content.files[0].thumbnail_url %}poster="{{ thread.content.files[0].thumbnail_url }}"{% endif %}
-                                   style="width: 100%; height: 100%; object-fit: cover;">
-                            </video>
-                            
-                            <span class="lazy-badge" style="position:absolute; bottom:5px; right:5px; background:rgba(0,0,0,0.6); color:white; padding:2px 4px; font-size:10px; border-radius:3px;">
-                                {{ 'GIF' if thread.content.files[0].type in ['gif', 'animation'] else 'VIDEO' }}
-                            </span>
-                        </div>
+                        {% else %}
+                            <div class="catalog-ambient">
+                                <span>📝</span>
+                                <small>{{ thread.content.text | safe | striptags | truncate(40) }}</small>
+                            </div>
+                        {% endif %}
                     {% else %}
                         <div class="catalog-ambient">
                             <span>📝</span>
@@ -397,6 +418,6 @@
         </form>
     </div>
     <div id="new-posts-indicator" style="display: none;"></div>
-    <script src="/static/js/main.js?v=9.7" defer></script>
+    <script src="/static/js/main.js?v=9.8" defer></script>
 </body>
 </html>

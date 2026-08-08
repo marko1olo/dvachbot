@@ -101,7 +101,7 @@ html {
 }
 :root {
     --z-content: 1;
-    --z-mascot: 50;
+    --z-mascot: 0;
     --z-scroll-btn: 900;
     --z-nav: 900;
     --z-reply-box: 2030;
@@ -571,8 +571,14 @@ body.filtering-by-id .post:not(.filter-highlight) {
 .post-image.loaded, 
 .post-sticker.loaded, 
 .post-video.loaded,
-video[poster]:not([poster=""]) {
+.catalog-thumb img.loaded,
+.catalog-thumb video.loaded,
+.lazy-media-wrapper.loaded video,
+video[poster]:not([poster=""]),
+video[data-src].loaded,
+img[data-loaded="true"] {
     opacity: 1 !important;
+    visibility: visible !important;
 }
 .blurred-media {
     filter: blur(30px) grayscale(0.5) !important;
@@ -1016,7 +1022,7 @@ body.modal-open { overflow: hidden !important; padding-right: 15px; }
     justify-content: space-between;
     align-items: center;
     padding: 8px 0;
-    border-bottom: 1px solid rgba(0,0,0,0.05);
+    border-bottom: 1px solid var(--border-input);
 }
 .settings-row:last-child { border-bottom: none; }
 .settings-row label { margin: 0; font-weight: 500; }
@@ -1464,7 +1470,7 @@ body.gallery-open { overflow: hidden !important; position: fixed !important; wid
     padding: 10px;
     width: 100%;
     max-width: 450px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    box-shadow: 0 1px 2px var(--border-input);
 }
 .cap-body {
     display: flex;
@@ -2901,8 +2907,8 @@ body.no-mascot #mascot { display: none !important; }
 .bot-username { flex-grow: 1; color: var(--text-secondary); font-family: monospace; }
 .bot-arrow { color: var(--accent-primary); font-weight: bold; }
 .backlinks-container { margin-top: 10px; font-size: 0.85em; color: var(--text-secondary); }
-.backlinks-container a.post-link { margin-right: 8px; color: var(--accent-link-special); }
-.backlinks-container a.post-link:hover { color: var(--accent-link-special-hover); }
+.backlinks-container a.post-link { margin-right: 8px; color: var(--accent-link); }
+.backlinks-container a.post-link:hover { color: var(--accent-link); }
 .history-item { padding: 8px; border-bottom: 1px solid var(--border-separator); }
 .history-item:last-child { border-bottom: none; }
 .history-item a { font-size: 1.1em; }
@@ -3095,7 +3101,7 @@ html.theme-paper code, html.theme-paper pre {
 html.theme-light .modal,
 html.theme-light .post {
     border: none !important;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.05) !important;
+    box-shadow: 0 4px 15px var(--border-input), 0 1px 2px var(--border-input) !important;
     border-radius: 8px !important;
 }
 html.theme-win95 .toast, 
@@ -3970,13 +3976,13 @@ details[open] summary::after {
     text-decoration: underline;
 }
 .quote-link {
-    color: var(--accent-link-special);
+    color: var(--accent-link);
     text-decoration: none;
     font-weight: 500;
 }
 .quote-link:hover {
     text-decoration: underline;
-    color: var(--accent-link-special-hover);
+    color: var(--accent-link);
 }
 .quote-link.dead-link {
     text-decoration: line-through;
@@ -4501,7 +4507,7 @@ code, pre, kbd, samp, var {
         height: 180px !important;
         right: 10px !important;
         bottom: 45px !important;
-        z-index: 50 !important;
+        z-index: 0 !important;
         pointer-events: none;
     }
     .mascot-img, .mascot-bubble {
@@ -5951,7 +5957,7 @@ html.theme-dark .captcha-hint { background: rgba(0,0,0,0.7); }
 }
 .captcha-slot {
     width: 40px; height: 40px; border: 2px dashed var(--border-input);
-    border-radius: 4px; background: rgba(0,0,0,0.05);
+    border-radius: 4px; background: var(--border-input);
 }
 .captcha-letter {
     width: 40px; height: 40px; background: var(--bg-button-secondary);
@@ -6017,11 +6023,7 @@ html.theme-dark .captcha-hint { background: rgba(0,0,0,0.7); }
     border-color: var(--action-danger) !important;
     box-shadow: 0 0 10px rgba(255, 0, 0, 0.3);
 }
-#ws-status-indicator {
-    position: fixed; bottom: 5px; right: 5px;
-    width: 10px; height: 10px; border-radius: 50%;
-    z-index: 9999;
-}
+#ws-status-indicator{display:none !important;}
 #ws-status-indicator.online { background-color: #2ecc71; box-shadow: 0 0 5px #2ecc71; }
 #ws-status-indicator.offline { background-color: #e74c3c; }
 #ws-status-indicator.polling { background-color: #f1c40f; animation: pulse 2s infinite; }
@@ -7889,7 +7891,7 @@ html.theme-sakura .mobile-bottom-nav { background-color: #fff0f5 !important; bor
 html.theme-sakura .mobile-nav-item { color: #a05070 !important; }
 html.theme-sakura #thread-player-controls { background-color: #fff !important; border: 2px solid #ffb6c1 !important; color: #a05070 !important; border-radius: 20px !important; box-shadow: 0 5px 15px rgba(255,182,193,.4) !important; }
 html.theme-sakura .loader-spinner { border-color: rgba(255,105,180,.2); border-top-color: #ff69b4; }
-html.theme-sakura ::placeholder { color: rgba(160,80,112,.4); }
+html.theme-sakura ::placeholder { color: rgba(160,80,112, 0.75); }
 html.theme-light #thread-player-controls { background-color: #fff !important; border: 1px solid #e2e8f0 !important; color: #2d3748 !important; box-shadow: 0 4px 6px rgba(0,0,0,.1) !important; }
 @media (hover: none) {
     body[class*="theme-"] .file-thumb img,
@@ -8074,7 +8076,7 @@ body.modal-open #system-dock * {
     border: 1px solid var(--bg-main);
     pointer-events: none;
 }
-.dock-tab:hover { opacity: 1; background: rgba(0,0,0,0.05); }
+.dock-tab:hover { opacity: 1; background: var(--border-input); }
 .dock-tab.active {
     opacity: 1;
     border-bottom-color: var(--accent-primary);
@@ -8231,8 +8233,8 @@ body.modal-open #system-dock * {
     background: repeating-linear-gradient(45deg, 
         transparent, 
         transparent 5px, 
-        rgba(0,0,0,0.05) 5px, 
-        rgba(0,0,0,0.05) 10px
+        var(--border-input) 5px, 
+        var(--border-input) 10px
     );
     animation: wave-move 20s linear infinite;
     opacity: 0.5;
@@ -8288,7 +8290,7 @@ body.font-size-large .reply-preview .post-text { font-size: 18px !important; lin
 }
 @media (max-width: 768px) {
     #mascot-wrapper {
-        z-index: 50 !important;
+        z-index: 0 !important;
         pointer-events: none; 
     }
     .mascot-body {
@@ -8594,7 +8596,7 @@ body.preview-size-large .post-video {
     padding: 20px;
     background-color: var(--bg-post);
     border: 1px solid var(--border-primary);
-    background-image: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, rgba(0,0,0,0.05) 100%) !important;
+    background-image: linear-gradient(135deg, rgba(255,255,255,0.05) 0%, var(--border-input) 100%) !important;
 }
 .board-card-grid.style-cards .board-card-content {
     text-align: left;
@@ -9912,7 +9914,7 @@ html[class*="theme-"] body {
     background-color: var(--bg-post-reply) !important;
     border-radius: 4px !important;
     border-left: 2px solid var(--accent-primary) !important;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    box-shadow: 0 1px 3px var(--border-input);
     clear: both; 
 }
 .overboard-reply .post-header {
@@ -10070,7 +10072,12 @@ body.nsfw-mode .file-thumb:not(:has(.blurhash-canvas)) .post-image {
 }
 
 /* Ядерный фикс видимости */
-.post-image.loaded {
+.post-image.loaded,
+.post-sticker.loaded,
+.post-video.loaded,
+.catalog-thumb img.loaded,
+.catalog-thumb video.loaded,
+.lazy-media-wrapper.loaded video {
     opacity: 1 !important;
     filter: none !important;
     visibility: visible !important;
@@ -10128,4 +10135,69 @@ canvas.blurhash-canvas {
 }
 ::-webkit-scrollbar-thumb:hover {
     background: var(--accent-primary);
+}
+/* CSS Variable Colorization for Logo-Wave */
+.header-logo img {
+    background-color: var(--accent-primary);
+    -webkit-mask: url(/static/logo.png) no-repeat center;
+    mask: url(/static/logo.png) no-repeat center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    content: url('data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=');
+}
+
+
+/* =========================
+   HOTFIXES FOR THEMES (UI REMEDIATION)
+   ========================= */
+
+/* 1. Sakura & Ocean: контрастность текста плейсхолдеров */
+html.theme-sakura ::placeholder { color: rgba(160,80,112,0.85) !important; }
+html.theme-ocean ::placeholder { color: rgba(137,180,250,0.8) !important; }
+
+/* 2. Sakura & Ocean: отбалансировать паддинги боковых блоков */
+html.theme-sakura .panel, html.theme-ocean .panel,
+html.theme-sakura .sidebar, html.theme-ocean .sidebar {
+    padding: 15px !important;
+}
+
+/* 3. Sakura: убрать dashed рамку с картинок */
+html.theme-sakura .post-image, html.theme-sakura .file-thumb img {
+    border-style: solid !important;
+}
+
+/* 4. Lain & Gruvbox: исправить контраст ссылок, окантовки блоков и тегов <Protocol> */
+html.theme-lain a, html.theme-gruvbox a {
+    color: var(--accent-link) !important;
+}
+html.theme-lain .protocol-tag { color: #ff3333 !important; }
+html.theme-gruvbox .protocol-tag { color: #fb4934 !important; }
+html.theme-lain .post, html.theme-gruvbox .post {
+    border-color: var(--border-primary) !important;
+}
+
+/* 5. Win95: отбалансировать [+], паддинги шапок постов, выпадающие списки */
+html.theme-win95 .thread-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; vertical-align: middle;
+}
+html.theme-win95 .post-header {
+    padding: 4px 8px !important;
+}
+html.theme-win95 select {
+    padding: 2px 4px !important;
+    appearance: menulist !important;
+}
+
+/* 6. Noir: убрать принудительный CAPS у кнопок, восстановить маскота */
+html.theme-noir button, html.theme-noir .btn {
+    text-transform: none !important;
+}
+html.theme-noir .mascot-container { display: block !important; }
+
+/* 7. Terminal & Cyberpunk: читаемость ссылок [на главную] (top-nav links) */
+html.theme-terminal .top-nav a, html.theme-cyberpunk .top-nav a,
+html.theme-terminal .header-group a, html.theme-cyberpunk .header-group a {
+    color: var(--accent-primary) !important;
+    text-shadow: 1px 1px 0px #000;
 }

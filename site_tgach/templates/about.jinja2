@@ -10,7 +10,7 @@
     <meta property="og:title" content="О проекте — ТГАЧ">
     <meta property="og:description" content="TGACH — анонимный веб-архив имиджборд, подробная статистика, персональные паспорта и тренды.">
     <meta property="og:image" content="/static/logo.png">
-    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.8">
     <link rel="icon" href="/static/favicon.ico">
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#212121">
@@ -139,7 +139,7 @@
 </head>
 <body {% if session.user %}data-user-id="{{ request.state.user_hash }}"{% endif %} data-site-mode="{{ site_mode }}">
     <header>
-        <div class="board-nav-top">
+        <div class="board-nav-top" spellcheck="false">
             {% for category in ['popular', 'bio', 'thematic', 'system'] %}
                 {% set category_boards = [] %}
                 {% for b_key, b_val in boards.items() %}
@@ -518,7 +518,7 @@
         </form>
     </div>
 
-    <script src="/static/js/main.js?v=9.7"></script>
+    <script src="/static/js/main.js?v=9.8"></script>
     <script>
         // Инициализация скриптов
         document.addEventListener('DOMContentLoaded', () => {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ request.state.t('dock_my', 'Мои посты') }} - {{ request.state.t('site_name') }}</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.8">
     <link rel="icon" href="/static/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
     <meta name="theme-color" content="#212121">    
@@ -166,7 +166,7 @@
     </div>
 
     <header>
-       <div class="board-nav-top">
+       <div class="board-nav-top" spellcheck="false">
             {% for category in ['popular', 'bio', 'thematic', 'system'] %}
                 {% set category_boards = [] %}
                 {% for b_key, b_val in boards.items() %}
@@ -351,7 +351,7 @@
         </button>
     </nav>
 
-    <script src="/static/js/main.js?v=9.7"></script>
+    <script src="/static/js/main.js?v=9.8"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             if(window.MyPostsPage) {

@@ -31,7 +31,7 @@ from common.spam_filter import analyze_message_for_spam, SpamResult, check_image
 from archive_manager import archive_thread, _forward_post_to_realtime_archive, _site_file_send_type
 from delivery_manager import message_broadcaster, send_missed_messages, execute_delayed_edit, edit_post_for_all_recipients, _get_thread_entry_keyboard, validate_message_format, board_help_worker, _remove_already_delivered_recipients, _delete_durable_delivery_item
 from post_processor import NewPostProcessor, NewPostContext
-from post_helpers import apply_shadow_autoreplace, _format_header_inner
+from post_helpers import apply_shadow_autoreplace, _format_header_inner, format_header
 from media_utils import _download_image_with_proxy, _resize_image_if_needed
 
 import shared_state
@@ -114,6 +114,7 @@ from common.database import (
 )
 from site_tgach.admin_config import ADMIN_IDS
 from site_tgach.tagging_worker import tagging_loop
+from ai_manager import transcribe_and_roast_voice_note
 from common.db_pool import create_pool, get_pool, db_lock, close_pool, LazyLock
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from text_assets import (
@@ -282,7 +283,7 @@ ANIME_COMMAND_MAP = {
     "LOL1": get_loli_image,
     "LOLICO": get_loli_image,
 }
-from common.text_utils import clean_html_tags, sanitize_html, RE_YOU_PATTERN, unwrap_tg_emoji, clean_html_for_tg
+from common.text_utils import clean_html_tags, sanitize_html, RE_YOU_PATTERN, unwrap_tg_emoji, clean_html_for_tg, generate_poll_text_display
 RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
 RE_SYSTEM_HEADER_CLEAN = re.compile(r'^(###.*?###|<i>.*?</i>)\s*\n?', flags=re.MULTILINE)
 RE_NEWLINES = re.compile(r'\n{2,}')
@@ -1663,7 +1664,7 @@ async def _handle_unhandled_exception(exception: Exception, update) -> None:
             update_json = update.model_dump_json(exclude_none=True, indent=2)
             print(f"--- Update Context ---\n{update_json}\n--- End Update Context ---")
         except Exception as json_e:
-            print(f"Не удалось сериализовать update: {json_e}")
+            logger.warning(f"[error_handler] Не удалось сериализовать update: {json_e}")
 
         # Send fallback message to user (try HTML first, then plain text)
         chat_obj = None
@@ -1798,7 +1799,7 @@ async def _drain_save_executor(timeout: float = SAVE_EXECUTOR_DRAIN_SEC) -> None
         try:
             save_executor.shutdown(wait=True)
         except Exception as e:
-            print(f"⚠️ Ошибка при завершении save_executor: {e}")
+            logger.warning(f"⚠️ Ошибка при завершении save_executor: {e}")
         finally:
             try:
                 loop.call_soon_threadsafe(finished.set)
@@ -1810,7 +1811,7 @@ async def _drain_save_executor(timeout: float = SAVE_EXECUTOR_DRAIN_SEC) -> None
         await asyncio.wait_for(finished.wait(), timeout=timeout)
         print("💾 Отложенные записи на диск завершены.")
     except asyncio.TimeoutError:
-        print(f"⚠️ Записи на диск не уложились в {timeout:g} с — продолжаю остановку.")
+        logger.warning(f"⚠️ Записи на диск не уложились в {timeout:g} с — продолжаю остановку.")
 
 
 async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | None = None, emergency: bool = False):
@@ -1833,7 +1834,7 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
         await dp.stop_polling()
         print("⏸ Polling остановлен.")
     except Exception as e:
-        print(f"⚠️ Ошибка при остановке polling: {e}")
+        logger.warning(f"⚠️ Ошибка при остановке polling: {e}")
         runtime_logger.warning(f"Ошибка при остановке polling: {e}")
 
     # Сброс WAL на диск
@@ -1847,7 +1848,7 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
             await db.execute("PRAGMA wal_checkpoint(TRUNCATE);")
             print("✅ Данные успешно сохранены на диск (WAL Truncated).")
     except Exception as e:
-        print(f"⛔ Ошибка сохранения WAL: {e}")
+        logger.error(f"⛔ Ошибка сохранения WAL: {e}")
 
     try:
         print("🛑 Отмена фоновых задач перед закрытием БД...")
@@ -1869,7 +1870,7 @@ async def graceful_shutdown(bots: list[Bot], healthcheck_site: web.TCPSite | Non
         # выполняющейся, а сразу следом memory_restarter шлёт SIGINT.
         await _drain_save_executor()
     except Exception as e:
-        print(f"⚠️ Ошибка при shutdown: {e}")
+        logger.error(f"⚠️ Ошибка при shutdown: {e}", exc_info=True)
         
     print("✅ Готово к выходу.")
 async def log_memory_summary():
@@ -2023,7 +2024,7 @@ async def board_statistics_broadcaster():
                     })
                     print(f"✅ [{board_id}] Статистика ({stream}) #{post_num} добавлена в очередь.")
         except Exception as e:
-            print(f"❌ Ошибка в board_statistics_broadcaster: {e}")
+            logger.error(f"❌ Ошибка в board_statistics_broadcaster: {e}", exc_info=True)
             await asyncio.sleep(120)
 async def _activate_mode(board_id: str, mode_to_enable: str):
     """
@@ -2227,7 +2228,7 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
                 reply_suffix = _get_reply_suffix(post, content, board_id, lang)
                 lines.append(f"{name}{reply_suffix}: {text}")
         except Exception as e:
-            print(f"[summarize] Error while chunking post: {e}")
+            logger.warning(f"[summarize] Error while chunking post: {e}")
     # Accumulate lines from newest to oldest up to 35000 characters to avoid split lines
     total_len = 0
     limited_lines = []
@@ -2312,8 +2313,8 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
 
         # Уведомление пользователю отключено по просьбе админа
 async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str) -> tuple[list[int], list, list]:
-    async with db_lock:
-        for attempt in range(10):
+    for attempt in range(10):
+        async with db_lock:
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
@@ -2399,10 +2400,13 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                 try: await db.execute("ROLLBACK")
                 except Exception: pass
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.2 * (attempt + 1))
-                    continue
-                print(f"⛔ DB Error in delete_user_posts: {e}")
-                return [], [], []
+                    # Sleep OUTSIDE the lock so other coroutines can acquire it during backoff
+                    pass
+                else:
+                    print(f"⛔ DB Error in delete_user_posts: {e}")
+                    return [], [], []
+        # Backoff outside db_lock
+        await asyncio.sleep(0.2 * (attempt + 1))
     return [], [], []
 
 async def _clean_posts_from_ram(posts_to_delete_nums: list[int], board_id: str):
@@ -2892,7 +2896,7 @@ async def admin_action_sync_worker():
                             board_data[b]['shadow_mutes'][uid] = datetime.fromtimestamp(act['expires'], timezone.utc)
             await asyncio.sleep(5)
         except Exception as e:
-            print(f"Sync error: {e}")
+            logger.error(f"[settings_sync] Sync error: {e}", exc_info=True)
             await asyncio.sleep(10)
 def smart_wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
     """
@@ -2984,7 +2988,7 @@ def generate_wipe_image(text: str) -> bytes | None:
         buffer.seek(0)
         return buffer.getvalue()
     except Exception as e:
-        print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА в generate_wipe_image: {e}")
+        logger.error(f"⛔ КРИТИЧЕСКАЯ ОШИБКА в generate_wipe_image: {e}", exc_info=True)
         import traceback
         traceback.print_exc()
         return None
@@ -3210,7 +3214,7 @@ async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: s
     try:
         await bot.send_message(chat_id, primary_message, parse_mode="HTML", disable_web_page_preview=True)
     except (TelegramForbiddenError, TelegramBadRequest) as e:
-        print(f"Не удалось отправить приветствие {chat_id}: {e}")
+        logger.warning(f"[welcome] Не удалось отправить приветствие {chat_id}: {e}")
         return
     await asyncio.sleep(1.5)
     secondary_pool = []
@@ -3284,9 +3288,9 @@ async def send_active_pin_to_new_user(bot: Bot, user_id: int, board_id: str):
                     disable_notification=True
                 )
             except Exception as e:
-                print(f"⚠️ Не удалось закрепить сообщение для нового юзера {user_id}: {e}")
+                logger.warning(f"[pin] Не удалось закрепить сообщение для нового юзера {user_id}: {e}")
     except Exception as e:
-        print(f"❌ Ошибка в send_active_pin_to_new_user: {e}")
+        logger.error(f"[pin] Ошибка в send_active_pin_to_new_user: {e}", exc_info=True)
 def throttle(rate: int):
     import functools
     cooldowns = {}
@@ -3365,7 +3369,7 @@ async def cmd_random_media(message: types.Message):
             else:
                 await message.answer_photo(file_id, caption=caption, parse_mode="HTML")
         except Exception as e:
-            print(f"Error sending random media: {e}")
+            logger.warning(f"[random_media] Error sending random media: {e}")
             await message.answer("❌ Ошибка при отправке. Возможно файл удален с серверов Telegram.")
     else:
         media_group = []
@@ -3379,7 +3383,7 @@ async def cmd_random_media(message: types.Message):
         try:
             await message.answer_media_group(media_group)
         except Exception as e:
-            print(f"Error sending random media group: {e}")
+            logger.warning(f"[random_media] Error sending random media group: {e}")
             await message.answer("❌ Ошибка при отправке альбома.")
 
 @dp.message(Command("getid"))
@@ -4369,7 +4373,7 @@ def _generate_stats_charts(board_id: str) -> list[bytes]:
         with matplotlib_guard():
             return _generate_stats_charts_locked(board_id)
     except ChartLockTimeout as e:
-        print(f"⛔ Графики /stats не построены: {e}")
+        logger.warning(f"⛔ Графики /stats не построены: {e}")
         return []
 
 
@@ -5195,7 +5199,7 @@ async def _get_passport_stats(user_id: int) -> tuple[int, float, int] | None:
                 row = await cursor.fetchone()
                 if row: post_count = row[0]
     except Exception as e:
-        print(f"Ошибка получения статистики: {e}")
+        logger.error(f"[статистика] Ошибка получения статистики: {e}", exc_info=True)
         return None
     return post_count, balance, is_verified
 
@@ -5343,7 +5347,7 @@ async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = 
                         'content': content
                     }))
         except Exception as e:
-            print(f"Error fetching atmosphere posts: {e}")
+            logger.warning(f"[atmosphere] Error fetching atmosphere posts: {e}")
 
     recent_posts.sort(key=lambda x: x[0])
     
@@ -5697,7 +5701,7 @@ async def cmd_menu(message: types.Message, board_id: str | None, stream: str = '
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        logger.error(f"Error deleting menu message: {traceback.format_exc()}")
 @dp.message(Command("whois", "info"))
 async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id): return
@@ -5724,7 +5728,8 @@ async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 
             async with db.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (target_id,)) as cursor:
                 row = await cursor.fetchone()
                 post_count = row[0] if row and row[0] else 0
-    except Exception: pass
+    except Exception as e:
+        logger.error(f"Error fetching whois info: {e}", exc_info=True)
 
     if lang == 'en': header = f"🗂 <b>Dossier on {anon_name}:</b>\n<code>{'—'*20}</code>"
     elif lang == 'jp': header = f"🗂 <b>{anon_name} の調査書:</b>\n<code>{'—'*20}</code>"
@@ -5941,7 +5946,7 @@ async def _board_motivation_worker(board_id: str):
                 await _send_motivation_message(board_id, stream, recipients)
 
         except Exception as e:
-            print(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}")
+            logger.error(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}", exc_info=True)
             await asyncio.sleep(120)
 
 
@@ -6010,7 +6015,7 @@ async def fetch_dvach_thread(board: str, only_new: bool = False):
                             result = f"{text}\n\n{link}\n\n{comment}"
                     return result
     except Exception as e:
-        print(f"Ошибка получения треда с /{board}/: {e}")
+        logger.error(f"Ошибка получения треда с /{board}/: {e}", exc_info=True)
         return None
 async def format_thread_for_telegram(op_post: dict, replies: list[dict]) -> list[str]:
     if not op_post: return []
@@ -6106,9 +6111,9 @@ async def dvach_thread_poster():
                     'board_id': destination_board_id,
                     'thread_id': thread_id
                 })
-                print(f"✅ Импортирован тред #{thread_id} (пост #{post_num}) на доску {destination_board_id}")
+                logger.info(f"✅ Импортирован тред #{thread_id} (пост #{post_num}) на доску {destination_board_id}")
         except Exception as e:
-            print(f"❌ Ошибка в dvach_thread_poster: {e}")
+            logger.error(f"❌ Ошибка в dvach_thread_poster: {e}", exc_info=True)
             await asyncio.sleep(300)
 async def check_cooldown(message: Message, board_id: str) -> bool:
 
@@ -6145,11 +6150,11 @@ async def check_cooldown(message: Message, board_id: str) -> bool:
             sent_msg = await message.answer(text, parse_mode="HTML")
             spawn_task(delete_message_after_delay(sent_msg, 11))
         except Exception:
-            import traceback; traceback.print_exc()
+            logger.error(f"Error sending cooldown msg: {traceback.format_exc()}")
         try:
             await message.delete()
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()     
+            logger.error(f"Error deleting cooldown message: {traceback.format_exc()}")     
         return False
     return True
 def get_board_id(telegram_object: types.Message | types.CallbackQuery) -> str | None:
@@ -6191,20 +6196,20 @@ def _sync_save_graph_stats(data_to_save: dict) -> bool:
             try:
                 shutil.copyfile(GRAPH_STATS_PATH, GRAPH_STATS_BACKUP_PATH)
             except OSError as e:
-                print(f"⚠️ Не удалось обновить {GRAPH_STATS_BACKUP_PATH}: {e}")
+                logger.warning(f"[graph_saver] Не удалось обновить {GRAPH_STATS_BACKUP_PATH}: {e}")
 
         os.replace(tmp_path, GRAPH_STATS_PATH)
         tmp_path = ""
         return True
     except Exception as e:
-        print(f"⛔ Ошибка в потоке сохранения graph.json: {e}")
+        logger.error(f"⛔ Ошибка в потоке сохранения graph.json: {e}", exc_info=True)
         return False
     finally:
         if tmp_path:
             try:
                 os.remove(tmp_path)
             except OSError:
-                import traceback; traceback.print_exc()
+                logger.error(f"Error removing temp file: {traceback.format_exc()}")
 
 
 def _coerce_graph_stats(raw) -> dict:
@@ -6261,9 +6266,9 @@ def _report_graph_save_result(future) -> None:
     """Callback для run_in_executor: не даём ошибке записи утонуть без следа."""
     try:
         if future.result() is False:
-            print("⚠️ graph.json не сохранён (см. ошибку выше), данные остались только в RAM.")
+            logger.warning("⚠️ graph.json не сохранён (см. ошибку выше), данные остались только в RAM.")
     except Exception as e:
-        print(f"⛔ Поток сохранения graph.json упал: {type(e).__name__}: {e}")
+        logger.error(f"⛔ Поток сохранения graph.json упал: {type(e).__name__}: {e}", exc_info=True)
 
 
 def load_graph_stats():
@@ -6276,12 +6281,12 @@ def load_graph_stats():
             with open(path, 'r', encoding='utf-8') as f:
                 raw = json.load(f)
         except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
-            print(f"⚠️ Не удалось прочитать {label}: {type(e).__name__}: {e}")
+            logger.warning(f"[graph] Не удалось прочитать {label}: {type(e).__name__}: {e}")
             continue
 
         loaded = _coerce_graph_stats(raw)
         if not loaded and raw:
-            print(f"⚠️ В {label} нет ни одной валидной серии "
+            logger.warning(f"⚠️ В {label} нет ни одной валидной серии "
                   f"(корень: {type(raw).__name__}), пропускаю файл.")
             continue
 
@@ -6289,10 +6294,10 @@ def load_graph_stats():
         graph_stats = loaded
         points = sum(len(series) for series in loaded.values())
         suffix = f", отброшено {dropped} устаревших точек" if dropped else ""
-        print(f"✅ Статистика для графика ({label}) загружена: {len(loaded)} досок, {points} точек{suffix}.")
+        logger.info(f"✅ Статистика для графика ({label}) загружена: {len(loaded)} досок, {points} точек{suffix}.")
         return
 
-    print("ℹ️ graph.json отсутствует или повреждён — статистика графика начнётся с нуля.")
+    logger.info("ℹ️ graph.json отсутствует или повреждён — статистика графика начнётся с нуля.")
     graph_stats = {}
 async def graph_data_collector():
     """
@@ -6322,14 +6327,14 @@ async def graph_data_collector():
                             posts_per_hour[board_id] += 1
             timestamp_key = start_time.replace(minute=0, second=0, microsecond=0).isoformat()
             if not posts_per_hour:
-                print(f"📊 Сборщик статистики для графика: за час с {start_time.strftime('%H:%M')} не было активности.")
+                logger.info(f"📊 Сборщик статистики для графика: за час с {start_time.strftime('%H:%M')} не было активности.")
                 continue
             for board_id, count in posts_per_hour.items():
                 if count > 0:
                     graph_stats.setdefault(board_id, {})[timestamp_key] = count
             dropped = _prune_graph_stats(graph_stats)
             pruned_note = f", подрезано {dropped} точек старше {GRAPH_STATS_RETENTION_DAYS}д" if dropped else ""
-            print(f"📊 Статистика для графика собрана за {timestamp_key}. Активные доски: {list(posts_per_hour.keys())}{pruned_note}")
+            logger.info(f"📊 Статистика для графика собрана за {timestamp_key}. Активные доски: {list(posts_per_hour.keys())}{pruned_note}")
 
             # Сохраняем на диск в фоновом потоке.
             # graph_stats.copy() был поверхностным: поток сериализовал те же вложенные
@@ -6341,10 +6346,10 @@ async def graph_data_collector():
             )
             save_future.add_done_callback(_report_graph_save_result)
         except asyncio.CancelledError:
-            print("ℹ️ Сборщик статистики для графика остановлен.")
+            logger.info("ℹ️ Сборщик статистики для графика остановлен.")
             break
         except Exception as e:
-            print(f"⛔ Ошибка в сборщике статистики для графика (graph_data_collector): {e}")
+            logger.error(f"⛔ Ошибка в сборщике статистики для графика (graph_data_collector): {e}", exc_info=True)
             await asyncio.sleep(300)
 def _prepare_graph_data(board_id: str, days: int):
     """Подготавливает DataFrame для графика, фильтруя и ресемплируя данные."""
@@ -6423,7 +6428,7 @@ def generate_statistics_graph(board_id: str, days: int) -> bytes | None:
         with matplotlib_guard():
             return _generate_statistics_graph_locked(board_id, days)
     except ChartLockTimeout as e:
-        print(f"⛔ График не построен: {e}")
+        logger.warning(f"⛔ График не построен: {e}")
         return None
 
 
@@ -6583,7 +6588,7 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
                         await message.bot.send_message(referrer_id, notif_text, parse_mode="HTML")
                     except Exception: pass
             except Exception as e:
-                print(f"⚠️ Ошибка обработки реферала: {e}")
+                logger.warning(f"[referral] Ошибка обработки реферала: {e}")
 
     # 3. Активируем пользователя (создает запись в БД для нового юзера)
     if user_id not in b_data['users']['active']:
@@ -6681,7 +6686,7 @@ async def cmd_show_board_info(message: types.Message, board_id: str | None, stre
     except (TelegramBadRequest, TelegramForbiddenError):
         import traceback; traceback.print_exc()
     except Exception as e:
-        print(f"Ошибка в cmd_show_board_info: {e}")
+        logger.error(f"[board_info] Ошибка в cmd_show_board_info: {e}", exc_info=True)
 async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str, notify_users: bool = True, initiator_id: int = None):
     """
     Централизованное и производительное удаление треда.
@@ -6978,7 +6983,7 @@ async def cmd_debug_memory(message: types.Message, board_id: str | None, stream:
         try:
             await message.answer("\n".join(report), parse_mode="HTML")
         except Exception as e:
-            print(f"Ошибка отправки debug_memory: {e}")
+            logger.error(f"[debug_memory] Ошибка отправки debug_memory: {e}")
             print("\n".join(report))
         return
     snapshot = tracemalloc.take_snapshot()
@@ -10136,8 +10141,8 @@ async def sync_boards_with_config():
             desc
         ))
     
-    async with db_lock:
-        for attempt in range(10):
+    for attempt in range(10):
+        async with db_lock:
             try:
                 await db.execute("BEGIN IMMEDIATE")
                 await db.executemany(insert_query, data_to_insert)
@@ -10150,10 +10155,12 @@ async def sync_boards_with_config():
                 except Exception: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.5 * (attempt + 1))
-                    continue
-                print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при синхронизации досок с БД: {e}")
-                break
+                    pass  # Sleep outside lock below
+                else:
+                    print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при синхронизации досок с БД: {e}")
+                    break
+        # Backoff outside db_lock
+        await asyncio.sleep(0.5 * (attempt + 1))
 def _contextual_reply_allowed(user_id: int, board_id: str) -> tuple[bool, str | None]:
     if not CONTEXTUAL_REPLIES_ENABLED:
         contextual_reply_stats["skipped_disabled"] += 1
@@ -14802,6 +14809,8 @@ async def handle_voice(message: Message, board_id: str | None, stream: str = 'ru
             is_shadow_muted=False,
             stream=stream
         ))
+        # Запускаем STT-транскрипцию + 2ch-роаст параллельно (не блокирует pipeline)
+        spawn_task(transcribe_and_roast_voice_note(message.bot, message, board_id, stream))
 
 @dp.message(F.video_note, ~F.media_group_id)
 async def handle_video_note(message: Message, board_id: str | None, stream: str = 'ru'): 
@@ -14863,6 +14872,8 @@ async def handle_video_note(message: Message, board_id: str | None, stream: str 
             is_shadow_muted=False,
             stream=stream
         ))
+        # Запускаем STT-транскрипцию + 2ch-роаст параллельно (не блокирует pipeline)
+        spawn_task(transcribe_and_roast_voice_note(message.bot, message, board_id, stream))
 
 
 def apply_greentext_formatting(text: str) -> str:

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ meta_title or 'Поиск: ' ~ query }} — ТГАЧ</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.8">
     <link rel="icon" href="/static/favicon.ico">
     {% if meta_description %}
     <meta name="description" content="{{ meta_description }}">
@@ -63,7 +63,7 @@
                     <input type="checkbox" name="archive" value="1" {% if archive %}checked{% endif %}>
                     Только архив
                 </label>
-                <button type="submit">🔍</button> 
+                <button type="submit"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" style="vertical-align: middle;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></button> 
             </form>
         </div>
         <div class="header-group-right">
@@ -100,8 +100,10 @@
             {% if is_tag_search and search_images %}
                 <div class="gallery-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 15px; padding: 10px;">
                     {% for file in search_images %}
+                        {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
+                        {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/files/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                         <div class="gallery-item-wrapper" style="position: relative; border: 1px solid var(--border-primary); border-radius: 4px; overflow: hidden; background: var(--bg-post); display: flex; flex-direction: column;">
-                            <a href="{{ file.original_url }}" 
+                            <a href="{{ file_orig_src }}" 
                                class="gallery-item gallery-trigger"
                                data-type="{{ file.type }}"
                                data-filename="{{ file.filename }}"
@@ -115,14 +117,14 @@
                                                playsinline
                                                loop
                                                autoplay
-                                               data-src="{{ file.original_url }}"
-                                               {% if file.thumbnail_url %}poster="{{ file.thumbnail_url }}"{% endif %}
+                                               data-src="{{ file_orig_src }}"
+                                               {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
                                                title="{{ current_tag or 'ТГАЧ видео' }}"
                                                style="width: 100%; height: 100%; object-fit: cover; background: #000;">
                                         </video>
                                     {% else %}
                                         <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
-                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                             data-src="{{ file_thumb_src }}" 
                                              class="post-image lazy-load" 
                                              alt="{{ current_tag or 'image content' }} - {{ file.filename }}"
                                              title="{{ current_tag or 'ТГАЧ контент' }}"
@@ -156,47 +158,49 @@
                             {% if post.content.files %}
                             <div class="post-files-container post-gallery">
                                 {% for file in post.content.files %}
+                                    {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
+                                    {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/files/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                                     {% if file.type in ['image', 'photo', 'sticker'] %}
-                                        {% if file.type == 'sticker' %}
-                                            <div class="sticker-wrapper" style="display:inline-block; vertical-align:bottom;">
-                                                <a href="{{ file.original_url }}" class="gallery-trigger" data-type="{{ 'video' if file.filename.endswith('.webm') else 'image' }}" data-filename="{{ file.filename }}">
-                                                    {% if file.filename.endswith('.webm') %}
-                                                        <video class="post-sticker" src="{{ file.original_url }}" autoplay loop muted playsinline webkit-playsinline referrerpolicy="no-referrer" style="max-height: 150px;"></video>
-                                                    {% else %}
-                                                        <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="{{ file.thumbnail_url or file.original_url }}" class="post-sticker lazy-load" referrerpolicy="no-referrer" style="max-height: 150px;">
-                                                    {% endif %}
-                                                </a>
-                                            </div>
-                                        {% else %}
-                                            <a href="{{ file.original_url }}" class="file-thumb" data-filename="{{ file.filename }}">
-                                                {% if file.blurhash %}
-                                                    <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
-                                                {% endif %}
-                                                <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="{{ file.thumbnail_url or file.original_url }}" class="post-image lazy-load" alt="img" referrerpolicy="no-referrer">
-                                                {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
-                                            </a>
-                                        {% endif %}
-                                    {% elif file.type in ['video', 'gif', 'animation'] %}
-                                        <div class="file-thumb lazy-media-wrapper" 
-                                             data-src="{{ file.original_url }}" 
-                                             data-filename="{{ file.filename }}" 
-                                             data-type="{{ 'gif' if file.type in ['gif', 'animation'] else 'video' }}">
-                                            {% if file.blurhash %}
-                                                <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
-                                            {% endif %}
-                                            <video class="post-image lazy-load" 
-                                                   preload="metadata" 
-                                                   muted 
-                                                   playsinline 
-                                                   loop 
-                                                   data-src="{{ file.original_url }}" 
-                                                   {% if file.thumbnail_url %}poster="{{ file.thumbnail_url }}"{% endif %}
-                                                   style="object-fit: cover; width: 100%; height: 100%; background: #000;">
-                                            </video>
-                                            <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
-                                        </div>
-                                    {% endif %}
-                                {% endfor %}
+                                         {% if file.type == 'sticker' %}
+                                             <div class="sticker-wrapper" style="display:inline-block; vertical-align:bottom;">
+                                                 <a href="{{ file_orig_src }}" class="gallery-trigger" data-type="{{ 'video' if file.filename.endswith('.webm') else 'image' }}" data-filename="{{ file.filename }}">
+                                                     {% if file.filename.endswith('.webm') %}
+                                                         <video class="post-sticker" src="{{ file_orig_src }}" autoplay loop muted playsinline webkit-playsinline referrerpolicy="no-referrer" style="max-height: 150px;"></video>
+                                                     {% else %}
+                                                         <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="{{ file_thumb_src }}" class="post-sticker lazy-load" referrerpolicy="no-referrer" style="max-height: 150px;">
+                                                     {% endif %}
+                                                 </a>
+                                             </div>
+                                         {% else %}
+                                             <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}">
+                                                 {% if file.blurhash %}
+                                                     <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
+                                                 {% endif %}
+                                                 <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="{{ file_thumb_src }}" class="post-image lazy-load" alt="img" referrerpolicy="no-referrer">
+                                                 {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
+                                             </a>
+                                         {% endif %}
+                                     {% elif file.type in ['video', 'gif', 'animation'] %}
+                                         <div class="file-thumb lazy-media-wrapper" 
+                                              data-src="{{ file_orig_src }}" 
+                                              data-filename="{{ file.filename }}" 
+                                              data-type="{{ 'gif' if file.type in ['gif', 'animation'] else 'video' }}">
+                                             {% if file.blurhash %}
+                                                 <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
+                                             {% endif %}
+                                             <video class="post-image lazy-load" 
+                                                    preload="metadata" 
+                                                    muted 
+                                                    playsinline 
+                                                    loop 
+                                                    data-src="{{ file_orig_src }}" 
+                                                    {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
+                                                    style="object-fit: cover; width: 100%; height: 100%; background: #000;">
+                                             </video>
+                                             <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
+                                         </div>
+                                     {% endif %}
+                                 {% endfor %}
                             </div>
                             {% endif %}
                             <div class="post-text-content">
@@ -370,6 +374,6 @@
         <div id="iv-loader" class="iv-loader" style="display: none;"></div>
     </div>
     <div id="loading-indicator" class="loading-indicator">Отправка...</div>
-    <script src="/static/js/main.js?v=9.7" defer></script>
+    <script src="/static/js/main.js?v=9.8" defer></script>
 </body>
 </html>

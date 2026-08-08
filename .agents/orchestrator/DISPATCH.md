@@ -1,33 +1,21 @@
-# DISPATCH LOG
+# DISPATCH
 
-## 2026-08-06T19:23:39Z
-
-<USER_REQUEST>
-# Teamwork Project Prompt — Draft
-
-> Status: Launched
-> Goal: Fix remaining stability issues, edge cases, and architectural weaknesses across the bot.
-
-Conduct a deep, autonomous codebase audit and repair for the dvachbot Telegram bot. Address any hidden exception swallowing, asynchronous loop vulnerabilities, unhandled API rejections, and missing data persistence fallbacks.
+## 2026-08-08T16:20:37Z
+Verify the recent fixes applied to the dvachbot project for correctness and regressions.
 
 Working directory: C:\Users\danat\Desktop\dvachbot
-Integrity mode: development
 
-## Requirements
+### R1. Verify Proxy Reversion
+Audit `site_tgach/main.py`. Ensure that Telegram file endpoints (e.g. `/files/`) are using HTTP 307 redirects directly to `api.telegram.org` instead of streaming the content through the server. Verify no logic errors were introduced.
 
-### R1. Broad Exception Auditing
-Investigate all `except Exception:` blocks, especially those surrounding API requests like `bot.send_message` (e.g. `periodic_publisher.py`, `broadcaster.py`, `user_manager.py`). If they mask critical failures like `TelegramForbiddenError`, ensure the failure is explicitly handled or logged properly.
+### R2. Verify `format_header` Fix
+Audit `user_manager.py` (specifically `cmd_anime` and related functions) and `main.py`. Ensure that `format_header` is properly imported and defined so that generic mode commands do not throw `NameError`.
 
-### R2. Asynchronous Queue Integrity
-Review and ensure that long-running tasks and message broadcasting queues (`delivery_manager.py`, `broadcaster.py`, `post_processor.py`) do not silently crash and drop queue elements if one item fails.
+### R3. Verify Database Concurrency Patch
+Audit `common/database.py` and `common/db_pool.py`. Ensure that `await asyncio.sleep` inside `database.py` has been replaced with `await db_sleep` and that `db_sleep` correctly releases and reacquires `db_lock` to prevent event loop blocking during `database is locked` retries.
 
-### R3. Strict Execution
-Modify the source code natively using code editing tools. Do not use wrapper scripts or proxy commands. Follow project authority and strict Python/Aiogram 3 standards.
-
-## Acceptance Criteria
-
-### Verification & Robustness
-- [ ] No `TelegramBadRequest` or `TelegramForbiddenError` is silently masked in a way that disrupts surrounding logic or loops.
-- [ ] Code modifications pass syntax and logic checks via `python -m py_compile` or similar static analysis.
-- [ ] Any modifications preserve the exact current behavior but harden the error paths.
-</USER_REQUEST>
+### Acceptance Criteria
+- R1: Telegram file proxy code correctly issues 307 Redirects.
+- R2: `format_header` is correctly imported in all files that use it.
+- R3: `db_sleep` releases `db_lock` safely and is used correctly across `database.py`.
+- No syntax errors or critical regressions were introduced in the modified files.

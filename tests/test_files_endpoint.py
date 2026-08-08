@@ -14,8 +14,14 @@ client = TestClient(app, raise_server_exceptions=False)
 
 @pytest.fixture(autouse=True)
 def mock_external_deps():
-    with patch("site_tgach.main.get_country_by_ip", new_callable=AsyncMock) as mock_country:
+    with patch("site_tgach.main.get_country_by_ip", new_callable=AsyncMock) as mock_country, \
+         patch("common.database.is_file_permanently_failed", new_callable=AsyncMock) as mock_failed, \
+         patch("site_tgach.main.get_file_owner_id", new_callable=AsyncMock) as mock_owner, \
+         patch("site_tgach.main.get_cached_file_path", new_callable=AsyncMock) as mock_cached:
         mock_country.return_value = "RU"
+        mock_failed.return_value = False
+        mock_owner.return_value = None
+        mock_cached.return_value = None
         yield mock_country
 
 def test_route_aliases_and_r2_redirect():
@@ -95,4 +101,20 @@ def test_cors_headers_on_direct_link():
     assert resp.status_code == 301
     assert resp.headers.get("location") == direct_url
     assert resp.headers.get("access-control-allow-origin") == "*"
+
+def test_telegram_proxy_streaming():
+    fake_mirrors = {}
+    with patch("site_tgach.main.get_file_mirrors", new_callable=AsyncMock) as mock_mirrors, \
+         patch("site_tgach.main.get_cached_file_path", new_callable=AsyncMock) as mock_cached, \
+         patch("site_tgach.main._proxy_protected_telegram_file", new_callable=AsyncMock) as mock_proxy:
+        mock_mirrors.return_value = fake_mirrors
+        mock_cached.return_value = ("photos/file_0.jpg", "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11")
+        from fastapi.responses import Response
+        mock_proxy.return_value = Response(content=b"fake_image_bytes", media_type="image/jpeg", status_code=200)
+
+        resp = client.get("/file/AgAC12345")
+        assert resp.status_code == 200
+        assert resp.content == b"fake_image_bytes"
+        mock_proxy.assert_called_once()
+
 

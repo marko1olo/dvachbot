@@ -215,7 +215,65 @@ const CONSTANTS = {
     FAV_KEY: 'favourite_threads'
 };
 
+const FailedMediaCache = {
+    _failedUrls: new Set(),
+    normalizeUrl(url) {
+        if (!url || typeof url !== 'string' || url.startsWith('data:')) return '';
+        try {
+            const loc = (typeof window !== 'undefined' && window.location) ? window.location.href : 'http://localhost';
+            const parsed = new URL(url, loc);
+            return parsed.origin + parsed.pathname;
+        } catch (e) {
+            return String(url).split('?')[0].split('#')[0];
+        }
+    },
+    markFailed(url) {
+        const key = this.normalizeUrl(url);
+        if (key) this._failedUrls.add(key);
+    },
+    isFailed(url) {
+        return false; // T.A.R.S Mode: Never blindly cache failures, force browser to try loading media.
+    },
+    clear() {
+        this._failedUrls.clear();
+    }
+};
+if (typeof window !== 'undefined') {
+    window.FailedMediaCache = FailedMediaCache;
+} else if (typeof global !== 'undefined') {
+    global.FailedMediaCache = FailedMediaCache;
+}
+
 let UI_TRANSLATIONS = { ru: {}, en: {}, jp: {} };
+function cleanUrlAndSuffix(full) {
+    let urlPart = full;
+    let suffix = '';
+    
+    const delimMatch = /&(?:quot|gt|lt|apos|#0*39|#0*38|#x0*27|#X0*27);/i.exec(full);
+    if (delimMatch) {
+        urlPart = full.slice(0, delimMatch.index);
+        suffix = full.slice(delimMatch.index);
+    }
+    
+    while (urlPart.length > 0) {
+        if (urlPart.endsWith('&amp;')) {
+            suffix = '&amp;' + suffix;
+            urlPart = urlPart.slice(0, -5);
+        } else if (/[.,;:!?)]$/.test(urlPart)) {
+            const lastChar = urlPart.slice(-1);
+            if (lastChar === ')' && urlPart.includes('(')) {
+                break;
+            }
+            suffix = lastChar + suffix;
+            urlPart = urlPart.slice(0, -1);
+        } else {
+            break;
+        }
+    }
+    
+    return { urlPart, suffix };
+}
+
 window.formatTextGlobal = (text, opId = null, boardId = null, threadId = null) => {
     if (!text) return "";
     let s = text.replace(/&/g, "&amp;")
@@ -225,7 +283,11 @@ window.formatTextGlobal = (text, opId = null, boardId = null, threadId = null) =
                 .replace(/'/g, "&#039;");
     
     const linkRegex = /(?<!["'=])(https?:\/\/[^\s<"']+)/g;
-    s = s.replace(linkRegex, '<a href="$1" target="_blank" rel="noopener" class="auto-link">$1</a>');
+    s = s.replace(linkRegex, (match, candidate) => {
+        const { urlPart, suffix } = cleanUrlAndSuffix(candidate);
+        if (!urlPart) return candidate;
+        return `<a href="${urlPart}" target="_blank" rel="noopener" class="auto-link">${urlPart}</a>${suffix}`;
+    });
 
     s = s.replace(
         /&gt;&gt;(\d+)/g,
@@ -747,7 +809,7 @@ const StealthEditor = {
                 data.content.files.forEach((f, index) => {
                     const wrapper = document.createElement('label');
                     wrapper.style.cssText = 'position: relative; display: inline-block; width: 60px; height: 60px; margin: 2px; cursor: pointer; border: 1px solid transparent;';
-                    const thumbUrl = f.thumbnail_url || f.original_url;
+                    const thumbUrl = (f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : (f.original_file_id ? `/files/${f.original_file_id}` : (f.thumbnail_url || f.original_url)));
                     const checkbox = document.createElement('input');
                     checkbox.type = 'checkbox';
                     checkbox.value = index;
@@ -1301,23 +1363,25 @@ const MediaStreamManager = {
         }
     },
     loadVideoWithRetry(videoEl, item, attempt = 0) {
-        const sources = item.file.sources || [item.file.original_url];
+        const itemOrigUrl = (item.file.original_file_id ? `/files/${item.file.original_file_id}` : item.file.original_url);
+        const sources = item.file.sources || [itemOrigUrl];
         videoEl.onerror = () => {
             if (attempt + 1 < sources.length) {
                 console.log(`[Stream] Mirror failed, trying mirror ${attempt + 1}`);
                 this.loadVideoWithRetry(videoEl, item, attempt + 1);
             } else {
-                const sep = sources[0].includes('?') ? '&' : '?';
-                if (!videoEl.dataset.retriedOnce) {
-                    videoEl.dataset.retriedOnce = "true";
-                    videoEl.src = `${sources[0]}${sep}retry=${Date.now()}`;
-                    videoEl.play().catch(()=>{});
-                } else {
-                    console.error('[Stream] All sources failed');
-                    if (typeof showToast === 'function') showToast(t('ms_video_404', 'Видео недоступно'), 2000);
+                if (typeof FailedMediaCache !== 'undefined') {
+                    sources.forEach(s => FailedMediaCache.markFailed(s));
                 }
+                console.error('[Stream] All sources failed');
+                if (typeof showToast === 'function') showToast(t('ms_video_404', 'Видео недоступно'), 2000);
             }
         };
+        if (typeof FailedMediaCache !== 'undefined' && sources[attempt] && FailedMediaCache.isFailed(sources[attempt])) {
+            console.error('[Stream] Media already marked failed');
+            if (typeof showToast === 'function') showToast(t('ms_video_404', 'Видео недоступно'), 2000);
+            return;
+        }
         videoEl.src = sources[attempt];
         videoEl.play().catch(() => {
             videoEl.muted = true;
@@ -1355,7 +1419,7 @@ const MediaStreamManager = {
         container.innerHTML = '';
         let el;
         const isVideo = ['video', 'gif', 'animation', 'video_note'].includes(item.file.type);
-        const url = item.file.original_url;
+        const url = (item.file.original_file_id ? `/files/${item.file.original_file_id}` : item.file.original_url);
         if (isVideo) {
             el = document.createElement('video');
             el.referrerPolicy = "no-referrer";
@@ -1390,7 +1454,7 @@ const MediaStreamManager = {
             [1, 2].forEach(offset => {
                 const nextItem = this.playlist[index + offset];
                 if (nextItem) {
-                    const nextUrl = nextItem.file.original_url;
+                    const nextUrl = nextItem.file.original_file_id ? `/files/${nextItem.file.original_file_id}` : nextItem.file.original_url;
                     const isNextVid = ['video', 'gif', 'animation', 'video_note'].includes(nextItem.file.type);
                     if (isNextVid) {
                         const v = document.createElement('video');
@@ -1462,8 +1526,9 @@ const MediaStreamManager = {
         const originalText = btn.textContent;
         btn.textContent = '⏳';
         btn.style.pointerEvents = 'none';
+        const targetDownloadUrl = item.file.original_file_id ? `/files/${item.file.original_file_id}` : item.file.original_url;
         try {
-            const response = await fetch(item.file.original_url);
+            const response = await fetch(targetDownloadUrl);
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             showToast(t('download_started', 'Скачивание началось...'), 1500);
             const blob = await response.blob();
@@ -1479,7 +1544,7 @@ const MediaStreamManager = {
                 if (match) extension = match[0];
             }
             if (!extension) {
-                const urlExtMatch = (item.file.original_url || '').match(/\.([a-z0-9]{2,5})(?=[?#]|$)/i);
+                const urlExtMatch = (targetDownloadUrl || '').match(/\.([a-z0-9]{2,5})(?=[?#]|$)/i);
                 if (urlExtMatch) extension = urlExtMatch[0];
             }
             let baseFilename = (item.file.filename || 'video').replace(/\.[^/.]+$/, "");
@@ -1499,7 +1564,7 @@ const MediaStreamManager = {
         } catch (err) {
             console.error('Download failed:', err);
             showToast(t('download_err', 'Ошибка скачивания'));
-            window.open(item.file.original_url, '_blank');
+            window.open(targetDownloadUrl, '_blank');
         } finally {
             btn.textContent = originalText;
             btn.style.pointerEvents = 'auto';
@@ -1509,9 +1574,10 @@ const MediaStreamManager = {
         const item = this.playlist[this.currentIndex];
         if (!item || !item.file) return;
         let fileId = item.file.original_file_id;
-        if (!fileId && item.file.original_url) {
+        const targetItemUrl = item.file.original_file_id ? `/files/${item.file.original_file_id}` : item.file.original_url;
+        if (!fileId && targetItemUrl) {
             try {
-                const filename = item.file.original_url.split('/').pop().split('?')[0];
+                const filename = targetItemUrl.split('/').pop().split('?')[0];
                 const parts = filename.split('.');
                 if (parts.length > 1) parts.pop();
                 fileId = parts.join('.');
@@ -1527,7 +1593,7 @@ const MediaStreamManager = {
         if (typeof GalleryManager !== 'undefined' && typeof GalleryManager.showTagsModal === 'function') {
             GalleryManager.items = [{ 
                 fileId: fileId,
-                url: item.file.original_url 
+                url: targetItemUrl 
             }];
             GalleryManager.index = 0;
             GalleryManager.showTagsModal();
@@ -10944,8 +11010,16 @@ const PostRenderer = {
                         mirrorAttrs += ` data-mirror-${type}="${esc(f._mirrors[type])}"`;
                     }
                 }
-                const url = f.original_url || (f.original_file_id ? `/files/${f.original_file_id}` : "");
-                let thumbCandidate = f.thumbnail_url || (f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : null);
+                const url = (f.original_file_id ? `/files/${f.original_file_id}` : f.original_url) || "";
+                let thumbCandidate = (f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : (f.original_file_id ? `/files/${f.original_file_id}` : (f.thumbnail_url || f.original_url))) || null;
+
+                if (typeof FailedMediaCache !== 'undefined' && url && FailedMediaCache.isFailed(url)) {
+                    imgContent += `<div class="file-thumb broken-media" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+                    return;
+                }
+                if (thumbCandidate && typeof FailedMediaCache !== 'undefined' && FailedMediaCache.isFailed(thumbCandidate)) {
+                    thumbCandidate = url;
+                }
                 const isVideoType = ['video', 'gif', 'animation', 'video_note'].includes(f.type);
                 if (!thumbCandidate) {
                     if (isVideoType) {
@@ -11173,21 +11247,32 @@ const PostRenderer = {
         if (files.length > 0) {
             const f = files[0];
             const isVid = ['video', 'gif', 'animation', 'video_note'].includes(f.type);
+            const mediaUrl = (f.original_file_id ? `/files/${f.original_file_id}` : f.original_url) || "";
+            const thumbUrl = (f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : (f.original_file_id ? `/files/${f.original_file_id}` : (f.thumbnail_url || f.original_url))) || "";
             
-            if (isVid) {
-                const vidUrl = f.original_url || '';
-                const posterUrl = f.thumbnail_url || '';
+            if (typeof FailedMediaCache !== 'undefined' && ((mediaUrl && FailedMediaCache.isFailed(mediaUrl)) || (thumbUrl && FailedMediaCache.isFailed(thumbUrl)))) {
+                thumbHtml = `<div class="catalog-thumb broken-media" style="background-color: #1e1e1e; display:flex; align-items:center; justify-content:center;"><span style="font-size:2em">⚠️</span></div>`;
+            } else if (isVid) {
+                const vidUrl = mediaUrl;
+                // Use overlay img (NOT poster=) to avoid browser black rect on 404
+                const thumbForOverlay = f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : (f.thumbnail_url || '');
                 if (vidUrl) {
+                    const hue = (parseInt(String(threadId).slice(-4), 10) * 137) % 360;
+                    const vidBg = `hsl(${hue},55%,35%)`;
+                    const overlayHtml = thumbForOverlay
+                        ? `<img src="${thumbForOverlay}" style="position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;z-index:1;" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">`
+                        : `<div style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;display:flex;align-items:center;justify-content:center;"><span style="font-size:2em;">🎬</span></div>`;
                     thumbHtml = `
-                        <div class="catalog-thumb lazy-media-wrapper" data-src="${vidUrl}" data-type="video" style="background-color: #000;">
-                            <video class="lazy-load${blurClass}" preload="metadata" muted playsinline loop data-src="${vidUrl}" poster="${posterUrl}" style="width: 100%; height: 100%; object-fit: cover;"></video>
-                            <span class="lazy-badge" style="position:absolute; bottom:5px; right:5px; background:rgba(0,0,0,0.6); color:white; padding:2px 4px; font-size:10px; border-radius:3px;">VIDEO</span>
+                        <div class="catalog-thumb lazy-media-wrapper" data-src="${vidUrl}" data-file-id="${f.original_file_id || ''}" data-type="video" style="background-color:${vidBg};">
+                            ${overlayHtml}
+                            <video class="lazy-load${blurClass}" preload="none" muted playsinline loop data-src="${vidUrl}" style="width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0;z-index:2;opacity:0;transition:opacity 0.3s;"></video>
+                            <span class="lazy-badge" style="position:absolute;bottom:5px;right:5px;background:rgba(0,0,0,0.6);color:white;padding:2px 4px;font-size:10px;border-radius:3px;z-index:3;">VIDEO</span>
                         </div>`;
                 } else {
-                     thumbHtml = `<div class="catalog-thumb" style="background-color: ${bgColor}; display:flex; align-items:center; justify-content:center;"><span style="font-size:2em">⏳</span></div>`;
+                     thumbHtml = `<div class="catalog-thumb" style="background-color: ${bgColor}; display:flex; align-items:center; justify-content:center;"><span style="font-size:2em;">⏳</span></div>`;
                 }
             } else {
-                const imgUrl = f.thumbnail_url || f.original_url;
+                const imgUrl = thumbUrl || mediaUrl;
                 if (imgUrl) {
                     thumbHtml = `<div class="catalog-thumb"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-src="${imgUrl}" class="lazy-load${blurClass}" style="width: 100%; height: 100%; object-fit: cover;" referrerpolicy="no-referrer"></div>`;
                 } else {
@@ -11282,8 +11367,21 @@ window.initializePostFeatures = function(el) {
             else v.onloadedmetadata = () => checkIfVideoIsNote(v);
         });
 
-        el.querySelectorAll('img.post-image').forEach(img => {
-            img.onerror = () => handleImageError(img);
+        el.querySelectorAll('img.post-image, video.post-image').forEach(img => {
+            const src = img.dataset.src || img.src || '';
+            if (typeof FailedMediaCache !== 'undefined' && FailedMediaCache.isFailed(src)) {
+                const parent = img.closest('.file-thumb, .lazy-media-wrapper, .sticker-wrapper, .catalog-thumb');
+                if (parent) {
+                    parent.classList.remove('is-loading');
+                    parent.classList.add('broken-media');
+                    parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+                } else {
+                    img.classList.add('broken-final');
+                    img.style.display = 'none';
+                }
+            } else {
+                img.onerror = () => handleImageError(img);
+            }
         });
         el.querySelectorAll('.file-thumb[data-type="video"], .file-thumb[data-type="gif"], .file-thumb[data-type="animation"]').forEach(wrapper => {
             wrapper.style.cursor = 'pointer'; 
@@ -11311,8 +11409,13 @@ window.parseTextEffects = (el) => {
     if (!container) return;
     if (container.dataset.parsed === 'true') return;
     let html = container.innerHTML;
-    const linkRegex = /(?<!["'=])(https?:\/\/[^\s<"']+)/g;
-    html = html.replace(linkRegex, '<a href="$1" target="_blank" rel="noopener" class="auto-link">$1</a>');
+    const linkRegex = /(<a\b[^>]*>[\s\S]*?<\/a>)|(?<!["'=])(https?:\/\/[^\s<"']+)/gi;
+    html = html.replace(linkRegex, (match, g1, g2) => {
+        if (g1) return g1;
+        const { urlPart, suffix } = cleanUrlAndSuffix(g2);
+        if (!urlPart) return g2;
+        return `<a href="${urlPart}" target="_blank" rel="noopener" class="auto-link">${urlPart}</a>${suffix}`;
+    });
     const simpleTags = [
         { open: '\\[b\\]', close: '\\[\\/b\\]', tag: 'b' },
         { open: '\\[i\\]', close: '\\[\\/i\\]', tag: 'i' },
@@ -11356,32 +11459,68 @@ window.parseTextEffects = (el) => {
     container.dataset.parsed = 'true';
 };
 function handleImageError(img) {
-    // 1. Проверка видимости (чтобы не грузить то, что за экраном)
-    if (img.dataset.finalError) return;
-    const rect = img.getBoundingClientRect();
-    const isVisible = (rect.top < window.innerHeight + 1000 && rect.bottom > -1000);
-    
-    if (!isVisible) {
-        // Сброс состояния, если ушло за экран
-        img.removeAttribute('src');
-        img.classList.remove('loaded', 'is-loading');
-        return;
-    }
+    if (!img) return;
+    img.onerror = null; // Unbind immediately to prevent synchronous 404 retry loop
 
-    // 2. Определяем родителя и ссылку на ОРИГИНАЛ
-    const parent = img.closest('.file-thumb, .lazy-media-wrapper');
-    // Берем href родителя (это всегда ссылка на оригинал) или data-src
-    const originalUrl = parent ? (parent.href || parent.dataset.src) : null;
+    if (img.dataset.finalError) return;
+    img.dataset.finalError = "true";
+
+    const parent = img.closest('.file-thumb, .lazy-media-wrapper, .sticker-wrapper, .catalog-thumb');
+    const currentSrc = img.src || img.dataset.src || "";
+    const originalUrl = parent ? (parent.href || parent.dataset.src || currentSrc) : (img.dataset.src || currentSrc);
+
+    const renderStaticError = () => {
+        img.classList.add('broken-final');
+        if (parent) {
+            parent.classList.remove('is-loading');
+            parent.classList.add('broken-media');
+            parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+        } else {
+            img.style.display = 'none';
+        }
+    };
+
+    if (typeof FailedMediaCache !== 'undefined') {
+        if (FailedMediaCache.isFailed(currentSrc) && (currentSrc === originalUrl || FailedMediaCache.isFailed(originalUrl))) {
+            renderStaticError();
+            return;
+        }
+    }
 
     if (!originalUrl) {
-        // Если ссылки на оригинал нет — сдаемся сразу
-        img.classList.add('broken-final');
+        if (typeof FailedMediaCache !== 'undefined' && currentSrc) FailedMediaCache.markFailed(currentSrc);
+        renderStaticError();
         return;
     }
 
-    // 3. Извлекаем сбойный хост из текущего src
+    // Try fallback from thumbnail / external mirror to originalUrl or local proxy endpoint
+    if (!img.dataset.triedFallback) {
+        img.dataset.triedFallback = "true";
+        let fallbackUrl = null;
+        if (originalUrl && originalUrl !== currentSrc && (typeof FailedMediaCache === 'undefined' || !FailedMediaCache.isFailed(originalUrl))) {
+            fallbackUrl = originalUrl;
+        } else {
+            const fileId = img.dataset.fileId || (parent ? parent.dataset.fileId : null);
+            if (fileId) {
+                const localUrl = `/files/${fileId}`;
+                if (localUrl !== currentSrc && localUrl !== originalUrl && (typeof FailedMediaCache === 'undefined' || !FailedMediaCache.isFailed(localUrl))) {
+                    fallbackUrl = localUrl;
+                }
+            }
+        }
+
+        if (fallbackUrl) {
+            if (typeof FailedMediaCache !== 'undefined' && currentSrc) {
+                FailedMediaCache.markFailed(currentSrc);
+            }
+            delete img.dataset.finalError;
+            img.onerror = function() { handleImageError(img); };
+            img.src = fallbackUrl;
+            return;
+        }
+    }
+
     let failedType = null;
-    const currentSrc = img.src || "";
     if (currentSrc.includes("iili.io")) failedType = "freeimage";
     else if (currentSrc.includes("ibb.co")) failedType = "imgbb";
     else if (currentSrc.includes("pixhost.to")) failedType = "pixhost";
@@ -11389,72 +11528,85 @@ function handleImageError(img) {
     else if (currentSrc.includes("0x0.st")) failedType = "0x0";
     else if (currentSrc.includes("telegram.org")) failedType = "telegram";
 
-    // Инициализируем/обновляем список пропущенных хостов
+    const isLocalFile = currentSrc.includes("/files/") || originalUrl.includes("/files/") || !failedType;
+
+    if (isLocalFile) {
+        if (typeof FailedMediaCache !== 'undefined') {
+            FailedMediaCache.markFailed(originalUrl);
+            FailedMediaCache.markFailed(currentSrc);
+        }
+        renderStaticError();
+        return;
+    }
+
     let skipped = img.dataset.skippedHosts ? img.dataset.skippedHosts.split(",") : [];
     if (failedType && !skipped.includes(failedType)) {
         skipped.push(failedType);
     }
     img.dataset.skippedHosts = skipped.join(",");
 
-    // Если перебрали слишком много попыток, сдаемся
     if (skipped.length >= 6) {
+        if (typeof FailedMediaCache !== 'undefined') {
+            FailedMediaCache.markFailed(originalUrl);
+            FailedMediaCache.markFailed(currentSrc);
+        }
         img.classList.add('broken-final');
         img.style.display = 'none';
         if (parent) {
+            parent.classList.remove('is-loading');
             parent.classList.add('broken-media');
             parent.innerHTML = `<div class="broken-media" title="Media failed"><a href="${originalUrl}" target="_blank" style="color:#fff;text-decoration:none;">📂 Скачать</a></div>`;
         }
         return;
     }
 
-    // Формируем URL с параметром skip
-    const urlObj = new URL(originalUrl, window.location.href);
-    urlObj.searchParams.set("skip", img.dataset.skippedHosts);
-    const newUrl = urlObj.toString();
+    delete img.dataset.finalError;
+    try {
+        const loc = (typeof window !== 'undefined' && window.location) ? window.location.href : 'http://localhost';
+        const urlObj = new URL(originalUrl, loc);
+        urlObj.searchParams.set("skip", img.dataset.skippedHosts);
+        const newUrl = urlObj.toString();
 
-    console.log(`[MediaRescue] Redirect failed for type: ${failedType}. Swapping to skip parameter: ${img.dataset.skippedHosts}`);
+        console.log(`[MediaRescue] Redirect failed for type: ${failedType}. Swapping to skip parameter: ${img.dataset.skippedHosts}`);
 
-    if (img.tagName === 'VIDEO') {
-        img.src = newUrl;
-        img.load();
-        return;
+        if (img.tagName === 'VIDEO') {
+            img.onerror = () => handleImageError(img);
+            img.src = newUrl;
+            img.load();
+            return;
+        }
+
+        const isVideo = (parent && (
+            parent.dataset.type === 'video' || 
+            parent.dataset.type === 'gif' || 
+            parent.dataset.type === 'video_note' || 
+            parent.dataset.type === 'animation'
+        ));
+
+        if (isVideo) {
+            const vid = document.createElement('video');
+            vid.className = img.className;
+            vid.src = newUrl;
+            vid.autoplay = true;
+            vid.loop = true;
+            vid.muted = true;
+            vid.playsInline = true;
+            vid.dataset.src = originalUrl;
+            vid.dataset.skippedHosts = img.dataset.skippedHosts;
+            vid.onerror = () => handleImageError(vid);
+            img.replaceWith(vid);
+        } else {
+            img.onerror = () => handleImageError(img);
+            img.src = newUrl;
+        }
+
+        if (parent) parent.classList.remove('is-loading');
+    } catch (e) {
+        if (typeof FailedMediaCache !== 'undefined') {
+            FailedMediaCache.markFailed(originalUrl);
+        }
+        renderStaticError();
     }
-
-    // 4. Определение типа контента
-    const isVideo = (parent && (
-        parent.dataset.type === 'video' || 
-        parent.dataset.type === 'gif' || 
-        parent.dataset.type === 'video_note' || 
-        parent.dataset.type === 'animation'
-    ));
-
-    if (isVideo) {
-        // === ВАРИАНТ А: ЭТО ВИДЕО ===
-        // Заменяем IMG на VIDEO с автоплеем
-        const vid = document.createElement('video');
-        vid.className = img.className;
-        vid.src = newUrl; // Ссылка на оригинал с параметром skip!
-        vid.autoplay = true;
-        vid.loop = true;
-        vid.muted = true;
-        vid.playsInline = true;
-        vid.dataset.src = originalUrl;
-        vid.dataset.skippedHosts = img.dataset.skippedHosts;
-        
-        // Обработчик ошибок уже для самого видео
-        vid.onerror = () => {
-            handleImageError(vid);
-        };
-        
-        img.replaceWith(vid);
-        
-    } else {
-        // === ВАРИАНТ Б: ЭТО КАРТИНКА ===
-        img.src = newUrl;
-    }
-    
-    // Убираем спиннер загрузки у родителя
-    if (parent) parent.classList.remove('is-loading');
 }
 function checkPostGet(el) {
     const id = el.id.replace('post-', '');
@@ -13676,7 +13828,7 @@ const TagSearchManager = {
                 
                 const image = document.createElement('img');
                 image.className = 'post-image lazy-load';
-                image.dataset.src = img.thumbnail_url || img.original_url;
+                image.dataset.src = (img.thumbnail_file_id ? `/files/${img.thumbnail_file_id}` : (img.original_file_id ? `/files/${img.original_file_id}` : (img.thumbnail_url || img.original_url)));
                 image.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
                 
                 link.appendChild(image);
@@ -14238,12 +14390,35 @@ const SmartLoader = {
         });
         if (!this.observer) { this.init(); return; }
         scope.querySelectorAll('img.lazy-load, video.lazy-load').forEach(img => {
+            const src = img.dataset.src || img.src || '';
+            if (typeof FailedMediaCache !== 'undefined' && FailedMediaCache.isFailed(src)) {
+                img.classList.add('broken-final');
+                const parent = img.closest('.file-thumb, .lazy-media-wrapper, .sticker-wrapper, .catalog-thumb');
+                if (parent) {
+                    parent.classList.remove('is-loading');
+                    parent.classList.add('broken-media');
+                    parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+                }
+                return;
+            }
             if (img.dataset.observed) return;
             img.dataset.observed = "true";
             this.observer.observe(img);
         });
     },
     enqueue(img) {
+        if (!img) return;
+        const targetSrc = img.dataset.src || img.src;
+        if (typeof FailedMediaCache !== 'undefined' && FailedMediaCache.isFailed(targetSrc)) {
+            img.classList.add('broken-final');
+            const parent = img.closest('.file-thumb, .lazy-media-wrapper');
+            if (parent) {
+                parent.classList.remove('is-loading');
+                parent.classList.add('broken-media');
+                parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+            }
+            return;
+        }
         if (this.queue.includes(img)) return;
         img.dataset.queued = "true";
         this.queue.unshift(img);
@@ -14256,16 +14431,24 @@ const SmartLoader = {
             this.process();
             return;
         }
-        this.activeCount++;
-        const parent = img.closest('.file-thumb, .lazy-media-wrapper');
-        if (parent) parent.classList.add('is-loading');
         let targetSrc = img.dataset.src;
-        if (!targetSrc || targetSrc.includes('undefined') || targetSrc.includes('null')) {
-            this.activeCount--;
+        const parent = img.closest('.file-thumb, .lazy-media-wrapper');
+        if (!targetSrc || targetSrc.includes('undefined') || targetSrc.includes('null') || (typeof FailedMediaCache !== 'undefined' && FailedMediaCache.isFailed(targetSrc))) {
+            if (targetSrc && typeof FailedMediaCache !== 'undefined' && FailedMediaCache.isFailed(targetSrc)) {
+                img.classList.add('broken-final');
+                if (parent) {
+                    parent.classList.remove('is-loading');
+                    parent.classList.add('broken-media');
+                    parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+                }
+            }
             if (parent) parent.classList.remove('is-loading');
             this.process();
             return;
         }
+        this.activeCount++;
+        if (parent) parent.classList.add('is-loading');
+        let targetSrcOriginal = img.dataset.src;
 
         if (img.tagName !== 'VIDEO') {
             const onLoad = () => this.onLoadFinished(img, parent, true);
@@ -14279,21 +14462,17 @@ const SmartLoader = {
                 if (parent) parent.classList.remove('is-loading');
             };
             img.onerror = () => {
-                 if (parent) {
-                    parent.classList.remove('is-loading');
-                    parent.classList.add('broken-media');
-                    parent.innerHTML = '<div style="font-size:2em; color:#555;">⚠️</div>';
-                }
+                this.onLoadFinished(img, parent, false);
             };
             
             img.src = targetSrc;
             img.load();
-            this.activeCount--;
+            this.activeCount = Math.max(0, this.activeCount - 1);
             this.process();
         }
     },
     onLoadFinished(img, parent, success) {
-        this.activeCount--;
+        this.activeCount = Math.max(0, this.activeCount - 1);
         if (this.observer) this.observer.unobserve(img);
         
         if (success) {
@@ -14342,7 +14521,7 @@ const SmartLoader = {
                 vid.onerror = () => {
                     const errDiv = document.createElement('div');
                     errDiv.className = 'broken-media';
-                    errDiv.innerHTML = '<span>TGS/Error</span>';
+                    errDiv.innerHTML = '<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>';
                     vid.replaceWith(errDiv);
                 };
                 img.replaceWith(vid);
@@ -14350,26 +14529,15 @@ const SmartLoader = {
                 this.process(); 
                 return;
             } else {
-                 if (!img.dataset.retried) {
-                    img.dataset.retried = "true";
-                    const baseUrl = img.dataset.src;
-                    if (baseUrl && !baseUrl.startsWith('data:')) {
-                        const sep = baseUrl.includes('?') ? '&' : '?';
-                        img.dataset.src = baseUrl + sep + 'retry=' + Date.now();
-                        delete img.dataset.queued;
-                        this.enqueue(img);
-                        return;
-                    }
-                } else {
-                    img.classList.add('broken-final');
-                    img.style.display = 'none';
-                    if (parent) {
-                        parent.classList.remove('is-loading');
-                        parent.classList.add('broken-media');
-                        parent.innerHTML = '<div style="font-size:2em; color:#555;">⚠️</div>';
-                    }
+                img.classList.add('broken-final');
+                if (typeof handleImageError === 'function') {
+                    handleImageError(img);
+                } else if (parent) {
+                    parent.classList.remove('is-loading');
+                    parent.classList.add('broken-media');
+                    parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
                 }
-             }
+            }
         }
         this.process();
     }
@@ -14788,35 +14956,28 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 document.addEventListener("DOMContentLoaded", function() {
-    if (localStorage.getItem('ru_vpn_alert_shown')) {
-        return; // Already shown or checked
+    // Check if already shown recently (24h TTL)
+    const shownAt = parseInt(localStorage.getItem('ru_vpn_alert_shown') || '0', 10);
+    if (shownAt && (Date.now() - shownAt) < 86400000) {
+        return;
     }
     fetch('/api/is-ru')
         .then(res => res.json())
         .then(data => {
+            // Mark as shown regardless of result to avoid hammering the API
+            localStorage.setItem('ru_vpn_alert_shown', Date.now().toString());
             if (data.is_ru) {
                 const alertDiv = document.createElement('div');
                 alertDiv.innerHTML = "Включи ВПН, иначе не загрузятся картинки!";
-                alertDiv.style.position = "fixed";
-                alertDiv.style.top = "10px";
-                alertDiv.style.left = "10px";
-                alertDiv.style.backgroundColor = "rgba(255, 0, 0, 0.9)";
-                alertDiv.style.color = "white";
-                alertDiv.style.padding = "10px 15px";
-                alertDiv.style.borderRadius = "5px";
-                alertDiv.style.zIndex = "999999";
-                alertDiv.style.fontWeight = "bold";
-                alertDiv.style.boxShadow = "0 4px 6px rgba(0,0,0,0.3)";
-                alertDiv.style.transition = "opacity 0.5s";
+                alertDiv.style.cssText = "position:fixed;top:10px;left:10px;background:rgba(200,0,0,0.92);color:#fff;padding:10px 15px;border-radius:5px;z-index:999999;font-weight:bold;box-shadow:0 4px 6px rgba(0,0,0,0.3);transition:opacity 0.5s;cursor:pointer;";
+                alertDiv.title = "Нажми чтобы скрыть";
+                alertDiv.onclick = () => { alertDiv.style.opacity = '0'; setTimeout(() => alertDiv.remove(), 500); };
                 document.body.appendChild(alertDiv);
-                
                 setTimeout(() => {
                     alertDiv.style.opacity = "0";
                     setTimeout(() => alertDiv.remove(), 500);
-                }, 6000);
+                }, 8000);
             }
-            // Optionally set flag to not show again this session:
-            // sessionStorage.setItem('ru_vpn_alert_shown', '1');
         })
         .catch(err => console.error("Error checking ru status:", err));
 });
@@ -14864,4 +15025,14 @@ document.addEventListener("DOMContentLoaded", function() {
         observer.observe(document.body, { childList: true, subtree: true });
     }
 })();
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        FailedMediaCache,
+        handleImageError,
+        PostRenderer,
+        SmartLoader,
+        MediaStreamManager
+    };
+}
 

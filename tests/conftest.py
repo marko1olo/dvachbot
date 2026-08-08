@@ -3,6 +3,13 @@ import sys
 
 import pytest
 
+try:
+    import site_tgach
+    sys.modules['Dubsite_tgach'] = site_tgach
+except ImportError:
+    pass
+
+
 # --- Защита от выселения нативных модулей из sys.modules -------------------
 # unittest.mock.patch.dict('sys.modules', ...) при выходе делает clear() и
 # заливает сохранённый снапшот обратно. Всё, что было импортировано ВНУТРИ

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ board_info.name }} Чатик - {{ request.state.t('site_name') }}</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.8">
     <link rel="icon" href="/static/favicon.ico">
     <meta property="og:site_name" content="ТГАЧ">
     <meta property="og:type" content="website">
@@ -79,7 +79,7 @@
         })();
     </script>
     <header>
-        <div class="board-nav-top">
+        <div class="board-nav-top" spellcheck="false">
             <a href="/overboard/" title="Все треды">/all/</a>
 
             {% for category in ['popular', 'bio', 'thematic', 'system'] %}
@@ -110,7 +110,7 @@
                 
                 <form action="/search" method="get" class="search-form compact-search" style="margin-left: 10px;">
                     <input type="text" name="query" placeholder="Поиск..." value="">
-                    <button type="submit" style="padding: 4px 8px;">🔍</button>
+                    <button type="submit" style="padding: 4px 8px;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" style="vertical-align: middle;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></button>
                 </form>
             </div>
             <div class="header-group-right">
@@ -130,7 +130,7 @@
                 </div>
             </div>
         </div>
-        <nav class="board-header-nav">
+        <nav class="board-header-nav" spellcheck="false">
             <a href="/">[{{ request.state.t('nav_home') }}]</a>
             <span class="nav-sep">|</span>
             <a href="/{{ board_id }}/mode/">[{{ request.state.t('nav_mode_select') }}]</a>
@@ -233,25 +233,27 @@
                             <div class="post-files-container post-gallery">
                                 {% for file in post.content.files %}
                                     {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
+                                        {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
+                                        {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/files/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                                                 {% if file.type == 'image' or file.type == 'photo' %}
-                                                    <a href="{{ file.original_url }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
+                                                    <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
                                                         <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
-                                                            data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                            data-src="{{ file_thumb_src }}" 
                                                             class="post-image lazy-load" alt="img" referrerpolicy="no-referrer">
                                                     </a>
                                                 {% elif file.type == 'sticker' %}
                                                     <div class="sticker-wrapper" style="display:inline-block; vertical-align:bottom;">
-                                                        <a href="{{ file.original_url }}" class="gallery-trigger" data-type="{{ 'video' if file.filename.endswith('.webm') else 'image' }}" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
+                                                        <a href="{{ file_orig_src }}" class="gallery-trigger" data-type="{{ 'video' if file.filename.endswith('.webm') else 'image' }}" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
                                                             {% if file.filename.endswith('.webm') %}
                                                                 <video class="post-sticker" 
-                                                                       src="{{ file.original_url }}" 
+                                                                       src="{{ file_orig_src }}" 
                                                                        autoplay loop muted playsinline webkit-playsinline 
                                                                        referrerpolicy="no-referrer" 
                                                                        style="max-height: 150px; width: auto; background: transparent; display: block;">
                                                                 </video>
                                                             {% else %}
                                                                 <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
-                                                                    data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                                    data-src="{{ file_thumb_src }}" 
                                                                     class="post-sticker lazy-load" 
                                                                     onclick="event.stopPropagation();" 
                                                                     referrerpolicy="no-referrer"
@@ -261,7 +263,8 @@
                                                     </div>
                                                 {% elif file.type == 'video_note' %}
                                                     <video class="post-video video-note" 
-                                                           src="{{ file.original_url }}" 
+                                                           data-src="{{ file_orig_src }}" 
+                                                           {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
                                                            autoplay 
                                                            loop 
                                                            muted 
@@ -272,7 +275,7 @@
                                                     </video>
                                                 {% elif file.type in ['video', 'gif', 'animation'] %}
                                                     <div class="file-thumb lazy-media-wrapper" 
-                                                        data-src="{{ file.original_url }}" 
+                                                        data-src="{{ file_orig_src }}" 
                                                         data-filename="{{ file.filename }}"
                                                         data-type="{{ 'gif' if file.type in ['gif', 'animation'] else 'video' }}">
                                                         {% if file.blurhash %}
@@ -283,8 +286,8 @@
                                                                muted 
                                                                playsinline
                                                                loop
-                                                               data-src="{{ file.original_url }}"
-                                                               {% if file.thumbnail_url %}poster="{{ file.thumbnail_url }}"{% endif %}
+                                                               data-src="{{ file_orig_src }}"
+                                                               {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
                                                                style="object-fit: cover; width: 100%; height: 100%; background: #000;">
                                                         </video>
                                                         <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
@@ -296,19 +299,20 @@
                             <div class="post-audios-container">
                                 {% for file in post.content.files %}
                                     {% if file.type in ['audio', 'voice', 'document'] %}
+                                        {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
                                         {% if file.type == 'audio' or file.type == 'voice' %}
                                             {% set unique_id = 'audio-' ~ post.id ~ '-' ~ loop.index %}
-                                            <div class="custom-audio-player" id="player-{{ unique_id }}" data-src="{{ file.original_url }}">
-                                                <audio id="{{ unique_id }}" preload="none"><source src="{{ file.original_url }}" type="{{ file.mime_type or 'audio/mpeg' }}"></audio>
+                                            <div class="custom-audio-player" id="player-{{ unique_id }}" data-src="{{ file_orig_src }}">
+                                                <audio id="{{ unique_id }}" preload="none"><source src="{{ file_orig_src }}" type="{{ file.mime_type or 'audio/mpeg' }}"></audio>
                                                 <button class="cap-play-btn" data-target="{{ unique_id }}" type="button">▶</button>
                                                 <div class="cap-info"><span class="cap-time">00:00</span></div>
                                                 <div class="cap-progress-container" data-target="{{ unique_id }}"><div class="cap-wave-base"></div><div class="cap-wave-progress"></div></div>
                                                 <div class="cap-info"><button class="cap-speed-btn" data-target="{{ unique_id }}" type="button">1x</button></div>
-                                                <a href="{{ file.original_url }}" download="{{ file.filename }}" class="cap-download-btn">⬇</a>
+                                                <a href="{{ file_orig_src }}" download="{{ file.filename }}" class="cap-download-btn">⬇</a>
                                             </div>
                                         {% elif file.type == 'document' %}
                                             <div style="margin-top:5px;">
-                                                <a href="{{ file.original_url }}" target="_blank" class="file-document-link">📄 {{ file.filename }}</a>
+                                                <a href="{{ file_orig_src }}" target="_blank" class="file-document-link">📄 {{ file.filename }}</a>
                                             </div>
                                         {% endif %}
                                     {% endif %}
@@ -538,26 +542,7 @@
     </div>
     <div id="new-posts-indicator" style="display: none;"></div>
     <div id="loading-indicator" class="loading-indicator">Отправка...</div>
-        <div id="global-action-menu">
-            <a href="#" class="menu-btn" data-action="reply">💬 {{ request.state.t('action_reply') }}</a>
-            <a href="#" class="menu-btn" data-action="view-thread" id="menu-view-thread-btn">📄 {{ request.state.t('action_view_thread') }}</a>
-            <a href="#" class="menu-btn" data-action="copy-link">🔗 {{ request.state.t('action_copy_link') }}</a>
-            <a href="#" class="menu-btn" data-action="bottle">🍾 {{ request.state.t('action_bottle') }}</a>
-            <a href="#" class="menu-btn" data-action="speak">🔊 {{ request.state.t('action_speak') }}</a>
-            <a href="#" class="menu-btn" data-action="report">🚨 {{ request.state.t('action_report') }}</a>
-            <a href="#" class="menu-btn" data-action="hide">👁️ {{ request.state.t('action_hide') }}</a>
-            <div class="admin-only">
-                <hr>
-                <a href="#" class="menu-btn admin-action" data-action="stealth" style="color: #e67e22;">🥷 Stealth Edit</a>
-                <a href="#" class="menu-btn admin-action" data-action="delete">🗑 {{ request.state.t('action_delete') }}</a>
-                <a href="#" class="menu-btn admin-action" data-action="ban">🔨 {{ request.state.t('action_ban') }}</a>
-                <a href="#" class="menu-btn admin-action" data-action="shadow" style="color: purple;">👻 {{ request.state.t('action_shadow') }}</a>
-                <a href="#" class="menu-btn admin-action" data-action="delete-after" style="color: orange;">✂️ {{ request.state.t('action_delete_after') }}</a>
-                <a href="#" class="menu-btn admin-action" data-action="wipe" style="color: red; font-weight: bold;">☢️ {{ request.state.t('action_wipe') }}</a>
-            </div>
-        </div>
-        <script src="/static/js/main.js?v=9.7" defer></script>
-    </body>
+    <script src="/static/js/main.js?v=9.8" defer></script>
     <div class="modal" id="bottle-modal" style="display: none;">
         <h3>Отправить записку анону</h3>
         <form id="bottle-form">

@@ -1,0 +1,50 @@
+7801:     Находит посты, содержащие указанные файлы.
+7802:     """
+7803:     if not file_ids:
+7804:         return []
+7805: 
+7806:     from common.db_pool import get_pool, db_lock
+7807: 
+7808:     clauses = []
+7809:     params = []
+7810: 
+7811:     placeholders = ",".join(["?"] * len(file_ids))
+7812:     # We query PostFiles to quickly find post_num for the given file IDs
+7813:     query = f"""
+7814:         SELECT * FROM Posts
+7815:         WHERE post_num IN (
+7816:             SELECT post_num FROM PostFiles
+7817:             WHERE original_file_id IN ({placeholders})
+7818:                OR thumbnail_file_id IN ({placeholders})
+7819:         ) AND IFNULL(is_shadow, 0) = 0
+7820:     """
+7821:     params = file_ids + file_ids
+7822: 
+7823:     async with db_lock:
+7824:         try:
+7825:             db = await get_pool()
+7826:             db.row_factory = aiosqlite.Row
+7827:             async with db.execute(query, params) as cursor:
+7828:                 rows = await cursor.fetchall()
+7829:                 cols = [d[0] for d in cursor.description]
+7830:                 results = []
+7831:                 for r in rows:
+7832:                     if hasattr(r, 'keys'):
+7833:                         results.append(dict(r))
+7834:                     else:
+7835:                         results.append(dict(zip(cols, r)))
+7836:                 return results
+7837:         except Exception as e:
+7838:             print(f"Error in get_posts_by_file_ids: {e}")
+7839:             return []
+7840:         finally:
+7841:             if 'db' in locals() and db:
+7842:                 db.row_factory = None
+7843: async def get_thread_type_and_unlock_status(thread_id: str, user_id: int) -> tuple[str, bool]:
+7844:     """
+7845:     Возвращает (тип_треда, имеет_ли_юзер_анлок).
+7846:     Использует цикл попыток при блокировке базы.
+7847:     """
+7848:     from common.db_pool import get_pool, db_lock
+7849: 
+7850:     async with db_lock:

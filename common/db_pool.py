@@ -9,6 +9,7 @@ class LazyLock:
     def __init__(self):
         self._lock = None
         self._loop = None
+        self._owner = None
 
     def _get_lock(self):
         try:
@@ -18,17 +19,39 @@ class LazyLock:
         if self._lock is None or (loop and self._loop is not loop):
             self._lock = asyncio.Lock()
             self._loop = loop
+            self._owner = None
         return self._lock
 
     async def acquire(self):
-        return await self._get_lock().acquire()
+        lock = self._get_lock()
+        res = await lock.acquire()
+        try:
+            self._owner = asyncio.current_task()
+        except RuntimeError:
+            self._owner = None
+        return res
 
     def release(self):
         if self._lock:
+            self._owner = None
             self._lock.release()
 
     def locked(self):
         return self._get_lock().locked()
+
+    def is_owned_by_current_task(self) -> bool:
+        """Проверяет, удерживает ли текущая задача этот замок."""
+        if not self.locked():
+            return False
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        return current is not None and self._owner is current
+
+    def locked_by_current_task(self) -> bool:
+        """Алиас/хелпер для проверки владения замком текущей задачей."""
+        return self.is_owned_by_current_task()
 
     async def __aenter__(self):
         await self.acquire()
@@ -132,7 +155,8 @@ async def close_pool():
 async def db_sleep(delay: float):
     """Безопасный sleep для отпускания db_lock во время ожидания."""
     lock_released = False
-    if db_lock.locked():
+    is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
+    if is_owned_fn and is_owned_fn():
         try:
             db_lock.release()
             lock_released = True

@@ -67,38 +67,6 @@ def _load_google_keys() -> list[str]:
     return []
 
 _key_cooldowns: dict[tuple[str, str], float] = {}
-def _get_models_cascade(model_preference: str | None) -> list[tuple[str, str]]:
-    if model_preference == "gemini":
-        return [("gemini-3.1-flash-lite", "gemini")]
-    if model_preference == "qwen":
-        return [("qwen/qwen3.6-27b", "groq")]
-    if model_preference == "llama":
-        return [("llama-3.3-70b-versatile", "groq")]
-
-    return [
-        ("gemini-3.1-flash-lite", "gemini"),
-        ("qwen/qwen3.6-27b", "groq"),
-        ("llama-3.3-70b-versatile", "groq"),
-    ]
-def get_models_cascade(model_preference: str | None = None) -> list[tuple[str, str]]:
-    if model_preference == "gemini":
-        return [
-            ("gemini-3.1-flash-lite", "gemini"),
-        ]
-    elif model_preference == "qwen":
-        return [
-            ("qwen/qwen3.6-27b", "groq")
-        ]
-    elif model_preference == "llama":
-        return [
-            ("llama-3.3-70b-versatile", "groq")
-        ]
-    else:
-        return [
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("qwen/qwen3.6-27b", "groq"),
-            ("llama-3.3-70b-versatile", "groq"),
-        ]
 
 async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     """

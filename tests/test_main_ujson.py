@@ -27,9 +27,8 @@ except Exception as e:
 """
         env = os.environ.copy()
         env['PYTHONPATH'] = PROJECT_ROOT
-        env['SECRET_KEY'] = 'test-secret-key-12345'
-
-        result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, env=env)
+        env['TESTING'] = '1'
+        result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, env=env, timeout=10)
 
         if result.returncode != 0:
             self.fail(f"Subprocess failed with code {result.returncode}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")

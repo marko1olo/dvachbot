@@ -12,6 +12,7 @@ UTC = timezone.utc
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.exceptions import TelegramBadRequest
+import httpx
 
 from common.html_utils import escape_html
 from common.text_utils import clean_html_for_tg
@@ -196,16 +197,28 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
         roast = None
         if transcript:
             try:
-                from site_tgach.neuro_poster import _execute_groq_post
                 prompt = (
                     "Ты циничный, ядовитый старый двачер из /b/. Твоя задача — жестко, с юмором "
                     "и суровым сленгом 2ch (без ИИ-вежливости) высмеять (отроастить) автора голосовухи на основе его слов.\n"
                     f"Слова автора: «{transcript}»\n"
                     "Напиши 1-2 ядовитых, смешных предложения ответа."
                 )
-                raw_roast = await _execute_groq_post(prompt, max_tokens=150)
-                if raw_roast and len(raw_roast.strip()) > 5:
-                    roast = raw_roast.strip()
+                from common.token_pool import groq_pool
+                token = groq_pool.get_token() or os.getenv("GROQ_API_KEY")
+                if token:
+                    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+                    data = {
+                        "model": "llama-3.1-70b-versatile",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 150,
+                        "temperature": 0.8
+                    }
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        resp = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data)
+                        if resp.status_code == 200:
+                            raw_roast = resp.json()["choices"][0]["message"]["content"]
+                            if raw_roast and len(raw_roast.strip()) > 5:
+                                roast = raw_roast.strip()
             except Exception as roast_err:
                 logger.warning(f"⚠️ Ошибка генерации роаста: {roast_err}")
 

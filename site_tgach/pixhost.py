@@ -71,6 +71,10 @@ async def upload_file_to_pixhost(file_path: str) -> str | None:
                 if resp.status_code == 200:
                     j = resp.json()
                     # Response: {"th_url": "...", "show_url": "...", ...}
+                    th_url = j.get("th_url", "")
+                    if th_url:
+                        logger.info(f"✅ Pixhost upload success ({strategy['name']}): {th_url}")
+                        return th_url
                     show_url = j.get("show_url", "")
                     if show_url:
                         # Construct direct URL: pixhost converts show_url to direct img

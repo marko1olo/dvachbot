@@ -1935,7 +1935,7 @@ async def country_cookie_middleware(request: Request, call_next):
             key="user_country",
             value=country,
             max_age=3600,
-            httponly=True,
+            httponly=False,
             samesite="lax",
         )
     except Exception:
@@ -5685,6 +5685,8 @@ async def roulette_redirect_alias():
 
 @app.get("/{board_id}/")
 async def read_board_index_redirect(board_id: str):
+    if board_id not in BOARD_CONFIG:
+        raise HTTPException(status_code=404)
     """
     Редирект с корня доски сразу на треды.
     """
@@ -6274,6 +6276,8 @@ async def read_board_chat(
 
 @app.get("/{board_id}/res/")
 async def read_res_root_redirect(board_id: str):
+    if board_id not in BOARD_CONFIG:
+        raise HTTPException(status_code=404)
     """
     Редирект с папки /res/ (если юзер стер номер треда) обратно на доску.
     """
@@ -11042,10 +11046,6 @@ async def check_if_ru(request: Request):
     client_ip = get_real_ip(request)
     user_country = await get_country_by_ip(client_ip)
     is_ru = user_country == "RU"
-    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
-        accept_lang = request.headers.get("accept-language", "").lower()
-        if "ru" in accept_lang or not accept_lang:
-            is_ru = True
     return {"is_ru": is_ru}
 
 
@@ -11057,3 +11057,47 @@ if __name__ == "__main__":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     asyncio.run(main_serve())
 
+
+@app.get("/api/is-ru")
+async def check_if_ru(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}
+
+@app.get("/api/is-ru")
+async def check_if_ru(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}
+
+@app.get("/api/is-ru")
+async def check_if_ru(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}
+
+@app.get("/api/is-ru")
+async def check_if_ru(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}

@@ -1,65 +1,93 @@
-# Handoff Report — explorer_media_1
+# Handoff Report — explorer_media_1 (Playwright Browser Forensics & VLM Screenshot Audit)
 
 ## 1. Observation
-- **Root Telegram Bot (`C:\Users\danat\Desktop\dvachbot\main.py`):** Verified to contain 0 web/HTTP route definitions. Web server is completely self-contained in `site_tgach\main.py`.
-- **FastAPI Endpoint Inventory (`site_tgach\main.py`):**
-  - Line 10313: `@app.api_route("/files/{file_id:path}", methods=["GET", "HEAD"])` -> `async def get_telegram_file(...)`
-  - Line 5614: `@app.get("/img/random")` -> `async def random_image_page(...)`
-  - Line 5630: `@app.get("/api/img/next")` -> `async def api_random_image_next(...)`
-  - Line 8741 / Line 5570: `@app.get("/tv/random")` & `@app.get("/roulette")` -> `async def roulette_page(...)`
-  - Line 8757: `@app.get("/api/tv/next")` -> `async def api_roulette_next(...)`
-  - Line 5549: `@app.get("/api/media-feed/{board_id}")` -> `async def api_get_media_feed(...)`
-  - Line 9133: `@app.get("/api/voice/{file_id:path}/transcribe")` -> `async def api_transcribe_voice(...)`
-  - Line 2263: `app.mount("/static", StaticFiles(...), name="static")`
-- **Missing Compatibility Routes:**
-  - Automated regex search across all `.py` files in `site_tgach\` returned **0 matches** for path patterns `@app...("/file/`, `@app...("/thumb/`, `@app...("/i/`, `@app...("/preview/`, `@app...("/{board}/src/`, `@app...("/{board}/thumb/`.
-- **Header Observations:**
-  - Line 10337: `no_cache_headers = {"Cache-Control": "no-store, no-cache..."}` is defined but unused.
-  - Lines 10163-10170 (`_proxy_protected_telegram_file`) and Lines 10238-10240 (`_proxy_external_url`): Headers set are `Accept-Ranges`, `Cache-Control: public, max-age=300`, `Content-Length`, `Content-Range`, `Last-Modified`, `ETag`. `Access-Control-Allow-Origin: *` is **absent**.
-- **Error Handling & Caching Discrepancy:**
-  - Line 10395: `backend.get(f"dead_file:public:{file_id}")` checks Redis for dead files.
-  - Line 10511: `_mark_random_dead_file(file_id)` is called when lookups fail.
-  - Line 512: `_mark_random_dead_file(file_id)` writes ONLY to local dictionary `RANDOM_DEAD_FILE_IDS[str(file_id)] = now`. It never sets Redis key `dead_file:public:{file_id}`.
-- **Telegram Bot Probing:**
-  - Lines 10002-10038 (`try_bot_batch` in `get_cached_file_path`): Iterates over `all_bot_tokens` in batches of 4 spawning parallel async tasks calling `_fetch_telegram_path(file_id, token)`.
+
+### Execution Summary & Tools
+- **Working Directory**: `C:\Users\danat\Desktop\dvachbot\.agents\explorer_media_1`
+- **Diagnostic Scripts**:
+  - `scratch/check_server.py` — Confirmed FastAPI server active on `http://127.0.0.1:8000` (HTTP 200 OK).
+  - `scratch/scratch_playwright_test.py` — Playwright headless browser forensics script.
+  - `scratch/capture_board.py` — Board catalog full-page screenshot capture script.
+- **Captured Artifacts**:
+  - `scratch/playwright_forensics.json` — Detailed JSON log of console messages, network responses, and DOM state.
+  - `scratch/playwright_before.png` — Full-page screenshot of active thread `#295459`.
+  - `scratch/playwright_board_before.png` — Full-page screenshot of main board page `/b/`.
+
+### Verbatim Console Errors & Network Log Analysis
+- **Uncaught JS Errors (`pageerror`)**: `0` uncaught exceptions.
+- **Console Log Highlights (175 entries captured)**:
+  - `[MediaRescue] Redirect failed for type: catbox. Swapping to skip parameter: catbox` (repeated over 30 times in console output from `main.js` line 11530).
+  - `[ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://127.0.0.1:8000/api/bottle/count`
+- **Network Requests (`requestfailed`)**:
+  - `GET https://files.catbox.moe/m1s8dd.jpg?skip=catbox` -> `net::ERR_BLOCKED_BY_ORB` (Opaque Response Blocking by browser).
+  - `GET https://files.catbox.moe/lcn6ha.jpg` -> `net::ERR_BLOCKED_BY_ORB`.
+  - 30+ failed GET requests to `catbox.moe` mirrors due to browser CORS/ORB security policy.
+
+### DOM Elements Audit (`playwright_forensics.json`)
+- **Total Images Evaluated on `/b/`**: 40 images.
+  - **Local `/files/` images**: 1 image (`/files/AgACAgIAAxUHaXWyaoO5JmlEI4Se9OyvKRuCCYkA...`) loaded successfully with `complete: true`, `naturalWidth: 1903`, `naturalHeight: 2560`.
+  - **Catbox Direct Images**: 3 images loaded directly.
+  - **Lazy-Loaded Images stuck on 1x1 GIF**: 32 images had `src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"`.
+- **Total Videos Evaluated on `/b/`**: 4 videos.
+  - All 4 video elements rendered with `src=""` (empty) and `data-src="https://files.catbox.moe/..."`. None had rendered posters or active playback sources.
+
+### VLM Screenshot Modality Inspection
+- **`scratch/playwright_before.png` (Thread #295459)**:
+  - Header warning banner present: `"Включи VPN, иначе не загрузятся картинки!"`.
+  - OP Post #295459 media block is **missing** and replaced by a light grey dashed box containing `⚠️ Media Unavailable`.
+  - Post replies (#302776, #302779, #305451, #474561) render text cleanly, but the OP media thumbnail is completely missing.
+- **`scratch/playwright_board_before.png` (Board Catalog `/b/`)**:
+  - Multiple catalog items have missing thumbnail previews or display empty white/black containers.
+  - Video thread items display black empty video boxes with small play icons and `VIDEO` badges, but no poster thumbnail.
 
 ---
 
 ## 2. Logic Chain
-1. **From missing route search to 404 finding:**
-   - Observation: FastAPI route list shows only `/files/{file_id:path}` is registered, and regex search for `/file/`, `/thumb/`, `/i/`, `/preview/`, `/src/` returned 0 decorator matches.
-   - Inference: Standard 2ch imageboard endpoints (`/file/...`, `/thumb/...`, `/i/...`, `/preview/...`, `/{board}/src/...`, `/{board}/thumb/...`) are completely missing from FastAPI. Any client or scraper targeting these legacy routes receives HTTP 404.
-2. **From header inspection to CORS vulnerability:**
-   - Observation: Neither 307 redirect responses in `get_telegram_file` nor streaming responses in `_proxy_protected_telegram_file` / `_proxy_external_url` set `Access-Control-Allow-Origin`.
-   - Inference: Cross-origin browser requests (HTML5 canvas, video element, external JS web clients) attempting to fetch media via these endpoints will be blocked by browser CORS policy.
-3. **From dead file code review to caching failure:**
-   - Observation: Line 10395 checks Redis key `dead_file:public:{file_id}`, but line 10511 calls `_mark_random_dead_file`, which line 512 shows only modifies local memory dict `RANDOM_DEAD_FILE_IDS`.
-   - Inference: Dead files marked by worker processes are never saved to Redis. Subsequent requests in other workers or subsequent API calls hit the cache miss and re-trigger full Telegram/mirror lookups.
-4. **From bot pool batch iteration to rate-limit bottleneck:**
-   - Observation: `get_cached_file_path` fires parallel `getFile` requests across all bot tokens in batches of 4 when a file has no owner ID.
-   - Inference: Non-existent file IDs trigger up to N parallel HTTP requests to Telegram API per 404 lookup, creating a thundering herd that risks triggering Telegram 429 FloodWait or bot token bans.
+
+1. **Backend Mirror Selection Priority**:
+   - In `site_tgach/main.py` (`_select_mirror_strategically`, lines 3345-3409), when a file has a `catbox` mirror in `FileRegistry` DB, `selected_thumbnail` is assigned `thumb_mirrors["catbox"]` (`https://files.catbox.moe/...`).
+2. **Browser Security Blocking (ORB / CORS)**:
+   - When the client browser executes `SmartLoader` or renders `<img>`, it attempts to load the `catbox.moe` thumbnail URL directly. Chromium blocks cross-origin media requests from untrusted external CDNs with `net::ERR_BLOCKED_BY_ORB`.
+3. **Frontend `MediaRescue` Fail-Loop**:
+   - Upon network request failure, `handleImageError(img)` in `site_tgach/static/js/main.src.js` (lines 11450-11570) traps the error, appends `?skip=catbox` to the URL, and attempts to re-fetch the image.
+   - Because all `catbox.moe` domains trigger ORB blocking, `handleImageError` loops up to `skipped.length >= 6`.
+4. **Permanent Invalidation via `FailedMediaCache`**:
+   - Once `skipped.length >= 6` is reached, `handleImageError` calls `FailedMediaCache.markFailed(originalUrl)` and `FailedMediaCache.markFailed(currentSrc)`.
+   - The DOM container is mutated to `<div class="broken-media">⚠️ Media Unavailable</div>`.
+   - On subsequent post re-renders, catalog switches, or thread navigation, `FailedMediaCache.isFailed(url)` evaluates to `true` immediately (lines 11248, 11360, 14355, 14373, 14397), preventing the browser from ever attempting to load the working local `/files/{file_id}` backend proxy route!
+5. **Video Poster Omission**:
+   - In catalog item rendering (lines 11254-11257), `<video>` tags are output with `data-src="${vidUrl}"` and `poster="${posterUrl}"`. When `posterUrl` points to `catbox.moe`, the video poster fails to load, leaving an empty black box.
 
 ---
 
 ## 3. Caveats
-- No live HTTP server was started during this read-only investigation, as per workspace constraints. All observations were derived directly from static source code analysis of `site_tgach\main.py` and project files.
+
+- **Read-Only Scope Complied**: No production source code files (`site_tgach/main.py`, `site_tgach/static/js/main.src.js`, or `site_tgach/static/js/main.js`) were modified during this R1 forensics phase.
+- **Local File Health**: Local `/files/{file_id}` proxy endpoints in FastAPI are operational; test image `AgACAgIAAxUHaXWyaoO5JmlEI4Se9OyvKRuCCYkAAr4Maxus9rFLqdOmyHLLU2MBAAMCAAN3AAM4BA` loaded with `HTTP 200 OK` and valid dimensions (1903x2560).
+- **Network Environment**: `files.catbox.moe` domain access may be blocked or restricted by local ISP / browser ORB policies; relying on client-side direct fetches to `catbox.moe` without local proxying is fundamentally fragile.
 
 ---
 
 ## 4. Conclusion
-The media serving architecture in `site_tgach\main.py` is functional for valid Telegram file IDs under `/files/{file_id:path}`, but contains critical compatibility gaps, header omissions, and performance bottlenecks:
-1. **Broken 2ch Path Compatibility:** Legacy `/file/`, `/thumb/`, `/i/`, `/preview/`, `/{board}/src/`, and `/{board}/thumb/` paths return 404.
-2. **Missing CORS Headers:** Missing `Access-Control-Allow-Origin: *` on all media responses.
-3. **Dead File Redis Desync:** `_mark_random_dead_file` fails to set Redis key `dead_file:public:{file_id}`.
-4. **Telegram Bot Rate-Limit Bottleneck:** Full bot pool scanning on missing owner IDs triggers API flooding.
+
+The missing media thumbnails in `site_tgach` are caused by a **two-fold systemic bug**:
+1. **Backend**: `_select_mirror_strategically` in `site_tgach/main.py` prioritizes external `catbox.moe` mirror URLs over local `/files/{file_id}` proxy URLs for thumbnails, exposing media fetches to browser `ERR_BLOCKED_BY_ORB` CORS failures.
+2. **Frontend**: `handleImageError` and `FailedMediaCache` in `site_tgach/static/js/main.src.js` over-aggressively poison the in-memory cache upon external mirror failure, permanently replacing valid media DOM containers with `⚠️ Media Unavailable` without falling back to local `/files/{file_id}` proxy endpoints.
+
+### Recommended Actionable Fix (For Implementer in Milestone R2):
+- **Backend Fix (`site_tgach/main.py`)**: Update `_select_mirror_strategically` to prioritize local `/files/{file_id}` endpoints for thumbnails when external mirrors are unverified or cross-origin blocked.
+- **Frontend Fix (`site_tgach/static/js/main.src.js`)**:
+  - Modify `handleImageError` to attempt a fallback to `/files/${file_id}` before invoking `FailedMediaCache.markFailed()`.
+  - Ensure `FailedMediaCache` only marks media as failed if the local `/files/` endpoint returns `404 Not Found`.
 
 ---
 
 ## 5. Verification Method
-1. **Inspect Source Locations:**
-   - Check `site_tgach\main.py` at line 10313 (`get_telegram_file`) to verify absence of `/file/`, `/thumb/`, `/i/`, `/preview/` decorators.
-   - Check lines 10163 and 10238 to verify missing CORS headers.
-   - Check line 512 (`_mark_random_dead_file`) vs line 10395 to verify Redis key desync.
-2. **Execution Test Commands (Once Server is Running):**
-   - Run python script calling `http://localhost:8000/file/test.jpg` -> Verify HTTP 404.
-   - Run python script calling `http://localhost:8000/files/test.jpg` -> Verify HTTP 307 / 404 flow.
+
+To independently verify the diagnosis and future fix:
+1. Run server healthcheck: `python scratch/check_server.py` (Must output `SERVER_IS_RUNNING`).
+2. Execute Playwright forensics script: `python scratch/scratch_playwright_test.py`.
+3. Inspect `scratch/playwright_forensics.json`:
+   - Assert `final_images_count > 0` and images have `complete == true` with `naturalWidth > 0`.
+   - Confirm 0 `net::ERR_BLOCKED_BY_ORB` failures for thumbnail media.
+4. Inspect `scratch/playwright_before.png` (and `scratch/playwright_after.png` post-fix) via visual modality to verify media thumbnails render visually instead of `⚠️ Media Unavailable`.

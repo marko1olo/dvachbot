@@ -1,35 +1,23 @@
-# dvachbot Enhancement Master Plan
+# dvachbot Audit & Verification Plan
 
 ## Overview
-Comprehensive audit and architectural enhancement of the dvachbot Telegram/web board ecosystem focusing on system safety, high-performance database & memory hygiene, advanced voice & multi-modal AI features, and end-to-end empirical verification.
+Verify recent fixes in `dvachbot` for R1 (Proxy Reversion), R2 (`format_header` Fix), and R3 (Database Concurrency Patch).
 
-## Milestones
+## Iteration Strategy
+For each milestone (M1, M2, M3):
+1. **Explore**: Dispatch Explorers (`teamwork_preview_explorer`) to audit target files, verify line-by-line implementation, check for syntax or import issues, and verify logic.
+2. **Implement/Fix (if needed)**: If defects or missing imports are found, dispatch Workers (`teamwork_preview_worker`) to perform native source edits and run tests.
+3. **Review & Challenge**: Dispatch Reviewers (`teamwork_preview_reviewer`) and Challengers (`teamwork_preview_challenger`) to independently review code and run stress tests / unit tests.
+4. **Audit**: Dispatch Forensic Auditor (`teamwork_preview_auditor`) to verify zero cheating, no dummy mocks, and full integrity.
+5. **Gate Check**: Record verdicts in `GATE_STATUS.md`. Mark milestone complete when all gates pass.
 
-### Phase 0: Survey & Codebase Mapping (COMPLETED)
-- [x] Dispatch 3 parallel Explorers to scan codebase against R1, R2, R3.
-- [x] Aggregate findings into Feature Inventory & Code Layout in `PROJECT.md`.
-
-### Phase 1: Milestone 1 — Deep System Audit & Error Resilience (IN PROGRESS)
-- [ ] Implement F1.1: Replace bare `except:` blocks with `except Exception:` so `asyncio.CancelledError` is re-raised.
-- [ ] Implement F1.2: Replace silent `except Exception: pass` swallows with structured `logger.warning`/`logger.error` in `common/database.py`, `main.py`, `user_manager.py`, `admin_manager.py`, `handlers/message_router.py`.
-- [ ] Implement F1.3: Audit & enforce 100% `spawn_task` usage across background coroutines.
-- [ ] Implement F1.4: Replace raw `print()` / `traceback.print_exc()` with `runtime_logger` in `main.py`.
-- [ ] Gate verification (Reviewers, Challenger, Auditor).
-
-### Phase 2: Milestone 2 — High-Performance Database & Memory Hygiene
-- [ ] Implement F2.1: Remove `asyncio.sleep(...)` inside `async with db_lock:` blocks.
-- [ ] Implement F2.2: Fix explicit `BEGIN IMMEDIATE` calls inside active `aiosqlite` transactions.
-- [ ] Implement F2.3: Enforce hard upper bounds (`maxsize` / LRU / bounded dict) on `_VIDEO_CACHE`, `_IMAGE_CACHE`, `_THREAD_CACHE`.
-- [ ] Implement F2.4: Enforce inline upper bounds on `messages_storage`, `post_to_messages`, `message_to_post` maps.
-- [ ] Implement F2.5: Enforce `maxlen` on `POST_RATE_LIMITER` deques in `site_tgach/main.py` & `Dubsite_tgach/main.py`.
-- [ ] Gate verification (Reviewers, Challenger, Auditor).
-
-### Phase 3: Milestone 3 — Advanced Voice & Multi-Modal AI Features
-- [ ] Implement F3.1: Fix `_execute_groq_post` call signature bug in `ai_manager.py:206`.
-- [ ] Implement F3.2: Add size/duration pre-checks, key rotation pool (`groq_pool`), and retry handling for Voice/Video note STT.
-- [ ] Implement F3.3: Localize voice note prompts and mock fallbacks for `ru`, `en`, `jp` streams.
-- [ ] Gate verification (Reviewers, Challenger, Auditor).
-
-### Phase 4: Milestone 4 — Comprehensive Automated & Empirical Verification
-- [ ] Implement F4.1: Automated test suite covering `spawn_task` supervision, non-blocking `db_lock`, bounded memory, STT & AI roast error handling.
-- [ ] Victory Audit verification & handoff.
+## Milestone Breakdown
+- **M1: Telegram File Proxy (R1)**
+  - Target: `site_tgach/main.py`
+  - Check: Ensure `/files/` endpoint returns HTTP 307 Redirect to `api.telegram.org`.
+- **M2: `format_header` Fix (R2)**
+  - Target: `user_manager.py`, `main.py`
+  - Check: Ensure `format_header` is defined and properly imported; check `cmd_anime` and generic mode commands for `NameError`.
+- **M3: DB Concurrency Patch (R3)**
+  - Target: `common/database.py`, `common/db_pool.py`
+  - Check: Ensure `await asyncio.sleep` replaced by `await db_sleep`, and `db_sleep` safely releases/reacquires `db_lock`.

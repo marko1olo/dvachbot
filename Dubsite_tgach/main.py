@@ -296,6 +296,33 @@ def _get_spam_pattern(stop_words_frozenset):
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 URL_PATTERN = re.compile(r'(https?://[^\s<>"\'`]+)')
+
+
+def _clean_url_and_suffix(full: str):
+    delim_match = re.search(
+        r"&(?:quot|gt|lt|apos|#0*39|#0*38|#x0*27|#X0*27);", full, flags=re.IGNORECASE
+    )
+    if delim_match:
+        url_part = full[: delim_match.start()]
+        suffix = full[delim_match.start() :]
+    else:
+        url_part = full
+        suffix = ""
+
+    while url_part:
+        if url_part.endswith("&amp;"):
+            suffix = "&amp;" + suffix
+            url_part = url_part[:-5]
+        elif url_part[-1] in ".,;:!?)]}" and not (
+            url_part.endswith(")") and "(" in url_part
+        ):
+            suffix = url_part[-1] + suffix
+            url_part = url_part[:-1]
+        else:
+            break
+
+    return url_part, suffix
+
 CROSS_LINK_PATTERN = re.compile(r'>>/([a-z0-9]+)/(\d+)')
 REF_LINK_PATTERN = re.compile(r'(>>(\d+))')
 SPOILER_PATTERN = re.compile(r'\|\|(.+?)\|\|')
@@ -1626,7 +1653,14 @@ def format_post_text(text: str) -> str:
     # --- ФОРМАТИРОВАНИЕ ---
     text = re.sub(r'&lt;br\s*/?&gt;', '\n', text, flags=re.IGNORECASE) 
     
-    processed_text = URL_PATTERN.sub(r'<a href="\1" target="_blank" rel="noopener noreferrer">\1</a>', text)
+    def replace_url(match):
+        full = match.group(0)
+        url_part, suffix = _clean_url_and_suffix(full)
+        if not url_part:
+            return full
+        return f'<a href="{url_part}" target="_blank" rel="noopener noreferrer">{url_part}</a>{suffix}'
+
+    processed_text = URL_PATTERN.sub(replace_url, text)
     
     lines = []
     for line in processed_text.split('\n'):
@@ -6755,6 +6789,50 @@ if __name__ == "__main__":
         timeout_keep_alive=10,
         limit_concurrency=1000
     )
+
+@app.get("/api/is-ru")
+async def check_if_ru_dub(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}
+
+@app.get("/api/is-ru")
+async def check_if_ru_dub(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}
+
+@app.get("/api/is-ru")
+async def check_if_ru_dub(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}
+
+@app.get("/api/is-ru")
+async def check_if_ru_dub(request: Request):
+    client_ip = get_real_ip(request)
+    user_country = await get_country_by_ip(client_ip)
+    is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
+    return {"is_ru": is_ru}
 
 @app.get("/api/is-ru")
 async def check_if_ru_dub(request: Request):

@@ -42,7 +42,7 @@ async def describe_image_for_bot(img_bytes: bytes, caption: str = "") -> str:
         )
         
         resp = await client.chat.completions.create(
-            model="llama-3.2-90b-vision-preview",
+            model="llama-3.2-11b-vision-preview",
             messages=[
                 {
                     "role": "user",

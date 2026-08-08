@@ -4,6 +4,7 @@ import asyncio
 import sqlite3
 
 from common.database import sync_boards_with_config
+from common.db_pool import LazyLock
 
 class TestSyncBoardsWithConfig(unittest.IsolatedAsyncioTestCase):
     async def test_success(self):
@@ -12,7 +13,7 @@ class TestSyncBoardsWithConfig(unittest.IsolatedAsyncioTestCase):
         mock_db = AsyncMock()
 
         with patch("common.db_pool.get_pool", new_callable=AsyncMock) as mock_get_pool, \
-             patch("common.db_pool.db_lock", new_callable=asyncio.Lock):
+             patch("common.db_pool.db_lock", new_callable=LazyLock):
 
             mock_get_pool.return_value = mock_db
 
@@ -37,7 +38,7 @@ class TestSyncBoardsWithConfig(unittest.IsolatedAsyncioTestCase):
         ]
 
         with patch("common.db_pool.get_pool", new_callable=AsyncMock) as mock_get_pool, \
-             patch("common.db_pool.db_lock", new_callable=asyncio.Lock), \
+             patch("common.db_pool.db_lock", new_callable=LazyLock), \
              patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
 
             mock_get_pool.return_value = mock_db
@@ -59,7 +60,7 @@ class TestSyncBoardsWithConfig(unittest.IsolatedAsyncioTestCase):
         ]
 
         with patch("common.db_pool.get_pool", new_callable=AsyncMock) as mock_get_pool, \
-             patch("common.db_pool.db_lock", new_callable=asyncio.Lock):
+             patch("common.db_pool.db_lock", new_callable=LazyLock):
 
             mock_get_pool.return_value = mock_db
 
@@ -78,7 +79,7 @@ class TestSyncBoardsWithConfig(unittest.IsolatedAsyncioTestCase):
         ]
 
         with patch("common.db_pool.get_pool", new_callable=AsyncMock) as mock_get_pool, \
-             patch("common.db_pool.db_lock", new_callable=asyncio.Lock):
+             patch("common.db_pool.db_lock", new_callable=LazyLock):
 
             mock_get_pool.return_value = mock_db
 

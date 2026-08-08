@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ТГАЧ :: Центр Управления</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.8">
     <link rel="icon" href="/static/favicon.ico">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -227,7 +227,7 @@
                 <button class="admin-nav-btn" onclick="openTab('mod_queue')">🛡️ Нейро-Щит</button>
                 <button class="admin-nav-btn" onclick="openTab('bans')">⛔ Бан-лист</button>
                 <button class="admin-nav-btn" onclick="openTab('firewall')">🧱 Файервол</button>
-                <button class="admin-nav-btn" onclick="openTab('inspector')">🔍 Инспектор Постов</button>
+                <button class="admin-nav-btn" onclick="openTab('inspector')"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" style="vertical-align: middle;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> Инспектор Постов</button>
                 <button class="admin-nav-btn" onclick="openTab('user_inspector')">👤 Инспектор Юзеров</button>
                 <button class="admin-nav-btn" onclick="openTab('inbox')">📬 Приемная <span id="inbox-badge" style="display:none;">New</span></button>
             {% endif %}
@@ -375,7 +375,7 @@
                 </div>
             </div>
             <div id="inspector" class="tab-pane">
-                <h2>🔍 Инспектор Постов</h2>
+                <h2><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" style="vertical-align: middle;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> Инспектор Постов</h2>
                 <p>Введите номер поста или ссылку на него, чтобы получить полную информацию об авторе и принять меры.</p>
                 <div style="display: flex; gap: 10px; margin-bottom: 20px;">
                     <input type="text" id="inspect-input" placeholder="12345 или ссылка..." style="flex-grow: 1; padding: 10px; border-radius: 4px; border: 1px solid var(--border-input); background: var(--bg-input); color: var(--text-primary);">
@@ -476,7 +476,7 @@
                 
                 <div style="display: flex; gap: 10px; margin-bottom: 20px; background: var(--bg-input); padding: 15px; border-radius: 8px; border: 1px solid var(--border-input);">
                     <input type="number" id="inspect-user-id" placeholder="User ID (например: 12345)" style="flex-grow: 1; padding: 10px; border-radius: 4px; border: 1px solid var(--border-input); background: var(--bg-post); color: var(--text-primary);">
-                    <button class="btn btn-primary" onclick="inspectUser()">🔍 Найти Досье</button>
+                    <button class="btn btn-primary" onclick="inspectUser()"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" style="vertical-align: middle;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg> Найти Досье</button>
                 </div>
 
                 <div id="user-inspector-result" style="display: none;">
@@ -942,7 +942,7 @@
             </div>
         </section>
     </div>
-    <script src="/static/js/main.js?v=9.7"></script>
+    <script src="/static/js/main.js?v=9.8"></script>
     <script src="/static/js/admin.js?v=1.0"></script>
     <script>
         let activityChartInstance = null;

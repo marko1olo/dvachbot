@@ -151,14 +151,16 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 f"Do not use reasoning blocks or <think> tags. Output ONLY raw JSON."
             )
             
-            # 33% / 33% / 33% load balancing pool between Qwen 3.6 27B, Gemini 3.5 Flash Lite, Gemini 3.1 Flash Lite
-            models_pool = [
-                ("qwen/qwen3.6-27b", "groq"),
+            # Deterministic best-first vision cascade.
+            # Gemini lite models are tried in order of quality.
+            # meta-llama/llama-4-scout (Groq) is the last-resort vision fallback.
+            # llama-3.2-90b-vision-preview was decommissioned by Groq 2026-08.
+            models_cascade = [
                 ("gemini-3.5-flash-lite", "gemini"),
-                ("gemini-3.1-flash-lite", "gemini")
+                ("gemini-3.1-flash-lite", "gemini"),
+                ("gemini-2.5-flash-lite", "gemini"),
+                ("meta-llama/llama-4-scout-17b-16e-instruct", "groq"),
             ]
-            start_idx = random.randint(0, 2)
-            models_cascade = models_pool[start_idx:] + models_pool[:start_idx]
 
             permanent_model_failures = 0
 

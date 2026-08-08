@@ -34,7 +34,7 @@
         })();
     </script>
     <header>
-        <div class="board-nav-top">
+        <div class="board-nav-top" spellcheck="false">
             {% for b_key, b_val in boards.items() %}
                 {% if b_key != 'test' %}
                     <a href="/{{ b_key }}/" class="{% if b_key == board_id %}active{% endif %}" title="{{ b_val.name }}">
@@ -209,6 +209,6 @@
     
     <div id="image-viewer" class="image-viewer-overlay" style="display: none;"></div>
     <div id="loading-indicator" class="loading-indicator">Отправка...</div>
-    <script src="/static/js/main.js?v=9.7" defer></script>
+    <script src="/static/js/main.js?v=9.8" defer></script>
 </body>
 </html>

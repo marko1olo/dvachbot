@@ -95,13 +95,14 @@ async def _find_msg_info(file_id: str):
             # No post_num window limit - search full table for old restored posts too
             query = """
                 SELECT cc.channel_id, cc.message_id, p.post_num
-                FROM Posts p
+                FROM PostFiles pf
+                JOIN Posts p ON pf.post_num = p.post_num
                 LEFT JOIN ChannelCopies cc ON p.post_num = cc.post_num
-                WHERE instr(p.content, ?) > 0
+                WHERE (pf.original_file_id = ? OR pf.thumbnail_file_id = ?)
                 ORDER BY p.post_num DESC
                 LIMIT 1
             """
-            async with db.execute(query, (file_id,)) as cursor:
+            async with db.execute(query, (file_id, file_id)) as cursor:
                 return await cursor.fetchone()
     except Exception as e:
         logger.error(f"DB lookup error: {e}", exc_info=True)

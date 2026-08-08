@@ -17,6 +17,29 @@ logger = logging.getLogger("backup_daemon")
 # Интервал: 7 дней (раз в неделю)
 BACKUP_INTERVAL = 7 * 24 * 3600 
 
+def split_file_by_size(file_path: str, chunk_size: int = 25 * 1024 * 1024):
+    file_size = os.path.getsize(file_path)
+    if file_size <= chunk_size:
+        return [file_path]
+    parts = []
+    part_num = 1
+    with open(file_path, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            part_name = f"{file_path}.{part_num:03d}"
+            with open(part_name, "wb") as p:
+                p.write(chunk)
+            parts.append(part_name)
+            part_num += 1
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+        except Exception:
+            pass
+    return parts
+
 def _pack_and_split_sync(backup_db_path: str, zip_name_base: str):
     """
     Синхронная функция для тяжелых операций CPU/Disk.

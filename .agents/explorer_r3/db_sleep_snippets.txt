@@ -1,0 +1,2054 @@
+=== LINE 975 ===
+ 963:                 )
+ 964:                 
+ 965:                 await db.execute("UPDATE Users SET api_token = ? WHERE user_id = ? AND board_id = 'b'", (new_token, user_id))
+ 966:                 
+ 967:                 await db.execute("COMMIT")
+ 968:                 return new_token
+ 969:                 
+ 970:             except sqlite3.OperationalError as e:
+ 971:                 try: await db.execute("ROLLBACK")
+ 972:                 except: pass
+ 973:                 
+ 974:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+ 975:                     await db_sleep(0.1 * (attempt + 1))
+ 976:                     continue
+ 977:                 print(f"⛔ Ошибка в get_or_create_api_token: {e}")
+ 978:                 raise e
+ 979:             except Exception as e:
+ 980:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 1296 ===
+1284:                 if shadow_media is not None:
+1285:                     await db.execute("UPDATE Users SET shadow_ban_media = ? WHERE user_id = ? AND board_id = ?", (shadow_media, user_id, board_id))
+1286:                 if lie_media is not None:
+1287:                     await db.execute("UPDATE Users SET lie_media = ? WHERE user_id = ? AND board_id = ?", (lie_media, user_id, board_id))
+1288:                 
+1289:                 await db.execute("COMMIT")
+1290:                 return
+1291:             except sqlite3.OperationalError as e:
+1292:                 try: await db.execute("ROLLBACK")
+1293:                 except: pass
+1294:                 
+1295:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+1296:                     await db_sleep(0.1 * (attempt + 1))
+1297:                     continue
+1298:                 print(f"⛔ Ошибка обновления настроек пользователя {user_id}: {e}")
+1299:                 break
+1300:             except Exception as e:
+1301:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 1344 ===
+1332:                 await db.execute(
+1333:                     "UPDATE Boards SET settings = ? WHERE board_id = ?",
+1334:                     (settings_json, board_id)
+1335:                 )
+1336:                 
+1337:                 await db.execute("COMMIT")
+1338:                 return
+1339:             except sqlite3.OperationalError as e:
+1340:                 try: await db.execute("ROLLBACK")
+1341:                 except: pass
+1342:                 
+1343:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+1344:                     await db_sleep(0.1 * (attempt + 1))
+1345:                     continue
+1346:                 break
+1347:             except Exception as e:
+1348:                 try: await db.execute("ROLLBACK")
+1349:                 except: pass
+
+
+=== LINE 1382 ===
+1370:                 await db.execute(
+1371:                     "UPDATE Users SET status = 'active' WHERE user_id = ? AND board_id = ?",
+1372:                     (user_id, board_id)
+1373:                 )
+1374:                 
+1375:                 await db.execute("COMMIT")
+1376:                 return
+1377:             except sqlite3.OperationalError as e:
+1378:                 try: await db.execute("ROLLBACK")
+1379:                 except: pass
+1380:                 
+1381:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+1382:                     await db_sleep(0.1 * (attempt + 1))
+1383:                     continue
+1384:                 break
+1385:             except Exception:
+1386:                 try: await db.execute("ROLLBACK")
+1387:                 except: pass
+
+
+=== LINE 1420 ===
+1408:                 await db.execute(
+1409:                     "UPDATE Users SET status = ? WHERE user_id = ? AND board_id = ?",
+1410:                     (status, user_id, board_id)
+1411:                 )
+1412:                 
+1413:                 await db.execute("COMMIT")
+1414:                 return
+1415:             except sqlite3.OperationalError as e:
+1416:                 try: await db.execute("ROLLBACK")
+1417:                 except: pass
+1418:                 
+1419:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+1420:                     await db_sleep(0.1 * (attempt + 1))
+1421:                     continue
+1422:                 break
+1423:             except Exception:
+1424:                 try: await db.execute("ROLLBACK")
+1425:                 except: pass
+
+
+=== LINE 1526 ===
+1514:                 await db.execute(
+1515:                     "UPDATE Users SET location = ? WHERE user_id = ? AND board_id = ?",
+1516:                     (location, user_id, board_id)
+1517:                 )
+1518:                 
+1519:                 await db.execute("COMMIT")
+1520:                 return
+1521:             except sqlite3.OperationalError as e:
+1522:                 try: await db.execute("ROLLBACK")
+1523:                 except: pass
+1524:                 
+1525:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+1526:                     await db_sleep(0.1 * (attempt + 1))
+1527:                     continue
+1528:                 print(f"Error updating location for user {user_id}: {e}")
+1529:                 break
+1530:             except Exception as e:
+1531:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 1684 ===
+1672:                 if _CACHED_MAX_POST_NUM is not None:
+1673:                     _CACHED_MAX_POST_NUM = max(_CACHED_MAX_POST_NUM, post_num)
+1674:                 return post_num
+1675:                 
+1676:             except sqlite3.OperationalError as e:
+1677:                 # Если транзакция была начата, откатываем её
+1678:                 try: await db.execute("ROLLBACK")
+1679:                 except: pass
+1680:                 
+1681:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+1682:                     # Экспоненциальная задержка при занятой базе
+1683:                     wait_time = min(0.1 * (2 ** attempt), 2.0)
+1684:                     await db_sleep(wait_time)
+1685:                     continue
+1686:                 return None
+1687:             except Exception as e:
+1688:                 try: await db.execute("ROLLBACK")
+1689:                 except: pass
+
+
+=== LINE 1718 ===
+1706:                 db = await get_pool()
+1707:                 # Глобальный бан
+1708:                 async with db.execute("SELECT status FROM Users WHERE user_id = ? AND board_id = 'ALL' LIMIT 1", (user_id,)) as cursor:
+1709:                     row = await cursor.fetchone()
+1710:                     if row and row[0] == 'banned':
+1711:                         return 'banned'
+1712:                 # Локальный бан
+1713:                 async with db.execute("SELECT status FROM Users WHERE user_id = ? AND board_id = ? LIMIT 1", (user_id, board_id)) as cursor:
+1714:                     row = await cursor.fetchone()
+1715:                     return row[0] if row else 'active'
+1716:             except sqlite3.OperationalError as e:
+1717:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+1718:                     await db_sleep(0.1 * (attempt + 1))
+1719:                     continue
+1720:                 break
+1721:             except Exception:
+1722:                 break
+1723:     return 'active'
+
+
+=== LINE 1749 ===
+1737:                     FROM Mutes 
+1738:                     WHERE user_id = ? 
+1739:                       AND (board_id = ? OR board_id = 'ALL')
+1740:                       AND mute_type = 'shadow' 
+1741:                       AND expires_at > ?
+1742:                     LIMIT 1
+1743:                 """
+1744:                 async with db.execute(query, (user_id, board_id, time.time())) as cursor:
+1745:                     row = await cursor.fetchone()
+1746:                     return row is not None
+1747:             except sqlite3.OperationalError as e:
+1748:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+1749:                     await db_sleep(0.1 * (attempt + 1))
+1750:                     continue
+1751:                 break
+1752:             except Exception:
+1753:                 break
+1754:     return False
+
+
+=== LINE 1991 ===
+1979:                                     target['_all_replies'].append(reply_obj)
+1980:                             except Exception: continue
+1981:                             
+1982:                 for post in op_posts:
+1983:                     if '_authors' in post: post['anon_count'] = len(post.pop('_authors'))
+1984:                     if '_all_replies' in post:
+1985:                         all_reps = post.pop('_all_replies')
+1986:                         post['latest_replies'] = all_reps[-reply_limit:]
+1987:                 return op_posts
+1988:                 
+1989:             except Exception as e:
+1990:                 if attempt < 2:
+1991:                     await db_sleep(0.2 * (attempt + 1))
+1992:                     continue
+1993:                 else:
+1994:                     print(f"⛔ Error in get_op_posts_for_board after 3 attempts: {e}")
+1995:                     return []
+1996:     return []
+
+
+=== LINE 2074 ===
+2062:                     q_links = f"""
+2063:                         SELECT source_board, source_post, target_post 
+2064:                         FROM CrossLinks 
+2065:                         WHERE target_board = ? AND target_post IN ({placeholders})
+2066:                     """
+2067:                     params = [board_id] + all_ids
+2068:                     async with db.execute(q_links, params) as cursor:
+2069:                         async for row in cursor:
+2070:                             raw_crosslinks_data.append(row)
+2071:             break 
+2072:         except sqlite3.OperationalError as e:
+2073:             if "locked" in str(e).lower() or "busy" in str(e).lower():
+2074:                 await db_sleep(0.1 * (attempt + 1))
+2075:                 if attempt == 9:
+2076:                     print(f"Error in get_thread_by_op_post (DB Phase) after retries: {e}")
+2077:                     return None
+2078:                 continue
+2079:             print(f"Error in get_thread_by_op_post (DB Phase): {e}")
+
+
+=== LINE 2166 ===
+2154:     async with db_lock:
+2155:         for attempt in range(10):
+2156:             try:
+2157:                 db = await get_pool()
+2158:                 query = "SELECT is_archived FROM Threads WHERE thread_num = ? LIMIT 1"
+2159:                 async with db.execute(query, (thread_op_num,)) as cursor:
+2160:                     row = await cursor.fetchone()
+2161:                 if row:
+2162:                     return bool(row[0])
+2163:                 return True # Если записи нет, считаем архивным/удаленным
+2164:             except sqlite3.OperationalError as e:
+2165:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2166:                     await db_sleep(0.1 * (attempt + 1))
+2167:                     continue
+2168:                 break
+2169:             except Exception:
+2170:                 break
+2171:     return True
+
+
+=== LINE 2266 ===
+2254:                     
+2255:                     # Безопасное извлечение данных без изменения db.row_factory
+2256:                     cols = [d[0] for d in cursor.description]
+2257:                     row_data = dict(zip(cols, row))
+2258:                 
+2259:                 post_data = _process_site_db_row(row_data)
+2260:                 if post_data and 'post_num' in post_data:
+2261:                     post_data['id'] = post_data['post_num']
+2262:                 return post_data
+2263:                 
+2264:             except sqlite3.OperationalError as e:
+2265:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2266:                     await db_sleep(0.1 * (attempt + 1))
+2267:                     continue
+2268:                 break
+2269:             except Exception:
+2270:                 break
+2271:     return None
+
+
+=== LINE 2291 ===
+2279:                 query = "SELECT thread_id, reply_to_post_num FROM Posts WHERE post_num = ? LIMIT 1"
+2280:                 async with db.execute(query, (post_num,)) as cursor:
+2281:                     row = await cursor.fetchone()
+2282:                     if row:
+2283:                         thread_id, reply_to = row
+2284:                         if thread_id:
+2285:                             return thread_id
+2286:                         if reply_to is None:
+2287:                             return post_num
+2288:                     return None
+2289:             except sqlite3.OperationalError as e:
+2290:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2291:                     await db_sleep(0.1 * (attempt + 1))
+2292:                     continue
+2293:                 break
+2294:             except Exception:
+2295:                 break
+2296:     return None
+
+
+=== LINE 2310 ===
+2298:     from common.db_pool import get_pool, db_lock
+2299:     
+2300:     async with db_lock:
+2301:         for attempt in range(10):
+2302:             try:
+2303:                 db = await get_pool()
+2304:                 query = "SELECT COUNT(*) FROM Posts WHERE thread_id = ? AND IFNULL(is_shadow, 0) = 0"
+2305:                 async with db.execute(query, (str(thread_op_num),)) as cursor:
+2306:                     row = await cursor.fetchone()
+2307:                     return row[0] if row else 0
+2308:             except sqlite3.OperationalError as e:
+2309:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2310:                     await db_sleep(0.1 * (attempt + 1))
+2311:                     continue
+2312:                 break
+2313:             except Exception:
+2314:                 break
+2315:     return 0
+
+
+=== LINE 2337 ===
+2325:                 db = await get_pool()
+2326:                 await db.execute("BEGIN IMMEDIATE")
+2327:                 
+2328:                 await db.execute("UPDATE Threads SET is_archived = 1 WHERE thread_num = ?", (thread_op_num,))
+2329:                 
+2330:                 await db.execute("COMMIT")
+2331:                 return
+2332:             except sqlite3.OperationalError as e:
+2333:                 try: await db.execute("ROLLBACK")
+2334:                 except: pass
+2335:                 
+2336:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2337:                     await db_sleep(0.1 * (attempt + 1))
+2338:                     continue
+2339:                 print(f"⚠️ Error archiving thread {thread_op_num}: {e}")
+2340:                 break
+2341:             except Exception as e:
+2342:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 2390 ===
+2378:                 
+2379:                 if thread_type != 'default':
+2380:                      await db.execute("INSERT OR IGNORE INTO ThreadUnlocks (thread_id, user_id) VALUES (?, ?)", (thread_op_num, op_id))
+2381:                      
+2382:                 await db.execute("COMMIT")
+2383:                 return True
+2384:                 
+2385:             except sqlite3.OperationalError as e:
+2386:                 try: await db.execute("ROLLBACK")
+2387:                 except: pass
+2388:                 
+2389:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2390:                     await db_sleep(0.1 * (attempt + 1))
+2391:                     continue
+2392:                 print(f"Критическая ошибка при создании записи для треда #{thread_op_num}: {e}")
+2393:                 break
+2394:             except Exception as e:
+2395:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 2469 ===
+2457:                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+2458:                         site_notifs
+2459:                     )
+2460:                 
+2461:                 await db.execute("COMMIT")
+2462:                 return
+2463: 
+2464:             except sqlite3.OperationalError as e:
+2465:                 try: await db.execute("ROLLBACK")
+2466:                 except: pass
+2467:                 
+2468:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2469:                     await db_sleep(0.1 * (attempt + 1))
+2470:                     continue
+2471:                 print(f"⛔ Error processing mentions: {e}")
+2472:                 break
+2473:             except Exception as e:
+2474:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 2538 ===
+2526:                     cache_list[:] = [item for item in cache_list if item[0] != post_id_int]
+2527:                 for cache_list in _IMAGE_CACHE.values():
+2528:                     cache_list[:] = [item for item in cache_list if item[0] != post_id_int]
+2529:                 
+2530:                 await db.execute("COMMIT")
+2531:                 return True
+2532:                 
+2533:             except sqlite3.OperationalError as e:
+2534:                 try: await db.execute("ROLLBACK")
+2535:                 except: pass
+2536:                 
+2537:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2538:                     await db_sleep(0.1 * (attempt + 1))
+2539:                     continue
+2540:                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при удалении #{post_num}: {e}")
+2541:                 break
+2542:             except Exception as e:
+2543:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 2578 ===
+2566:                     "UPDATE Users SET status = ? WHERE user_id = ? AND board_id = ?",
+2567:                     ("banned", user_id, board_id)
+2568:                 )
+2569:                 
+2570:                 await db.execute("COMMIT")
+2571:                 return True
+2572:                 
+2573:             except sqlite3.OperationalError as e:
+2574:                 try: await db.execute("ROLLBACK")
+2575:                 except: pass
+2576:                 
+2577:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2578:                     await db_sleep(0.1 * (attempt + 1))
+2579:                     continue
+2580:                 print(f"Критическая ошибка при бане user #{user_id} на доске {board_id}: {e}")
+2581:                 break
+2582:             except Exception as e:
+2583:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 2615 ===
+2603:                 await db.execute(
+2604:                     "UPDATE Posts SET content = ? WHERE post_num = ?",
+2605:                     (content_json, post_num)
+2606:                 )
+2607:                 
+2608:                 await db.execute("COMMIT")
+2609:                 return
+2610:             except sqlite3.OperationalError as e:
+2611:                 try: await db.execute("ROLLBACK")
+2612:                 except: pass
+2613:                 
+2614:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2615:                     await db_sleep(0.1 * (attempt + 1))
+2616:                     continue
+2617:                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при обновлении контента поста #{post_num}: {e}")
+2618:                 break
+2619:             except Exception as e:
+2620:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 2653 ===
+2641:                 await db.executemany(
+2642:                     "INSERT OR IGNORE INTO PostCopies (post_num, recipient_id, message_id) VALUES (?, ?, ?)",
+2643:                     data_to_insert
+2644:                 )
+2645:                 
+2646:                 await db.execute("COMMIT")
+2647:                 return
+2648:             except sqlite3.OperationalError as e:
+2649:                 try: await db.execute("ROLLBACK")
+2650:                 except: pass
+2651:                 
+2652:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2653:                     await db_sleep(0.1 * (attempt + 1))
+2654:                     continue
+2655:                 if "foreign key constraint failed" in str(e).lower():
+2656:                     # Post was deleted before delivery finished, ignore safely
+2657:                     break
+2658:                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
+
+
+=== LINE 2829 ===
+2817:                             str(thread_id) if thread_id is not None else None,
+2818:                             created_at,
+2819:                             now,
+2820:                         ),
+2821:                     ) as cursor:
+2822:                         item_id = int(cursor.lastrowid)
+2823:                 await db.execute("COMMIT")
+2824:                 return item_id
+2825:             except sqlite3.OperationalError as e:
+2826:                 try: await db.execute("ROLLBACK")
+2827:                 except: pass
+2828:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2829:                     await db_sleep(0.1 * (attempt + 1))
+2830:                     continue
+2831:                 print(f"⚠️ DeliveryQueue upsert failed for #{post_num}: {e}")
+2832:                 break
+2833:             except Exception as e:
+2834:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 2856 ===
+2844:     async with db_lock:
+2845:         for attempt in range(10):
+2846:             try:
+2847:                 db = await get_pool()
+2848:                 await db.execute("BEGIN IMMEDIATE")
+2849:                 await db.execute("DELETE FROM DeliveryQueue WHERE id = ?", (int(item_id),))
+2850:                 await db.execute("COMMIT")
+2851:                 return True
+2852:             except sqlite3.OperationalError as e:
+2853:                 try: await db.execute("ROLLBACK")
+2854:                 except: pass
+2855:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+2856:                     await db_sleep(0.1 * (attempt + 1))
+2857:                     continue
+2858:                 print(f"⚠️ DeliveryQueue delete failed id={item_id}: {e}")
+2859:                 break
+2860:             except Exception as e:
+2861:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 3003 ===
+2991:                 post_dict['is_op_post'] = str(post_dict.get('thread_id')) == str(post_dict.get('id'))
+2992:                 
+2993:                 try:
+2994:                     if isinstance(post_dict.get('content'), str):
+2995:                         post_dict['content'] = json.loads(post_dict['content'])
+2996:                 except (json.JSONDecodeError, TypeError):
+2997:                     post_dict['content'] = {'text': '[Ошибка данных]', 'type': 'text'}
+2998:                     
+2999:                 return post_dict
+3000:                 
+3001:             except sqlite3.OperationalError as e:
+3002:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3003:                     await db_sleep(0.1 * (attempt + 1))
+3004:                     continue
+3005:                 break
+3006:             except Exception:
+3007:                 break
+3008:     return None
+
+
+=== LINE 3031 ===
+3019:                 db = await get_pool()
+3020:                 await db.execute("BEGIN IMMEDIATE")
+3021:                 
+3022:                 await db.execute("DELETE FROM BroadcastQueue WHERE created_at < ?", (cutoff_timestamp,))
+3023:                 
+3024:                 await db.execute("COMMIT")
+3025:                 return
+3026:             except sqlite3.OperationalError as e:
+3027:                 try: await db.execute("ROLLBACK")
+3028:                 except: pass
+3029:                 
+3030:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3031:                     await db_sleep(0.5 * (attempt + 1))
+3032:                     continue
+3033:                 print(f"⛔ ОШИБКА в cleanup_broadcast_queue: {e}.")
+3034:                 break
+3035:             except Exception as e:
+3036:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 3106 ===
+3094:                     except (json.JSONDecodeError, TypeError):
+3095:                         post_dict['content'] = {}
+3096:                         post_dict['_broadcast_decode_failed'] = True
+3097:                     processed_posts.append(post_dict)
+3098:                         
+3099:                 return processed_posts
+3100: 
+3101:             except sqlite3.OperationalError as e:
+3102:                 try: await db.execute("ROLLBACK")
+3103:                 except: pass
+3104:                 
+3105:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3106:                     await db_sleep(0.1 * (attempt + 1))
+3107:                     continue
+3108:                 print(f"⛔ ОШИБКА в get_and_clear_broadcast_queue: {e}")
+3109:                 break
+3110:             except Exception as e:
+3111:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 3139 ===
+3127:         for attempt in range(10):
+3128:             try:
+3129:                 db = await get_pool()
+3130:                 placeholders = ','.join('?' for _ in clean_post_nums)
+3131:                 async with db.execute(
+3132:                     f"UPDATE BroadcastQueue SET is_sent_to_tg = 1 WHERE post_num IN ({placeholders})",
+3133:                     clean_post_nums,
+3134:                 ) as cursor:
+3135:                     await db.commit()
+3136:                     return int(cursor.rowcount or 0)
+3137:             except sqlite3.OperationalError as e:
+3138:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3139:                     await db_sleep(0.1 * (attempt + 1))
+3140:                     continue
+3141:                 print(f"⛔ ОШИБКА в mark_broadcast_posts_sent: {e}")
+3142:                 break
+3143:             except Exception as e:
+3144:                 print(f"⛔ ОШИБКА в mark_broadcast_posts_sent: {e}")
+
+
+=== LINE 3166 ===
+3154:         for attempt in range(10):
+3155:             try:
+3156:                 db = await get_pool()
+3157:                 async with db.execute("SELECT user_id FROM Users WHERE api_token = ? LIMIT 1", (token,)) as cursor:
+3158:                     row = await cursor.fetchone()
+3159:                     if not row:
+3160:                         return None
+3161:                     
+3162:                     cols = [d[0] for d in cursor.description]
+3163:                     return dict(zip(cols, row))
+3164:             except sqlite3.OperationalError as e:
+3165:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3166:                     await db_sleep(0.1 * (attempt + 1))
+3167:                     continue
+3168:                 break
+3169:             except Exception:
+3170:                 break
+3171:     return None
+
+
+=== LINE 3474 ===
+3462:                 await db.execute(
+3463:                     "INSERT OR IGNORE INTO SpamFilterWords (board_id, word) VALUES (?, ?)",
+3464:                     (board_id, word.lower())
+3465:                 )
+3466:                 
+3467:                 await db.execute("COMMIT")
+3468:                 return True
+3469:             except sqlite3.OperationalError as e:
+3470:                 try: await db.execute("ROLLBACK")
+3471:                 except: pass
+3472:                 
+3473:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3474:                     await db_sleep(0.1 * (attempt + 1))
+3475:                     continue
+3476:                 break
+3477:             except Exception as e:
+3478:                 try: await db.execute("ROLLBACK")
+3479:                 except: pass
+
+
+=== LINE 3509 ===
+3497:                     "DELETE FROM SpamFilterWords WHERE board_id = ? AND word = ?",
+3498:                     (board_id, word.lower())
+3499:                 ) as cursor:
+3500:                     count = cursor.rowcount
+3501:                 
+3502:                 await db.execute("COMMIT")
+3503:                 return count > 0
+3504:             except sqlite3.OperationalError as e:
+3505:                 try: await db.execute("ROLLBACK")
+3506:                 except: pass
+3507:                 
+3508:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3509:                     await db_sleep(0.1 * (attempt + 1))
+3510:                     continue
+3511:                 break
+3512:             except Exception as e:
+3513:                 try: await db.execute("ROLLBACK")
+3514:                 except: pass
+
+
+=== LINE 3540 ===
+3528:                 await db.execute(
+3529:                     "INSERT OR IGNORE INTO ReactionBans (user_id, board_id) VALUES (?, ?)",
+3530:                     (user_id, board_id)
+3531:                 )
+3532:                 
+3533:                 await db.execute("COMMIT")
+3534:                 return
+3535:             except sqlite3.OperationalError as e:
+3536:                 try: await db.execute("ROLLBACK")
+3537:                 except: pass
+3538:                 
+3539:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3540:                     await db_sleep(0.1 * (attempt + 1))
+3541:                     continue
+3542:                 print(f"⛔ ОШИБКА при добавлении бана на реакции в БД: {e}")
+3543:                 break
+3544:             except Exception as e:
+3545:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 3572 ===
+3560:                 await db.execute(
+3561:                     "DELETE FROM ReactionBans WHERE user_id = ? AND board_id = ?",
+3562:                     (user_id, board_id)
+3563:                 )
+3564:                 
+3565:                 await db.execute("COMMIT")
+3566:                 return
+3567:             except sqlite3.OperationalError as e:
+3568:                 try: await db.execute("ROLLBACK")
+3569:                 except: pass
+3570:                 
+3571:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3572:                     await db_sleep(0.1 * (attempt + 1))
+3573:                     continue
+3574:                 print(f"⛔ ОШИБКА при удалении бана на реакции из БД: {e}")
+3575:                 break
+3576:             except Exception as e:
+3577:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 3622 ===
+3610:                 await db.execute(
+3611:                     "UPDATE Posts SET thread_id = ? WHERE post_num = ?",
+3612:                     (thread_id, post_num)
+3613:                 )
+3614:                 
+3615:                 await db.execute("COMMIT")
+3616:                 return
+3617:             except sqlite3.OperationalError as e:
+3618:                 try: await db.execute("ROLLBACK")
+3619:                 except: pass
+3620:                 
+3621:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3622:                     await db_sleep(0.1 * (attempt + 1))
+3623:                     continue
+3624:                 break
+3625:             except Exception:
+3626:                 try: await db.execute("ROLLBACK")
+3627:                 except: pass
+
+
+=== LINE 3653 ===
+3641:                 await db.execute(
+3642:                     "INSERT INTO ReactionQueue (user_id, post_num, emoji, created_at) VALUES (?, ?, ?, ?)",
+3643:                     (user_id, post_num, emoji, time.time())
+3644:                 )
+3645:                 
+3646:                 await db.execute("COMMIT")
+3647:                 return True
+3648:             except sqlite3.OperationalError as e:
+3649:                 try: await db.execute("ROLLBACK")
+3650:                 except: pass
+3651:                 
+3652:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3653:                     await db_sleep(0.1 * (attempt + 1))
+3654:                     continue
+3655:                 print(f"⛔ ОШИБКА при добавлении реакции в очередь: {e}")
+3656:                 break
+3657:             except Exception as e:
+3658:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 3708 ===
+3696:                     placeholders = ','.join('?' for _ in chunk)
+3697:                     await db.execute(f"DELETE FROM ReactionQueue WHERE id IN ({placeholders});", chunk)
+3698: 
+3699: 
+3700:                 await db.execute("COMMIT")
+3701:                 return result_data
+3702:                 
+3703:             except sqlite3.OperationalError as e:
+3704:                 try: await db.execute("ROLLBACK")
+3705:                 except: pass
+3706:                 
+3707:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+3708:                     await db_sleep(0.1 * (attempt + 1))
+3709:                     continue
+3710:                 print(f"⛔ ОШИБКА в get_and_clear_reaction_queue: {e}.")
+3711:                 break
+3712:             except Exception as e:
+3713:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 4021 ===
+4009:                 db = await get_pool()
+4010:                 await db.execute("BEGIN IMMEDIATE")
+4011:                 await db.execute(
+4012:                     "UPDATE Threads SET last_updated_at = ? WHERE thread_id = ? AND is_archived = 0",
+4013:                     (timestamp, str(thread_op_num))
+4014:                 )
+4015:                 await db.execute("COMMIT")
+4016:                 return
+4017:             except sqlite3.OperationalError as e:
+4018:                 try: await db.execute("ROLLBACK")
+4019:                 except: pass
+4020:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4021:                     await db_sleep(0.1 * (attempt + 1))
+4022:                     continue
+4023:                 print(f"⛔ ОШИБКА при обновлении времени треда #{thread_op_num}: {e}")
+4024:                 break
+4025:             except Exception as e:
+4026:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 4128 ===
+4116:                         for board_id, info in board_config.items()
+4117:                     )
+4118:                 )
+4119: 
+4120:                 await db.execute("COMMIT")
+4121:                 print(f"✅ Синхронизация досок с БД завершена. Проверено {len(board_config)} досок.")
+4122:                 return
+4123:             except sqlite3.OperationalError as e:
+4124:                 try: await db.execute("ROLLBACK")
+4125:                 except: pass
+4126:                 
+4127:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4128:                     await db_sleep(0.5 * (attempt + 1))
+4129:                     continue
+4130:                 print(f"⛔ ОШИБКА при синхронизации досок с БД: {e}")
+4131:                 break
+4132:             except Exception as e:
+4133:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 4158 ===
+4146:                 await db.execute(
+4147:                     "INSERT INTO Bottles (sender_id, recipient_id, message_text, timestamp) VALUES (?, ?, ?, ?)",
+4148:                     (sender_id, recipient_id, message, time.time())
+4149:                 )
+4150:                 
+4151:                 await db.execute("COMMIT")
+4152:                 return True
+4153:             except sqlite3.OperationalError as e:
+4154:                 try: await db.execute("ROLLBACK")
+4155:                 except: pass
+4156:                 
+4157:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4158:                     await db_sleep(0.1 * (attempt + 1))
+4159:                     continue
+4160:                 break
+4161:             except Exception as e:
+4162:                 try: await db.execute("ROLLBACK")
+4163:                 except: pass
+
+
+=== LINE 4196 ===
+4184:                     return None
+4185:                     
+4186:                 bottle_id, message_text = bottle_data
+4187:                 await db.execute("DELETE FROM Bottles WHERE id = ?", (bottle_id,))
+4188:                 
+4189:                 await db.execute("COMMIT")
+4190:                 return {"message": message_text}
+4191:             except sqlite3.OperationalError as e:
+4192:                 try: await db.execute("ROLLBACK")
+4193:                 except: pass
+4194:                 
+4195:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4196:                     await db_sleep(0.1 * (attempt + 1))
+4197:                     continue
+4198:                 break
+4199:             except Exception:
+4200:                 try: await db.execute("ROLLBACK")
+4201:                 except: pass
+
+
+=== LINE 4276 ===
+4264:                     await db.executemany("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", shadow_updates)
+4265: 
+4266:                 if blur_updates:
+4267:                     await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", blur_updates)
+4268: 
+4269:                 await db.execute("COMMIT")
+4270:                 return affected_posts
+4271: 
+4272:             except sqlite3.OperationalError as e:
+4273:                 try: await db.execute("ROLLBACK")
+4274:                 except: pass
+4275:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4276:                     await db_sleep(0.2 * (attempt + 1))
+4277:                     continue
+4278:                 print(f"⚠️ Auto-Censure DB Error: {e}")
+4279:                 break
+4280:             except Exception as e:
+4281:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 4360 ===
+4348:                 db = await get_pool()
+4349:                 await db.execute("BEGIN IMMEDIATE")
+4350:                 
+4351:                 await db.execute("UPDATE Users SET status = 'active' WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+4352:                 
+4353:                 await db.execute("COMMIT")
+4354:                 return
+4355:             except sqlite3.OperationalError as e:
+4356:                 try: await db.execute("ROLLBACK")
+4357:                 except: pass
+4358:                 
+4359:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4360:                     await db_sleep(0.1 * (attempt + 1))
+4361:                     continue
+4362:                 print(f"⛔ Error lifting ban: {e}")
+4363:                 break
+4364:             except Exception as e:
+4365:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 4389 ===
+4377:                 db = await get_pool()
+4378:                 await db.execute("BEGIN IMMEDIATE")
+4379:                 
+4380:                 await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'shadow'", (user_id, board_id))
+4381:                 
+4382:                 await db.execute("COMMIT")
+4383:                 return
+4384:             except sqlite3.OperationalError as e:
+4385:                 try: await db.execute("ROLLBACK")
+4386:                 except: pass
+4387:                 
+4388:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4389:                     await db_sleep(0.1 * (attempt + 1))
+4390:                     continue
+4391:                 print(f"⛔ Error lifting shadow ban: {e}")
+4392:                 break
+4393:             except Exception as e:
+4394:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 4428 ===
+4416:                 await db.execute(
+4417:                     "INSERT INTO Mutes (user_id, board_id, mute_type, expires_at) VALUES (?, ?, 'mute', ?)",
+4418:                     (user_id, board_id, expires_at)
+4419:                 )
+4420:                 
+4421:                 await db.execute("COMMIT")
+4422:                 return True
+4423:             except sqlite3.OperationalError as e:
+4424:                 try: await db.execute("ROLLBACK")
+4425:                 except: pass
+4426:                 
+4427:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4428:                     await db_sleep(0.1 * (attempt + 1))
+4429:                     continue
+4430:                 print(f"⛔ DB Error applying regular mute: {e}")
+4431:                 break
+4432:             except Exception as e:
+4433:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 4462 ===
+4450:                 await db.execute(
+4451:                     "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'mute'",
+4452:                     (user_id, board_id)
+4453:                 )
+4454:                 
+4455:                 await db.execute("COMMIT")
+4456:                 return
+4457:             except sqlite3.OperationalError as e:
+4458:                 try: await db.execute("ROLLBACK")
+4459:                 except: pass
+4460:                 
+4461:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4462:                     await db_sleep(0.1 * (attempt + 1))
+4463:                     continue
+4464:                 print(f"⛔ DB Error removing regular mute: {e}")
+4465:                 break
+4466:             except Exception as e:
+4467:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 4589 ===
+4577:                 await db.execute("BEGIN IMMEDIATE")
+4578:                 
+4579:                 await db.execute("UPDATE Users SET role = ? WHERE user_id = ?", (role, user_id))
+4580:                 await db.execute("INSERT OR IGNORE INTO Users (user_id, board_id, role) VALUES (?, 'b', ?)", (user_id, role))
+4581:                 
+4582:                 await db.execute("COMMIT")
+4583:                 return
+4584:             except sqlite3.OperationalError as e:
+4585:                 try: await db.execute("ROLLBACK")
+4586:                 except: pass
+4587:                 
+4588:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4589:                     await db_sleep(0.1 * (attempt + 1))
+4590:                     continue
+4591:                 break
+4592:             except Exception:
+4593:                 try: await db.execute("ROLLBACK")
+4594:                 except: pass
+
+
+=== LINE 4658 ===
+4646:                 db = await get_pool()
+4647:                 await db.execute("BEGIN IMMEDIATE")
+4648:                 
+4649:                 await db.execute("UPDATE UserAlerts SET is_read = 1, read_at = ? WHERE id = ?", (time.time(), alert_id))
+4650:                 
+4651:                 await db.execute("COMMIT")
+4652:                 return
+4653:             except sqlite3.OperationalError as e:
+4654:                 try: await db.execute("ROLLBACK")
+4655:                 except: pass
+4656:                 
+4657:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4658:                     await db_sleep(0.1 * (attempt + 1))
+4659:                     continue
+4660:                 break
+4661:             except Exception:
+4662:                 try: await db.execute("ROLLBACK")
+4663:                 except: pass
+
+
+=== LINE 4707 ===
+4695:                 db = await get_pool()
+4696:                 await db.execute("BEGIN IMMEDIATE")
+4697:                 
+4698:                 await db.execute("INSERT OR IGNORE INTO FileOwners (file_id, bot_id) VALUES (?, ?)", (file_id, bot_id))
+4699:                 
+4700:                 await db.execute("COMMIT")
+4701:                 return 
+4702:             except sqlite3.OperationalError as e:
+4703:                 try: await db.execute("ROLLBACK")
+4704:                 except: pass
+4705:                 
+4706:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4707:                     await db_sleep(0.2 * (attempt + 1))
+4708:                     continue
+4709:                 break
+4710:             except Exception:
+4711:                 try: await db.execute("ROLLBACK")
+4712:                 except: pass
+
+
+=== LINE 4739 ===
+4727:                 await db.execute(
+4728:                     "INSERT OR IGNORE INTO FileRegistry (sha256, phash, file_id, thumbnail_id, file_type, created_at, blurhash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+4729:                     (sha256, phash, file_id, thumb_id, ftype, time.time(), blurhash)
+4730:                 )
+4731:                 
+4732:                 await db.execute("COMMIT")
+4733:                 return
+4734:             except sqlite3.OperationalError as e:
+4735:                 try: await db.execute("ROLLBACK")
+4736:                 except: pass
+4737:                 
+4738:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4739:                     await db_sleep(0.2 * (attempt + 1))
+4740:                     continue
+4741:                 break
+4742:             except Exception:
+4743:                 try: await db.execute("ROLLBACK")
+4744:                 except: pass
+
+
+=== LINE 4791 ===
+4779:                 async with db.execute("SELECT timestamp FROM Posts WHERE thread_id = ? ORDER BY post_num DESC LIMIT 1", (str(thread_id),)) as cursor:
+4780:                     row = await cursor.fetchone()
+4781:                     if row:
+4782:                         await db.execute("UPDATE Threads SET last_updated_at = ? WHERE thread_num = ?", (row[0], int(thread_id)))
+4783:                 
+4784:                 await db.execute("COMMIT")
+4785:                 return True
+4786:             except sqlite3.OperationalError as e:
+4787:                 try: await db.execute("ROLLBACK")
+4788:                 except: pass
+4789:                 
+4790:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4791:                     await db_sleep(0.1 * (attempt + 1))
+4792:                     continue
+4793:                 print(f"⛔ Error deleting posts after {post_num_start}: {e}")
+4794:                 break
+4795:             except Exception as e:
+4796:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 4881 ===
+4869:                 await db.execute(
+4870:                     "UPDATE Users SET stream = ? WHERE user_id = ? AND board_id = ?",
+4871:                     (stream, user_id, board_id)
+4872:                 )
+4873:                 
+4874:                 await db.execute("COMMIT")
+4875:                 return
+4876:             except sqlite3.OperationalError as e:
+4877:                 try: await db.execute("ROLLBACK")
+4878:                 except: pass
+4879:                 
+4880:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+4881:                     await db_sleep(0.1 * (attempt + 1))
+4882:                     continue
+4883:                 break
+4884:             except Exception:
+4885:                 try: await db.execute("ROLLBACK")
+4886:                 except: pass
+
+
+=== LINE 5051 ===
+5039:                 await db.execute(
+5040:                     "UPDATE Threads SET is_archived = 0, last_updated_at = ? WHERE thread_num = ?",
+5041:                     (time.time(), int(thread_id))
+5042:                 )
+5043:                 
+5044:                 await db.execute("COMMIT")
+5045:                 return True
+5046:             except sqlite3.OperationalError as e:
+5047:                 try: await db.execute("ROLLBACK")
+5048:                 except: pass
+5049:                 
+5050:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5051:                     await db_sleep(0.1 * (attempt + 1))
+5052:                     continue
+5053:                 break
+5054:             except Exception:
+5055:                 try: await db.execute("ROLLBACK")
+5056:                 except: pass
+
+
+=== LINE 5097 ===
+5085:                 
+5086:                 # Обновление счетчика у поста
+5087:                 await db.execute("UPDATE Posts SET report_count = report_count + 1 WHERE post_num = ?", (post_num,))
+5088:                 
+5089:                 await db.execute("COMMIT")
+5090:                 return True
+5091:                 
+5092:             except sqlite3.OperationalError as e:
+5093:                 try: await db.execute("ROLLBACK")
+5094:                 except: pass
+5095:                 
+5096:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5097:                     await db_sleep(0.1 * (attempt + 1))
+5098:                     continue
+5099:                 print(f"⛔ Error creating report: {e}")
+5100:                 break
+5101:             except Exception as e:
+5102:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 5161 ===
+5149:                 db = await get_pool()
+5150:                 await db.execute("BEGIN IMMEDIATE")
+5151:                 
+5152:                 await db.execute("UPDATE Reports SET status = ? WHERE id = ?", (resolution, report_id))
+5153:                 
+5154:                 await db.execute("COMMIT")
+5155:                 return
+5156:             except sqlite3.OperationalError as e:
+5157:                 try: await db.execute("ROLLBACK")
+5158:                 except: pass
+5159:                 
+5160:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5161:                     await db_sleep(0.1 * (attempt + 1))
+5162:                     continue
+5163:                 print(f"⚠️ Ошибка при разрешении репорта: {e}")
+5164:                 break
+5165:             except Exception as e:
+5166:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 5228 ===
+5216:                 db = await get_pool()
+5217:                 await db.execute("BEGIN IMMEDIATE")
+5218:                 
+5219:                 await db.execute("INSERT OR REPLACE INTO SystemSettings (key, value) VALUES (?, ?)", (key, value))
+5220:                 
+5221:                 await db.execute("COMMIT")
+5222:                 return
+5223:             except sqlite3.OperationalError as e:
+5224:                 try: await db.execute("ROLLBACK")
+5225:                 except: pass
+5226:                 
+5227:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5228:                     await db_sleep(0.1 * (attempt + 1))
+5229:                     continue
+5230:                 break
+5231:             except Exception:
+5232:                 try: await db.execute("ROLLBACK")
+5233:                 except: pass
+
+
+=== LINE 5264 ===
+5252:                 await db.execute(
+5253:                     "INSERT INTO Boards (board_id, name, description, owner_id, is_approved) VALUES (?, ?, ?, ?, ?)",
+5254:                     (board_id, name, description, owner_id, approved)
+5255:                 )
+5256:                 
+5257:                 await db.execute("COMMIT")
+5258:                 return True
+5259:             except sqlite3.OperationalError as e:
+5260:                 try: await db.execute("ROLLBACK")
+5261:                 except: pass
+5262:                 
+5263:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5264:                     await db_sleep(0.1 * (attempt + 1))
+5265:                     continue
+5266:                 break
+5267:             except Exception as e:
+5268:                 try: await db.execute("ROLLBACK")
+5269:                 except: pass
+
+
+=== LINE 5292 ===
+5280:                 db = await get_pool()
+5281:                 await db.execute("BEGIN IMMEDIATE")
+5282:                 
+5283:                 await db.execute("UPDATE Boards SET is_approved = 1 WHERE board_id = ?", (board_id,))
+5284:                 
+5285:                 await db.execute("COMMIT")
+5286:                 return
+5287:             except sqlite3.OperationalError as e:
+5288:                 try: await db.execute("ROLLBACK")
+5289:                 except: pass
+5290:                 
+5291:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5292:                     await db_sleep(0.1 * (attempt + 1))
+5293:                     continue
+5294:                 break
+5295:             except Exception:
+5296:                 try: await db.execute("ROLLBACK")
+5297:                 except: pass
+
+
+=== LINE 5319 ===
+5307:                 await db.execute("BEGIN IMMEDIATE")
+5308:                 
+5309:                 await db.execute("DELETE FROM Boards WHERE board_id = ?", (board_id,))
+5310:                 await db.execute("DELETE FROM Posts WHERE board_id = ?", (board_id,))
+5311:                 
+5312:                 await db.execute("COMMIT")
+5313:                 return
+5314:             except sqlite3.OperationalError as e:
+5315:                 try: await db.execute("ROLLBACK")
+5316:                 except: pass
+5317:                 
+5318:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5319:                     await db_sleep(0.1 * (attempt + 1))
+5320:                     continue
+5321:                 break
+5322:             except Exception:
+5323:                 try: await db.execute("ROLLBACK")
+5324:                 except: pass
+
+
+=== LINE 5347 ===
+5335:                 await db.execute(
+5336:                     "UPDATE Posts SET is_op_hidden = ? WHERE post_num = ?",
+5337:                     (1 if hide else 0, post_num)
+5338:                 )
+5339:                 
+5340:                 await db.execute("COMMIT")
+5341:                 return True
+5342:             except sqlite3.OperationalError as e:
+5343:                 try: await db.execute("ROLLBACK")
+5344:                 except: pass
+5345:                 
+5346:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5347:                     await db_sleep(0.1 * (attempt + 1))
+5348:                     continue
+5349:                 print(f"Error toggling OP hide for {post_num}: {e}")
+5350:                 break
+5351:             except Exception as e:
+5352:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 5396 ===
+5384:                 await db.execute(
+5385:                     "INSERT INTO ImportRequests (user_id, url, target_board, comment, created_at) VALUES (?, ?, ?, ?, ?)",
+5386:                     (user_id, url, board_id, comment, time.time())
+5387:                 )
+5388:                 
+5389:                 await db.execute("COMMIT")
+5390:                 return True
+5391:             except sqlite3.OperationalError as e:
+5392:                 try: await db.execute("ROLLBACK")
+5393:                 except: pass
+5394:                 
+5395:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5396:                     await db_sleep(0.1 * (attempt + 1))
+5397:                     continue
+5398:                 break
+5399:             except Exception:
+5400:                 try: await db.execute("ROLLBACK")
+5401:                 except: pass
+
+
+=== LINE 5423 ===
+5411:                 db = await get_pool()
+5412:                 await db.execute("BEGIN IMMEDIATE")
+5413:                 
+5414:                 await db.execute("UPDATE ImportRequests SET status = ? WHERE id = ?", (status, request_id))
+5415:                 
+5416:                 await db.execute("COMMIT")
+5417:                 return
+5418:             except sqlite3.OperationalError as e:
+5419:                 try: await db.execute("ROLLBACK")
+5420:                 except: pass
+5421:                 
+5422:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5423:                     await db_sleep(0.1 * (attempt + 1))
+5424:                     continue
+5425:                 break
+5426:             except Exception:
+5427:                 try: await db.execute("ROLLBACK")
+5428:                 except: pass
+
+
+=== LINE 5467 ===
+5455:                 await db.execute(
+5456:                     "INSERT INTO Feedback (user_id, category, contact, message, created_at) VALUES (?, ?, ?, ?, ?)",
+5457:                     (user_id, category, contact, message, time.time())
+5458:                 )
+5459:                 
+5460:                 await db.execute("COMMIT")
+5461:                 return True
+5462:             except sqlite3.OperationalError as e:
+5463:                 try: await db.execute("ROLLBACK")
+5464:                 except: pass
+5465:                 
+5466:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5467:                     await db_sleep(0.1 * (attempt + 1))
+5468:                     continue
+5469:                 break
+5470:             except Exception as e:
+5471:                 try: await db.execute("ROLLBACK")
+5472:                 except: pass
+
+
+=== LINE 5595 ===
+5583:                     async with db.execute("UPDATE Posts SET is_shadow = 1 WHERE author_id = ? AND board_id = ?", (user_id, board_id)) as cursor:
+5584:                         row_count = cursor.rowcount
+5585:                 else:
+5586:                     async with db.execute("UPDATE Posts SET is_shadow = 1 WHERE author_id = ?", (user_id,)) as cursor:
+5587:                         row_count = cursor.rowcount
+5588:                 await db.execute("COMMIT")
+5589:                 return row_count
+5590:             except sqlite3.OperationalError as e:
+5591:                 try: await db.execute("ROLLBACK")
+5592:                 except: pass
+5593:                 
+5594:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5595:                     await db_sleep(0.1 * (attempt + 1))
+5596:                     continue
+5597:                 break
+5598:             except Exception:
+5599:                 try: await db.execute("ROLLBACK")
+5600:                 except: pass
+
+
+=== LINE 5624 ===
+5612:                 await db.execute(
+5613:                     "INSERT OR IGNORE INTO ChannelCopies (post_num, channel_id, message_id) VALUES (?, ?, ?)",
+5614:                     (post_num, channel_id, message_id)
+5615:                 )
+5616:                 
+5617:                 await db.execute("COMMIT")
+5618:                 return
+5619:             except sqlite3.OperationalError as e:
+5620:                 try: await db.execute("ROLLBACK")
+5621:                 except: pass
+5622:                 
+5623:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5624:                     await db_sleep(0.1 * (attempt + 1))
+5625:                     continue
+5626:                 break
+5627:             except Exception:
+5628:                 try: await db.execute("ROLLBACK")
+5629:                 except: pass
+
+
+=== LINE 5653 ===
+5641:                 await db.execute(
+5642:                     "UPDATE Posts SET channel_message_id = ? WHERE post_num = ?",
+5643:                     (message_id, post_num)
+5644:                 )
+5645:                 
+5646:                 await db.execute("COMMIT")
+5647:                 return
+5648:             except sqlite3.OperationalError as e:
+5649:                 try: await db.execute("ROLLBACK")
+5650:                 except: pass
+5651:                 
+5652:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+5653:                     await db_sleep(0.1 * (attempt + 1))
+5654:                     continue
+5655:                 print(f"⚠️ Ошибка сохранения channel_message_id для #{post_num}: {e}")
+5656:                 break
+5657:             except Exception as e:
+5658:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 6057 ===
+6045:                     count = cursor.rowcount
+6046:                 
+6047:                 await db.execute("COMMIT")
+6048:                 
+6049:                 if count > 0:
+6050:                     print(f"  > DB: Удалено {count} пользователей с доски '{board_id}'.")
+6051:                 return
+6052:             except sqlite3.OperationalError as e:
+6053:                 try: await db.execute("ROLLBACK")
+6054:                 except: pass
+6055:                 
+6056:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+6057:                     await db_sleep(0.1 * (attempt + 1))
+6058:                     continue
+6059:                 break
+6060:             except Exception:
+6061:                 try: await db.execute("ROLLBACK")
+6062:                 except: pass
+
+
+=== LINE 6087 ===
+6075:                 await db.execute(
+6076:                     "INSERT OR REPLACE INTO BannedHashes (hash_value, hash_type, reason) VALUES (?, ?, ?)", 
+6077:                     (value, type, reason)
+6078:                 )
+6079:                 
+6080:                 await db.execute("COMMIT")
+6081:                 return
+6082:             except sqlite3.OperationalError as e:
+6083:                 try: await db.execute("ROLLBACK")
+6084:                 except: pass
+6085:                 
+6086:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+6087:                     await db_sleep(0.1 * (attempt + 1))
+6088:                     continue
+6089:                 print(f"⛔ Ошибка при бане хеша {value}: {e}")
+6090:                 break
+6091:             except Exception as e:
+6092:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 6115 ===
+6103:                 db = await get_pool()
+6104:                 await db.execute("BEGIN IMMEDIATE")
+6105:                 
+6106:                 await db.execute("DELETE FROM BannedHashes WHERE hash_value = ?", (hash_value,))
+6107:                 
+6108:                 await db.execute("COMMIT")
+6109:                 return
+6110:             except sqlite3.OperationalError as e:
+6111:                 try: await db.execute("ROLLBACK")
+6112:                 except: pass
+6113:                 
+6114:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+6115:                     await db_sleep(0.1 * (attempt + 1))
+6116:                     continue
+6117:                 break
+6118:             except Exception:
+6119:                 try: await db.execute("ROLLBACK")
+6120:                 except: pass
+
+
+=== LINE 6201 ===
+6189:                     ) as cursor:
+6190:                         deleted_in_chunk = cursor.rowcount
+6191:                     
+6192:                     await db.execute("COMMIT")
+6193:                     transaction_success = True
+6194:                     break
+6195:                     
+6196:                 except sqlite3.OperationalError as e:
+6197:                     try: await db.execute("ROLLBACK")
+6198:                     except: pass
+6199:                     
+6200:                     if "locked" in str(e).lower() or "busy" in str(e).lower():
+6201:                         await db_sleep(0.2 * (attempt + 1))
+6202:                         continue
+6203:                     print(f"⚠️ Shadow cleanup DB error: {e}")
+6204:                     return # Критическая ошибка, выходим
+6205:                 except Exception as e:
+6206:                     try: await db.execute("ROLLBACK")
+
+
+=== LINE 6218 ===
+6206:                     try: await db.execute("ROLLBACK")
+6207:                     except: pass
+6208:                     print(f"⚠️ Shadow cleanup critical error: {e}")
+6209:                     return
+6210: 
+6211:         # Если в этой итерации ничего не удалили - значит, закончили
+6212:         if transaction_success:
+6213:             if deleted_in_chunk == 0:
+6214:                 break
+6215:             
+6216:             total_deleted += deleted_in_chunk
+6217:             # ВАЖНО: Пауза между транзакциями, чтобы дать другим записать данные
+6218:             await db_sleep(0.5) 
+6219:         else:
+6220:             # Если транзакция не прошла после всех попыток
+6221:             break
+6222: 
+6223:     if total_deleted > 0:
+
+
+=== LINE 6341 ===
+6329:                 
+6330:                 if links_to_insert:
+6331:                     await db.executemany(
+6332:                         "INSERT OR IGNORE INTO CrossLinks (source_board, source_post, target_board, target_post) VALUES (?, ?, ?, ?)",
+6333:                         links_to_insert
+6334:                     )
+6335:                 await db.execute("COMMIT")
+6336:                 return
+6337:             except sqlite3.OperationalError as e:
+6338:                 try: await db.execute("ROLLBACK")
+6339:                 except: pass
+6340:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+6341:                     await db_sleep(0.1 * (attempt + 1))
+6342:                     continue
+6343:                 break
+6344:             except Exception:
+6345:                 try: await db.execute("ROLLBACK")
+6346:                 except: pass
+
+
+=== LINE 6399 ===
+6387:                     "INSERT OR IGNORE INTO Backlinks (target_post_num, source_post_num) VALUES (?, ?)",
+6388:                     links_to_insert
+6389:                 )
+6390:                 
+6391:                 await db.execute("COMMIT")
+6392:                 return
+6393: 
+6394:             except sqlite3.OperationalError as e:
+6395:                 try: await db.execute("ROLLBACK")
+6396:                 except: pass
+6397:                 
+6398:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+6399:                     await db_sleep(0.1 * (attempt + 1))
+6400:                     continue
+6401:                 print(f"⚠️ Backlink Insert Error for #{source_post_num}: {e}")
+6402:                 break
+6403:             except Exception as e:
+6404:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 6658 ===
+6646:                 await db.execute(
+6647:                     "INSERT OR IGNORE INTO FileMirrors (file_id, mirror_type, url) VALUES (?, ?, ?)",
+6648:                     (file_id, mirror_type, url)
+6649:                 )
+6650:                 
+6651:                 await db.execute("COMMIT")
+6652:                 return
+6653:             except sqlite3.OperationalError as e:
+6654:                 try: await db.execute("ROLLBACK")
+6655:                 except: pass
+6656:                 
+6657:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+6658:                     await db_sleep(0.1 * (attempt + 1))
+6659:                     continue
+6660:                 break
+6661:             except Exception:
+6662:                 try: await db.execute("ROLLBACK")
+6663:                 except: pass
+
+
+=== LINE 6689 ===
+6677:     # Но мы добавляем retry на уровне execute для надежности.
+6678:     
+6679:     for attempt in range(10):
+6680:         try:
+6681:             async with conn.cursor() as cursor:
+6682:                 await cursor.executemany(
+6683:                     "INSERT OR IGNORE INTO FileOwners (file_id, bot_id) VALUES (?, ?)",
+6684:                     owner_pairs
+6685:                 )
+6686:             return
+6687:         except sqlite3.OperationalError as e:
+6688:             if "locked" in str(e).lower() and attempt < 9:
+6689:                 await db_sleep(0.1 * (attempt + 1))
+6690:                 continue
+6691:             print(f"⚠️ Error in batch registration: {e}")
+6692:             raise e
+6693:         except Exception as e:
+6694:             print(f"⚠️ Error in batch registration: {e}")
+
+
+=== LINE 6722 ===
+6710:                     deleted_count = cursor.rowcount
+6711:                 
+6712:                 await db.execute("COMMIT")
+6713:                 
+6714:                 if deleted_count > 0:
+6715:                     print(f"🧹 Очистка БД: Удалено {deleted_count} устаревших уведомлений.")
+6716:                 return
+6717:             except sqlite3.OperationalError as e:
+6718:                 try: await db.execute("ROLLBACK")
+6719:                 except: pass
+6720:                 
+6721:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+6722:                     await db_sleep(0.5 * (attempt + 1))
+6723:                     continue
+6724:                 break
+6725:             except Exception:
+6726:                 try: await db.execute("ROLLBACK")
+6727:                 except: pass
+
+
+=== LINE 6753 ===
+6741:                 await db.execute(
+6742:                     "INSERT INTO GlobalLogs (source, event_text, created_at) VALUES (?, ?, ?)",
+6743:                     (source, text, time.time())
+6744:                 )
+6745:                 
+6746:                 await db.execute("COMMIT")
+6747:                 return
+6748:             except sqlite3.OperationalError as e:
+6749:                 try: await db.execute("ROLLBACK")
+6750:                 except: pass
+6751:                 
+6752:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+6753:                     await db_sleep(0.1 * (attempt + 1))
+6754:                     continue
+6755:                 print(f"⛔ Ошибка записи лога: {e}")
+6756:                 break
+6757:             except Exception as e:
+6758:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 6792 ===
+6780:                 await db.execute(
+6781:                     "INSERT INTO ModQueue (post_num, file_id, reason, score, created_at) VALUES (?, ?, ?, ?, ?)",
+6782:                     (post_num, file_id, reason, score, time.time())
+6783:                 )
+6784:                 
+6785:                 await db.execute("COMMIT")
+6786:                 return
+6787:             except sqlite3.OperationalError as e:
+6788:                 try: await db.execute("ROLLBACK")
+6789:                 except: pass
+6790:                 
+6791:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+6792:                     await db_sleep(0.1 * (attempt + 1))
+6793:                     continue
+6794:                 print(f"⚠️ ModQueue add error: {e}")
+6795:                 break
+6796:             except Exception as e:
+6797:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 6873 ===
+6861:                         elif ftype in ['video', 'gif', 'animation', 'video_note']:
+6862:                             ext = 'mp4'
+6863:                         elif ftype in ['audio', 'voice']:
+6864:                             ext = 'ogg'
+6865:                         
+6866:                         details_map[fid] = {
+6867:                             "type": ftype,
+6868:                             "filename": f"{sha[:16]}.{ext}" if sha else f"{fid}.{ext}"
+6869:                         }
+6870:                 return details_map
+6871:             except sqlite3.OperationalError as e:
+6872:                 if "locked" in str(e).lower():
+6873:                     await db_sleep(0.2 * (attempt + 1))
+6874:                     continue
+6875:                 break
+6876:             except Exception as e:
+6877:                 logger.error(f"Error in get_file_details_batch: {e}", exc_info=True)
+6878:                 break
+
+
+=== LINE 6920 ===
+6908:                 db = await get_pool()
+6909:                 await db.execute("BEGIN IMMEDIATE")
+6910:                 
+6911:                 await db.execute("UPDATE ModQueue SET status = 'resolved' WHERE id = ?", (item_id,))
+6912:                 
+6913:                 await db.execute("COMMIT")
+6914:                 return
+6915:             except sqlite3.OperationalError as e:
+6916:                 try: await db.execute("ROLLBACK")
+6917:                 except: pass
+6918:                 
+6919:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+6920:                     await db_sleep(0.1 * (attempt + 1))
+6921:                     continue
+6922:                 break
+6923:             except Exception:
+6924:                 try: await db.execute("ROLLBACK")
+6925:                 except: pass
+
+
+=== LINE 7015 ===
+7003:                 # 3. Обновляем таблицу Posts
+7004:                 await db.execute("UPDATE Posts SET board_id = ? WHERE thread_id = ? OR post_num = ?", 
+7005:                                  (new_board_id, thread_id, thread_id))
+7006:                 
+7007:                 await db.execute("COMMIT")
+7008:                 return True
+7009:                 
+7010:             except sqlite3.OperationalError as e:
+7011:                 try: await db.execute("ROLLBACK")
+7012:                 except: pass
+7013:                 
+7014:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7015:                     await db_sleep(0.1 * (attempt + 1))
+7016:                     continue
+7017:                 print(f"⛔ Error moving thread {thread_id}: {e}")
+7018:                 break
+7019:             except Exception as e:
+7020:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 7065 ===
+7053:                     placeholders = ','.join('?' for _ in chunk)
+7054:                     await db.execute(f"DELETE FROM AdminActionQueue WHERE id IN ({placeholders})", chunk)
+7055:                 
+7056:                 await db.execute("COMMIT")
+7057:                 
+7058:                 return [{"type": r[1], "user_id": r[2], "board_id": r[3], "expires": r[4]} for r in rows]
+7059:                 
+7060:             except sqlite3.OperationalError as e:
+7061:                 try: await db.execute("ROLLBACK")
+7062:                 except: pass
+7063:                 
+7064:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7065:                     await db_sleep(0.1 * (attempt + 1))
+7066:                     continue
+7067:                 break
+7068:             except Exception:
+7069:                 try: await db.execute("ROLLBACK")
+7070:                 except: pass
+
+
+=== LINE 7110 ===
+7098:                     INSERT INTO PendingHF (file_id, created_at) 
+7099:                     VALUES (?, ?)
+7100:                     ON CONFLICT(file_id) DO UPDATE SET created_at = excluded.created_at
+7101:                 """, (file_id, time.time()))
+7102:                 
+7103:                 await db.execute("COMMIT")
+7104:                 return
+7105:             except sqlite3.OperationalError as e:
+7106:                 try: await db.execute("ROLLBACK")
+7107:                 except: pass
+7108:                 
+7109:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7110:                     await db_sleep(0.1 * (attempt + 1))
+7111:                     continue
+7112:                 break
+7113:             except Exception:
+7114:                 try: await db.execute("ROLLBACK")
+7115:                 except: pass
+
+
+=== LINE 7142 ===
+7130:                 for i in range(0, len(file_ids), chunk_size):
+7131:                     chunk = file_ids[i:i+chunk_size]
+7132:                     placeholders = ','.join('?' for _ in chunk)
+7133:                     await db.execute(f"DELETE FROM PendingHF WHERE file_id IN ({placeholders})", chunk)
+7134:                 
+7135:                 await db.execute("COMMIT")
+7136:                 return
+7137:             except sqlite3.OperationalError as e:
+7138:                 try: await db.execute("ROLLBACK")
+7139:                 except: pass
+7140:                 
+7141:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7142:                     await db_sleep(0.5 * (attempt + 1))
+7143:                     continue
+7144:                 break
+7145:             except Exception:
+7146:                 try: await db.execute("ROLLBACK")
+7147:                 except: pass
+
+
+=== LINE 7177 ===
+7165:                     INSERT INTO MirrorQueue (file_id, mirror_type, next_run_at, attempts)
+7166:                     VALUES (?, ?, ?, 0)
+7167:                     ON CONFLICT(file_id, mirror_type) DO NOTHING
+7168:                 """, (file_id, mirror_type, time.time()))
+7169:                 
+7170:                 await db.execute("COMMIT")
+7171:                 return
+7172:             except sqlite3.OperationalError as e:
+7173:                 try: await db.execute("ROLLBACK")
+7174:                 except: pass
+7175:                 
+7176:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7177:                     await db_sleep(0.1 * (attempt + 1))
+7178:                     continue
+7179:                 break
+7180:             except Exception:
+7181:                 try: await db.execute("ROLLBACK")
+7182:                 except: pass
+
+
+=== LINE 7264 ===
+7252:                 await db.execute(
+7253:                     "UPDATE MirrorQueue SET attempts = ?, next_run_at = ? WHERE id = ?",
+7254:                     (attempt + 1, next_time, task_id)
+7255:                 )
+7256:                 
+7257:                 await db.execute("COMMIT")
+7258:                 return
+7259:             except sqlite3.OperationalError as e:
+7260:                 try: await db.execute("ROLLBACK")
+7261:                 except: pass
+7262:                 
+7263:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7264:                     await db_sleep(0.1 * (try_idx + 1))
+7265:                     continue
+7266:                 print(f"⚠️ DB Error rescheduling mirror task: {e}")
+7267:                 break
+7268:             except Exception as e:
+7269:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 7374 ===
+7362:                     (1 if endless else 0, int(thread_id))
+7363:                 )
+7364:                 if endless:
+7365:                     await db.execute("UPDATE Threads SET is_archived = 0 WHERE thread_num = ?", (int(thread_id),))
+7366:                 
+7367:                 await db.execute("COMMIT")
+7368:                 return True
+7369:             except sqlite3.OperationalError as e:
+7370:                 try: await db.execute("ROLLBACK")
+7371:                 except: pass
+7372:                 
+7373:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7374:                     await db_sleep(0.1 * (attempt + 1))
+7375:                     continue
+7376:                 break
+7377:             except Exception as e:
+7378:                 try: await db.execute("ROLLBACK")
+7379:                 except: pass
+
+
+=== LINE 7423 ===
+7411:                 
+7412:                 await db.execute("COMMIT")
+7413:                 
+7414:                 if count > 0:
+7415:                     print(f"✂️ Trimmed thread {thread_id}: deleted {count} old posts (Atomic).")
+7416:                 return
+7417: 
+7418:             except sqlite3.OperationalError as e:
+7419:                 try: await db.execute("ROLLBACK")
+7420:                 except: pass
+7421:                 
+7422:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7423:                     await db_sleep(0.1 * (attempt + 1))
+7424:                     continue
+7425:                 print(f"Error trimming thread {thread_id}: {e}")
+7426:                 break
+7427:             except Exception as e:
+7428:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 7453 ===
+7441:                 db = await get_pool()
+7442:                 await db.execute("BEGIN IMMEDIATE")
+7443:                 
+7444:                 await db.execute("DELETE FROM MirrorQueue WHERE id = ?", (task_id,))
+7445:                 
+7446:                 await db.execute("COMMIT")
+7447:                 return
+7448:             except sqlite3.OperationalError as e:
+7449:                 try: await db.execute("ROLLBACK")
+7450:                 except: pass
+7451:                 
+7452:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7453:                     await db_sleep(0.2 * (attempt + 1))
+7454:                     continue
+7455:                 break
+7456:             except Exception:
+7457:                 try: await db.execute("ROLLBACK")
+7458:                 except: pass
+
+
+=== LINE 7478 ===
+7466:     
+7467:     async with db_lock:
+7468:         for attempt in range(5):
+7469:             try:
+7470:                 db = await get_pool()
+7471:                 # ПРАВКА: Сортировка DESC (новые первыми)
+7472:                 async with db.execute("SELECT file_id FROM PendingHF ORDER BY created_at DESC LIMIT ?", (limit,)) as cursor:
+7473:                     rows = await cursor.fetchall()
+7474:                     return [row[0] for row in rows]
+7475:             except Exception as e:
+7476:                 # Чтение редко падает, но на случай разрыва соединения
+7477:                 print(f"HF Queue read error: {e}")
+7478:                 await db_sleep(1)
+7479:     return []
+7480: 
+7481: async def get_queue_stats() -> tuple[int, float]:
+7482:     """
+7483:     Возвращает (кол-во файлов, время самого старого).
+
+
+=== LINE 7546 ===
+7534:                            VALUES (?, ?, ?, ?, ?, 0, ?)""",
+7535:                         (original_author_id, board_id, effective_thread_id, reply_post_num, source_post_num, curr_time)
+7536:                     )
+7537:                 
+7538:                 await db.execute("COMMIT")
+7539:                 return
+7540: 
+7541:             except sqlite3.OperationalError as e:
+7542:                 try: await db.execute("ROLLBACK")
+7543:                 except: pass
+7544:                 
+7545:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7546:                     await db_sleep(0.1 * (attempt + 1))
+7547:                     continue
+7548:                 print(f"⚠️ Ошибка добавления уведомления: {e}")
+7549:                 break
+7550:             except Exception as e:
+7551:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 7593 ===
+7581:                         "source_post_num": r[1],
+7582:                         "reply_post_num": r[2],
+7583:                         "board_id": r[3],
+7584:                         "thread_id": r[4]
+7585:                     } for r in rows
+7586:                 ]
+7587:                 
+7588:             except sqlite3.OperationalError as e:
+7589:                 try: await db.execute("ROLLBACK")
+7590:                 except: pass
+7591:                 
+7592:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7593:                     await db_sleep(0.1 * (attempt + 1))
+7594:                     continue
+7595:                 print(f"⛔ Ошибка в get_and_clear_notification_queue: {e}")
+7596:                 break
+7597:             except Exception as e:
+7598:                 try: await db.execute("ROLLBACK")
+
+
+=== LINE 7635 ===
+7623:                 
+7624:             except sqlite3.IntegrityError:
+7625:                 try: await db.execute("ROLLBACK")
+7626:                 except: pass
+7627:                 # Пользователь уже голосовал — это нормальное поведение, не ошибка.
+7628:                 return False
+7629:                 
+7630:             except sqlite3.OperationalError as e:
+7631:                 try: await db.execute("ROLLBACK")
+7632:                 except: pass
+7633:                 
+7634:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7635:                     await db_sleep(0.1 * (attempt + 1))
+7636:                     continue
+7637:                 print(f"Poll Vote DB Error: {e}")
+7638:                 break
+7639:                 
+7640:             except Exception as e:
+
+
+=== LINE 7842 ===
+7830:                         return 'default', False
+7831:                     t_type = row[0] or 'default'
+7832:                     
+7833:                 if t_type == 'default':
+7834:                     return 'default', True
+7835:                     
+7836:                 async with db.execute("SELECT 1 FROM ThreadUnlocks WHERE thread_id = ? AND user_id = ? LIMIT 1", (thread_id, user_id)) as cursor:
+7837:                     is_unlocked = await cursor.fetchone() is not None
+7838:                     
+7839:                 return t_type, is_unlocked
+7840:             except sqlite3.OperationalError as e:
+7841:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+7842:                     await db_sleep(0.1 * (attempt + 1))
+7843:                     continue
+7844:                 break
+7845:             except Exception:
+7846:                 break
+7847:     return 'default', False
+
+
+=== LINE 8022 ===
+8010:                 
+8011:                 if updates:
+8012:                     await db.executemany("UPDATE Posts SET content = ? WHERE post_num = ?", updates)
+8013:                 
+8014:                 await db.execute("COMMIT")
+8015:                 return results
+8016:                 
+8017:             except sqlite3.OperationalError as e:
+8018:                 try: await db.execute("ROLLBACK")
+8019:                 except: pass
+8020:                 
+8021:                 if "locked" in str(e).lower() or "busy" in str(e).lower():
+8022:                     await db_sleep(0.1 * (attempt + 1))
+8023:                     continue
+8024:                 break
+8025:             except Exception as e:
+8026:                 try: await db.execute("ROLLBACK")
+8027:                 except: pass
+
+
+=== LINE 8113 ===
+8101:                     # против процесса сайта, а последующие записи бота копились
+8102:                     # незакоммиченными и терялись при SIGINT от memory_restarter.
+8103:                     # Остальные ~85 мест с BEGIN IMMEDIATE в этом файле
+8104:                     # откатываются именно так.
+8105:                     try:
+8106:                         await db.execute("ROLLBACK")
+8107:                     except Exception:
+8108:                         import traceback; traceback.print_exc()
+8109:                     raise
+8110:             total_deleted += deleted
+8111:             if deleted == 0:
+8112:                 break
+8113:             await db_sleep(0.5)
+8114: 
+8115:         if total_deleted > 0:
+8116:             logging.getLogger("database").info(f"🧹 [POSTCOPIES_CLEANUP] Удалено {total_deleted:,} устаревших записей (post_num < {threshold_post_num}). Храним данные за 14 дней.")
+8117:         return total_deleted
+8118:     except Exception as e:
+
+
+=== LINE 8175 ===
+8163:                         deleted = cursor.rowcount or 0
+8164:                     await db.execute("COMMIT")
+8165:                 except Exception:
+8166:                     try:
+8167:                         await db.execute("ROLLBACK")
+8168:                     except Exception:
+8169:                         import traceback; traceback.print_exc()
+8170:                     raise
+8171:             total_deleted += deleted
+8172:             if deleted == 0:
+8173:                 break
+8174:             # Уступаем цикл событий между пачками, как в чистке PostCopies.
+8175:             await db_sleep(0.5)
+8176: 
+8177:         if total_deleted > 0:
+8178:             logging.getLogger("database").info(
+8179:                 f"🧹 [REPOSTS_CLEANUP] Удалено {total_deleted:,} записей о медиа "
+8180:                 f"старше {MEDIA_REPOSTS_RETENTION_DAYS} дней, показанном один раз."
+
+
+=== LINE 8199 ===
+8187: 
+8188: async def postcopies_daily_cleanup_loop():
+8189:     """
+8190:     Запускает ежедневную очистку PostCopies ровно в 00:00 MSK (UTC+3).
+8191:     """
+8192:     from datetime import datetime, timezone, timedelta
+8193:     MSK = timezone(timedelta(hours=3))
+8194:     while True:
+8195:         try:
+8196:             now_msk = datetime.now(timezone.utc).astimezone(MSK)
+8197:             next_run = (now_msk + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+8198:             sleep_sec = (next_run - now_msk).total_seconds()
+8199:             await db_sleep(max(10, sleep_sec))
+8200:             await clean_old_postcopies_daily()
+8201:             # Второй уборщик в том же суточном цикле: отдельная фоновая задача
+8202:             # ради одного DELETE в сутки не нужна, а падение любого из двух
+8203:             # ловится общим except ниже и не роняет цикл.
+8204:             await clean_old_media_reposts_daily()
+
+
+=== LINE 8209 ===
+8197:             next_run = (now_msk + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+8198:             sleep_sec = (next_run - now_msk).total_seconds()
+8199:             await db_sleep(max(10, sleep_sec))
+8200:             await clean_old_postcopies_daily()
+8201:             # Второй уборщик в том же суточном цикле: отдельная фоновая задача
+8202:             # ради одного DELETE в сутки не нужна, а падение любого из двух
+8203:             # ловится общим except ниже и не роняет цикл.
+8204:             await clean_old_media_reposts_daily()
+8205:         except asyncio.CancelledError:
+8206:             break
+8207:         except Exception as e:
+8208:             logging.getLogger("database").error(f"⚠️ [POSTCOPIES_LOOP] Ошибка в цикле чистки: {e}")
+8209:             await db_sleep(3600)
+8210: 
+
+

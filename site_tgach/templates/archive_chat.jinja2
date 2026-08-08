@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Летопись Чата - ТГАЧ АРХИВ</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.8">
     <link rel="icon" href="/static/favicon.ico">
     <meta name="theme-color" content="#212121">
 </head>
@@ -84,14 +84,16 @@
                         {% if post.content.files %}
                         <div class="post-files-container post-gallery">
                             {% for file in post.content.files %}
+                                {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
+                                {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/files/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                                 {% if file.type in ['image', 'photo'] %}
-                                    <a href="{{ file.original_url }}" class="file-thumb">
+                                    <a href="{{ file_orig_src }}" class="file-thumb">
                                         <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
-                                             data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                             data-src="{{ file_thumb_src }}" 
                                              class="post-image lazy-load" referrerpolicy="no-referrer">
                                     </a>
                                 {% elif file.type == 'video' or file.type == 'gif' %}
-                                    <div class="file-thumb lazy-media-wrapper" data-src="{{ file.original_url }}" data-type="video">
+                                    <div class="file-thumb lazy-media-wrapper" data-src="{{ file_orig_src }}" data-type="video">
                                         {% if file.blurhash %}
                                             <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32" style="position: absolute; top:0; left:0; width:100%; height:100%; object-fit: cover;"></canvas>
                                         {% endif %}
@@ -100,8 +102,8 @@
                                                muted 
                                                playsinline 
                                                loop
-                                               data-src="{{ file.original_url }}"
-                                               {% if file.thumbnail_url %}poster="{{ file.thumbnail_url }}"{% endif %}
+                                               data-src="{{ file_orig_src }}"
+                                               {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
                                                style="object-fit: cover; width: 100%; height: 100%; background: #000;">
                                         </video>
                                         <span class="lazy-badge">VIDEO</span>
@@ -110,14 +112,14 @@
                                     <div class="sticker-wrapper" style="display:inline-block; vertical-align:bottom;">
                                         {% if file.filename.endswith('.webm') %}
                                             <video class="post-sticker lazy-load" 
-                                                   data-src="{{ file.original_url }}" 
+                                                   data-src="{{ file_orig_src }}" 
                                                    autoplay loop muted playsinline webkit-playsinline 
                                                    referrerpolicy="no-referrer" 
                                                    style="max-height: 150px; width: auto; background: transparent;">
                                             </video>
                                         {% else %}
                                             <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
-                                                 data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                 data-src="{{ file_thumb_src }}" 
                                                  class="post-sticker lazy-load" 
                                                  referrerpolicy="no-referrer">
                                         {% endif %}
@@ -182,6 +184,6 @@
     </div>
 
     <!-- Подключаем главный скрипт для работы галереи и темы -->
-    <script src="/static/js/main.js?v=9.7" defer></script>
+    <script src="/static/js/main.js?v=9.8" defer></script>
 </body>
 </html>

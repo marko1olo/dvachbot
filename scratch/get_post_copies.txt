@@ -1,0 +1,150 @@
+2704:                 result = await cursor.fetchone()
+2705:                 return result[0] if result else None
+2706:         except Exception:
+2707:             return None
+2708: @overload
+2709: async def get_post_copies(post_num: int) -> list[tuple[int, int]]: ...
+2710: 
+2711: @overload
+2712: async def get_post_copies(post_num: list[int]) -> dict[int, list[tuple[int, int]]]: ...
+2713: 
+2714: async def get_post_copies(post_num: int | list[int]) -> list[tuple[int, int]] | dict[int, list[tuple[int, int]]]:
+2715:     """
+2716:     Возвращает список всех копий для указанного поста,
+2717:     либо словарь со списками копий для нескольких постов.
+2718:     """
+2719:     from common.db_pool import get_pool, db_lock
+2720: 
+2721:     if isinstance(post_num, list):
+2722:         if not post_num:
+2723:             return {}
+2724:         async with db_lock:
+2725:             try:
+2726:                 db = await get_pool()
+2727:                 placeholders = ','.join('?' for _ in post_num)
+2728:                 query = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
+2729: 
+2730:                 result = {num: [] for num in post_num}
+2731:                 async with db.execute(query, post_num) as cursor:
+2732:                     rows = await cursor.fetchall()
+2733:                     for p_num, recipient_id, message_id in rows:
+2734:                         result[p_num].append((recipient_id, message_id))
+2735:                 return result
+2736:             except Exception:
+2737:                 return {num: [] for num in post_num}
+2738: 
+2739:     async with db_lock:
+2740:         try:
+2741:             db = await get_pool()
+2742:             query = "SELECT recipient_id, message_id FROM PostCopies WHERE post_num = ?"
+2743:             async with db.execute(query, (post_num,)) as cursor:
+2744:                 return await cursor.fetchall()
+2745:         except Exception:
+2746:             return []
+2747: async def upsert_delivery_queue_item(
+2748:     board_id: str,
+2749:     post_num: int,
+2750:     recipients: list[int],
+2751:     content: dict,
+2752:     delivery_phase: str = "passive",
+2753:     original_recipients: int = 0,
+2707:             return None
+2708: @overload
+2709: async def get_post_copies(post_num: int) -> list[tuple[int, int]]: ...
+2710: 
+2711: @overload
+2712: async def get_post_copies(post_num: list[int]) -> dict[int, list[tuple[int, int]]]: ...
+2713: 
+2714: async def get_post_copies(post_num: int | list[int]) -> list[tuple[int, int]] | dict[int, list[tuple[int, int]]]:
+2715:     """
+2716:     Возвращает список всех копий для указанного поста,
+2717:     либо словарь со списками копий для нескольких постов.
+2718:     """
+2719:     from common.db_pool import get_pool, db_lock
+2720: 
+2721:     if isinstance(post_num, list):
+2722:         if not post_num:
+2723:             return {}
+2724:         async with db_lock:
+2725:             try:
+2726:                 db = await get_pool()
+2727:                 placeholders = ','.join('?' for _ in post_num)
+2728:                 query = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
+2729: 
+2730:                 result = {num: [] for num in post_num}
+2731:                 async with db.execute(query, post_num) as cursor:
+2732:                     rows = await cursor.fetchall()
+2733:                     for p_num, recipient_id, message_id in rows:
+2734:                         result[p_num].append((recipient_id, message_id))
+2735:                 return result
+2736:             except Exception:
+2737:                 return {num: [] for num in post_num}
+2738: 
+2739:     async with db_lock:
+2740:         try:
+2741:             db = await get_pool()
+2742:             query = "SELECT recipient_id, message_id FROM PostCopies WHERE post_num = ?"
+2743:             async with db.execute(query, (post_num,)) as cursor:
+2744:                 return await cursor.fetchall()
+2745:         except Exception:
+2746:             return []
+2747: async def upsert_delivery_queue_item(
+2748:     board_id: str,
+2749:     post_num: int,
+2750:     recipients: list[int],
+2751:     content: dict,
+2752:     delivery_phase: str = "passive",
+2753:     original_recipients: int = 0,
+2754:     thread_id: str | None = None,
+2755:     enqueued_at: float | None = None,
+2756: ) -> int | None:
+2709: async def get_post_copies(post_num: int) -> list[tuple[int, int]]: ...
+2710: 
+2711: @overload
+2712: async def get_post_copies(post_num: list[int]) -> dict[int, list[tuple[int, int]]]: ...
+2713: 
+2714: async def get_post_copies(post_num: int | list[int]) -> list[tuple[int, int]] | dict[int, list[tuple[int, int]]]:
+2715:     """
+2716:     Возвращает список всех копий для указанного поста,
+2717:     либо словарь со списками копий для нескольких постов.
+2718:     """
+2719:     from common.db_pool import get_pool, db_lock
+2720: 
+2721:     if isinstance(post_num, list):
+2722:         if not post_num:
+2723:             return {}
+2724:         async with db_lock:
+2725:             try:
+2726:                 db = await get_pool()
+2727:                 placeholders = ','.join('?' for _ in post_num)
+2728:                 query = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
+2729: 
+2730:                 result = {num: [] for num in post_num}
+2731:                 async with db.execute(query, post_num) as cursor:
+2732:                     rows = await cursor.fetchall()
+2733:                     for p_num, recipient_id, message_id in rows:
+2734:                         result[p_num].append((recipient_id, message_id))
+2735:                 return result
+2736:             except Exception:
+2737:                 return {num: [] for num in post_num}
+2738: 
+2739:     async with db_lock:
+2740:         try:
+2741:             db = await get_pool()
+2742:             query = "SELECT recipient_id, message_id FROM PostCopies WHERE post_num = ?"
+2743:             async with db.execute(query, (post_num,)) as cursor:
+2744:                 return await cursor.fetchall()
+2745:         except Exception:
+2746:             return []
+2747: async def upsert_delivery_queue_item(
+2748:     board_id: str,
+2749:     post_num: int,
+2750:     recipients: list[int],
+2751:     content: dict,
+2752:     delivery_phase: str = "passive",
+2753:     original_recipients: int = 0,
+2754:     thread_id: str | None = None,
+2755:     enqueued_at: float | None = None,
+2756: ) -> int | None:
+2757:     """
+2758:     Stores one durable delivery phase. This is intentionally coarse-grained:

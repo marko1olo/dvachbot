@@ -10,7 +10,7 @@
     <meta property="og:title" content="Оверборд — ТГАЧ">
     <meta property="og:description" content="Оверборд TGACH — просмотр всех досок (разделов) анонимной имиджборды на одной странице.">
     <meta property="og:image" content="/static/logo.png">
-    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.8">
     <link rel="preconnect" href="https://api.telegram.org" crossorigin>
     <link rel="dns-prefetch" href="https://files.catbox.moe">
     <link rel="dns-prefetch" href="https://huggingface.co">
@@ -58,7 +58,7 @@
         })();
     </script>
     <header>
-        <div class="board-nav-top">
+        <div class="board-nav-top" spellcheck="false">
             <a href="/overboard/" title="Все треды">/all/</a>
 
             {% for category in ['popular', 'bio', 'thematic', 'system'] %}
@@ -195,27 +195,29 @@
                                 <div class="post-files-container post-gallery">
                                     {% for file in post.content.files %}
                                         {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
+                                            {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
+                                            {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/files/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                                             {% if file.type == 'image' or file.type == 'photo' or file.type == 'sticker' %}
-                                                <a href="{{ file.original_url }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
+                                                <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
                                                     {% if file.blurhash %}
                                                         <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
                                                     {% endif %}
                                                     <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
-                                                        data-src="{{ file.thumbnail_url or file.original_url }}" 
+                                                        data-src="{{ file_thumb_src }}" 
                                                         class="post-image lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
                                                     {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                 </a>
                                             {% elif file.type == 'video_note' %}
                                                 <video class="post-video video-note lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" 
-                                                       data-src="{{ file.original_url }}" 
-                                                       poster="{{ file.thumbnail_url }}"
+                                                       data-src="{{ file_orig_src }}" 
+                                                       poster="{{ file_thumb_src }}"
                                                        autoplay loop muted playsinline 
                                                        style="border-radius: 50%; object-fit: cover;" 
                                                        referrerpolicy="no-referrer">
                                                 </video>
                                             {% elif file.type == 'video' or file.type == 'gif' or file.type == 'animation' %}
                                                 <div class="file-thumb lazy-media-wrapper" 
-                                                    data-src="{{ file.original_url }}" 
+                                                    data-src="{{ file_orig_src }}" 
                                                     data-filename="{{ file.filename }}"
                                                     data-type="{{ 'gif' if file.type in ['gif', 'animation'] else 'video' }}">
                                                     {% if file.blurhash %}
@@ -223,8 +225,8 @@
                                                     {% endif %}
                                                     <video class="post-image lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" 
                                                            preload="metadata" muted playsinline loop
-                                                           data-src="{{ file.original_url }}"
-                                                           {% if file.thumbnail_url %}poster="{{ file.thumbnail_url }}"{% endif %}
+                                                           data-src="{{ file_orig_src }}"
+                                                           {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
                                                            style="object-fit: cover; width: 100%; height: 100%; background: #000;">
                                                     </video>
                                                     <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
@@ -237,9 +239,10 @@
                                 <div class="post-audios-container">
                                     {% for file in post.content.files %}
                                         {% if file.type in ['audio', 'voice'] %}
+                                            {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
                                             {% set unique_id = 'audio-' ~ post.id ~ '-' ~ loop.index %}
-                                            <div class="custom-audio-player" id="player-{{ unique_id }}" data-src="{{ file.original_url }}">
-                                                <audio id="{{ unique_id }}" preload="none"><source src="{{ file.original_url }}" type="{{ file.mime_type or 'audio/mpeg' }}"></audio>
+                                            <div class="custom-audio-player" id="player-{{ unique_id }}" data-src="{{ file_orig_src }}">
+                                                <audio id="{{ unique_id }}" preload="none"><source src="{{ file_orig_src }}" type="{{ file.mime_type or 'audio/mpeg' }}"></audio>
                                                 <button class="cap-play-btn" data-target="{{ unique_id }}" type="button">▶</button>
                                                 <div class="cap-body">
                                                     <div class="cap-title" title="{{ file.filename }}">
@@ -263,7 +266,7 @@
                                                         <div class="cap-info"><span class="cap-time">00:00</span></div>
                                                         <div class="cap-progress-container" data-target="{{ unique_id }}"><div class="cap-wave-base"></div><div class="cap-wave-progress"></div></div>
                                                         <div class="cap-info"><button class="cap-speed-btn" data-target="{{ unique_id }}" type="button">1x</button></div>
-                                                        <a href="{{ file.original_url }}" download="{{ file.filename }}" class="cap-download-btn">⬇</a>
+                                                        <a href="{{ file_orig_src }}" download="{{ file.filename }}" class="cap-download-btn">⬇</a>
                                                     </div>
                                                 </div>
                                             </div>
@@ -298,20 +301,22 @@
                                             {% if reply.content.files %}
                                                 <div class="post-files-container post-gallery" style="margin: 0 10px 10px 0; flex-shrink: 0; display: flex; gap: 5px;">
                                                     {% for f in reply.content.files %}
+                                                        {% set f_orig_src = (f.original_file_id and '/files/' ~ f.original_file_id) or f.original_url %}
+                                                        {% set f_thumb_src = (f.thumbnail_file_id and '/files/' ~ f.thumbnail_file_id) or (f.original_file_id and '/files/' ~ f.original_file_id) or f.thumbnail_url or f.original_url %}
                                                         {% if f.type in ['video', 'gif', 'animation', 'video_note'] %}
                                                             <div class="file-thumb lazy-media-wrapper" 
                                                                 style="width: 80px; height: 80px;"
-                                                                data-src="{{ f.original_url }}" 
+                                                                data-src="{{ f_orig_src }}" 
                                                                 data-filename="{{ f.filename }}"
                                                                 data-type="{{ 'gif' if f.type in ['gif', 'animation'] else 'video' }}">
                                                                 {% if f.blurhash %}<canvas class="blurhash-canvas" data-hash="{{ f.blurhash }}" width="32" height="32"></canvas>{% endif %}
                                                                 <video class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" preload="metadata" muted playsinline loop
-                                                                    data-src="{{ f.original_url }}"
-                                                                       {% if f.thumbnail_url %}poster="{{ f.thumbnail_url }}"{% endif %}
+                                                                    data-src="{{ f_orig_src }}"
+                                                                       {% if f_thumb_src %}poster="{{ f_thumb_src }}"{% endif %}
                                                                        style="width: 100%; height: 100%; object-fit: cover;"></video>
                                                             </div>
                                                         {% else %}
-                                                            <a href="{{ f.original_url }}" 
+                                                            <a href="{{ f_orig_src }}" 
                                                                 class="file-thumb" 
                                                                 data-type="image" 
                                                                 data-filename="{{ f.filename }}"
@@ -319,7 +324,7 @@
                                                                 style="width: 80px; height: 80px;">
                                                                 {% if f.blurhash %}<canvas class="blurhash-canvas" data-hash="{{ f.blurhash }}" width="32" height="32"></canvas>{% endif %}
                                                                 <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
-                                                                    data-src="{{ f.thumbnail_url or f.original_url }}" 
+                                                                    data-src="{{ f_thumb_src }}" 
                                                                     class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" 
                                                                     style="width: 100%; height: 100%; object-fit: cover;"
                                                                     referrerpolicy="no-referrer">
@@ -503,7 +508,7 @@
     </div>
     <div id="new-posts-indicator" style="display: none;"></div>
     <div id="loading-indicator" class="loading-indicator">Отправка...</div>
-    <script src="/static/js/main.js?v=9.7" defer></script>
+    <script src="/static/js/main.js?v=9.8" defer></script>
     <div class="modal" id="filters-modal" style="display: none;">
         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-separator); margin-bottom: 15px; padding-bottom: 10px;">
             <h3 style="margin: 0; border: none; padding: 0;">🛡️ Фильтрация контента</h3>

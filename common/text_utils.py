@@ -1,4 +1,5 @@
 import re
+import html
 
 RE_HTML_TAGS = re.compile(r'<[^>]+>')
 RE_YOU_PATTERN = re.compile(r">>(\d+)")
@@ -80,7 +81,8 @@ def sanitize_html(text: str) -> str:
                 if attr_name == "href":
                     val = attr_m.group(2) if attr_m.group(2) is not None else (attr_m.group(3) if attr_m.group(3) is not None else attr_m.group(4))
                     if val and val.lower().strip().startswith(("http://", "https://", "tg://")):
-                        valid_a_tag = f'<a href="{val}">'
+                        safe_val = html.escape(val, quote=True)
+                        valid_a_tag = f'<a href="{safe_val}">'
                     break
 
         if start > last_idx:

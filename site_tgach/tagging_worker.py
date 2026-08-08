@@ -43,12 +43,9 @@ import math
 import io
 import imagehash
 from PIL import Image
-from openai import AsyncOpenAI
-
 # Импорты проекта
 from common.db_pool import get_pool, db_lock, db_sleep
 from common.bot_pool import global_bot_pool
-from common.token_pool import groq_pool
 from aiogram.exceptions import TelegramBadRequest
 
 # Импорт логики модерации
@@ -64,7 +61,6 @@ if not logger.handlers:
 logger.propagate = True
 
 PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or None
-GROQ_MODEL = "qwen/qwen3.6-27b"
 GROQ_TIMEOUT = 40.0
 BATCH_SIZE = 1  # СТРОГО ПО ОДНОМУ, чтобы не насиловать ключи
 
@@ -315,13 +311,6 @@ def process_image_cpu(image_bytes):
 
     except Exception as e:
         return None, f"CPU Error: {type(e).__name__}: {e}"
-
-
-@api_retry
-async def _execute_tagging(client, model, messages, max_tokens):
-    return await client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens
-    )
 
 
 async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:

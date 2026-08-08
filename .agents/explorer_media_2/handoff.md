@@ -1,99 +1,231 @@
-# HANDOFF REPORT — Fallback & Mirror Image Services Audit
+# Handoff Report — Frontend JS Media Rendering Audit
 
 ## 1. Observation
 
-Direct observations from auditing source code files under `C:\Users\danat\Desktop\dvachbot\site_tgach`:
+Direct code examination of `site_tgach/static/js/main.src.js`, `site_tgach/static/js/main.js`, `site_tgach/templates/board.jinja2`, `site_tgach/templates/thread.jinja2`, and `site_tgach/main.py`:
 
-1. **Catbox Integration (`site_tgach/catbox.py`)**:
-   - `_upload_logic` (lines 64-147) handles `urlupload` (URL source) and `fileupload` (disk file / memory tuple).
-   - Userhash rejection check (`_is_invalid_uploader` lines 49-52) disables userhash for 3600 seconds (`_disable_bad_catbox_hash` lines 54-58) and retries payload as anonymous upload (lines 119-123).
-   - Dynamic strategy selection: Direct/System transport first, followed by HTTP/SOCKS proxy (`PROXY_URL`, lines 71-74).
+### Key Locations & Verbatim Code:
 
-2. **0x0.st Integration (`site_tgach/zeroxzero.py`)**:
-   - `_post_0x0` (lines 56-100) disables 0x0.st for 6 hours (`ZEROXZERO_COOLDOWN_SECONDS = 21600`) if HTTP 503 response contains `"uploads disabled"` (lines 86-88).
-   - Enforces configurable byte payload limit (`ZEROXZERO_MAX_BYTES` = 512MB, line 14).
+1. **`FailedMediaCache` Normalization** (`site_tgach/static/js/main.src.js:218-241`):
+   ```javascript
+   const FailedMediaCache = {
+       _failedUrls: new Set(),
+       normalizeUrl(url) {
+           if (!url) return '';
+           try {
+               const loc = (typeof window !== 'undefined' && window.location) ? window.location.href : 'http://localhost';
+               const parsed = new URL(url, loc);
+               return parsed.origin + parsed.pathname;
+           } catch (e) {
+               return String(url).split('?')[0].split('#')[0];
+           }
+       },
+       markFailed(url) {
+           const key = this.normalizeUrl(url);
+           if (key) this._failedUrls.add(key);
+       },
+       isFailed(url) {
+           const key = this.normalizeUrl(url);
+           return key ? this._failedUrls.has(key) : false;
+       }
+   };
+   ```
 
-3. **Pixhost Integration (`site_tgach/pixhost.py`)**:
-   - `upload_file_to_pixhost` (lines 26-98) enforces 10MB limit (`PIXHOST_MAX_MB`, line 18) and extension whitelist (`.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.webp`, line 17).
-   - Line 82 assigns `direct_url = show_url`, returning HTML viewer page URL (`https://pixhost.to/show/...`) rather than direct raw image URL (`https://img123.pixhost.to/images/...`).
+2. **`handleImageError` Failure Handler** (`site_tgach/static/js/main.src.js:11449-11501`):
+   ```javascript
+   function handleImageError(img) {
+       if (!img) return;
+       img.onerror = null;
+       if (img.dataset.finalError) return;
+       img.dataset.finalError = "true";
 
-4. **ImgBB Integration (`site_tgach/imgbb.py`)**:
-   - `upload_file_to_imgbb` (lines 29-94) requires `IMGBB_API_KEY` (line 15) and max size 32MB (line 44).
-   - Lines 62-66 load the file as bytes and Base64-encodes the entire buffer (`base64.b64encode(file_bytes)`).
-   - Returns `None` immediately on HTTP 400 Bad Request (line 82) to avoid key exhaustion.
+       const parent = img.closest('.file-thumb, .lazy-media-wrapper, .sticker-wrapper, .catalog-thumb');
+       const currentSrc = img.src || img.dataset.src || "";
+       const originalUrl = parent ? (parent.href || parent.dataset.src || currentSrc) : (img.dataset.src || currentSrc);
 
-5. **FreeImage Integration (`site_tgach/freeimage.py`)**:
-   - `upload_file_to_freeimage` (lines 25-77) targets `https://freeimage.host/api/1/upload`.
-   - **Unreferenced**: `freeimage.py` is not imported in `mirror_worker.py` (lines 11-19), `image_processing.py` (lines 49-55), or `tagging_worker.py`.
+       const renderStaticError = () => {
+           img.classList.add('broken-final');
+           if (parent) {
+               parent.classList.remove('is-loading');
+               parent.classList.add('broken-media');
+               parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="...">⚠️ Media Unavailable</div>`;
+           } else {
+               img.style.display = 'none';
+           }
+       };
 
-6. **Mirror Worker & Dead `file_id` Recovery (`site_tgach/mirror_worker.py`)**:
-   - `process_mirror_queue` (lines 327-358) filters allowed types to `['catbox', 'pixhost']` + optional `'0x0'` and `'imgbb'` (lines 341-345).
-   - `_process_single_task` (lines 109-326) checks bot state and catches `"file_id_invalid"` / `"wrong file_id"` (lines 188-206).
-   - For photos (`AgAC...`) without DB message context (`_find_msg_info`), task is immediately removed as dead (line 201).
-   - `_detect_real_ext` (lines 25-42) reads header magic bytes (`JPEG`, `PNG`, `GIF`, `WEBP`, `BMP`) and renames `.dat` files to proper extensions before sending to Pixhost or ImgBB (lines 279-304).
+       if (typeof FailedMediaCache !== 'undefined') {
+           if (FailedMediaCache.isFailed(originalUrl) || FailedMediaCache.isFailed(currentSrc)) {
+               renderStaticError();
+               return;
+           }
+       }
+       ...
+       if (isLocalFile) {
+           if (typeof FailedMediaCache !== 'undefined') {
+               FailedMediaCache.markFailed(originalUrl);
+               FailedMediaCache.markFailed(currentSrc);
+           }
+           renderStaticError();
+           return;
+       }
+   ```
 
-7. **Tagging Worker Fallback (`site_tgach/tagging_worker.py`)**:
-   - `download_file_with_fallback` (lines 412-447) limits per-bot download timeout to 45s (`DOWNLOAD_TIMEOUT_PER_BOT`) and total deadline to 120s (`DOWNLOAD_TOTAL_TIMEOUT`). Maintains `TEMP_FAILED_FILES` in memory.
+3. **`SmartLoader.process` & `onLoadFinished`** (`site_tgach/static/js/main.src.js:14388-14513`):
+   - Line 14406 counter underflow:
+     ```javascript
+     if (!targetSrc || targetSrc.includes('undefined') || targetSrc.includes('null') || (typeof FailedMediaCache !== 'undefined' && FailedMediaCache.isFailed(targetSrc))) {
+         ...
+         this.activeCount--; // Decrements activeCount BEFORE it was incremented at line 14411!
+         if (parent) parent.classList.remove('is-loading');
+         this.process();
+         return;
+     }
+     this.activeCount++;
+     ```
+   - Lines 14498-14509 premature `markFailed`:
+     ```javascript
+     const baseUrl = img.dataset.src || img.src;
+     if (baseUrl && typeof FailedMediaCache !== 'undefined') {
+         FailedMediaCache.markFailed(baseUrl);
+     }
+     img.classList.add('broken-final');
+     if (typeof handleImageError === 'function') {
+         handleImageError(img);
+     }
+     ```
+
+4. **`PostRenderer.create` Media Check** (`site_tgach/static/js/main.src.js:11014`):
+   ```javascript
+   if (typeof FailedMediaCache !== 'undefined' && ((url && FailedMediaCache.isFailed(url)) || (thumbCandidate && FailedMediaCache.isFailed(thumbCandidate)))) {
+       imgContent += `<div class="file-thumb broken-media" style="...">⚠️ Media Unavailable</div>`;
+       return;
+   }
+   ```
+
+5. **Jinja2 Templates Media Rendering** (`site_tgach/templates/board.jinja2:331-334`, `site_tgach/templates/thread.jinja2:303-305`):
+   ```html
+   <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+       data-src="{{ file.thumbnail_url or file.original_url }}" 
+       loading="lazy"
+       class="post-image lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
+   ```
 
 ---
 
 ## 2. Logic Chain
 
-1. **Initialization & Invocation**:
-   - Media uploaded to Telegram triggers `_upload_mirrors_task` in `image_processing.py`, attempting direct Catbox/0x0/HF uploads. Failures or delayed tasks are inserted into `MirrorQueue` table in SQLite.
-   - `mirror_worker.py` polls `MirrorQueue` every 10 seconds. Active mirror types are dynamically checked based on environment variables (`IMGBB_API_KEY`, `ZEROXZERO_ENABLED`).
+1. **JSON Schema Analysis**:
+   - Backend `enrich_extra_data` in `site_tgach/main.py:3531-3545` and `_process_files_list` in `site_tgach/main.py:3674-3696` populate `p["content"]["files"]` with:
+     - `original_url`: e.g. `/files/12345/image.jpg`
+     - `thumbnail_url`: e.g. `/files/12345_thumb` (or `""` if no thumbnail file ID exists).
+     - `is_broken`: `true` (if download failed).
+   - Property names (`original_url`, `thumbnail_url`, `files`) match between backend and frontend Jinja2 templates/JS code. No JSON property name mismatch exists.
 
-2. **Dead `file_id` Detection & Recovery**:
-   - If Telegram Bot API rejects a `file_id` (expired or invalid), `mirror_worker.py` queries `Posts` and `ChannelCopies` via `_find_msg_info` to get `(channel_id, message_id)`.
-   - If message context is found, it switches to Pyrogram MTProto (`download_file_mtproto`) to recover the file.
-   - If no message context exists and the file is a photo (`AgAC...`), MTProto cannot recover it; the task is deleted from `MirrorQueue` as unrecoverable.
+2. **Root Cause #1 — Premature Marking of Original Image URL on Thumbnail 404**:
+   - When a post renders, `img` tags are rendered with `data-src` pointing to `file.thumbnail_url` (e.g. `/files/12345_thumb`) and wrapped in an `<a>` tag with `href` pointing to `file.original_url` (e.g. `/files/12345/image.jpg`).
+   - If the thumbnail `/files/12345_thumb` returns HTTP 404 (e.g., thumbnail generation failed or thumbnail file is missing), `SmartLoader.onLoadFinished` or `handleImageError` is invoked for `img`.
+   - `handleImageError` (`main.src.js:11458`) extracts `originalUrl` from `parent.href` (`/files/12345/image.jpg`).
+   - `handleImageError` (`main.src.js:11496-11497`) executes:
+     `FailedMediaCache.markFailed(originalUrl);`
+     `FailedMediaCache.markFailed(currentSrc);`
+   - **Crucial flaw**: `handleImageError` marks `originalUrl` (`/files/12345/image.jpg`) as FAILED in `FailedMediaCache`, EVEN THOUGH the full original file physically exists on the server!
+   - Because `originalUrl` is now stored in `FailedMediaCache`, all future checks `FailedMediaCache.isFailed(originalUrl)` return `true`.
+   - `PostRenderer.create` (`main.src.js:11014`) and `SmartLoader.scan` (`main.src.js:14355`) see `FailedMediaCache.isFailed(originalUrl) === true` and immediately replace the valid original image with a static `⚠️ Media Unavailable` placeholder across the session!
 
-3. **Error Handling & Fallbacks**:
-   - Catbox detects userhash bans and switches seamlessly to anonymous upload.
-   - 0x0.st enforces a 6-hour service-wide pause when HTTP 503 "uploads disabled" occurs.
-   - Tasks in `MirrorQueue` use exponential retry backoff (`delay = min(300 * 2^attempt, 3600)` seconds) and are purged after 10 failed attempts.
+3. **Root Cause #2 — Lack of Fallback from Thumbnail to Original Image URL**:
+   - When a thumbnail image fails to load, `handleImageError` does NOT attempt to set `img.src = originalUrl` as a fallback.
+   - Instead, it immediately wipes out the `<img>` element and replaces `parent.innerHTML` with `⚠️ Media Unavailable`.
+   - If thumbnails fail or are missing, valid full-size media are never given a chance to display as thumbnails.
 
-4. **Identified Defects**:
-   - `freeimage.py` is an orphaned module that is never called by any worker or task handler.
-   - `pixhost.py` returns HTML page links (`show_url`) instead of raw direct image file URLs, breaking image embeds.
-   - `imgbb.py` performs in-memory Base64 encoding for up to 32MB files, creating high RAM usage under high concurrency.
+4. **Root Cause #3 — `SmartLoader` Premature `markFailed` & Order-of-Execution Override**:
+   - In `SmartLoader.onLoadFinished` (`main.src.js:14500`), `SmartLoader` calls `FailedMediaCache.markFailed(baseUrl)` BEFORE calling `handleImageError(img)` (`main.src.js:14504`).
+   - When `handleImageError(img)` runs, its initial check (`main.src.js:11472`): `if (FailedMediaCache.isFailed(currentSrc))` evaluates to `true` because `SmartLoader` just inserted `currentSrc` into `FailedMediaCache`.
+   - As a result, `handleImageError` immediately returns `renderStaticError()`, bypassing any host-skipping or fallback logic that `handleImageError` might have performed.
+
+5. **Root Cause #4 — `FailedMediaCache` Data URI Cache Pollution**:
+   - `FailedMediaCache.normalizeUrl(url)` (`main.src.js:224`) executes `new URL(url, loc)` and returns `parsed.origin + parsed.pathname`.
+   - For 1x1 GIF placeholder data URIs (`data:image/gif;base64,...`), `parsed.origin` is `"null"`, returning `"nullimage/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"`.
+   - If `markFailed` is called with `data:image/gif;...` (which occurs if `img.dataset.src` is missing/empty and `img.src` is passed to `markFailed`), `FailedMediaCache` stores the placeholder URI.
+   - Since ALL lazy-loaded images initially have `src="data:image/gif;..."`, every `FailedMediaCache.isFailed(img.src)` call returns `true`, instantly breaking every thumbnail on the page.
+
+6. **Root Cause #5 — `SmartLoader.process` Concurrency Throttling Counter Corruption**:
+   - In `SmartLoader.process` (`main.src.js:14406`), `this.activeCount--` is called when an image has a missing or failed `targetSrc`.
+   - However, `this.activeCount` was NOT incremented for that image yet (increment occurs on line 14411).
+   - This causes `this.activeCount` to go negative (-1, -2, -3...), corrupting concurrency control and breaking queue scheduling.
 
 ---
 
 ## 3. Caveats
 
-- **Network Constraints**: Conducted in CODE_ONLY mode without executing live HTTP requests to external APIs (`catbox.moe`, `0x0.st`, `pixhost.to`, `imgbb.com`, `freeimage.host`).
-- **Database State**: Analyzed database query structures in `common/database.py` and `mirror_worker.py`. Did not inspect live sqlite DB data content (`2d2vach_bot.db`).
-- **Proxy Configuration**: Assumed standard `PROXY_URL` behavior as defined in code. Live proxy performance was not benchmarked.
+- **No backend changes analyzed in this report**: Backend media proxy routes in `site_tgach/main.py` (e.g. `/files/{file_id}`) and worker status logic in `site_tgach/tagging_worker.py` are outside frontend JS static analysis scope, but must serve valid HTTP status codes (200 for existing files, 404 for missing files).
+- **Static analysis scope**: Findings are derived from code audit of `main.src.js`, `main.js`, `board.jinja2`, `thread.jinja2`, and `main.py`. Execution proof via Playwright will be conducted in downstream tasks.
 
 ---
 
 ## 4. Conclusion
 
-The fallback and mirror image services in `site_tgach` feature a robust multi-tier fallback mechanism (Instant URL -> MTProto Download -> HTTP Fallback -> Async Mirror Queue) with solid error handling for dead `file_id`s, exponential backoff, and bot pool failover.
+The disappearance of media thumbnails is caused by **five specific logic flaws in frontend JavaScript** (`site_tgach/static/js/main.src.js` and `site_tgach/static/js/main.js`):
 
-However, three key actionable issues require resolution by the implementation team:
-1. **Unused Module**: `freeimage.py` is orphaned and should be integrated into `mirror_worker.py` or pruned.
-2. **Broken Direct Image Links**: `pixhost.py` returns `show_url` (HTML viewer page) instead of raw image data.
-3. **Memory Optimization**: `imgbb.py` requires Base64 payload streaming/multipart form-data optimization to reduce RAM usage on large image files.
+1. **Premature Original URL Marking**: When a thumbnail 404s, `handleImageError` (`line 11496`) marks the full image URL (`parent.href`) as failed in `FailedMediaCache`, breaking valid original images.
+2. **Missing Thumbnail Fallback**: `handleImageError` (`line 11449`) lacks fallback logic to swap `img.src` to `originalUrl` when `thumbnail_url` 404s.
+3. **Premature `SmartLoader` Failure Marking**: `SmartLoader.onLoadFinished` (`line 14500`) calls `FailedMediaCache.markFailed(baseUrl)` before `handleImageError` executes, triggering early termination in `handleImageError`.
+4. **Data URI Cache Pollution**: `FailedMediaCache.normalizeUrl` (`line 220`) does not ignore `data:` URIs, allowing 1x1 GIF placeholders to pollute the cache and disable all images.
+5. **Counter Underflow in `SmartLoader`**: `SmartLoader.process` (`line 14406`) decrements `this.activeCount` before incrementing it, corrupting queue state.
+
+### Recommended Frontend Code Fixes (for Implementer Agent):
+
+#### Fix 1: Guard `FailedMediaCache.normalizeUrl` against Data URIs
+In `site_tgach/static/js/main.src.js` (and `main.js`) lines 220-229:
+```javascript
+normalizeUrl(url) {
+    if (!url || typeof url !== 'string' || url.startsWith('data:')) return '';
+    try {
+        const loc = (typeof window !== 'undefined' && window.location) ? window.location.href : 'http://localhost';
+        const parsed = new URL(url, loc);
+        return parsed.origin + parsed.pathname;
+    } catch (e) {
+        return String(url).split('?')[0].split('#')[0];
+    }
+}
+```
+
+#### Fix 2: Implement Fallback Chain in `handleImageError` & Prevent Premature Original URL Marking
+In `site_tgach/static/js/main.src.js` (and `main.js`) lines 11449-11501:
+- When `img.src` (thumbnail URL) fails, check if `originalUrl` is different from `currentSrc`.
+- If `originalUrl` is valid and NOT marked in `FailedMediaCache`, attempt loading `originalUrl` (`img.src = originalUrl`) before marking media as broken.
+- Only mark `currentSrc` (the specific failed thumbnail URL) in `FailedMediaCache`, NOT `originalUrl`, unless `originalUrl` itself failed to load.
+
+#### Fix 3: Fix `SmartLoader.onLoadFinished` Failure Delegation
+In `site_tgach/static/js/main.src.js` (and `main.js`) lines 14498-14509:
+- Remove premature `FailedMediaCache.markFailed(baseUrl)` call inside `onLoadFinished`.
+- Allow `handleImageError(img)` to evaluate and handle fallback logic first.
+
+#### Fix 4: Fix `SmartLoader.process` Counter Underflow
+In `site_tgach/static/js/main.src.js` (and `main.js`) line 14406:
+- Remove `this.activeCount--;` from the early exit branch where `activeCount` had not yet been incremented.
+
+#### Fix 5: Refine `PostRenderer.create` `FailedMediaCache` Check
+In `site_tgach/static/js/main.src.js` (and `main.js`) line 11014:
+- Only render `⚠️ Media Unavailable` if the full original `url` is in `FailedMediaCache`. If only `thumbCandidate` is failed, fallback `thumbCandidate = url` and render the `<img>` tag using `url`.
 
 ---
 
 ## 5. Verification Method
 
-To verify these findings independently:
+To verify these fixes:
 
-1. **Orphan `freeimage.py` Verification**:
-   - Inspect imports across `site_tgach/mirror_worker.py`, `site_tgach/image_processing.py`, and `site_tgach/tagging_worker.py`.
-   - Confirm `upload_file_to_freeimage` is never imported or called.
+1. **Files to inspect**:
+   - `site_tgach/static/js/main.src.js`
+   - `site_tgach/static/js/main.js`
 
-2. **Pixhost Link Return Verification**:
-   - Inspect `site_tgach/pixhost.py` lines 76-84.
-   - Observe `direct_url = show_url` where `show_url` is the page URL returned by `https://api.pixhost.to/images`.
+2. **Automated Verification Script**:
+   - Run Playwright test script (`scratch_playwright_test.py`) to open `/b/` and a thread containing media.
+   - Assert `page.locator('img.post-image, video.post-image').count() > 0`.
+   - Verify network requests to `/files/...` return HTTP 200 OK.
+   - Take screenshot `scratch/playwright_after.png` and verify visual rendering of thumbnails.
 
-3. **Dead `file_id` Recovery Logic Verification**:
-   - Inspect `site_tgach/mirror_worker.py` lines 178-206.
-   - Confirm `_find_msg_info` lookup and MTProto fallback handling for invalid `file_id`s.
-
-4. **Detailed Report**:
-   - Refer to full analysis in `C:\Users\danat\Desktop\dvachbot\.agents\explorer_media_2\analysis.md`.
+3. **Invalidation Conditions**:
+   - If `FailedMediaCache` still stores `data:image/gif;...` keys.
+   - If `handleImageError` marks `parent.href` on a thumbnail 404 error without fallback.
+   - If `SmartLoader.activeCount` drops below 0.

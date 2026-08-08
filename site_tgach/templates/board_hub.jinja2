@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ board_info.name }} - {{ request.state.t('site_name') }}</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=9.7">
+    <link rel="stylesheet" href="/static/css/style.css?v=9.8">
     <link rel="icon" href="/static/favicon.ico">
     <meta property="og:site_name" content="ТГАЧ">
     <meta property="og:type" content="website">
@@ -80,7 +80,7 @@
         })();
     </script>
     <header>
-        <div class="board-nav-top">
+        <div class="board-nav-top" spellcheck="false">
             <a href="/overboard/" title="Все треды">/all/</a>
 
             {% for category in ['popular', 'bio', 'thematic', 'system'] %}
@@ -111,7 +111,7 @@
                 
                 <form action="/search" method="get" class="search-form compact-search" style="margin-left: 10px;">
                     <input type="text" name="query" placeholder="Поиск..." value="" style="padding: 4px 8px; font-size: 0.9em;">
-                    <button type="submit" style="padding: 4px 8px;">🔍</button>
+                    <button type="submit" style="padding: 4px 8px;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" style="vertical-align: middle;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></button>
                 </form>
             </div>
             <div class="header-group-right">
@@ -350,6 +350,6 @@
         <div id="iv-loader" class="iv-loader" style="display: none;"></div>
     </div>
     <div id="loading-indicator" class="loading-indicator">Отправка...</div>
-    <script src="/static/js/main.js?v=9.7" defer></script>
+    <script src="/static/js/main.js?v=9.8" defer></script>
 </body>
 </html>

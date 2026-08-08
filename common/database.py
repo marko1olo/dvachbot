@@ -33,7 +33,7 @@ from enum import Enum
 from datetime import datetime, UTC
 from typing import Optional, Dict, Any, Tuple, List, Union
 from aiogram.types import BufferedInputFile, InputFile
-from common.db_pool import get_pool
+from common.db_pool import get_pool, db_sleep, db_lock
 from common.config import (
     DB_NAME,
     DB_TIMEOUT,
@@ -509,6 +509,19 @@ async def _create_tables(db):
             updated_at REAL
         );
         """)
+        await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS PostFiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_num INTEGER,
+            file_type TEXT,
+            original_file_id TEXT,
+            thumbnail_file_id TEXT,
+            original_url TEXT,
+            thumbnail_url TEXT,
+            FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
+        );
+        """)
+
 
 async def _apply_migrations(db):
     async with db.cursor() as cursor:
@@ -764,6 +777,9 @@ async def _create_indices(db):
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_channelcopies_post ON ChannelCopies(post_num);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_stream ON Posts(board_id, stream);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_threads_stream ON Threads(board_id, stream);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_postfiles_orig ON PostFiles(original_file_id);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_postfiles_thumb ON PostFiles(thumbnail_file_id);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_postfiles_post_num ON PostFiles(post_num);")
     
         # Injected optimization indices
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_spam_filter_board_word ON SpamFilterWords(board_id, word);")
@@ -1626,6 +1642,7 @@ async def create_post(
                     )
 
                 files_to_register = []
+                post_files_inserts = []
                 content_obj = content
                 if isinstance(content_obj, str):
                     try:
@@ -1636,21 +1653,34 @@ async def create_post(
                 if isinstance(content_obj, dict):
                     m_type = content_obj.get('type')
                     f_id = content_obj.get('file_id')
-                    if f_id and m_type in {'photo', 'image', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
-                        sha_temp = hashlib.sha256(f_id.encode('utf-8')).hexdigest()
-                        files_to_register.append((sha_temp, f_id, None, m_type, timestamp))
+                    orig_url = content_obj.get('original_url')
+                    if (f_id or orig_url) and m_type in {'photo', 'image', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
+                        if f_id:
+                            sha_temp = hashlib.sha256(f_id.encode('utf-8')).hexdigest()
+                            files_to_register.append((sha_temp, f_id, None, m_type, timestamp))
+                        post_files_inserts.append((post_num, m_type or 'photo', f_id, content_obj.get('thumbnail_file_id'), orig_url, content_obj.get('thumbnail_url')))
                     elif content_obj.get('media') and isinstance(content_obj['media'], list):
                         for item in content_obj['media']:
-                            if isinstance(item, dict) and item.get('file_id'):
-                                fid = item['file_id']
-                                sha_temp = hashlib.sha256(fid.encode('utf-8')).hexdigest()
-                                files_to_register.append((sha_temp, fid, None, item.get('type', 'photo'), timestamp))
+                            if isinstance(item, dict):
+                                fid = item.get('file_id') or item.get('original_file_id')
+                                i_url = item.get('original_url')
+                                i_type = item.get('type', 'photo')
+                                if fid or i_url:
+                                    if fid:
+                                        sha_temp = hashlib.sha256(fid.encode('utf-8')).hexdigest()
+                                        files_to_register.append((sha_temp, fid, None, i_type, timestamp))
+                                    post_files_inserts.append((post_num, i_type, fid, item.get('thumbnail_file_id'), i_url, item.get('thumbnail_url')))
                     elif content_obj.get('files') and isinstance(content_obj['files'], list):
                         for item in content_obj['files']:
-                            if isinstance(item, dict) and item.get('original_file_id'):
-                                fid = item['original_file_id']
-                                sha_temp = hashlib.sha256(fid.encode('utf-8')).hexdigest()
-                                files_to_register.append((sha_temp, fid, item.get('thumbnail_file_id'), item.get('type', 'photo'), timestamp))
+                            if isinstance(item, dict):
+                                fid = item.get('original_file_id')
+                                i_url = item.get('original_url')
+                                i_type = item.get('type', 'photo')
+                                if fid or i_url:
+                                    if fid:
+                                        sha_temp = hashlib.sha256(fid.encode('utf-8')).hexdigest()
+                                        files_to_register.append((sha_temp, fid, item.get('thumbnail_file_id'), i_type, timestamp))
+                                    post_files_inserts.append((post_num, i_type, fid, item.get('thumbnail_file_id'), i_url, item.get('thumbnail_url')))
 
                 if files_to_register:
                     await db.executemany(
@@ -1659,6 +1689,15 @@ async def create_post(
                         VALUES (?, ?, ?, ?, ?)
                         """,
                         files_to_register
+                    )
+
+                if post_files_inserts:
+                    await db.executemany(
+                        """
+                        INSERT INTO PostFiles (post_num, file_type, original_file_id, thumbnail_file_id, original_url, thumbnail_url)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        post_files_inserts
                     )
 
                 if is_from_site and post_mode == 'new_thread':
@@ -1803,7 +1842,7 @@ async def get_op_posts_for_board(
             try:
                 db = await get_pool()
                 op_posts = []
-                pin_clause = "MAX(IFNULL(t.is_pinned, 0)) DESC," if not ignore_pin else ""
+                pin_clause = "IFNULL(t.is_pinned, 0) DESC," if not ignore_pin else ""
                 
                 # Общая часть для WHERE
                 params = []
@@ -1831,9 +1870,8 @@ async def get_op_posts_for_board(
                     ids_query = f"""
                         SELECT p.post_num
                         FROM Posts p
-                        LEFT JOIN Threads t ON p.post_num = t.thread_num
+                        INNER JOIN Threads t ON p.post_num = t.thread_num
                         {where_clause}
-                        GROUP BY p.post_num
                     """
                     
                     target_ids_pool = []
@@ -1851,7 +1889,7 @@ async def get_op_posts_for_board(
                 
                 else: # bump или new
                     if sort_by == "bump":
-                        order_clause = f"ORDER BY {pin_clause} MIN(IFNULL(t.is_archived, 0)) ASC, MAX(IFNULL(t.last_updated_at, p.timestamp)) DESC, p.post_num DESC"
+                        order_clause = f"ORDER BY {pin_clause} IFNULL(t.is_archived, 0) ASC, IFNULL(t.last_updated_at, p.timestamp) DESC, p.post_num DESC"
                     else:
                         order_clause = f"ORDER BY {pin_clause} p.timestamp DESC, p.post_num DESC"
                     
@@ -1859,9 +1897,8 @@ async def get_op_posts_for_board(
                     ids_query = f"""
                         SELECT p.post_num
                         FROM Posts p
-                        LEFT JOIN Threads t ON p.post_num = t.thread_num
+                        INNER JOIN Threads t ON p.post_num = t.thread_num
                         {where_clause}
-                        GROUP BY p.post_num
                         {order_clause}
                         LIMIT ? OFFSET ?
                     """
@@ -4223,9 +4260,15 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                # Ищем посты, содержащие file_id в JSON
-                query = "SELECT post_num, content, is_shadow FROM Posts WHERE instr(content, ?) > 0"
-                async with db.execute(query, (file_id,)) as cursor:
+                # Ищем посты через сопоставление с PostFiles по file_id
+                query = """
+                    SELECT post_num, content, is_shadow FROM Posts 
+                    WHERE post_num IN (
+                        SELECT post_num FROM PostFiles 
+                        WHERE original_file_id = ? OR thumbnail_file_id = ?
+                    )
+                """
+                async with db.execute(query, (file_id, file_id)) as cursor:
                     rows = await cursor.fetchall()
                 
                 if not rows:
@@ -6435,18 +6478,18 @@ async def find_post_by_file_id(file_id_substring: str) -> dict | None:
     """
     db = await get_pool()
     try:
-        # Ищем подстроку в поле content (там JSON).
-        # file_id в телеграме длинный, ищем точное вхождение строки
+        # Ищем пост по file_id через PostFiles
         query = """
             SELECT post_num, board_id, author_id, content, timestamp 
             FROM Posts 
-            WHERE instr(content, ?) > 0
+            WHERE post_num IN (
+                SELECT post_num FROM PostFiles 
+                WHERE original_file_id = ? OR thumbnail_file_id = ?
+            )
             ORDER BY timestamp DESC 
             LIMIT 1
         """
-        search_pattern = file_id_substring
-        
-        async with db.execute(query, (search_pattern,)) as cursor:
+        async with db.execute(query, (file_id_substring, file_id_substring)) as cursor:
             row = await cursor.fetchone()
             
         if row:
@@ -7786,12 +7829,18 @@ async def get_posts_by_file_ids(file_ids: list[str]) -> list[dict]:
     
     clauses = []
     params = []
-    for fid in file_ids:
-        clauses.append("instr(content, ?) > 0")
-        params.append(fid)
-        
-    where_clause = " OR ".join(clauses)
-    query = f"SELECT * FROM Posts WHERE ({where_clause}) AND IFNULL(is_shadow, 0) = 0"
+    
+    placeholders = ",".join(["?"] * len(file_ids))
+    # We query PostFiles to quickly find post_num for the given file IDs
+    query = f"""
+        SELECT * FROM Posts 
+        WHERE post_num IN (
+            SELECT post_num FROM PostFiles 
+            WHERE original_file_id IN ({placeholders}) 
+               OR thumbnail_file_id IN ({placeholders})
+        ) AND IFNULL(is_shadow, 0) = 0
+    """
+    params = file_ids + file_ids
 
     async with db_lock:
         try:
@@ -8196,7 +8245,7 @@ async def postcopies_daily_cleanup_loop():
             now_msk = datetime.now(timezone.utc).astimezone(MSK)
             next_run = (now_msk + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
             sleep_sec = (next_run - now_msk).total_seconds()
-            await db_sleep(max(10, sleep_sec))
+            await asyncio.sleep(max(10, sleep_sec))
             await clean_old_postcopies_daily()
             # Второй уборщик в том же суточном цикле: отдельная фоновая задача
             # ради одного DELETE в сутки не нужна, а падение любого из двух
@@ -8206,5 +8255,5 @@ async def postcopies_daily_cleanup_loop():
             break
         except Exception as e:
             logging.getLogger("database").error(f"⚠️ [POSTCOPIES_LOOP] Ошибка в цикле чистки: {e}")
-            await db_sleep(3600)
+            await asyncio.sleep(3600)
 

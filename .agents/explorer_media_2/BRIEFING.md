@@ -1,40 +1,45 @@
-# BRIEFING — 2026-07-29T19:48:00Z
+# BRIEFING — 2026-08-08T13:01:58Z
 
 ## Mission
-Investigate and audit fallback and mirror image services in site_tgach (`imgbb.py`, `pixhost.py`, `tagging_worker.py`, Catbox, Telegram file downloaders/mirrors) in `C:\Users\danat\Desktop\dvachbot`.
+Audit frontend media rendering logic in site_tgach/static/js/main.src.js, main.js, and Jinja2 templates to diagnose why thumbnails fail to render.
 
 ## 🔒 My Identity
-- Archetype: Explorer
-- Roles: Read-only investigator / code auditor
+- Archetype: Teamwork explorer
+- Roles: Frontend JS Media Rendering Auditor
 - Working directory: C:\Users\danat\Desktop\dvachbot\.agents\explorer_media_2
-- Original parent: ef464f9b-8939-41b6-b81a-0b0bf6361cf2
-- Milestone: Media Mirror & Fallback Audit
+- Original parent: 03ad4533-e872-43c8-bdf1-d985f3f3c4ee
+- Milestone: Milestone R1 (Playwright Forensics & Audit)
 
 ## 🔒 Key Constraints
-- Read-only investigation — do NOT implement or modify project code in `C:\Users\danat\Desktop\dvachbot`
-- Detailed analysis written to `C:\Users\danat\Desktop\dvachbot\.agents\explorer_media_2\analysis.md`
-- Handoff report written to `C:\Users\danat\Desktop\dvachbot\.agents\explorer_media_2\handoff.md`
-- Send final completion message to parent orchestrator (`ef464f9b-8939-41b6-b81a-0b0bf6361cf2`)
+- Read-only investigation — do NOT implement / edit production source code files
+- Audit frontend JS media rendering logic, tracing post.content.media transformations and thumbnail rendering failures
+- Focus on static and logic analysis, identify exact line numbers, logic flaws, and recommended code fixes
 
 ## Current Parent
-- Conversation ID: ef464f9b-8939-41b6-b81a-0b0bf6361cf2
-- Updated: 2026-07-29T19:48:00Z
+- Conversation ID: 03ad4533-e872-43c8-bdf1-d985f3f3c4ee
+- Updated: 2026-08-08T13:01:58Z
 
 ## Investigation State
-- **Explored paths**: `site_tgach/imgbb.py`, `site_tgach/pixhost.py`, `site_tgach/freeimage.py`, `site_tgach/catbox.py`, `site_tgach/zeroxzero.py`, `site_tgach/mirror_worker.py`, `site_tgach/mirror_health.py`, `site_tgach/tagging_worker.py`, `site_tgach/image_processing.py`, `site_tgach/mtproto_client.py`, `scripts/backfill_imgbb.py`, `common/database.py`.
+- **Explored paths**:
+  - `site_tgach/static/js/main.src.js` (lines 218-241, 10883-11229, 11449-11571, 14317-14520)
+  - `site_tgach/static/js/main.js`
+  - `site_tgach/templates/board.jinja2` (lines 331-382)
+  - `site_tgach/templates/thread.jinja2` (lines 303-356)
+  - `site_tgach/main.py` (lines 3412-3570, 3701-3750)
 - **Key findings**:
-  1. Catbox/0x0/Pixhost/ImgBB fallback architecture audited. Freeimage module exists as an unreferenced orphan module.
-  2. Dead Telegram `file_id`s handled via DB message context lookup (`_find_msg_info`) and Pyrogram MTProto recovery. Photos (`AgAC...`) without context marked dead and purged.
-  3. Magic bytes inspection (`_detect_real_ext`) automatically corrects generic `.dat` file extensions for Pixhost & ImgBB.
-  4. Pixhost returns `show_url` (HTML viewer page) instead of direct image URL.
-  5. ImgBB Base64 encoding creates memory spikes on large files (up to 32MB).
-- **Unexplored areas**: None (all requested files and components investigated).
+  1. `handleImageError` (line 11496) prematurely marks `originalUrl` (`parent.href`) in `FailedMediaCache` when a thumbnail 404s, destroying valid original media.
+  2. `handleImageError` lacks a fallback mechanism to set `img.src = originalUrl` when `thumbnail_url` 404s.
+  3. `SmartLoader.onLoadFinished` (line 14500) prematurely marks `baseUrl` in `FailedMediaCache` before `handleImageError` can execute.
+  4. `FailedMediaCache.normalizeUrl` (line 220) normalizes 1x1 GIF placeholder `data:` URIs into `"nullimage/gif..."` keys, corrupting the failure cache for all images.
+  5. `SmartLoader.process` (line 14406) decrements `activeCount` before incrementing it, causing counter underflow.
+- **Unexplored areas**: None (analysis complete).
 
 ## Key Decisions Made
-- Audit complete. Detailed reports generated in `analysis.md` and `handoff.md`.
+- Performed thorough static analysis of media handling across Jinja2 SSR, JS `PostRenderer.create`, `SmartLoader`, `FailedMediaCache`, `handleImageError`, and Python enrichment pipelines.
+- Formulated exact recommended code fixes in `handoff.md`.
 
 ## Artifact Index
-- ORIGINAL_REQUEST.md — Original prompt record
-- BRIEFING.md — Context and briefing tracking
-- analysis.md — Detailed technical analysis report
-- handoff.md — Structured 5-component handoff report
+- C:\Users\danat\Desktop\dvachbot\.agents\explorer_media_2\DISPATCH.md — Dispatch log
+- C:\Users\danat\Desktop\dvachbot\.agents\explorer_media_2\BRIEFING.md — Working memory briefing
+- C:\Users\danat\Desktop\dvachbot\.agents\explorer_media_2\progress.md — Progress heartbeat log
+- C:\Users\danat\Desktop\dvachbot\.agents\explorer_media_2\handoff.md — Complete handoff report with exact line numbers and fixes

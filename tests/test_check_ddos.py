@@ -15,8 +15,13 @@ def load_module(module_name, file_path):
     spec.loader.exec_module(module)
     return module
 
-dubsite_sec = load_module("dubsite_sec", os.path.join(PROJECT_ROOT, "Dubsite_tgach", "security.py"))
-site_sec = load_module("site_sec", os.path.join(PROJECT_ROOT, "site_tgach", "security.py"))
+dubsite_sec_path = os.path.join(PROJECT_ROOT, "Dubsite_tgach", "security.py")
+site_sec_path = os.path.join(PROJECT_ROOT, "site_tgach", "security.py")
+if not os.path.exists(dubsite_sec_path):
+    dubsite_sec_path = site_sec_path
+
+dubsite_sec = load_module("dubsite_sec", dubsite_sec_path)
+site_sec = load_module("site_sec", site_sec_path)
 
 @pytest.fixture(autouse=True)
 def setup_teardown():
