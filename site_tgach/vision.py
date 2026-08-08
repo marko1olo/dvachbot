@@ -1,4 +1,5 @@
 import base64
+import json
 import logging
 import random
 import asyncio
@@ -43,6 +44,13 @@ _VISION_SEMAPHORE = None
 BANNED_GEMINI_KEYS = set()
 BANNED_GROQ_KEYS = set()
 _LAST_VISION_CALL_TIME: dict[str, float] = {"groq": 0.0, "gemini": 0.0}
+_PROVIDER_RATE_LOCKS: dict[str, asyncio.Lock | None] = {"groq": None, "gemini": None}
+
+def _get_provider_lock(provider: str) -> asyncio.Lock:
+    """Lazy-init per-provider asyncio.Lock to serialize rate-limit timestamp checks."""
+    if _PROVIDER_RATE_LOCKS.get(provider) is None:
+        _PROVIDER_RATE_LOCKS[provider] = asyncio.Lock()
+    return _PROVIDER_RATE_LOCKS[provider]
 
 
 def _env_int(name, default):
@@ -106,11 +114,7 @@ def prepare_image_for_groq(file_path):
 
 async def describe_image(file_paths, caption: str = None, is_passive: bool = False, source: str = "SITE") -> str:
     """Анализирует изображение(я) через каскад Vision (Gemini 3.5 -> Qwen 3.6 -> Llama 4 Scout)."""
-    global GROQ_COOLDOWN_UNTIL
 
-    if time.time() < GROQ_COOLDOWN_UNTIL:
-        logger.warning(f"⚠️ [VISION] [{source}] Skipped analysis due to active cooldown.")
-        return None
 
     if isinstance(file_paths, str):
         file_paths = [file_paths]
@@ -211,11 +215,13 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     
                     for api_key in keys:
                         try:
-                            # Enforce per-provider cooldown of 3 seconds between requests
-                            time_since_last_call = time.time() - _LAST_VISION_CALL_TIME.get(provider, 0.0)
-                            if time_since_last_call < 3.0:
-                                await asyncio.sleep(3.0 - time_since_last_call)
-                            _LAST_VISION_CALL_TIME[provider] = time.time()
+                            # Per-provider rate limit: serialize timestamp check under a lock
+                            # to prevent concurrent requests from all seeing stale time at once.
+                            async with _get_provider_lock(provider):
+                                time_since_last_call = time.time() - _LAST_VISION_CALL_TIME.get(provider, 0.0)
+                                if time_since_last_call < 3.0:
+                                    await asyncio.sleep(3.0 - time_since_last_call)
+                                _LAST_VISION_CALL_TIME[provider] = time.time()
 
                             client = AsyncOpenAI(
                                 api_key=api_key,
@@ -243,7 +249,6 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             resp = await client.chat.completions.create(**kwargs)
                             content = resp.choices[0].message.content
                             
-                            import json
                             if content:
                                 # Quick cleanup just in case
                                 if "<think>" in content:
@@ -261,13 +266,20 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                         
                                     parsed = json.loads(json_str)
                                     if "tags" in parsed and "description" in parsed:
-                                        logger.info(f"👁️ [VISION] [{source}] ✅ Success via {provider} ({model_name}).")
+                                        logger.info(f"\U0001f441\ufe0f [VISION] [{source}] \u2705 Success via {provider} ({model_name}).")
                                         return json.dumps(parsed, ensure_ascii=False)
+                                    else:
+                                        logger.warning(f"\u26a0\ufe0f [VISION] [{source}] {provider} JSON missing 'tags'/'description' keys. Trying next model.")
+                                        break  # malformed schema — next model
                                 except json.JSONDecodeError:
                                     # Fallback if model failed JSON format
-                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} returned invalid JSON.")
+                                    logger.warning(f"\u26a0\ufe0f [VISION] [{source}] {provider} returned invalid JSON. Using raw content as description.")
                                     return json.dumps({"tags": "parse_error", "description": content}, ensure_ascii=False)
 
+                            else:
+                                # Empty response — model returned nothing, try next key
+                                logger.warning(f"\u26a0\ufe0f [VISION] [{source}] {provider} ({model_name}) returned empty content. Trying next key.")
+                                continue
                         except Exception as e:
                             err_str = str(e).lower()
                             if "413" in err_str: return None
@@ -297,6 +309,3 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
         except Exception as e:
             logger.error(f"❌ [VISION] [{source}] Critical error in Vision module: {e}", exc_info=True)
             return None
-        finally:
-            resized_bytes = None
-            image_url = None
