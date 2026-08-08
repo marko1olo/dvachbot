@@ -27,16 +27,20 @@ def check_indexes():
     chunk_size = 100
     for i in range(0, len(valid_tables), chunk_size):
         chunk = valid_tables[i:i+chunk_size]
+        escaped_chunk = [t.replace('"', '""') for t in chunk]
         q = " UNION ALL ".join(
-            [f"SELECT '{t}', COUNT(*) FROM \"{t}\"" for t in chunk]
+            [f'SELECT ?, COUNT(*) FROM "{escaped_t}"'
+             for escaped_t in escaped_chunk]
         )
         try:
-            cursor.execute(q)
+            cursor.execute(q, chunk)
             for row in cursor.fetchall():
                 counts[row[0]] = row[1]
         except sqlite3.Error:
             for t in chunk:
-                cursor.execute(f'SELECT COUNT(*) FROM "{t}"')  # nosec B608
+                escaped_t = t.replace('"', '""')
+                q_single = f'SELECT COUNT(*) FROM "{escaped_t}"'
+                cursor.execute(q_single)  # nosec B608
                 counts[t] = cursor.fetchone()[0]
 
     for table in valid_tables:
