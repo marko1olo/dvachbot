@@ -69,25 +69,25 @@ def _load_google_keys() -> list[str]:
 _key_cooldowns: dict[tuple[str, str], float] = {}
 def _get_models_cascade(model_preference: str | None) -> list[tuple[str, str]]:
     if model_preference == "gemini":
-        return [("gemini-3.1-flash-lite", "gemini")]
+        return [("gemini-1.5-flash-8b", "gemini")]
     if model_preference == "qwen":
-        return [("qwen/qwen3.6-27b", "groq")]
+        return [("llama-3.1-8b-instant", "groq")]
     if model_preference == "llama":
         return [("llama-3.3-70b-versatile", "groq")]
 
     return [
-        ("gemini-3.1-flash-lite", "gemini"),
-        ("qwen/qwen3.6-27b", "groq"),
+        ("gemini-1.5-flash-8b", "gemini"),
+        ("llama-3.1-8b-instant", "groq"),
         ("llama-3.3-70b-versatile", "groq"),
     ]
 def get_models_cascade(model_preference: str | None = None) -> list[tuple[str, str]]:
     if model_preference == "gemini":
         return [
-            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-1.5-flash-8b", "gemini"),
         ]
     elif model_preference == "qwen":
         return [
-            ("qwen/qwen3.6-27b", "groq")
+            ("llama-3.1-8b-instant", "groq")
         ]
     elif model_preference == "llama":
         return [
@@ -95,8 +95,8 @@ def get_models_cascade(model_preference: str | None = None) -> list[tuple[str, s
         ]
     else:
         return [
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-1.5-flash-8b", "gemini"),
+            ("llama-3.1-8b-instant", "groq"),
             ("llama-3.3-70b-versatile", "groq"),
         ]
 
@@ -117,45 +117,45 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     if model_preference == "persona" or model_preference == "persona_gemini":
         # Persona Bot priority: Gemini Lite -> Qwen 27B -> Llama 70B
         models_cascade = [
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-2.0-flash-lite", "gemini"),
+            ("gemini-1.5-flash-8b", "gemini"),
+            ("llama-3.1-8b-instant", "groq"),
             ("llama-3.3-70b-versatile", "groq"),
         ]
     elif model_preference == "summary" or model_preference == "gemini":
         # Summarization priority: Smart Flash models first for maximum intelligence and deep reasoning
         models_cascade = [
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
-            ("gemini-2.5-flash", "gemini"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
+            ("gemini-1.5-flash", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
+            ("gemini-2.0-flash-lite", "gemini"),
+            ("gemini-1.5-flash-8b", "gemini"),
+            ("gemini-1.5-flash-8b", "gemini"),
         ]
     elif model_preference == "qwen":
         models_cascade = [
-            ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("llama-3.1-8b-instant", "groq"),
+            ("gemini-2.0-flash-lite", "gemini"),
+            ("gemini-1.5-flash-8b", "gemini"),
+            ("gemini-1.5-flash-8b", "gemini"),
         ]
     elif model_preference == "llama":
         models_cascade = [
             ("llama-3.3-70b-versatile", "groq"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.0-flash-lite", "gemini"),
+            ("gemini-1.5-flash-8b", "gemini"),
+            ("gemini-1.5-flash-8b", "gemini"),
         ]
     else:
         # Default summarization cascade: Smart Flash models first, then Lite models
         models_cascade = [
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
-            ("gemini-2.5-flash", "gemini"),
-            ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
+            ("gemini-1.5-flash", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
+            ("llama-3.1-8b-instant", "groq"),
+            ("gemini-2.0-flash-lite", "gemini"),
+            ("gemini-1.5-flash-8b", "gemini"),
+            ("gemini-1.5-flash-8b", "gemini"),
             ("llama-3.3-70b-versatile", "groq"),
         ]
     
