@@ -15287,6 +15287,14 @@ async def periodic_shop_broadcast():
 
 SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
 
+def _site_public_url(path: str | None) -> str | None:
+    """Convert a relative site file path like /files/... to a full public URL."""
+    if not path:
+        return None
+    if path.startswith(("http://", "https://")):
+        return path
+    return SITE_PUBLIC_BASE_URL + path if path.startswith("/") else SITE_PUBLIC_BASE_URL + "/" + path
+
 def _site_file_source(file_info: dict, prefer_url: bool = False) -> str | None:
     file_id = file_info.get("original_file_id") or file_info.get("file_id") or file_info.get("media")
     if isinstance(file_id, str) and file_id.startswith("shadowbanned"):
