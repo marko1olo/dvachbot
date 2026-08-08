@@ -208,17 +208,29 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     random.shuffle(keys)
                     
                     for api_key in keys:
-                        # Fast skip if this specific key is penalized (e.g. from a recent 429)
-                        if _LAST_VISION_CALL_TIME.get(api_key, 0.0) > time.time() + 1.0:
+                        # Fast skip if this key is booked by another concurrent task or penalized
+                        if _LAST_VISION_CALL_TIME.get(api_key, 0.0) > time.time():
                             continue
 
                         try:
+                            sleep_time = 0.0
                             # Per-API-key rate limit: serialize timestamp check under a global lock
                             async with _KEY_RATE_LOCK:
-                                time_since_last_call = time.time() - _LAST_VISION_CALL_TIME.get(api_key, 0.0)
-                                if time_since_last_call < 2.5:
-                                    await asyncio.sleep(2.5 - time_since_last_call)
-                                _LAST_VISION_CALL_TIME[api_key] = time.time()
+                                now = time.time()
+                                last_call = _LAST_VISION_CALL_TIME.get(api_key, 0.0)
+                                
+                                if last_call > now:
+                                    continue  # Booked or penalized while we were waiting for the lock
+                                    
+                                time_since = now - last_call
+                                if time_since < 2.5:
+                                    sleep_time = 2.5 - time_since
+                                    _LAST_VISION_CALL_TIME[api_key] = now + sleep_time
+                                else:
+                                    _LAST_VISION_CALL_TIME[api_key] = now
+                                    
+                            if sleep_time > 0:
+                                await asyncio.sleep(sleep_time)
 
                             client = AsyncOpenAI(
                                 api_key=api_key,
