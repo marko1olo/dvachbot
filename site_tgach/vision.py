@@ -129,8 +129,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     images_data.append(resized_bytes)
 
             if not image_urls:
-                logger.error(f"❌ [VISION] [{source}] Ошибка подготовки фото: ни одно фото не удалось обработать.")
-                return None
+                logger.error(f"\u274c [VISION] [{source}] \u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0438 \u0444\u043e\u0442\u043e: \u043d\u0438 \u043e\u0434\u043d\u043e \u0444\u043e\u0442\u043e \u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u0442\u044c.")
+                return "error_file_invalid"
 
             context = f" Context from the author: '{caption}'." if caption else ""
             system_prompt = (
@@ -291,7 +291,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 continue
                         except Exception as e:
                             err_str = str(e).lower()
-                            if "413" in err_str: return None
+                            if "413" in err_str: return "error_413"
                             if "json_validate" in err_str or "max completion tokens" in err_str or "400" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} failed ({err_str[:120]}). Trying next model...")
                                 break
@@ -313,9 +313,9 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 continue
                             logger.warning(f"⚠️ [VISION] [{source}] {provider} key failed ({model_name}): {e}")
 
-            logger.error(f"❌ [VISION] [{source}] Image analysis failed: all vision models exhausted.")
-            return None
+            logger.error(f"\u274c [VISION] [{source}] Image analysis failed: all vision models exhausted.")
+            return "error_api_exhausted"
 
         except Exception as e:
-            logger.error(f"❌ [VISION] [{source}] Critical error in Vision module: {e}", exc_info=True)
-            return None
+            logger.error(f"\u274c [VISION] [{source}] Critical error in Vision module: {e}", exc_info=True)
+            return "error_api_exhausted"

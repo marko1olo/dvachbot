@@ -731,8 +731,12 @@ async def tagging_loop():
                 description = None
                 if tags is None:
                     ai_response = await get_neuro_tags(resized_bytes)
-                    if ai_response == "error_413" or ai_response == "error_too_large":
+                    if ai_response in ("error_413", "error_too_large"):
                         tags = "error_too_large"
+                    elif ai_response == "error_api_exhausted":
+                        tags = None  # Force retry
+                    elif ai_response == "error_file_invalid":
+                        tags = "error_no_tags"  # Permanent failure
                     elif ai_response and ai_response.startswith("{"):
                         import json
                         try:
@@ -744,8 +748,8 @@ async def tagging_loop():
                     else:
                         tags = ai_response
 
-                if tags is None and ai_response is None:
-                    logger.warning(f"⚠️ [TAGGER] ai_response is None (API exhausted). Skipping DB update for {file_id} to retry later.")
+                if tags is None and ai_response == "error_api_exhausted":
+                    logger.warning(f"\u26a0\ufe0f [TAGGER] API exhausted. Skipping DB update for {file_id} to retry later.")
                     continue
                     
                 if not tags:
