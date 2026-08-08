@@ -43,14 +43,8 @@ GROQ_COOLDOWN_UNTIL = 0
 _VISION_SEMAPHORE = None
 BANNED_GEMINI_KEYS = set()
 BANNED_GROQ_KEYS = set()
-_LAST_VISION_CALL_TIME: dict[str, float] = {"groq": 0.0, "gemini": 0.0}
-_PROVIDER_RATE_LOCKS: dict[str, asyncio.Lock | None] = {"groq": None, "gemini": None}
-
-def _get_provider_lock(provider: str) -> asyncio.Lock:
-    """Lazy-init per-provider asyncio.Lock to serialize rate-limit timestamp checks."""
-    if _PROVIDER_RATE_LOCKS.get(provider) is None:
-        _PROVIDER_RATE_LOCKS[provider] = asyncio.Lock()
-    return _PROVIDER_RATE_LOCKS[provider]
+_LAST_VISION_CALL_TIME: dict[str, float] = {}  # api_key -> timestamp
+_KEY_RATE_LOCK = asyncio.Lock()
 
 
 def _env_int(name, default):
@@ -214,14 +208,17 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     random.shuffle(keys)
                     
                     for api_key in keys:
+                        # Fast skip if this specific key is penalized (e.g. from a recent 429)
+                        if _LAST_VISION_CALL_TIME.get(api_key, 0.0) > time.time() + 1.0:
+                            continue
+
                         try:
-                            # Per-provider rate limit: serialize timestamp check under a lock
-                            # to prevent concurrent requests from all seeing stale time at once.
-                            async with _get_provider_lock(provider):
-                                time_since_last_call = time.time() - _LAST_VISION_CALL_TIME.get(provider, 0.0)
-                                if time_since_last_call < 3.0:
-                                    await asyncio.sleep(3.0 - time_since_last_call)
-                                _LAST_VISION_CALL_TIME[provider] = time.time()
+                            # Per-API-key rate limit: serialize timestamp check under a global lock
+                            async with _KEY_RATE_LOCK:
+                                time_since_last_call = time.time() - _LAST_VISION_CALL_TIME.get(api_key, 0.0)
+                                if time_since_last_call < 2.5:
+                                    await asyncio.sleep(2.5 - time_since_last_call)
+                                _LAST_VISION_CALL_TIME[api_key] = time.time()
 
                             client = AsyncOpenAI(
                                 api_key=api_key,
@@ -290,8 +287,9 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} server overloaded ({err_str}). Skipping model {model_name}.")
                                 break
                             if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
-                                logger.info(f"ℹ️ [VISION] [{source}] {provider} model {model_name} rate limited (429). Switching to next model immediately.")
-                                break  # stop cycling keys — the whole model/provider is rate-limited
+                                logger.info(f"\u2139\ufe0f [VISION] [{source}] {provider} key {api_key[:8]}... rate limited (429). Penalizing and trying next key.")
+                                _LAST_VISION_CALL_TIME[api_key] = time.time() + 60.0  # 60 second penalty
+                                continue  # Try the next key!
                             if "401" in err_str or "invalid api key" in err_str or "unauthorized" in err_str:
                                 if provider == "groq":
                                     logger.error(f"❌ [VISION] [{source}] Groq key {api_key[:12]}... unauthorized (401). Removing from pool.")
