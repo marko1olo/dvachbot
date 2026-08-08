@@ -160,6 +160,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             start_idx = random.randint(0, 2)
             models_cascade = models_pool[start_idx:] + models_pool[:start_idx]
 
+            permanent_model_failures = 0
+
             timeout = httpx.Timeout(
                 GROQ_HTTP_TIMEOUT_SECONDS,
                 connect=min(10.0, GROQ_HTTP_TIMEOUT_SECONDS),
@@ -299,6 +301,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                         return json.dumps(parsed, ensure_ascii=False)
                                     else:
                                         logger.warning(f"⚠️ [VISION] [{source}] {provider} JSON missing 'tags'/'description' keys. Trying next model.")
+                                        permanent_model_failures += 1
                                         break  # malformed schema — next model
                                 except json.JSONDecodeError:
                                     # Fallback if model failed JSON format
@@ -315,6 +318,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             if "413" in err_str: return "error_413"
                             if "json_validate" in err_str or "max completion tokens" in err_str or "400" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} failed ({err_str[:120]}). Trying next model...")
+                                permanent_model_failures += 1
                                 break
                             if "503" in err_str or "504" in err_str or "unavailable" in err_str or "500" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} server overloaded ({err_str}). Skipping model {model_name}.")
@@ -341,6 +345,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             available_keys.remove(selected_key)
                             continue
 
+            if permanent_model_failures >= len(models_cascade):
+                logger.error(f"\u274c [VISION] [{source}] Image rejected by all models (permanent error). Marking as invalid.")
+                return "error_file_invalid"
+                
             logger.error(f"\u274c [VISION] [{source}] Image analysis failed: all vision models exhausted.")
             return "error_api_exhausted"
 
