@@ -625,10 +625,10 @@ async def execute_delayed_edit(
                     reply_to_message_id=reply_to_message_id
                 )
             except (TelegramForbiddenError, TelegramBadRequest):
-                import traceback; traceback.print_exc()
+                pass  # юзер заблокировал бота или сообщение удалено — норм
         await edit_post_for_all_recipients(post_num, bot_instance)
     except asyncio.CancelledError:
-        import traceback; traceback.print_exc()
+        raise  # нормальная отмена таски — не логируем, propagate вверх
     except Exception as e:
         print(f"❌ Ошибка в execute_delayed_edit для поста #{post_num}: {e}")
     finally:
