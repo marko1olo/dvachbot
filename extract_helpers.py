@@ -1,4 +1,4 @@
-﻿import ast
+import ast
 import sys
 
 source_file = r'C:/Users/danat/Desktop/dvachbot/main.py'
