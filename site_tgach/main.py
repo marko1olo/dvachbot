@@ -821,6 +821,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 URL_PATTERN = re.compile(r'(https?://[^\s<>"\'`]+)')
+
+
+def _clean_url_and_suffix(full: str):
+    delim_match = re.search(
+        r"&(?:quot|gt|lt|apos|#0*39|#0*38|#x0*27|#X0*27);", full, flags=re.IGNORECASE
+    )
+    if delim_match:
+        url_part = full[: delim_match.start()]
+        suffix = full[delim_match.start() :]
+    else:
+        url_part = full
+        suffix = ""
+
+    while url_part:
+        if url_part.endswith("&amp;"):
+            suffix = "&amp;" + suffix
+            url_part = url_part[:-5]
+        elif url_part[-1] in ".,;:!?)]}" and not (
+            url_part.endswith(")") and "(" in url_part
+        ):
+            suffix = url_part[-1] + suffix
+            url_part = url_part[:-1]
+        else:
+            break
+
+    return url_part, suffix
+
 XSS_REPLACEMENTS = [
     (re.compile(r"(s)(c)(r)(i)(p)(t)", re.IGNORECASE), r"\1\2\3l\5\6"),
     (re.compile(r"(i)(f)(r)(a)(m)(e)", re.IGNORECASE), r"l\2\3\4\5\6"),
@@ -3129,9 +3156,15 @@ def _apply_xss_protection(text: str) -> str:
 
 def _format_lines_and_greentext(text: str) -> str:
     text = NEWLINE_PATTERN.sub("\n", text)
-    text = URL_PATTERN.sub(
-        r'<a href="\1" target="_blank" rel="noopener noreferrer">\1</a>', text
-    )
+
+    def replace_url(match):
+        full = match.group(0)
+        url_part, suffix = _clean_url_and_suffix(full)
+        if not url_part:
+            return full
+        return f'<a href="{url_part}" target="_blank" rel="noopener noreferrer">{url_part}</a>{suffix}'
+
+    text = URL_PATTERN.sub(replace_url, text)
 
     lines = []
     for line in text.split("\n"):
@@ -3415,15 +3448,17 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
                     poll_post_ids.append(r["id"])
 
     dupe_map, blur_map, mirror_map = {}, {}, {}
+    failed_set = set()
     backlinks_map = defaultdict(list)
     tasks = []
 
     if all_fids:
-        from common.database import get_mirrors_batch
+        from common.database import get_mirrors_batch, get_failed_files_batch
 
         tasks.append(get_duplicate_counts(all_fids))
         tasks.append(get_blurhashes_batch(all_fids))
         tasks.append(get_mirrors_batch(all_fids))
+        tasks.append(get_failed_files_batch(all_fids))
 
     if poll_post_ids:
         for pid in poll_post_ids:
@@ -3445,6 +3480,13 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
             results[res_idx] if not isinstance(results[res_idx], Exception) else {}
         )
         res_idx += 1
+        failed_set = (
+            results[res_idx]
+            if not isinstance(results[res_idx], Exception)
+            and isinstance(results[res_idx], (set, list, tuple))
+            else set()
+        )
+        res_idx += 1
 
     poll_results_map = {}
     if poll_post_ids:
@@ -3463,7 +3505,7 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
                     target, source = row
                     backlinks_map[target].append(source)
         except Exception as e:
-            print(f"Backlinks fetch error: {e}")
+            logger.warning(f"Backlinks fetch error: {e}", exc_info=True)
 
     for p in posts:
         db_bl = backlinks_map.get(p["id"], [])
@@ -3478,13 +3520,33 @@ async def enrich_extra_data(posts: List[dict], is_ru: bool = True):
                 f["blurhash"] = blur_map.get(fid)
                 f["dupe_count"] = dupe_map.get(fid, 0)
 
-                mirrors = mirror_map.get(fid, {})
                 tid = f.get("thumbnail_file_id")
-                thumb_mirrors = mirror_map.get(tid, {}) if tid else {}
-
-                f["original_url"], f["thumbnail_url"] = _select_mirror_strategically(
-                    f, mirrors, thumb_mirrors, is_ru
+                is_orig_failed = (
+                    (fid in failed_set)
+                    or f.get("is_broken")
+                    or (f.get("tags") in ("download_failed", "error"))
                 )
+                is_thumb_failed = (tid in failed_set) if tid else False
+
+                if is_orig_failed:
+                    f["is_broken"] = True
+                    f["download_failed"] = True
+                    f["original_url"] = ""
+                    f["thumbnail_url"] = ""
+                else:
+                    mirrors = mirror_map.get(fid, {})
+                    thumb_mirrors = mirror_map.get(tid, {}) if tid else {}
+                    sel_orig, sel_thumb = _select_mirror_strategically(
+                        f, mirrors, thumb_mirrors, is_ru
+                    )
+                    if not sel_orig and fid:
+                        sel_orig = f"/files/{fid}"
+                    if not sel_thumb or is_thumb_failed:
+                        sel_thumb = sel_orig or (f"/files/{fid}" if fid else "")
+                    f["original_url"] = sel_orig
+                    f["thumbnail_url"] = sel_thumb
+                    if is_thumb_failed:
+                        f["thumbnail_download_failed"] = True
 
         if p.get("content", {}).get("files"):
             update_files(p["content"]["files"])
@@ -3613,24 +3675,29 @@ def _process_files_list(content: dict) -> None:
         safe_name = quote(str(file_info.get("filename", "file")).strip("/"))
 
         oid_str = str(oid) if oid else ""
-        if oid_str.startswith(("http://", "https://")):
-            file_info["original_url"] = oid_str
-        else:
-            clean_oid = oid_str.strip("/")
-            if clean_oid:
-                file_info["original_url"] = f"/files/{clean_oid}/{safe_name}"
-            else:
-                file_info["original_url"] = f"/files/{safe_name}"
-
-        tid = file_info.get("thumbnail_file_id")
-        if tid:
-            tid_str = str(tid)
-            if tid_str.startswith(("http://", "https://")):
-                file_info["thumbnail_url"] = tid_str
-            else:
-                file_info["thumbnail_url"] = f"/files/{tid_str.strip('/')}"
-        else:
+        if file_info.get("is_broken") or file_info.get("download_failed"):
+            file_info["is_broken"] = True
+            file_info["original_url"] = ""
             file_info["thumbnail_url"] = ""
+        else:
+            if oid_str.startswith(("http://", "https://")):
+                file_info["original_url"] = oid_str
+            else:
+                clean_oid = oid_str.strip("/")
+                if clean_oid:
+                    file_info["original_url"] = f"/files/{clean_oid}/{safe_name}"
+                else:
+                    file_info["original_url"] = f"/files/{safe_name}"
+
+            tid = file_info.get("thumbnail_file_id")
+            if tid:
+                tid_str = str(tid)
+                if tid_str.startswith(("http://", "https://")):
+                    file_info["thumbnail_url"] = tid_str
+                else:
+                    file_info["thumbnail_url"] = f"/files/{tid_str.strip('/')}"
+            else:
+                file_info["thumbnail_url"] = ""
         valid_files.append(file_info)
     content["files"] = valid_files
 
@@ -7903,7 +7970,7 @@ async def api_create_post(
                                 img.size = len(processed)
                             new_images.append(img)
                     except Exception as e:
-                        print(f"WH40k Filter Error: {e}")
+                        logger.warning(f"WH40k Filter Error: {e}", exc_info=True)
                         new_images.append(img)
                 else:
                     new_images.append(img)
@@ -8398,7 +8465,7 @@ async def api_import_thread(
             )
             await conn.commit()
     except Exception as e:
-        print(f"Warning logging import request: {e}")
+        logger.warning(f"Warning logging import request: {e}")
 
     bg_tasks.add_task(
         importer.process_thread, url, board_id, target_stream, sim_settings
@@ -10219,7 +10286,13 @@ async def _proxy_protected_telegram_file(
         guessed_type = mimetypes.guess_type(filename or file_path)[0]
         media_type = resp.headers.get("Content-Type")
         if not media_type or media_type == "application/octet-stream":
-            media_type = guessed_type or media_type or "application/octet-stream"
+            if file_id.startswith("AgAC") or file_path.endswith((".jpg", ".jpeg")):
+                guessed_type = "image/jpeg"
+            elif file_path.endswith(".png"):
+                guessed_type = "image/png"
+            elif file_path.endswith(".mp4"):
+                guessed_type = "video/mp4"
+            media_type = guessed_type or media_type or "image/jpeg"
 
         headers = {
             "Access-Control-Allow-Origin": "*",
@@ -10418,6 +10491,15 @@ async def get_telegram_file(
         file_id, path_filename = file_id.split("/", 1)
         filename = filename or path_filename.rsplit("/", 1)[-1]
 
+    try:
+        from common.database import is_file_permanently_failed
+        if await is_file_permanently_failed(file_id):
+            raise HTTPException(status_code=404, detail="File permanently unavailable.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Error checking is_file_permanently_failed for file {file_id}: {e}")
+
     # Динамическое определение страны по IP
     client_ip = get_real_ip(request)
     user_country = await get_country_by_ip(client_ip)
@@ -10454,11 +10536,15 @@ async def get_telegram_file(
                     mirrors = json.loads(cached)
                 except Exception:
                     mirrors = {}
+                if not isinstance(mirrors, dict):
+                    mirrors = {}
 
-        if not mirrors:
+        if not mirrors or not isinstance(mirrors, dict):
             mirrors = await get_file_mirrors(file_id)
-            if mirrors and backend:
+            if mirrors and isinstance(mirrors, dict) and backend:
                 await backend.set(cache_key, json.dumps(mirrors), expire=900)
+            elif not isinstance(mirrors, dict):
+                mirrors = {}
 
         # Проверка валидности HF (из глобального списка VALID_HF_REPOS)
         hf_candidate = mirrors.get("huggingface")
@@ -10517,10 +10603,11 @@ async def get_telegram_file(
         info = await get_cached_file_path(file_id, allow_protected_tokens=True)
         if info:
             path, token = info
+            # User confirmed it's fine to expose tokens, revert to 307 Redirect
             return RedirectResponse(
                 url=f"https://api.telegram.org/file/bot{token}/{path}",
                 status_code=307,
-                headers={"Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*"},
+                headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"}
             )
 
     # 3. Shadow Telegram (Прямой редирект для теневого файла с защищенными токенами)
@@ -10528,10 +10615,11 @@ async def get_telegram_file(
         info_shadow = await get_cached_file_path(shadow_file_id, allow_protected_tokens=True)
         if info_shadow:
             path, token = info_shadow
+            # User confirmed it's fine to expose tokens, revert to 307 Redirect
             return RedirectResponse(
                 url=f"https://api.telegram.org/file/bot{token}/{path}",
                 status_code=307,
-                headers={"Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*"},
+                headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"}
             )
 
     # 3.1. FreeImage (работает везде, включая РФ)
@@ -10721,7 +10809,7 @@ async def api_get_favourite_threads(data: FavouriteThreads):
                 post["anon_count"] = 1
             return posts
     except Exception as e:
-        print(f"🔴 Ошибка API избранного: {e}")
+        logger.error(f"🔴 Ошибка API избранного: {e}", exc_info=True)
         return []
 
 
@@ -10945,14 +11033,9 @@ async def main_serve():
             print("🛑 Server stopped by user.")
             break
         except Exception as e:
-            print(f"🔥 Server crashed: {e}")
+            logger.error(f"🔥 Server crashed: {e}", exc_info=True)
             print("🔄 Restarting in 3 seconds...")
             await asyncio.sleep(3)
-
-if __name__ == "__main__":
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-    asyncio.run(main_serve())
 
 @app.get("/api/is-ru")
 async def check_if_ru(request: Request):
@@ -10964,3 +11047,13 @@ async def check_if_ru(request: Request):
         if "ru" in accept_lang or not accept_lang:
             is_ru = True
     return {"is_ru": is_ru}
+
+
+# Legacy duplicate route serve_telegram_file_dev removed to prevent overriding /files/{file_id:path} with 307 redirects.
+
+
+if __name__ == "__main__":
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    asyncio.run(main_serve())
+

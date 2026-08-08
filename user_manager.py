@@ -17,6 +17,7 @@ from thread_texts import thread_messages
 from text_assets import INVITE_TEXTS, INVITE_TEXTS_EN, INVITE_TEXTS_JP, DEANON_COOLDOWN_PHRASES
 from common.db_pool import db_lock
 import io
+from post_helpers import format_header
 
 router = Router()
 

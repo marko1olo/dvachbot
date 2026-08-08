@@ -972,7 +972,7 @@ async def get_or_create_api_token(user_id: int, token_generator_func) -> str:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ Ошибка в get_or_create_api_token: {e}")
                 raise e
@@ -1293,7 +1293,7 @@ async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None,
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ Ошибка обновления настроек пользователя {user_id}: {e}")
                 break
@@ -1341,7 +1341,7 @@ async def update_board_settings(board_id: str, updates: dict):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception as e:
@@ -1379,7 +1379,7 @@ async def add_or_activate_user(user_id: int, board_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -1417,7 +1417,7 @@ async def update_user_status(user_id: int, board_id: str, status: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -1523,7 +1523,7 @@ async def update_user_location(user_id: int, board_id: str, location: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"Error updating location for user {user_id}: {e}")
                 break
@@ -1681,7 +1681,7 @@ async def create_post(
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     # Экспоненциальная задержка при занятой базе
                     wait_time = min(0.1 * (2 ** attempt), 2.0)
-                    await asyncio.sleep(wait_time)
+                    await db_sleep(wait_time)
                     continue
                 return None
             except Exception as e:
@@ -1715,7 +1715,7 @@ async def get_user_status(user_id: int, board_id: str) -> Optional[str]:
                     return row[0] if row else 'active'
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -1746,7 +1746,7 @@ async def get_shadow_mute_status(user_id: int, board_id: str) -> bool:
                     return row is not None
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -1988,7 +1988,7 @@ async def get_op_posts_for_board(
                 
             except Exception as e:
                 if attempt < 2:
-                    await asyncio.sleep(0.2 * (attempt + 1))
+                    await db_sleep(0.2 * (attempt + 1))
                     continue
                 else:
                     print(f"⛔ Error in get_op_posts_for_board after 3 attempts: {e}")
@@ -2071,7 +2071,7 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
             break 
         except sqlite3.OperationalError as e:
             if "locked" in str(e).lower() or "busy" in str(e).lower():
-                await asyncio.sleep(0.1 * (attempt + 1))
+                await db_sleep(0.1 * (attempt + 1))
                 if attempt == 9:
                     print(f"Error in get_thread_by_op_post (DB Phase) after retries: {e}")
                     return None
@@ -2163,7 +2163,7 @@ async def is_thread_archived(thread_op_num: int) -> bool:
                 return True # Если записи нет, считаем архивным/удаленным
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -2263,7 +2263,7 @@ async def get_post_by_num(post_num: int) -> Optional[Dict[str, Any]]:
                 
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -2288,7 +2288,7 @@ async def get_thread_op_by_post_num(post_num: int) -> Optional[int]:
                     return None
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -2307,7 +2307,7 @@ async def get_post_count_in_thread(thread_op_num: int) -> int:
                     return row[0] if row else 0
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -2334,7 +2334,7 @@ async def archive_thread_in_db(thread_op_num: int):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⚠️ Error archiving thread {thread_op_num}: {e}")
                 break
@@ -2387,7 +2387,7 @@ async def create_thread_entry(
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"Критическая ошибка при создании записи для треда #{thread_op_num}: {e}")
                 break
@@ -2466,7 +2466,7 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ Error processing mentions: {e}")
                 break
@@ -2535,7 +2535,7 @@ async def delete_post_by_num(post_num: int) -> bool:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при удалении #{post_num}: {e}")
                 break
@@ -2575,7 +2575,7 @@ async def ban_user_on_board(user_id: int, board_id: str) -> bool:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"Критическая ошибка при бане user #{user_id} на доске {board_id}: {e}")
                 break
@@ -2612,7 +2612,7 @@ async def update_post_content(post_num: int, content: dict):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при обновлении контента поста #{post_num}: {e}")
                 break
@@ -2650,7 +2650,7 @@ async def add_post_copies(post_num: int, copies_data: list[tuple[int, int]]):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 if "foreign key constraint failed" in str(e).lower():
                     # Post was deleted before delivery finished, ignore safely
@@ -2826,7 +2826,7 @@ async def upsert_delivery_queue_item(
                 try: await db.execute("ROLLBACK")
                 except: pass
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⚠️ DeliveryQueue upsert failed for #{post_num}: {e}")
                 break
@@ -2853,7 +2853,7 @@ async def delete_delivery_queue_item(item_id: int) -> bool:
                 try: await db.execute("ROLLBACK")
                 except: pass
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⚠️ DeliveryQueue delete failed id={item_id}: {e}")
                 break
@@ -3000,7 +3000,7 @@ async def get_post_for_broadcast(post_num: int) -> Optional[Dict[str, Any]]:
                 
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -3028,7 +3028,7 @@ async def cleanup_broadcast_queue(retention_hours: int = 1):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.5 * (attempt + 1))
+                    await db_sleep(0.5 * (attempt + 1))
                     continue
                 print(f"⛔ ОШИБКА в cleanup_broadcast_queue: {e}.")
                 break
@@ -3103,7 +3103,7 @@ async def get_and_clear_broadcast_queue() -> list[dict]:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ ОШИБКА в get_and_clear_broadcast_queue: {e}")
                 break
@@ -3136,7 +3136,7 @@ async def mark_broadcast_posts_sent(post_nums: list[int] | tuple[int, ...] | set
                     return int(cursor.rowcount or 0)
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ ОШИБКА в mark_broadcast_posts_sent: {e}")
                 break
@@ -3163,7 +3163,7 @@ async def get_user_by_token(token: str) -> Optional[dict]:
                     return dict(zip(cols, row))
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -3471,7 +3471,7 @@ async def add_spam_word(board_id: str, word: str) -> bool:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception as e:
@@ -3506,7 +3506,7 @@ async def remove_spam_word(board_id: str, word: str) -> bool:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception as e:
@@ -3537,7 +3537,7 @@ async def add_reaction_ban(user_id: int, board_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ ОШИБКА при добавлении бана на реакции в БД: {e}")
                 break
@@ -3569,7 +3569,7 @@ async def remove_reaction_ban(user_id: int, board_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ ОШИБКА при удалении бана на реакции из БД: {e}")
                 break
@@ -3619,7 +3619,7 @@ async def update_post_thread_id(post_num: int, thread_id: int):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -3650,7 +3650,7 @@ async def add_reaction_to_queue(user_id: int, post_num: int, emoji: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ ОШИБКА при добавлении реакции в очередь: {e}")
                 break
@@ -3705,7 +3705,7 @@ async def get_and_clear_reaction_queue() -> list[dict]:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ ОШИБКА в get_and_clear_reaction_queue: {e}.")
                 break
@@ -4018,7 +4018,7 @@ async def update_thread_last_updated(thread_op_num: int, timestamp: float):
                 try: await db.execute("ROLLBACK")
                 except: pass
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ ОШИБКА при обновлении времени треда #{thread_op_num}: {e}")
                 break
@@ -4125,7 +4125,7 @@ async def sync_boards_with_config(board_config: dict):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.5 * (attempt + 1))
+                    await db_sleep(0.5 * (attempt + 1))
                     continue
                 print(f"⛔ ОШИБКА при синхронизации досок с БД: {e}")
                 break
@@ -4155,7 +4155,7 @@ async def create_bottle(sender_id: int, recipient_id: int, message: str) -> bool
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception as e:
@@ -4193,7 +4193,7 @@ async def read_and_delete_bottle(user_id: int) -> dict | None:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -4273,7 +4273,7 @@ async def apply_auto_censure(file_id: str, action: str) -> list[int]:
                 try: await db.execute("ROLLBACK")
                 except: pass
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.2 * (attempt + 1))
+                    await db_sleep(0.2 * (attempt + 1))
                     continue
                 print(f"⚠️ Auto-Censure DB Error: {e}")
                 break
@@ -4357,7 +4357,7 @@ async def lift_ban(user_id: int, board_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ Error lifting ban: {e}")
                 break
@@ -4386,7 +4386,7 @@ async def lift_shadow_ban(user_id: int, board_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ Error lifting shadow ban: {e}")
                 break
@@ -4425,7 +4425,7 @@ async def apply_regular_mute(user_id: int, board_id: str, duration_seconds: int)
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ DB Error applying regular mute: {e}")
                 break
@@ -4459,7 +4459,7 @@ async def remove_regular_mute(user_id: int, board_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ DB Error removing regular mute: {e}")
                 break
@@ -4586,7 +4586,7 @@ async def set_user_role(user_id: int, role: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -4655,7 +4655,7 @@ async def mark_alert_read(alert_id: int):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -4704,7 +4704,7 @@ async def register_file_owner(file_id: str, bot_id: int):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.2 * (attempt + 1))
+                    await db_sleep(0.2 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -4736,7 +4736,7 @@ async def register_new_file(sha256: str, phash: str, file_id: str, thumb_id: str
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.2 * (attempt + 1))
+                    await db_sleep(0.2 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -4788,7 +4788,7 @@ async def delete_posts_in_thread_after(thread_id: str, post_num_start: int):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ Error deleting posts after {post_num_start}: {e}")
                 break
@@ -4878,7 +4878,7 @@ async def set_user_stream(user_id: int, board_id: str, stream: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -5048,7 +5048,7 @@ async def restore_thread_from_archive(thread_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -5094,7 +5094,7 @@ async def create_report(post_num: int, category: str, reason: str, sender_ip_has
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ Error creating report: {e}")
                 break
@@ -5158,7 +5158,7 @@ async def resolve_report(report_id: int, resolution: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⚠️ Ошибка при разрешении репорта: {e}")
                 break
@@ -5225,7 +5225,7 @@ async def set_system_setting(key: str, value: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -5261,7 +5261,7 @@ async def create_board(board_id: str, name: str, description: str, owner_id: int
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception as e:
@@ -5289,7 +5289,7 @@ async def approve_board(board_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -5316,7 +5316,7 @@ async def delete_board(board_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -5344,7 +5344,7 @@ async def toggle_op_hidden(post_num: int, hide: bool) -> bool:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"Error toggling OP hide for {post_num}: {e}")
                 break
@@ -5393,7 +5393,7 @@ async def create_import_request(user_id: int, url: str, board_id: str, comment: 
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -5420,7 +5420,7 @@ async def update_import_request_status(request_id: int, status: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -5464,7 +5464,7 @@ async def create_feedback(user_id: int, category: str, contact: str, message: st
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception as e:
@@ -5592,7 +5592,7 @@ async def shadow_wipe_user(user_id: int, board_id: str = None) -> int:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -5621,7 +5621,7 @@ async def add_channel_copy(post_num: int, channel_id: int, message_id: int):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -5650,7 +5650,7 @@ async def set_channel_message_id(post_num: int, message_id: int):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⚠️ Ошибка сохранения channel_message_id для #{post_num}: {e}")
                 break
@@ -6054,7 +6054,7 @@ async def remove_users_from_board_batch(user_ids: list[int], board_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -6084,7 +6084,7 @@ async def ban_hash(value: str, type: str, reason: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ Ошибка при бане хеша {value}: {e}")
                 break
@@ -6112,7 +6112,7 @@ async def unban_hash(hash_value: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -6198,7 +6198,7 @@ async def cleanup_shadow_posts_db(hours: int = 24):
                     except: pass
                     
                     if "locked" in str(e).lower() or "busy" in str(e).lower():
-                        await asyncio.sleep(0.2 * (attempt + 1))
+                        await db_sleep(0.2 * (attempt + 1))
                         continue
                     print(f"⚠️ Shadow cleanup DB error: {e}")
                     return # Критическая ошибка, выходим
@@ -6215,7 +6215,7 @@ async def cleanup_shadow_posts_db(hours: int = 24):
             
             total_deleted += deleted_in_chunk
             # ВАЖНО: Пауза между транзакциями, чтобы дать другим записать данные
-            await asyncio.sleep(0.5) 
+            await db_sleep(0.5) 
         else:
             # Если транзакция не прошла после всех попыток
             break
@@ -6338,7 +6338,7 @@ async def process_cross_links(source_board: str, source_post: int, text: str, st
                 try: await db.execute("ROLLBACK")
                 except: pass
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -6396,7 +6396,7 @@ async def process_backlinks(source_post_num: int, text: str, reply_to_int: Optio
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⚠️ Backlink Insert Error for #{source_post_num}: {e}")
                 break
@@ -6655,7 +6655,7 @@ async def add_file_mirror(file_id: str, mirror_type: str, url: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -6686,7 +6686,7 @@ async def register_file_owners_batch(conn: aiosqlite.Connection, owner_pairs: li
             return
         except sqlite3.OperationalError as e:
             if "locked" in str(e).lower() and attempt < 9:
-                await asyncio.sleep(0.1 * (attempt + 1))
+                await db_sleep(0.1 * (attempt + 1))
                 continue
             print(f"⚠️ Error in batch registration: {e}")
             raise e
@@ -6719,7 +6719,7 @@ async def cleanup_notification_queue(retention_hours: int = 48):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.5 * (attempt + 1))
+                    await db_sleep(0.5 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -6750,7 +6750,7 @@ async def log_global_event(source: str, text: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ Ошибка записи лога: {e}")
                 break
@@ -6789,7 +6789,7 @@ async def add_to_mod_queue(post_num: int, file_id: str, reason: str, score: floa
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⚠️ ModQueue add error: {e}")
                 break
@@ -6870,7 +6870,7 @@ async def get_file_details_batch(file_ids: list[str]) -> dict:
                 return details_map
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower():
-                    await asyncio.sleep(0.2 * (attempt + 1))
+                    await db_sleep(0.2 * (attempt + 1))
                     continue
                 break
             except Exception as e:
@@ -6917,7 +6917,7 @@ async def resolve_mod_queue(item_id: int):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -7012,7 +7012,7 @@ async def move_thread_to_board(thread_id: str, new_board_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ Error moving thread {thread_id}: {e}")
                 break
@@ -7062,7 +7062,7 @@ async def get_and_clear_admin_actions() -> list[dict]:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -7107,7 +7107,7 @@ async def add_to_hf_queue(file_id: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -7139,7 +7139,7 @@ async def remove_from_hf_queue(file_ids: list[str]):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.5 * (attempt + 1))
+                    await db_sleep(0.5 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -7174,7 +7174,7 @@ async def add_to_mirror_queue(file_id: str, mirror_type: str):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -7261,7 +7261,7 @@ async def reschedule_mirror_task(task_id: int, attempt: int):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (try_idx + 1))
+                    await db_sleep(0.1 * (try_idx + 1))
                     continue
                 print(f"⚠️ DB Error rescheduling mirror task: {e}")
                 break
@@ -7371,7 +7371,7 @@ async def toggle_thread_endless(thread_id: str, endless: bool):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception as e:
@@ -7420,7 +7420,7 @@ async def trim_thread_posts(thread_id: str, max_posts: int = 1000):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"Error trimming thread {thread_id}: {e}")
                 break
@@ -7450,7 +7450,7 @@ async def remove_mirror_task(task_id: int):
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.2 * (attempt + 1))
+                    await db_sleep(0.2 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -7475,7 +7475,7 @@ async def get_hf_queue_batch(limit: int = 50) -> list[str]:
             except Exception as e:
                 # Чтение редко падает, но на случай разрыва соединения
                 print(f"HF Queue read error: {e}")
-                await asyncio.sleep(1)
+                await db_sleep(1)
     return []
 
 async def get_queue_stats() -> tuple[int, float]:
@@ -7543,7 +7543,7 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⚠️ Ошибка добавления уведомления: {e}")
                 break
@@ -7590,7 +7590,7 @@ async def get_and_clear_notification_queue() -> list[dict]:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ Ошибка в get_and_clear_notification_queue: {e}")
                 break
@@ -7632,7 +7632,7 @@ async def save_poll_vote_db(post_num: int, user_id: int, option_index: int) -> b
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"Poll Vote DB Error: {e}")
                 break
@@ -7732,6 +7732,49 @@ async def get_mirrors_batch(file_ids: list[str]) -> dict:
     except Exception:
         pass
     return res
+
+async def get_failed_files_batch(file_ids: list[str]) -> set[str]:
+    if not file_ids:
+        return set()
+    db = await get_pool()
+    placeholders = ','.join('?' for _ in file_ids)
+    query = f"""
+        SELECT file_id, thumbnail_id 
+        FROM FileRegistry 
+        WHERE (tags IN ('download_failed', 'error', 'error_too_large', 'format_unsupported', 'dead') OR (tags LIKE 'error%' AND tags != 'error_no_tags') OR tags LIKE '%download_failed%') 
+          AND (file_id IN ({placeholders}) OR thumbnail_id IN ({placeholders}))
+    """
+    failed_set = set()
+    try:
+        async with db.execute(query, file_ids + file_ids) as cursor:
+            async for row in cursor:
+                if row[0]:
+                    failed_set.add(row[0])
+                if row[1]:
+                    failed_set.add(row[1])
+    except Exception as e:
+        logger = logging.getLogger("database")
+        logger.error(f"Error fetching failed files batch: {e}")
+    return failed_set
+
+async def is_file_permanently_failed(file_id: str) -> bool:
+    if not file_id:
+        return False
+    try:
+        db = await get_pool()
+        if not db:
+            return False
+        async with db.execute(
+            "SELECT tags FROM FileRegistry WHERE (file_id = ? OR thumbnail_id = ?) AND (tags IN ('download_failed', 'error', 'error_too_large', 'format_unsupported', 'dead') OR (tags LIKE 'error%' AND tags != 'error_no_tags') OR tags LIKE '%download_failed%') LIMIT 1",
+            (file_id, file_id),
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return True
+    except Exception:
+        pass
+    return False
+
 async def get_posts_by_file_ids(file_ids: list[str]) -> list[dict]:
     """
     Находит посты, содержащие указанные файлы.
@@ -7796,7 +7839,7 @@ async def get_thread_type_and_unlock_status(thread_id: str, user_id: int) -> tup
                 return t_type, is_unlocked
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception:
@@ -7976,7 +8019,7 @@ async def toggle_post_censorship(post_nums: list[int]) -> dict[int, bool]:
                 except: pass
                 
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await asyncio.sleep(0.1 * (attempt + 1))
+                    await db_sleep(0.1 * (attempt + 1))
                     continue
                 break
             except Exception as e:
@@ -8067,7 +8110,7 @@ async def clean_old_postcopies_daily():
             total_deleted += deleted
             if deleted == 0:
                 break
-            await asyncio.sleep(0.5)
+            await db_sleep(0.5)
 
         if total_deleted > 0:
             logging.getLogger("database").info(f"🧹 [POSTCOPIES_CLEANUP] Удалено {total_deleted:,} устаревших записей (post_num < {threshold_post_num}). Храним данные за 14 дней.")
@@ -8129,7 +8172,7 @@ async def clean_old_media_reposts_daily() -> int:
             if deleted == 0:
                 break
             # Уступаем цикл событий между пачками, как в чистке PostCopies.
-            await asyncio.sleep(0.5)
+            await db_sleep(0.5)
 
         if total_deleted > 0:
             logging.getLogger("database").info(
@@ -8153,7 +8196,7 @@ async def postcopies_daily_cleanup_loop():
             now_msk = datetime.now(timezone.utc).astimezone(MSK)
             next_run = (now_msk + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
             sleep_sec = (next_run - now_msk).total_seconds()
-            await asyncio.sleep(max(10, sleep_sec))
+            await db_sleep(max(10, sleep_sec))
             await clean_old_postcopies_daily()
             # Второй уборщик в том же суточном цикле: отдельная фоновая задача
             # ради одного DELETE в сутки не нужна, а падение любого из двух
@@ -8163,5 +8206,5 @@ async def postcopies_daily_cleanup_loop():
             break
         except Exception as e:
             logging.getLogger("database").error(f"⚠️ [POSTCOPIES_LOOP] Ошибка в цикле чистки: {e}")
-            await asyncio.sleep(3600)
+            await db_sleep(3600)
 

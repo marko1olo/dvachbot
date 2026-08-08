@@ -128,3 +128,18 @@ async def close_pool():
                 print(f"⚠️ [DB] Ошибка при закрытии: {e}")
             finally:
                 _db_connection = None
+
+async def db_sleep(delay: float):
+    """Безопасный sleep для отпускания db_lock во время ожидания."""
+    lock_released = False
+    if db_lock.locked():
+        try:
+            db_lock.release()
+            lock_released = True
+        except RuntimeError:
+            pass
+    try:
+        await asyncio.sleep(delay)
+    finally:
+        if lock_released:
+            await db_lock.acquire()
