@@ -46,7 +46,7 @@ from PIL import Image
 from openai import AsyncOpenAI
 
 # Импорты проекта
-from common.db_pool import get_pool, db_lock
+from common.db_pool import get_pool, db_lock, db_sleep
 from common.bot_pool import global_bot_pool
 from common.token_pool import groq_pool
 from aiogram.exceptions import TelegramBadRequest
@@ -633,10 +633,22 @@ async def tagging_loop():
                         async with db_lock:
                             await db.execute("BEGIN IMMEDIATE")
                             try:
-                                await db.execute(
-                                    "UPDATE FileRegistry SET tags='download_failed' WHERE file_id=?",
+                                async with db.execute(
+                                    "SELECT sha256 FROM FileRegistry WHERE file_id=?",
                                     (file_id,),
-                                )
+                                ) as cursor:
+                                    row = await cursor.fetchone()
+                                if row:
+                                    await db.execute(
+                                        "UPDATE FileRegistry SET tags='download_failed' WHERE file_id=?",
+                                        (file_id,),
+                                    )
+                                else:
+                                    dummy_sha = f"failed_{file_id}"
+                                    await db.execute(
+                                        "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, tags, created_at) VALUES (?, ?, ?, ?, 'download_failed', ?)",
+                                        (dummy_sha, file_id, thumb_id, file_type, time.time()),
+                                    )
                                 await db.execute("COMMIT")
                             except Exception:
                                 await db.execute("ROLLBACK")
@@ -665,10 +677,22 @@ async def tagging_loop():
                     async with db_lock:
                         await db.execute("BEGIN IMMEDIATE")
                         try:
-                            await db.execute(
-                                "UPDATE FileRegistry SET tags='sticker_animated' WHERE file_id=?",
+                            async with db.execute(
+                                "SELECT sha256 FROM FileRegistry WHERE file_id=?",
                                 (file_id,),
-                            )
+                            ) as cursor:
+                                row = await cursor.fetchone()
+                            if row:
+                                await db.execute(
+                                    "UPDATE FileRegistry SET tags='sticker_animated' WHERE file_id=?",
+                                    (file_id,),
+                                )
+                            else:
+                                dummy_sha = f"sticker_{file_id}"
+                                await db.execute(
+                                    "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, tags, created_at) VALUES (?, ?, ?, ?, 'sticker_animated', ?)",
+                                    (dummy_sha, file_id, thumb_id, file_type, time.time()),
+                                )
                             await db.execute("COMMIT")
                         except Exception:
                             await db.execute("ROLLBACK")
@@ -681,10 +705,22 @@ async def tagging_loop():
                     async with db_lock:
                         await db.execute("BEGIN IMMEDIATE")
                         try:
-                            await db.execute(
-                                "UPDATE FileRegistry SET tags='format_unsupported' WHERE file_id=?",
+                            async with db.execute(
+                                "SELECT sha256 FROM FileRegistry WHERE file_id=?",
                                 (file_id,),
-                            )
+                            ) as cursor:
+                                row = await cursor.fetchone()
+                            if row:
+                                await db.execute(
+                                    "UPDATE FileRegistry SET tags='format_unsupported' WHERE file_id=?",
+                                    (file_id,),
+                                )
+                            else:
+                                dummy_sha = f"unsupported_{file_id}"
+                                await db.execute(
+                                    "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, tags, created_at) VALUES (?, ?, ?, ?, 'format_unsupported', ?)",
+                                    (dummy_sha, file_id, thumb_id, file_type, time.time()),
+                                )
                             await db.execute("COMMIT")
                         except Exception:
                             await db.execute("ROLLBACK")
@@ -753,7 +789,7 @@ async def tagging_loop():
                     continue
                     
                 if not tags:
-                    tags = "error_no_tags"
+                    tags = "no_tags"
 
                 tag_mark = "🏷️" if (tags and "error" not in tags) else "⚪"
 
@@ -810,7 +846,7 @@ async def tagging_loop():
                         break
                     except Exception as e:
                         if "locked" in str(e).lower():
-                            await asyncio.sleep(0.5 * (attempt + 1))
+                            await db_sleep(0.5 * (attempt + 1))
                             continue
                         logger.error(
                             f"❌ [BG_TAGGER] DB Save error for {file_id[:12]}: {e}"
