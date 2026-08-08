@@ -12,6 +12,7 @@ from html import escape as escape_html
 from post_helpers import delete_user_posts
 from thread_texts import thread_messages
 from common.db_pool import db_lock
+from dataclasses import dataclass
 from common.token_generator import generate_unique_token
 from common.database import (
     get_pool, get_post_author_by_copy, get_post_by_num, get_post_copies,
@@ -978,17 +979,23 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
     try: await message.delete()
     except Exception as e: pass
 
-async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: int, minutes: int):
+@dataclass
+class WipeRequest:
+    target_id: int
+    board_id: str
+    minutes: int
+
+async def execute_wipe(bot, message, req: WipeRequest, admin_id: int):
     try: await message.edit_text("⏳ Сжигаю посты (процесс запущен, может занять несколько минут)...", parse_mode="HTML")
     except Exception as e: pass
-    deleted_count = await delete_user_posts(bot, target_id, minutes, board_id)
-    await log_global_event('bot', f"🧹 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на /{board_id}/ (глубина {minutes}м)")
-    anon_name = generate_anon_name(target_id)
-    lang = 'en' if board_id == 'int' else 'ru'
+    deleted_count = await delete_user_posts(bot, req.target_id, req.minutes, req.board_id)
+    await log_global_event('bot', f"🧹 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {req.target_id} на /{req.board_id}/ (глубина {req.minutes}м)")
+    anon_name = generate_anon_name(req.target_id)
+    lang = 'en' if req.board_id == 'int' else 'ru'
     if lang == 'en':
-        text = f"🧹 Posts by <b>{anon_name}</b> in the last {minutes}m were wiped.\nTotal deleted: {deleted_count}"
+        text = f"🧹 Posts by <b>{anon_name}</b> in the last {req.minutes}m were wiped.\nTotal deleted: {deleted_count}"
     else:
-        text = f"🧹 Посты от <b>{anon_name}</b> за {minutes}м удалены.\nСнесено: {deleted_count}"
+        text = f"🧹 Посты от <b>{anon_name}</b> за {req.minutes}м удалены.\nСнесено: {deleted_count}"
     await message.edit_text(text, parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("admin_action:"))
@@ -1016,7 +1023,8 @@ async def on_admin_action(callback: types.CallbackQuery):
     elif action == "wipe":
         minutes = int(parts[4])
         await callback.answer("Вайпаем...")
-        await execute_wipe(callback.bot, callback.message, target_id, board_id, admin_id, minutes)
+        req = WipeRequest(target_id=target_id, board_id=board_id, minutes=minutes)
+        await execute_wipe(callback.bot, callback.message, req, admin_id)
 
 @router.message(Command("restrict_anime"))
 async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str = 'ru'):
