@@ -14929,7 +14929,6 @@ async def database_cleanup_task():
             print("🧹 [Maintenance] Запуск плановой очистки очередей в БД...")
             from common.database import cleanup_broadcast_queue
             await cleanup_broadcast_queue(retention_hours=48)
-            from common.database import cleanup_notification_queue
             print("✅ [Maintenance] База данных оптимизирована.")
             
             # Оптимизация оперативной памяти (RAM): обрезаем кэш постов до 10,000 последних
