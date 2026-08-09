@@ -158,11 +158,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 ("gemini-3.5-flash-lite", "gemini"),
                 ("gemini-3.1-flash-lite", "gemini"),
                 ("gemini-2.5-flash-lite", "gemini"),
-                ("gemini-2.0-flash-lite", "gemini"),
-                ("gemini-3.5-flash", "gemini"),
                 ("gemini-3.6-flash", "gemini"),
+                ("gemini-3.5-flash", "gemini"),
+                ("gemini-3-flash", "gemini"),
                 ("gemini-2.5-flash", "gemini"),
-                ("gemini-2.0-flash", "gemini"),
             ]
 
             permanent_model_failures = 0
