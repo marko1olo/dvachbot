@@ -152,14 +152,17 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             )
             
             # Deterministic best-first vision cascade.
-            # Gemini lite models are tried in order of quality.
-            # meta-llama/llama-4-scout (Groq) is the last-resort vision fallback.
-            # llama-3.2-90b-vision-preview was decommissioned by Groq 2026-08.
+            # Gemini lite and flash models are tried in order to maximize free tier quotas.
+            # Groq's multimodal Llama models have been decommissioned, so we rely on Gemini.
             models_cascade = [
                 ("gemini-3.5-flash-lite", "gemini"),
                 ("gemini-3.1-flash-lite", "gemini"),
                 ("gemini-2.5-flash-lite", "gemini"),
-                ("meta-llama/llama-4-scout-17b-16e-instruct", "groq"),
+                ("gemini-2.0-flash-lite", "gemini"),
+                ("gemini-3.5-flash", "gemini"),
+                ("gemini-3.6-flash", "gemini"),
+                ("gemini-2.5-flash", "gemini"),
+                ("gemini-2.0-flash", "gemini"),
             ]
 
             permanent_model_failures = 0
