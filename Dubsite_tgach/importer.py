@@ -118,19 +118,19 @@ class ThreadImporter:
             return ""
 
         replacements = {
+            r"двачер": "тгачер",
             r"двач": "тгач",
             r"харкач": "тгач",
             r"сосач": "тгач",
-            r"двачер": "тгачер",
             r"двощ": "тгач",
             r"абу": "админ",
             r"mailru": "tganon",
-            r"2ch": "tgach",
-            r"2ch.su": "tgach.site",
-            r"2ch.org": "tgach.site",
+            r"2ch\.su": "tgach.site",
+            r"2ch\.org": "tgach.site",
             r"2chan": "tgach",
+            r"2ch": "tgach",
+            r"4chan\.org": "tgach.site",
             r"4chan": "tgach",
-            r"4chan.org": "tgach.site",
         }
         for pattern, replacement in replacements.items():
             raw_html = re.sub(pattern, replacement, raw_html, flags=re.IGNORECASE)
