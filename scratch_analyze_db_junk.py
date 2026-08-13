@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import re
 import sys
 import time
 
@@ -47,15 +48,24 @@ def print_top_tables(cur, tables):
     for i in range(0, len(tables), chunk_size):
         chunk = tables[i:i + chunk_size]
         query_parts = []
+        valid_chunk = []
         for tbl in chunk:
+            if not re.match(r"^[a-zA-Z0-9_]+$", tbl):
+                table_counts[tbl] = -1
+                continue
+            valid_chunk.append(tbl)
             query_parts.append(f"SELECT '{tbl}', (SELECT COUNT(*) FROM \"{tbl}\")")
+
+        if not query_parts:
+            continue
+
         query = " UNION ALL ".join(query_parts)
         try:
             cur.execute(query)
             for row in cur.fetchall():
                 table_counts[row[0]] = row[1]
         except Exception:
-            for tbl in chunk:
+            for tbl in valid_chunk:
                 try:
                     cur.execute(f"SELECT COUNT(*) FROM \"{tbl}\"")
                     table_counts[tbl] = cur.fetchone()[0]
