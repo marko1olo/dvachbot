@@ -3,7 +3,6 @@ import time
 import ujson as json
 import random
 import os
-import sqlite3
 import re
 import aiosqlite
 
