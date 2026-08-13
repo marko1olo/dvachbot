@@ -351,6 +351,25 @@
             transition: transform 0.2s ease;
         }
 
+        .selection-status {
+            color: var(--text-sub);
+            font-size: 0.88rem;
+            margin: 1.35rem auto 0;
+            min-height: 1.5rem;
+        }
+
+        .selection-status[data-state="loading"] {
+            color: #cbd7ff;
+        }
+
+        .selection-status[data-state="error"] {
+            color: #ff9b95;
+        }
+
+        button.lang-card.is-loading {
+            transform: translateY(-0.2rem);
+        }
+
         button.lang-card:hover .lang-cta::after,
         button.lang-card:focus-visible .lang-cta::after {
             transform: translateX(0.25rem);
@@ -473,32 +492,41 @@
                 <span class="lang-cta">ストリームを開く</span>
             </button>
         </div>
+        <p id="stream-status" class="selection-status" role="status" aria-live="polite"></p>
     </div>
 
     <script>
         async function selectStream(stream, selectedCard) {
             const cards = document.querySelectorAll('.lang-card');
+            const status = document.getElementById('stream-status');
+            const streamNames = { ru: 'Russian', en: 'English', jp: 'Japanese' };
+
             cards.forEach((card) => {
                 card.disabled = true;
                 card.setAttribute('aria-busy', 'true');
             });
             selectedCard.classList.add('is-loading');
+            status.dataset.state = 'loading';
+            status.textContent = `Opening the ${streamNames[stream]} stream…`;
             
             try {
-                // Шлем запрос на API для установки куки и настройки в БД
                 const res = await fetch('/api/settings/stream', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ stream: stream })
                 });
-                
-                setTimeout(() => {
-                    window.location.href = "/";
-                }, 200);
-            } catch (e) {
-                console.error(e);
-                document.cookie = `stream=${stream}; path=/; max-age=31536000`;
-                window.location.href = "/";
+
+                if (!res.ok) {
+                    throw new Error(`Stream preference request failed with ${res.status}`);
+                }
+
+                window.location.assign('/');
+            } catch (error) {
+                console.warn('Using local stream preference fallback.', error);
+                document.cookie = `stream=${stream}; path=/; max-age=31536000; SameSite=Lax`;
+                status.dataset.state = 'error';
+                status.textContent = 'The server preference could not be saved. Continuing with this browser’s stream preference…';
+                window.setTimeout(() => window.location.assign('/'), 900);
             }
         }
     </script>
