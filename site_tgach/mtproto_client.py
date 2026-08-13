@@ -18,11 +18,6 @@ logger = logging.getLogger("mtproto")
 # Подавляем шумные ошибки Pyrogram (например, 400 Bad Request при протухших файлах)
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
-try:
-    import tgcrypto
-except ImportError:
-    logger.warning("⚠️ TGCRYPTO NOT INSTALLED! Download speed will be very slow. Run: pip install tgcrypto")
-
 # Глобальный кэш запущенных клиентов: {bot_token: Client}
 _ACTIVE_CLIENTS = {}
 _LAST_USED = {}  # {bot_token: timestamp}
