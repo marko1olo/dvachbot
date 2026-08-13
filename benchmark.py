@@ -1,106 +1,74 @@
 import asyncio
 import time
-import ujson as json
-import random
-import os
 import sqlite3
-import re
 import aiosqlite
+import json
 
-async def setup_and_benchmark():
-    if os.path.exists("test_bot.db"):
-        os.remove("test_bot.db")
+async def setup_db():
+    conn = await aiosqlite.connect('test_perf.db')
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS Threads (
+            thread_id INTEGER PRIMARY KEY,
+            board_id TEXT,
+            title TEXT,
+            last_updated_at INTEGER,
+            is_archived INTEGER
+        )
+    """)
+    await conn.commit()
+    # Insert some data
+    await conn.execute("DELETE FROM Threads")
 
-    async with aiosqlite.connect("test_bot.db") as conn:
-        await conn.execute("CREATE TABLE IF NOT EXISTS ImportQueue (id INTEGER PRIMARY KEY, task_id TEXT, board_id TEXT, original_post_num TEXT, reply_to_original TEXT, content TEXT, author_id INTEGER, stream INTEGER, is_op INTEGER, thread_title TEXT, publish_at REAL)")
-        await conn.execute("CREATE TABLE IF NOT EXISTS ImportRefMap (task_id TEXT, original_post_num TEXT, real_post_num TEXT)")
+    threads = []
+    for bid in [f"board_{i}" for i in range(10)]:
+        for j in range(100):
+            threads.append((bid, f"Thread {j}", time.time() - j, 0))
+    await conn.executemany("INSERT INTO Threads (board_id, title, last_updated_at, is_archived) VALUES (?, ?, ?, ?)", threads)
+    await conn.commit()
+    return conn
 
-        now = time.time()
+async def run_baseline(db, stats):
+    start = time.perf_counter()
+    for bid in stats.keys():
+        async with db.execute("""
+            SELECT thread_id, title, last_updated_at
+            FROM Threads
+            WHERE board_id = ? AND is_archived = 0
+            ORDER BY last_updated_at DESC
+            LIMIT 5
+        """, (bid,)) as cursor:
+            async for row in cursor:
+                pass
+    return time.perf_counter() - start
 
-        queue_rows = []
-        refmap_rows = []
-        for i in range(500):
-            task_id = f"task_{i // 50}"
-            refs = [str(random.randint(1, 500)) for _ in range(5)]
-            content = {"text": f"Some text " + " ".join([f">>{r}" for r in refs])}
-            queue_rows.append((task_id, "test_board", str(i), str(0), json.dumps(content), 1, 0, 0, "Test", now))
-            refmap_rows.append((task_id, str(i), str(i + 10000)))
+async def run_optimized(db, stats):
+    start = time.perf_counter()
+    bids = list(stats.keys())
+    async with db.execute("""
+        SELECT board_id, thread_id, title, last_updated_at
+        FROM (
+            SELECT board_id, thread_id, title, last_updated_at,
+                   ROW_NUMBER() OVER(PARTITION BY board_id ORDER BY last_updated_at DESC) as rn
+            FROM Threads
+            WHERE is_archived = 0 AND board_id IN (SELECT value FROM json_each(?))
+        )
+        WHERE rn <= 5
+    """, (json.dumps(bids),)) as cursor:
+        async for row in cursor:
+            pass
+    return time.perf_counter() - start
 
-        await conn.executemany("INSERT INTO ImportQueue (task_id, board_id, original_post_num, reply_to_original, content, author_id, stream, is_op, thread_title, publish_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", queue_rows)
-        await conn.executemany("INSERT INTO ImportRefMap (task_id, original_post_num, real_post_num) VALUES (?, ?, ?)", refmap_rows)
-        await conn.commit()
+async def main():
+    db = await setup_db()
+    stats = {f"board_{i}": {} for i in range(10)}
 
-        async with conn.execute("SELECT id, task_id, board_id, original_post_num, reply_to_original, content, author_id, stream, is_op, thread_title FROM ImportQueue ORDER BY publish_at ASC, original_post_num ASC") as cursor:
-            rows = await cursor.fetchall()
+    b_time = await run_baseline(db, stats)
+    print(f"Baseline: {b_time:.6f}s")
 
-        # 1. Current Benchmark
-        start_time = time.time()
-        for row in rows:
-            (q_id, task_id, board_id, orig_num, reply_to_orig, content_str, author_id, stream, is_op, title) = row
-            content = json.loads(content_str)
-            text = content.get("text", "")
-            refs = re.findall(r"(?:>>|&gt;&gt;)(\d+)", text)
-            replacements = {}
-            if refs:
-                placeholders = ",".join(["?"] * len(refs))
-                q_map = f"SELECT original_post_num, real_post_num FROM ImportRefMap WHERE task_id = ? AND original_post_num IN ({placeholders})"
-                async with conn.execute(q_map, [task_id] + refs) as map_cur:
-                    async for m_row in map_cur:
-                        replacements[m_row[0]] = m_row[1]
-        end_time = time.time()
-        print(f"Current approach (N+1 Query IN clause): {end_time - start_time:.4f} seconds")
+    o_time = await run_optimized(db, stats)
+    print(f"Optimized: {o_time:.6f}s")
 
-        # 2. Benchmark json_each
-        start_time = time.time()
-        for row in rows:
-            (q_id, task_id, board_id, orig_num, reply_to_orig, content_str, author_id, stream, is_op, title) = row
-            content = json.loads(content_str)
-            text = content.get("text", "")
-            refs = re.findall(r"(?:>>|&gt;&gt;)(\d+)", text)
-            replacements = {}
-            if refs:
-                refs_json = json.dumps(refs)
-                q_map = "SELECT original_post_num, real_post_num FROM ImportRefMap, json_each(?) WHERE task_id = ? AND original_post_num = json_each.value"
-                async with conn.execute(q_map, [refs_json, task_id]) as map_cur:
-                    async for m_row in map_cur:
-                        replacements[str(m_row[0])] = m_row[1]
-        end_time = time.time()
-        print(f"json_each inside loop: {end_time - start_time:.4f} seconds")
+    await db.close()
 
-        # 3. Batched benchmark
-        start_time = time.time()
-        for i in range(0, len(rows), 10):
-            batch = rows[i:i+10]
-            task_refs = {}
-            parsed_batch = []
-            for row in batch:
-                (q_id, task_id, board_id, orig_num, reply_to_orig, content_str, author_id, stream, is_op, title) = row
-                content = json.loads(content_str)
-                text = content.get("text", "")
-                refs = re.findall(r"(?:>>|&gt;&gt;)(\d+)", text)
-                if refs:
-                    if task_id not in task_refs:
-                        task_refs[task_id] = set()
-                    task_refs[task_id].update(refs)
-                parsed_batch.append({"row": row, "content": content, "refs": refs, "task_id": task_id})
-
-            all_replacements = {}
-            if task_refs:
-                for task_id, refs in task_refs.items():
-                    refs_json = json.dumps(list(refs))
-                    q_map = "SELECT original_post_num, real_post_num FROM ImportRefMap, json_each(?) WHERE task_id = ? AND original_post_num = json_each.value"
-                    async with conn.execute(q_map, [refs_json, task_id]) as map_cur:
-                        async for m_row in map_cur:
-                            all_replacements[(task_id, str(m_row[0]))] = m_row[1]
-
-            for item in parsed_batch:
-                replacements = {}
-                for ref in item["refs"]:
-                    key = (item["task_id"], ref)
-                    if key in all_replacements:
-                        replacements[ref] = all_replacements[key]
-        end_time = time.time()
-        print(f"Batched json_each: {end_time - start_time:.4f} seconds")
-
-if __name__ == "__main__":
-    asyncio.run(setup_and_benchmark())
+if __name__ == '__main__':
+    asyncio.run(main())
