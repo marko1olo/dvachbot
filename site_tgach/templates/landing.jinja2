@@ -178,16 +178,215 @@
             .lang-name { margin-bottom: 0; font-size: 1.3rem; }
             .lang-phrase { font-size: 0.9rem; }
         }
+
+        /* Visual system refresh: a calm editorial surface with clear stream hierarchy. */
+        :root {
+            --bg-color: #090b12;
+            --card-bg: rgba(20, 25, 40, 0.72);
+            --text-main: #f6f7fb;
+            --text-sub: #aeb8cb;
+            --surface-line: rgba(205, 218, 255, 0.16);
+            --accent-ru: #ff6b62;
+            --accent-en: #63b2ff;
+            --accent-jp: #f58ac2;
+        }
+
+        body {
+            background:
+                radial-gradient(circle at 12% 12%, rgba(80, 123, 255, 0.18), transparent 28rem),
+                radial-gradient(circle at 87% 82%, rgba(226, 84, 143, 0.14), transparent 32rem),
+                var(--bg-color);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            isolation: isolate;
+        }
+
+        body::before {
+            background-image: linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+            background-size: 2.5rem 2.5rem;
+            content: "";
+            inset: 0;
+            mask-image: linear-gradient(to bottom, black, transparent 76%);
+            pointer-events: none;
+            position: fixed;
+            z-index: -1;
+        }
+
+        .container {
+            max-width: 70rem;
+            position: relative;
+        }
+
+        .hero {
+            margin: 0 auto 3.25rem;
+            max-width: 42rem;
+        }
+
+        .eyebrow {
+            align-items: center;
+            color: #cbd7ff;
+            display: flex;
+            font-size: 0.7rem;
+            font-weight: 800;
+            gap: 0.6rem;
+            justify-content: center;
+            letter-spacing: 0.16em;
+            margin: 0 0 0.8rem;
+            text-transform: uppercase;
+        }
+
+        .eyebrow::before,
+        .eyebrow::after {
+            background: linear-gradient(90deg, transparent, rgba(203, 215, 255, 0.9));
+            content: "";
+            height: 1px;
+            width: 2.4rem;
+        }
+
+        .eyebrow::after {
+            transform: scaleX(-1);
+        }
+
+        h1 {
+            font-size: clamp(3rem, 8vw, 5.6rem);
+            letter-spacing: -0.075em;
+            line-height: 0.94;
+            margin: 0;
+            text-shadow: 0 1.25rem 4rem rgba(0, 0, 0, 0.45);
+        }
+
+        .subtitle {
+            font-size: clamp(1rem, 2vw, 1.18rem);
+            line-height: 1.65;
+            margin: 1.2rem auto 0;
+            max-width: 34rem;
+        }
+
+        .lang-grid {
+            gap: 1.15rem;
+        }
+
+        button.lang-card {
+            appearance: none;
+            background: linear-gradient(145deg, rgba(35, 43, 67, 0.82), var(--card-bg));
+            border: 1px solid var(--surface-line);
+            box-shadow: 0 1rem 2.6rem rgba(0, 0, 0, 0.2);
+            font: inherit;
+            justify-content: flex-start;
+            min-height: 17.25rem;
+            padding: 2.25rem 1.85rem 1.75rem;
+            text-align: center;
+        }
+
+        button.lang-card::after {
+            background: radial-gradient(circle at 50% 0, rgba(255, 255, 255, 0.16), transparent 54%);
+            content: "";
+            inset: 0;
+            opacity: 0;
+            pointer-events: none;
+            position: absolute;
+            transition: opacity 0.3s ease;
+        }
+
+        button.lang-card:hover,
+        button.lang-card:focus-visible {
+            box-shadow: 0 1.8rem 3.8rem rgba(0, 0, 0, 0.36);
+            outline: none;
+            transform: translateY(-0.45rem);
+        }
+
+        button.lang-card:hover::after,
+        button.lang-card:focus-visible::after {
+            opacity: 1;
+        }
+
+        button.lang-card:focus-visible {
+            box-shadow: 0 0 0 0.25rem rgba(236, 241, 255, 0.92), 0 0 0 0.5rem rgba(99, 178, 255, 0.46), 0 1.8rem 3.8rem rgba(0, 0, 0, 0.36);
+        }
+
+        button.lang-card:disabled {
+            cursor: progress;
+            opacity: 0.65;
+        }
+
+        .flag-wrapper {
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            box-shadow: 0 0.85rem 1.8rem rgba(0, 0, 0, 0.28);
+            height: 4.25rem;
+            margin-bottom: 1.5rem;
+            width: 6.35rem;
+        }
+
+        .lang-name {
+            letter-spacing: -0.035em;
+            position: relative;
+            z-index: 1;
+        }
+
+        .lang-phrase {
+            line-height: 1.5;
+            margin: 0.4rem auto 0;
+            max-width: 15rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .lang-cta {
+            align-items: center;
+            color: var(--text-main);
+            display: inline-flex;
+            font-size: 0.76rem;
+            font-weight: 800;
+            gap: 0.45rem;
+            letter-spacing: 0.04em;
+            margin-top: auto;
+            padding-top: 1.6rem;
+            position: relative;
+            text-transform: uppercase;
+            z-index: 1;
+        }
+
+        .lang-cta::after {
+            content: "→";
+            font-size: 1.1rem;
+            transition: transform 0.2s ease;
+        }
+
+        button.lang-card:hover .lang-cta::after,
+        button.lang-card:focus-visible .lang-cta::after {
+            transform: translateX(0.25rem);
+        }
+
+        @media (max-width: 768px) {
+            .hero { margin-bottom: 2.25rem; }
+            .eyebrow { font-size: 0.63rem; }
+            button.lang-card {
+                display: grid;
+                grid-template-columns: 4.5rem 1fr;
+                min-height: 0;
+                padding: 1.35rem;
+                text-align: left;
+            }
+            .flag-wrapper { height: 3rem; margin: 0; width: 4.5rem; }
+            .lang-phrase { margin-left: 0; }
+            .lang-cta { grid-column: 2; padding-top: 0.8rem; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: 0.01ms !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>TGACH</h1>
-        <p class="subtitle">Choose your region / Выберите язык</p>
-        
-        <div class="lang-grid">
+        <header class="hero">
+            <p class="eyebrow">Anonymous forum archive</p>
+            <h1>TGACH</h1>
+            <p class="subtitle">Choose your stream and enter an archive shaped around its language, culture, and community.</p>
+        </header>
+
+        <div class="lang-grid" aria-label="Choose a regional stream">
             <!-- RUSSIAN -->
-            <div class="lang-card card-ru" onclick="selectStream('ru')">
+            <button class="lang-card card-ru" type="button" onclick="selectStream('ru', this)" aria-label="Open the Russian stream">
                 <div class="flag-wrapper">
                     <svg class="flag-svg" viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
                         <rect fill="#fff" width="900" height="600"/>
@@ -201,10 +400,11 @@
                     <div class="lang-name">Russian</div>
                     <div class="lang-phrase">Я говорю по-русски</div>
                 </div>
-            </div>
+                <span class="lang-cta">Открыть поток</span>
+            </button>
 
             <!-- ENGLISH (ANIMATED) -->
-            <div class="lang-card card-en" onclick="selectStream('en')">
+            <button class="lang-card card-en" type="button" onclick="selectStream('en', this)" aria-label="Open the English stream">
                 <div class="flag-wrapper">
                     <div class="flag-slideshow">
                         <!-- US Flag -->
@@ -253,10 +453,11 @@
                     <div class="lang-name">English</div>
                     <div class="lang-phrase">I speak English</div>
                 </div>
-            </div>
+                <span class="lang-cta">Open stream</span>
+            </button>
 
             <!-- JAPANESE -->
-            <div class="lang-card card-jp" onclick="selectStream('jp')">
+            <button class="lang-card card-jp" type="button" onclick="selectStream('jp', this)" aria-label="Open the Japanese stream">
                 <div class="flag-wrapper">
                     <svg class="flag-svg" viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
                         <rect fill="#fff" width="900" height="600"/>
@@ -269,15 +470,19 @@
                     <div class="lang-name">Japanese</div>
                     <div class="lang-phrase">日本語を話します</div>
                 </div>
-            </div>
+                <span class="lang-cta">ストリームを開く</span>
+            </button>
         </div>
     </div>
 
     <script>
-        async function selectStream(stream) {
-            // Эффект нажатия (Scale down)
+        async function selectStream(stream, selectedCard) {
             const cards = document.querySelectorAll('.lang-card');
-            cards.forEach(c => c.style.opacity = '0.3');
+            cards.forEach((card) => {
+                card.disabled = true;
+                card.setAttribute('aria-busy', 'true');
+            });
+            selectedCard.classList.add('is-loading');
             
             try {
                 // Шлем запрос на API для установки куки и настройки в БД
