@@ -3301,7 +3301,7 @@ def throttle(rate: int):
             now = time.time()
             if user_id in cooldowns and now - cooldowns[user_id] < rate:
                 try:
-                    await message.answer(f"⚠️ Пожалуйста, подождите {int(rate - (now - cooldowns[user_id]))} сек.", disable_notification=True)
+                    await message.answer(html.escape(f"⚠️ Пожалуйста, подождите {int(rate - (now - cooldowns[user_id]))} сек."), disable_notification=True)
                 except Exception:
                     import traceback; traceback.print_exc()
                 return
