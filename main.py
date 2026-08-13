@@ -12332,7 +12332,7 @@ async def _collect_stacked_anime_downloads(
 
     return [successful_by_slot[slot] for slot in sorted(successful_by_slot)]
 
-def _prepare_anime_content(successful_downloads: list, caption: str) -> dict:
+def _prepare_anime_content(successful_downloads: list, caption: str, stream: str = 'ru') -> dict:
     """Build the content dict passed to process_new_post → broadcaster.
 
     Key contract (see broadcaster.py lines 827-962):
@@ -12348,7 +12348,7 @@ def _prepare_anime_content(successful_downloads: list, caption: str) -> dict:
         # All single-item types: store raw bytes. Broadcaster wraps in BufferedInputFile
         # using the correct filename based on content['type']:
         #   photo -> file.jpg, animation -> file.gif, video/other -> video.mp4
-        content = {'type': mtype, 'image_bytes': ibytes, 'caption': caption}
+        content = {'type': mtype, 'image_bytes': ibytes, 'caption': caption, 'stream': stream}
     else:
         media_items = []
         for ibytes, mtype, ext in successful_downloads:
@@ -12364,14 +12364,16 @@ def _prepare_anime_content(successful_downloads: list, caption: str) -> dict:
             input_file = BufferedInputFile(ibytes, filename=f"file.{ext}")
             media_items.append({'type': tg_type, 'media': input_file})
 
-        content = {'type': 'media_group', 'media': media_items, 'caption': caption}
+        content = {'type': 'media_group', 'media': media_items, 'caption': caption, 'stream': stream}
     return content
 
 
-async def _publish_anime_post(message: types.Message, board_id: str, user_id: int, content: dict, stream: str, num_downloads: int):
+async def _publish_anime_post(message: types.Message, board_id: str, user_id: int, content: dict, num_downloads: int):
     b_data = board_data[board_id]
     is_shadow_muted = (user_id in b_data['shadow_mutes'] and
                        b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+
+    stream = content.get('stream', 'ru')
 
     if is_shadow_muted:
         await process_shadow_reject(ShadowRejectContext(
@@ -12453,9 +12455,9 @@ async def _process_stacked_anime_command(
         if not successful_downloads:
             raise ValueError("Не удалось скачать ни одного изображения.")
             
-        content = _prepare_anime_content(successful_downloads, caption)
+        content = _prepare_anime_content(successful_downloads, caption, stream)
 
-        await _publish_anime_post(message, board_id, user_id, content, stream, len(successful_downloads))
+        await _publish_anime_post(message, board_id, user_id, content, len(successful_downloads))
         
         # --- EVENT LOGIC ---
         if random.random() < 0.15:
