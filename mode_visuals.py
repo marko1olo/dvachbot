@@ -149,7 +149,10 @@ def create_visual_post(mode, text, header=None):
             img_path = f"templates/{config['filename']}"
         elif mode in DYNAMIC_MODES:
             folder = DYNAMIC_MODES[mode]
-            files = glob.glob(f"{folder}/*.png") + glob.glob(f"{folder}/*.webp")
+            files = (glob.glob(f"{folder}/*.png") + 
+                     glob.glob(f"{folder}/*.webp") + 
+                     glob.glob(f"{folder}/*.jpg") + 
+                     glob.glob(f"{folder}/*.jpeg"))
             if not files: return None
             img_path = random.choice(files)
             
@@ -162,59 +165,96 @@ def create_visual_post(mode, text, header=None):
                 'layout': layout_type
             }
             if layout_type == 'bottom':
-                config['text_area'] = (80, 600, 944, 980)
-                config['max_font_size'] = 60
-            else:
-                config['header_area'] = (80, 40, 944, 180)
-                config['text_area'] = (80, 680, 944, 980)
+                config['text_area'] = (60, 550, 964, 870)
                 config['max_font_size'] = 55
+            else:
+                config['header_area'] = (60, 40, 964, 180)
+                config['text_area'] = (60, 600, 964, 870)
+                config['max_font_size'] = 50
 
         if not img_path or not os.path.exists(img_path): return None
         
         img = Image.open(img_path).convert("RGBA")
+        if img.size != (1024, 1024):
+            # Guarantee 1024x1024 1:1 square
+            if abs(img.width - img.height) > 20:
+                img.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+                new_sq = Image.new("RGBA", (1024, 1024), (0, 0, 0, 255))
+                new_sq.paste(img, ((1024 - img.width) // 2, (1024 - img.height) // 2))
+                img = new_sq
+            else:
+                img = img.resize((1024, 1024), Image.Resampling.LANCZOS)
+
         draw = ImageDraw.Draw(img)
         
         if mode in DYNAMIC_MODES:
-            overlay = Image.new('RGBA', img.size, (0,0,0,0))
+            # Fonts to use
+            def get_font_by_size(size: int):
+                for p in ["fonts/Impact.ttf", "C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arialbd.ttf"]:
+                    if os.path.exists(p):
+                        try: return ImageFont.truetype(p, size)
+                        except Exception: pass
+                return ImageFont.load_default()
+
+            clean_h = ""
+            if header:
+                clean_h = header.replace("<i>", "").replace("</i>", "").replace("###", "").strip()
+                for em in ["💙", "💛", "🇺🇦", "🚜", "🐷", "🔥", "✈️", "💥", "👑", "⚡", "🎯", "🇵🇱", "🧠"]:
+                    clean_h = clean_h.replace(em, "").strip()
+
+            overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
             odraw = ImageDraw.Draw(overlay)
+
+            # Choose font size depending on text length
+            f_size = 44 if len(text) < 60 else (36 if len(text) < 120 else 28)
+            f_text = get_font_by_size(f_size)
+            f_head = get_font_by_size(26)
+
+            # Wrap text to max width 860
+            words = text.split()
+            lines = []
+            curr = ""
+            for w in words:
+                test = f"{curr} {w}".strip()
+                if odraw.textlength(test, font=f_text) <= 860:
+                    curr = test
+                else:
+                    if curr: lines.append(curr)
+                    curr = w
+            if curr: lines.append(curr)
+            wrapped_text = "\n".join(lines)
+
+            bbox = odraw.multiline_textbbox((0, 0), wrapped_text, font=f_text, align="center")
+            text_h = bbox[3] - bbox[1]
+
+            banner_pad = 22
+            head_h = 42 if clean_h else 0
+            total_content_h = head_h + text_h
             
-            if config['layout'] == 'bottom':
-                odraw.rectangle([0, 550, 1024, 1024], fill=(0,0,0,130))
-            else:
-                odraw.rectangle([0, 0, 1024, 200], fill=(0,0,0,130))
-                odraw.rectangle([0, 600, 1024, 1024], fill=(0,0,0,130))
+            # Keep banner safe from bottom Telegram UI (ending at y=760 max)
+            banner_bottom = min(770, max(620, 520 + total_content_h // 2))
+            banner_top = max(380, banner_bottom - total_content_h - banner_pad * 2)
             
+            border_color = (0, 180, 255, 140) if mode == 'ukrainian' else (255, 100, 100, 140)
+            odraw.rounded_rectangle([40, banner_top, 984, banner_bottom], radius=18, fill=(10, 14, 20, 200), outline=border_color, width=2)
+
             img = Image.alpha_composite(img, overlay)
             draw = ImageDraw.Draw(img)
 
-            if config['layout'] == 'split' and header:
-                h_x1, h_y1, h_x2, h_y2 = config['header_area']
-                clean_h = header.replace("<i>","").replace("</i>","").replace("###","").strip()
-                h_fit_config = FontFitConfig(
-                    font_path=config['font_path'],
-                    max_width=h_x2-h_x1,
-                    max_height=h_y2-h_y1,
-                    max_font_size=40,
-                    text_align='center'
-                )
-                h_font, h_text = _find_best_font_size(draw, clean_h, h_fit_config)
-                _draw_text_with_shadow(draw, (h_x1 + (h_x2-h_x1)/2, h_y1), h_text, font=h_font, fill=(255,220,50), align='center', anchor='ma', stroke_width=2)
+            curr_y = banner_top + banner_pad
+            if clean_h:
+                h_w = draw.textlength(clean_h, font=f_head)
+                h_x = (1024 - h_w) / 2
+                draw.text((h_x, curr_y), clean_h, font=f_head, fill=(255, 220, 40, 255))
+                curr_y += head_h
 
-            x1, y1, x2, y2 = config['text_area']
-            display_text = text
-            if config['layout'] == 'bottom' and header:
-                clean_h = header.replace("<i>","").replace("</i>","").replace("###","").strip()
-                display_text = f"{clean_h}\n\n{text}"
+            t_bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=f_text, align="center")
+            t_w = t_bbox[2] - t_bbox[0]
+            t_x = (1024 - t_w) / 2
             
-            fit_config = FontFitConfig(
-                font_path=config['font_path'],
-                max_width=x2-x1,
-                max_height=y2-y1,
-                max_font_size=config['max_font_size'],
-                text_align='center'
-            )
-            font, w_text = _find_best_font_size(draw, display_text, fit_config)
-            _draw_text_with_shadow(draw, (x1 + (x2-x1)/2, y1), w_text, font=font, fill=(255,255,255), align='center', anchor='ma', stroke_width=2)
+            for ox, oy in [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, 3)]:
+                draw.multiline_text((t_x + ox, curr_y + oy), wrapped_text, font=f_text, fill=(0, 0, 0, 220), align="center")
+            draw.multiline_text((t_x, curr_y), wrapped_text, font=f_text, fill=(255, 255, 255, 255), align="center")
 
         else:
             x1, y1, x2, y2 = config['text_area']

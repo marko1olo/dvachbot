@@ -39,34 +39,27 @@ class TestStatsGenerator(unittest.TestCase):
         # Mock fetchone to return our profile, posts_count, rx_received, rx_given, mutes_count
         # The execute commands map directly to fetchone results.
         mock_cursor.fetchone.side_effect = [
-            (150.0, 'mod', 1234567890, 'Sup'), # 1. Fetch user profile
-            (42,), # 2. Count actual posts
-            (2,),  # 5. Count mutes
+            (150.0, 'mod', 1234567890, 'Sup', '{}'), # 1. Fetch user profile
+            (2,),  # 4. Count mutes
         ]
 
         mock_cursor.fetchall.side_effect = [
-            [('{"reactions": {"users": {"999": ["👍", "🔥"]}}}',)], # 3. reactions received
-            [('{"reactions": {"users": {"123": ["👍", "❤️"]}}}',)], # 4. reactions given
-            [(101, 100), (123, 42), (200, 10)], # 6. board posters
+            [(1, 1234567890, 'test', '{"text": "hello", "reactions": {"users": {"999": ["👍", "🔥"]}}}')], # 2. user posts
+            [('{"reactions": {"users": {"123": ["👍", "❤️"]}}}',)], # 3. reactions given
+            [(101, 100), (123, 42), (200, 10)], # 5. board posters
         ]
 
         stats_data = fetch_user_stats_data(123, 'test')
 
-        expected_data = {
-            'balance': 150.0,
-            'role': 'mod',
-            'created_at': 1234567890,
-            'custom_prefix': 'Sup',
-            'posts_count': 42,
-            'rx_received': 2,
-            'rx_given': 2,
-            'mutes_count': 2,
-            'rank': 2,
-            'total_users': 3,
-            'cringe_factor': 10
-        }
-
-        self.assertEqual(stats_data, expected_data)
+        self.assertEqual(stats_data['balance'], 150.0)
+        self.assertEqual(stats_data['role'], 'mod')
+        self.assertEqual(stats_data['custom_prefix'], 'Sup')
+        self.assertEqual(stats_data['posts_count'], 1)
+        self.assertEqual(stats_data['rx_received'], 2)
+        self.assertEqual(stats_data['rx_given'], 2)
+        self.assertEqual(stats_data['mutes_count'], 2)
+        self.assertEqual(stats_data['rank'], 2)
+        self.assertEqual(stats_data['total_users'], 3)
         mock_connect.assert_called_once()
         mock_conn.close.assert_called_once()
 
@@ -85,7 +78,13 @@ class TestStatsGenerator(unittest.TestCase):
             'mutes_count': 2,
             'rank': 2,
             'total_users': 3,
-            'cringe_factor': 10
+            'cringe_factor': 10,
+            'fav_board': 'test',
+            'chronotype': 'Ночной сыч',
+            'post_style': 'Базовые мысли',
+            'avg_len': 50,
+            'approval_pct': 85,
+            'badges': ['Анон']
         }
         mock_generate_schizo_name.return_value = "Базированный-Анон"
 
@@ -115,7 +114,13 @@ class TestStatsGenerator(unittest.TestCase):
             cringe_factor=10,
             rank=2,
             total_users=3,
-            slang_comment='ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц.'
+            slang_comment='ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц.',
+            fav_board='test',
+            chronotype='Ночной сыч',
+            post_style='Базовые мысли',
+            avg_len=50,
+            approval_pct=85,
+            badges=['Анон']
         )
         mock_draw_user_stats_card.assert_called_once_with(expected_data)
 

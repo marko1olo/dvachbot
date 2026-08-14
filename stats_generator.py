@@ -2576,46 +2576,71 @@ def _generate_all_charts_locked():
 
 
 def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
+    from collections import Counter
+    from datetime import datetime, UTC
+
     with contextlib.closing(connect_stats_db()) as conn:
         with contextlib.closing(conn.cursor()) as c:
 
-            # 1. Fetch user profile
-            c.execute("SELECT balance, role, created_at, custom_prefix FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            # 1. Fetch user profile & active items
+            c.execute("SELECT balance, role, created_at, custom_prefix, active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id))
             profile = c.fetchone()
             if not profile:
-                c.execute("SELECT balance, role, created_at, custom_prefix FROM Users WHERE user_id = ?", (user_id,))
+                c.execute("SELECT balance, role, created_at, custom_prefix, active_items FROM Users WHERE user_id = ?", (user_id,))
                 profile = c.fetchone()
 
             if profile:
-                balance, role, created_at, custom_prefix = profile
+                balance = profile[0] if len(profile) > 0 and profile[0] is not None else 0.0
+                role = profile[1] if len(profile) > 1 and profile[1] is not None else 'user'
+                created_at = profile[2] if len(profile) > 2 and profile[2] is not None else time.time()
+                custom_prefix = profile[3] if len(profile) > 3 else None
+                active_items_str = profile[4] if len(profile) > 4 and profile[4] else '{}'
             else:
-                balance, role, created_at, custom_prefix = 0.0, 'user', time.time(), None
+                balance, role, created_at, custom_prefix, active_items_str = 0.0, 'user', time.time(), None, '{}'
 
-            # 2. Count actual posts (board specific and total)
-            c.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ? AND board_id = ?", (user_id, board_id))
-            posts_count = c.fetchone()[0]
-            if posts_count == 0:
-                c.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (user_id,))
-                posts_count = c.fetchone()[0]
+            try:
+                active_items = json.loads(active_items_str) if active_items_str else {}
+            except Exception:
+                active_items = {}
 
-            # 3. Count real reactions received from Posts table
-            c.execute("SELECT content FROM Posts WHERE author_id = ? AND content LIKE '%reactions%'", (user_id,))
-            posts_with_rx = c.fetchall()
+            # 2. Fetch all user posts for multi-dimensional analytics
+            c.execute("SELECT post_num, timestamp, board_id, content FROM Posts WHERE author_id = ?", (user_id,))
+            posts = c.fetchall()
+            posts_count = len(posts)
+
+            board_counter = Counter()
+            hour_counter = Counter()
+            total_len = 0
             rx_received = 0
+            pos_rx = 0
             neg_rx = 0
-            for p in posts_with_rx:
-                try:
-                    d = json.loads(p[0])
-                    users_rx = d.get('reactions', {}).get('users', {})
-                    for r_uid, emojis in users_rx.items():
-                        for em in emojis:
-                            rx_received += 1
-                            if em in ['👎', '🤡', '💩', '🤮', '😱', 'сажа']:
-                                neg_rx += 1
-                except Exception:
-                    pass
 
-            # 4. Count reactions given by this user
+            for pnum, ts, b_id, content_raw in posts:
+                board_counter[b_id] += 1
+                if ts:
+                    try:
+                        dt = datetime.fromtimestamp(ts, UTC)
+                        hour_counter[dt.hour] += 1
+                    except Exception:
+                        pass
+
+                if content_raw:
+                    try:
+                        d = json.loads(content_raw)
+                        text = d.get('text', '') or d.get('caption', '')
+                        total_len += len(text)
+                        users_rx = d.get('reactions', {}).get('users', {})
+                        for r_uid, emojis in users_rx.items():
+                            for em in emojis:
+                                rx_received += 1
+                                if em in ['👎', '🤡', '💩', '🤮', '😱', 'сажа']:
+                                    neg_rx += 1
+                                else:
+                                    pos_rx += 1
+                    except Exception:
+                        pass
+
+            # 3. Reactions given by user
             user_str = f'"{user_id}"'
             c.execute("SELECT content FROM Posts WHERE content LIKE ?", (f'%{user_str}%',))
             rx_given_posts = c.fetchall()
@@ -2628,11 +2653,11 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
                 except Exception:
                     pass
 
-            # 5. Count mutes
+            # 4. Count mutes
             c.execute("SELECT COUNT(*) FROM Mutes WHERE user_id = ?", (user_id,))
             mutes_count = c.fetchone()[0]
 
-            # 6. Rank among all posters on this board
+            # 5. Rank among all posters on this board
             c.execute("""
                 SELECT author_id, COUNT(*) as cnt 
                 FROM Posts 
@@ -2647,13 +2672,66 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
                 rank = len(board_posters) + 1
             total_users = max(len(board_posters), 1)
 
-            # 7. Dynamic Cringe Factor (%)
+            # 6. Chronotype & Fav Board
+            fav_board = board_counter.most_common(1)[0][0] if board_counter else board_id
+            peak_hour = hour_counter.most_common(1)[0][0] if hour_counter else 22
+            if 0 <= peak_hour < 6:
+                chronotype = f"Ночной сыч ({peak_hour:02d}:00)"
+            elif 6 <= peak_hour < 12:
+                chronotype = f"Утренний анон ({peak_hour:02d}:00)"
+            elif 12 <= peak_hour < 18:
+                chronotype = f"Дневной щитпостер ({peak_hour:02d}:00)"
+            else:
+                chronotype = f"Вечерний подпивас ({peak_hour:02d}:00)"
+
+            # 7. Post style / Verbosity
+            avg_len = total_len // max(1, posts_count)
+            if avg_len < 35:
+                post_style = "Лаконичный щитпост"
+            elif avg_len < 120:
+                post_style = "Базовые мысли"
+            else:
+                post_style = "Пасты и лонгриды"
+
+            # 8. Dynamic Cringe Factor (%) & Approval
+            approval_pct = int(round((pos_rx / max(1, rx_received)) * 100)) if rx_received > 0 else 85
             if rx_received > 0:
                 cringe_factor = int(round((neg_rx / rx_received) * 100))
                 cringe_factor = min(100, cringe_factor + mutes_count * 5)
             else:
                 cringe_factor = (user_id * 17 + posts_count * 3) % 45 + (mutes_count * 10)
                 cringe_factor = min(100, max(0, cringe_factor))
+
+            # 9. Badges
+            badges = []
+            if posts_count >= 5000:
+                badges.append("Легенда")
+            elif posts_count >= 500:
+                badges.append("Скуф-ветеран")
+            elif posts_count >= 50:
+                badges.append("Активист")
+            else:
+                badges.append("Ньюфаг")
+
+            if pos_rx >= 500 or approval_pct >= 85 and rx_received >= 20:
+                badges.append("Базовик")
+            if mutes_count >= 5:
+                badges.append("Рецидивист")
+            elif mutes_count == 0 and posts_count > 100:
+                badges.append("Чист перед законом")
+
+            if balance >= 500:
+                badges.append("Олигарх")
+            elif balance < 15 and posts_count > 50:
+                badges.append("Нищук")
+
+            now_ts = int(time.time())
+            if active_items.get("tinfoil_hat", 0) > now_ts:
+                badges.append("В фольге")
+            if active_items.get("reflect_shield_until", 0) > now_ts:
+                badges.append("Под щитом")
+            if active_items.get("shit_gun"):
+                badges.append("С говном")
 
             return {
                 'balance': balance or 0.0,
@@ -2666,7 +2744,13 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
                 'mutes_count': mutes_count,
                 'rank': rank,
                 'total_users': total_users,
-                'cringe_factor': cringe_factor
+                'cringe_factor': cringe_factor,
+                'fav_board': fav_board,
+                'chronotype': chronotype,
+                'post_style': post_style,
+                'avg_len': avg_len,
+                'approval_pct': approval_pct,
+                'badges': badges[:4]
             }
 
 
@@ -2691,16 +2775,6 @@ def _get_slang_comment(posts_count: int, rank: int, balance: float) -> str:
         return "Обычный сыч. Бамп в тред, сажу в комменты."
 
 @dataclass
-class CardConfig:
-    x: int
-    y: int
-    w: int
-    h: int
-    val: str
-    label: str
-    color: str
-
-@dataclass
 class UserStatsCardData:
     user_id: int
     board_id: str
@@ -2717,6 +2791,12 @@ class UserStatsCardData:
     rank: int
     total_users: int
     slang_comment: str
+    fav_board: str = "b"
+    chronotype: str = "Ночной сыч"
+    post_style: str = "Базовые мысли"
+    avg_len: int = 50
+    approval_pct: int = 85
+    badges: list = None
 
 
 def _format_text_report(data: UserStatsCardData) -> str:
@@ -2724,12 +2804,13 @@ def _format_text_report(data: UserStatsCardData) -> str:
         f"☘️ <b>Статистика пользователя {data.schizo_name}</b> (/${data.board_id}/)\n\n"
         f"👤 <b>Статус:</b> {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}\n"
         f"🏅 <b>Ранг борды:</b> #{data.rank} из {data.total_users}\n"
-        f"📝 <b>Написано постов:</b> {data.posts_count}\n"
-        f"🎭 <b>Получено реакций:</b> +{data.rx_received}\n"
-        f"⚡ <b>Поставлено реакций:</b> {data.rx_given}\n"
-        f"💰 <b>Баланс:</b> {int(data.balance)} RUB\n"
+        f"📝 <b>Написано постов:</b> {data.posts_count:,}\n"
+        f"🎭 <b>Получено реакций:</b> +{data.rx_received:,} (Одобрение: {data.approval_pct}%)\n"
+        f"⚡ <b>Поставлено реакций:</b> {data.rx_given:,}\n"
+        f"💰 <b>Баланс:</b> {int(data.balance):,} RUB\n"
         f"🔇 <b>Схвачено мутов:</b> {data.mutes_count}\n"
-        f"🌀 <b>Кринж-фактор:</b> {data.cringe_factor}%\n\n"
+        f"🌀 <b>Кринж-фактор:</b> {data.cringe_factor}%\n"
+        f"🌙 <b>Хронотип:</b> {data.chronotype}\n\n"
         f"💬 <i>\"{data.slang_comment}\"</i>"
     )
 
@@ -2755,7 +2836,13 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         cringe_factor=stats_data['cringe_factor'],
         rank=stats_data['rank'],
         total_users=stats_data['total_users'],
-        slang_comment=slang_comment
+        slang_comment=slang_comment,
+        fav_board=stats_data.get('fav_board', board_id),
+        chronotype=stats_data.get('chronotype', "Ночной сыч"),
+        post_style=stats_data.get('post_style', "Базовые мысли"),
+        avg_len=stats_data.get('avg_len', 50),
+        approval_pct=stats_data.get('approval_pct', 85),
+        badges=stats_data.get('badges', ["Анон"])
     )
 
     text_report = _format_text_report(card_data)
@@ -2764,126 +2851,158 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
 
 
 
-def draw_user_stats_card(
-    data: UserStatsCardData
-) -> io.BytesIO:
-    import os
-    import textwrap
+def draw_user_stats_card(data: UserStatsCardData) -> io.BytesIO:
+    import random
     from PIL import Image, ImageDraw, ImageFont
 
-    width, height = 860, 480
-    img = Image.new('RGB', (width, height), color='#0d1117')
+    W, H = 960, 540
+    img = Image.new("RGBA", (W, H), (14, 18, 23, 255))
     draw = ImageDraw.Draw(img)
 
-    font_candidates = [
-        "C:/Windows/Fonts/segoeuib.ttf",
-        "C:/Windows/Fonts/arialbd.ttf",
-        "C:/Windows/Fonts/arial.ttf",
-        "font1.ttf"
-    ]
-    font_bold_path = "arial.ttf"
-    for f in font_candidates:
-        if os.path.exists(f):
-            font_bold_path = f
-            break
+    def get_f(name: str, size: int):
+        paths = [
+            f"C:/Windows/Fonts/{name}.ttf",
+            f"C:/Windows/Fonts/{name}",
+            "C:/Windows/Fonts/segoeuib.ttf",
+            "C:/Windows/Fonts/arialbd.ttf",
+            "C:/Windows/Fonts/segoeui.ttf",
+            "C:/Windows/Fonts/arial.ttf"
+        ]
+        for p in paths:
+            if os.path.exists(p):
+                try: return ImageFont.truetype(p, size)
+                except Exception: pass
+        return ImageFont.load_default()
 
-    font_regular_path = "C:/Windows/Fonts/segoeui.ttf" if os.path.exists("C:/Windows/Fonts/segoeui.ttf") else font_bold_path
+    f_title = get_f("segoeuib", 24)
+    f_subtitle = get_f("segoeui", 14)
+    f_num = get_f("segoeuib", 22)
+    f_label = get_f("segoeui", 12)
+    f_badge = get_f("segoeuib", 12)
+    f_footer = get_f("segoeui", 11)
 
-    try:
-        font_title = ImageFont.truetype(font_bold_path, 25)
-        font_subtitle = ImageFont.truetype(font_regular_path, 14)
-        font_badge_main = ImageFont.truetype(font_bold_path, 13)
-        font_badge_sub = ImageFont.truetype(font_bold_path, 10)
-        font_card_num = ImageFont.truetype(font_bold_path, 22)
-        font_card_lbl = ImageFont.truetype(font_regular_path, 12)
-        font_comment = ImageFont.truetype(font_regular_path, 14)
-        font_comment_title = ImageFont.truetype(font_bold_path, 12)
-    except Exception:
-        font_title = font_subtitle = font_badge_main = font_badge_sub = font_card_num = font_card_lbl = font_comment = font_comment_title = ImageFont.load_default()
+    # 1. Background grid dots
+    for x in range(25, W - 25, 28):
+        for y in range(25, H - 25, 28):
+            draw.point((x, y), fill=(26, 34, 46, 255))
 
-    # Top Header Bar
-    draw.rectangle([0, 0, width, 95], fill='#161b22')
-    draw.line([0, 95, width, 95], fill='#30363d', width=2)
+    # Outer border
+    draw.rounded_rectangle([14, 14, W - 14, H - 14], radius=16, outline=(36, 46, 62, 255), width=2)
 
-    # Title & Subtitle
-    draw.text((32, 22), data.schizo_name, fill='#f0883e', font=font_title)
+    # 2. Header Area
+    av_x, av_y, av_s = 36, 32, 70
+    draw.rounded_rectangle([av_x, av_y, av_x + av_s, av_y + av_s], radius=12, fill=(22, 28, 38, 255), outline=(48, 62, 82, 255), width=2)
     
-    prefix_display = f" [{data.custom_prefix.strip('[]')}]" if data.custom_prefix else ""
-    status_text = f"ID: Анон-#{data.user_id % 10000:04d}   •   Раздел: /{data.board_id}/   •   Статус: {data.role_name}{prefix_display}"
-    draw.text((32, 60), status_text, fill='#8b949e', font=font_subtitle)
+    rng = random.Random(data.user_id)
+    av_color = rng.choice([
+        (0, 230, 160, 255), (0, 180, 255, 255), (255, 180, 40, 255), (255, 80, 120, 255), (180, 120, 255, 255)
+    ])
+    grid = [[rng.random() > 0.45 for _ in range(3)] for _ in range(5)]
+    pw = 9
+    ox, oy = av_x + 12, av_y + 12
+    for r in range(5):
+        for c in range(3):
+            if grid[r][c]:
+                draw.rectangle([ox + c * pw, oy + r * pw, ox + (c + 1) * pw - 1, oy + (r + 1) * pw - 1], fill=av_color)
+                if c < 2:
+                    draw.rectangle([ox + (4 - c) * pw, oy + r * pw, ox + (5 - c) * pw - 1, oy + (r + 1) * pw - 1], fill=av_color)
 
-    # Certified badge (top right)
-    badge_w, badge_h = 180, 68
-    badge_x = width - badge_w - 32
-    draw.rounded_rectangle([badge_x, 14, badge_x + badge_w, 14 + badge_h], radius=8, fill='#0d1117', outline='#f0883e', width=2)
-    draw.text((badge_x + badge_w//2, 33), "ТГАЧ CERTIFIED", fill='#f0883e', font=font_badge_main, anchor="mm")
-    sub_cert = "APPROVED BITYARD" if data.role != 'admin' else "ADMINISTRATOR"
-    draw.text((badge_x + badge_w//2, 58), sub_cert, fill='#39d353', font=font_badge_sub, anchor="mm")
+    # User Header Text
+    draw.text((126, 34), data.schizo_name, font=f_title, fill=(245, 247, 250, 255))
+    
+    prefix_str = f"Титул: [{data.custom_prefix}]  •  " if data.custom_prefix else ""
+    board_tag = f"/{data.fav_board}/"
+    role_tag = f"Статус: {data.role.upper()}"
+    draw.text((126, 70), f"{prefix_str}Доска: {board_tag}  •  {role_tag}", font=f_subtitle, fill=(135, 150, 170, 255))
 
-    # Helper to draw stats cards
-    def draw_card(cfg: CardConfig):
-        draw.rounded_rectangle([cfg.x, cfg.y, cfg.x + cfg.w, cfg.y + cfg.h], radius=8, fill='#161b22', outline='#30363d', width=1)
-        draw.ellipse([cfg.x + 14, cfg.y + 14, cfg.x + 22, cfg.y + 22], fill=cfg.color)
-        draw.text((cfg.x + 30, cfg.y + 18), cfg.label, fill='#8b949e', font=font_card_lbl, anchor="lm")
-        draw.text((cfg.x + 14, cfg.y + 50), cfg.val, fill=cfg.color, font=font_card_num, anchor="lm")
+    # Top Right Verification & ID
+    draw.rounded_rectangle([W - 240, 32, W - 36, 76], radius=10, fill=(18, 24, 32, 255), outline=(42, 54, 72, 255), width=1)
+    dot_color = (0, 230, 150, 255) if data.cringe_factor < 50 else (255, 75, 75, 255)
+    draw.ellipse([W - 225, 50, W - 213, 62], fill=dot_color)
+    draw.text((W - 204, 40), "TGACH PASSPORT", font=f_badge, fill=(100, 120, 145, 255))
+    draw.text((W - 204, 54), f"ID: Анон-#{data.user_id % 10000:04d}", font=f_label, fill=(220, 230, 245, 255))
 
-    # Grid (2 rows x 3 cols)
-    card_w, card_h = 180, 82
-    gap_x, gap_y = 16, 14
-    start_x, start_y = 32, 114
-
+    # 3. Key Metrics (6 Cards in 3x2 Grid)
     cards = [
-        CardConfig(start_x, start_y, card_w, card_h, f"{data.posts_count:,}", "Написано постов", "#58a6ff"),
-        CardConfig(start_x + card_w + gap_x, start_y, card_w, card_h, f"#{data.rank} / {data.total_users}", "Ранг на борде", "#e3b341"),
-        CardConfig(start_x + (card_w + gap_x)*2, start_y, card_w, card_h, f"{int(data.balance)} RUB", "Баланс коинов", "#3fb950"),
-
-        CardConfig(start_x, start_y + card_h + gap_y, card_w, card_h, f"+{data.rx_received:,}", "Получено реакций", "#f778ba"),
-        CardConfig(start_x + card_w + gap_x, start_y + card_h + gap_y, card_w, card_h, f"{data.rx_given:,}", "Поставлено реакций", "#a371f7"),
-        CardConfig(start_x + (card_w + gap_x)*2, start_y + card_h + gap_y, card_w, card_h, f"{data.cringe_factor}%", "Кринж-фактор", "#bc8cff"),
+        ("ПОСТЫ И РАНГ", f"{data.posts_count:,}", f"Ранг #{data.rank} из {data.total_users}", (0, 200, 255, 255)),
+        ("РЕАКЦИИ", f"+{data.rx_received:,}", f"Одобрение: {data.approval_pct}%", (0, 230, 150, 255)),
+        ("ПОСТАВЛЕНО", f"{data.rx_given:,}", "Активность в тредах", (180, 140, 255, 255)),
+        ("АКТИВЫ", f"{int(data.balance):,} RUB", "Шекели на балансе", (255, 200, 50, 255)),
+        ("ХРОНОТИП", f"{data.chronotype}", "Пик активности анона", (255, 140, 60, 255)),
+        ("СТИЛЬ ПОСТИНГА", f"{data.post_style}", f"Ср. длина: {data.avg_len} симв.", (100, 210, 255, 255)),
     ]
 
-    for card in cards:
-        draw_card(card)
+    grid_x, grid_y = 36, 126
+    cw, ch = 280, 94
+    gap_x, gap_y = 18, 14
 
-    # Right column (2 blocks: Mutes + Activity)
-    right_x = start_x + (card_w + gap_x)*3
-    right_w = width - right_x - 32
+    for i, (title, val, sub, accent) in enumerate(cards):
+        col = i % 3
+        row = i // 3
+        cx = grid_x + col * (cw + gap_x)
+        cy = grid_y + row * (ch + gap_y)
 
-    # Mutes Card
-    draw.rounded_rectangle([right_x, start_y, right_x + right_w, start_y + card_h], radius=8, fill='#1f1418', outline='#f85149', width=1)
-    draw.ellipse([right_x + 14, start_y + 14, right_x + 22, start_y + 22], fill='#f85149')
-    draw.text((right_x + 30, start_y + 18), "Схвачено мутов", fill='#8b949e', font=font_card_lbl, anchor="lm")
-    draw.text((right_x + 14, start_y + 50), f"{data.mutes_count} шт", fill='#ff7b72', font=font_card_num, anchor="lm")
+        draw.rounded_rectangle([cx, cy, cx + cw, cy + ch], radius=10, fill=(20, 26, 34, 255), outline=(36, 46, 60, 255), width=1)
+        draw.rectangle([cx + 14, cy, cx + 55, cy + 2], fill=accent)
+        draw.text((cx + 14, cy + 10), title, font=f_label, fill=(110, 130, 155, 255))
+        draw.text((cx + 14, cy + 30), str(val), font=f_num, fill=(245, 248, 252, 255))
+        draw.text((cx + 14, cy + 66), sub, font=f_label, fill=(140, 155, 175, 255))
 
-    # Activity Card
-    act_y = start_y + card_h + gap_y
-    draw.rounded_rectangle([right_x, act_y, right_x + right_w, act_y + card_h], radius=8, fill='#161b22', outline='#30363d', width=1)
-    draw.text((right_x + 14, act_y + 20), "Деградация", fill='#8b949e', font=font_card_lbl)
-    activity_pct = min(1.0, data.posts_count / 500.0)
-    draw.text((right_x + right_w - 14, act_y + 20), f"{int(activity_pct*100)}%", fill='#f0883e', font=font_card_lbl, anchor="ra")
+    # 4. Badges / Achievements Row
+    by = 352
+    draw.text((36, by), "ДОСТИЖЕНИЯ И ЭКИПИРОВКА:", font=f_badge, fill=(110, 130, 155, 255))
+    bx = 36
+    
+    badge_colors = {
+        "Легенда": (255, 200, 40, 255),
+        "Базовик": (0, 230, 150, 255),
+        "Рецидивист": (255, 80, 80, 255),
+        "В фольге": (0, 200, 255, 255),
+        "Под щитом": (180, 120, 255, 255),
+        "Олигарх": (255, 215, 0, 255),
+        "Скуф-ветеран": (255, 140, 40, 255),
+        "Активист": (0, 180, 255, 255),
+        "Ньюфаг": (120, 200, 120, 255),
+        "Чист перед законом": (100, 220, 200, 255),
+        "Нищук": (150, 160, 170, 255),
+        "С говном": (180, 120, 60, 255)
+    }
 
-    # Progress bar
-    bar_x = right_x + 14
-    bar_y = act_y + 44
-    bar_w = right_w - 28
-    draw.rounded_rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + 16], radius=4, fill='#21262d')
-    fill_w = max(6, int(bar_w * activity_pct))
-    draw.rounded_rectangle([bar_x, bar_y, bar_x + fill_w, bar_y + 16], radius=4, fill='#f0883e')
+    badge_list = data.badges if data.badges else ["Анон"]
+    for raw_badge in badge_list:
+        b_name = raw_badge
+        for em in ["👑", "🔥", "⚡", "💎", "🚨", "🕊️", "💰", "📉", "👽", "🛡️", "🐒", "🌱"]:
+            b_name = b_name.replace(em, "").strip()
+        
+        b_color = badge_colors.get(b_name, (0, 200, 255, 255))
+        bw = int(draw.textlength(b_name, font=f_badge)) + 34
+        
+        draw.rounded_rectangle([bx, by + 18, bx + bw, by + 46], radius=8, fill=(24, 32, 44, 255), outline=(46, 60, 80, 255), width=1)
+        draw.ellipse([bx + 10, by + 28, bx + 18, by + 36], fill=b_color)
+        draw.text((bx + 24, by + 24), b_name, font=f_badge, fill=(230, 240, 255, 255))
+        bx += bw + 12
 
-    # Bottom Summary Box
-    summary_y = start_y + (card_h + gap_y)*2 + 4
-    summary_h = height - summary_y - 20
-    draw.rounded_rectangle([32, summary_y, width - 32, summary_y + summary_h], radius=8, fill='#161b22', outline='#30363d', width=1)
-    draw.text((48, summary_y + 16), "РЕЗЮМЕ ДЕГРАДАЦИИ:", fill='#f0883e', font=font_comment_title)
+    # 5. Degradation Progress Bar
+    bar_y = 428
+    draw.text((36, bar_y), "ШКАЛА ДЕГРАДАЦИИ", font=f_badge, fill=(110, 130, 155, 255))
+    pct_str = f"{data.cringe_factor}%"
+    pct_w = int(draw.textlength(pct_str, font=f_badge))
+    draw.text((W - 36 - pct_w, bar_y), pct_str, font=f_badge, fill=(255, 90, 90, 255) if data.cringe_factor > 50 else (0, 220, 140, 255))
 
-    wrapped_lines = textwrap.wrap(f'"{data.slang_comment}"', width=105)
-    y_comm = summary_y + 38
-    for line in wrapped_lines[:2]:
-        draw.text((48, y_comm), line, fill='#e6edf3', font=font_comment)
-        y_comm += 22
+    track_w = W - 72
+    draw.rounded_rectangle([36, bar_y + 18, 36 + track_w, bar_y + 30], radius=6, fill=(22, 28, 38, 255))
+    
+    fill_w = max(12, int(track_w * (data.cringe_factor / 100.0)))
+    bar_color = (255, 65, 85, 255) if data.cringe_factor > 60 else (0, 210, 150, 255)
+    draw.rounded_rectangle([36, bar_y + 18, 36 + fill_w, bar_y + 30], radius=6, fill=bar_color)
+
+    # 6. Footer
+    draw.line([36, H - 42, W - 36, H - 42], fill=(28, 36, 48, 255), width=1)
+    draw.text((36, H - 30), "ТГАЧ • АНОНИМНАЯ ИМИДЖБОРДА", font=f_footer, fill=(80, 95, 115, 255))
+    draw.text((W - 180, H - 30), "t.me/dvach_chatbot", font=f_footer, fill=(0, 180, 240, 255))
 
     buf = io.BytesIO()
-    img.save(buf, format='png')
+    img.convert("RGB").save(buf, format='png')
     buf.seek(0)
     return buf
 

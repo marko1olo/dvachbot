@@ -356,19 +356,6 @@ PilImage.MAX_IMAGE_PIXELS = 49_000_000
 import logging
 import uuid
 
-VALID_HF_REPOS = set()
-try:
-    _hf_accs = os.getenv("HF_ACCOUNTS", "")
-    if _hf_accs:
-        for _acc in _hf_accs.split(","):
-            if ":" in _acc:
-                _parts = _acc.split(":")
-                if len(_parts) >= 2:
-                    VALID_HF_REPOS.add(_parts[1].strip())
-    print(f"✅ Loaded {len(VALID_HF_REPOS)} valid HF repos for link filtering.")
-except Exception as e:
-    print(f"⚠️ Error parsing HF_ACCOUNTS for filtering: {e}")
-
 # --- БЛОК ЗАЩИТЫ ОТ TOR И ПЛОХИХ ПОДСЕТЕЙ ---
 TOR_EXIT_NODES = set()
 BANNED_SUBNETS = [
@@ -465,6 +452,19 @@ class RequestIdAdapter(logging.LoggerAdapter):
 
 
 logger = RequestIdAdapter(logger, {})
+
+VALID_HF_REPOS = set()
+try:
+    _hf_accs = os.getenv("HF_ACCOUNTS", "")
+    if _hf_accs:
+        for _acc in _hf_accs.split(","):
+            if ":" in _acc:
+                _parts = _acc.split(":")
+                if len(_parts) >= 2:
+                    VALID_HF_REPOS.add(_parts[1].strip())
+    logger.info(f"Loaded {len(VALID_HF_REPOS)} valid HF repos for link filtering.")
+except Exception as e:
+    logger.warning(f"Error parsing HF_ACCOUNTS for filtering: {e}")
 
 class SafeRotatingFileHandler(RotatingFileHandler):
     def doRollover(self):

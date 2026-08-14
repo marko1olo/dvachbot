@@ -214,8 +214,16 @@ class RequestIdAdapter(logging.LoggerAdapter):
 
 logger = RequestIdAdapter(logger, {})
 
+class SafeRotatingFileHandler(RotatingFileHandler):
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except (PermissionError, OSError):
+            pass
+
+
 # Настройка компактного логгера посетителей
-visitor_fh = RotatingFileHandler("visitors.log", maxBytes=3*1024*1024, backupCount=2, encoding="utf-8")
+visitor_fh = SafeRotatingFileHandler("visitors.log", maxBytes=3*1024*1024, backupCount=2, encoding="utf-8")
 visitor_fh.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
 add_secret_redaction_filter(visitor_fh)
 v_logger = logging.getLogger("visitor_tracker")

@@ -7112,20 +7112,20 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
             start_text = (
                 f"⚡ <b>TGACH — Anonymous {board_name}</b>\n\n"
                 "🌐 <b>Pure Imageboard Culture</b>\n"
-                "A true reincarnation of classic imageboards inside Telegram, blending the authentic /b/ spirit with the speed of a messenger — no VPNs, no captchas, no lag. No profiles, avatars, or saved dossiers. Every text, image, or voice note dissolves anonymously into the collective stream. Your identity resets with every post: words are judged solely on merit, not status. You are simply Anon, equal among equals.\n\n"
+                "Reincarnation of classic imageboards in Telegram — no VPNs, captchas, or censorship. No profiles, avatars, or saved dossiers: every post dissolves into the collective stream. Identity resets with each post. You are simply Anon, equal among equals.\n\n"
                 "⚙️ <b>Autonomous Living Entity</b>\n"
-                "The board thrives as a self-regulating hivemind. Direct replies weave into branching threads, while reactions drive the shadow economy: quality posts earn shekels, while dullness sinks in sage. Forge demotivators on the fly, spin the roulette, fight in duels, and trigger board-wide speech mode transformations.\n\n"
+                "The board thrives as a self-regulating hivemind. Direct replies weave into branching threads, while reactions drive the shadow economy: quality posts earn shekels, while dullness sinks in sage. Forge demotivators, spin roulette, and trigger events.\n\n"
                 "☕ <b>Sanctuary from Social Media</b>\n"
-                "No janitor power-trips, fragile egos, or fake positivity. Shed the normie mask: throw questions into the void, share midnight thoughts, or spectate digital chaos with a cup of tea. From deep existential talks to absurd humor and anime.\n\n"
-                "<i>Brew some tea, settle in, and dive into the eternal stream — you are home, Anon.</i>"
+                "No janitor power-trips, fragile egos, or fake positivity. Shed the normie mask: throw questions into the void, share midnight thoughts, or spectate digital chaos with a cup of tea.\n\n"
+                "<i>Brew some tea and dive into the eternal stream — you are home, Anon.</i>"
             )
         elif lang == 'jp':
             start_text = (
                 f"⚡ <b>TGACH — 匿名画像掲示板 ({board_name})</b>\n\n"
                 "🌐 <b>完全匿名の掲示板文化</b>\n"
-                "Telegram内で蘇るクラシックな画像掲示板。VPNやキャプチャなしで即座にアクセス。プロフィールもアイコンも履歴も存在しません。投稿されたテキストや画像はすべて匿名で全体ストリームに溶け込みます。発言者の肩書きではなく、言葉そのものが評価される世界です。\n\n"
+                "Telegram内で蘇るクラシックな画像掲示板。VPNやキャプチャなしで即座にアクセス。プロフィールもアイコンも履歴も存在しません。言葉そのものが評価される世界です。\n\n"
                 "⚙️ <b>自律的に呼吸するシステム</b>\n"
-                "返信でリアルタイムにスレッドが形成され、リアクションが経済を動かします。良質な投稿にはシェケルが集まり、sageで沈められます。デモティベーター生成、ルーレット、決闘、掲示板全体を変化させるシゾモードなど多彩な機能を搭載。\n\n"
+                "返信でリアルタイムにスレッドが形成され、リアクションが経済を動かします。良質な投稿にはシェケルが集まり、sageで沈められます。デモティベーター生成、ルーレット、決闘、シゾモードを搭載。\n\n"
                 "☕ <b>深夜の居場所</b>\n"
                 "SNSの虚飾から離れ、日常では言えない本音や深夜の思索、アニメや不条理なユーモアを自由に語り合えます。\n\n"
                 "<i>お茶を用意して、混沌のストリームへようこそ。ここは君の居場所だ、名無しさん。</i>"
@@ -7134,19 +7134,22 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
             start_text = (
                 f"⚡ <b>ТГАЧ — Твой анонимный {board_name}</b>\n\n"
                 "🌐 <b>Культура имиджборд без цензуры</b>\n"
-                "Это реинкарнация классических бордов прямо в Телеграме, объединившая дух старого Двача и скорость мессенджера — без VPN, капчи и бесконечных экранов загрузки. Здесь нет профилей, аватарок, контактов и архивов компромата. Любое отправленное сообщение, картинка или войс мгновенно растворяются в общем потоке. Твоя личность обнуляется с каждым постом: оценивается не тот, кто пишет, а исключительно то, что написано. Ты просто Аноним, равный среди равных.\n\n"
-                "⚙️ <b>Живой саморегулирующийся организм</b>\n"
-                "Доска живёт как автономный коллективный разум. Ответы через реплай моментально сплетаются в разветвлённые ветки тредов, а реакции формируют баланс: годные мысли поощряются шекелями, а духота топится сажей. Прямо на лету можно перерабатывать пикчи в демотиваторы, крутить рулетку, устраивать дуэли, грабежи и запускать безумные события, которые на время трансформируют стиль общения всей борды.\n\n"
-                "☕ <b>Сычевальня и антидот от соцсетей</b>\n"
-                "Здесь нет админов с синдромом вахтёра, обиженных модераторов и показного глянца. Сюда приходят сбросить маску нормиса: задать вопрос в пустоту, поделиться тем, о чём молчишь в реале, или понаблюдать за цифровым хаосом со стороны. Можно обсуждать что угодно — от глубоких ночных откровений и экзистенциальной тоски до абсурдного юмора, аниме и локальных мемов.\n\n"
-                "<i>Заваривай чай, устраивайся поудобнее и вливайся в вечный /b/ред — здесь рады любой твоей шизе. Ты дома, Анон.</i>"
+                "Реинкарнация классических бордов в Telegram — без VPN, капчи и цензуры. Нет профилей, аватарок и архивов: каждое сообщение мгновенно растворяется в общем потоке. Твоя личность обнуляется с каждым постом. Оценивается только написанное — ты просто Аноним, равный среди равных.\n\n"
+                "⚙️ <b>Живой организм</b>\n"
+                "Доска живёт как автономный разум. Реплаи строят треды, реакции распределяют баланс: годные мысли поощряются шекелями, духота топится сажей. На лету создавай демотиваторы, крути рулетку, дуэлься и запускай события, меняющие стиль всей борды.\n\n"
+                "☕ <b>Ночная сычевальня</b>\n"
+                "Антидот от душных соцсетей. Никаких админов-вахтёров и показного глянца: делись тем, о чём молчишь в реале, или наблюдай за хаосом со стороны — от ночной тоски до локальных мемов.\n\n"
+                "<i>Заваривай чай и вливайся в вечный /b/ред — здесь рады любой твоей шизе. Ты дома, Анон.</i>"
             )
 
-        await message.answer(
-            start_text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-            reply_markup=get_quick_menu_keyboard(board_id, stream=stream)
+        from banner_manager import send_banner_message
+        await send_banner_message(
+            bot=message.bot,
+            chat_id=user_id,
+            caption=start_text,
+            reply_markup=get_quick_menu_keyboard(board_id, stream=stream),
+            category="start",
+            parse_mode="HTML"
         )
         try: await message.delete()
         except Exception: pass
