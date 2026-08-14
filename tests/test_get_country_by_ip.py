@@ -39,14 +39,6 @@ _SAVED_MODULES = {dep: sys.modules.get(dep) for dep in mocked_deps + ['async_lru
 for dep in mocked_deps:
     mock_module(dep)
 
-# Return MagicMock for any attribute access on our mocked modules
-for mod_name in sys.modules:
-    if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
-        try:
-            sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
-        except AttributeError:
-            import traceback; traceback.print_exc()
-
 # Instead of MagicMocking async_lru which makes get_country_by_ip non-awaitable, just bypass it
 sys.modules['async_lru'] = types.ModuleType('async_lru')
 sys.modules['async_lru'].alru_cache = lambda *args, **kwargs: lambda func: func
