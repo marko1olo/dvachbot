@@ -4805,7 +4805,7 @@ _stats_cooldown_tracker = {}
 async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
 
-    now = _time_module.time()
+    now = time.time()
     user_id = message.from_user.id
     if not is_admin(user_id, board_id):
         last_used = _stats_cooldown_tracker.get((user_id, board_id), 0)
@@ -17890,72 +17890,142 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
         traceback.print_exc()
         await status_message.edit_text(f"Произошла ошибка при генерации облака слов: {e}", parse_mode=None)
 
+_INLINE_MEDIA_CMDS = {
+    "fap": ("Случайная аниме-картинка", "fap"),
+    "hent": ("Хентай-картинка", "hent"),
+    "hentai": ("Хентай-картинка", "hent"),
+    "loli": ("Лоли-картинка", "loli"),
+    "lolicon": ("Лоли-картинка", "loli"),
+    "gatari": ("Серия Monogatari", "gatari"),
+    "monogatari": ("Серия Monogatari", "gatari"),
+    "nsfw": ("NSFW-картинка", "nsfw"),
+}
+
+_INLINE_POPULAR_CMDS = [
+    ("start", "Запустить бота"),
+    ("help", "Помощь по командам"),
+    ("menu", "Главное меню"),
+    ("app", "Открыть Mini App"),
+    ("stats", "Статистика доски"),
+    ("my_stats", "Персональная карта статистики"),
+    ("passport", "Паспорт и статистика"),
+    ("wallet", "Баланс кошелька"),
+    ("daily", "Ежедневный бонус"),
+    ("shop", "Теневой Магазин"),
+    ("inv", "Рюкзак и активные баффы"),
+    ("work", "Биржа труда (Заработок)"),
+    ("threads", "Список тредов"),
+    ("search", "Поиск постов"),
+    ("top", "Топ пользователей"),
+    ("global_top", "Топ по всем доскам"),
+    ("fap", "Случайная аниме-картинка"),
+    ("hent", "Хентай-картинка"),
+    ("loli", "Лоли-картинка"),
+    ("gatari", "Серия Monogatari"),
+    ("nsfw", "NSFW-картинка"),
+    ("random", "Случайное медиа с доски"),
+    ("quote", "Случайная цитата"),
+    ("dice", "Бросить кости"),
+    ("roll", "Рулетка/Roll"),
+    ("duel", "Вызвать анона на дуэль"),
+    ("tags", "Облако тегов картинок"),
+    ("wordcloud", "Облако слов дня"),
+    ("graph", "График активности доски"),
+    ("anime", "Аниме режим"),
+    ("gopnik", "Режим гопника"),
+    ("schizo", "Шиза режим"),
+    ("token", "Токен для входа на сайт"),
+    ("deanon", "Деанон (шуточный)"),
+    ("report", "Жалоба модераторам"),
+]
+
+
 @dp.inline_query()
 async def handle_inline_query(inline_query: types.InlineQuery):
-    query = inline_query.query.strip().lower()
-    parts = query.split()
+    raw_query = inline_query.query.strip()
+    parts = raw_query.split()
     results = []
-    
-    available_cmds = {
-        "fap": ("Случайная аниме-картинка", "fap"),
-        "hent": ("Хентай-картинка", "hent"),
-        "hentai": ("Хентай-картинка", "hent"),
-        "loli": ("Лоли-картинка", "loli"),
-        "lolicon": ("Лоли-картинка", "loli"),
-        "gatari": ("Серия Monogatari", "gatari"),
-        "monogatari": ("Серия Monogatari", "gatari"),
-        "nsfw": ("NSFW-картинка", "nsfw"),
-    }
-    
-    if not query:
-        for cmd, (desc, canonical) in available_cmds.items():
-            if cmd in ["fap", "hent", "loli", "gatari", "nsfw"]:
+    seen_cmds = set()
+
+    if not raw_query:
+        for cmd, desc in _INLINE_POPULAR_CMDS[:20]:
+            results.append(
+                types.InlineQueryResultArticle(
+                    id=f"inline_{cmd}",
+                    title=f"/{cmd} — {desc}",
+                    description=f"Отправить /{cmd}",
+                    input_message_content=types.InputTextMessageContent(
+                        message_text=f"/{cmd}"
+                    )
+                )
+            )
+    else:
+        first_token = parts[0].lstrip('/').lower()
+        count = None
+        if len(parts) > 1 and parts[1].isdecimal():
+            count = max(1, min(10, int(parts[1])))
+
+        # 1. Точное совпадение медиа-команды (с количеством или без)
+        if first_token in _INLINE_MEDIA_CMDS:
+            desc, canonical = _INLINE_MEDIA_CMDS[first_token]
+            if count is not None:
                 results.append(
                     types.InlineQueryResultArticle(
-                        id=f"inline_{cmd}_1",
-                        title=f"{desc} (1 шт)",
+                        id=f"inline_{canonical}_{count}",
+                        title=f"/{canonical} {count} — {desc} ({count} шт)",
+                        description=f"Отправить /{canonical} {count}",
+                        input_message_content=types.InputTextMessageContent(
+                            message_text=f"/{canonical} {count}"
+                        )
+                    )
+                )
+                seen_cmds.add(canonical)
+            else:
+                results.append(
+                    types.InlineQueryResultArticle(
+                        id=f"inline_{canonical}",
+                        title=f"/{canonical} — {desc}",
                         description=f"Отправить /{canonical}",
                         input_message_content=types.InputTextMessageContent(
                             message_text=f"/{canonical}"
                         )
                     )
                 )
-    else:
-        cmd = parts[0]
-        if cmd in available_cmds:
-            desc, canonical = available_cmds[cmd]
-            count = 1
-            if len(parts) > 1 and parts[1].isdecimal():
-                # isdecimal, не isdigit — см. пояснение в cmd_random_media
-                count = int(parts[1])
-            
-            counts_to_show = [count]
-            if len(parts) == 1:
-                counts_to_show = [1, 5, 10]
-            
-            for c in counts_to_show:
+                seen_cmds.add(canonical)
+
+        # 2. Поиск по префиксу/вхождению среди всех команд
+        for cmd, desc in _INLINE_POPULAR_CMDS:
+            if cmd in seen_cmds:
+                continue
+            if cmd.startswith(first_token) or first_token in cmd:
+                seen_cmds.add(cmd)
                 results.append(
                     types.InlineQueryResultArticle(
-                        id=f"inline_{canonical}_{c}",
-                        title=f"{desc} ({c} шт)",
-                        description=f"Отправить /{canonical} {c}",
+                        id=f"inline_{cmd}",
+                        title=f"/{cmd} — {desc}",
+                        description=f"Отправить /{cmd}",
                         input_message_content=types.InputTextMessageContent(
-                            message_text=f"/{canonical} {c}"
+                            message_text=f"/{cmd}"
                         )
                     )
                 )
-        else:
+                if len(results) >= 25:
+                    break
+
+        # 3. Фолбэк на поиск по доске
+        if not results:
+            clean_search = raw_query.lstrip('/')
             results.append(
                 types.InlineQueryResultArticle(
-                    id="inline_help_anime",
-                    title="Аниме картинки",
-                    description="Примеры: fap 5, hent 3, loli 10",
+                    id="inline_search",
+                    title=f"🔍 Поиск по доске: «{clean_search}»",
+                    description=f"Отправить /search {clean_search}",
                     input_message_content=types.InputTextMessageContent(
-                        message_text="/help"
+                        message_text=f"/search {clean_search}"
                     )
                 )
             )
-            
+
     try:
         await inline_query.answer(results, is_personal=True, cache_time=5)
     except Exception as e:
