@@ -1,5 +1,6 @@
 import sys
-sys.modules['main'] = sys.modules[__name__]
+if __name__ in sys.modules:
+    sys.modules['main'] = sys.modules[__name__]
 import dataclasses
 from typing import Any
 from dataclasses import dataclass
@@ -2478,36 +2479,112 @@ async def _delete_posts_from_pm_api(messages_to_delete_from_api: list, bot_insta
 
 async def _delete_message_with_retries(bot_instance, uid: int, mid: int, b_id: str = None) -> bool:
     deleter = GLOBAL_BOTS.get(b_id) or bot_instance if b_id else bot_instance
-    max_attempts = 6
-    delay = 1.5
-    for attempt in range(max_attempts):
+    try:
+        await deleter.delete_message(uid, mid)
+        return True
+    except (TelegramBadRequest, TelegramForbiddenError):
+        if deleter != bot_instance:
+            try:
+                await bot_instance.delete_message(uid, mid)
+                return True
+            except Exception:
+                pass
+        return False
+    except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
+        await asyncio.sleep(0.5)
         try:
             await deleter.delete_message(uid, mid)
             return True
-        except (TelegramBadRequest, TelegramForbiddenError):
-            if deleter != bot_instance:
-                try:
-                    await bot_instance.delete_message(uid, mid)
-                    return True
-                except Exception:
-                    pass
-            for other_bid, other_bot in GLOBAL_BOTS.items():
-                if other_bot != deleter and other_bot != bot_instance:
-                    try:
-                        await other_bot.delete_message(uid, mid)
-                        return True
-                    except Exception:
-                        pass
-            return False
-        except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
-            if attempt < max_attempts - 1:
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 30)
-            else:
-                return False
         except Exception:
             return False
-    return False
+    except Exception:
+        return False
+
+async def execute_sdel_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
+    """
+    Теневое удаление постов пользователя за период (sdel wipe).
+    Удаляет копии у всех получателей кроме самого автора,
+    удаляет из каналов, и помечает посты в БД как is_shadow = 1.
+    """
+    try:
+        time_threshold_ts = (datetime.now(UTC) - timedelta(minutes=time_period_minutes)).timestamp()
+        
+        async with db_lock:
+            db = await get_pool()
+            await db.execute("BEGIN IMMEDIATE")
+            
+            # Находим посты пользователя за период
+            query = "SELECT post_num FROM Posts WHERE author_id = ? AND board_id = ? AND timestamp >= ?"
+            async with db.execute(query, (user_id, board_id, time_threshold_ts)) as cursor:
+                rows = await cursor.fetchall()
+            user_posts = [r[0] for r in rows]
+            
+            if not user_posts:
+                await db.execute("COMMIT")
+                return 0
+                
+            posts_json = json.dumps(user_posts)
+            
+            # Помечаем посты как теневые в БД
+            await db.execute(
+                "UPDATE Posts SET is_shadow = 1 WHERE post_num IN (SELECT value FROM json_each(?))",
+                (posts_json,)
+            )
+            
+            # Получаем все копии у других получателей (кроме автора)
+            query_copies = """
+                SELECT pc.recipient_id, pc.message_id, p.board_id
+                FROM PostCopies pc
+                JOIN Posts p ON pc.post_num = p.post_num
+                WHERE pc.post_num IN (SELECT value FROM json_each(?))
+                  AND pc.recipient_id != ?
+            """
+            async with db.execute(query_copies, (posts_json, user_id)) as cursor:
+                messages_to_delete_from_api = await cursor.fetchall()
+                
+            query_channels = """
+                SELECT cc.channel_id, cc.message_id, p.board_id
+                FROM ChannelCopies cc
+                JOIN Posts p ON cc.post_num = p.post_num
+                WHERE cc.post_num IN (SELECT value FROM json_each(?))
+            """
+            async with db.execute(query_channels, (posts_json,)) as cursor:
+                channel_messages_to_delete = await cursor.fetchall()
+                
+            # Удаляем копии других получателей из PostCopies, оставляем только копию автора
+            await db.execute(
+                "DELETE FROM PostCopies WHERE post_num IN (SELECT value FROM json_each(?)) AND recipient_id != ?",
+                (posts_json, user_id)
+            )
+            await db.execute(
+                "DELETE FROM ChannelCopies WHERE post_num IN (SELECT value FROM json_each(?))",
+                (posts_json,)
+            )
+            
+            await db.execute("COMMIT")
+
+        # Удаляем из каналов и у других пользователей
+        await _delete_posts_from_channels(channel_messages_to_delete, bot_instance)
+        spawn_task(_delete_posts_from_pm_api(messages_to_delete_from_api, bot_instance))
+        
+        # Обновляем RAM память
+        async with storage_lock:
+            for p_num in user_posts:
+                if p_num in messages_storage:
+                    messages_storage[p_num]['is_shadow'] = 1
+                copies = post_to_messages.get(p_num, {})
+                for uid, mid in list(copies.items()):
+                    if uid != user_id:
+                        if isinstance(mid, list):
+                            for m in mid: message_to_post.pop((uid, m), None)
+                        else:
+                            message_to_post.pop((uid, mid), None)
+                        copies.pop(uid, None)
+                        
+        return len(user_posts)
+    except Exception as e:
+        runtime_logger.error(f"Error in execute_sdel_user_posts: {e}", exc_info=True)
+        return 0
 
 async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
     """
@@ -2528,9 +2605,9 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
         await _clean_posts_from_ram(posts_to_delete_nums, board_id)
         _clean_posts_from_caches(posts_to_delete_nums)
         await _delete_posts_from_channels(channel_messages_to_delete, bot_instance)
-        total_deleted_count = await _delete_posts_from_pm_api(messages_to_delete_from_api, bot_instance)
+        spawn_task(_delete_posts_from_pm_api(messages_to_delete_from_api, bot_instance))
         
-        return total_deleted_count
+        return len(posts_to_delete_nums)
     except Exception as e:
         import traceback
         print(f"Критическая ошибка в delete_user_posts: {e}\n{traceback.format_exc()}")
@@ -4300,7 +4377,9 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
 async def cmd_mega(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
-    text_content = message.text.replace("/mega", "").replace(f"@{message.bot.me.username}", "").strip()
+    raw_text = message.text or ""
+    parts = raw_text.split(maxsplit=1)
+    text_content = parts[1].strip() if len(parts) > 1 else ""
     if not text_content:
         await message.answer("⚠️ Напиши текст, который нужно прокричать: `/mega Я дебил!`", parse_mode="Markdown")
         return
@@ -16442,16 +16521,109 @@ async def process_report_pipeline(bot, message: types.Message, reported_msg: typ
     except Exception as e:
         runtime_logger.warning(f"Failed sending report feedback to user {reporter_id}: {e}")
 
-    # 6. Notify all admins
+def build_report_mod_keyboard(mask: int, author_id: int, post_num: int, board_id: str, chat_id: int, msg_id: int):
+    """
+    Builds an interactive multi-select inline keyboard for report moderation.
+    Mask bits:
+      1 (1<<0): Шедоумут 8ч + sdel 1ч
+      2 (1<<1): Шедоумут 24ч
+      4 (1<<2): Шедоумут 4 дня
+      8 (1<<3): Toggle Media
+      16 (1<<4): Toggle GIF
+      32 (1<<5): Удалить этот пост
+      64 (1<<6): Вайп sdel (1 час)
+      128 (1<<7): Вайп sdel (24 часа)
+    """
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     builder = InlineKeyboardBuilder()
-    builder.button(text="🗑 Удалить пост", callback_data=f"rep:del:{author_id}:{post_num or 0}:{board_id}:{chat_id}:{msg_id}")
-    builder.button(text="🔨 Бан 1ч", callback_data=f"rep:ban1:{author_id}:{post_num or 0}:{board_id}:{chat_id}:{msg_id}")
-    builder.button(text="🔨 Бан 24ч", callback_data=f"rep:ban24:{author_id}:{post_num or 0}:{board_id}:{chat_id}:{msg_id}")
-    builder.button(text="🧹 Вайп 15м", callback_data=f"rep:wipe15:{author_id}:{post_num or 0}:{board_id}:{chat_id}:{msg_id}")
-    builder.button(text="❌ Отклонить", callback_data=f"rep:ign:{author_id}:{post_num or 0}:{board_id}:{chat_id}:{msg_id}")
-    builder.adjust(2, 2, 1)
 
+    sm8_icon = "☑️" if (mask & 1) else "🔲"
+    sm24_icon = "☑️" if (mask & 2) else "🔲"
+    builder.button(text=f"{sm8_icon} ШМ 8ч + sdel 1ч", callback_data=f"rep_t:{mask ^ 1}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text=f"{sm24_icon} ШМ 24ч", callback_data=f"rep_t:{mask ^ 2}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+
+    sm4d_icon = "☑️" if (mask & 4) else "🔲"
+    del_icon = "☑️" if (mask & 32) else "🔲"
+    builder.button(text=f"{sm4d_icon} ШМ 4 дня", callback_data=f"rep_t:{mask ^ 4}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text=f"{del_icon} Удалить пост", callback_data=f"rep_t:{mask ^ 32}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+
+    tmedia_icon = "☑️" if (mask & 8) else "🔲"
+    tgif_icon = "☑️" if (mask & 16) else "🔲"
+    builder.button(text=f"{tmedia_icon} Toggle Media", callback_data=f"rep_t:{mask ^ 8}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text=f"{tgif_icon} Toggle GIF", callback_data=f"rep_t:{mask ^ 16}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+
+    w1_icon = "☑️" if (mask & 64) else "🔲"
+    w24_icon = "☑️" if (mask & 128) else "🔲"
+    builder.button(text=f"{w1_icon} Вайп sdel 1ч", callback_data=f"rep_t:{mask ^ 64}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text=f"{w24_icon} Вайп sdel 24ч", callback_data=f"rep_t:{mask ^ 128}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+
+    sel_count = bin(mask).count('1')
+    apply_text = f"🚀 Применить ({sel_count})" if sel_count > 0 else "🚀 Применить выбранное"
+    builder.button(text=apply_text, callback_data=f"rep_x:{mask}:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text="❌ Отклонить", callback_data=f"rep_i:{author_id}:{post_num}:{board_id}:{chat_id}:{msg_id}")
+
+    builder.adjust(2, 2, 2, 2, 2)
+    return builder.as_markup()
+
+
+async def process_report_pipeline(bot, message: types.Message, reported_msg: types.Message, author_id: int, board_id: str, stream: str = 'ru'):
+    """
+    Background pipeline: fetches suspect history, runs AI analysis, sends feedback to user, notifies all admins.
+    """
+    chat_id = message.chat.id
+    msg_id = reported_msg.message_id
+    reporter_id = message.from_user.id
+    reporter_name = message.from_user.username or message.from_user.full_name or str(reporter_id)
+
+    # 1. Resolve post_num and thread_id if available
+    post_num = None
+    thread_id = None
+    async with storage_lock:
+        lookup_key = (reported_msg.chat.id, reported_msg.message_id)
+        post_num = message_to_post.get(lookup_key)
+    if not post_num:
+        info = await get_post_info_by_copy(reported_msg.chat.id, reported_msg.message_id)
+        if info:
+            post_num = info[0]
+
+    reported_text = reported_msg.text or reported_msg.caption or '<медиа>'
+    if post_num:
+        p_data = await get_post_by_num(post_num)
+        if p_data:
+            thread_id = p_data.get("thread_id") or post_num
+            if not reported_msg.text and not reported_msg.caption and p_data.get("text_content"):
+                reported_text = p_data.get("text_content")
+
+    # 2. Fetch suspect dossier (15-20 posts + media descriptions)
+    dossier_text, total_posts, posts_24h = await fetch_user_report_dossier(author_id, limit=15)
+
+    # 3. AI analysis
+    ai_res = await analyze_report_with_ai(reported_text, dossier_text)
+    analysis_text = ai_res["full_analysis"]
+
+    # 4. Extract anon verdict for reporting user
+    anon_verdict = ""
+    for line in analysis_text.splitlines():
+        if "Вердикт для анона" in line or "вердикт" in line.lower():
+            anon_verdict = line.strip()
+            break
+    if not anon_verdict:
+        anon_verdict = "Жалоба принята. Модераторы уже изучают твоё досье."
+
+    # 5. Feedback to reporting user
+    try:
+        user_reply = (
+            f"✅ Репорт принят на рассмотрение. <b>СПАСИБО УЁБОК!</b>\n\n"
+            f"🤖 <b>Вердикт нейромодератора:</b>\n"
+            f"<blockquote>{anon_verdict}</blockquote>\n"
+            f"<i>Досье подозреваемого ({total_posts} постов) направлено администраторам.</i>"
+        )
+        feedback_msg = await message.answer(user_reply, parse_mode="HTML")
+        spawn_task(delete_message_after_delay(feedback_msg, 20))
+    except Exception as e:
+        runtime_logger.warning(f"Failed sending report feedback to user {reporter_id}: {e}")
+
+    # 6. Notify all admins with interactive multi-select keyboard
     post_link_str = f"<a href=\"https://tgach.top/{board_id}/res/{thread_id or post_num}.html#post-{post_num}\">#{post_num}</a>" if post_num else f"сообщение <code>{msg_id}</code>"
     anon_suspect_name = generate_anon_name(author_id) if author_id else "Неизвестный"
 
@@ -16465,13 +16637,15 @@ async def process_report_pipeline(bot, message: types.Message, reported_msg: typ
         f"🕵️ <b>Репортёр:</b> <code>{reporter_id}</code> (@{escape_html(reporter_name)})"
     )
 
+    markup = build_report_mod_keyboard(mask=0, author_id=author_id, post_num=post_num or 0, board_id=board_id, chat_id=chat_id, msg_id=msg_id)
+
     all_admin_ids = set(ADMIN_IDS) | set(BOARD_CONFIG.get(board_id, {}).get('admins', set()))
     for adm_id in all_admin_ids:
         try:
             await bot.send_message(
                 adm_id,
                 admin_report_text,
-                reply_markup=builder.as_markup(),
+                reply_markup=markup,
                 parse_mode="HTML",
                 disable_web_page_preview=True
             )
@@ -16520,8 +16694,215 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     spawn_task(process_report_pipeline(message.bot, message, reported_msg, author_id, board_id, stream))
 
 
+@dp.callback_query(F.data.startswith("rep_t:"))
+async def on_report_toggle_option(callback: types.CallbackQuery, board_id: str | None = None):
+    """
+    Toggles a moderation checkbox in the inline keyboard.
+    Format: rep_t:<new_mask>:<author_id>:<post_num>:<board_id>:<chat_id>:<msg_id>
+    """
+    parts = callback.data.split(":")
+    new_mask = int(parts[1])
+    author_id = int(parts[2])
+    post_num = int(parts[3])
+    b_id = parts[4]
+    chat_id = int(parts[5])
+    msg_id = int(parts[6])
+
+    if not is_admin(callback.from_user.id, b_id):
+        await callback.answer("У вас нет прав администратора.", show_alert=True)
+        return
+
+    markup = build_report_mod_keyboard(
+        mask=new_mask,
+        author_id=author_id,
+        post_num=post_num,
+        board_id=b_id,
+        chat_id=chat_id,
+        msg_id=msg_id
+    )
+    try:
+        await callback.message.edit_reply_markup(reply_markup=markup)
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("rep_x:"))
+async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str | None = None):
+    """
+    Applies all selected moderation actions in a batch.
+    Format: rep_x:<mask>:<author_id>:<post_num>:<board_id>:<chat_id>:<msg_id>
+    """
+    parts = callback.data.split(":")
+    mask = int(parts[1])
+    author_id = int(parts[2])
+    post_num = int(parts[3])
+    b_id = parts[4]
+    chat_id = int(parts[5])
+    msg_id = int(parts[6])
+
+    if not is_admin(callback.from_user.id, b_id):
+        await callback.answer("У вас нет прав администратора.", show_alert=True)
+        return
+
+    if mask == 0:
+        await callback.answer("⚠️ Выберите хотя бы одну меру (нажмите на чекбокс)", show_alert=True)
+        return
+
+    admin_id = callback.from_user.id
+    admin_name = callback.from_user.username or callback.from_user.full_name or str(admin_id)
+    actions_done = []
+
+    b_data = board_data.get(b_id, {})
+    if 'shadow_mutes' not in b_data:
+        b_data['shadow_mutes'] = {}
+
+    # 1. Шедоумут 8ч + sdel 1ч
+    if mask & 1:
+        if author_id != 0:
+            expires_dt = datetime.now(UTC) + timedelta(hours=8)
+            async with storage_lock:
+                b_data['shadow_mutes'][author_id] = expires_dt
+            await update_shadow_mute(author_id, b_id, expires_dt.timestamp())
+            wiped = await execute_sdel_user_posts(callback.bot, author_id, 60, b_id)
+            actions_done.append(f"👻 Шедоумут 8ч + sdel 1ч (скрыто {wiped} пст)")
+            await log_global_event('bot', f"👻 SHADOWMUTE: Мод {admin_id} дал ШМ 8ч + sdel 1ч юзеру {author_id} на /{b_id}/")
+
+    # 2. Шедоумут 24ч
+    if mask & 2:
+        if author_id != 0:
+            expires_dt = datetime.now(UTC) + timedelta(hours=24)
+            async with storage_lock:
+                b_data['shadow_mutes'][author_id] = expires_dt
+            await update_shadow_mute(author_id, b_id, expires_dt.timestamp())
+            actions_done.append("👻 Шедоумут 24ч")
+            await log_global_event('bot', f"👻 SHADOWMUTE: Мод {admin_id} дал ШМ 24ч юзеру {author_id} на /{b_id}/")
+
+    # 3. Шедоумут 4 дня
+    if mask & 4:
+        if author_id != 0:
+            expires_dt = datetime.now(UTC) + timedelta(days=4)
+            async with storage_lock:
+                b_data['shadow_mutes'][author_id] = expires_dt
+            await update_shadow_mute(author_id, b_id, expires_dt.timestamp())
+            actions_done.append("👻 Шедоумут 4 дня")
+            await log_global_event('bot', f"👻 SHADOWMUTE: Мод {admin_id} дал ШМ 4д юзеру {author_id} на /{b_id}/")
+
+    # 4. Toggle Media
+    if mask & 8:
+        if author_id != 0:
+            u_settings = b_data.setdefault('user_settings', {}).setdefault(author_id, {
+                'nsfw': False, 'hide': set(), 'shadow_gif': False, 'shadow_sticker': False, 'shadow_media': False
+            })
+            new_val = not u_settings.get('shadow_media', False)
+            u_settings['shadow_media'] = new_val
+            spawn_task(update_user_settings_db(author_id, b_id, shadow_media=1 if new_val else 0))
+            st_text = "ЗАПРЕЩЕНЫ" if new_val else "РАЗРЕШЕНЫ"
+            actions_done.append(f"🔇 Медиа: {st_text}")
+            await log_global_event('bot', f"🔇 MEDIA_TOGGLE: Мод {admin_id} установил media={new_val} для {author_id} на /{b_id}/")
+
+    # 5. Toggle GIF
+    if mask & 16:
+        if author_id != 0:
+            u_settings = b_data.setdefault('user_settings', {}).setdefault(author_id, {
+                'nsfw': False, 'hide': set(), 'shadow_gif': False, 'shadow_sticker': False, 'shadow_media': False
+            })
+            new_val = not u_settings.get('shadow_gif', False)
+            u_settings['shadow_gif'] = new_val
+            spawn_task(update_user_settings_db(author_id, b_id, shadow_gif=1 if new_val else 0))
+            st_text = "ЗАПРЕЩЕНЫ" if new_val else "РАЗРЕШЕНЫ"
+            actions_done.append(f"🖼 GIF: {st_text}")
+            await log_global_event('bot', f"🖼 GIF_TOGGLE: Мод {admin_id} установил gif={new_val} для {author_id} на /{b_id}/")
+
+    # 6. Удалить пожалованный пост
+    if mask & 32:
+        if post_num and post_num > 0:
+            await delete_post_by_num(post_num)
+        try:
+            await callback.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception:
+            pass
+        actions_done.append(f"🗑 Удален пост #{post_num or msg_id}")
+
+    # 7. Вайп sdel 1ч
+    if mask & 64:
+        if author_id != 0:
+            wiped = await execute_sdel_user_posts(callback.bot, author_id, 60, b_id)
+            actions_done.append(f"🧹 Вайп sdel 1ч (скрыто {wiped} постов)")
+            await log_global_event('bot', f"🧹 WIPE_SDEL: Мод {admin_id} скрыл посты {author_id} за 1ч на /{b_id}/")
+
+    # 8. Вайп sdel 24ч
+    if mask & 128:
+        if author_id != 0:
+            wiped = await execute_sdel_user_posts(callback.bot, author_id, 1440, b_id)
+            actions_done.append(f"🧹 Вайп sdel 24ч (скрыто {wiped} постов)")
+            await log_global_event('bot', f"🧹 WIPE_SDEL: Мод {admin_id} скрыл посты {author_id} за 24ч на /{b_id}/")
+
+    summary_lines = "\n".join(f"• {a}" for a in actions_done) if actions_done else "• Меры применены"
+    report_resolution = f"\n\n✅ <b>Применено модератором @{escape_html(admin_name)}:</b>\n{summary_lines}"
+
+    try:
+        await callback.message.edit_text(
+            callback.message.html_text + report_resolution,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    except Exception:
+        try:
+            await callback.message.answer(report_resolution, parse_mode="HTML")
+        except Exception:
+            pass
+
+    # Update Reports table
+    if post_num and post_num > 0:
+        try:
+            db = await get_pool()
+            await db.execute("UPDATE Reports SET status = 'resolved' WHERE post_num = ?", (post_num,))
+        except Exception:
+            pass
+
+    await callback.answer(f"Применено мер: {len(actions_done)}")
+
+
+@dp.callback_query(F.data.startswith("rep_i:"))
+async def on_report_dismiss(callback: types.CallbackQuery, board_id: str | None = None):
+    """
+    Dismisses the report.
+    Format: rep_i:<author_id>:<post_num>:<board_id>:<chat_id>:<msg_id>
+    """
+    parts = callback.data.split(":")
+    b_id = parts[3]
+    post_num = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+
+    if not is_admin(callback.from_user.id, b_id):
+        await callback.answer("У вас нет прав администратора.", show_alert=True)
+        return
+
+    admin_name = callback.from_user.username or callback.from_user.full_name or str(callback.from_user.id)
+    try:
+        await callback.message.edit_text(
+            callback.message.html_text + f"\n\n<i>❌ Отклонено модератором @{escape_html(admin_name)}.</i>",
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    except Exception:
+        pass
+
+    if post_num > 0:
+        try:
+            db = await get_pool()
+            await db.execute("UPDATE Reports SET status = 'dismissed' WHERE post_num = ?", (post_num,))
+        except Exception:
+            pass
+
+    await callback.answer("Жалоба отклонена")
+
+
 @dp.callback_query(F.data.startswith("rep:"))
 async def process_report_action(callback: types.CallbackQuery, board_id: str | None = None):
+    """
+    Legacy callback handler for backward compatibility.
+    """
     parts = callback.data.split(":")
     if len(parts) < 7:
         action, author_id, chat_id, msg_id = parts[1], parts[2], parts[3], parts[4]
@@ -16539,9 +16920,7 @@ async def process_report_action(callback: types.CallbackQuery, board_id: str | N
         await callback.answer("У вас нет прав администратора.", show_alert=True)
         return
 
-    admin_id = callback.from_user.id
-    admin_name = callback.from_user.username or callback.from_user.full_name or str(admin_id)
-
+    admin_name = callback.from_user.username or callback.from_user.full_name or str(callback.from_user.id)
     if action == "ign":
         await callback.message.edit_text(
             callback.message.html_text + f"\n\n<i>❌ Отклонено модератором @{escape_html(admin_name)}.</i>",
@@ -16564,52 +16943,6 @@ async def process_report_action(callback: types.CallbackQuery, board_id: str | N
             disable_web_page_preview=True
         )
         await callback.answer("Пост удален")
-        return
-
-    if action.startswith("ban"):
-        if author_id == "0":
-            await callback.answer("ID автора неизвестен, невозможно забанить.", show_alert=True)
-            return
-
-        target_id = int(author_id)
-        duration_hours = 1 if action == "ban1" else 24
-
-        async with storage_lock:
-            b_data = board_data[b_id]
-            b_data.setdefault('bans', {})[target_id] = time.time() + (duration_hours * 3600)
-
-        deleted_posts = await delete_user_posts(callback.bot, target_id, 10, b_id)
-        if post_num and post_num > 0:
-            await delete_post_by_num(post_num)
-
-        await log_global_event('bot', f"🚨 BAN: Мод {admin_id} забанил по репорту {target_id} на {duration_hours}ч в /{b_id}/ (удалено {deleted_posts} копий)")
-
-        try:
-            await callback.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
-        except Exception:
-            pass
-
-        await callback.message.edit_text(
-            callback.message.html_text + f"\n\n<i>🔨 Автор забанен на {duration_hours}ч модератором @{escape_html(admin_name)} (удалено {deleted_posts} постов).</i>",
-            parse_mode="HTML",
-            disable_web_page_preview=True
-        )
-        await callback.answer(f"Пользователь забанен на {duration_hours}ч")
-        return
-
-    if action == "wipe15":
-        if author_id == "0":
-            await callback.answer("ID автора неизвестен, невозможно вайпнуть.", show_alert=True)
-            return
-        target_id = int(author_id)
-        from admin_manager import execute_wipe
-        await execute_wipe(callback.bot, callback.message, target_id, b_id, admin_id, minutes=15)
-        await callback.message.edit_text(
-            callback.message.html_text + f"\n\n<i>🧹 Посты автора за 15 минут удалены модератором @{escape_html(admin_name)}.</i>",
-            parse_mode="HTML",
-            disable_web_page_preview=True
-        )
-        await callback.answer("Вайп выполнен")
         return
 
 @dp.callback_query(F.data.startswith("admin_menu:"))

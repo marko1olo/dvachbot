@@ -119,7 +119,7 @@ async def get_country_by_ip(ip: str) -> str:
             logging.warning(f"Failed to lookup IP {ip} in GeoIP database: {e}")
 
     return "XX"
-limiter = Limiter(key_func=get_real_ip)
+limiter = Limiter(key_func=get_real_ip, config_filename=os.devnull)
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 from aiogram import Bot
@@ -745,7 +745,7 @@ async def notify_admins(bot: Bot, text: str):
             logger.warning(f"❌ Админ {admin_id} заблокировал бота! Сообщение не доставлено.")
         except Exception as e:
             logger.error(f"⚠️ Ошибка доставки админу {admin_id}: {e}", exc_info=True)
-limiter = Limiter(key_func=get_user_id_from_session)
+limiter = Limiter(key_func=get_user_id_from_session, config_filename=os.devnull)
 signer = TimestampSigner(SECRET_KEY)
 def generate_negative_id(token: str) -> int:
     hash_val = hashlib.sha256(token.encode()).hexdigest()

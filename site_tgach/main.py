@@ -245,7 +245,7 @@ async def get_country_by_ip(ip: str) -> str:
 
     return "XX"
 
-limiter = Limiter(key_func=get_real_ip)
+limiter = Limiter(key_func=get_real_ip, config_filename=os.devnull)
 from pydantic import BaseModel
 from starlette.middleware.sessions import SessionMiddleware
 from aiogram import Bot
@@ -1525,7 +1525,7 @@ async def notify_admins(bot: Bot, text: str):
             ADMIN_IDS.discard(b_admin)
 
 
-limiter = Limiter(key_func=get_user_id_from_session)
+limiter = Limiter(key_func=get_user_id_from_session, config_filename=os.devnull)
 signer = TimestampSigner(SECRET_KEY)
 
 

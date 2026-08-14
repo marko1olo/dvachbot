@@ -474,12 +474,93 @@ async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes
         await _clean_posts_from_ram(posts_to_delete_nums, board_id)
         _clean_posts_from_caches(posts_to_delete_nums)
         await _delete_posts_from_channels(channel_messages_to_delete, bot_instance)
-        total_deleted_count = await _delete_posts_from_pm_api(messages_to_delete_from_api, bot_instance)
+        spawn_task(_delete_posts_from_pm_api(messages_to_delete_from_api, bot_instance))
         
-        return total_deleted_count
+        return len(posts_to_delete_nums)
     except Exception as e:
         import traceback
         print(f"Критическая ошибка в delete_user_posts: {e}\n{traceback.format_exc()}")
+        return 0
+
+async def execute_sdel_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
+    """
+    Теневое удаление постов пользователя за период (sdel wipe).
+    Удаляет копии у всех получателей кроме самого автора,
+    удаляет из каналов, и помечает посты в БД как is_shadow = 1.
+    """
+    try:
+        time_threshold_ts = (datetime.now(UTC) - timedelta(minutes=time_period_minutes)).timestamp()
+        
+        async with db_lock:
+            db = await get_pool()
+            await db.execute("BEGIN IMMEDIATE")
+            
+            query = "SELECT post_num FROM Posts WHERE author_id = ? AND board_id = ? AND timestamp >= ?"
+            async with db.execute(query, (user_id, board_id, time_threshold_ts)) as cursor:
+                rows = await cursor.fetchall()
+            user_posts = [r[0] for r in rows]
+            
+            if not user_posts:
+                await db.execute("COMMIT")
+                return 0
+                
+            posts_json = json.dumps(user_posts)
+            
+            await db.execute(
+                "UPDATE Posts SET is_shadow = 1 WHERE post_num IN (SELECT value FROM json_each(?))",
+                (posts_json,)
+            )
+            
+            query_copies = """
+                SELECT pc.recipient_id, pc.message_id, p.board_id
+                FROM PostCopies pc
+                JOIN Posts p ON pc.post_num = p.post_num
+                WHERE pc.post_num IN (SELECT value FROM json_each(?))
+                  AND pc.recipient_id != ?
+            """
+            async with db.execute(query_copies, (posts_json, user_id)) as cursor:
+                messages_to_delete_from_api = await cursor.fetchall()
+                
+            query_channels = """
+                SELECT cc.channel_id, cc.message_id, p.board_id
+                FROM ChannelCopies cc
+                JOIN Posts p ON cc.post_num = p.post_num
+                WHERE cc.post_num IN (SELECT value FROM json_each(?))
+            """
+            async with db.execute(query_channels, (posts_json,)) as cursor:
+                channel_messages_to_delete = await cursor.fetchall()
+                
+            await db.execute(
+                "DELETE FROM PostCopies WHERE post_num IN (SELECT value FROM json_each(?)) AND recipient_id != ?",
+                (posts_json, user_id)
+            )
+            await db.execute(
+                "DELETE FROM ChannelCopies WHERE post_num IN (SELECT value FROM json_each(?))",
+                (posts_json,)
+            )
+            
+            await db.execute("COMMIT")
+
+        await _delete_posts_from_channels(channel_messages_to_delete, bot_instance)
+        spawn_task(_delete_posts_from_pm_api(messages_to_delete_from_api, bot_instance))
+        
+        async with storage_lock:
+            for p_num in user_posts:
+                if p_num in messages_storage:
+                    messages_storage[p_num]['is_shadow'] = 1
+                copies = post_to_messages.get(p_num, {})
+                for uid, mid in list(copies.items()):
+                    if uid != user_id:
+                        if isinstance(mid, list):
+                            for m in mid: message_to_post.pop((uid, m), None)
+                        else:
+                            message_to_post.pop((uid, mid), None)
+                        copies.pop(uid, None)
+                        
+        return len(user_posts)
+    except Exception as e:
+        import traceback
+        print(f"Критическая ошибка в execute_sdel_user_posts: {e}\n{traceback.format_exc()}")
         return 0
 
 def _get_random_header_prefix(lang: str = 'ru') -> str:

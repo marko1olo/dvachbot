@@ -272,3 +272,26 @@ async def cmd_heist(message: types.Message, board_id: str | None = None):
             
     except Exception as e:
         await message.reply(f"❌ Ошибка ИИ при ограблении: {e}")
+
+
+# Делегаты на живые обработчики в main.py
+async def cmd_partyvan(message, board_id=None, *args, **kwargs):
+    import main as main_mod
+    return await main_mod.cmd_partyvan(message, board_id, *args, **kwargs)
+
+async def cmd_mega(message, board_id=None, *args, **kwargs):
+    import main as main_mod
+    return await main_mod.cmd_mega(message, board_id, *args, **kwargs)
+
+async def cmd_curse(message, board_id=None, *args, **kwargs):
+    import main as main_mod
+    return await main_mod.cmd_curse(message, board_id, *args, **kwargs)
+
+async def cmd_shit(message, board_id=None, *args, **kwargs):
+    import main as main_mod
+    return await main_mod.cmd_shit(message, board_id, *args, **kwargs)
+
+async def cmd_rob(message, board_id=None, *args, **kwargs):
+    import main as main_mod
+    return await main_mod.cmd_rob(message, board_id, *args, **kwargs)
+

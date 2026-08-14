@@ -43,7 +43,7 @@ from common.bot_helpers import accept_duel_logic, decline_duel_logic
 from bot_helpers import is_admin, _get_msg_content_and_type
 from common.spam_filter import analyze_message_for_spam, SpamResult, is_spam_filtered, acquire_spam_lock, get_spam_violation_level, SPAM_RULES, _check_repeats
 from text_assets import (
-    EARNING_NOTIFICATIONS, REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES, 
+    EARNING_NOTIFICATIONS, PENALTY_NOTIFICATIONS, REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES, 
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP
 )
 from ai_manager import schedule_persona_reply, check_and_send_contextual_reply, transcribe_and_roast_voice_note
@@ -209,84 +209,143 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                 b_data['reaction_queue'][user_id].append(post_num)
         else:
             rate_tracker.append(now)
-        # === ENTERPRISE ЛОГИКА НАЧИСЛЕНИЯ (SQLITE ATOMIC + EXPLORE PROTECTION) ===
+        # === ENTERPRISE ЛОГИКА НАЧИСЛЕНИЯ/СПИСАНИЯ ШЕКЕЛЕЙ (SQLITE ATOMIC + ANTI-ABUSE) ===
         if author_id and author_id != user_id and author_id != 0:
-            # Проверяем, добавляется ли реакция (а не убирается)
-            if len(reaction.new_reaction) > len(reaction.old_reaction):
-                
-                async with storage_lock:
-                    post_data = messages_storage.get(post_num)
-                    if not post_data:
-                        return # Пост слишком старый или выгружен из памяти
+            action = None
+            async with storage_lock:
+                post_data = messages_storage.get(post_num)
+                if post_data:
+                    # Инициализируем хранилище оплаченных реакторов для этого поста: {user_id: 'like' | 'dislike' | 'neutral'}
+                    if 'paid_reactors' not in post_data or not isinstance(post_data['paid_reactors'], dict):
+                        old_paid = post_data.get('paid_reactors', set())
+                        post_data['paid_reactors'] = {uid: 'like' for uid in old_paid} if isinstance(old_paid, set) else {}
                     
-                    # Инициализируем список оплаченных реакторов для этого поста
-                    if 'paid_reactors' not in post_data:
-                        post_data['paid_reactors'] = set()
+                    paid_reactors = post_data['paid_reactors']
                     
-                    # ЗАЩИТА ОТ АБУЗА: Если этот юзер уже "платил" за этот пост, выходим
-                    if user_id in post_data['paid_reactors']:
-                        return
+                    # Определяем тип новой реакции
+                    is_new_positive = any(em in POSITIVE_REACTIONS or em in LAUGHING_REACTIONS for em in new_emojis)
+                    is_new_negative = any(em in NEGATIVE_REACTIONS or em in INSULT_REACTIONS or em in CLOWN_REACTION for em in new_emojis)
+                    is_new_neutral = bool(new_emojis) and not is_new_positive and not is_new_negative
                     
-                    # Фиксируем оплату
-                    post_data['paid_reactors'].add(user_id)
+                    new_type = None
+                    if is_new_positive:
+                        new_type = 'like'
+                    elif is_new_negative:
+                        new_type = 'dislike'
+                    elif is_new_neutral:
+                        new_type = 'neutral'
+                    
+                    prev_type = paid_reactors.get(user_id)
+                    
+                    if new_type is None:
+                        # Реакция снята полностью
+                        paid_reactors.pop(user_id, None)
+                    elif prev_type != new_type:
+                        # Новый тип реакции
+                        paid_reactors[user_id] = new_type
+                        action = new_type
 
-                
+            if action is not None:
                 async with db_lock:
                     db = await get_pool()
                     
-                    # Сумма вознаграждения за одну реакцию
-                    reward_per_reaction = random.randint(3, 9)
-                    
-                    # 1. Начисляем деньги (UPSERT)
-                    await db.execute(
-                        """
-                        INSERT INTO Users (user_id, board_id, balance, reaction_reward_counter) 
-                        VALUES (?, ?, ?, 1) 
-                        ON CONFLICT(user_id, board_id) DO UPDATE SET 
-                        balance = balance + ?, 
-                        reaction_reward_counter = reaction_reward_counter + 1
-                        """,
-                        (author_id, board_id, reward_per_reaction, reward_per_reaction)
-                    )
-                    
-                    # 2. Проверяем счетчик для отправки уведомления (каждые 6 реакций)
-                    async with db.execute(
-                        "SELECT reaction_reward_counter FROM Users WHERE user_id = ? AND board_id = ?",
-                        (author_id, board_id)
-                    ) as c:
-                        row = await c.fetchone()
-                    
-                    # --- НАЧАЛО ИЗМЕНЕНИЙ (Изменение порога уведомлений) ---
-                    if row and row[0] >= 6:
-                        # Сбрасываем счетчик уведомлений
+                    if action == 'like':
+                        # Бонус за лайк: в среднем ~12 рублей (10-15 RUB)
+                        reward_amount = random.randint(10, 15)
                         await db.execute(
-                            "UPDATE Users SET reaction_reward_counter = 0 WHERE user_id = ? AND board_id = ?", 
-                            (author_id, board_id)
+                            """
+                            INSERT INTO Users (user_id, board_id, balance, reaction_reward_counter) 
+                            VALUES (?, ?, ?, 1) 
+                            ON CONFLICT(user_id, board_id) DO UPDATE SET 
+                            balance = balance + ?, 
+                            reaction_reward_counter = COALESCE(reaction_reward_counter, 0) + 1
+                            """,
+                            (author_id, board_id, reward_amount, reward_amount)
                         )
-                    # --- КОНЕЦ ИЗМЕНЕНИЙ ---
                         
-                        # Получаем итоговый ГЛОБАЛЬНЫЙ баланс для солидности текста
-                        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (author_id,)) as c_sum:
-                            sum_row = await c_sum.fetchone()
-                            global_balance = sum_row[0] if sum_row and sum_row[0] else 0
+                        # Проверяем счетчик наград для отправки уведомления (каждые 5 лайков)
+                        async with db.execute(
+                            "SELECT reaction_reward_counter FROM Users WHERE user_id = ? AND board_id = ?",
+                            (author_id, board_id)
+                        ) as c:
+                            row = await c.fetchone()
                         
-                        # 3. Отправляем уведомление (шанс 50%, чтобы не спамить слишком часто)
-                        if random.random() < 0.5:
-                            # В тексте пишем сумму чуть больше, как будто за "пакет реакций"
-                            display_reward = random.randint(15, 28)
-                            notif_tpl = random.choice(EARNING_NOTIFICATIONS)
-                            notif_text = notif_tpl.format(amount=display_reward, balance=int(global_balance))
+                        if row and row[0] and row[0] >= 5:
+                            await db.execute(
+                                "UPDATE Users SET reaction_reward_counter = 0 WHERE user_id = ? AND board_id = ?", 
+                                (author_id, board_id)
+                            )
                             
-                            # Используем bot_instance, переданный в функцию.
-                            # Отправляем отдельной задачей, а не await: этот код
-                            # выполняется ПОД db_lock, который сериализует весь
-                            # доступ к базе в процессе. Ждать здесь сетевой
-                            # вызов — значит остановить работу с БД во всём боте
-                            # ради необязательного уведомления.
-                            final_bot = bot_instance if bot_instance else reaction.bot
-                            spawn_task(_send_notification_quietly(
-                                final_bot, author_id, notif_text
-                            ))
+                            async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (author_id,)) as c_sum:
+                                sum_row = await c_sum.fetchone()
+                                global_balance = sum_row[0] if sum_row and sum_row[0] else 0
+                            
+                            if random.random() < 0.5:
+                                display_reward = random.randint(35, 65)
+                                notif_tpl = random.choice(EARNING_NOTIFICATIONS)
+                                notif_text = notif_tpl.format(amount=display_reward, balance=int(global_balance))
+                                final_bot = bot_instance if bot_instance else reaction.bot
+                                spawn_task(_send_notification_quietly(final_bot, author_id, notif_text))
+                    
+                    elif action == 'dislike':
+                        # Штраф за дизлайк/сажу: в среднем ~5.5 рублей (4-7 RUB, меньше чем за лайк)
+                        penalty_amount = random.randint(4, 7)
+                        await db.execute(
+                            """
+                            INSERT INTO Users (user_id, board_id, balance, reaction_penalty_counter) 
+                            VALUES (?, ?, 0, 1) 
+                            ON CONFLICT(user_id, board_id) DO UPDATE SET 
+                            balance = MAX(0.0, balance - ?), 
+                            reaction_penalty_counter = COALESCE(reaction_penalty_counter, 0) + 1
+                            """,
+                            (author_id, board_id, penalty_amount)
+                        )
+                        
+                        # Проверяем счетчик штрафов для отправки уведомления (каждые 5 дизлайков)
+                        async with db.execute(
+                            "SELECT reaction_penalty_counter FROM Users WHERE user_id = ? AND board_id = ?",
+                            (author_id, board_id)
+                        ) as c:
+                            row = await c.fetchone()
+                        
+                        if row and row[0] and row[0] >= 5:
+                            await db.execute(
+                                "UPDATE Users SET reaction_penalty_counter = 0 WHERE user_id = ? AND board_id = ?", 
+                                (author_id, board_id)
+                            )
+                            
+                            async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (author_id,)) as c_sum:
+                                sum_row = await c_sum.fetchone()
+                                global_balance = sum_row[0] if sum_row and sum_row[0] else 0
+                            
+                            if random.random() < 0.5:
+                                penalty_display = random.randint(15, 30)
+                                notif_pool = getattr(shared_state, 'PENALTY_NOTIFICATIONS', None)
+                                if not notif_pool:
+                                    try:
+                                        from text_assets import PENALTY_NOTIFICATIONS as P_NOTIFS
+                                        notif_pool = P_NOTIFS
+                                    except ImportError:
+                                        notif_pool = [
+                                            "💩 <b>САЖА-ШТРАФ | TGACH</b>\nАноны закидали твой пост сажей! Списано <b>-{amount} RUB</b>.\n💰 Баланс: <code>{balance} RUB</code>\n👉 Пополнить баланс: /work"
+                                        ]
+                                notif_tpl = random.choice(notif_pool)
+                                notif_text = notif_tpl.format(amount=penalty_display, balance=int(global_balance))
+                                final_bot = bot_instance if bot_instance else reaction.bot
+                                spawn_task(_send_notification_quietly(final_bot, author_id, notif_text))
+                    
+                    elif action == 'neutral':
+                        # Символический бонус за активность в треде (1-3 RUB)
+                        neutral_reward = random.randint(1, 3)
+                        await db.execute(
+                            """
+                            INSERT INTO Users (user_id, board_id, balance) 
+                            VALUES (?, ?, ?) 
+                            ON CONFLICT(user_id, board_id) DO UPDATE SET 
+                            balance = balance + ?
+                            """,
+                            (author_id, board_id, neutral_reward, neutral_reward)
+                        )
         if should_trigger_edit:
             author_id_for_notify = None
             text_for_notify = None

@@ -23,8 +23,14 @@ async def run_process_checked(args: Sequence[str], timeout: float | None = None)
     try:
         await asyncio.wait_for(process.wait(), timeout=timeout)
     except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
+        try:
+            process.kill()
+        except Exception:
+            pass
+        try:
+            await process.wait()
+        except Exception:
+            pass
         raise
 
     if process.returncode != 0:

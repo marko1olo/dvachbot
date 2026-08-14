@@ -402,12 +402,15 @@ def _generate_chart_7(thirty_days_ago, c, images):
     top_owls = c.fetchall()
 
     if r7:
-        fig, (ax_pie, ax_bar) = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={'width_ratios': [1, 1.4]})
         night_p = r7['night_posts'] or 0
         day_p = r7['day_posts'] or 0
+        if (night_p + day_p) == 0:
+            return
+
+        fig, (ax_pie, ax_bar) = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={'width_ratios': [1, 1.4]})
         
         wedges, texts, autotexts = ax_pie.pie(
-            [night_p, day_p], labels=['Ночной сыч\n(01:00–06:00)', 'Дневной анон\n(06:00–01:00)'],
+            [night_p, day_p], labels=['Ночной сыч (01:00-06:00)', 'Дневной анон (06:00-01:00)'],
             autopct='%1.1f%%', startangle=140,
             colors=['#7928ca', '#ffa657'],
             wedgeprops=dict(width=0.52, edgecolor='#0d1117', linewidth=2),
@@ -455,9 +458,12 @@ def _generate_chart_8(thirty_days_ago, c, images):
             except Exception:
                 counts['text'] += 1
         
-        fig, (ax8_pie, ax8_bar) = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={'width_ratios': [1, 1.4]})
         media_total = sum(v for k, v in counts.items() if k != 'text')
         text_total = counts['text']
+        if (text_total + media_total) == 0:
+            return
+
+        fig, (ax8_pie, ax8_bar) = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={'width_ratios': [1, 1.4]})
         
         wedges, texts, autotexts = ax8_pie.pie(
             [text_total, media_total], labels=['Текст\n(чистый пост)', 'Медиа\n(картинка/видео)'],
@@ -504,6 +510,8 @@ def _generate_chart_9(thirty_days_ago, c, images):
     if r9:
         replies_cnt = r9['replies'] or 0
         singles_cnt = r9['singles'] or 0
+        if (replies_cnt + singles_cnt) == 0:
+            return
         
         c.execute('''
             SELECT (repl.timestamp - orig.timestamp) as delta_sec

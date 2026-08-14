@@ -242,7 +242,7 @@ def _rewind_media_group(media_group: Iterable[InputMediaPhoto]) -> None:
 async def send_stats_to_user(bot: Bot, chat_id: int):
     """Generates and sends stats directly to a user/admin, and copies them to the archive."""
     try:
-        await bot.send_message(chat_id, "⏳ <i>Рисую 30 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
+        await bot.send_message(chat_id, "⏳ <i>Рисую 40 графиков вашей деградации (погоди пару секунд)...</i>", parse_mode="HTML")
     except TelegramForbiddenError:
         logger.warning("send_stats_to_user forbidden for chat_id %s, purging user", chat_id)
         try:

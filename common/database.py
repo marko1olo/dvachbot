@@ -541,6 +541,10 @@ async def _apply_migrations(db):
             await cursor.execute("ALTER TABLE Users ADD COLUMN reaction_reward_counter INTEGER DEFAULT 0;")
             print("✅ Migrated: Added 'reaction_reward_counter' to Users.")
         except aiosqlite.OperationalError: pass
+        try:
+            await cursor.execute("ALTER TABLE Users ADD COLUMN reaction_penalty_counter INTEGER DEFAULT 0;")
+            print("✅ Migrated: Added 'reaction_penalty_counter' to Users.")
+        except aiosqlite.OperationalError: pass
         # Колонки экономики и предметов. Их не было ни в CREATE TABLE Users, ни в
         # миграциях, хотя код обращается к ним из 105 мест: инвентарь предметов
         # (/shop, мут-ган, зеркальный щит), проклятия, платные префиксы. На чистой
