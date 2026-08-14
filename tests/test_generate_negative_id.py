@@ -20,16 +20,6 @@ os.environ["SECRET_KEY"] = "test_secret"
 os.environ["BOT_TOKEN"] = "123:test_bot_token"
 os.environ["OPENAI_API_KEY"] = "sk-test_openai_api_key"
 
-# Mock problematic dependencies globally just for this test file
-mocked_deps = [
-    'pyrogram',
-    'site_tgach.mtproto_client',
-    'imagehash',
-    'site_tgach.neuro_poster'
-]
-for mod in mocked_deps:
-    if mod not in sys.modules:
-        sys.modules[mod] = MagicMock()
 
 try:
     from Dubsite_tgach.main import generate_negative_id as generate_negative_id_dub

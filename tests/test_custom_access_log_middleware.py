@@ -13,50 +13,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-import types
-def mock_module(name):
-    mod = types.ModuleType(name)
-    mod.__path__ = [] # makes it a package
-    sys.modules[name] = mod
-    return mod
-
-# Mock heavy/missing dependencies to allow import
-mocked_deps = [
-    'site_tgach', 'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
-    'site_tgach.security', 'site_tgach.image_processing', 'site_tgach.catbox',
-    'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
-    'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
-    'site_tgach.html_sanitizer',
-    'site_tgach.voice_processing', 'warhammer_mode', 'japanese_translator',
-    'slowapi', 'slowapi.util', 'slowapi.errors', 'uvicorn',
-    'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
-    'fastapi_cache.decorator', 'aiogram',
-    'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
-    'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
-    'aiogram.webhook', 'aiogram.webhook.aiohttp_server'
-]
-
-_SAVED_MODULES = {dep: sys.modules.get(dep) for dep in mocked_deps + ['async_lru']}
-
-for dep in mocked_deps:
-    mock_module(dep)
-
-# Return MagicMock for any attribute access on our mocked modules
-for mod_name in sys.modules:
-    if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
-        sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
-
-sys.modules['async_lru'] = types.ModuleType('async_lru')
-sys.modules['async_lru'].alru_cache = lambda *args, **kwargs: lambda func: func
-
 from Dubsite_tgach.main import custom_access_log_middleware, KNOWN_IPS
-
-for _dep, _previous in _SAVED_MODULES.items():
-    if _previous is None:
-        sys.modules.pop(_dep, None)
-    else:
-        sys.modules[_dep] = _previous
-del _dep, _previous
 
 class TestCustomAccessLogMiddleware(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

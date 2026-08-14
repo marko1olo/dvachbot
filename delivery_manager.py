@@ -9,7 +9,6 @@ from common.database import (
 )
 from common.board_config import BOARD_CONFIG
 from post_helpers import format_header
-from help_text import HELP_TEXT_EN_COMMANDS, THREAD_PROMO_TEXT_EN
 from common.thread_manager import get_threads_data
 from thread_texts import thread_messages
 from common.bot_helpers import process_new_post

@@ -8472,13 +8472,12 @@ async def cq_tagcloud_menu(callback: types.CallbackQuery):
     except Exception as e:
         print(f"⚠️ Ошибка в cq_tagcloud_menu: {e}")
 
-@dp.message(Command("help"))
+@dp.message(Command("help", "помощь", "справка", "команды", "хелп"))
 async def cmd_help(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    b_data = board_data[board_id]
-    text_map = b_data.get('start_message_map', {})
-    start_text = text_map.get(lang, b_data.get('start_message_text', "Help info missing."))
+    from help_text import get_help_hub_page
+    start_text = get_help_hub_page("main", lang=lang)
     await _send_thread_info_if_applicable(message, board_id)
     await message.answer(start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
     try:
@@ -9751,10 +9750,12 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         await _handle_quick_menu_ruletka(callback, board_id, user_id, lang)
     elif action == "wallet": await cmd_wallet(callback.message, board_id, stream=stream)
     elif action == "help":
-        b_data = board_data[board_id]
-        text_map = b_data.get('start_message_map', {})
-        start_text = text_map.get(lang, b_data.get('start_message_text', "Help info."))
-        await callback.message.answer(start_text, parse_mode="HTML", disable_web_page_preview=True)
+        from help_text import get_help_hub_page
+        start_text = get_help_hub_page("main", lang=lang)
+        try:
+            await callback.message.edit_text(start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+        except Exception:
+            await callback.message.answer(start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
     elif action == "invite":
         await _handle_quick_menu_invite(callback, board_id, lang)
     elif action == "admin":
@@ -17107,28 +17108,42 @@ def get_help_keyboard(category: str, board_id: str, stream: str = 'ru') -> Inlin
     
     if category == "main":
         if lang == 'en':
-            builder.button(text="🛠 Moderation", callback_data="help:mod")
-            builder.button(text="🎲 Fun", callback_data="help:fun")
-            builder.button(text="⚙️ Settings", callback_data="help:settings")
-            builder.button(text="💬 Chat", callback_data="help:chat")
+            builder.button(text="💬 Chat & Post", callback_data="help:chat")
             builder.button(text="💰 Economy", callback_data="help:economy")
+            builder.button(text="🖼 Media & /dem", callback_data="help:media")
+            builder.button(text="🧠 AI & Stats", callback_data="help:ai")
+            builder.button(text="🎭 Speech Modes", callback_data="help:modes")
+            builder.button(text="⚔️ PvP & Actions", callback_data="help:actions")
+            builder.button(text="⚙️ Settings", callback_data="help:settings")
+            builder.button(text="📋 All Commands", callback_data="help:all")
+            builder.button(text="⚡ Quick Menu", callback_data="menu_main")
         elif lang == 'jp':
-            builder.button(text="🛠 モデレーション", callback_data="help:mod")
-            builder.button(text="🎲 遊び", callback_data="help:fun")
-            builder.button(text="⚙️ 設定", callback_data="help:settings")
-            builder.button(text="💬 チャット", callback_data="help:chat")
-            builder.button(text="💰 経済", callback_data="help:economy")
-        else:
-            builder.button(text="🛠 Модерация", callback_data="help:mod")
-            builder.button(text="🎲 Развлечения", callback_data="help:fun")
+            builder.button(text="💬 チャット・投稿", callback_data="help:chat")
+            builder.button(text="💰 経済・シェケル", callback_data="help:economy")
+            builder.button(text="🖼 メディア・画像", callback_data="help:media")
+            builder.button(text="🧠 AI・分析", callback_data="help:ai")
+            builder.button(text="🎭 会話モード", callback_data="help:modes")
+            builder.button(text="⚔️ 対戦・PvP", callback_data="help:actions")
+            builder.button(text="⚙️ 設定・管理", callback_data="help:settings")
+            builder.button(text="📋 全コマンド", callback_data="help:all")
+            builder.button(text="⚡ メニュー", callback_data="menu_main")
+        else: # ru
+            builder.button(text="💬 Общение и Посты", callback_data="help:chat")
+            builder.button(text="💰 Экономика и Шекели", callback_data="help:economy")
+            builder.button(text="🖼 Медиа и Демотиваторы", callback_data="help:media")
+            builder.button(text="🧠 ИИ и Аналитика", callback_data="help:ai")
+            builder.button(text="🎭 Шизо-Режимы", callback_data="help:modes")
+            builder.button(text="⚔️ Разборки и PvP", callback_data="help:actions")
             builder.button(text="⚙️ Настройки", callback_data="help:settings")
-            builder.button(text="💬 Общение", callback_data="help:chat")
-            builder.button(text="💰 Экономика", callback_data="help:economy")
-        builder.adjust(2, 2, 1)
+            builder.button(text="📋 Все команды", callback_data="help:all")
+            builder.button(text="⚡ Быстрое меню", callback_data="menu_main")
+        builder.adjust(2, 2, 2, 2, 1)
     else:
-        btn_back = "⬅️ Back" if lang == 'en' else ("⬅️ 戻る" if lang == 'jp' else "⬅️ Назад")
+        btn_back = "⬅️ Back to Help" if lang == 'en' else ("⬅️ ヘルプ一覧" if lang == 'jp' else "⬅️ Назад в Справку")
+        btn_menu = "⚡ Quick Menu" if lang == 'en' else ("⚡ クイックメニュー" if lang == 'jp' else "⚡ Быстрое меню")
         builder.button(text=btn_back, callback_data="help:main")
-        builder.adjust(1)
+        builder.button(text=btn_menu, callback_data="menu_main")
+        builder.adjust(2)
     return builder.as_markup()
 
 @dp.callback_query(F.data.startswith("help:"))
@@ -17136,54 +17151,15 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
     if not board_id: return
     cat = callback.data.split(":")[1]
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    b_data = board_data[board_id]
+    from help_text import get_help_hub_page
+    text = get_help_hub_page(cat, lang=lang)
     
-    if cat == "main":
-        text_map = b_data.get('start_message_map', {})
-        text = text_map.get(lang, b_data.get('start_message_text', "Help info missing."))
-    elif cat == "mod":
-        if lang == 'en': text = "<b>🛠 Moderation:</b>\n<code>/admin</code> - Admin Panel\n<code>/ban &lt;id&gt;</code> - Ban user\n<code>/mute &lt;id&gt;</code> - Mute user\n<code>/wipe &lt;id&gt;</code> - Delete messages"
-        elif lang == 'jp': text = "<b>🛠 モデレーション:</b>\n<code>/admin</code> - 管理パネル\n<code>/ban &lt;id&gt;</code> - バン\n<code>/mute &lt;id&gt;</code> - ミュート\n<code>/wipe &lt;id&gt;</code> - メッセージ削除"
-        else: text = "<b>🛠 Модерация:</b>\n<code>/admin</code> - Панель управления\n<code>/ban &lt;id&gt;</code> - Бан\n<code>/mute &lt;id&gt;</code> - Мут\n<code>/wipe &lt;id&gt;</code> - Очистка"
-    elif cat == "fun":
-        if lang == 'en': text = "<b>🎲 Fun:</b>\n<code>/roll</code> - Roulette / fate\n<code>/fortune</code> - Fortune roll\n<code>/quote</code> - Random post\n<code>/wordcloud</code> - Word cloud\n<code>/passport</code> - Profile\n<code>/my_stats</code> - Personal stats card\n<code>/stats</code> - Activity charts"
-        elif lang == 'jp': text = "<b>🎲 遊び:</b>\n<code>/roll</code> - ルーレット\n<code>/wordcloud</code> - ワードクラウド\n<code>/passport</code> - プロフ\n<code>/schizo</code> - 統合失調症モード"
-        else: text = "<b>🎲 Развлечения:</b>\n<code>/roll</code> — Рулетка судьбы\n<code>/fortune</code> — То же что roll (алиас)\n<code>/quote</code> — Случайный пост с борды\n<code>/wordcloud</code> — Облако слов\n<code>/passport</code> — Паспорт анона\n<code>/my_stats</code> — Персональная карта статистики\n<code>/stats</code> — Тепловые карты активности"
-    elif cat == "settings":
-        if lang == 'en': text = "<b>⚙️ Settings:</b>\n<code>/nsfw</code> - NSFW Spoilers\n<code>/hide</code> - Word filter\n<code>/togglegif</code> - Hide GIFs"
-        elif lang == 'jp': text = "<b>⚙️ 設定:</b>\n<code>/nsfw</code> - NSFW スポイラー\n<code>/hide</code> - 単語フィルター\n<code>/togglegif</code> - GIF非表示"
-        else: text = "<b>⚙️ Настройки:</b>\n<code>/nsfw</code> - Спойлеры на NSFW\n<code>/hide</code> - Фильтр слов\n<code>/togglegif</code> - Скрыть гифки"
-    elif cat == "chat":
-        if lang == 'en': text = "<b>💬 Chat:</b>\n<code>/whisper</code> - Secret reply\n<code>/ans</code> - Anonymous reply\n<code>/report</code> - Report post"
-        elif lang == 'jp': text = "<b>💬 チャット:</b>\n<code>/whisper</code> - 秘密の返信\n<code>/ans</code> - 匿名返信\n<code>/report</code> - 通報する"
-        else: text = "<b>💬 Общение:</b>\n<code>/whisper</code> - Шепот\n<code>/ans</code> - Анонимный ответ\n<code>/report</code> - Пожаловаться"
-        
-    elif cat == "economy":
-        if lang == 'en':
-            text = (
-                "<b>💰 Economy:</b>\n"
-                "<code>/wallet</code> — Balance &amp; transactions\n"
-                "<code>/daily</code> — Daily bonus (75 RUB + streak)\n"
-                "<code>/shop</code> — Shadow Shop\n"
-                "<code>/top</code> — Richest anons leaderboard\n"
-                "<code>/duel 200</code> — Challenge anon, 50/50 bet\n"
-                "<code>/duel accept</code> — Accept active duel"
-            )
-        else:
-            text = (
-                "<b>💰 Экономика:</b>\n"
-                "<code>/wallet</code> — Баланс и операции\n"
-                "<code>/daily</code> — Ежедневный бонус (75 RUB + серия)\n"
-                "<code>/shop</code> — Теневой Магазин\n"
-                "<code>/top</code> — Топ богачей (анонимно, только хэши)\n"
-                "<code>/duel 200</code> — Дуэль на ставку (50/50 рандом)\n"
-                "<code>/duel accept</code> — Принять активный вызов"
-            )
-
     try:
         await callback.message.edit_text(text, reply_markup=get_help_keyboard(cat, board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
-    except Exception:
+    except TelegramBadRequest:
         pass
+    except Exception as e:
+        runtime_logger.warning("Error editing help text: %s", e)
     await callback.answer()
 
 try:

@@ -188,56 +188,50 @@ def unittest_mock_open(read_data=""):
 def test_get_telegraph_token_cached():
     from summarize import get_telegraph_token
     import summarize
-    summarize._TELEGRAPH_TOKEN = "cached_token"
+    summarize._telegraph_token_cache = "cached_token"
     assert get_telegraph_token() == "cached_token"
-    summarize._TELEGRAPH_TOKEN = None
+    summarize._telegraph_token_cache = None
 
 
 def test_get_telegraph_token_env_var():
     from summarize import get_telegraph_token
     import summarize
-    summarize._TELEGRAPH_TOKEN = None
+    summarize._telegraph_token_cache = None
     with patch.dict("os.environ", {"TELEGRAPH_TOKEN": "env_token"}):
         assert get_telegraph_token() == "env_token"
-    summarize._TELEGRAPH_TOKEN = None
+    summarize._telegraph_token_cache = None
 
 
 def test_get_telegraph_token_file():
     from summarize import get_telegraph_token
     import summarize
-    summarize._TELEGRAPH_TOKEN = None
+    summarize._telegraph_token_cache = None
     with patch.dict("os.environ", {}, clear=True), \
          patch("os.path.exists", return_value=True), \
          patch("builtins.open", unittest_mock_open(read_data="file_token")):
         assert get_telegraph_token() == "file_token"
-    summarize._TELEGRAPH_TOKEN = None
+    summarize._telegraph_token_cache = None
 
 
 def test_get_telegraph_token_generation_success():
     from summarize import get_telegraph_token
     import summarize
-    summarize._TELEGRAPH_TOKEN = None
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"ok": True, "result": {"access_token": "new_token"}}
-
+    summarize._telegraph_token_cache = None
     with patch.dict("os.environ", {}, clear=True), \
          patch("os.path.exists", return_value=False), \
-         patch("requests.get", return_value=mock_response), \
+         patch("summarize._telegraph_create_account_sync", return_value="new_token"), \
          patch("builtins.open", unittest_mock_open()):
         assert get_telegraph_token() == "new_token"
-    summarize._TELEGRAPH_TOKEN = None
+    summarize._telegraph_token_cache = None
 
 
 def test_get_telegraph_token_generation_failure():
     from summarize import get_telegraph_token
     import summarize
-    summarize._TELEGRAPH_TOKEN = None
-    mock_response = MagicMock()
-    mock_response.status_code = 500
-
+    summarize._telegraph_token_cache = None
     with patch.dict("os.environ", {}, clear=True), \
          patch("os.path.exists", return_value=False), \
-         patch("requests.get", return_value=mock_response):
-        assert get_telegraph_token() is None
-    summarize._TELEGRAPH_TOKEN = None
+         patch("summarize._telegraph_create_account_sync", side_effect=Exception("Failed")):
+        assert get_telegraph_token() == ""
+    summarize._telegraph_token_cache = None
+

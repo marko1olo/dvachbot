@@ -12,75 +12,11 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-def mock_module(name):
-    mod = types.ModuleType(name)
-    mod.__path__ = [] # makes it a package
-    sys.modules[name] = mod
-    return mod
-
-# Mock heavy/missing dependencies to allow import
-mocked_deps = [
-    'site_tgach.html_sanitizer',
-    'site_tgach', 'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
-    'site_tgach.security', 'site_tgach.image_processing', 'site_tgach.catbox',
-    'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
-    'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
-    'site_tgach.voice_processing', 'site_tgach.html_sanitizer', 'warhammer_mode', 'japanese_translator',
-    'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
-    'fastapi', 'fastapi.responses', 'fastapi.middleware', 'fastapi.middleware.cors',
-    'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip',
-    'fastapi.staticfiles', 'fastapi.templating', 'fastapi.exceptions',
-    'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
-    'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiosqlite', 'aiogram',
-    'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
-    'aiogram.client.default', 'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
-    'aiogram.filters', 'aiogram.fsm', 'aiogram.fsm.context', 'aiogram.fsm.state', 'aiogram.fsm.storage', 'aiogram.fsm.storage.memory',
-    'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'orjson', 'pydantic',
-    'aiogram.utils', 'aiogram.utils.media_group', 'aiogram.utils.keyboard',
-    'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types'
-]
-
-_SAVED_MODULES = {dep: sys.modules.get(dep) for dep in mocked_deps + ['async_lru']}
-
-for dep in mocked_deps:
-    mock_module(dep)
-
-# Return MagicMock for any attribute access on our mocked modules
-for mod_name in sys.modules:
-    if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
-        try:
-            sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
-        except AttributeError:
-            import traceback; traceback.print_exc()
-
-# Stub async_lru.alru_cache so it acts as an identity decorator instead of returning MagicMock.
-# Without this, @alru_cache(...) wraps async functions and replaces them with MagicMock
-# because the entire async_lru module is mocked.
-import functools
-def _alru_cache_stub(maxsize=128, ttl=None, **kwargs):
-    def decorator(func):
-        @functools.wraps(func)
-        async def wrapper(*args, **kw):
-            return await func(*args, **kw)
-        return wrapper
-    return decorator
-
-sys.modules['async_lru'].alru_cache = _alru_cache_stub
-
-# Now we can safely import the function under test
-from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, get_country_by_ip, check_post_cooldown, _resize_image_if_needed, format_poll_for_html
-from Dubsite_tgach.main import get_real_ip, sanitize_html, format_post_text, get_country_by_ip, check_post_cooldown, _resize_image_if_needed, get_user_id_from_session
-
-# Заглушки нужны были только на время импорта выше — символы уже связаны
-# напрямую. Если оставить их в sys.modules, они протекают на весь прогон pytest
-# и роняют посторонние тестовые модули (test_rss и др.), которые изолированно
-# проходят. Возвращаем всё как было.
-for _dep, _previous in _SAVED_MODULES.items():
-    if _previous is None:
-        sys.modules.pop(_dep, None)
-    else:
-        sys.modules[_dep] = _previous
-del _dep, _previous
+from Dubsite_tgach.main import (
+    get_real_ip, sanitize_html, format_post_text, get_country_by_ip,
+    check_post_cooldown, _resize_image_if_needed, format_poll_for_html,
+    get_user_id_from_session
+)
 
 from unittest.mock import MagicMock, AsyncMock, patch
 import io
