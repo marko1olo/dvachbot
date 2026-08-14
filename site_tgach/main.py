@@ -218,7 +218,7 @@ async def get_country_by_ip(ip: str) -> str:
         if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_reserved or ip_obj.is_link_local:
             return "XX"
     except Exception:
-        import traceback; traceback.print_exc()
+        return "XX"
 
     if GEOIP_READER is None:
         try:
@@ -234,14 +234,14 @@ async def get_country_by_ip(ip: str) -> str:
                             geoip2.database.Reader, db_full_path
                         )
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
 
     if GEOIP_READER:
         try:
             response = await asyncio.to_thread(GEOIP_READER.country, ip)
             return response.country.iso_code or "XX"
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
 
     return "XX"
 
@@ -466,8 +466,16 @@ class RequestIdAdapter(logging.LoggerAdapter):
 
 logger = RequestIdAdapter(logger, {})
 
+class SafeRotatingFileHandler(RotatingFileHandler):
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except (PermissionError, OSError):
+            pass
+
+
 # Настройка компактного логгера посетителей
-visitor_fh = RotatingFileHandler(
+visitor_fh = SafeRotatingFileHandler(
     "visitors.log", maxBytes=3 * 1024 * 1024, backupCount=2, encoding="utf-8"
 )
 visitor_fh.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))

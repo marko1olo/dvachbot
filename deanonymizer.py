@@ -235,14 +235,14 @@ def _generate_person_data(lang: str) -> dict:
     details_str = ", ".join(details)
 
     return {
-        'name': name,
-        'surname': surname,
-        'city': city,
-        'street': street,
-        'prof': prof,
-        'fetish': fetish,
-        'address': address,
-        'details_str': details_str
+        'name': escape_html(name),
+        'surname': escape_html(surname),
+        'city': escape_html(city),
+        'street': escape_html(street),
+        'prof': escape_html(prof),
+        'fetish': escape_html(fetish),
+        'address': escape_html(address),
+        'details_str': escape_html(details_str)
     }
 
 def _format_housing_report(data: dict) -> str:
@@ -492,13 +492,13 @@ def _format_schizo(data: dict) -> str:
         "ОН ПРЯЧЕТ ЧИП В ЗУБЕ", f"ГОРОД {city.upper()} ЭТО ИХ БАЗА", "ИЗЛУЧАТЕЛИ РАБОТАЮТ",
         f"ОН {details_str.upper()}", "Я ВИДЕЛ ЕГО ГЛАЗА ОНИ СВЕТЯТСЯ", "ПЯТЬ ДЖИ",
         "РЕПТИЛОИДЫ УЖЕ ЗДЕСЬ", f"ФЕТИШ ({fetish.upper()}) ЭТО КОД ДОСТУПА", "НЕ СЛУШАЙТЕ ЕГО ОН ЛЖЕТ", f"НАЙДЕМ ЕГО УСТАНОВКУ В {address.upper()}",
-        "КРАСНАЯ РТУТЬ", "ТАБЛЕТКИ НЕ ПОМОГАЮТ", "СИГНАЛ ИДЕТ ИЗНУТРИ ЧЕРЕПА", f"<ДОКАЗАТЕЛЬСТВО ГРЕХА {name.upper()}> {random.randint(10, 99)}",
+        "КРАСНАЯ РТУТЬ", "ТАБЛЕТКИ НЕ ПОМОГАЮТ", "СИГНАЛ ИДЕТ ИЗНУТРИ ЧЕРЕПА", f"[ДОКАЗАТЕЛЬСТВО ГРЕХА {name.upper()}] {random.randint(10, 99)}",
         f"ОН РАБОТАЕТ НА {prof.upper()}", "МУСОРОПРОВОД ГОВОРИЛ МНЕ О НЕМ", "ОН ЗНАЕТ ПРО ВЫШКИ",
         "АБУ СКАЗАЛ МНЕ ЕГО ИМЯ", f"ЕГО ФАМИЛИЯ - {surname.upper()}", "СИГНАЛ УСИЛИВАЕТСЯ", "ОНИ ПРИШЛИ ЗА МНОЙ", "НЕ ВЕРЬТЕ СМИ", "ОНИ ЧИТАЮТ МОИ МЫСЛИ"
     ]
     num_lines = random.randint(4, 7)
     selected_lines = random.sample(schizo_phrases, k=min(len(schizo_phrases), num_lines))
-    return "<code>" + "\n".join(selected_lines) + "</code>"
+    return "<code>" + "\n".join(escape_html(line) for line in selected_lines) + "</code>"
 
 def _format_default(data: dict) -> str:
     name = data['name']

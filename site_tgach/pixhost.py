@@ -48,7 +48,11 @@ async def upload_file_to_pixhost(file_path: str) -> str | None:
     if PROXY_URL:
         strategies.append({"proxy": PROXY_URL, "name": "Proxy"})
 
-    file_bytes = await asyncio.to_thread(lambda: open(file_path, "rb").read())
+    def _read_bytes():
+        with open(file_path, "rb") as f:
+            return f.read()
+
+    file_bytes = await asyncio.to_thread(_read_bytes)
     for strategy in strategies:
         try:
             transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)

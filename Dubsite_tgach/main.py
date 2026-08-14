@@ -116,7 +116,11 @@ GEOIP_READER = None
 @alru_cache(maxsize=10000, ttl=3600)
 async def get_country_by_ip(ip: str) -> str:
     global GEOIP_READER
-    if ip in ("127.0.0.1", "localhost", "::1"): 
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_reserved or ip_obj.is_link_local:
+            return "XX"
+    except Exception:
         return "XX"
     
     if GEOIP_READER is None:
@@ -125,19 +129,15 @@ async def get_country_by_ip(ip: str) -> str:
             db_full_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GeoLite2-Country.mmdb")
             if os.path.exists(db_full_path):
                 GEOIP_READER = geoip2.database.Reader(db_full_path)
-        except Exception as e:
-            logger.error(f"Failed to load GeoIP DB: {e}", exc_info=True)
-            logging.warning(f"Failed to initialize GeoIP reader: {e}")
-            logging.warning(f"Failed to load GeoIP database: {e}")
+        except Exception:
+            pass
 
     if GEOIP_READER:
         try:
-            response = GEOIP_READER.country(ip)
+            response = await asyncio.to_thread(GEOIP_READER.country, ip)
             return response.country.iso_code or "XX"
-        except Exception as e:
-            logger.error(f"GeoIP country lookup failed for IP {ip}: {e}", exc_info=True)
-            logging.warning(f"GeoIP reader failed for IP {ip}: {e}")
-            logging.warning(f"Failed to lookup IP {ip} in GeoIP database: {e}")
+        except Exception:
+            pass
 
     return "XX"
 limiter = Limiter(key_func=get_real_ip, config_filename=os.devnull)

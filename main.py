@@ -5300,7 +5300,7 @@ async def cb_support_prank(callback: types.CallbackQuery):
     except Exception:
         await callback.message.answer(SUPPORT_RESPONSES['text'], parse_mode="HTML")
     await callback.answer()
-@dp.message(Command("my_stats", "mystats", "statsme", "профиль", "паспорт"))
+@dp.message(Command("mystats", "my_stats", "statsme", "карта", "деградация", "карточка"))
 async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     try: spawn_task(delete_message_after_delay(message, 5))
@@ -5507,11 +5507,10 @@ def _generate_passport_text(ctx: PassportContext) -> str:
         f"<code>{'—'*22}</code>\n"
     )
 
-@dp.message(Command("passport", "me", "profile", "stats_me"))
+@dp.message(Command("passport", "me", "profile", "stats_me", "паспорт", "профиль", "я"))
 async def cmd_passport(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
-    Генерирует 'Паспорт Анона'. Полная локализация.
-    Адаптировано под безопасную работу с БД (db_lock).
+    Генерирует 'Паспорт Анона' с интерактивным меню (Карта деградации, Личное дело, Кошелек, Рынок).
     """
     if not board_id: return
 
@@ -5556,15 +5555,132 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     )
     passport_text = _generate_passport_text(ctx)
 
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📊 Карта деградации", callback_data="prof_card"),
+            InlineKeyboardButton(text="📂 Личное дело", callback_data="prof_dossier")
+        ],
+        [
+            InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet"),
+            InlineKeyboardButton(text="🛒 Черный рынок", callback_data="prof_shop")
+        ]
+    ])
+
     try:
-        await message.reply(passport_text, parse_mode="HTML")
+        await message.reply(passport_text, reply_markup=kb, parse_mode="HTML")
     except (TelegramBadRequest, TelegramForbiddenError):
         try:
-            await message.answer(passport_text, parse_mode="HTML")
+            await message.answer(passport_text, reply_markup=kb, parse_mode="HTML")
         except (TelegramBadRequest, TelegramForbiddenError):
             pass
     try: await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError): pass
+
+
+@dp.callback_query(F.data == "prof_card")
+async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    username = callback.from_user.username or callback.from_user.first_name or "Аноним"
+    await callback.answer("📊 Генерирую карту деградации...")
+    
+    from stats_generator import generate_user_stats_card
+    from aiogram.types import BufferedInputFile
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+        photo_buf, text_report = await loop.run_in_executor(None, generate_user_stats_card, user_id, board_id, username)
+        if photo_buf:
+            photo = BufferedInputFile(photo_buf.getvalue(), filename='mystats.png')
+            await callback.message.answer_photo(photo, caption=text_report, parse_mode="HTML")
+        else:
+            await callback.message.answer(text_report, parse_mode="HTML")
+    except Exception as e:
+        runtime_logger.warning("Failed generating user stats card: %s", e)
+        await callback.message.answer("⚠️ Ошибка генерации карты деградации.")
+
+
+@dp.callback_query(F.data == "prof_dossier")
+async def cb_prof_dossier(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    from stats_generator import fetch_user_stats_data, generate_schizo_name
+    import random
+
+    stats = fetch_user_stats_data(user_id, board_id)
+    schizo_name = generate_schizo_name(user_id)
+    rng = random.Random(user_id * 31 + 42)
+
+    cases = [
+        "Ст. 228 ч.3 — Хранение тяжелых мемов в особо крупном размере",
+        "Ст. 1488 — Оскорбление чувств подпивасов и скуфов",
+        "Ст. 105 — Злостное покушение на здравый смысл",
+        "Ст. 210 — Организация преступного шитпостинг-сообщества",
+        "Ст. 282 — Возбуждение ненависти к нормисам и зумерам",
+        "Ст. 159 — Мошенничество с рулеткой и шекелями",
+        "Ст. 330 — Самоуправство в ночных тредах",
+        "Ст. 119 — Угрозы обмазать говном из /shit",
+        "Ст. 213 — Хулиганство с применением мут-гана"
+    ]
+    notes = [
+        "Склонен к ночному шитпостингу. При задержании кричит про базу.",
+        "Регулярно скупает шапочки из фольги на Черном рынке. Подозревается в шизофрении.",
+        "Опасный полемист. При первых признаках сажи уходит в глухую оборону.",
+        "Вспыльчив, дерзок. Мечтает свергнуть модераторов и захватить /b/.",
+        "Постоянный клиент санитаров. Ранее привлекался за вайп баянами.",
+        "Тихий подпивас. В трезвом состоянии неопасен, под пивом пишет пасты на 10 экранов."
+    ]
+
+    chosen_cases = rng.sample(cases, k=2)
+    chosen_note = rng.choice(notes)
+    
+    if stats['mutes_count'] > 5 or stats['cringe_factor'] > 60:
+        reliability = "🔴 ОСОБО ОПАСЕН ДЛЯ ОБЩЕСТВА"
+    elif stats['mutes_count'] > 0 or stats['cringe_factor'] > 30:
+        reliability = "🟡 ПОД НАБЛЮДЕНИЕМ САНИТАРОВ"
+    else:
+        reliability = "🟢 УСЛОВНО БЛАГОНАДЕЖЕН"
+
+    prefix_str = f" [{stats['custom_prefix']}]" if stats['custom_prefix'] else ""
+
+    lines = [
+        f"📂 <b>ЛИЧНОЕ ДЕЛО АНОНА №{user_id % 10000:04d}</b> (Твоё личное дело)",
+        f"<code>{'═'*26}</code>",
+        f"👤 <b>Позывной:</b> {schizo_name}{prefix_str}",
+        f"🎖 <b>Статус:</b> {stats['role'].upper()}",
+        f"⚖️ <b>Благонадежность:</b> {reliability}",
+        f"<code>{'—'*26}</code>",
+        f"📝 <b>Постов на борде:</b> <code>{stats['posts_count']:,}</code> (Ранг #{stats['rank']}/{stats['total_users']})",
+        f"🎭 <b>Реакций получено:</b> <code>+{stats['rx_received']:,}</code>",
+        f"⚡ <b>Реакций поставлено:</b> <code>{stats['rx_given']:,}</code>",
+        f"🌀 <b>Кринж-индекс:</b> <code>{stats['cringe_factor']}%</code>",
+        f"💰 <b>Активы:</b> <code>{int(stats['balance']):,} RUB</code>",
+        f"🔇 <b>Приводов в карцер:</b> <code>{stats['mutes_count']} мутов</code>",
+        f"<code>{'—'*26}</code>",
+        f"📋 <b>Инкриминируемые статьи:</b>",
+        f" • <i>{chosen_cases[0]}</i>",
+        f" • <i>{chosen_cases[1]}</i>",
+        f"\n🕵️ <b>Оперативная заметка:</b>",
+        f"<i>\"{chosen_note}\"</i>",
+        f"<code>{'═'*26}</code>"
+    ]
+    await callback.answer()
+    await callback.message.answer("\n".join(lines), parse_mode="HTML")
+
+
+@dp.callback_query(F.data == "prof_wallet")
+async def cb_prof_wallet(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    await callback.answer()
+    await cmd_wallet(callback.message, board_id=board_id, stream=stream)
+
+
+@dp.callback_query(F.data == "prof_shop")
+async def cb_prof_shop(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    await callback.answer()
+    await cmd_shop(callback.message, board_id=board_id, stream=stream)
 
 
 @dp.message(Command("dossier", "досье", "дело", "case", "личноедело"))
@@ -6055,7 +6171,9 @@ async def cmd_menu(message: types.Message, board_id: str | None, stream: str = '
         logger.error(f"Error deleting menu message: {traceback.format_exc()}")
 @dp.message(Command("whois", "info"))
 async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id or not is_admin(message.from_user.id, board_id): return
+    if not board_id: return
+    if not is_admin(message.from_user.id, board_id):
+        return await cmd_dossier(message, board_id=board_id, stream=stream)
     target_id = None
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
