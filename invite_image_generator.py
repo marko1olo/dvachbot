@@ -964,6 +964,17 @@ def build_invite_image_card(
     buf.seek(0)
     return buf
 
+INVITE_LAYOUT_STYLES = [0, 1, 2, 3, 4, 5, 6]
+STYLE_NAMES = {
+    0: "CYBER_BOARD",
+    1: "DEMOTIVATOR_2CH",
+    2: "CYBER_PLAQUE",
+    3: "VAPOR_NEON",
+    4: "BREAKING_NEWS",
+    5: "ANIME_JAPAN_CARD",
+    6: "TERMINAL_MATRIX"
+}
+
 async def generate_invite_image_async(
     board_id: str = "b",
     bot_username: str = "@dvach_chatbot",
@@ -973,13 +984,17 @@ async def generate_invite_image_async(
 ) -> io.BytesIO:
     """High-level async helper to generate a complete invite image card."""
     base_img = await fetch_random_post_image()
-    return build_invite_image_card(
-        base_image=base_img,
-        slogan_dict=slogan_dict,
-        custom_text=custom_text,
-        board_id=board_id,
-        bot_username=bot_username,
-        layout_style=layout_style
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        lambda: build_invite_image_card(
+            base_image=base_img,
+            slogan_dict=slogan_dict,
+            custom_text=custom_text,
+            board_id=board_id,
+            bot_username=bot_username,
+            layout_style=layout_style
+        )
     )
 
 def get_random_auto_invite_content(board_id: str = "b", bot_username: str = "@dvach_chatbot") -> Tuple[Dict[str, str], str]:

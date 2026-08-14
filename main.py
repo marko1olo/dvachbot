@@ -6179,7 +6179,6 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
 
 
     now_dt = datetime.now(UTC)
-    content = {'type': 'text', 'text': message_text, 'is_system_message': True}
 
     post_num = await create_post(
         board_id=board_id, author_id=0, content=content,

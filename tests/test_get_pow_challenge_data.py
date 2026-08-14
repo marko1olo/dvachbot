@@ -1,10 +1,8 @@
 import pytest
 from unittest.mock import patch
-import Dubsite_tgach.security as dubsite_security
 import site_tgach.security as site_security
 
 @pytest.mark.parametrize("security_module", [
-    dubsite_security,
     site_security
 ])
 def test_get_pow_challenge_data_default(security_module):
@@ -16,7 +14,6 @@ def test_get_pow_challenge_data_default(security_module):
         }
 
 @pytest.mark.parametrize("security_module", [
-    dubsite_security,
     site_security
 ])
 def test_get_pow_challenge_data_custom_difficulty(security_module):

@@ -3,11 +3,26 @@ import unittest
 from unittest.mock import call, patch, AsyncMock, MagicMock
 import sys
 
+class MockTelegramException(Exception): pass
+class MockTelegramBadRequest(MockTelegramException): pass
+class MockTelegramForbiddenError(MockTelegramException): pass
+class MockTelegramNetworkError(MockTelegramException): pass
+class MockTelegramRetryAfter(MockTelegramException):
+    def __init__(self, retry_after=5, *args, **kwargs):
+        super().__init__(*args)
+        self.retry_after = retry_after
+
 class MockedImportsTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
+        mock_exc = MagicMock()
+        mock_exc.TelegramBadRequest = MockTelegramBadRequest
+        mock_exc.TelegramForbiddenError = MockTelegramForbiddenError
+        mock_exc.TelegramNetworkError = MockTelegramNetworkError
+        mock_exc.TelegramRetryAfter = MockTelegramRetryAfter
+
         self.mock_modules = {
             'aiogram': MagicMock(),
-            'aiogram.exceptions': MagicMock(),
+            'aiogram.exceptions': mock_exc,
             'aiogram.types': MagicMock(),
             'stats_generator': MagicMock(),
         }
