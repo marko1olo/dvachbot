@@ -25,16 +25,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Setup Pages
-        uses: actions/configure-pages@v4
-        with:
-          enablement: true
+        uses: actions/configure-pages@v5
+
+      - name: Prepare Pages Artifacts
+        run: |
+          mkdir -p _site
+          cp -f docs/index.html _site/ 2>/dev/null || cp -f index.html _site/ 2>/dev/null || true
+          cp -f docs/llms.txt _site/ 2>/dev/null || cp -f llms.txt _site/ 2>/dev/null || true
+          cp -f docs/manifest.json _site/ 2>/dev/null || cp -f manifest.json _site/ 2>/dev/null || true
+          cp -f docs/manifest.webmanifest _site/ 2>/dev/null || cp -f manifest.webmanifest _site/ 2>/dev/null || true
+          cp -f docs/robots.txt _site/ 2>/dev/null || true
+          cp -f docs/sitemap.xml _site/ 2>/dev/null || true
+          cp -f docs/favicon.svg _site/ 2>/dev/null || true
+          cp -f docs/og-card.png _site/ 2>/dev/null || true
+          cp -f docs/sw.js _site/ 2>/dev/null || true
+          touch _site/.nojekyll
 
       - name: Upload static project surface
         uses: actions/upload-pages-artifact@v3
         with:
-          path: 'docs'
+          path: '_site'
 
       - name: Deploy to GitHub Pages
         id: deployment
