@@ -11,18 +11,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-with patch.dict('sys.modules', {
-    'common.task_manager': MagicMock(),
-    'common.database': MagicMock(),
-    'common.secret_redaction': MagicMock(),
-    'common.bot_pool': MagicMock(),
-    'common.board_config': MagicMock(),
-    'site_tgach.catbox': MagicMock(),
-    'site_tgach.huggingface': MagicMock(),
-    'site_tgach.mtproto_client': MagicMock(),
-    'common': MagicMock(),
-}):
-    from Dubsite_tgach.image_processing import apply_srgb_to_linear, sign_pow
+from site_tgach.image_processing import apply_srgb_to_linear, sign_pow
 
 class TestApplySrgbToLinear(unittest.TestCase):
     def test_apply_srgb_to_linear_low(self):

@@ -71,7 +71,7 @@ class TestBackupManager(unittest.TestCase):
         self.assertEqual(result, expected_path)
 
         mock_makedirs.assert_called_once_with("out_dir", exist_ok=True)
-        mock_connect.assert_called_once_with("test.db")
+        mock_connect.assert_called_once_with("test.db", timeout=15.0)
         mock_gzip_open.assert_called_once_with(expected_path, "wt", encoding="utf-8")
 
         # Verify writing to gzip

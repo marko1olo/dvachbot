@@ -33,7 +33,7 @@ class TestMaintenance(unittest.TestCase):
         run_maintenance()
 
         mock_exists.assert_called_once_with(DB_NAME)
-        mock_connect.assert_called_once_with(DB_NAME)
+        mock_connect.assert_called_once_with(DB_NAME, timeout=15.0)
 
         # Check that both VACUUM and ANALYZE are called
         self.assertEqual(mock_con.execute.call_count, 2)
@@ -58,7 +58,7 @@ class TestMaintenance(unittest.TestCase):
         run_maintenance()
 
         mock_exists.assert_called_once_with(DB_NAME)
-        mock_connect.assert_called_once_with(DB_NAME)
+        mock_connect.assert_called_once_with(DB_NAME, timeout=15.0)
 
         # Verify that the critical error message is printed
         mock_print.assert_any_call(f"⛔ КРИТИЧЕСКАЯ ОШИБКА во время обслуживания: {error_msg}")

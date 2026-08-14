@@ -2,8 +2,6 @@ import unittest
 from unittest.mock import patch, MagicMock
 import sys
 
-# Mock mode_visuals before importing polish_mode to avoid PIL dependency issues
-sys.modules['mode_visuals'] = MagicMock()
 import polish_mode
 
 class TestPolishTransform(unittest.TestCase):

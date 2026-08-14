@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock
-import Dubsite_tgach.image_processing as image_processing
+import site_tgach.image_processing as image_processing
 
 class TestShutdownImageExecutors(unittest.TestCase):
     def setUp(self):

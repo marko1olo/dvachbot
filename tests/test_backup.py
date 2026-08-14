@@ -12,7 +12,7 @@ os.environ["API_ID"] = "123"
 os.environ["API_HASH"] = "test_hash"
 os.environ["BASE_URL"] = "http://test.com"
 
-from Dubsite_tgach.backup import split_file_by_size
+from site_tgach.backup import split_file_by_size
 
 class TestBackupSplit(unittest.TestCase):
     def setUp(self):

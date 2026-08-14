@@ -11,18 +11,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # Using mock.patch.dict instead to not pollute sys.modules globally and permanently
-with patch.dict('sys.modules', {
-    'common.task_manager': MagicMock(),
-    'common.database': MagicMock(),
-    'common.secret_redaction': MagicMock(),
-    'common.bot_pool': MagicMock(),
-    'common.board_config': MagicMock(),
-    'site_tgach.catbox': MagicMock(),
-    'site_tgach.huggingface': MagicMock(),
-    'site_tgach.mtproto_client': MagicMock(),
-    'common': MagicMock(),
-}):
-    from site_tgach.image_processing import encode_83
+from site_tgach.image_processing import encode_83
 
 class TestEncode83(unittest.TestCase):
     def test_encode_zero(self):

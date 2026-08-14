@@ -273,7 +273,7 @@ async def send_stats_to_user(bot: Bot, chat_id: int):
         # Send a copy to the Archive Channel if not already there
         archive_channel_id = int(os.getenv("ARCHIVE_CHANNEL_ID", -1002827087363))
         if chat_id != archive_channel_id:
-            print(f"📊 Отправляю копию графиков в архивный канал {archive_channel_id}...")
+            logger.info("Sending copy of charts to archive channel %s...", archive_channel_id)
             for idx, media_group in enumerate(media_groups):
                 if not media_group:
                     continue

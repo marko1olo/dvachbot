@@ -6893,9 +6893,47 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
         await send_welcome_sequence(message.bot, user_id, board_id, stream=stream)
         spawn_task(send_active_pin_to_new_user(message.bot, user_id, board_id))
     else:
-        start_text = b_data.get('start_message_text', "Добро пожаловать в ТГАЧ!")
+        lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+        board_name = BOARD_CONFIG.get(board_id, {}).get('name', f"/{board_id}/")
+        
+        if lang == 'en':
+            start_text = (
+                f"⚡ <b>Welcome to TGACH — Anonymous Imageboard ({board_name})!</b>\n\n"
+                "💬 <b>How it works:</b>\n"
+                "• Any text or image you send is posted anonymously on the board.\n"
+                "• To answer an anon, simply <b>Reply</b> to their message.\n"
+                "• React with emojis: 👍 like (+12 RUB to author), 👎 sage (-5.5 RUB penalty).\n"
+                "• Earn shekels via /work, buy gear in /shop, check /wallet.\n"
+                "• Create custom demotivators: <code>/dem Title | Subline</code>\n\n"
+                "👉 Use the quick menu below or type /help for the full command list."
+            )
+            menu_text = "👇 <b>Quick Menu:</b>"
+        elif lang == 'jp':
+            start_text = (
+                f"⚡ <b>TGACHへようこそ — 匿名画像掲示板 ({board_name})！</b>\n\n"
+                "💬 <b>使い方:</b>\n"
+                "• 送信したメッセージは匿名で板に投稿されます。\n"
+                "• 他のアノンに返信するには <b>返信 (Reply)</b> を使用します。\n"
+                "• リアクション: 👍 (+12 RUB), 👎 (-5.5 RUB)。\n"
+                "• /work で稼ぎ、/shop でアイテムを購入、/wallet で残高確認。\n"
+                "• デモティベーター作成: <code>/dem タイトル | サブ</code>\n\n"
+                "👉 下のメニューまたは /help をご利用ください。"
+            )
+            menu_text = "👇 <b>クイックメニュー:</b>"
+        else:
+            start_text = (
+                f"⚡ <b>Добро пожаловать в ТГАЧ — Анонимную борду ({board_name})!</b>\n\n"
+                "💬 <b>Как здесь общаться:</b>\n"
+                "• <b>Постинг:</b> Отправь любой текст, фото или стикер — он мгновенно и анонимно появится на доске.\n"
+                "• <b>Ответы:</b> Чтобы ответить анону, сделай <b>Reply (Ответить)</b> на его сообщение.\n"
+                "• <b>Экономика:</b> Ставь реакции! 👍 Лайк даёт автору <b>+12₽</b>, а 👎 дизлайк и сажа списывают штраф.\n"
+                "• <b>Заработок:</b> Заходи в /work (сдавай бутылки), получай /daily, закупай пушки в /shop и проверяй /wallet.\n"
+                "• <b>Демотиваторы:</b> Ответь на картинку <code>/dem Заголовок | Подпись</code> для создания плаката!\n\n"
+                "👉 Выбирай раздел в меню ниже или пиши /help для полного списка команд."
+            )
+            menu_text = "👇 <b>Быстрое меню ТГАЧ:</b>"
+            
         await message.answer(start_text, parse_mode="HTML", disable_web_page_preview=True)
-        menu_text = "👇 <b>Quick Menu / Быстрое меню:</b>"
         await message.answer(menu_text, reply_markup=get_quick_menu_keyboard(board_id, stream=stream), parse_mode="HTML")
         try: await message.delete()
         except Exception: pass
@@ -9025,7 +9063,12 @@ async def cmd_yer(message: types.Message, board_id: str | None, stream: str = 'r
     try: await message.delete()
     except TelegramBadRequest: pass
 
+UNFINISHED_NEW_MODES = {'matrix_mode', 'america_mode', 'holiday_mode', 'oldweb_mode', 'jewish_mode'}
+
 async def _trigger_generic_mode(message: types.Message, board_id: str | None, stream: str, mode_key: str, start_phrases: list, duration_sec: int, prefix_title: str):
+    if mode_key in UNFINISHED_NEW_MODES:
+        await message.answer("⚠️ Данный режим не активен и находится в разработке.")
+        return
     if not board_id or board_id == 'int':
         try: await message.delete()
         except Exception: pass
