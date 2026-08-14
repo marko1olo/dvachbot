@@ -73,7 +73,7 @@ async def _purge_blocked_user(user_id: int, board_id: str | None = None):
 # EARN MENU
 # ====================
 
-@economy_router.message(Command("work", "earn", "bomj", "job", "economy"))
+@economy_router.message(Command("earn", "bomj", "economy"))
 async def cmd_work_menu(message: types.Message, board_id: str | None = None):
     if not board_id:
         return
@@ -94,7 +94,7 @@ async def cmd_work_menu(message: types.Message, board_id: str | None = None):
     try: await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception): pass
 
-@economy_router.callback_query(F.data.startswith("work_"))
+@economy_router.callback_query(F.data.in_({"work_bottles", "work_sell_mother"}))
 async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = None):
     if not board_id: return
     user_id = callback.from_user.id

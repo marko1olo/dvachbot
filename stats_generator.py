@@ -2962,9 +2962,34 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str, theme: 
     return buf, text_report
 
 
-def draw_user_stats_card(data: UserStatsCardData, theme: str = 'auto') -> io.BytesIO:
+def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
     import random
     from PIL import Image, ImageDraw, ImageFont
+
+    if isinstance(data, dict):
+        data = UserStatsCardData(
+            user_id=data.get('user_id', 0),
+            board_id=data.get('board_id', 'b'),
+            schizo_name=data.get('schizo_name', f"Анон-#{data.get('user_id', 0)%10000:04d}"),
+            role_name=data.get('role_name', 'Анонимус'),
+            custom_prefix=data.get('custom_prefix', ''),
+            role=data.get('role', 'user'),
+            posts_count=data.get('posts_count', 0),
+            rx_received=data.get('rx_received', data.get('reactions_received', 0)),
+            rx_given=data.get('rx_given', data.get('reactions_given', 0)),
+            mutes_count=data.get('mutes_count', 0),
+            balance=data.get('balance', 0.0),
+            cringe_factor=data.get('cringe_factor', 10),
+            rank=data.get('rank', 1),
+            total_users=data.get('total_users', 100),
+            slang_comment=data.get('slang_comment', 'Обычный посетитель'),
+            fav_board=data.get('fav_board', 'b'),
+            chronotype=data.get('chronotype', 'Ночной сыч'),
+            post_style=data.get('post_style', 'Базовые мысли'),
+            avg_len=data.get('avg_len', 50),
+            approval_pct=data.get('approval_pct', 85),
+            badges=data.get('badges', ['Анон'])
+        )
 
     if theme == 'auto':
         if data.mutes_count >= 3 or data.cringe_factor >= 80:

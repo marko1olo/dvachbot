@@ -43,9 +43,9 @@ logger.setLevel(logging.INFO)
 GROQ_COOLDOWN_UNTIL = 0
 _VISION_SEMAPHORE = None
 BANNED_GEMINI_KEYS = set()
-BANNED_GROQ_KEYS = set()
 _LAST_VISION_CALL_TIME: dict[str, float] = {}  # api_key -> timestamp
 _GLOBAL_GEMINI_LAST_CALL = 0.0
+_GLOBAL_GROQ_LAST_CALL = 0.0
 _KEY_RATE_LOCK = asyncio.Lock()
 
 
@@ -212,27 +212,32 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     available_keys = list(keys)
                     random.shuffle(available_keys)
                     
+                    consecutive_429 = 0
                     while available_keys:
                         selected_key = None
                         sleep_time = 0.0
                         
                         async with _KEY_RATE_LOCK:
-                            global _GLOBAL_GEMINI_LAST_CALL
+                            global _GLOBAL_GEMINI_LAST_CALL, _GLOBAL_GROQ_LAST_CALL
                             now = time.time()
-                            global_wait = max(0.0, _GLOBAL_GEMINI_LAST_CALL - now) if provider == "gemini" else 0.0
+                            provider_last = _GLOBAL_GEMINI_LAST_CALL if provider == "gemini" else _GLOBAL_GROQ_LAST_CALL
+                            global_wait = max(0.0, provider_last - now)
                             eff_now = now + global_wait
 
-                            # PASS 1: Try to find a completely free key (no sleep)
+                            # PASS 1: Try to find a completely free key (no sleep beyond global_wait)
                             for api_key in available_keys:
-                                last_call = _LAST_VISION_CALL_TIME.get(api_key, 0.0)
+                                pool_cd = getattr(pool, "_cooldown_until", {}).get(api_key, 0.0)
+                                last_call = max(_LAST_VISION_CALL_TIME.get(api_key, 0.0), pool_cd)
                                 if last_call > eff_now + 15.0:
                                     continue
                                 if eff_now >= last_call:
                                     selected_key = api_key
                                     sleep_time = global_wait
-                                    _LAST_VISION_CALL_TIME[api_key] = eff_now + 4.5
+                                    _LAST_VISION_CALL_TIME[api_key] = eff_now + 3.0
                                     if provider == "gemini":
-                                        _GLOBAL_GEMINI_LAST_CALL = eff_now + 4.5
+                                        _GLOBAL_GEMINI_LAST_CALL = eff_now + 3.0
+                                    else:
+                                        _GLOBAL_GROQ_LAST_CALL = eff_now + 3.0
                                     break
                                     
                             # PASS 2: Find key with the minimum wait time
@@ -240,7 +245,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 best_key = None
                                 min_wait = float('inf')
                                 for api_key in available_keys:
-                                    last_call = _LAST_VISION_CALL_TIME.get(api_key, 0.0)
+                                    pool_cd = getattr(pool, "_cooldown_until", {}).get(api_key, 0.0)
+                                    last_call = max(_LAST_VISION_CALL_TIME.get(api_key, 0.0), pool_cd)
                                     if last_call > eff_now + 15.0:
                                         continue
                                     wait_time = last_call - eff_now
@@ -250,9 +256,11 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 if best_key:
                                     selected_key = best_key
                                     sleep_time = global_wait + min_wait
-                                    _LAST_VISION_CALL_TIME[selected_key] = eff_now + min_wait + 4.5
+                                    _LAST_VISION_CALL_TIME[selected_key] = eff_now + min_wait + 3.0
                                     if provider == "gemini":
-                                        _GLOBAL_GEMINI_LAST_CALL = eff_now + min_wait + 4.5
+                                        _GLOBAL_GEMINI_LAST_CALL = eff_now + min_wait + 3.0
+                                    else:
+                                        _GLOBAL_GROQ_LAST_CALL = eff_now + min_wait + 3.0
 
                         if not selected_key:
                             logger.warning(f"⚠️ [VISION] [{source}] All keys for {model_name} are penalized. Skipping model.")
@@ -353,6 +361,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                         except Exception as e:
                             err_str = str(e).lower()
                             if "413" in err_str: return "error_413"
+                            if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str:
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} not found (404). Skipping model.")
+                                permanent_model_failures += 1
+                                break
                             if "json_validate" in err_str or "max completion tokens" in err_str or "400" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} failed ({err_str[:120]}). Trying next model...")
                                 permanent_model_failures += 1
@@ -360,13 +372,36 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             if "503" in err_str or "504" in err_str or "unavailable" in err_str or "500" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} server overloaded ({err_str}). Skipping model {model_name}.")
                                 break
-                            if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
-                                logger.info(f"ℹ️ [VISION] [{source}] {provider} key {selected_key[:8]}... rate limited (429). Penalizing and trying next key.")
-                                pool.penalize_token(selected_key, 60.0)
+                            if "tokens per day" in err_str or "tpd" in err_str:
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} daily token limit (TPD) reached. Pausing {provider} for 15m.")
                                 async with _KEY_RATE_LOCK:
-                                    _LAST_VISION_CALL_TIME[selected_key] = time.time() + 60.0
+                                    if provider == "gemini":
+                                        _GLOBAL_GEMINI_LAST_CALL = time.time() + 900.0
+                                    else:
+                                        _GLOBAL_GROQ_LAST_CALL = time.time() + 900.0
+                                break
+                            if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
+                                consecutive_429 += 1
+                                logger.info(f"ℹ️ [VISION] [{source}] {provider} key {selected_key[:8]}... rate limited (429). Penalizing for 120s.")
+                                pool.penalize_token(selected_key, 120.0)
+                                async with _KEY_RATE_LOCK:
+                                    _LAST_VISION_CALL_TIME[selected_key] = time.time() + 120.0
+                                    if provider == "gemini":
+                                        _GLOBAL_GEMINI_LAST_CALL = max(_GLOBAL_GEMINI_LAST_CALL, time.time() + 3.0)
+                                    else:
+                                        _GLOBAL_GROQ_LAST_CALL = max(_GLOBAL_GROQ_LAST_CALL, time.time() + 3.0)
                                 available_keys.remove(selected_key)
-                                await asyncio.sleep(1.5)
+
+                                if consecutive_429 >= 2:
+                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} hit multiple consecutive 429 rate limits ({consecutive_429}). Halting {provider} attempts to protect keys from spam.")
+                                    async with _KEY_RATE_LOCK:
+                                        if provider == "gemini":
+                                            _GLOBAL_GEMINI_LAST_CALL = time.time() + 60.0
+                                        else:
+                                            _GLOBAL_GROQ_LAST_CALL = time.time() + 60.0
+                                    break
+
+                                await asyncio.sleep(3.0)
                                 continue
                             if "401" in err_str or "invalid api key" in err_str or "unauthorized" in err_str:
                                 logger.error(f"❌ [VISION] [{source}] {provider} key {selected_key[:12]}... unauthorized (401). Removing from pool.")

@@ -5612,6 +5612,8 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
     job = WORK_VACANCIES[job_id]
     db = await get_pool()
 
+    ans_text = None
+    is_cd = False
     async with db_lock:
         async with db.execute("SELECT balance, active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
             row = await c.fetchone()
@@ -5630,28 +5632,33 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
 
         if passed < job["cooldown_sec"]:
             left_min = ((job["cooldown_sec"] - passed) // 60) + 1
-            await callback.answer(f"⏳ Кулдаун! Эта работа будет доступна через {left_min} мин.", show_alert=True)
-            return
-
-        is_fail = (job.get("risk_pct", 0) > 0 and random.random() < job["risk_pct"])
-        if is_fail:
-            penalty = job.get("penalty", 30)
-            work_timers[job_id] = now
-            await db.execute(
-                "UPDATE Users SET balance = MAX(0.0, balance - ?), active_items = ? WHERE user_id = ? AND board_id = ?",
-                (penalty, json.dumps(items), user_id, board_id)
-            )
-            await db.commit()
-            await callback.answer(f"🚨 Попался модерации! Штраф -{penalty} RUB", show_alert=True)
+            ans_text = f"⏳ Кулдаун! Эта работа будет доступна через {left_min} мин."
+            is_cd = True
         else:
-            reward = random.randint(job["reward_range"][0], job["reward_range"][1])
-            work_timers[job_id] = now
-            await db.execute(
-                "UPDATE Users SET balance = balance + ?, active_items = ? WHERE user_id = ? AND board_id = ?",
-                (reward, json.dumps(items), user_id, board_id)
-            )
-            await db.commit()
-            await callback.answer(f"✅ Успешно! +{reward} RUB", show_alert=True)
+            is_fail = (job.get("risk_pct", 0) > 0 and random.random() < job["risk_pct"])
+            if is_fail:
+                penalty = job.get("penalty", 30)
+                work_timers[job_id] = now
+                await db.execute(
+                    "UPDATE Users SET balance = MAX(0.0, balance - ?), active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (penalty, json.dumps(items), user_id, board_id)
+                )
+                await db.commit()
+                ans_text = f"🚨 Попался модерации! Штраф -{penalty} RUB"
+            else:
+                reward = random.randint(job["reward_range"][0], job["reward_range"][1])
+                work_timers[job_id] = now
+                await db.execute(
+                    "UPDATE Users SET balance = balance + ?, active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (reward, json.dumps(items), user_id, board_id)
+                )
+                await db.commit()
+                ans_text = f"✅ Успешно! +{reward} RUB"
+
+    if ans_text:
+        await callback.answer(ans_text, show_alert=True)
+    if is_cd:
+        return
 
     text, kb = await _build_work_card(user_id, board_id)
     try:
@@ -9075,10 +9082,18 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
     from help_text import get_help_hub_page
     start_text = get_help_hub_page("main", lang=lang)
     await _send_thread_info_if_applicable(message, board_id)
-    await message.answer(start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=start_text,
+        reply_markup=get_help_keyboard("main", board_id, stream),
+        category="start",
+        parse_mode="HTML"
+    )
     try:
         await message.delete()
-    except TelegramBadRequest:
+    except (TelegramBadRequest, Exception):
         pass
 @dp.message(Command("dice", "roll100", "d100"))
 async def cmd_dice(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -10351,9 +10366,12 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         from help_text import get_help_hub_page
         start_text = get_help_hub_page("main", lang=lang)
         try:
-            await callback.message.edit_text(start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+            await callback.message.edit_caption(caption=start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML")
         except Exception:
-            await callback.message.answer(start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+            try:
+                await callback.message.edit_text(start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+            except Exception:
+                await callback.message.answer(start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
     elif action == "invite":
         await _handle_quick_menu_invite(callback, board_id, lang)
     elif action == "admin":
@@ -17765,11 +17783,14 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
     text = get_help_hub_page(cat, lang=lang)
     
     try:
-        await callback.message.edit_text(text, reply_markup=get_help_keyboard(cat, board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
-    except TelegramBadRequest:
-        pass
-    except Exception as e:
-        runtime_logger.warning("Error editing help text: %s", e)
+        await callback.message.edit_caption(caption=text, reply_markup=get_help_keyboard(cat, board_id, stream), parse_mode="HTML")
+    except Exception:
+        try:
+            await callback.message.edit_text(text, reply_markup=get_help_keyboard(cat, board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+        except TelegramBadRequest:
+            pass
+        except Exception as e:
+            runtime_logger.warning("Error editing help text: %s", e)
     await callback.answer()
 
 try:
