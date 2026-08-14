@@ -1,18 +1,22 @@
 <div align="center">
 
-# TGACH (dvachbot_cloned)
+# TGACH (dvachbot) — Official Hybrid Imageboard Platform
 
 ### *Telegram-Attached Hybrid Imageboard Platform with Real-time WebSocket Synchronization*
 
-[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Demo-brightgreen?style=for-the-badge&logo=github)](https://marko1olo.github.io/dvachbot/)
-[![Deploy GitHub Pages](https://github.com/marko1olo/dvachbot/actions/workflows/deploy-gh-pages.yml/badge.svg)](https://github.com/marko1olo/dvachbot/actions/workflows/deploy-gh-pages.yml)
+[![Production Platform: tgach.top](https://img.shields.io/badge/Production%20Platform-tgach.top-ff6600?style=for-the-badge&logo=googlechrome&logoColor=white)](https://tgach.top)
+[![Telegram Bot: @dvach_Chatbot](https://img.shields.io/badge/Telegram%20Bot-@dvach__Chatbot-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/dvach_Chatbot)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Showcase-brightgreen?style=for-the-badge&logo=github)](https://marko1olo.github.io/dvachbot/)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.95%2B-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org)
-[![Vanilla JS](https://img.shields.io/badge/Vanilla_JS-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
-[![Jinja2](https://img.shields.io/badge/Jinja2-SSR-B41717?style=for-the-badge&logo=jinja&logoColor=white)](https://jinja.palletsprojects.com/)
-[![Telegram Bot API](https://img.shields.io/badge/Telegram_Bot-API-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
+[![WebSockets](https://img.shields.io/badge/WebSockets-Real--time%20Sync-yellow?style=for-the-badge&logo=websocket&logoColor=black)](https://tgach.top)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+
+<br />
+
+> ### 🚀 **LIVE PRODUCTION ENDPOINTS**
+> - **🌐 Web Imageboard:** [https://tgach.top](https://tgach.top) — Полная веб-версия с 20+ темами оформления и живыми WebSocket-обновлениями.
+> - **🤖 Official Telegram Bot:** [@dvach_Chatbot](https://t.me/dvach_Chatbot) (`https://t.me/dvach_Chatbot`) — Мгновенное чтение тредов, отправка постов, Atkinson-дизеринг медиа и сквозная синхронизация с сайтом!
 
 <br />
 
