@@ -4,8 +4,8 @@
 
 ### *Telegram-Attached Hybrid Imageboard Platform with Real-time WebSocket Synchronization*
 
-[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Demo-brightgreen?style=for-the-badge&logo=github)](https://barsukdana.github.io/dvachbot_cloned/)
-[![Deploy GitHub Pages](https://github.com/barsukdana/dvachbot_cloned/actions/workflows/deploy-gh-pages.yml/badge.svg)](https://github.com/barsukdana/dvachbot_cloned/actions/workflows/deploy-gh-pages.yml)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Demo-brightgreen?style=for-the-badge&logo=github)](https://marko1olo.github.io/dvachbot/)
+[![Deploy GitHub Pages](https://github.com/marko1olo/dvachbot/actions/workflows/deploy-gh-pages.yml/badge.svg)](https://github.com/marko1olo/dvachbot/actions/workflows/deploy-gh-pages.yml)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.95%2B-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org)
