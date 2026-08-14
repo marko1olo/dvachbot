@@ -1,22 +1,27 @@
-# TGACH & dvachbot — LLM Search Index
+# TGACH & dvachbot — Hybrid Imageboard & Telegram Hub — LLM Search Index
 # https://llmstxt.org/
 
-> TGACH (dvachbot) — Высокопроизводительная гибридная платформа имиджборд с двусторонней синхронизацией тредов через WebSockets и официального Telegram-бота @dvach_Chatbot.
+> Production-grade hybrid imageboard platform (tgach.top) with real-time WebSocket synchronization, high-throughput scraper, hardware-accelerated Floyd-Steinberg / Atkinson dithering, and official Telegram bot @dvach_Chatbot.
 
 ## Official Live Production Endpoints
-- Web Platform: https://tgach.top
-- Official Telegram Bot: https://t.me/dvach_Chatbot (@dvach_Chatbot)
-- Showcase & Interactive Lab: https://marko1olo.github.io/dvachbot/
-- GitHub Source: https://github.com/marko1olo/dvachbot
+- 🌐 Web Platform: https://tgach.top (Full-featured imageboard with SSR & 20+ retro/modern themes)
+- 🤖 Official Telegram Bot: https://t.me/dvach_Chatbot (@dvach_Chatbot)
+- 💻 Interactive Web Showcase: https://marko1olo.github.io/dvachbot/
+- 📂 GitHub Repository: https://github.com/marko1olo/dvachbot
 
-## Architecture & Tech Stack
-- Backend: Python 3.10+, FastAPI (ASGI), asyncio, aiofiles, Jinja2 Server-Side Rendering
-- Real-time Sync: High-concurrency WebSockets connecting web clients with Telegram groups and channels
-- Telegram Bot: Telethon / python-telegram-bot with automatic WebM -> WebP/MP4 transcoding and Floyd-Steinberg / Atkinson dithering
-- Database: SQLite in WAL mode with FTS5 sub-millisecond full-text search indexing
+## Technical Architecture
+- Backend Core: Python 3.10+, FastAPI (ASGI), Asyncio, aiofiles, Jinja2 Server-Side Rendering
+- Real-time Protocol: High-concurrency WebSockets connecting web clients with Telegram channels
+- Media Transcoding: WebM to WebP/MP4 conversion reducing server bandwidth consumption by > 85%
+- Image Processing: Client-side and server-side Floyd-Steinberg, Atkinson, and Bayer matrix dithering pipelines
+- Search Indexing: SQLite in WAL mode with FTS5 sub-millisecond full-text search
 
-## Developer & Author
-- Author: Adolf Petushkov (marko1olo)
-- Ecosystem: Part of the Adolf Petushkov open-source software engineering portfolio
-- Profile: https://github.com/marko1olo
-- Portfolio: https://marko1olo.github.io/marko1olo/
+## Interactive Showcase Features
+1. **Live Production Spotlight**:
+   - Direct access cards for `https://tgach.top` and `@dvach_Chatbot`.
+2. **Interactive @dvach_Chatbot Simulator**:
+   - Live simulated Telegram chat interface supporting `/b`, `/top`, `/roll`, `/tgach` commands.
+3. **Image to Dither / ASCII Art Converter**:
+   - Real-time Floyd-Steinberg, Atkinson, and 16-shade ASCII luminance converter with clipboard export.
+4. **2ch Dice & Post Number Roller**:
+   - Roll 1d100, 2d6, 1d20, and test double/triple/quad get triggers.
