@@ -2237,15 +2237,19 @@ def _generate_chart_38(c, images):
         bars_em = ax.barh(range(len(emojis)), counts, color=colors_em,
                           edgecolor='#21262d', linewidth=0.6)
         ax.set_yticks(range(len(emojis)))
-        # Direct path lookup for Windows emoji font (findfont fails for color fonts)
+        # Direct path lookup for Windows/Linux emoji fonts (findfont fails for color fonts)
         import matplotlib.font_manager as _fm
         import os as _os
         emoji_font_prop = None
-        _win_emoji_paths = [
-            r'C:\Windows\Fonts\seguiemj.ttf',   # Segoe UI Emoji
-            r'C:\Windows\Fonts\seguisym.ttf',   # Segoe UI Symbol fallback
+        _emoji_paths = [
+            r'C:\Windows\Fonts\seguiemj.ttf',   # Windows 10/11 Segoe UI Emoji
+            r'C:\Windows\Fonts\seguisym.ttf',   # Windows Segoe UI Symbol
+            '/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf', # Debian / Ubuntu
+            '/usr/share/fonts/noto/NotoColorEmoji.ttf',         # Arch / Fedora
+            '/usr/share/fonts/truetype/ancient-scripts/Symbola.ttf', # Linux Symbola
+            '/System/Library/Fonts/Apple Color Emoji.ttc',      # macOS
         ]
-        for _fp in _win_emoji_paths:
+        for _fp in _emoji_paths:
             if _os.path.exists(_fp):
                 try:
                     emoji_font_prop = _fm.FontProperties(fname=_fp)
