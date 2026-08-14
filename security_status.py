@@ -4,24 +4,48 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from security_paths import (
-    ASYNC_BLOCKING_REPORT,
-    COOKIE_ARTIFACT_REPORT,
-    ENV_CONTRACT_REPORT,
-    GITIGNORE_POLICY_REPORT,
-    IMPORT_GRAPH_REPORT,
-    LOCAL_ARTIFACT_REPORT,
-    PYTHON_QUALITY_REPORT,
-    REMEDIATION_PLAN,
-    REPOSITORY_HEALTH_REPORT,
-    SECRET_ARTIFACT_INVENTORY,
-    SECRET_FINDINGS_BASELINE,
-    SECURITY_CHECK_SUMMARY,
-    SECURITY_STATUS_REPORT,
-    SOURCE_INTEGRITY_REPORT,
-)
-from security_report_utils import atomic_write_json
-from security_report_validator import validate_reports
+VERIF_DIR = str(Path(__file__).resolve().parent / "verification_scripts")
+if VERIF_DIR not in sys.path:
+    sys.path.insert(0, VERIF_DIR)
+
+try:
+    from security_paths import (
+        ASYNC_BLOCKING_REPORT,
+        COOKIE_ARTIFACT_REPORT,
+        ENV_CONTRACT_REPORT,
+        GITIGNORE_POLICY_REPORT,
+        IMPORT_GRAPH_REPORT,
+        LOCAL_ARTIFACT_REPORT,
+        PYTHON_QUALITY_REPORT,
+        REMEDIATION_PLAN,
+        REPOSITORY_HEALTH_REPORT,
+        SECRET_ARTIFACT_INVENTORY,
+        SECRET_FINDINGS_BASELINE,
+        SECURITY_CHECK_SUMMARY,
+        SECURITY_STATUS_REPORT,
+        SOURCE_INTEGRITY_REPORT,
+    )
+    from security_report_utils import atomic_write_json
+    from security_report_validator import validate_reports
+except ImportError:
+    from verification_scripts.security_paths import (
+        ASYNC_BLOCKING_REPORT,
+        COOKIE_ARTIFACT_REPORT,
+        ENV_CONTRACT_REPORT,
+        GITIGNORE_POLICY_REPORT,
+        IMPORT_GRAPH_REPORT,
+        LOCAL_ARTIFACT_REPORT,
+        PYTHON_QUALITY_REPORT,
+        REMEDIATION_PLAN,
+        REPOSITORY_HEALTH_REPORT,
+        SECRET_ARTIFACT_INVENTORY,
+        SECRET_FINDINGS_BASELINE,
+        SECURITY_CHECK_SUMMARY,
+        SECURITY_STATUS_REPORT,
+        SOURCE_INTEGRITY_REPORT,
+    )
+    from verification_scripts.security_report_utils import atomic_write_json
+    from verification_scripts.security_report_validator import validate_reports
 
 
 def load_json(path: Path) -> dict[str, Any]:
