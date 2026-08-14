@@ -22,13 +22,8 @@ CACHE_FILE = PROJECT_ROOT / "data" / "banners_cache.json"
 
 # Categorization mapping based on filename keywords
 CATEGORY_PATTERNS = {
-    # start pool includes wide variety of high-impact banners (Mugi, Shinobu, Senjougahara, Landscapes, Cyberpunk)
-    "start": [
-        "sunset", "shinjuku", "alien_sky", "sketch_studio", "illustration", "vortex",
-        "sunny_park", "ocean", "clubroom_with_tea", "cozy", "grassy_hill", "library",
-        "cyberpunk_room", "fashion_runway", "sunflower", "snowy", "zen_garden",
-        "pop-art", "vaporwave"
-    ],
+    # All banners are in the start pool for rich diversity
+    "start": [],
     "night": [
         "vampiric", "cathedral", "graveyard", "tokyo_alleyway", "moon", "rain", "cyberpunk"
     ],
@@ -40,6 +35,21 @@ CATEGORY_PATTERNS = {
     ],
     "calm": [
         "clubroom_with_tea", "cozy", "library", "coffee_shop", "ocean", "zen_garden", "concert", "grassy_hill", "snowy"
+    ],
+    "shop": [
+        "vampiric", "graveyard", "floating_tools", "scissor", "cyberpunk_room", "tokyo_alleyway"
+    ],
+    "newspaper": [
+        "library", "sketch_studio", "cozy", "study", "illustration", "vinyl_record_store"
+    ],
+    "digest": [
+        "shinjuku", "sunset", "vaporwave", "ocean", "alien_sky", "fashion_runway"
+    ],
+    "summary": [
+        "retro_desktop", "maid", "rain", "empty_classroom", "sketch_studio"
+    ],
+    "stats": [
+        "sunset", "ocean", "shinjuku", "concert", "grassy_hill", "sunny_park"
     ]
 }
 
@@ -69,31 +79,30 @@ def _init_banners():
 
     _CATEGORIZED_BANNERS = {
         "all": all_files,
-        "start": [],
+        "start": all_files.copy(),  # Full pool for /start
         "night": [],
         "maid": [],
         "schizo": [],
-        "calm": []
+        "calm": [],
+        "shop": [],
+        "newspaper": [],
+        "digest": [],
+        "summary": [],
+        "stats": []
     }
 
     for fname in all_files:
         fn_lower = fname.lower()
-        matched = False
         for cat, keywords in CATEGORY_PATTERNS.items():
+            if cat == "start":
+                continue
             if any(kw in fn_lower for kw in keywords):
                 _CATEGORIZED_BANNERS[cat].append(fname)
-                matched = True
-        if not matched:
-            _CATEGORIZED_BANNERS["start"].append(fname)
-
-    # Ensure start pool has the vast majority of all banners for rich diversity
-    if len(_CATEGORIZED_BANNERS["start"]) < 30:
-        _CATEGORIZED_BANNERS["start"] = all_files.copy()
 
     # Ensure no empty categories
     for cat in _CATEGORIZED_BANNERS:
         if not _CATEGORIZED_BANNERS[cat]:
-            _CATEGORIZED_BANNERS[cat] = all_files
+            _CATEGORIZED_BANNERS[cat] = all_files.copy()
 
 
 _init_banners()

@@ -188,9 +188,11 @@ def create_visual_post(mode, text, header=None):
         draw = ImageDraw.Draw(img)
         
         if mode in DYNAMIC_MODES:
-            # Fonts to use
-            def get_font_by_size(size: int):
-                for p in ["fonts/Impact.ttf", "C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/impact.ttf", "C:/Windows/Fonts/arialbd.ttf"]:
+            def get_font_by_size(size: int, bold: bool = True):
+                for p in ["fonts/Impact.ttf", 
+                          "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf", 
+                          "C:/Windows/Fonts/impact.ttf", 
+                          "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf"]:
                     if os.path.exists(p):
                         try: return ImageFont.truetype(p, size)
                         except Exception: pass
@@ -202,59 +204,146 @@ def create_visual_post(mode, text, header=None):
                 for em in ["💙", "💛", "🇺🇦", "🚜", "🐷", "🔥", "✈️", "💥", "👑", "⚡", "🎯", "🇵🇱", "🧠"]:
                     clean_h = clean_h.replace(em, "").strip()
 
-            overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
-            odraw = ImageDraw.Draw(overlay)
+            def wrap_text_str(odraw, txt, font, max_w):
+                words = txt.split()
+                lines, curr = [], ""
+                for w in words:
+                    test = f"{curr} {w}".strip()
+                    if odraw.textlength(test, font=font) <= max_w:
+                        curr = test
+                    else:
+                        if curr: lines.append(curr)
+                        curr = w
+                if curr: lines.append(curr)
+                return "\n".join(lines)
 
-            # Choose font size depending on text length
-            f_size = 44 if len(text) < 60 else (36 if len(text) < 120 else 28)
-            f_text = get_font_by_size(f_size)
-            f_head = get_font_by_size(26)
+            # Pick style
+            style = random.choice(['cyber_banner', 'breaking_news', 'speech_bubble', 'demotivator', 'impact_bold'])
 
-            # Wrap text to max width 860
-            words = text.split()
-            lines = []
-            curr = ""
-            for w in words:
-                test = f"{curr} {w}".strip()
-                if odraw.textlength(test, font=f_text) <= 860:
-                    curr = test
+            # 1. BREAKING NEWS STYLE
+            if style == 'breaking_news':
+                overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+                odraw = ImageDraw.Draw(overlay)
+                f_ticker = get_font_by_size(24)
+                f_text = get_font_by_size(36)
+                
+                banner_title = "⚡ ТЕРМІНОВА БАВОВНА | ТГАЧ NEWS 24/7" if mode == 'ukrainian' else "⚡ СРОЧНАЯ МОЛНИЯ | ТГАЧ NEWS 24/7"
+                odraw.rectangle([0, 560, 1024, 760], fill=(10, 14, 22, 235))
+                odraw.rectangle([0, 560, 1024, 606], fill=(220, 35, 45, 255))
+                odraw.text((32, 572), banner_title, font=f_ticker, fill=(255, 255, 255, 255))
+                
+                wrapped = wrap_text_str(odraw, text, f_text, 960)
+                img = Image.alpha_composite(img, overlay)
+                draw = ImageDraw.Draw(img)
+                draw.multiline_text((32, 626), wrapped, font=f_text, fill=(255, 235, 60, 255))
+
+            # 2. COMIC SPEECH BUBBLE
+            elif style == 'speech_bubble':
+                overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+                odraw = ImageDraw.Draw(overlay)
+                f_text = get_font_by_size(34)
+                wrapped = wrap_text_str(odraw, text, f_text, 760)
+                
+                bbox = odraw.multiline_textbbox((0, 0), wrapped, font=f_text, align="center")
+                tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+                bx, by, bw, bh = 100, 480, 824, min(240, th + 50)
+                
+                border_c = (0, 140, 255, 255) if mode == 'ukrainian' else (255, 60, 60, 255)
+                odraw.rounded_rectangle([bx, by, bx + bw, by + bh], radius=22, fill=(255, 255, 255, 245), outline=border_c, width=3)
+                odraw.polygon([(bx + 80, by), (bx + 110, by - 30), (bx + 140, by)], fill=(255, 255, 255, 245), outline=border_c)
+                
+                img = Image.alpha_composite(img, overlay)
+                draw = ImageDraw.Draw(img)
+                tx = bx + (bw - tw)/2
+                ty = by + (bh - th)/2
+                draw.multiline_text((tx, ty), wrapped, font=f_text, fill=(15, 20, 30, 255), align="center")
+
+            # 3. DEMOTIVATOR EMBED
+            elif style == 'demotivator':
+                canvas = Image.new("RGBA", (1024, 1024), (0, 0, 0, 255))
+                inner_w, inner_h = 860, 580
+                inner_img = img.resize((inner_w, inner_h), Image.Resampling.LANCZOS)
+                canvas.paste(inner_img, (82, 60))
+                draw = ImageDraw.Draw(canvas)
+                draw.rectangle([78, 56, 78 + inner_w + 8, 56 + inner_h + 8], outline=(255, 255, 255, 255), width=2)
+                
+                f_dem_head = get_font_by_size(42)
+                f_dem_sub = get_font_by_size(24, bold=False)
+                
+                head_txt = clean_h if clean_h else ("СЛАВА УКРАЇНІ!" if mode == 'ukrainian' else "БАЗА ДВАЧА")
+                hw = draw.textlength(head_txt, font=f_dem_head)
+                draw.text(((1024 - hw)/2, 680), head_txt, font=f_dem_head, fill=(255, 215, 40, 255))
+                
+                wrapped = wrap_text_str(draw, text, f_dem_sub, 860)
+                tb = draw.multiline_textbbox((0, 0), wrapped, font=f_dem_sub, align="center")
+                tw = tb[2] - tb[0]
+                draw.multiline_text(((1024 - tw)/2, 745), wrapped, font=f_dem_sub, fill=(255, 255, 255, 255), align="center")
+                img = canvas
+
+            # 4. IMPACT BOLD MEME
+            elif style == 'impact_bold':
+                draw = ImageDraw.Draw(img)
+                f_impact = get_font_by_size(50)
+                words = text.split()
+                if len(words) > 4:
+                    mid = len(words) // 2
+                    top_txt = " ".join(words[:mid])
+                    bot_txt = " ".join(words[mid:])
                 else:
-                    if curr: lines.append(curr)
-                    curr = w
-            if curr: lines.append(curr)
-            wrapped_text = "\n".join(lines)
+                    top_txt = clean_h if clean_h else ("СЛАВА УКРАЇНІ!" if mode == 'ukrainian' else "БАЗИРОВАННЫЙ ПОСТ")
+                    bot_txt = text
+                
+                tw1 = draw.textlength(top_txt, font=f_impact)
+                tx1, ty1 = (1024 - tw1)/2, 60
+                for ox, oy in [(-3, -3), (3, -3), (-3, 3), (3, 3), (0, 4)]:
+                    draw.text((tx1+ox, ty1+oy), top_txt, font=f_impact, fill=(0, 0, 0, 255))
+                draw.text((tx1, ty1), top_txt, font=f_impact, fill=(255, 255, 255, 255))
+                
+                tw2 = draw.textlength(bot_txt, font=f_impact)
+                tx2, ty2 = (1024 - tw2)/2, 680
+                for ox, oy in [(-3, -3), (3, -3), (-3, 3), (3, 3), (0, 4)]:
+                    draw.text((tx2+ox, ty2+oy), bot_txt, font=f_impact, fill=(0, 0, 0, 255))
+                draw.text((tx2, ty2), bot_txt, font=f_impact, fill=(255, 230, 40, 255))
 
-            bbox = odraw.multiline_textbbox((0, 0), wrapped_text, font=f_text, align="center")
-            text_h = bbox[3] - bbox[1]
-
-            banner_pad = 22
-            head_h = 42 if clean_h else 0
-            total_content_h = head_h + text_h
-            
-            # Keep banner safe from bottom Telegram UI (ending at y=760 max)
-            banner_bottom = min(770, max(620, 520 + total_content_h // 2))
-            banner_top = max(380, banner_bottom - total_content_h - banner_pad * 2)
-            
-            border_color = (0, 180, 255, 140) if mode == 'ukrainian' else (255, 100, 100, 140)
-            odraw.rounded_rectangle([40, banner_top, 984, banner_bottom], radius=18, fill=(10, 14, 20, 200), outline=border_color, width=2)
-
-            img = Image.alpha_composite(img, overlay)
-            draw = ImageDraw.Draw(img)
-
-            curr_y = banner_top + banner_pad
-            if clean_h:
-                h_w = draw.textlength(clean_h, font=f_head)
-                h_x = (1024 - h_w) / 2
-                draw.text((h_x, curr_y), clean_h, font=f_head, fill=(255, 220, 40, 255))
-                curr_y += head_h
-
-            t_bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=f_text, align="center")
-            t_w = t_bbox[2] - t_bbox[0]
-            t_x = (1024 - t_w) / 2
-            
-            for ox, oy in [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, 3)]:
-                draw.multiline_text((t_x + ox, curr_y + oy), wrapped_text, font=f_text, fill=(0, 0, 0, 220), align="center")
-            draw.multiline_text((t_x, curr_y), wrapped_text, font=f_text, fill=(255, 255, 255, 255), align="center")
+            # 5. CYBER GLASS BANNER (DEFAULT)
+            else:
+                overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+                odraw = ImageDraw.Draw(overlay)
+                
+                f_size = 42 if len(text) < 60 else (34 if len(text) < 120 else 26)
+                f_text = get_font_by_size(f_size)
+                f_head = get_font_by_size(24)
+                
+                wrapped_text = wrap_text_str(odraw, text, f_text, 860)
+                bbox = odraw.multiline_textbbox((0, 0), wrapped_text, font=f_text, align="center")
+                text_h = bbox[3] - bbox[1]
+                
+                banner_pad = 22
+                head_h = 40 if clean_h else 0
+                total_content_h = head_h + text_h
+                
+                banner_bottom = min(770, max(620, 520 + total_content_h // 2))
+                banner_top = max(380, banner_bottom - total_content_h - banner_pad * 2)
+                
+                border_color = (0, 180, 255, 140) if mode == 'ukrainian' else (255, 100, 100, 140)
+                odraw.rounded_rectangle([40, banner_top, 984, banner_bottom], radius=18, fill=(10, 14, 20, 205), outline=border_color, width=2)
+                
+                img = Image.alpha_composite(img, overlay)
+                draw = ImageDraw.Draw(img)
+                
+                curr_y = banner_top + banner_pad
+                if clean_h:
+                    h_w = draw.textlength(clean_h, font=f_head)
+                    draw.text(((1024 - h_w)/2, curr_y), clean_h, font=f_head, fill=(255, 220, 40, 255))
+                    curr_y += head_h
+                    
+                t_bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=f_text, align="center")
+                t_w = t_bbox[2] - t_bbox[0]
+                t_x = (1024 - t_w) / 2
+                
+                for ox, oy in [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, 3)]:
+                    draw.multiline_text((t_x + ox, curr_y + oy), wrapped_text, font=f_text, fill=(0, 0, 0, 220), align="center")
+                draw.multiline_text((t_x, curr_y), wrapped_text, font=f_text, fill=(255, 255, 255, 255), align="center")
 
         else:
             x1, y1, x2, y2 = config['text_area']

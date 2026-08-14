@@ -2814,7 +2814,118 @@ def _format_text_report(data: UserStatsCardData) -> str:
         f"💬 <i>\"{data.slang_comment}\"</i>"
     )
 
-def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tuple[io.BytesIO, str]:
+CARD_THEMES = {
+    'cyber': {
+        'name': 'Cyber-Anon',
+        'bg': (14, 18, 23, 255),
+        'card_bg': (20, 26, 34, 255),
+        'card_border': (36, 46, 60, 255),
+        'border': (36, 46, 62, 255),
+        'grid_dot': (26, 34, 46, 255),
+        'header_fill': (22, 28, 38, 255),
+        'header_border': (48, 62, 82, 255),
+        'title_color': (245, 247, 250, 255),
+        'subtitle_color': (135, 150, 170, 255),
+        'accent_default': (0, 200, 255, 255),
+        'accent_primary': (0, 230, 160, 255),
+        'bar_color': (0, 210, 150, 255),
+        'bar_danger': (255, 65, 85, 255),
+        'footer_text': (80, 95, 115, 255),
+        'footer_brand': (0, 180, 240, 255)
+    },
+    'crimson': {
+        'name': 'Crimson Blood',
+        'bg': (22, 10, 14, 255),
+        'card_bg': (30, 14, 20, 255),
+        'card_border': (60, 24, 34, 255),
+        'border': (70, 25, 36, 255),
+        'grid_dot': (40, 18, 26, 255),
+        'header_fill': (34, 16, 22, 255),
+        'header_border': (80, 30, 44, 255),
+        'title_color': (255, 220, 225, 255),
+        'subtitle_color': (180, 120, 135, 255),
+        'accent_default': (255, 60, 90, 255),
+        'accent_primary': (255, 120, 60, 255),
+        'bar_color': (255, 60, 90, 255),
+        'bar_danger': (255, 30, 60, 255),
+        'footer_text': (120, 70, 80, 255),
+        'footer_brand': (255, 80, 100, 255)
+    },
+    'gold': {
+        'name': 'Imperial Gold',
+        'bg': (20, 17, 12, 255),
+        'card_bg': (28, 23, 16, 255),
+        'card_border': (65, 52, 32, 255),
+        'border': (75, 60, 36, 255),
+        'grid_dot': (45, 36, 22, 255),
+        'header_fill': (32, 26, 18, 255),
+        'header_border': (85, 68, 40, 255),
+        'title_color': (255, 245, 220, 255),
+        'subtitle_color': (185, 165, 130, 255),
+        'accent_default': (255, 200, 50, 255),
+        'accent_primary': (230, 175, 40, 255),
+        'bar_color': (240, 185, 40, 255),
+        'bar_danger': (255, 100, 50, 255),
+        'footer_text': (130, 110, 80, 255),
+        'footer_brand': (255, 200, 50, 255)
+    },
+    'anime': {
+        'name': 'Kawaii Neon',
+        'bg': (18, 14, 26, 255),
+        'card_bg': (26, 20, 38, 255),
+        'card_border': (58, 42, 85, 255),
+        'border': (68, 48, 100, 255),
+        'grid_dot': (40, 30, 58, 255),
+        'header_fill': (30, 22, 44, 255),
+        'header_border': (80, 55, 115, 255),
+        'title_color': (255, 235, 250, 255),
+        'subtitle_color': (180, 150, 200, 255),
+        'accent_default': (255, 110, 190, 255),
+        'accent_primary': (180, 130, 255, 255),
+        'bar_color': (255, 110, 190, 255),
+        'bar_danger': (255, 60, 130, 255),
+        'footer_text': (120, 95, 140, 255),
+        'footer_brand': (255, 120, 200, 255)
+    },
+    'matrix': {
+        'name': 'Matrix Green',
+        'bg': (8, 18, 12, 255),
+        'card_bg': (12, 26, 18, 255),
+        'card_border': (24, 60, 36, 255),
+        'border': (28, 70, 42, 255),
+        'grid_dot': (18, 42, 26, 255),
+        'header_fill': (14, 30, 20, 255),
+        'header_border': (36, 85, 50, 255),
+        'title_color': (220, 255, 230, 255),
+        'subtitle_color': (120, 185, 140, 255),
+        'accent_default': (0, 255, 130, 255),
+        'accent_primary': (50, 220, 110, 255),
+        'bar_color': (0, 230, 120, 255),
+        'bar_danger': (255, 160, 0, 255),
+        'footer_text': (60, 120, 80, 255),
+        'footer_brand': (0, 230, 120, 255)
+    },
+    'olddvach': {
+        'name': 'Classic /b/',
+        'bg': (22, 20, 18, 255),
+        'card_bg': (32, 28, 24, 255),
+        'card_border': (60, 52, 44, 255),
+        'border': (70, 60, 50, 255),
+        'grid_dot': (44, 38, 32, 255),
+        'header_fill': (36, 32, 28, 255),
+        'header_border': (75, 65, 55, 255),
+        'title_color': (245, 235, 220, 255),
+        'subtitle_color': (170, 155, 140, 255),
+        'accent_default': (240, 136, 62, 255),
+        'accent_primary': (88, 166, 255, 255),
+        'bar_color': (240, 136, 62, 255),
+        'bar_danger': (248, 81, 73, 255),
+        'footer_text': (120, 110, 100, 255),
+        'footer_brand': (240, 136, 62, 255)
+    }
+}
+
+def generate_user_stats_card(user_id: int, board_id: str, username: str, theme: str = 'auto') -> tuple[io.BytesIO, str]:
     stats_data = fetch_user_stats_data(user_id, board_id)
 
     schizo_name = generate_schizo_name(user_id)
@@ -2846,17 +2957,30 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
     )
 
     text_report = _format_text_report(card_data)
-    buf = draw_user_stats_card(card_data)
+    buf = draw_user_stats_card(card_data, theme=theme)
     return buf, text_report
 
 
-
-def draw_user_stats_card(data: UserStatsCardData) -> io.BytesIO:
+def draw_user_stats_card(data: UserStatsCardData, theme: str = 'auto') -> io.BytesIO:
     import random
     from PIL import Image, ImageDraw, ImageFont
 
+    if theme == 'auto':
+        if data.mutes_count >= 3 or data.cringe_factor >= 80:
+            theme = 'crimson'
+        elif data.rank <= 3 or data.balance >= 500:
+            theme = 'gold'
+        elif data.user_id % 7 == 0:
+            theme = 'matrix'
+        elif data.user_id % 5 == 0:
+            theme = 'anime'
+        else:
+            theme = 'cyber'
+
+    t = CARD_THEMES.get(theme, CARD_THEMES['cyber'])
+
     W, H = 960, 540
-    img = Image.new("RGBA", (W, H), (14, 18, 23, 255))
+    img = Image.new("RGBA", (W, H), t['bg'])
     draw = ImageDraw.Draw(img)
 
     def get_f(name: str, size: int):
@@ -2884,19 +3008,17 @@ def draw_user_stats_card(data: UserStatsCardData) -> io.BytesIO:
     # 1. Background grid dots
     for x in range(25, W - 25, 28):
         for y in range(25, H - 25, 28):
-            draw.point((x, y), fill=(26, 34, 46, 255))
+            draw.point((x, y), fill=t['grid_dot'])
 
     # Outer border
-    draw.rounded_rectangle([14, 14, W - 14, H - 14], radius=16, outline=(36, 46, 62, 255), width=2)
+    draw.rounded_rectangle([14, 14, W - 14, H - 14], radius=16, outline=t['border'], width=2)
 
     # 2. Header Area
     av_x, av_y, av_s = 36, 32, 70
-    draw.rounded_rectangle([av_x, av_y, av_x + av_s, av_y + av_s], radius=12, fill=(22, 28, 38, 255), outline=(48, 62, 82, 255), width=2)
+    draw.rounded_rectangle([av_x, av_y, av_x + av_s, av_y + av_s], radius=12, fill=t['header_fill'], outline=t['header_border'], width=2)
     
     rng = random.Random(data.user_id)
-    av_color = rng.choice([
-        (0, 230, 160, 255), (0, 180, 255, 255), (255, 180, 40, 255), (255, 80, 120, 255), (180, 120, 255, 255)
-    ])
+    av_color = t['accent_default']
     grid = [[rng.random() > 0.45 for _ in range(3)] for _ in range(5)]
     pw = 9
     ox, oy = av_x + 12, av_y + 12
@@ -2908,28 +3030,28 @@ def draw_user_stats_card(data: UserStatsCardData) -> io.BytesIO:
                     draw.rectangle([ox + (4 - c) * pw, oy + r * pw, ox + (5 - c) * pw - 1, oy + (r + 1) * pw - 1], fill=av_color)
 
     # User Header Text
-    draw.text((126, 34), data.schizo_name, font=f_title, fill=(245, 247, 250, 255))
+    draw.text((126, 34), data.schizo_name, font=f_title, fill=t['title_color'])
     
     prefix_str = f"Титул: [{data.custom_prefix}]  •  " if data.custom_prefix else ""
     board_tag = f"/{data.fav_board}/"
     role_tag = f"Статус: {data.role.upper()}"
-    draw.text((126, 70), f"{prefix_str}Доска: {board_tag}  •  {role_tag}", font=f_subtitle, fill=(135, 150, 170, 255))
+    draw.text((126, 70), f"{prefix_str}Доска: {board_tag}  •  {role_tag}", font=f_subtitle, fill=t['subtitle_color'])
 
     # Top Right Verification & ID
-    draw.rounded_rectangle([W - 240, 32, W - 36, 76], radius=10, fill=(18, 24, 32, 255), outline=(42, 54, 72, 255), width=1)
-    dot_color = (0, 230, 150, 255) if data.cringe_factor < 50 else (255, 75, 75, 255)
+    draw.rounded_rectangle([W - 240, 32, W - 36, 76], radius=10, fill=t['header_fill'], outline=t['header_border'], width=1)
+    dot_color = t['accent_primary'] if data.cringe_factor < 50 else t['bar_danger']
     draw.ellipse([W - 225, 50, W - 213, 62], fill=dot_color)
-    draw.text((W - 204, 40), "TGACH PASSPORT", font=f_badge, fill=(100, 120, 145, 255))
-    draw.text((W - 204, 54), f"ID: Анон-#{data.user_id % 10000:04d}", font=f_label, fill=(220, 230, 245, 255))
+    draw.text((W - 204, 40), f"TGACH {t['name'].upper()}", font=f_badge, fill=t['subtitle_color'])
+    draw.text((W - 204, 54), f"ID: Анон-#{data.user_id % 10000:04d}", font=f_label, fill=t['title_color'])
 
     # 3. Key Metrics (6 Cards in 3x2 Grid)
     cards = [
-        ("ПОСТЫ И РАНГ", f"{data.posts_count:,}", f"Ранг #{data.rank} из {data.total_users}", (0, 200, 255, 255)),
-        ("РЕАКЦИИ", f"+{data.rx_received:,}", f"Одобрение: {data.approval_pct}%", (0, 230, 150, 255)),
-        ("ПОСТАВЛЕНО", f"{data.rx_given:,}", "Активность в тредах", (180, 140, 255, 255)),
-        ("АКТИВЫ", f"{int(data.balance):,} RUB", "Шекели на балансе", (255, 200, 50, 255)),
-        ("ХРОНОТИП", f"{data.chronotype}", "Пик активности анона", (255, 140, 60, 255)),
-        ("СТИЛЬ ПОСТИНГА", f"{data.post_style}", f"Ср. длина: {data.avg_len} симв.", (100, 210, 255, 255)),
+        ("ПОСТЫ И РАНГ", f"{data.posts_count:,}", f"Ранг #{data.rank} из {data.total_users}", t['accent_default']),
+        ("РЕАКЦИИ", f"+{data.rx_received:,}", f"Одобрение: {data.approval_pct}%", t['accent_primary']),
+        ("ПОСТАВЛЕНО", f"{data.rx_given:,}", "Активность в тредах", t['accent_default']),
+        ("АКТИВЫ", f"{int(data.balance):,} RUB", "Шекели на балансе", t['accent_primary']),
+        ("ХРОНОТИП", f"{data.chronotype}", "Пик активности анона", t['accent_default']),
+        ("СТИЛЬ ПОСТИНГА", f"{data.post_style}", f"Ср. длина: {data.avg_len} симв.", t['accent_primary']),
     ]
 
     grid_x, grid_y = 36, 126
@@ -2942,15 +3064,15 @@ def draw_user_stats_card(data: UserStatsCardData) -> io.BytesIO:
         cx = grid_x + col * (cw + gap_x)
         cy = grid_y + row * (ch + gap_y)
 
-        draw.rounded_rectangle([cx, cy, cx + cw, cy + ch], radius=10, fill=(20, 26, 34, 255), outline=(36, 46, 60, 255), width=1)
+        draw.rounded_rectangle([cx, cy, cx + cw, cy + ch], radius=10, fill=t['card_bg'], outline=t['card_border'], width=1)
         draw.rectangle([cx + 14, cy, cx + 55, cy + 2], fill=accent)
-        draw.text((cx + 14, cy + 10), title, font=f_label, fill=(110, 130, 155, 255))
-        draw.text((cx + 14, cy + 30), str(val), font=f_num, fill=(245, 248, 252, 255))
-        draw.text((cx + 14, cy + 66), sub, font=f_label, fill=(140, 155, 175, 255))
+        draw.text((cx + 14, cy + 10), title, font=f_label, fill=t['subtitle_color'])
+        draw.text((cx + 14, cy + 30), str(val), font=f_num, fill=t['title_color'])
+        draw.text((cx + 14, cy + 66), sub, font=f_label, fill=t['subtitle_color'])
 
     # 4. Badges / Achievements Row
     by = 352
-    draw.text((36, by), "ДОСТИЖЕНИЯ И ЭКИПИРОВКА:", font=f_badge, fill=(110, 130, 155, 255))
+    draw.text((36, by), "ДОСТИЖЕНИЯ И ЭКИПИРОВКА:", font=f_badge, fill=t['subtitle_color'])
     bx = 36
     
     badge_colors = {
@@ -2974,32 +3096,32 @@ def draw_user_stats_card(data: UserStatsCardData) -> io.BytesIO:
         for em in ["👑", "🔥", "⚡", "💎", "🚨", "🕊️", "💰", "📉", "👽", "🛡️", "🐒", "🌱"]:
             b_name = b_name.replace(em, "").strip()
         
-        b_color = badge_colors.get(b_name, (0, 200, 255, 255))
+        b_color = badge_colors.get(b_name, t['accent_default'])
         bw = int(draw.textlength(b_name, font=f_badge)) + 34
         
-        draw.rounded_rectangle([bx, by + 18, bx + bw, by + 46], radius=8, fill=(24, 32, 44, 255), outline=(46, 60, 80, 255), width=1)
+        draw.rounded_rectangle([bx, by + 18, bx + bw, by + 46], radius=8, fill=t['card_bg'], outline=t['card_border'], width=1)
         draw.ellipse([bx + 10, by + 28, bx + 18, by + 36], fill=b_color)
-        draw.text((bx + 24, by + 24), b_name, font=f_badge, fill=(230, 240, 255, 255))
+        draw.text((bx + 24, by + 24), b_name, font=f_badge, fill=t['title_color'])
         bx += bw + 12
 
     # 5. Degradation Progress Bar
     bar_y = 428
-    draw.text((36, bar_y), "ШКАЛА ДЕГРАДАЦИИ", font=f_badge, fill=(110, 130, 155, 255))
+    draw.text((36, bar_y), "ШКАЛА ДЕГРАДАЦИИ", font=f_badge, fill=t['subtitle_color'])
     pct_str = f"{data.cringe_factor}%"
     pct_w = int(draw.textlength(pct_str, font=f_badge))
-    draw.text((W - 36 - pct_w, bar_y), pct_str, font=f_badge, fill=(255, 90, 90, 255) if data.cringe_factor > 50 else (0, 220, 140, 255))
+    draw.text((W - 36 - pct_w, bar_y), pct_str, font=f_badge, fill=t['bar_danger'] if data.cringe_factor > 50 else t['bar_color'])
 
     track_w = W - 72
-    draw.rounded_rectangle([36, bar_y + 18, 36 + track_w, bar_y + 30], radius=6, fill=(22, 28, 38, 255))
+    draw.rounded_rectangle([36, bar_y + 18, 36 + track_w, bar_y + 30], radius=6, fill=t['header_fill'])
     
     fill_w = max(12, int(track_w * (data.cringe_factor / 100.0)))
-    bar_color = (255, 65, 85, 255) if data.cringe_factor > 60 else (0, 210, 150, 255)
+    bar_color = t['bar_danger'] if data.cringe_factor > 60 else t['bar_color']
     draw.rounded_rectangle([36, bar_y + 18, 36 + fill_w, bar_y + 30], radius=6, fill=bar_color)
 
     # 6. Footer
-    draw.line([36, H - 42, W - 36, H - 42], fill=(28, 36, 48, 255), width=1)
-    draw.text((36, H - 30), "ТГАЧ • АНОНИМНАЯ ИМИДЖБОРДА", font=f_footer, fill=(80, 95, 115, 255))
-    draw.text((W - 180, H - 30), "t.me/dvach_chatbot", font=f_footer, fill=(0, 180, 240, 255))
+    draw.line([36, H - 42, W - 36, H - 42], fill=t['card_border'], width=1)
+    draw.text((36, H - 30), "ТГАЧ • АНОНИМНАЯ ИМИДЖБОРДА", font=f_footer, fill=t['footer_text'])
+    draw.text((W - 180, H - 30), "t.me/dvach_chatbot", font=f_footer, fill=t['footer_brand'])
 
     buf = io.BytesIO()
     img.convert("RGB").save(buf, format='png')

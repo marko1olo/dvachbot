@@ -122,7 +122,7 @@ class TestStatsGenerator(unittest.TestCase):
             approval_pct=85,
             badges=['Анон']
         )
-        mock_draw_user_stats_card.assert_called_once_with(expected_data)
+        mock_draw_user_stats_card.assert_called_once_with(expected_data, theme='auto')
 
 
     def test_generate_all_charts_basic(self):
