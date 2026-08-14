@@ -16273,6 +16273,223 @@ async def setup_bot_commands(bots: dict):
         except Exception as e:
             runtime_logger.warning(f"Failed setting user commands: {e}")
 
+async def fetch_user_report_dossier(author_id: int, limit: int = 15) -> tuple[str, int, int]:
+    """
+    Fetches the last N posts of the author, with media descriptions and tags from FileRegistry,
+    and calculates total posts count and posts in the last 24 hours.
+    Returns (formatted_dossier_text, total_posts_count, posts_24h_count).
+    """
+    if not author_id or author_id == 0:
+        return "История сообщений в базе данных отсутствует.", 0, 0
+        
+    try:
+        db = await get_pool()
+        now = time.time()
+        day_ago = now - 86400
+
+        async with db.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (author_id,)) as cursor:
+            row = await cursor.fetchone()
+            total_posts = row[0] if row else 0
+
+        async with db.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ? AND timestamp >= ?", (author_id, day_ago)) as cursor:
+            row = await cursor.fetchone()
+            posts_24h = row[0] if row else 0
+
+        async with db.execute("""
+            SELECT p.post_num, p.board_id, p.thread_id, p.content, p.text_content, p.timestamp
+            FROM Posts p
+            WHERE p.author_id = ?
+            ORDER BY p.post_num DESC
+            LIMIT ?
+        """, (author_id, limit)) as cursor:
+            posts = await cursor.fetchall()
+
+        if not posts:
+            return "История сообщений в базе данных отсутствует.", total_posts, posts_24h
+
+        post_nums = [p[0] for p in posts]
+        placeholders = ','.join('?' * len(post_nums))
+
+        files_by_post = {}
+        async with db.execute(f"""
+            SELECT pf.post_num, pf.file_type, fr.description, fr.tags
+            FROM PostFiles pf
+            LEFT JOIN FileRegistry fr ON (pf.original_file_id = fr.file_id OR pf.thumbnail_file_id = fr.thumbnail_id)
+            WHERE pf.post_num IN ({placeholders})
+        """, post_nums) as cursor:
+            rows = await cursor.fetchall()
+            for p_num, f_type, f_desc, f_tags in rows:
+                if p_num not in files_by_post:
+                    files_by_post[p_num] = []
+                parts = []
+                if f_type: parts.append(f"тип: {f_type}")
+                if f_desc: parts.append(f"описание: {f_desc}")
+                if f_tags: parts.append(f"теги: {f_tags}")
+                files_by_post[p_num].append(', '.join(parts) if parts else (f_type or 'файл'))
+
+        lines = []
+        for p_num, b_id, t_id, raw_content, text_content, ts in posts:
+            txt = text_content or ""
+            if not txt and raw_content:
+                try:
+                    c_json = json.loads(raw_content)
+                    txt = c_json.get("text", "")
+                except Exception:
+                    pass
+            txt = txt.replace('\n', ' ').strip()
+            if len(txt) > 140:
+                txt = txt[:140] + "..."
+
+            media_str = ""
+            if p_num in files_by_post:
+                media_str = f" [Медиа: {'; '.join(files_by_post[p_num])}]"
+
+            lines.append(f"• Пост #{p_num} (/{b_id}/): \"{txt}\"{media_str}")
+
+        return "\n".join(lines), total_posts, posts_24h
+    except Exception as e:
+        runtime_logger.error(f"Error fetching user report dossier: {e}", exc_info=True)
+        return "Ошибка извлечения досье из БД.", 0, 0
+
+
+async def analyze_report_with_ai(reported_post_text: str, dossier_text: str) -> dict:
+    """
+    Analyzes the reported post and suspect's dossier using LLM.
+    """
+    prompt = (
+        "Ты — циничный, опытный и беспристрастный ИИ-модератор анонимной имиджборды ТГАЧ.\n"
+        "Поступил репорт от анона на подозрительного пользователя.\n"
+        "Тебе предоставлен пожалованный пост и досье из последних 10-20 сообщений подозреваемого с описаниями картинок.\n\n"
+        "Сделай краткий, точный и структурированный анализ:\n"
+        "1. <b>Профиль активности</b>: (1 предложение: стиль поведения юзера — щитпостит, флудит, спамит, вайпит, травит, постит NSFW или нормальный).\n"
+        "2. <b>Оценка опасности</b>: 🟢 Низкая | 🟡 Средняя | 🔴 Высокая\n"
+        "3. <b>Рекомендация админам</b>: (1 предложение: Забанить / Удалить пост / Игнорировать).\n"
+        "4. <b>Вердикт для анона</b>: (1 хлёсткая и ироничная фраза в стиле двача).\n"
+        "Строго соблюдай HTML-теги <b>, <i>, <code>, <blockquote>. Не используй Markdown."
+    )
+    
+    text_dump = f"Пожалованный пост:\n{reported_post_text}\n\nДосье сообщений подозреваемого:\n{dossier_text}"
+    
+    try:
+        from summarize import summarize_text_with_hf
+        raw_result = await summarize_text_with_hf(prompt, text_dump, model_preference="persona_gemini")
+        return {
+            "full_analysis": raw_result.strip(),
+            "raw": raw_result
+        }
+    except Exception as e:
+        runtime_logger.warning(f"AI report analysis fallback: {e}")
+        return {
+            "full_analysis": "<b>Профиль активности:</b> Обычная активность.\n<b>Оценка опасности:</b> 🟢 Низкая\n<b>Рекомендация админам:</b> Проверить вручную.\n<b>Вердикт для анона:</b> Сиди спокойно, разберёмся.",
+            "raw": ""
+        }
+
+
+async def process_report_pipeline(bot, message: types.Message, reported_msg: types.Message, author_id: int, board_id: str, stream: str = 'ru'):
+    """
+    Background pipeline: fetches suspect history, runs AI analysis, sends feedback to user, notifies all admins.
+    """
+    chat_id = message.chat.id
+    msg_id = reported_msg.message_id
+    reporter_id = message.from_user.id
+    reporter_name = message.from_user.username or message.from_user.full_name or str(reporter_id)
+
+    # 1. Resolve post_num and thread_id if available
+    post_num = None
+    thread_id = None
+    async with storage_lock:
+        lookup_key = (reported_msg.chat.id, reported_msg.message_id)
+        post_num = message_to_post.get(lookup_key)
+    if not post_num:
+        info = await get_post_info_by_copy(reported_msg.chat.id, reported_msg.message_id)
+        if info:
+            post_num = info[0]
+
+    reported_text = reported_msg.text or reported_msg.caption or '<медиа>'
+    if post_num:
+        p_data = await get_post_by_num(post_num)
+        if p_data:
+            thread_id = p_data.get("thread_id") or post_num
+            if not reported_msg.text and not reported_msg.caption and p_data.get("text_content"):
+                reported_text = p_data.get("text_content")
+
+    # 2. Fetch suspect dossier (15-20 posts + media descriptions)
+    dossier_text, total_posts, posts_24h = await fetch_user_report_dossier(author_id, limit=15)
+
+    # 3. AI analysis
+    ai_res = await analyze_report_with_ai(reported_text, dossier_text)
+    analysis_text = ai_res["full_analysis"]
+
+    # 4. Extract anon verdict for reporting user
+    anon_verdict = ""
+    for line in analysis_text.splitlines():
+        if "Вердикт для анона" in line or "вердикт" in line.lower():
+            anon_verdict = line.strip()
+            break
+    if not anon_verdict:
+        anon_verdict = "Жалоба принята. Модераторы уже изучают твоё досье."
+
+    # 5. Feedback to reporting user
+    try:
+        user_reply = (
+            f"✅ Репорт принят на рассмотрение. <b>СПАСИБО УЁБОК!</b>\n\n"
+            f"🤖 <b>Вердикт нейромодератора:</b>\n"
+            f"<blockquote>{anon_verdict}</blockquote>\n"
+            f"<i>Досье подозреваемого ({total_posts} постов) направлено администраторам.</i>"
+        )
+        feedback_msg = await message.answer(user_reply, parse_mode="HTML")
+        spawn_task(delete_message_after_delay(feedback_msg, 20))
+    except Exception as e:
+        runtime_logger.warning(f"Failed sending report feedback to user {reporter_id}: {e}")
+
+    # 6. Notify all admins
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🗑 Удалить пост", callback_data=f"rep:del:{author_id}:{post_num or 0}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text="🔨 Бан 1ч", callback_data=f"rep:ban1:{author_id}:{post_num or 0}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text="🔨 Бан 24ч", callback_data=f"rep:ban24:{author_id}:{post_num or 0}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text="🧹 Вайп 15м", callback_data=f"rep:wipe15:{author_id}:{post_num or 0}:{board_id}:{chat_id}:{msg_id}")
+    builder.button(text="❌ Отклонить", callback_data=f"rep:ign:{author_id}:{post_num or 0}:{board_id}:{chat_id}:{msg_id}")
+    builder.adjust(2, 2, 1)
+
+    post_link_str = f"<a href=\"https://tgach.top/{board_id}/res/{thread_id or post_num}.html#post-{post_num}\">#{post_num}</a>" if post_num else f"сообщение <code>{msg_id}</code>"
+    anon_suspect_name = generate_anon_name(author_id) if author_id else "Неизвестный"
+
+    admin_report_text = (
+        f"🚨 <b>РЕПОРТ В /{board_id}/</b>\n\n"
+        f"👤 <b>На кого:</b> <code>{author_id}</code> (<b>{anon_suspect_name}</b>)\n"
+        f"📩 <b>Пост:</b> {post_link_str}\n"
+        f"💬 <b>Текст:</b> <blockquote>{escape_html(reported_text[:300])}</blockquote>\n"
+        f"📊 <b>Активность:</b> {total_posts} постов (за 24ч: {posts_24h})\n\n"
+        f"🤖 <b>АНАЛИЗ НЕЙРОСЕТИ:</b>\n{analysis_text}\n\n"
+        f"🕵️ <b>Репортёр:</b> <code>{reporter_id}</code> (@{escape_html(reporter_name)})"
+    )
+
+    all_admin_ids = set(ADMIN_IDS) | set(BOARD_CONFIG.get(board_id, {}).get('admins', set()))
+    for adm_id in all_admin_ids:
+        try:
+            await bot.send_message(
+                adm_id,
+                admin_report_text,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML",
+                disable_web_page_preview=True
+            )
+        except Exception as e:
+            runtime_logger.warning(f"Failed to send report to admin {adm_id}: {e}")
+
+    # 7. Record into Reports table
+    if post_num:
+        try:
+            db = await get_pool()
+            await db.execute(
+                "INSERT INTO Reports (post_num, category, reason, sender_ip_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+                (post_num, "user_report", f"Report from TG:{reporter_id}", str(reporter_id), time.time())
+            )
+        except Exception as e:
+            runtime_logger.error(f"Error inserting into Reports table: {e}", exc_info=True)
+
+
 @dp.message(Command("report", "mods", "admin", "moderator"))
 async def cmd_report(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -16282,109 +16499,118 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     if not message.reply_to_message:
-        msg = "⚠️ Ответьте на подозрительное сообщение командой <code>/report</code>, чтобы позвать модераторов."
-        if lang == 'en': msg = "⚠️ Reply to a suspicious message with <code>/report</code> to alert moderators."
+        msg = "⚠️ Ответьте на подозрительное сообщение командой <code>/report</code>, чтобы позвать модераторов и запустить проверку нейросетью."
+        if lang == 'en': msg = "⚠️ Reply to a suspicious message with <code>/report</code> to alert moderators and trigger AI analysis."
         elif lang == 'jp': msg = "⚠️ 違反報告するメッセージに返信して <code>/report</code> を送信してください。"
         await message.answer(msg, parse_mode="HTML")
         return
 
     reported_msg = message.reply_to_message
-    
-    # Send confirmation to user
-    confirm_msg = "✅ Репорт отправлен модераторам. Спасибо!"
-    if lang == 'en': confirm_msg = "✅ Report sent to moderators. Thank you!"
-    elif lang == 'jp': confirm_msg = "✅ モデレーターに報告しました。ありがとうございます！"
-    
-    sent_confirm = await message.answer(confirm_msg)
-    try: spawn_task(delete_message_after_delay(sent_confirm, 10))
-    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
 
     # Get author id of reported message
-    author_id = None
     author_id = await get_author_id_by_reply(message)
     if not author_id:
-        author_id = "0"
-    
-    chat_id = message.chat.id
-    msg_id = reported_msg.message_id
-    
-    # Build inline keyboard for admins
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Удалить пост", callback_data=f"rep:del:{author_id}:{chat_id}:{msg_id}")
-    builder.button(text="Бан 1ч", callback_data=f"rep:ban1:{author_id}:{chat_id}:{msg_id}")
-    builder.button(text="Бан 24ч", callback_data=f"rep:ban24:{author_id}:{chat_id}:{msg_id}")
-    builder.button(text="Игнор", callback_data=f"rep:ign:{author_id}:{chat_id}:{msg_id}")
-    builder.adjust(1, 2, 1)
+        author_id = 0
 
-    admins = BOARD_CONFIG.get(board_id, {}).get('admins', set())
-    report_text = f"🚨 <b>Новый РЕПОРТ в /{board_id}/</b>\n"
-    report_text += f"От кого: <code>{message.from_user.id}</code>\n"
-    report_text += f"На кого: <code>{author_id}</code>\n"
-    report_text += f"Текст: <i>{escape_html(reported_msg.text or reported_msg.caption or '<медиа>')}</i>"
-    
-    for admin_id in admins:
-        try:
-            await message.bot.send_message(
-                admin_id,
-                report_text,
-                reply_markup=builder.as_markup(),
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
+    if author_id == message.from_user.id:
+        await message.answer("🤡 Репортишь сам себя, дебил?", parse_mode="HTML")
+        return
+
+    # Spawn asynchronous pipeline
+    spawn_task(process_report_pipeline(message.bot, message, reported_msg, author_id, board_id, stream))
+
 
 @dp.callback_query(F.data.startswith("rep:"))
-async def process_report_action(callback: types.CallbackQuery, board_id: str | None):
-    if not board_id or not is_admin(callback.from_user.id, board_id):
-        await callback.answer("У вас нет прав.", show_alert=True)
-        return
-        
+async def process_report_action(callback: types.CallbackQuery, board_id: str | None = None):
     parts = callback.data.split(":")
-    action = parts[1]
-    author_id = parts[2]
-    chat_id = parts[3]
-    msg_id = parts[4]
-    
+    if len(parts) < 7:
+        action, author_id, chat_id, msg_id = parts[1], parts[2], parts[3], parts[4]
+        post_num = 0
+        b_id = board_id or 'b'
+    else:
+        action = parts[1]
+        author_id = parts[2]
+        post_num = int(parts[3])
+        b_id = parts[4]
+        chat_id = parts[5]
+        msg_id = parts[6]
+
+    if not is_admin(callback.from_user.id, b_id):
+        await callback.answer("У вас нет прав администратора.", show_alert=True)
+        return
+
     admin_id = callback.from_user.id
-    
+    admin_name = callback.from_user.username or callback.from_user.full_name or str(admin_id)
+
     if action == "ign":
-        await callback.message.edit_text(callback.message.html_text + "\n\n<i>❌ Проигнорировано модератором.</i>", parse_mode="HTML")
+        await callback.message.edit_text(
+            callback.message.html_text + f"\n\n<i>❌ Отклонено модератором @{escape_html(admin_name)}.</i>",
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
         await callback.answer("Жалоба отклонена")
         return
-        
+
     if action == "del":
+        if post_num and post_num > 0:
+            await delete_post_by_num(post_num)
         try:
             await callback.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
         except Exception:
             pass
-        await callback.message.edit_text(callback.message.html_text + "\n\n<i>🗑 Пост удален модератором.</i>", parse_mode="HTML")
+        await callback.message.edit_text(
+            callback.message.html_text + f"\n\n<i>🗑 Пост #{post_num or msg_id} удален модератором @{escape_html(admin_name)}.</i>",
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
         await callback.answer("Пост удален")
         return
-        
+
     if action.startswith("ban"):
         if author_id == "0":
             await callback.answer("ID автора неизвестен, невозможно забанить.", show_alert=True)
             return
-            
+
         target_id = int(author_id)
         duration_hours = 1 if action == "ban1" else 24
-        
+
         async with storage_lock:
-            b_data = board_data[board_id]
+            b_data = board_data[b_id]
             b_data.setdefault('bans', {})[target_id] = time.time() + (duration_hours * 3600)
-            
-        deleted_posts = await delete_user_posts(callback.bot, target_id, 10, board_id)
-        await log_global_event('bot', f"🚨 BAN: Мод {admin_id} забанил по репорту {target_id} на {duration_hours}ч в /{board_id}/ (удалено {deleted_posts} копий)")
-        
-        # Also try to delete the specific reported message just in case
+
+        deleted_posts = await delete_user_posts(callback.bot, target_id, 10, b_id)
+        if post_num and post_num > 0:
+            await delete_post_by_num(post_num)
+
+        await log_global_event('bot', f"🚨 BAN: Мод {admin_id} забанил по репорту {target_id} на {duration_hours}ч в /{b_id}/ (удалено {deleted_posts} копий)")
+
         try:
             await callback.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
         except Exception:
             pass
-            
-        await callback.message.edit_text(callback.message.html_text + f"\n\n<i>🔨 Автор забанен на {duration_hours}ч модератором.</i>", parse_mode="HTML")
+
+        await callback.message.edit_text(
+            callback.message.html_text + f"\n\n<i>🔨 Автор забанен на {duration_hours}ч модератором @{escape_html(admin_name)} (удалено {deleted_posts} постов).</i>",
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
         await callback.answer(f"Пользователь забанен на {duration_hours}ч")
+        return
+
+    if action == "wipe15":
+        if author_id == "0":
+            await callback.answer("ID автора неизвестен, невозможно вайпнуть.", show_alert=True)
+            return
+        target_id = int(author_id)
+        from admin_manager import execute_wipe
+        await execute_wipe(callback.bot, callback.message, target_id, b_id, admin_id, minutes=15)
+        await callback.message.edit_text(
+            callback.message.html_text + f"\n\n<i>🧹 Посты автора за 15 минут удалены модератором @{escape_html(admin_name)}.</i>",
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+        await callback.answer("Вайп выполнен")
+        return
 
 @dp.callback_query(F.data.startswith("admin_menu:"))
 async def process_admin_menu(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):

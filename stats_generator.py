@@ -190,7 +190,7 @@ def _generate_chart_2(c, images):
         save_chart(images, '2_wau.png')
 
 def _generate_chart_3(thirty_days_ago, c, images):
-    # 3. Матоемкость борды
+    # 3. Матоемкость борды (% постов с матами) — улучшенное
     c.execute('''
         SELECT date(timestamp, 'unixepoch', 'localtime') as d, content
         FROM Posts
@@ -225,15 +225,32 @@ def _generate_chart_3(thirty_days_ago, c, images):
             plot_data.append({'d': d, 'toxic_percent': toxic_percent})
 
         df = pd.DataFrame(plot_data)
-        fig, ax = plt.subplots(figsize=(10, 5))
+        fig, ax = plt.subplots(figsize=(12, 5))
         xs3 = list(range(len(df)))
-        ax.fill_between(xs3, df['toxic_percent'], color='#ff0000', alpha=0.25)
-        ax.plot(xs3, df['toxic_percent'], marker='X', color='#ff0000', linewidth=2)
+        vals = df['toxic_percent'].tolist()
+
+        ax.fill_between(xs3, vals, color='#ff0055', alpha=0.18, zorder=1)
+        ax.plot(xs3, vals, marker='o', markersize=4, color='#ff0055', linewidth=1.5, alpha=0.85, label='Дневной %', zorder=2)
+
+        roll7 = pd.Series(vals).rolling(7, min_periods=1).mean().tolist()
+        ax.plot(xs3, roll7, color='#ffcc00', linewidth=2.5, label='Тренд 7 дней', zorder=3)
+
+        avg_tox = sum(vals) / len(vals) if vals else 0
+        ax.axhline(avg_tox, color='#8b949e', linestyle='--', linewidth=1.2, label=f'Среднее: {avg_tox:.1f}%', zorder=2)
+
+        idx_max = vals.index(max(vals))
+        ax.annotate(f'Пик: {vals[idx_max]:.1f}%',
+                    xy=(idx_max, vals[idx_max]), xytext=(idx_max, vals[idx_max] + max(vals)*0.1),
+                    arrowprops=dict(arrowstyle='->', color='#ff0055', lw=1.5),
+                    fontsize=8.5, color='#ff0055', ha='center', fontweight='bold')
+
         step3 = max(1, len(df)//10)
         ax.set_xticks(xs3[::step3])
-        ax.set_xticklabels(df['d'].tolist()[::step3], rotation=45, ha='right', fontsize=7)
-        plt.title('3. Матоемкость (% постов с матами)', fontsize=16, fontweight='bold', color='#ff0000')
-        plt.ylabel('% постов с матом')
+        ax.set_xticklabels(df['d'].tolist()[::step3], rotation=35, ha='right', fontsize=8)
+        ax.set_ylabel('% постов с матом')
+        ax.set_ylim(0, max(max(vals) * 1.25, 25))
+        ax.legend(fontsize=8.5, loc='upper left', framealpha=0.8)
+        ax.set_title('3. Матоемкость (% постов с матами, 30д)', fontsize=15, fontweight='bold', color='#ff0055')
         plt.tight_layout()
         save_chart(images, '3_toxicity.png')
 
@@ -365,47 +382,182 @@ def _generate_chart_6(thirty_days_ago, c, images):
             save_chart(images, '6_post_length.png')
 
 def _generate_chart_7(thirty_days_ago, c, images):
-    # 7+8+9. Три пирога в одном — Ночники / Медиа / Диалог
+    # 7. Клуб Полуночников (Ночная vs Дневная активность)
     c.execute('''
         SELECT
             SUM(CASE WHEN cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) BETWEEN 1 AND 6 THEN 1 ELSE 0 END) as night_posts,
             SUM(CASE WHEN cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) NOT BETWEEN 1 AND 6 THEN 1 ELSE 0 END) as day_posts,
-            SUM(CASE WHEN content LIKE '%"type": "text"%' THEN 1 ELSE 0 END) as text_posts,
-            SUM(CASE WHEN content LIKE '%"type": "photo"%' OR content LIKE '%"type": "video"%' OR content LIKE '%"type": "animation"%' THEN 1 ELSE 0 END) as media_posts,
-            SUM(CASE WHEN reply_to_post_num IS NOT NULL THEN 1 ELSE 0 END) as replies,
-            SUM(CASE WHEN reply_to_post_num IS NULL THEN 1 ELSE 0 END) as singles
+            COUNT(*) as total
         FROM Posts WHERE timestamp > ?
     ''', (thirty_days_ago,))
-    row789 = c.fetchone()
-    if row789:
-        fig, axes = plt.subplots(1, 3, figsize=(16, 6))
-        fig.patch.set_facecolor('#121212')
-        _donuts = [
-            {'ax': axes[0], 'sizes': [row789['night_posts'] or 0, row789['day_posts'] or 0],
-             'labels': ['Ночь\n(01-06)', 'День'], 'colors': ['#6600cc', '#ffcc00'],
-             'title': '7. Клуб\nПолуночников', 'tc': '#aa88ff'},
-            {'ax': axes[1], 'sizes': [row789['media_posts'] or 0, row789['text_posts'] or 0],
-             'labels': ['Медиа', 'Текст'], 'colors': ['#ff3399', '#cccccc'],
-             'title': '8. Картинко-\nдрочеры', 'tc': '#ff3399'},
-            {'ax': axes[2], 'sizes': [row789['replies'] or 0, row789['singles'] or 0],
-             'labels': ['Диалог', 'Монолог'], 'colors': ['#00ff99', '#555555'],
-             'title': '9. Уровень\nДискуссии', 'tc': '#00ff99'},
-        ]
-        for _d in _donuts:
-            _ax = _d['ax']; _ax.set_facecolor('#121212')
-            _ws, _ts, _ats = _ax.pie(
-                _d['sizes'], labels=_d['labels'], autopct='%1.1f%%', startangle=90,
-                colors=_d['colors'], wedgeprops=dict(width=0.55, edgecolor='#121212', linewidth=2),
-                pctdistance=0.75)
-            for _at in _ats: _at.set_fontsize(11); _at.set_fontweight('bold'); _at.set_color('#ffffff')
-            for _t in _ts: _t.set_color('#dddddd'); _t.set_fontsize(9)
-            _ax.set_title(_d['title'], fontsize=13, fontweight='bold', color=_d['tc'], pad=12)
-        plt.suptitle('7–9. Профиль Анона: время / формат / диалог (30д)',
-                     fontsize=14, fontweight='bold', color='#ffffff', y=1.02)
+    r7 = c.fetchone()
+    
+    c.execute('''
+        SELECT author_id, COUNT(*) as cnt
+        FROM Posts
+        WHERE timestamp > ? AND cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) BETWEEN 1 AND 6
+              AND author_id IS NOT NULL AND author_id != 0
+        GROUP BY author_id ORDER BY cnt DESC LIMIT 5
+    ''', (thirty_days_ago,))
+    top_owls = c.fetchall()
+
+    if r7:
+        fig, (ax_pie, ax_bar) = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={'width_ratios': [1, 1.4]})
+        night_p = r7['night_posts'] or 0
+        day_p = r7['day_posts'] or 0
+        
+        wedges, texts, autotexts = ax_pie.pie(
+            [night_p, day_p], labels=['Ночной сыч\n(01:00–06:00)', 'Дневной анон\n(06:00–01:00)'],
+            autopct='%1.1f%%', startangle=140,
+            colors=['#7928ca', '#ffa657'],
+            wedgeprops=dict(width=0.52, edgecolor='#0d1117', linewidth=2),
+            pctdistance=0.72
+        )
+        for at in autotexts:
+            at.set_color('#ffffff')
+            at.set_fontweight('bold')
+            at.set_fontsize(11)
+        ax_pie.set_title('7. Клуб Полуночников (30д)\nДоля ночного контента', fontsize=13, fontweight='bold', color='#a371f7')
+
+        if top_owls:
+            owl_names = [generate_schizo_name(r['author_id']).split('(')[0].strip() for r in top_owls]
+            owl_cnts = [r['cnt'] for r in top_owls]
+            owl_names.reverse()
+            owl_cnts.reverse()
+            bars = ax_bar.barh(owl_names, owl_cnts, color='#8957e5', edgecolor='#0d1117', linewidth=0.6)
+            for bar, val in zip(bars, owl_cnts):
+                ax_bar.text(bar.get_width() + max(owl_cnts)*0.015, bar.get_y() + bar.get_height()/2,
+                            f'{val:,} ночных постов', va='center', fontsize=9, color='#e6edf3', fontweight='bold')
+            ax_bar.set_title('Главные ночные шизоиды (Топ-5)', fontsize=12, fontweight='bold', color='#d2a8ff')
+            ax_bar.set_xlim(0, max(owl_cnts) * 1.28)
+            ax_bar.set_xlabel('Постов в интервале 01:00–06:00')
+            ax_bar.xaxis.set_major_formatter(plt.FuncFormatter(lambda val, _: f'{int(val):,}'))
         plt.tight_layout()
-        save_chart(images, '7_8_9_donut_panel.png', bbox_inches='tight')
+        save_chart(images, '7_night_owls.png', bbox_inches='tight')
 
 def _generate_chart_8(thirty_days_ago, c, images):
+    # 8. Картинко-дрочеры (Медиа vs Текст с детализацией)
+    c.execute('''
+        SELECT content FROM Posts WHERE timestamp > ? AND content IS NOT NULL
+    ''', (thirty_days_ago,))
+    rows = c.fetchall()
+    if rows:
+        counts = {'text': 0, 'photo': 0, 'video': 0, 'animation': 0, 'sticker': 0, 'other': 0}
+        for r in rows:
+            raw = r['content']
+            try:
+                d = json.loads(raw)
+                t = d.get('type', 'text')
+                if t in counts:
+                    counts[t] += 1
+                else:
+                    counts['other'] += 1
+            except Exception:
+                counts['text'] += 1
+        
+        fig, (ax8_pie, ax8_bar) = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={'width_ratios': [1, 1.4]})
+        media_total = sum(v for k, v in counts.items() if k != 'text')
+        text_total = counts['text']
+        
+        wedges, texts, autotexts = ax8_pie.pie(
+            [text_total, media_total], labels=['Текст\n(чистый пост)', 'Медиа\n(картинка/видео)'],
+            autopct='%1.1f%%', startangle=120,
+            colors=['#388bfd', '#f778ba'],
+            wedgeprops=dict(width=0.52, edgecolor='#0d1117', linewidth=2),
+            pctdistance=0.72
+        )
+        for at in autotexts:
+            at.set_color('#ffffff')
+            at.set_fontweight('bold')
+            at.set_fontsize(11)
+        ax8_pie.set_title('8. Картинко-дрочеры (30д)\nТекст vs Медиаконтент', fontsize=13, fontweight='bold', color='#f778ba')
+
+        labels_map = {'photo': 'Фотографии', 'video': 'Видеофайлы', 'animation': 'GIF / WebM', 'sticker': 'Стикеры', 'text': 'Текст', 'other': 'Прочее'}
+        sorted_types = sorted(counts.items(), key=lambda x: x[1], reverse=False)
+        types_ru = [labels_map.get(k, k) for k, v in sorted_types]
+        types_val = [v for k, v in sorted_types]
+        
+        cmap_m = plt.get_cmap('spring')
+        colors_m = [cmap_m(0.2 + 0.7 * i / len(types_val)) for i in range(len(types_val))]
+        bars8 = ax8_bar.barh(types_ru, types_val, color=colors_m, edgecolor='#0d1117', linewidth=0.6)
+        max_v = max(types_val) or 1
+        tot = sum(types_val) or 1
+        for bar, v in zip(bars8, types_val):
+            ax8_bar.text(bar.get_width() + max_v * 0.015, bar.get_y() + bar.get_height()/2,
+                         f'{v:,} ({100*v/tot:.1f}%)', va='center', fontsize=9, color='#e6edf3', fontweight='bold')
+        ax8_bar.set_title('Детализация типов контента', fontsize=12, fontweight='bold', color='#ffa657')
+        ax8_bar.set_xlim(0, max_v * 1.28)
+        ax8_bar.xaxis.set_major_formatter(plt.FuncFormatter(lambda val, _: f'{int(val):,}'))
+        plt.tight_layout()
+        save_chart(images, '8_media_breakdown.png', bbox_inches='tight')
+
+def _generate_chart_9(thirty_days_ago, c, images):
+    # 9. Уровень Дискуссии (Диалоги vs Монологи и Latency ответов)
+    c.execute('''
+        SELECT
+            SUM(CASE WHEN reply_to_post_num IS NOT NULL THEN 1 ELSE 0 END) as replies,
+            SUM(CASE WHEN reply_to_post_num IS NULL THEN 1 ELSE 0 END) as singles,
+            COUNT(*) as total
+        FROM Posts WHERE timestamp > ?
+    ''', (thirty_days_ago,))
+    r9 = c.fetchone()
+    if r9:
+        replies_cnt = r9['replies'] or 0
+        singles_cnt = r9['singles'] or 0
+        
+        c.execute('''
+            SELECT (repl.timestamp - orig.timestamp) as delta_sec
+            FROM Posts repl
+            JOIN Posts orig ON repl.reply_to_post_num = orig.post_num AND repl.board_id = orig.board_id
+            WHERE repl.timestamp > ? AND repl.timestamp >= orig.timestamp
+        ''', (thirty_days_ago,))
+        deltas = [row['delta_sec'] for row in c.fetchall()]
+        
+        fig, (ax9_pie, ax9_bar) = plt.subplots(1, 2, figsize=(13, 5), gridspec_kw={'width_ratios': [1, 1.4]})
+        
+        wedges, texts, autotexts = ax9_pie.pie(
+            [replies_cnt, singles_cnt], labels=['Диалоги\n(ответ на пост)', 'Монологи\n(крик в пустоту)'],
+            autopct='%1.1f%%', startangle=140,
+            colors=['#3fb950', '#8b949e'],
+            wedgeprops=dict(width=0.52, edgecolor='#0d1117', linewidth=2),
+            pctdistance=0.72
+        )
+        for at in autotexts:
+            at.set_color('#ffffff')
+            at.set_fontweight('bold')
+            at.set_fontsize(11)
+        ax9_pie.set_title('9. Уровень Дискуссии (30д)\nДиалоги vs Одиночные посты', fontsize=13, fontweight='bold', color='#3fb950')
+
+        if deltas:
+            import numpy as _np
+            d_arr = _np.array(deltas)
+            b_fast = int((d_arr <= 120).sum())
+            b_quick = int(((d_arr > 120) & (d_arr <= 900)).sum())
+            b_mid = int(((d_arr > 900) & (d_arr <= 3600)).sum())
+            b_slow = int(((d_arr > 3600) & (d_arr <= 21600)).sum())
+            b_late = int((d_arr > 21600).sum())
+            
+            d_labels = ['< 2 мин (Мгновенно)', '2–15 мин (Быстро)', '15–60 мин (Живой тред)', '1–6 часов (Слоупоки)', '> 6 часов (Некробамп)']
+            d_vals = [b_fast, b_quick, b_mid, b_slow, b_late]
+            d_labels.reverse()
+            d_vals.reverse()
+            
+            cmap_d = plt.get_cmap('viridis')
+            colors_d = [cmap_d(0.25 + 0.7 * i / len(d_vals)) for i in range(len(d_vals))]
+            bars9 = ax9_bar.barh(d_labels, d_vals, color=colors_d, edgecolor='#0d1117', linewidth=0.6)
+            max_dv = max(d_vals) or 1
+            tot_d = sum(d_vals) or 1
+            for bar, v in zip(bars9, d_vals):
+                ax9_bar.text(bar.get_width() + max_dv * 0.015, bar.get_y() + bar.get_height()/2,
+                             f'{v:,} ({100*v/tot_d:.1f}%)', va='center', fontsize=9, color='#e6edf3', fontweight='bold')
+            ax9_bar.set_title('Скорость ответа на реплаи (Latency)', fontsize=12, fontweight='bold', color='#7ee787')
+            ax9_bar.set_xlim(0, max_dv * 1.30)
+            ax9_bar.xaxis.set_major_formatter(plt.FuncFormatter(lambda val, _: f'{int(val):,}'))
+            
+        plt.tight_layout()
+        save_chart(images, '9_dialogue_level.png', bbox_inches='tight')
+
+def _generate_chart_10(thirty_days_ago, c, images):
     # 10. Тепловая карта активности (Heatmap)
     c.execute('''
         SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w,
@@ -433,7 +585,7 @@ def _generate_chart_8(thirty_days_ago, c, images):
         plt.tight_layout()
         save_chart(images, '10_heatmap.png')
 
-def _generate_chart_9(thirty_days_ago, c, images):
+def _generate_chart_11(thirty_days_ago, c, images):
     edges_data = None
     # 11. Граф Социального Пузыря (Эхо-камеры) — улучшенное
     try:
@@ -508,7 +660,7 @@ def _generate_chart_9(thirty_days_ago, c, images):
         print(f"Error Chart 11: {e}")
     return edges_data
 
-def _generate_chart_10(edges_data, images):
+def _generate_chart_12(edges_data, images):
     # 12. Топ-10 Хабов Внимания (PageRank Centrality)
     try:
         if edges_data:
@@ -540,7 +692,7 @@ def _generate_chart_10(edges_data, images):
     except Exception as e:
         print(f"Error Chart 12: {e}")
 
-def _generate_chart_11(edges_data, images):
+def _generate_chart_13(edges_data, images):
     # 13. Коэффициент Взаимного Дроча (Circlejerk Index)
     try:
         if edges_data:
@@ -585,7 +737,7 @@ def _generate_chart_11(edges_data, images):
     except Exception as e:
         print(f"Error Chart 13: {e}")
 
-def _generate_chart_12(thirty_days_ago, c, images):
+def _generate_chart_14(thirty_days_ago, c, images):
     # 14. Сессионный Анализ (Длина сессий)
     try:
         c.execute('''
@@ -728,7 +880,7 @@ def _get_word_counts(posts_list):
     return counts
 
 
-def _generate_chart_13(c, images):
+def _generate_chart_15(c, images):
     # 15. Мем-Радар: Взлетающие Тренды (Rising Keywords)
     try:
         now_ts = time.time()
@@ -786,7 +938,7 @@ def _generate_chart_13(c, images):
     except Exception as e:
         print(f"Error Chart 15: {e}")
 
-def _generate_chart_14(thirty_days_ago, c, images):
+def _generate_chart_16(thirty_days_ago, c, images):
     # 16. Частотный Шитпост-Словарь (Топ-15 Слов)
     try:
         from collections import Counter
@@ -855,7 +1007,7 @@ def _generate_chart_14(thirty_days_ago, c, images):
     except Exception as e:
         print(f"Error Chart 16: {e}")
 
-def _generate_chart_15(thirty_days_ago, c, images):
+def _generate_chart_17(thirty_days_ago, c, images):
     # 17. Индекс Токсичности (Сентимент)
     try:
         c.execute('''
@@ -918,7 +1070,7 @@ def _generate_chart_15(thirty_days_ago, c, images):
     except Exception as e:
         print(f"Error Chart 17: {e}")
 
-def _generate_chart_16(thirty_days_ago, c, images):
+def _generate_chart_18(thirty_days_ago, c, images):
     # 18. Лексическое Разнообразие (MSTTR)
     try:
         c.execute('''
@@ -979,7 +1131,7 @@ def _generate_chart_16(thirty_days_ago, c, images):
     except Exception as e:
         print(f"Error Chart 18: {e}")
 
-def _generate_chart_17(thirty_days_ago, c, images):
+def _generate_chart_19(thirty_days_ago, c, images):
     # 19. Популярность разделов — заменяем pie на hbar
     try:
         c.execute('''
@@ -1035,7 +1187,7 @@ def _generate_chart_17(thirty_days_ago, c, images):
     except Exception as e:
         print(f"Error Chart 19: {e}")
 
-def _generate_chart_18(thirty_days_ago, c, images):
+def _generate_chart_20(thirty_days_ago, c, images):
     # 20. Неравенство богатства битардов (Кривая Лоренца и Индекс Джини)
     # 20. Профиль Чтива (Качество постов по дням)
     try:
@@ -1108,7 +1260,7 @@ def _generate_chart_18(thirty_days_ago, c, images):
     except Exception as e:
         print(f"Error Chart 20: {e}")
 
-def _generate_chart_19(c, images):
+def _generate_chart_21(c, images):
     # ── 21. Тепловая карта час × день (180д) ──────────────────────────────
     try:
         import numpy as _np
@@ -1149,7 +1301,7 @@ def _generate_chart_19(c, images):
     except Exception as e:
         print(f"Error Chart 21: {e}")
 
-def _generate_chart_20(c, images):
+def _generate_chart_22(c, images):
     # ── 22. Ритм активности по дням недели (90д) ───────────────────────────
     try:
         import numpy as _np
@@ -1208,7 +1360,7 @@ def _generate_chart_20(c, images):
     except Exception as e:
         print(f"Error Chart 22: {e}")
 
-def _generate_chart_21(c, images):
+def _generate_chart_23(c, images):
     # ── 23. Часовой циферблат активности (90д) ───────────────────────────
     try:
         import numpy as _np
@@ -1263,7 +1415,7 @@ def _generate_chart_21(c, images):
     except Exception as e:
         print(f"Error Chart 23: {e}")
 
-def _generate_chart_22(c, images):
+def _generate_chart_24(c, images):
     # ── 24. Календарь активности (180д) ──────────────────────────────────
     try:
         import numpy as _np
@@ -1324,7 +1476,7 @@ def _generate_chart_22(c, images):
     except Exception as e:
         print(f"Error Chart 24: {e}")
 
-def _generate_chart_23(c, images):
+def _generate_chart_25(c, images):
     pass
 
     # ── 25. Кумулятивный рост постов (всё время) ─────────────────────────────
@@ -1353,7 +1505,7 @@ def _generate_chart_23(c, images):
     except Exception as e:
         print(f"Error Chart 25: {e}")
 
-def _generate_chart_24(c, images):
+def _generate_chart_26(c, images):
     # ── 26. Глубина цепочек ответов (30д) ────────────────────────────────────
     try:
         with contextlib.closing(connect_stats_db()) as conn2:
@@ -1390,7 +1542,7 @@ def _generate_chart_24(c, images):
     except Exception as e:
         print(f"Error Chart 26: {e}")
 
-def _generate_chart_25(images):
+def _generate_chart_27(images):
     # ── 27. Радар здоровья борды ──────────────────────────────────────────────
     try:
         with contextlib.closing(connect_stats_db()) as conn2:
@@ -1462,7 +1614,7 @@ def _generate_chart_25(images):
     except Exception as e:
         print(f"Error Chart 27: {e}")
 
-def _generate_chart_26(c, images):
+def _generate_chart_28(c, images):
     # ── 28. Топ тредов — пузырьковая диаграмма ───────────────────────────────
     try:
         with contextlib.closing(connect_stats_db()) as conn2:
@@ -1503,7 +1655,7 @@ def _generate_chart_26(c, images):
     except Exception as e:
         print(f"Error Chart 28: {e}")
 
-def _generate_chart_27(images):
+def _generate_chart_29(images):
     # ── 29. Тренд медиа vs текст по дням (30д) ─────────────────────────────
     try:
         with contextlib.closing(connect_stats_db()) as conn2:
@@ -1536,7 +1688,7 @@ def _generate_chart_27(images):
     except Exception as e:
         print(f"Error Chart 29: {e}")
 
-def _generate_chart_28(images):
+def _generate_chart_30(images):
     # ── 30. Когорты новых авторов по неделям (13 нед) ─────────────────────────
     try:
         with contextlib.closing(connect_stats_db()) as conn2:
@@ -1581,7 +1733,7 @@ def _generate_chart_28(images):
     except Exception as e:
         print(f"Error Chart 30: {e}")
 
-def _generate_chart_29(images):
+def _generate_chart_31(images):
     # ── 31. Активность борд по неделям (12 нед) stacked area ─────────────────
     try:
         with contextlib.closing(connect_stats_db()) as _conn31:
@@ -1621,7 +1773,7 @@ def _generate_chart_29(images):
     except Exception as e:
         print(f"Error Chart 31: {e}")
 
-def _generate_chart_30(images):
+def _generate_chart_32(images):
     # ── 32. Стрик-чемпионы (60д) Top-20, dual-column ─────────────────────────
     try:
         import datetime as _dt32
@@ -1682,7 +1834,7 @@ def _generate_chart_30(images):
         print(f"Error Chart 32: {e}")
 
 
-def _generate_chart_31(c, images):
+def _generate_chart_33(c, images):
     # ── 33. Velocity Map: Скорость Деградации ────────────────────────────────
     try:
         import numpy as _np
@@ -1743,7 +1895,7 @@ def _generate_chart_31(c, images):
         print(f"Error Chart 33: {e}")
 
 
-def _generate_chart_32(c, images):
+def _generate_chart_34(c, images):
     # ── 34. Churned Users — Кто Слился ────────────────────────────────────────
     try:
         now = time.time()
@@ -1793,7 +1945,7 @@ def _generate_chart_32(c, images):
         print(f"Error Chart 34: {e}")
 
 
-def _generate_chart_33(c, images):
+def _generate_chart_35(c, images):
     # ── 35. Bump Chart — Недельный рейтинг топ-5 авторов (8 нед) ─────────────
     try:
         import numpy as _np
@@ -1859,7 +2011,7 @@ def _generate_chart_33(c, images):
         print(f"Error Chart 35: {e}")
 
 
-def _generate_chart_34(c, images):
+def _generate_chart_36(c, images):
     # ── 36. Хронотип — Scatter авторов по среднему часу активности ───────────
     try:
         t30 = time.time() - 30 * 86400
@@ -1926,7 +2078,7 @@ def _generate_chart_34(c, images):
         print(f"Error Chart 36: {e}")
 
 
-def _generate_chart_35(c, images):
+def _generate_chart_37(c, images):
     # ── 37. Матрица Хайпа — 7×24 со стрелками тренда ────────────────────────
     try:
         import numpy as _np
@@ -2010,7 +2162,7 @@ def _generate_chart_35(c, images):
         print(f"Error Chart 37: {e}")
 
 
-def _generate_chart_36(c, images):
+def _generate_chart_38(c, images):
     # ── 38. Эмодзи-Борда — Топ-20 эмодзи из постов ───────────────────────────
     try:
         import re as _re
@@ -2118,7 +2270,7 @@ def _generate_chart_36(c, images):
         print(f"Error Chart 38: {e}")
 
 
-def _generate_chart_37(c, images):
+def _generate_chart_39(c, images):
     # ── 39. Сеть Тредов — граф тредов соединённых общими авторами ────────────
     try:
         import networkx as _nx
@@ -2193,7 +2345,7 @@ def _generate_chart_37(c, images):
         print(f"Error Chart 39: {e}")
 
 
-def _generate_chart_38(images):
+def _generate_chart_40(images):
     # ── 40. AI Weekly Digest — нарратив от Groq ──────────────────────────────
     try:
         import os as _os
@@ -2373,36 +2525,38 @@ def _generate_all_charts_locked():
                 _generate_chart_6(thirty_days_ago, c, images)
                 _generate_chart_7(thirty_days_ago, c, images)
                 _generate_chart_8(thirty_days_ago, c, images)
-                edges_data = _generate_chart_9(thirty_days_ago, c, images)
-                _generate_chart_10(edges_data, images)
-                _generate_chart_11(edges_data, images)
-                _generate_chart_12(thirty_days_ago, c, images)
-                _generate_chart_13(c, images)
+                _generate_chart_9(thirty_days_ago, c, images)
+                _generate_chart_10(thirty_days_ago, c, images)
+                edges_data = _generate_chart_11(thirty_days_ago, c, images)
+                _generate_chart_12(edges_data, images)
+                _generate_chart_13(edges_data, images)
                 _generate_chart_14(thirty_days_ago, c, images)
-                _generate_chart_15(thirty_days_ago, c, images)
+                _generate_chart_15(c, images)
                 _generate_chart_16(thirty_days_ago, c, images)
                 _generate_chart_17(thirty_days_ago, c, images)
                 _generate_chart_18(thirty_days_ago, c, images)
-                _generate_chart_19(c, images)
-                _generate_chart_20(c, images)
+                _generate_chart_19(thirty_days_ago, c, images)
+                _generate_chart_20(thirty_days_ago, c, images)
                 _generate_chart_21(c, images)
                 _generate_chart_22(c, images)
                 _generate_chart_23(c, images)
                 _generate_chart_24(c, images)
-                _generate_chart_25(images)
+                _generate_chart_25(c, images)
                 _generate_chart_26(c, images)
                 _generate_chart_27(images)
-                _generate_chart_28(images)
+                _generate_chart_28(c, images)
                 _generate_chart_29(images)
                 _generate_chart_30(images)
-                _generate_chart_31(c, images)
-                _generate_chart_32(c, images)
+                _generate_chart_31(images)
+                _generate_chart_32(images)
                 _generate_chart_33(c, images)
                 _generate_chart_34(c, images)
                 _generate_chart_35(c, images)
                 _generate_chart_36(c, images)
                 _generate_chart_37(c, images)
-                _generate_chart_38(images)
+                _generate_chart_38(c, images)
+                _generate_chart_39(c, images)
+                _generate_chart_40(images)
             except Exception as e:
                 print(f"Error generating charts: {e}")
 

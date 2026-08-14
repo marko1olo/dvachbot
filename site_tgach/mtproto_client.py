@@ -174,7 +174,10 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
                     break
 
             if msg and not msg.empty:
-                media_obj = getattr(msg, msg.media.value, None) if msg.media else None
+                if not msg.media:
+                    logger.warning(f"⚠️ [MTProto] Message context for {file_id[:10]} contains no media.")
+                    return False
+                media_obj = getattr(msg, msg.media.value, None)
                 main_file_id = getattr(media_obj, "file_id", None) if media_obj else None
                 
                 if main_file_id and main_file_id != file_id:
