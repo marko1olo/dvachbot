@@ -5474,6 +5474,207 @@ async def cb_support_prank(callback: types.CallbackQuery):
     except Exception:
         await callback.message.answer(SUPPORT_RESPONSES['text'], parse_mode="HTML")
     await callback.answer()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# /work — Биржа труда и заработок шекелей (4 интерактивные работы)
+# ══════════════════════════════════════════════════════════════════════════════
+WORK_VACANCIES = {
+    "sweeper": {
+        "title": "🧹 Дворник /b/",
+        "desc": "Уборка спама и мусора из тредов",
+        "reward_range": (30, 60),
+        "cooldown_sec": 900,  # 15 min
+        "phrases": [
+            "Ты подмёл тред от щитпостов и нашёл в мусоре <code>+{reward} RUB</code>!",
+            "Убрал засохшие мемы из нулевой и заработал <code>+{reward} RUB</code>!",
+            "Расчистил бамп-лимит и получил от Абу <code>+{reward} RUB</code>!"
+        ]
+    },
+    "captcha": {
+        "title": "👁️ Разметка капчи",
+        "desc": "Обучение нейросети распознавать трапы и NSFW",
+        "reward_range": (50, 95),
+        "cooldown_sec": 1800,  # 30 min
+        "phrases": [
+            "Разметил 100 картинок с трапами и получил грант <code>+{reward} RUB</code>!",
+            "Успешно обучил нейросеть ловить ЦП, заработано <code>+{reward} RUB</code>!",
+            "Ввёл 50 кривых капчей за тупых ньюфагов. Начислено <code>+{reward} RUB</code>!"
+        ]
+    },
+    "spy": {
+        "title": "🕵️ Шпионаж на чужой доске",
+        "desc": "Скрытный рейд на соседнюю борду за инсайдами",
+        "reward_range": (80, 160),
+        "cooldown_sec": 2700,  # 45 min
+        "risk_pct": 0.20,
+        "penalty": 45,
+        "phrases": [
+            "Успешно проник в /po/ и украл закрытый инсайд! Награда: <code>+{reward} RUB</code>!",
+            "Завайпал тред на /int/ и вернулся с трофеями на <code>+{reward} RUB</code>!"
+        ],
+        "fail_phrases": [
+            "🚨 <b>ТЕБЯ СПАЛИЛА МОДЕРАЦИЯ!</b> Местные админы поймали тебя за руку и оштрафовали на <code>-{penalty} RUB</code>!"
+        ]
+    },
+    "bottles": {
+        "title": "🍾 Сдать стеклотару и цветмет",
+        "desc": "Сбор пустых бутылок после пьянки скуфов",
+        "reward_range": (15, 35),
+        "cooldown_sec": 300,  # 5 min
+        "phrases": [
+            "Собрал ящик жигулёвского за гаражами и сдал в приёмку за <code>+{reward} RUB</code>!",
+            "Нашёл медный кабель в заброшенном треде, выручил <code>+{reward} RUB</code>!"
+        ]
+    }
+}
+
+async def _build_work_card(user_id: int, board_id: str):
+    db = await get_pool()
+    async with db.execute("SELECT balance, active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+        row = await c.fetchone()
+    
+    balance = row[0] if row and row[0] is not None else 0
+    ai_str = row[1] if row and len(row) > 1 and row[1] else "{}"
+    try:
+        items = json.loads(ai_str)
+    except Exception:
+        items = {}
+
+    work_timers = items.get("work_cooldowns", {})
+    now = int(time.time())
+
+    lines = [
+        f"💼 <b>БИРЖА ТРУДА /{board_id}/ • ЗАРАБОТОК ШЕКЕЛЕЙ</b>",
+        f"<code>{'—'*28}</code>",
+        f"💵 <b>Твой баланс:</b> <code>{int(balance):,} RUB</code>",
+        f"📍 <i>Выбирай халтуру, чтобы поднять шекелей на оружие и баффы:</i>\n"
+    ]
+
+    kb_rows = []
+    for job_id, job in WORK_VACANCIES.items():
+        last_time = work_timers.get(job_id, 0)
+        passed = now - last_time
+        cd = job["cooldown_sec"]
+        
+        if passed < cd:
+            left_min = ((cd - passed) // 60) + 1
+            status = f"⏳ {left_min} мин"
+            btn_text = f"{job['title']} ({status})"
+        else:
+            status = "🟢 Доступно"
+            btn_text = f"{job['title']} (+{job['reward_range'][0]}-{job['reward_range'][1]}₽)"
+
+        lines.append(f"<b>{job['title']}</b> — {status}")
+        lines.append(f"└ <i>{job['desc']}</i>")
+        kb_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"work_do_{job_id}")])
+
+    lines.append(f"\n<code>{'—'*28}</code>")
+    lines.append("💡 <i>Заработанное можно потратить в /shop или вывести в /wallet.</i>")
+
+    kb_rows.append([
+        InlineKeyboardButton(text="🛒 Черный рынок", callback_data="prof_shop"),
+        InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet")
+    ])
+    kb_rows.append([
+        InlineKeyboardButton(text="🔄 Обновить биржу", callback_data="work_refresh")
+    ])
+
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+@dp.message(Command("work", "биржа", "работа", "job", "заработок"))
+async def cmd_work(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    text, kb = await _build_work_card(user_id, board_id)
+
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=text,
+        reply_markup=kb,
+        category="wallet",
+        parse_mode="HTML"
+    )
+    try: await message.delete()
+    except Exception: pass
+
+@dp.callback_query(F.data.startswith("work_do_"))
+async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    job_id = callback.data.replace("work_do_", "")
+
+    if job_id not in WORK_VACANCIES:
+        await callback.answer("❌ Неизвестная вакансия.", show_alert=True)
+        return
+
+    job = WORK_VACANCIES[job_id]
+    db = await get_pool()
+
+    async with db_lock:
+        async with db.execute("SELECT balance, active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+
+        balance = row[0] if row and row[0] is not None else 0
+        ai_str = row[1] if row and len(row) > 1 and row[1] else "{}"
+        try:
+            items = json.loads(ai_str)
+        except Exception:
+            items = {}
+
+        work_timers = items.setdefault("work_cooldowns", {})
+        now = int(time.time())
+        last_time = work_timers.get(job_id, 0)
+        passed = now - last_time
+
+        if passed < job["cooldown_sec"]:
+            left_min = ((job["cooldown_sec"] - passed) // 60) + 1
+            await callback.answer(f"⏳ Кулдаун! Эта работа будет доступна через {left_min} мин.", show_alert=True)
+            return
+
+        is_fail = (job.get("risk_pct", 0) > 0 and random.random() < job["risk_pct"])
+        if is_fail:
+            penalty = job.get("penalty", 30)
+            work_timers[job_id] = now
+            await db.execute(
+                "UPDATE Users SET balance = MAX(0.0, balance - ?), active_items = ? WHERE user_id = ? AND board_id = ?",
+                (penalty, json.dumps(items), user_id, board_id)
+            )
+            await db.commit()
+            await callback.answer(f"🚨 Попался модерации! Штраф -{penalty} RUB", show_alert=True)
+        else:
+            reward = random.randint(job["reward_range"][0], job["reward_range"][1])
+            work_timers[job_id] = now
+            await db.execute(
+                "UPDATE Users SET balance = balance + ?, active_items = ? WHERE user_id = ? AND board_id = ?",
+                (reward, json.dumps(items), user_id, board_id)
+            )
+            await db.commit()
+            await callback.answer(f"✅ Успешно! +{reward} RUB", show_alert=True)
+
+    text, kb = await _build_work_card(user_id, board_id)
+    try:
+        await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        try:
+            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
+
+@dp.callback_query(F.data == "work_refresh")
+async def cb_work_refresh(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    text, kb = await _build_work_card(user_id, board_id)
+    try:
+        await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        try:
+            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
+    await callback.answer("🔄 Биржа обновлена")
 @dp.message(Command("mystats", "my_stats", "statsme", "карта", "деградация", "карточка"))
 async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -10335,10 +10536,21 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
     user_s = b_data['user_state'].setdefault(user_id, {})
-    now_ts = time.time()
-
     if await _check_create_thread_cooldown(callback, user_s, lang, now_ts):
         return
+
+    # Начисляем автору 150 RUB за создание полезного треда
+    try:
+        db = await get_pool()
+        async with db_lock:
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, 150) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + 150",
+                (user_id, board_id)
+            )
+            await db.commit()
+    except Exception as e:
+        runtime_logger.warning("Failed rewarding thread creation: %s", e)
 
     fsm_data = await state.get_data()
     op_post_text = fsm_data.get('op_post_text')
@@ -15075,11 +15287,48 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
         except: pass
         return
 
+    key = (message.chat.id, target_msg.message_id)
+    post_num = message_to_post.get(key)
+    if not post_num:
+        info = await get_post_info_by_copy(message.chat.id, target_msg.message_id)
+        if info: post_num = info[0]
+
+    wipe_tag = "<b>[ПОСТ УДАЛЁН МОДЕРАТОРОМ]</b>" if admin_status else "<b>[ПОСТ УДАЛЁН ДВОРНИКОМ]</b>"
+
+    if post_num:
+        async with storage_lock:
+            if post_num in messages_storage:
+                messages_storage[post_num]['is_deleted'] = True
+                if isinstance(messages_storage[post_num].get('content'), dict):
+                    messages_storage[post_num]['content']['text'] = wipe_tag
+
+        db = await get_pool()
+        try:
+            await db.execute("UPDATE Posts SET content = ? WHERE post_num = ?", (json.dumps({'type': 'text', 'text': wipe_tag}), post_num))
+            await db.commit()
+        except Exception:
+            pass
+
+        db_copies = await get_post_copies(post_num)
+        target_bot = GLOBAL_BOTS.get(board_id) or message.bot
+        for rec_id, msg_id in db_copies:
+            try:
+                try:
+                    await target_bot.edit_message_text(chat_id=rec_id, message_id=msg_id, text=wipe_tag, parse_mode="HTML")
+                except TelegramBadRequest as e:
+                    err_str = str(e).lower()
+                    if "there is no text in the message" in err_str or "caption" in err_str:
+                        try:
+                            await target_bot.edit_message_caption(chat_id=rec_id, message_id=msg_id, caption=wipe_tag, parse_mode="HTML")
+                        except Exception: pass
+            except Exception:
+                pass
+            await asyncio.sleep(0.03)
+
     try:
         await target_msg.delete()
-    except Exception as e:
-        if admin_status:
-            pass
+    except Exception:
+        pass
 
     try:
         await message.delete()
