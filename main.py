@@ -3300,8 +3300,9 @@ async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: s
     else:
         primary_message = random.choice(HELP_TEXT_COMMANDS)
     try:
-        await bot.send_message(chat_id, primary_message, parse_mode="HTML", disable_web_page_preview=True)
-    except (TelegramForbiddenError, TelegramBadRequest) as e:
+        from banner_manager import send_banner_message
+        await send_banner_message(bot, chat_id, caption=primary_message, category="start", parse_mode="HTML")
+    except Exception as e:
         logger.warning(f"[welcome] Не удалось отправить приветствие {chat_id}: {e}")
         return
     await asyncio.sleep(1.5)
@@ -15835,8 +15836,13 @@ async def periodic_board_summary():
             if not recipients:
                 continue
                 
+            from banner_manager import get_banner_file
+            fname, photo_payload = get_banner_file(category="summary")
+            fid = photo_payload if isinstance(photo_payload, str) else None
             content_obj = {
-                'type': 'text',
+                'type': 'photo' if fid else 'text',
+                'file_id': fid,
+                'caption': final_text,
                 'text': final_text,
                 'is_system_message': True,
                 'archive_allowed': True
@@ -15891,8 +15897,13 @@ async def periodic_thread_digest():
                 recipients = b_data['users']['active'] - b_data['users']['banned']
                 if not recipients:
                     continue
+                from banner_manager import get_banner_file
+                fname, photo_payload = get_banner_file(category="digest")
+                fid = photo_payload if isinstance(photo_payload, str) else None
                 content = {
-                    'type': 'text',
+                    'type': 'photo' if fid else 'text',
+                    'file_id': fid,
+                    'caption': digest_text,
                     'text': digest_text,
                     'is_system_message': True,
                     'archive_allowed': True
@@ -15945,8 +15956,13 @@ async def periodic_newspaper_broadcast():
                 recipients = b_data['users']['active'] - b_data['users']['banned']
                 if not recipients:
                     continue
+                from banner_manager import get_banner_file
+                fname, photo_payload = get_banner_file(category="newspaper")
+                fid = photo_payload if isinstance(photo_payload, str) else None
                 content = {
-                    'type': 'text',
+                    'type': 'photo' if fid else 'text',
+                    'file_id': fid,
+                    'caption': newspaper_text,
                     'text': newspaper_text,
                     'is_system_message': True,
                     'archive_allowed': True
@@ -16000,8 +16016,13 @@ async def periodic_shop_broadcast():
                 recipients = b_data['users']['active'] - b_data['users']['banned']
                 if not recipients:
                     continue
+                from banner_manager import get_banner_file
+                fname, photo_payload = get_banner_file(category="shop")
+                fid = photo_payload if isinstance(photo_payload, str) else None
                 content = {
-                    'type': 'text',
+                    'type': 'photo' if fid else 'text',
+                    'file_id': fid,
+                    'caption': shop_text,
                     'text': shop_text,
                     'is_system_message': True,
                     'archive_allowed': True
