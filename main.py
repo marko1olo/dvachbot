@@ -4756,11 +4756,18 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
     if streak > 1:
         streak_msg = f"\n🔥 Серия: <b>{streak} дней</b> → бонус +{streak_bonus} RUB"
 
-    await message.answer(
+    daily_text = (
         f"✅ <b>Ежедневный бонус получен!</b>\n"
         f"Начислено: <code>+{total_bonus} RUB</code>{streak_msg}\n"
         f"Новый баланс: <code>{int(balance + total_bonus)} RUB</code>\n\n"
-        f"<i>Приходи завтра — серия даёт до +70 RUB сверху.</i>",
+        f"<i>Приходи завтра — серия даёт до +70 RUB сверху.</i>"
+    )
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=user_id,
+        caption=daily_text,
+        category="calm",
         parse_mode="HTML"
     )
     try: await message.delete()
@@ -5768,13 +5775,14 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
     ]
     
     dossier_text = "\n".join(lines)
-    try:
-        await message.reply(dossier_text, parse_mode="HTML")
-    except Exception:
-        try:
-            await message.answer(dossier_text, parse_mode="HTML")
-        except Exception:
-            pass
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=dossier_text,
+        category="maid",
+        parse_mode="HTML"
+    )
 
 
 async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = None, limit: int = 25) -> str:
@@ -10481,8 +10489,8 @@ def get_quick_menu_keyboard(board_id: str, stream: str = 'ru') -> InlineKeyboard
         [InlineKeyboardButton(text=btn_profile, callback_data="menu_profile"), InlineKeyboardButton(text=btn_personal, callback_data="menu_personal")],
         [InlineKeyboardButton(text=btn_roll, callback_data="menu_roll"), InlineKeyboardButton(text=btn_stats, callback_data="menu_stats")],
         [
-            InlineKeyboardButton(text=btn_hent, switch_inline_query_current_chat="hent "),
-            InlineKeyboardButton(text=btn_loli, switch_inline_query_current_chat="loli ")
+            InlineKeyboardButton(text=btn_hent, callback_data="menu_hent"),
+            InlineKeyboardButton(text=btn_loli, callback_data="menu_loli")
         ],
         [InlineKeyboardButton(text=btn_invite, callback_data="menu_invite"), InlineKeyboardButton(text=btn_token, callback_data="menu_token")],
         [InlineKeyboardButton(text=btn_admin, callback_data="menu_admin"), InlineKeyboardButton(text=btn_help, callback_data="menu_help")]
