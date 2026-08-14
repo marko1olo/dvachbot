@@ -1,0 +1,17 @@
+{
+  "name": "TGACH & dvachbot",
+  "short_name": "TGACH",
+  "description": "Hybrid Imageboard Platform at tgach.top & @dvach_Chatbot Telegram Hub",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#14110e",
+  "theme_color": "#ff6600",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
