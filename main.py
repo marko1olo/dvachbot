@@ -3637,9 +3637,167 @@ async def cmd_shop(message: types.Message, board_id: str | None, stream: str = '
         [InlineKeyboardButton(text=f"💊 Аминазин ({current_prices['pills']})", callback_data="shop_buy_pills"), InlineKeyboardButton(text=f"🔪 Заточка ({current_prices['knife']})", callback_data="shop_buy_knife")],
         [InlineKeyboardButton(text=f"👽 Фольга ({current_prices['tinfoil']})", callback_data="shop_buy_tinfoil"), InlineKeyboardButton(text=f"📜 Взятка ({current_prices['bribe']})", callback_data="shop_buy_bribe")],
         [InlineKeyboardButton(text=f"🚽 Слабительное ({current_prices['laxative']})", callback_data="shop_buy_laxative"), InlineKeyboardButton(text=f"📣 Мегафон ({current_prices['megaphone']})", callback_data="shop_buy_megaphone")],
-        [InlineKeyboardButton(text=f"💊 Шизо-Таблетка ({current_prices['schizopill']})", callback_data="shop_buy_schizopill")]
+        [InlineKeyboardButton(text=f"💊 Шизо-Таблетка ({current_prices['schizopill']})", callback_data="shop_buy_schizopill")],
+        [InlineKeyboardButton(text="🎒 Мой рюкзак", callback_data="prof_inventory"), InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet")]
     ])
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=text,
+        reply_markup=kb,
+        category="shop",
+        parse_mode="HTML"
+    )
+    try: await message.delete()
+    except Exception: pass
+
+async def _build_inventory_content(user_id: int, board_id: str):
+    db = await get_pool()
+    async with db.execute(
+        "SELECT balance, active_items, custom_prefix, prefix_expires_at, cursed_until FROM Users WHERE user_id = ? AND board_id = ?",
+        (user_id, board_id)
+    ) as c:
+        row = await c.fetchone()
+
+    balance = row[0] if row and row[0] is not None else 0
+    active_items_str = row[1] if row and len(row) > 1 and row[1] else "{}"
+    prefix = row[2] if row and len(row) > 2 and row[2] else None
+    prefix_exp = row[3] if row and len(row) > 3 and row[3] else 0
+    cursed_until = row[4] if row and len(row) > 4 and row[4] else 0
+
+    try:
+        import json
+        items = json.loads(active_items_str)
+    except Exception:
+        items = {}
+
+    import time
+    now = int(time.time())
+    
+    # Active Buffs & Timers
+    buffs = []
+    if prefix and prefix_exp > now:
+        left_h = (prefix_exp - now) // 3600
+        left_m = ((prefix_exp - now) % 3600) // 60
+        buffs.append(f"👑 <b>VIP Префикс:</b> <code>{prefix}</code> (осталось {left_h}ч {left_m}мин)")
+
+    shield_until = items.get("reflect_shield_until", 0)
+    if shield_until > now:
+        left_h = (shield_until - now) // 3600
+        left_m = ((shield_until - now) % 3600) // 60
+        buffs.append(f"🛡️ <b>Зеркальный Щит:</b> Активен (осталось {left_h}ч {left_m}мин)")
+
+    tinfoil_until = items.get("tinfoil_hat", 0)
+    if tinfoil_until > now:
+        left_h = (tinfoil_until - now) // 3600
+        left_m = ((tinfoil_until - now) % 3600) // 60
+        buffs.append(f"👽 <b>Шапочка из фольги:</b> Активна (осталось {left_h}ч {left_m}мин)")
+
+    janitor_until = items.get("janitor_until", 0)
+    deletes_left = items.get("janitor_deletes_left", 0)
+    if janitor_until > now and deletes_left > 0:
+        left_h = (janitor_until - now) // 3600
+        left_m = ((janitor_until - now) % 3600) // 60
+        buffs.append(f"🧹 <b>Билет Дворника:</b> {deletes_left} удалений (осталось {left_h}ч {left_m}мин)")
+
+    shit_until = items.get("shit_until", 0)
+    if shit_until > now:
+        left_m = (shit_until - now) // 60
+        buffs.append(f"🐒 <b>Обмазан говном:</b> ({left_m} мин)")
+
+    if cursed_until > now:
+        left_m = (cursed_until - now) // 60
+        buffs.append(f"🚽 <b>Проклятие поноса:</b> Активно ({left_m} мин)")
+
+    # Weapons & Inventory Items
+    weapons = []
+    if items.get("mute_gun"):
+        weapons.append("🔫 <b>Мут-Ган:</b> 1 шт. <i>(Реплай + /shoot)</i>")
+    if items.get("partyvan_gun"):
+        weapons.append("🚔 <b>Пативэн-Ган:</b> 1 шт. <i>(Реплай + /partyvan)</i>")
+    if items.get("knife_gun"):
+        weapons.append("🔪 <b>Заточка:</b> 1 шт. <i>(Реплай + /rob)</i>")
+    if items.get("shit_gun"):
+        weapons.append("🐒 <b>Кусок говна:</b> 1 шт. <i>(Реплай + /shit)</i>")
+    if items.get("laxative_gun"):
+        weapons.append("🚽 <b>Слабительное:</b> 1 шт. <i>(Реплай + /curse)</i>")
+    if items.get("megaphone_gun"):
+        weapons.append("📣 <b>Мегафон:</b> 1 шт. <i>(Реплай + /mega)</i>")
+    if items.get("schizopill_gun"):
+        weapons.append("💊 <b>Шизо-Таблетка:</b> 1 шт. <i>(Реплай + /schizopill)</i>")
+
+    lines = [
+        f"🎒 <b>РЮКЗАК АНОНА №{user_id % 10000:04d}</b>",
+        f"<code>{'—'*26}</code>",
+        f"💵 <b>Баланс:</b> <code>{int(balance):,} RUB</code>\n"
+    ]
+
+    if buffs:
+        lines.append("🛡️ <b>АКТИВНЫЕ ЭФФЕКТЫ:</b>")
+        lines.extend([f" • {b}" for b in buffs])
+        lines.append("")
+    else:
+        lines.append("🛡️ <b>АКТИВНЫЕ ЭФФЕКТЫ:</b> <i>Нет активных баффов</i>\n")
+
+    if weapons:
+        lines.append("⚔️ <b>СНАРЯЖЕНИЕ И ОРУЖИЕ:</b>")
+        lines.extend([f" • {w}" for w in weapons])
+    else:
+        lines.append("⚔️ <b>СНАРЯЖЕНИЕ:</b> <i>Рюкзак пуст. Загляни на Черный рынок!</i>")
+
+    lines.append(f"<code>{'—'*26}</code>")
+    lines.append("💡 <i>Трать шекели в /shop, чтобы вооружаться и кошмарить тред.</i>")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🛒 Черный рынок", callback_data="prof_shop"),
+            InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet")
+        ],
+        [
+            InlineKeyboardButton(text="🪪 Мой паспорт", callback_data="prof_card"),
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="prof_inventory")
+        ]
+    ])
+
+    return "\n".join(lines), kb
+
+
+@dp.message(Command("inv", "inventory", "рюкзак", "инвентарь", "bag"))
+async def cmd_inventory(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    text, kb = await _build_inventory_content(user_id, board_id)
+
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=text,
+        reply_markup=kb,
+        category="wallet",
+        parse_mode="HTML"
+    )
+    try: await message.delete()
+    except Exception: pass
+
+
+@dp.callback_query(F.data == "prof_inventory")
+async def cb_prof_inventory(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    text, kb = await _build_inventory_content(user_id, board_id)
+
+    from banner_manager import send_banner_message
+    await callback.answer()
+    await send_banner_message(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        caption=text,
+        reply_markup=kb,
+        category="wallet",
+        parse_mode="HTML"
+    )
 
 @dp.callback_query(F.data.startswith("shop_buy_"))
 async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
@@ -5575,6 +5733,9 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
         ],
         [
             InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet"),
+            InlineKeyboardButton(text="🎒 Рюкзак", callback_data="prof_inventory")
+        ],
+        [
             InlineKeyboardButton(text="🛒 Черный рынок", callback_data="prof_shop")
         ]
     ])
@@ -16627,6 +16788,7 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="whois", description="Информация о пользователе"),
         BotCommand(command="wallet", description="Баланс кошелька"),
         BotCommand(command="shop", description="Теневой Магазин"),
+        BotCommand(command="inv", description="Рюкзак и активные баффы"),
         BotCommand(command="passport", description="Паспорт и статистика"),
         BotCommand(command="my_stats", description="Персональная карта статистики"),
         BotCommand(command="threads", description="Список тредов"),
