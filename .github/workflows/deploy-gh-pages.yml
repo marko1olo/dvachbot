@@ -31,10 +31,10 @@ jobs:
         with:
           enablement: true
 
-      - name: Upload Artifact
+      - name: Upload static project surface
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.'
+          path: 'docs'
 
       - name: Deploy to GitHub Pages
         id: deployment
