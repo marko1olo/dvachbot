@@ -19,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from Dubsite_tgach.image_processing import clean_tags_string
+from site_tgach.image_processing import clean_tags_string
 
 class TestCleanTagsString(unittest.TestCase):
     def test_none_or_empty(self):

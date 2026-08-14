@@ -22,7 +22,7 @@ with patch.dict('sys.modules', {
     'site_tgach.mtproto_client': MagicMock(),
     'common': MagicMock(),
 }):
-    from Dubsite_tgach.image_processing import encode_83
+    from site_tgach.image_processing import encode_83
 
 class TestEncode83(unittest.TestCase):
     def test_encode_zero(self):
