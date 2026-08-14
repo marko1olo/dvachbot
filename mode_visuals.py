@@ -219,8 +219,13 @@ def create_visual_post(mode, text, header=None):
                 if curr: lines.append(curr)
                 return "\n".join(lines)
 
-            # Pick style
-            style = random.choice(['cyber_banner', 'breaking_news', 'speech_bubble', 'demotivator', 'impact_bold'])
+            # Pick style from 8 elite meme layout styles
+            available_styles = [
+                'cyber_banner', 'breaking_news', 'speech_bubble', 'demotivator',
+                'impact_bold', 'neon_cyberpunk_glitch', 'retro_window',
+                'gopnik_quote', 'propaganda_banner', 'cctv_camera'
+            ]
+            style = random.choice(available_styles)
 
             # 1. BREAKING NEWS STYLE
             if style == 'breaking_news':
@@ -230,15 +235,15 @@ def create_visual_post(mode, text, header=None):
                 f_text = get_font_by_size(36)
                 
                 if mode == 'ukrainian':
-                    banner_title = "⚡ ТЕРМІНОВА БАВОВНА | ТГАЧ NEWS 24/7"
+                    banner_title = "ТЕРМІНОВА БАВОВНА | ТГАЧ NEWS 24/7"
                     bg_col = (20, 40, 70, 240)
                     top_bar = (0, 140, 255, 255)
                 elif mode == 'zaputin':
-                    banner_title = "⚡ СРОЧНАЯ СВОДКА С ФРОНТА | ТГАЧ Z-NEWS"
+                    banner_title = "СРОЧНАЯ СВОДКА С ФРОНТА | ТГАЧ Z-NEWS"
                     bg_col = (40, 15, 15, 240)
                     top_bar = (220, 30, 20, 255)
                 else:
-                    banner_title = "⚡ СРОЧНАЯ МОЛНИЯ | ТГАЧ NEWS 24/7"
+                    banner_title = "СРОЧНАЯ МОЛНИЯ | ТГАЧ NEWS 24/7"
                     bg_col = (10, 14, 22, 235)
                     top_bar = (220, 35, 45, 255)
 
@@ -332,7 +337,131 @@ def create_visual_post(mode, text, header=None):
                     draw.text((tx2+ox, ty2+oy), bot_txt, font=f_impact, fill=(0, 0, 0, 255))
                 draw.text((tx2, ty2), bot_txt, font=f_impact, fill=(255, 230, 40, 255))
 
-            # 5. CYBER GLASS BANNER (DEFAULT)
+            # 5. NEON CYBERPUNK GLITCH
+            elif style == 'neon_cyberpunk_glitch':
+                overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+                odraw = ImageDraw.Draw(overlay)
+                by1, by2 = 560, 770
+                odraw.rectangle([40, by1, 984, by2], fill=(8, 12, 20, 220), outline=(0, 240, 255, 220), width=2)
+                for gy in range(by1 + 6, by2, 8):
+                    odraw.line([(42, gy), (982, gy)], fill=(0, 0, 0, 80), width=1)
+                odraw.line([(32, by1 - 8), (56, by1 - 8)], fill=(255, 0, 120, 255), width=3)
+                odraw.line([(32, by1 - 8), (32, by1 + 16)], fill=(255, 0, 120, 255), width=3)
+                odraw.line([(992, by2 + 8), (968, by2 + 8)], fill=(0, 240, 255, 255), width=3)
+                odraw.line([(992, by2 + 8), (992, by2 - 16)], fill=(0, 240, 255, 255), width=3)
+                
+                f_tag = get_font_by_size(14, bold=True)
+                odraw.text((54, by1 + 10), "[ SYSTEM_OVERRIDE // V2.077 ]", font=f_tag, fill=(0, 255, 200, 255))
+
+                f_txt = get_font_by_size(36)
+                wrapped = wrap_text_str(odraw, text, f_txt, 900)
+                tb = odraw.multiline_textbbox((0, 0), wrapped, font=f_txt, align="center")
+                tw, th = tb[2] - tb[0], tb[3] - tb[1]
+                tx = (1024 - tw) / 2
+                ty = by1 + 42 + (by2 - by1 - 42 - th) / 2
+
+                odraw.multiline_text((tx - 3, ty), wrapped, font=f_txt, fill=(0, 240, 255, 200), align="center")
+                odraw.multiline_text((tx + 3, ty), wrapped, font=f_txt, fill=(255, 0, 120, 200), align="center")
+                odraw.multiline_text((tx, ty), wrapped, font=f_txt, fill=(255, 255, 255, 255), align="center")
+                img = Image.alpha_composite(img, overlay)
+
+            # 6. RETRO WINDOWS 95 DIALOG
+            elif style == 'retro_window':
+                overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+                odraw = ImageDraw.Draw(overlay)
+                wx, wy, ww, wh = 80, 520, 864, 250
+                odraw.rectangle([wx, wy, wx + ww, wy + wh], fill=(195, 199, 203, 250), outline=(255, 255, 255, 255), width=2)
+                odraw.line([(wx + ww, wy), (wx + ww, wy + wh)], fill=(0, 0, 0, 255), width=2)
+                odraw.line([(wx, wy + wh), (wx + ww, wy + wh)], fill=(0, 0, 0, 255), width=2)
+                
+                title_bar_col = (0, 0, 128, 255) if mode != 'zaputin' else (140, 0, 0, 255)
+                odraw.rectangle([wx + 4, wy + 4, wx + ww - 4, wy + 38], fill=title_bar_col)
+                f_wtitle = get_font_by_size(18, bold=True)
+                w_title = clean_h if clean_h else "Critical Alert - ТГАЧ 95"
+                odraw.text((wx + 12, wy + 10), w_title, font=f_wtitle, fill=(255, 255, 255, 255))
+                odraw.rectangle([wx + ww - 32, wy + 8, wx + ww - 10, wy + 30], fill=(195, 199, 203, 255), outline=(0, 0, 0, 255))
+                odraw.text((wx + ww - 26, wy + 9), "X", font=f_wtitle, fill=(0, 0, 0, 255))
+
+                odraw.ellipse([wx + 24, wy + 60, wx + 74, wy + 110], fill=(240, 200, 30, 255), outline=(0, 0, 0, 255), width=2)
+                odraw.text((wx + 44, wy + 66), "!", font=get_font_by_size(32, bold=True), fill=(0, 0, 0, 255))
+
+                f_msg = get_font_by_size(28, bold=True)
+                wrapped = wrap_text_str(odraw, text, f_msg, 720)
+                odraw.multiline_text((wx + 96, wy + 62), wrapped, font=f_msg, fill=(0, 0, 0, 255))
+
+                btn_x, btn_y, btn_w, btn_h = wx + (ww - 120)//2, wy + wh - 48, 120, 36
+                odraw.rectangle([btn_x, btn_y, btn_x + btn_w, btn_y + btn_h], fill=(220, 224, 228, 255), outline=(0, 0, 0, 255), width=2)
+                odraw.text((btn_x + 44, btn_y + 8), "OK", font=f_wtitle, fill=(0, 0, 0, 255))
+                img = Image.alpha_composite(img, overlay)
+
+            # 7. GOPNIK / ANON QUOTE CARD
+            elif style == 'gopnik_quote':
+                overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+                odraw = ImageDraw.Draw(overlay)
+                for y in range(480, 1024):
+                    alpha = int(((y - 480) / (1024 - 480)) ** 1.3 * 235)
+                    odraw.line([(0, y), (1024, y)], fill=(8, 10, 14, alpha), width=1)
+                    
+                f_quote = get_font_by_size(36, bold=True)
+                wrapped = wrap_text_str(odraw, f"«{text}»", f_quote, 880)
+                tb = odraw.multiline_textbbox((0, 0), wrapped, font=f_quote, align="center")
+                tw, th = tb[2] - tb[0], tb[3] - tb[1]
+                tx = (1024 - tw) / 2
+                ty = 600
+                
+                for ox, oy in [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, 3)]:
+                    odraw.multiline_text((tx + ox, ty + oy), wrapped, font=f_quote, fill=(0, 0, 0, 255), align="center")
+                odraw.multiline_text((tx, ty), wrapped, font=f_quote, fill=(255, 225, 75, 255), align="center")
+
+                f_sign = get_font_by_size(18, bold=True)
+                author_txt = f"© {clean_h}" if clean_h else "© Анон из /b/, золотые мысли борды"
+                aw = odraw.textlength(author_txt, font=f_sign)
+                odraw.text(((1024 - aw)/2, ty + th + 24), author_txt, font=f_sign, fill=(180, 190, 205, 220))
+                img = Image.alpha_composite(img, overlay)
+
+            # 8. PROPAGANDA CONSTRUCTIVIST BANNER
+            elif style == 'propaganda_banner':
+                overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+                odraw = ImageDraw.Draw(overlay)
+                poly = [(0, 540), (1024, 500), (1024, 760), (0, 800)]
+                stripe_col = (200, 30, 25, 245) if mode != 'ukrainian' else (0, 100, 220, 245)
+                odraw.polygon(poly, fill=stripe_col, outline=(255, 220, 40, 255))
+                odraw.polygon([(0, 532), (1024, 492), (1024, 502), (0, 542)], fill=(255, 220, 40, 255))
+
+                f_prop = get_font_by_size(40, bold=True)
+                wrapped = wrap_text_str(odraw, text, f_prop, 920)
+                tb = odraw.multiline_textbbox((0, 0), wrapped, font=f_prop, align="center")
+                tw, th = tb[2] - tb[0], tb[3] - tb[1]
+                tx = (1024 - tw)/2
+                ty = 580
+                for ox, oy in [(-3, -3), (3, -3), (-3, 3), (3, 3), (0, 4)]:
+                    odraw.multiline_text((tx + ox, ty + oy), wrapped, font=f_prop, fill=(0, 0, 0, 255), align="center")
+                odraw.multiline_text((tx, ty), wrapped, font=f_prop, fill=(255, 235, 50, 255), align="center")
+                img = Image.alpha_composite(img, overlay)
+
+            # 9. CCTV SECURITY CAMERA
+            elif style == 'cctv_camera':
+                overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+                odraw = ImageDraw.Draw(overlay)
+                f_hud = get_font_by_size(18, bold=True)
+                odraw.text((40, 36), "CAM_07 [LIVE] • 24 FPS", font=f_hud, fill=(0, 255, 120, 240))
+                odraw.text((1024 - 310, 36), "2026-08-15 01:24:19 UTC", font=f_hud, fill=(0, 255, 120, 240))
+                
+                odraw.line([(512 - 20, 512), (512 + 20, 512)], fill=(0, 255, 120, 160), width=2)
+                odraw.line([(512, 512 - 20), (512, 512 + 20)], fill=(0, 255, 120, 160), width=2)
+                
+                for gy in range(0, 1024, 6):
+                    odraw.line([(0, gy), (1024, gy)], fill=(0, 0, 0, 45), width=1)
+
+                odraw.rectangle([40, 590, 984, 760], fill=(10, 18, 12, 230), outline=(0, 255, 120, 220), width=2)
+                odraw.text((56, 604), "[ОБНАРУЖЕНА АКТИВНОСТЬ НА КАМЕРЕ]:", font=get_font_by_size(16, bold=True), fill=(0, 255, 120, 255))
+                
+                f_msg = get_font_by_size(32, bold=True)
+                wrapped = wrap_text_str(odraw, text, f_msg, 900)
+                odraw.multiline_text((56, 640), wrapped, font=f_msg, fill=(240, 255, 240, 255))
+                img = Image.alpha_composite(img, overlay)
+
+            # 10. CYBER GLASS BANNER (DEFAULT)
             else:
                 overlay = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
                 odraw = ImageDraw.Draw(overlay)
@@ -368,8 +497,6 @@ def create_visual_post(mode, text, header=None):
                 t_w = t_bbox[2] - t_bbox[0]
                 t_x = (1024 - t_w) / 2
                 
-                for ox, oy in [(-2, -2), (2, -2), (-2, 2), (2, 2), (0, 3)]:
-                    draw.multiline_text((t_x + ox, curr_y + oy), wrapped_text, font=f_text, fill=(0, 0, 0, 220), align="center")
                 draw.multiline_text((t_x, curr_y), wrapped_text, font=f_text, fill=(255, 255, 255, 255), align="center")
 
         else:
