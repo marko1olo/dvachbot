@@ -5684,7 +5684,14 @@ async def cb_prof_dossier(callback: types.CallbackQuery, board_id: str | None):
         f"<code>{'═'*26}</code>"
     ]
     await callback.answer()
-    await callback.message.answer("\n".join(lines), parse_mode="HTML")
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=callback.bot,
+        chat_id=callback.message.chat.id,
+        caption="\n".join(lines),
+        category="maid",
+        parse_mode="HTML"
+    )
 
 
 @dp.callback_query(F.data == "prof_wallet")
