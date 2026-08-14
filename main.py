@@ -5091,7 +5091,15 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
          InlineKeyboardButton(text=btns[3], callback_data="scam_history")]
     ])
 
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=text,
+        reply_markup=kb,
+        category="wallet",
+        parse_mode="HTML"
+    )
 # --- 1. Начало вывода (Выбор метода) ---
 @dp.callback_query(F.data == "start_withdrawal")
 async def cb_start_withdrawal(callback: types.CallbackQuery, state: FSMContext, board_id: str | None):
