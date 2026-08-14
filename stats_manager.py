@@ -61,9 +61,21 @@ except Exception:
 
 @dataclass
 class ChartContext:
-    plt: Any
-    fig: Any
-    ax: Any
+    cur: Any = None
+    board_id: Any = None
+    since_90: Any = None
+    since_180: Any = None
+    BG: Any = None
+    FG: Any = None
+    HEAT: Any = None
+    np: Any = None
+    plt: Any = None
+    io: Any = None
+    mpl: Any = None
+    defaultdict: Any = None
+    dt: Any = None
+    fig: Any = None
+    ax: Any = None
     matplotlib_guard_acquired: bool = False
     temp_file: str = None
 

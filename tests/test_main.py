@@ -265,24 +265,7 @@ class TestFormatBayanLabel(unittest.TestCase):
         res = format_bayan_label(5, lang='missing_lang')
         self.assertEqual(res, "♻️ Mocked_Eng (5)")
 
-import ast
-
-def get_clean_html_function():
-    with open("main.py", "r", encoding="utf-8") as f:
-        source = f.read()
-
-    # Extract the function dynamically to avoid importing main.py's side effects
-    module = ast.parse(source)
-    for node in module.body:
-        if isinstance(node, ast.FunctionDef) and node.name == 'clean_html_for_tg':
-            # compile and eval
-            code = compile(ast.Module(body=[node], type_ignores=[]), filename="<ast>", mode="exec")
-            namespace = {'re': __import__('re')}
-            exec(code, namespace)
-            return namespace['clean_html_for_tg']
-    return None
-
-clean_html_for_tg = get_clean_html_function()
+from common.text_utils import clean_html_for_tg
 
 class TestCleanHtmlForTg(unittest.TestCase):
     def test_empty_input(self):
@@ -298,8 +281,8 @@ class TestCleanHtmlForTg(unittest.TestCase):
         self.assertEqual(clean_html_for_tg("*text*"), "<i>text</i>")
         self.assertEqual(clean_html_for_tg("hello *world*"), "hello <i>world</i>")
         self.assertEqual(clean_html_for_tg("not * italic"), "not * italic")
-        # Ensure it doesn't mess up bold. The current implementation produces a stray tag closing which is expected behavior for now.
-        self.assertEqual(clean_html_for_tg("**bold *italic***"), "<b>bold <i>italic</i></b>&lt;/i&gt;")
+        # Ensure it doesn't mess up bold.
+        self.assertEqual(clean_html_for_tg("**bold *italic***"), "<b>bold <i>italic</i></b>")
 
     def test_markdown_code(self):
         self.assertEqual(clean_html_for_tg("`text`"), "<code>text</code>")
@@ -312,7 +295,7 @@ class TestCleanHtmlForTg(unittest.TestCase):
 
     def test_mixed_markdown(self):
         self.assertEqual(clean_html_for_tg("hello **bold** and *italic* and `code`"), "hello <b>bold</b> and <i>italic</i> and <code>code</code>")
-        self.assertEqual(clean_html_for_tg("<h1>hello</h1> **world**"), "&lt;h1>hello&lt;/h1> <b>world</b>")
+        self.assertEqual(clean_html_for_tg("<h1>hello</h1> **world**"), "hello\n <b>world</b>")
 
     def test_balanced_tags(self):
         self.assertEqual(clean_html_for_tg("hello <b>world</b>"), "hello <b>world</b>")
@@ -324,8 +307,8 @@ class TestCleanHtmlForTg(unittest.TestCase):
         self.assertEqual(clean_html_for_tg("hello <b><i>world</b>"), "hello <b><i>world</i></b>")
 
     def test_stray_closing_tags(self):
-        self.assertEqual(clean_html_for_tg("hello <b>world</i>"), "hello <b>world&lt;/i&gt;</b>")
-        self.assertEqual(clean_html_for_tg("hello </b>world"), "hello &lt;/b&gt;world")
+        self.assertEqual(clean_html_for_tg("hello <b>world</i>"), "hello <b>world</b>")
+        self.assertEqual(clean_html_for_tg("hello </b>world"), "hello world")
 
     def test_invalid_tags(self):
         self.assertEqual(clean_html_for_tg("hello <script>world</script>"), "hello world")
@@ -359,7 +342,7 @@ class TestVibeToIcon(unittest.TestCase):
 class TestSanitizeHtml(unittest.TestCase):
     def test_empty_input(self):
         self.assertEqual(sanitize_html(""), "")
-        self.assertEqual(sanitize_html(None), "None")
+        self.assertEqual(sanitize_html(None), "")
 
     def test_basic_tags(self):
         self.assertEqual(sanitize_html("<b>bold</b>"), "&lt;b&gt;bold&lt;/b&gt;")
@@ -533,11 +516,11 @@ class TestFormatPostText(unittest.TestCase):
     def test_button(self):
         self.assertEqual(
             format_post_text("[btn=http://test.com]Click[/btn]"),
-            '[btn=<a href="http://test.com]Click[/btn]" target="_blank" rel="noopener noreferrer">http://test.com]Click[/btn]</a>'
+            '<a href="http://test.com" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-small post-btn">Click</a>'
         )
         self.assertEqual(
             format_post_text("[btn=http://test.com?a=1&b=2]Click[/btn]"),
-            '[btn=<a href="http://test.com?a=1&amp;b=2]Click[/btn]" target="_blank" rel="noopener noreferrer">http://test.com?a=1&amp;b=2]Click[/btn]</a>'
+            '<a href="http://test.com?a=1&amp;b=2" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-small post-btn">Click</a>'
         )
 
     def test_size(self):
@@ -551,51 +534,35 @@ class TestFormatPostText(unittest.TestCase):
 
 
 class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        for attr in ("cache_clear", "invalidate_all"):
+            clear = getattr(get_country_by_ip, attr, None)
+            if callable(clear):
+                result = clear()
+                if hasattr(result, "__await__"):
+                    await result
+                break
+
     async def test_local_ip(self):
         self.assertEqual(await get_country_by_ip("127.0.0.1"), "XX")
         self.assertEqual(await get_country_by_ip("localhost"), "XX")
         self.assertEqual(await get_country_by_ip("::1"), "XX")
 
-    @patch("Dubsite_tgach.main.GEOIP_READER", None)
-    @patch("os.path.exists", return_value=False)
-    @patch("httpx.AsyncClient")
-    async def test_http_fallback_success(self, mock_client_cls, mock_exists):
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"countryCode": "US"}
-        mock_client.get.return_value = mock_response
-        self.assertEqual(await get_country_by_ip("8.8.8.8"), "US")
-        self.assertTrue(mock_client.get.called)
-
     @patch("Dubsite_tgach.main.GEOIP_READER")
     async def test_geoip_success(self, mock_reader):
         mock_response = MagicMock()
         mock_response.country.iso_code = "CA"
-        mock_reader.get = MagicMock(return_value=mock_response)
         mock_reader.country = MagicMock(return_value=mock_response)
         self.assertEqual(await get_country_by_ip("1.1.1.1"), "CA")
 
     @patch("Dubsite_tgach.main.GEOIP_READER")
-    @patch("httpx.AsyncClient")
-    async def test_geoip_exception_fallback(self, mock_client_cls, mock_reader):
+    async def test_geoip_exception_fallback(self, mock_reader):
         mock_reader.country = MagicMock(side_effect=Exception("Not found"))
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"countryCode": "GB"}
-        mock_client.get = AsyncMock(return_value=mock_response)
-        self.assertEqual(await get_country_by_ip("2.2.2.2"), "GB")
+        self.assertEqual(await get_country_by_ip("2.2.2.2"), "XX")
 
     @patch("Dubsite_tgach.main.GEOIP_READER", None)
     @patch("os.path.exists", return_value=False)
-    @patch("httpx.AsyncClient")
-    async def test_all_fail(self, mock_client_cls, mock_exists):
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_client.get.side_effect = Exception("Network error")
+    async def test_missing_db(self, mock_exists):
         self.assertEqual(await get_country_by_ip("3.3.3.3"), "XX")
 
 

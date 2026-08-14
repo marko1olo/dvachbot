@@ -47,12 +47,33 @@ try:
     )
 except ImportError:
     print("⚠️ Не удалось импортировать japanese_translator. Проверь наличие файла в корне.")
-from common.database import initialize_database
+    get_random_anime_image = None
+    get_monogatari_image = None
+    get_nsfw_anime_image = None
+    get_loli_image = None
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from site_tgach.rss import generate_rss
 from slowapi.util import get_remote_address
 from common.config import ENABLE_MULTILANG
-from common.database import create_report, get_active_reports, set_user_stream, resolve_report, get_detailed_statistics, get_all_feedback, get_board_media_posts, get_updates_since, get_activity_history, get_poll_results
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
+from common.database import (
+    initialize_database,
+    create_report,
+    get_active_reports,
+    set_user_stream,
+    resolve_report,
+    get_detailed_statistics,
+    get_all_feedback,
+    get_board_media_posts,
+    get_updates_since,
+    get_activity_history,
+    get_poll_results,
+    update_thread_last_updated,
+    create_board,
+    approve_board,
+    delete_board,
+)
 from collections import deque, defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -218,7 +239,8 @@ except ImportError:
     psutil = None
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-    sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
 SITE_ACCESS_MODE = "PUBLIC"
 SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
@@ -280,7 +302,7 @@ URL_PATTERN = re.compile(r'(https?://[^\s<>"\'`]+)')
 
 def _clean_url_and_suffix(full: str):
     delim_match = re.search(
-        r"&(?:quot|gt|lt|apos|#0*39|#0*38|#x0*27|#X0*27);", full, flags=re.IGNORECASE
+        r"&(?:amp;)?(?:quot|gt|lt|apos|#0*39|#0*38|#x0*27|#X0*27);", full, flags=re.IGNORECASE
     )
     if delim_match:
         url_part = full[: delim_match.start()]
@@ -1566,7 +1588,7 @@ async def check_post_cooldown(request: Request, user: dict):
             if elapsed < limit_seconds:
                 raise HTTPException(status_code=429, detail=f"Подожди {int(limit_seconds - elapsed) + 1} сек.")
         except (ValueError, TypeError):
-            import traceback; traceback.print_exc()
+            pass
     await backend.set(key, str(time.time()), expire=limit_seconds)
 def to_makaba_post(post_data: dict, board_id: str) -> dict:
     files_makaba = []
@@ -1634,7 +1656,14 @@ def format_post_text(text: str) -> str:
 
     # --- ФОРМАТИРОВАНИЕ ---
     text = re.sub(r'&lt;br\s*/?&gt;', '\n', text, flags=re.IGNORECASE) 
-    
+
+    btn_matches = []
+    def save_btn(match):
+        btn_matches.append((match.group(1), match.group(2)))
+        return f"___BTN_TOKEN_{len(btn_matches)-1}___"
+
+    text = re.sub(r'\[btn=(https?://[^\]]+)\](.*?)\[/btn\]', save_btn, text, flags=re.DOTALL)
+
     def replace_url(match):
         full = match.group(0)
         url_part, suffix = _clean_url_and_suffix(full)
@@ -1670,21 +1699,26 @@ def format_post_text(text: str) -> str:
     processed_text = re.sub(r'\[b\](.*?)\[/b\]', r'<b>\1</b>', processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[i\](.*?)\[/i\]', r'<i>\1</i>', processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[h1\](.*?)\[/h1\]', r'<h3 class="post-heading">\1</h3>', processed_text, flags=re.DOTALL)
-    def btn_replacer(match):
-        url = match.group(1)
-        if url.strip().lower().startswith("javascript:"):
-            url = "#"
-        safe_url = html.escape(url, quote=True) 
-        text = match.group(2)
-        return f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-small post-btn">{text}</a>'
 
-    processed_text = re.sub(r'\[btn=(https?://[^\]]+)\](.*?)\[/btn\]', btn_replacer, processed_text, flags=re.DOTALL)
+    def restore_btn(match):
+        idx = int(match.group(1))
+        url, text_content = btn_matches[idx]
+        unescaped_url = html.unescape(url)
+        if unescaped_url.strip().lower().startswith("javascript:"):
+            safe_url = "#"
+        else:
+            safe_url = html.escape(unescaped_url, quote=True)
+        return f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-small post-btn">{text_content}</a>'
+
+    processed_text = re.sub(r'___BTN_TOKEN_(\d+)___', restore_btn, processed_text)
+
     def size_replacer(match):
         try:
             s = int(match.group(1))
             s = max(10, min(30, s)) 
             return f'<span style="font-size: {s}px;">{match.group(2)}</span>'
-        except Exception: return match.group(2)
+        except Exception:
+            return match.group(2)
     processed_text = re.sub(r'\[size=(\d+)\](.*?)\[/size\]', size_replacer, processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[s\](.*?)\[/s\]', r'<s>\1</s>', processed_text, flags=re.DOTALL)
     processed_text = re.sub(r'\[u\](.*?)\[/u\]', r'<u>\1</u>', processed_text, flags=re.DOTALL)

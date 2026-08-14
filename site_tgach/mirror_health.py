@@ -21,7 +21,6 @@ _STATE = {
 
 
 def _load_state() -> None:
-    global _STATE
     try:
         if not HF_HEALTH_STATE_PATH.exists():
             return

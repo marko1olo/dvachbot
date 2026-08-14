@@ -39,17 +39,16 @@ class TestStatsGenerator(unittest.TestCase):
         # Mock fetchone to return our profile, posts_count, rx_received, rx_given, mutes_count
         # The execute commands map directly to fetchone results.
         mock_cursor.fetchone.side_effect = [
-            (150.0, 'mod', 1234567890, 10, 'Sup'), # 1. Fetch user profile
+            (150.0, 'mod', 1234567890, 'Sup'), # 1. Fetch user profile
             (42,), # 2. Count actual posts
-            (15,), # 3. Count reactions received
-            (20,), # 4. Count reactions given
             (2,),  # 5. Count mutes
         ]
 
-        # Mock fetchall for the all_users query
-        mock_cursor.__iter__.return_value = iter([
-            (101,), (123,), (200,)
-        ])
+        mock_cursor.fetchall.side_effect = [
+            [('{"reactions": {"users": {"999": ["👍", "🔥"]}}}',)], # 3. reactions received
+            [('{"reactions": {"users": {"123": ["👍", "❤️"]}}}',)], # 4. reactions given
+            [(101, 100), (123, 42), (200, 10)], # 6. board posters
+        ]
 
         stats_data = fetch_user_stats_data(123, 'test')
 
@@ -57,14 +56,14 @@ class TestStatsGenerator(unittest.TestCase):
             'balance': 150.0,
             'role': 'mod',
             'created_at': 1234567890,
-            'lie_media': 10,
             'custom_prefix': 'Sup',
             'posts_count': 42,
-            'rx_received': 15,
-            'rx_given': 20,
+            'rx_received': 2,
+            'rx_given': 2,
             'mutes_count': 2,
             'rank': 2,
-            'total_users': 3
+            'total_users': 3,
+            'cringe_factor': 10
         }
 
         self.assertEqual(stats_data, expected_data)
@@ -79,14 +78,14 @@ class TestStatsGenerator(unittest.TestCase):
             'balance': 150.0,
             'role': 'mod',
             'created_at': 1234567890,
-            'lie_media': 10,
             'custom_prefix': 'Sup',
             'posts_count': 42,
             'rx_received': 15,
             'rx_given': 20,
             'mutes_count': 2,
             'rank': 2,
-            'total_users': 3
+            'total_users': 3,
+            'cringe_factor': 10
         }
         mock_generate_schizo_name.return_value = "Базированный-Анон"
 
@@ -113,7 +112,7 @@ class TestStatsGenerator(unittest.TestCase):
             rx_given=20,
             mutes_count=2,
             balance=150.0,
-            lie_media=10,
+            cringe_factor=10,
             rank=2,
             total_users=3,
             slang_comment='ОП-хуй и бог тредов! База сертифицирована, скуфы падают ниц.'

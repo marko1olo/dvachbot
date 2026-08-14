@@ -39,8 +39,9 @@ print(stdout.getvalue().strip())
         env["DB_HOST"] = "localhost"
         env["DB_NAME"] = "test"
         env["PYTHONPATH"] = os.getcwd()
+        env["PYTHONIOENCODING"] = "utf-8"
 
-        res = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
+        res = subprocess.run([sys.executable, "-X", "utf8", "-c", script], env=env, capture_output=True, text=True, encoding="utf-8")
         self.assertIn("⚠️ Не удалось импортировать japanese_translator. Проверь наличие файла в корне.", res.stdout)
 
 if __name__ == '__main__':

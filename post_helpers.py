@@ -156,7 +156,7 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                     except Exception:
                         import traceback; traceback.print_exc()
                 if row[1] and row[2] and int(time.time()) < row[2]:
-                    prefix_str = f"<b>{row[1]}</b> "
+                    prefix_str = f"{row[1]} "
         if has_poop:
             custom_prefix = "💩 " + prefix_str
         else:

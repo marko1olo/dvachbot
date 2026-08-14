@@ -56,11 +56,13 @@ HELP_HUB_PAGES_RU = {
     ),
     "ai": (
         "🧠 <b>Раздел: Нейросети и Аналитика</b>\n\n"
-        "• <code>/summarize</code> (<code>/саммари</code>) — ИИ анализирует последние 50 постов треда и выдает краткую суть всех срачей и обсуждений.\n"
-        "• <code>/roast</code> (<code>/прожарка</code>, <code>/база</code>) — Жесткая нейросетевая прожарка текущей атмосферы и участников борды.\n"
-        "• <code>/stats</code> (<code>/activity</code>, <code>/стата</code>) — Полноценные графики активности, тепловые карты и динамика постов.\n"
-        "• <code>/tags</code> (<code>/wordcloud</code>, <code>/теги</code>) — Облако ключевых тем и популярных слов за сутки.\n"
-        "• <code>/me</code> (<code>/profile</code>, <code>/паспорт</code>) — Личная карточка анона: карма, стаж, количество постов и достижения."
+        "• <code>/mystats</code> (<code>/профиль</code>) — <b>Личная карта деградации!</b> Генерирует стильную HD-карточку с реальным количеством постов, реакций, кринж-индексом и рангом.\n"
+        "• <code>/passport</code> (<code>/me</code>, <code>/паспорт</code>) — <b>Паспорт Тгачера:</b> статус, экипировка из /shop, титул, диагноз и соц. рейтинг.\n"
+        "• <code>/dossier</code> (<code>/дело</code>, <code>/досье</code>) — <b>Личное дело анона:</b> выписка из картотеки КГБ, инкриминируемые статьи и оперативная заметка (по реплаю или на себя).\n"
+        "• <code>/summarize</code> (<code>/саммари</code>) — ИИ анализирует последние 50 постов треда и выдает краткую суть всех срачей.\n"
+        "• <code>/roast</code> (<code>/прожарка</code>) — Жесткая нейросетевая прожарка атмосферы и участников борды.\n"
+        "• <code>/stats</code> (<code>/activity</code>) — Полноценные графики активности доски (ритмы, тепловые карты и календарь).\n"
+        "• <code>/tags</code> (<code>/теги</code>) — Облако ключевых тем и популярных слов за сутки."
     ),
     "modes": (
         "🎭 <b>Раздел: Шизо-Режимы Общения (на 5 минут)</b>\n\n"
@@ -83,6 +85,7 @@ HELP_HUB_PAGES_RU = {
     "actions": (
         "⚔️ <b>Раздел: Разборки и Интерактив</b>\n\n"
         "Все эти команды применяются <b>ответом (Reply)</b> на пост неугодного анона:\n\n"
+        "• <code>/dossier</code> — Запросить Личное Дело на автора поста из картотеки.\n"
         "• <code>/rob</code> — Ограбление! Шанс украсть 10-30% шекелей с баланса жертвы.\n"
         "• <code>/shit</code> — Запустить свежим говном в автора поста.\n"
         "• <code>/curse</code> — Наложить проклятие: следующие посты жертвы будут искажаться шизо-стилем.\n"
@@ -100,11 +103,12 @@ HELP_HUB_PAGES_RU = {
     ),
     "all": (
         "📋 <b>Полный список всех команд ТГАЧ:</b>\n\n"
-        "<b>Общение:</b> /start, /help, /redact, /whisper, /poll, /report\n"
+        "<b>Общение:</b> /start, /help, /redact, /whisper, /poll, /report, /quote, /dice\n"
+        "<b>Профиль/Досье:</b> /mystats, /passport, /dossier, /me\n"
         "<b>Экономика:</b> /wallet, /work, /daily, /shop, /top, /duel\n"
         "<b>Медиа:</b> /dem, /invite_pic, /invite, /fap, /loli, /roll, /ruletka\n"
-        "<b>ИИ/Инфо:</b> /summarize, /roast, /stats, /tags, /me\n"
-        "<b>Интерактив:</b> /rob, /shit, /curse, /partyvan, /deanon\n"
+        "<b>ИИ/Аналитика:</b> /summarize, /roast, /stats, /tags\n"
+        "<b>Интерактив (Reply):</b> /dossier, /rob, /shit, /curse, /partyvan, /deanon\n"
         "<b>Настройки:</b> /nsfw, /hide, /togglegif, /token\n"
         "<b>Режимы:</b> /anime, /zaputin, /slavaukraine, /warhammer, /imperial, /gopnik, /schizo, /polish, /rus, /abu, /matrix, /oldweb, /jewish, /america\n"
         "<b>Доски:</b> /b, /po, /a, /vg, /sex, /int, /trash"

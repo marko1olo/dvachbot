@@ -101,6 +101,7 @@ async def _create_tables(db):
             author_id INTEGER NOT NULL,
             reply_to_post_num INTEGER,
             content TEXT NOT NULL,
+            text_content TEXT,
             timestamp REAL NOT NULL,
             FOREIGN KEY (board_id) REFERENCES Boards(board_id),
             FOREIGN KEY (reply_to_post_num) REFERENCES Posts(post_num) ON DELETE SET NULL
@@ -440,7 +441,8 @@ async def _create_tables(db):
             -- схемы, поэтому поломка не была видна: CREATE TABLE IF NOT EXISTS
             -- просто пропускается. На ЧИСТОЙ БД таблица создавалась без tags, и
             -- первая же регистрация медиа падала - см. миграцию ниже.
-            tags TEXT
+            tags TEXT,
+            description TEXT
         );
         """)
         await cursor.execute("""
@@ -540,6 +542,14 @@ async def _apply_migrations(db):
         try:
             await cursor.execute("ALTER TABLE Users ADD COLUMN reaction_reward_counter INTEGER DEFAULT 0;")
             print("✅ Migrated: Added 'reaction_reward_counter' to Users.")
+        except aiosqlite.OperationalError: pass
+        try:
+            await cursor.execute("ALTER TABLE Posts ADD COLUMN text_content TEXT;")
+            print("✅ Migrated: Added 'text_content' to Posts.")
+        except aiosqlite.OperationalError: pass
+        try:
+            await cursor.execute("ALTER TABLE FileRegistry ADD COLUMN description TEXT;")
+            print("✅ Migrated: Added 'description' to FileRegistry.")
         except aiosqlite.OperationalError: pass
         try:
             await cursor.execute("ALTER TABLE Users ADD COLUMN reaction_penalty_counter INTEGER DEFAULT 0;")

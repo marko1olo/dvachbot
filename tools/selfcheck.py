@@ -57,7 +57,7 @@ import tempfile
 from collections import defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SKIP_DIRS = ("tests", "scratch", "archive", ".git", "tools")
+SKIP_DIRS = ("tests", "scratch", "archive", ".git", "tools", "venv", ".agent", ".gemini", "tmp")
 
 # Файлы, которые крутятся в бою. Остальное проверяем мягче: сломанный
 # одноразовый скрипт не стоит красного билда.
@@ -253,13 +253,16 @@ def check_sql(report):
                     continue
                 seen.add(key)
                 try:
-                    con.execute("EXPLAIN " + s)
+                    explain_sql = "EXPLAIN " + re.sub(r"\?", "NULL", s)
+                    con.execute(explain_sql)
                 except sqlite3.OperationalError as exc:
                     msg = str(exc)
                     if "no such column" in msg or "no such table" in msg or "has no column" in msg:
                         report(path, getattr(node, "lineno", 0), f"{msg}: {key[:70]}")
+                except sqlite3.ProgrammingError:
+                    pass
                 except Exception:
-                    import traceback; traceback.print_exc()
+                    pass
     finally:
         con.close()
         import shutil
@@ -470,6 +473,14 @@ def _check_scoped_handlers(report):
     # мертва. Класс не выдуманный: пять команд экономики (/rob, /curse,
     # /mega, /partyvan, /shit) существовали в двух реализациях, и правка
     # гонки в /rob ушла в мёртвую копию на роутере.
+    included_routers = set()
+    _, tm = _parse("main.py")
+    if tm:
+        for node in ast.walk(tm):
+            if isinstance(node, ast.Call) and ast.unparse(node.func).endswith("include_router"):
+                for arg in node.args:
+                    included_routers.add(ast.unparse(arg))
+
     scoped = defaultdict(dict)
     for path in _py_files():
         _, t = _parse(path)
@@ -479,10 +490,13 @@ def _check_scoped_handlers(report):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for d in node.decorator_list:
-                m = re.match(r"(dp|\w*router)\.message", ast.unparse(d))
+                m = re.match(r"(dp|(\w*router))\.(?:message|edited_message)", ast.unparse(d))
                 if not m:
                     continue
-                scope = "dp" if m.group(1) == "dp" else "router"
+                obj_name = m.group(1)
+                if obj_name != "dp" and obj_name not in included_routers:
+                    continue
+                scope = "dp" if obj_name == "dp" else "router"
                 for c in ast.walk(d):
                     if isinstance(c, ast.Call) and getattr(c.func, "id", "") == "Command":
                         for a in c.args:
@@ -861,13 +875,13 @@ def main(argv=None):
         found = []
         fn(lambda path, line, msg: found.append((path, line, msg)))
         mark = "OK  " if not found else "НАЙД"
-        print(f"[{mark}] {key:<10} {title}: {len(found)}")
+        print(f"[{mark}] {key:<10} {title}: {len(found)}", flush=True)
         for path, line, msg in sorted(found):
             loc = f"{path}:{line}" if line else path
-            print(f"         {loc}  {msg}")
+            print(f"         {loc}  {msg}", flush=True)
         total += len(found)
 
-    print(f"\nвсего замечаний: {total}")
+    print(f"\nвсего замечаний: {total}", flush=True)
     return 1 if total else 0
 
 

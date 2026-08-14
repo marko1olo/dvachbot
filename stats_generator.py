@@ -2580,58 +2580,93 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
         with contextlib.closing(conn.cursor()) as c:
 
             # 1. Fetch user profile
-            c.execute("SELECT balance, role, created_at, lie_media, custom_prefix FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            c.execute("SELECT balance, role, created_at, custom_prefix FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id))
             profile = c.fetchone()
-            if profile:
-                balance, role, created_at, lie_media, custom_prefix = profile
-            else:
-                balance, role, created_at, lie_media, custom_prefix = 0.0, 'user', time.time(), 0, None
+            if not profile:
+                c.execute("SELECT balance, role, created_at, custom_prefix FROM Users WHERE user_id = ?", (user_id,))
+                profile = c.fetchone()
 
-            # 2. Count actual posts
+            if profile:
+                balance, role, created_at, custom_prefix = profile
+            else:
+                balance, role, created_at, custom_prefix = 0.0, 'user', time.time(), None
+
+            # 2. Count actual posts (board specific and total)
             c.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ? AND board_id = ?", (user_id, board_id))
             posts_count = c.fetchone()[0]
+            if posts_count == 0:
+                c.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (user_id,))
+                posts_count = c.fetchone()[0]
 
-            # 3. Count reactions received
-            c.execute("""
-                SELECT COUNT(*) FROM ReactionQueue rq
-                JOIN Posts p ON rq.post_num = p.post_num
-                WHERE p.author_id = ? AND p.board_id = ?
-            """, (user_id, board_id))
-            rx_received = c.fetchone()[0]
+            # 3. Count real reactions received from Posts table
+            c.execute("SELECT content FROM Posts WHERE author_id = ? AND content LIKE '%reactions%'", (user_id,))
+            posts_with_rx = c.fetchall()
+            rx_received = 0
+            neg_rx = 0
+            for p in posts_with_rx:
+                try:
+                    d = json.loads(p[0])
+                    users_rx = d.get('reactions', {}).get('users', {})
+                    for r_uid, emojis in users_rx.items():
+                        for em in emojis:
+                            rx_received += 1
+                            if em in ['👎', '🤡', '💩', '🤮', '😱', 'сажа']:
+                                neg_rx += 1
+                except Exception:
+                    pass
 
-            # 4. Count reactions given
-            c.execute("SELECT COUNT(*) FROM ReactionQueue WHERE user_id = ?", (user_id,))
-            rx_given = c.fetchone()[0]
+            # 4. Count reactions given by this user
+            user_str = f'"{user_id}"'
+            c.execute("SELECT content FROM Posts WHERE content LIKE ?", (f'%{user_str}%',))
+            rx_given_posts = c.fetchall()
+            rx_given = 0
+            for p in rx_given_posts:
+                try:
+                    d = json.loads(p[0])
+                    user_emojis = d.get('reactions', {}).get('users', {}).get(str(user_id), [])
+                    rx_given += len(user_emojis)
+                except Exception:
+                    pass
 
             # 5. Count mutes
-            c.execute("SELECT COUNT(*) FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            c.execute("SELECT COUNT(*) FROM Mutes WHERE user_id = ?", (user_id,))
             mutes_count = c.fetchone()[0]
 
-            # 6. Rank among other users on this board
+            # 6. Rank among all posters on this board
             c.execute("""
-                SELECT user_id FROM Users
-                WHERE board_id = ?
-                ORDER BY posts_count DESC, balance DESC;
+                SELECT author_id, COUNT(*) as cnt 
+                FROM Posts 
+                WHERE board_id = ? AND author_id > 0 
+                GROUP BY author_id 
+                ORDER BY cnt DESC
             """, (board_id,))
-            all_users = [r[0] for r in c]
+            board_posters = [r[0] for r in c.fetchall()]
             try:
-                rank = all_users.index(user_id) + 1
+                rank = board_posters.index(user_id) + 1
             except ValueError:
-                rank = len(all_users) + 1
+                rank = len(board_posters) + 1
+            total_users = max(len(board_posters), 1)
 
+            # 7. Dynamic Cringe Factor (%)
+            if rx_received > 0:
+                cringe_factor = int(round((neg_rx / rx_received) * 100))
+                cringe_factor = min(100, cringe_factor + mutes_count * 5)
+            else:
+                cringe_factor = (user_id * 17 + posts_count * 3) % 45 + (mutes_count * 10)
+                cringe_factor = min(100, max(0, cringe_factor))
 
             return {
-                'balance': balance,
-                'role': role,
+                'balance': balance or 0.0,
+                'role': role or 'user',
                 'created_at': created_at,
-                'lie_media': lie_media,
                 'custom_prefix': custom_prefix,
                 'posts_count': posts_count,
                 'rx_received': rx_received,
                 'rx_given': rx_given,
                 'mutes_count': mutes_count,
                 'rank': rank,
-                'total_users': len(all_users)
+                'total_users': total_users,
+                'cringe_factor': cringe_factor
             }
 
 
@@ -2678,7 +2713,7 @@ class UserStatsCardData:
     rx_given: int
     mutes_count: int
     balance: float
-    lie_media: float
+    cringe_factor: int
     rank: int
     total_users: int
     slang_comment: str
@@ -2694,7 +2729,7 @@ def _format_text_report(data: UserStatsCardData) -> str:
         f"⚡ <b>Поставлено реакций:</b> {data.rx_given}\n"
         f"💰 <b>Баланс:</b> {int(data.balance)} RUB\n"
         f"🔇 <b>Схвачено мутов:</b> {data.mutes_count}\n"
-        f"🌀 <b>Кринж-фактор:</b> {data.lie_media}%\n\n"
+        f"🌀 <b>Кринж-фактор:</b> {data.cringe_factor}%\n\n"
         f"💬 <i>\"{data.slang_comment}\"</i>"
     )
 
@@ -2717,7 +2752,7 @@ def generate_user_stats_card(user_id: int, board_id: str, username: str) -> tupl
         rx_given=stats_data['rx_given'],
         mutes_count=stats_data['mutes_count'],
         balance=stats_data['balance'],
-        lie_media=stats_data['lie_media'],
+        cringe_factor=stats_data['cringe_factor'],
         rank=stats_data['rank'],
         total_users=stats_data['total_users'],
         slang_comment=slang_comment
@@ -2733,83 +2768,119 @@ def draw_user_stats_card(
     data: UserStatsCardData
 ) -> io.BytesIO:
     import os
+    import textwrap
     from PIL import Image, ImageDraw, ImageFont
 
-    width, height = 800, 450
-    img = Image.new('RGB', (width, height), color='#0d0f12')
+    width, height = 860, 480
+    img = Image.new('RGB', (width, height), color='#0d1117')
     draw = ImageDraw.Draw(img)
 
+    font_candidates = [
+        "C:/Windows/Fonts/segoeuib.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "font1.ttf"
+    ]
+    font_bold_path = "arial.ttf"
+    for f in font_candidates:
+        if os.path.exists(f):
+            font_bold_path = f
+            break
+
+    font_regular_path = "C:/Windows/Fonts/segoeui.ttf" if os.path.exists("C:/Windows/Fonts/segoeui.ttf") else font_bold_path
+
     try:
-        font_path = "font1.ttf" if os.path.exists("font1.ttf") else "arial.ttf"
-        font_title = ImageFont.truetype(font_path, 26)
-        font_subtitle = ImageFont.truetype(font_path, 15)
-        font_card_num = ImageFont.truetype(font_path, 22)
-        font_card_lbl = ImageFont.truetype(font_path, 12)
-        font_comment = ImageFont.truetype(font_path, 14)
+        font_title = ImageFont.truetype(font_bold_path, 25)
+        font_subtitle = ImageFont.truetype(font_regular_path, 14)
+        font_badge_main = ImageFont.truetype(font_bold_path, 13)
+        font_badge_sub = ImageFont.truetype(font_bold_path, 10)
+        font_card_num = ImageFont.truetype(font_bold_path, 22)
+        font_card_lbl = ImageFont.truetype(font_regular_path, 12)
+        font_comment = ImageFont.truetype(font_regular_path, 14)
+        font_comment_title = ImageFont.truetype(font_bold_path, 12)
     except Exception:
-        font_title = font_subtitle = font_card_num = font_card_lbl = font_comment = ImageFont.load_default()
+        font_title = font_subtitle = font_badge_main = font_badge_sub = font_card_num = font_card_lbl = font_comment = font_comment_title = ImageFont.load_default()
 
-    # Header bar
-    draw.rectangle([0, 0, width, 95], fill='#13171f')
-    draw.line([0, 95, width, 95], fill='#252932', width=2)
+    # Top Header Bar
+    draw.rectangle([0, 0, width, 95], fill='#161b22')
+    draw.line([0, 95, width, 95], fill='#30363d', width=2)
 
-    # Title & Info
-    draw.text((30, 22), data.schizo_name, fill='#ff9900', font=font_title)
-    status_text = f"ID: {data.user_id}  |  Раздел: /{data.board_id}/  |  Статус: {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}"
-    draw.text((30, 60), status_text, fill='#8abeb7', font=font_subtitle)
+    # Title & Subtitle
+    draw.text((32, 22), data.schizo_name, fill='#f0883e', font=font_title)
+    
+    prefix_display = f" [{data.custom_prefix.strip('[]')}]" if data.custom_prefix else ""
+    status_text = f"ID: Анон-#{data.user_id % 10000:04d}   •   Раздел: /{data.board_id}/   •   Статус: {data.role_name}{prefix_display}"
+    draw.text((32, 60), status_text, fill='#8b949e', font=font_subtitle)
 
     # Certified badge (top right)
-    draw.rounded_rectangle([610, 15, 770, 80], radius=6, fill='#1b1f28', outline='#ff9900', width=2)
-    draw.text((690, 33), "ТГАЧ CERTIFIED", fill='#ff9900', font=font_subtitle, anchor="mm")
+    badge_w, badge_h = 180, 68
+    badge_x = width - badge_w - 32
+    draw.rounded_rectangle([badge_x, 14, badge_x + badge_w, 14 + badge_h], radius=8, fill='#0d1117', outline='#f0883e', width=2)
+    draw.text((badge_x + badge_w//2, 33), "ТГАЧ CERTIFIED", fill='#f0883e', font=font_badge_main, anchor="mm")
     sub_cert = "APPROVED BITYARD" if data.role != 'admin' else "ADMINISTRATOR"
-    draw.text((690, 58), sub_cert, fill='#00ffcc', font=ImageFont.truetype(font_path, 10) if os.path.exists(font_path) else font_subtitle, anchor="mm")
+    draw.text((badge_x + badge_w//2, 58), sub_cert, fill='#39d353', font=font_badge_sub, anchor="mm")
 
-    # Helper to draw cards
+    # Helper to draw stats cards
     def draw_card(cfg: CardConfig):
-        draw.rounded_rectangle([cfg.x, cfg.y, cfg.x+cfg.w, cfg.y+cfg.h], radius=6, fill='#13171f', outline='#252932', width=1)
-        draw.ellipse([cfg.x+15, cfg.y+16, cfg.x+23, cfg.y+24], fill=cfg.color)
-        draw.text((cfg.x+33, cfg.y+20), cfg.label, fill='#969896', font=font_card_lbl, anchor="lm")
-        draw.text((cfg.x+15, cfg.y+48), cfg.val, fill=cfg.color, font=font_card_num, anchor="lm")
+        draw.rounded_rectangle([cfg.x, cfg.y, cfg.x + cfg.w, cfg.y + cfg.h], radius=8, fill='#161b22', outline='#30363d', width=1)
+        draw.ellipse([cfg.x + 14, cfg.y + 14, cfg.x + 22, cfg.y + 22], fill=cfg.color)
+        draw.text((cfg.x + 30, cfg.y + 18), cfg.label, fill='#8b949e', font=font_card_lbl, anchor="lm")
+        draw.text((cfg.x + 14, cfg.y + 50), cfg.val, fill=cfg.color, font=font_card_num, anchor="lm")
 
-    # Cards grid
+    # Grid (2 rows x 3 cols)
+    card_w, card_h = 180, 82
+    gap_x, gap_y = 16, 14
+    start_x, start_y = 32, 114
+
     cards = [
-        CardConfig(30, 115, 175, 80, str(data.posts_count), "Написано постов", "#00ffcc"),
-        CardConfig(220, 115, 175, 80, f"#{data.rank} / {data.total_users}", "Ранг на борде", "#ffcc00"),
-        CardConfig(410, 115, 175, 80, f"{int(data.balance)} RUB", "Баланс коинов", "#00ff66"),
+        CardConfig(start_x, start_y, card_w, card_h, f"{data.posts_count:,}", "Написано постов", "#58a6ff"),
+        CardConfig(start_x + card_w + gap_x, start_y, card_w, card_h, f"#{data.rank} / {data.total_users}", "Ранг на борде", "#e3b341"),
+        CardConfig(start_x + (card_w + gap_x)*2, start_y, card_w, card_h, f"{int(data.balance)} RUB", "Баланс коинов", "#3fb950"),
 
-        CardConfig(30, 210, 175, 80, f"+{data.rx_received}", "Получено реакций", "#ff3399"),
-        CardConfig(220, 210, 175, 80, str(data.rx_given), "Поставлено реакций", "#859900"),
-        CardConfig(410, 210, 175, 80, f"{data.lie_media}%", "Кринж-фактор", "#cc00ff"),
+        CardConfig(start_x, start_y + card_h + gap_y, card_w, card_h, f"+{data.rx_received:,}", "Получено реакций", "#f778ba"),
+        CardConfig(start_x + card_w + gap_x, start_y + card_h + gap_y, card_w, card_h, f"{data.rx_given:,}", "Поставлено реакций", "#a371f7"),
+        CardConfig(start_x + (card_w + gap_x)*2, start_y + card_h + gap_y, card_w, card_h, f"{data.cringe_factor}%", "Кринж-фактор", "#bc8cff"),
     ]
 
     for card in cards:
         draw_card(card)
 
-    # Mutes Card (top right block)
-    draw.rounded_rectangle([600, 115, 770, 175], radius=6, fill='#1d1315', outline='#ff3333', width=1)
-    draw.ellipse([600+15, 115+16, 600+23, 115+24], fill="#ff3333")
-    draw.text((600+33, 115+20), "Схвачено мутов", fill='#969896', font=font_card_lbl, anchor="lm")
-    draw.text((600+15, 115+48), f"{data.mutes_count} шт", fill="#ff3339", font=font_card_num, anchor="lm")
+    # Right column (2 blocks: Mutes + Activity)
+    right_x = start_x + (card_w + gap_x)*3
+    right_w = width - right_x - 32
 
-    # Activity Level Card (below mutes)
-    draw.rounded_rectangle([600, 210, 770, 290], radius=6, fill='#13171f', outline='#252932', width=1)
-    draw.text((615, 230), "Уровень деградации", fill='#969896', font=font_card_lbl)
+    # Mutes Card
+    draw.rounded_rectangle([right_x, start_y, right_x + right_w, start_y + card_h], radius=8, fill='#1f1418', outline='#f85149', width=1)
+    draw.ellipse([right_x + 14, start_y + 14, right_x + 22, start_y + 22], fill='#f85149')
+    draw.text((right_x + 30, start_y + 18), "Схвачено мутов", fill='#8b949e', font=font_card_lbl, anchor="lm")
+    draw.text((right_x + 14, start_y + 50), f"{data.mutes_count} шт", fill='#ff7b72', font=font_card_num, anchor="lm")
+
+    # Activity Card
+    act_y = start_y + card_h + gap_y
+    draw.rounded_rectangle([right_x, act_y, right_x + right_w, act_y + card_h], radius=8, fill='#161b22', outline='#30363d', width=1)
+    draw.text((right_x + 14, act_y + 20), "Деградация", fill='#8b949e', font=font_card_lbl)
     activity_pct = min(1.0, data.posts_count / 500.0)
-    draw.rounded_rectangle([615, 255, 755, 267], radius=3, fill='#1b1f28')
-    draw.rounded_rectangle([615, 255, 615 + int(140 * activity_pct), 267], radius=3, fill='#ff9900')
-    draw.text((755, 230), f"{int(activity_pct*100)}%", fill='#ff9900', font=font_card_lbl, anchor="ra")
+    draw.text((right_x + right_w - 14, act_y + 20), f"{int(activity_pct*100)}%", fill='#f0883e', font=font_card_lbl, anchor="ra")
+
+    # Progress bar
+    bar_x = right_x + 14
+    bar_y = act_y + 44
+    bar_w = right_w - 28
+    draw.rounded_rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + 16], radius=4, fill='#21262d')
+    fill_w = max(6, int(bar_w * activity_pct))
+    draw.rounded_rectangle([bar_x, bar_y, bar_x + fill_w, bar_y + 16], radius=4, fill='#f0883e')
 
     # Bottom Summary Box
-    draw.rounded_rectangle([30, 310, 770, 420], radius=8, fill='#1b1f28', outline='#252932', width=1)
-    draw.text((50, 335), "РЕЗЮМЕ ДЕГРАДАЦИИ:", fill='#ff9900', font=font_card_lbl)
+    summary_y = start_y + (card_h + gap_y)*2 + 4
+    summary_h = height - summary_y - 20
+    draw.rounded_rectangle([32, summary_y, width - 32, summary_y + summary_h], radius=8, fill='#161b22', outline='#30363d', width=1)
+    draw.text((48, summary_y + 16), "РЕЗЮМЕ ДЕГРАДАЦИИ:", fill='#f0883e', font=font_comment_title)
 
-    # Wrap comment safely
-    import textwrap
-    wrapped_lines = textwrap.wrap(f'"{data.slang_comment}"', width=90)
-    y_comm = 360
+    wrapped_lines = textwrap.wrap(f'"{data.slang_comment}"', width=105)
+    y_comm = summary_y + 38
     for line in wrapped_lines[:2]:
-        draw.text((50, y_comm), line, fill='#e6edf3', font=font_comment)
-        y_comm += 20
+        draw.text((48, y_comm), line, fill='#e6edf3', font=font_comment)
+        y_comm += 22
 
     buf = io.BytesIO()
     img.save(buf, format='png')

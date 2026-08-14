@@ -1,22 +1,23 @@
 import types
 import unittest
-import importlib.util
 from unittest.mock import patch
 
 import json as std_json
 
 class TestMainUjsonFallback(unittest.TestCase):
     def load_main_module(self):
-        """Helper to load main.py and catch any initialization exceptions."""
-        spec = importlib.util.spec_from_file_location("main_test_fallback", "main.py")
-        main_mod = importlib.util.module_from_spec(spec)
-        try:
-            # We execute the module. It might fail on later imports/logic,
-            # but we only care about the top-level json assignment.
-            spec.loader.exec_module(main_mod)
-        except Exception:
-            import traceback; traceback.print_exc()
-        return main_mod
+        """Helper to test json import logic from main.py without full bot side effects."""
+        with open("main.py", "r", encoding="utf-8") as f:
+            code_lines = []
+            for line in f:
+                code_lines.append(line)
+                if "import logging" in line:
+                    break
+            code = "".join(code_lines)
+
+        namespace = {"__name__": "main"}
+        exec(code, namespace)
+        return types.SimpleNamespace(**namespace)
 
     @patch.dict('sys.modules', {'ujson': None})
     def test_ujson_missing_fallback(self):
@@ -45,3 +46,4 @@ class TestMainUjsonFallback(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

@@ -416,7 +416,6 @@ def _text_to_telegraph_nodes(html_content: str) -> list:
         return node
         
     def walk(child, inline_stack):
-        nonlocal current_block
         if isinstance(child, str):
             parts = child.split('\n')
             for i, part in enumerate(parts):

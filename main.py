@@ -3658,6 +3658,8 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     import time
     import random
     db = await get_pool()
+    err_msg = None
+    msg = ""
     async with db_lock:
         async with db.execute("SELECT balance, active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
             row = await c.fetchone()
@@ -3666,168 +3668,173 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         active_items_str = row[1] if row and len(row) > 1 and row[1] else "{}"
         
         if balance < price:
-            await callback.answer(f"❌ Не хватает бабок! Нужно {price} Шекелей, у тебя {int(balance)} Шекелей.", show_alert=True)
-            return
-            
-        try:
-            active_items = json.loads(active_items_str)
-        except Exception:
-            active_items = {}
-            
-        msg = ""
-        # 0. Janitor Ticket
-        if item == "janitor":
-            current_time = int(time.time())
-            base_time = max(current_time, active_items.get("janitor_until", 0))
-            active_items["janitor_until"] = base_time + 6 * 3600
-            active_items["janitor_deletes_left"] = active_items.get("janitor_deletes_left", 0) + 10
-            left = active_items["janitor_deletes_left"]
-            msg = (
-                f"🧹 Ты купил Билет Дворника на 6 часов!\n"
-                f"Как использовать: найди спам в чате, нажми Reply и отправь /del.\n"
-                f"Лимит удалений: {left}. Каждый успешный /del уменьшает счётчик на 1."
-            )
-        # 1. Mute-Gun
-        elif item == "mute":
-            if active_items.get("mute_gun"):
-                await callback.answer("У тебя уже есть Мут-Ган! Сделай Reply на пост с командой /shoot", show_alert=True)
-                return
-            active_items["mute_gun"] = True
-            msg = (
-                f"🔫 Ты купил Мут-Ган!\n"
-                f"Как использовать: найди пост жертвы, нажми Reply и отправь /shoot.\n"
-                f"Эффект: жертва получает мут на 1 час.\n"
-                f"⚠️ Осторожно: если у цели активен Зеркальный Щит, выстрел отразится обратно в тебя!"
-            )
-        # 2. Reflect Shield
-        elif item == "shield":
-            current_time = int(time.time())
-            base_time = max(current_time, active_items.get("reflect_shield_until", 0))
-            active_items["reflect_shield_until"] = base_time + 24 * 3600
-            msg = (
-                f"🛡️ Ты купил Зеркальный Щит на 24 часа!\n"
-                f"Щит работает пассивно: при первой попытке выстрелить в тебя из Мут-Гана\n"
-                f"выстрел автоматически отразится в стрелка (мут 1 час), а щит израсходуется."
-            )
-        # 3. Prefix
-        elif item == "prefix":
-            prefixes = [
-                "[Скуф]", "[Опущенный]",
-                "[Калоед]", "[Подпивас]",
-                "[Шитпостер]", "[Гой]",
-                "[Мамкин Трейдер]",
-                "[Инцел]", "[Анимешник]",
-                "[Чмо]", "[Вумен ☕️]",
-                "[Гигачад]", "[Бог Борды]",
-                "[VIP Анон]", "[Владелец]"
-            ]
-            chosen = random.choice(prefixes[:10]) if random.random() < 0.9 else random.choice(prefixes[10:])
-            expires = int(time.time()) + 86400
-            await db.execute("UPDATE Users SET custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ?", (chosen, expires, user_id))
-            msg = (
-                f"👑 Рулетка крутится...\n"
-                f"Тебе выпал префикс: {chosen}\n"
-                f"Виден в /passport и заголовках постов 24 часа."
-            )
+            err_msg = f"❌ Не хватает бабок! Нужно {price} Шекелей, у тебя {int(balance)} Шекелей."
+        else:
+            try:
+                active_items = json.loads(active_items_str)
+            except Exception:
+                active_items = {}
+                
+            # 0. Janitor Ticket
+            if item == "janitor":
+                current_time = int(time.time())
+                base_time = max(current_time, active_items.get("janitor_until", 0))
+                active_items["janitor_until"] = base_time + 6 * 3600
+                active_items["janitor_deletes_left"] = active_items.get("janitor_deletes_left", 0) + 10
+                left = active_items["janitor_deletes_left"]
+                msg = (
+                    f"🧹 Ты купил Билет Дворника на 6 часов!\n"
+                    f"Как использовать: найди спам в чате, нажми Reply и отправь /del.\n"
+                    f"Лимит удалений: {left}. Каждый успешный /del уменьшает счётчик на 1."
+                )
+            # 1. Mute-Gun
+            elif item == "mute":
+                if active_items.get("mute_gun"):
+                    err_msg = "У тебя уже есть Мут-Ган! Сделай Reply на пост с командой /shoot"
+                else:
+                    active_items["mute_gun"] = True
+                    msg = (
+                        f"🔫 Ты купил Мут-Ган!\n"
+                        f"Как использовать: найди пост жертвы, нажми Reply и отправь /shoot.\n"
+                        f"Эффект: жертва получает мут на 1 час.\n"
+                        f"⚠️ Осторожно: если у цели активен Зеркальный Щит, выстрел отразится обратно в тебя!"
+                    )
+            # 2. Reflect Shield
+            elif item == "shield":
+                current_time = int(time.time())
+                base_time = max(current_time, active_items.get("reflect_shield_until", 0))
+                active_items["reflect_shield_until"] = base_time + 24 * 3600
+                msg = (
+                    f"🛡️ Ты купил Зеркальный Щит на 24 часа!\n"
+                    f"Щит работает пассивно: при первой попытке выстрелить в тебя из Мут-Гана\n"
+                    f"выстрел автоматически отразится в стрелка (мут 1 час), а щит израсходуется."
+                )
+            # 3. Prefix
+            elif item == "prefix":
+                prefixes = [
+                    "[Скуф]", "[Опущенный]",
+                    "[Калоед]", "[Подпивас]",
+                    "[Шитпостер]", "[Гой]",
+                    "[Мамкин Трейдер]",
+                    "[Инцел]", "[Анимешник]",
+                    "[Чмо]", "[Вумен ☕️]",
+                    "[Гигачад]", "[Бог Борды]",
+                    "[VIP Анон]", "[Владелец]"
+                ]
+                chosen = random.choice(prefixes[:10]) if random.random() < 0.9 else random.choice(prefixes[10:])
+                expires = int(time.time()) + 86400
+                await db.execute("UPDATE Users SET custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ?", (chosen, expires, user_id))
+                msg = (
+                    f"👑 Рулетка крутится...\n"
+                    f"Тебе выпал префикс: {chosen}\n"
+                    f"Виден в /passport и заголовках постов 24 часа."
+                )
 
-        # 4. Partyvan
-        elif item == "partyvan":
-            if active_items.get("partyvan_gun"):
-                await callback.answer("Ты уже купил вызов Пативэна! Сделай Reply на пост с командой /partyvan", show_alert=True)
-                return
-            active_items["partyvan_gun"] = True
-            msg = (
-                f"🚔 Ты оплатил вызов Пативэна!\n"
-                f"Сделай Reply на пост жертвы с командой /partyvan.\n"
-                f"Нарушитель отлетит в мут на 12 часов с анимацией бобика."
-            )
-        # 5. Shit
-        elif item == "shit":
-            if active_items.get("shit_gun"):
-                await callback.answer("Полные карманы говна! Сделай Reply на пост с командой /shit", show_alert=True)
-                return
-            active_items["shit_gun"] = True
-            msg = (
-                f"🐒 Ты подобрал кусок говна!\n"
-                f"Сделай Reply на пост жертвы с командой /shit.\n"
-                f"Жертва будет обмазана говном на 1 час. Осторожно, ветер может сдуть обратно (20% шанс)."
-            )
-        # 6. Pills
-        elif item == "pills":
-            active_items.pop("shit_until", None)
-            await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-            msg = "💊 Ты выпил Аминазин. Шизофрения, говно и проклятия сняты. Разум ясен."
-            
-        # 7. Knife
-        elif item == "knife":
-            if active_items.get("knife_gun"):
-                await callback.answer("У тебя уже есть заточка! Сделай Reply на пост с командой /rob", show_alert=True)
-                return
-            active_items["knife_gun"] = True
-            msg = (
-                f"🔪 Ты купил заточку!\n"
-                f"Сделай Reply на пост жертвы с командой /rob.\n"
-                f"Ты сможешь ограбить анона на 10-30% его шекелей (до 1000).\n"
-                f"Осторожно: если у жертвы шапочка из фольги, ты порежешься сам."
-            )
-        # 8. Tinfoil
-        elif item == "tinfoil":
-            current_time = int(time.time())
-            base_time = max(current_time, active_items.get("tinfoil_hat", 0))
-            active_items["tinfoil_hat"] = base_time + 24 * 3600
-            msg = (
-                f"👽 Ты надел Шапочку из фольги на 24 часа!\n"
-                f"Защищает от говна (/shit) и ограблений (/rob).\n"
-                f"Нападающие обмажутся говном сами или порежутся своей заточкой!"
-            )
-        # 9. Bribe
-        elif item == "bribe":
-            # Just clear mute, handled externally mostly but let's assume apply_regular_mute is done outside
-            pass
-            
-        # 10. Laxative
-        elif item == "laxative":
-            if active_items.get("laxative_gun"):
-                await callback.answer("У тебя уже есть слабительное! Сделай Reply на пост с командой /curse", show_alert=True)
-                return
-            active_items["laxative_gun"] = True
-            msg = (
-                f"🚽 Ты купил слабительное!\n"
-                f"Сделай Reply на пост жертвы с командой /curse.\n"
-                f"Цель проклинается на 1 час: она не сможет писать посты длиннее 50 символов."
-            )
-        # 11. Megaphone
-        elif item == "megaphone":
-            if active_items.get("megaphone_gun"):
-                await callback.answer("У тебя уже есть мегафон! Сделай Reply на свой пост с командой /mega", show_alert=True)
-                return
-            active_items["megaphone_gun"] = True
-            msg = (
-                f"📣 Ты арендовал Мегафон!\n"
-                f"Сделай Reply на СВОЙ пост с командой /mega.\n"
-                f"Твой пост будет закреплен на 24 часа для всех на борде."
-            )
-        # 12. Schizopill
-        elif item == "schizopill":
-            if active_items.get("schizopill_gun"):
-                await callback.answer("У тебя уже есть Шизо-Таблетка! Сделай Reply на пост с командой /schizopill", show_alert=True)
-                return
-            active_items["schizopill_gun"] = True
-            msg = (
-                f"💊 Ты купил Шизо-Таблетку!\n"
-                f"Сделай Reply на пост жертвы с командой /schizopill.\n"
-                f"Цель проклинается на 1 час: её посты будут переписываться нейросетью в стиле конспиролога-шизофреника."
-            )
+            # 4. Partyvan
+            elif item == "partyvan":
+                if active_items.get("partyvan_gun"):
+                    err_msg = "Ты уже купил вызов Пативэна! Сделай Reply на пост с командой /partyvan"
+                else:
+                    active_items["partyvan_gun"] = True
+                    msg = (
+                        f"🚔 Ты оплатил вызов Пативэна!\n"
+                        f"Сделай Reply на пост жертвы с командой /partyvan.\n"
+                        f"Нарушитель отлетит в мут на 12 часов с анимацией бобика."
+                    )
+            # 5. Shit
+            elif item == "shit":
+                if active_items.get("shit_gun"):
+                    err_msg = "Полные карманы говна! Сделай Reply на пост с командой /shit"
+                else:
+                    active_items["shit_gun"] = True
+                    msg = (
+                        f"🐒 Ты подобрал кусок говна!\n"
+                        f"Сделай Reply на пост жертвы с командой /shit.\n"
+                        f"Жертва будет обмазана говном на 1 час. Осторожно, ветер может сдуть обратно (20% шанс)."
+                    )
+            # 6. Pills
+            elif item == "pills":
+                active_items.pop("shit_until", None)
+                await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+                msg = "💊 Ты выпил Аминазин. Шизофрения, говно и проклятия сняты. Разум ясен."
+                
+            # 7. Knife
+            elif item == "knife":
+                if active_items.get("knife_gun"):
+                    err_msg = "У тебя уже есть заточка! Сделай Reply на пост с командой /rob"
+                else:
+                    active_items["knife_gun"] = True
+                    msg = (
+                        f"🔪 Ты купил заточку!\n"
+                        f"Сделай Reply на пост жертвы с командой /rob.\n"
+                        f"Ты сможешь ограбить анона на 10-30% его шекелей (до 1000).\n"
+                        f"Осторожно: если у жертвы шапочка из фольги, ты порежешься сам."
+                    )
+            # 8. Tinfoil
+            elif item == "tinfoil":
+                current_time = int(time.time())
+                base_time = max(current_time, active_items.get("tinfoil_hat", 0))
+                active_items["tinfoil_hat"] = base_time + 24 * 3600
+                msg = (
+                    f"👽 Ты надел Шапочку из фольги на 24 часа!\n"
+                    f"Защищает от говна (/shit) и ограблений (/rob).\n"
+                    f"Нападающие обмажутся говном сами или порежутся своей заточкой!"
+                )
+            # 9. Bribe
+            elif item == "bribe":
+                # Just clear mute, handled externally mostly
+                pass
+                
+            # 10. Laxative
+            elif item == "laxative":
+                if active_items.get("laxative_gun"):
+                    err_msg = "У тебя уже есть слабительное! Сделай Reply на пост с командой /curse"
+                else:
+                    active_items["laxative_gun"] = True
+                    msg = (
+                        f"🚽 Ты купил слабительное!\n"
+                        f"Сделай Reply на пост жертвы с командой /curse.\n"
+                        f"Цель проклинается на 1 час: она не сможет писать посты длиннее 50 символов."
+                    )
+            # 11. Megaphone
+            elif item == "megaphone":
+                if active_items.get("megaphone_gun"):
+                    err_msg = "У тебя уже есть мегафон! Сделай Reply на свой пост с командой /mega"
+                else:
+                    active_items["megaphone_gun"] = True
+                    msg = (
+                        f"📣 Ты арендовал Мегафон!\n"
+                        f"Сделай Reply на СВОЙ пост с командой /mega.\n"
+                        f"Твой пост будет закреплен на 24 часа для всех на борде."
+                    )
+            # 12. Schizopill
+            elif item == "schizopill":
+                if active_items.get("schizopill_gun"):
+                    err_msg = "У тебя уже есть Шизо-Таблетка! Сделай Reply на пост с командой /schizopill"
+                else:
+                    active_items["schizopill_gun"] = True
+                    msg = (
+                        f"💊 Ты купил Шизо-Таблетку!\n"
+                        f"Сделай Reply на пост жертвы с командой /schizopill.\n"
+                        f"Цель проклинается на 1 час: её посты будут переписываться нейросетью в стиле конспиролога-шизофреника."
+                    )
 
-        # Списываем баланс
-        await db.execute(
-            "UPDATE Users SET balance = balance - ?, active_items = ? WHERE user_id = ? AND board_id = ?",
-            (price, json.dumps(active_items), user_id, board_id)
-        )
-        await db.commit()
+            if not err_msg:
+                # Списываем баланс
+                await db.execute(
+                    "UPDATE Users SET balance = balance - ?, active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (price, json.dumps(active_items), user_id, board_id)
+                )
+                await db.commit()
+
+    if err_msg:
+        await callback.answer(err_msg, show_alert=True)
+        return
         
     if item == "bribe":
-        await apply_regular_mute(user_id, board_id, 0) # Clear mute
+        await remove_regular_mute(user_id, board_id)
+        if board_id in board_data and 'mutes' in board_data[board_id]:
+            board_data[board_id]['mutes'].pop(user_id, None)
         msg = "📜 Ты дал взятку модератору! Твой мут снят, ты снова можешь шитпостить."
         
     await callback.answer(msg, show_alert=True)
@@ -4143,274 +4150,172 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     db = await get_pool()
     current_time = int(time.time())
 
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("shit_gun"):
+        await message.answer("⚠️ У тебя нет куска говна в карманах! Купи его в /shop.")
+        return
+
     target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0:
-        await message.answer("🚫 Не удалось найти автора поста...")
+    if not target_id or target_id == 0 or target_id == user_id: 
+        await message.answer("⚠️ Не удалось прицелиться или ты пытаешься обмазать сам себя.")
         return
-    if target_id == user_id:
-        await message.answer("Ты обмазался говном самостоятельно. Поздравляю.")
-        return
-
-    has_item = False
-    is_shielded = False
-
-    async with db_lock:
-        active_items = await _get_user_active_items(db, user_id, board_id)
-        if active_items.get("shit_gun"):
-            has_item = True
-            t_items = await _get_user_active_items(db, target_id, board_id)
-            if t_items.get("tinfoil_hat", 0) > current_time:
-                is_shielded = True
-                active_items["shit_gun"] = False
-                active_items["shit_until"] = current_time + 3600
-                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", 
-                                 (json.dumps(active_items), user_id, board_id))
-                await db.commit()
-            else:
-                active_items["shit_gun"] = False
-                t_items["shit_until"] = current_time + 3600
-                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                                 (user_id, board_id, json.dumps(active_items)))
-                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                                 (target_id, board_id, json.dumps(t_items)))
-                await db.commit()
-
-    if not has_item:
-        await message.answer("У тебя нет Говномёта! Иди в /shop")
-        return
-
-    if is_shielded:
-        await message.answer("🛡️ <b>Шапочка из Фольги!</b>\nГовнометание отражено! Заряд говномёта угодил прямо тебе в лицо. Ты весь в говне на 1 час!", parse_mode="HTML")
-        return
-
-    # Успех
-    shit_msg = (
-        f"💩 <b>СМАЧНЫЙ ПЛЮХ!</b>\n\n"
-        f"Анон выстрелил в автора этого поста из Говномёта!\n"
-        f"Теперь все сообщения жертвы в течение часа будут выглядеть как говно 🤎\n"
-        f"<i>(Говномёт израсходован)</i>"
-    )
-    await message.bot.send_message(message.chat.id, shit_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
     
-    try:
-        await message.bot.send_message(
-            target_id,
-            "💩 <b>В тебя выстрелили говном!</b>\n"
-            "Твои сообщения будут измазаны в течение 1 часа.\n"
-            "Покупай Шапочку из Фольги в /shop для защиты.",
-            parse_mode="HTML"
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    current_time = int(time.time())
+    
+    # Идемпотентность: цель уже в говне
+    if t_items.get("shit_until", 0) > current_time:
+        await message.answer("💩 Эта цель УЖЕ обмазана говном! Выбери кого-нибудь чистого. Кусок говна остался у тебя.")
+        return
+
+    active_items["shit_gun"] = False
+    
+    if t_items.get("tinfoil_hat", 0) > current_time:
+        active_items["shit_until"] = current_time + 3600
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        await message.answer("👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Говно отскочило от фольги прямо тебе в лицо. Теперь ТЫ обмазан говном на 1 час!", parse_mode="HTML")
+        return
+
+    t_items["shit_until"] = current_time + 3600
+    async with db_lock:
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (user_id, board_id, json.dumps(active_items))
         )
-    except: pass
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (target_id, board_id, json.dumps(t_items))
+        )
+        await db.commit()
+    await message.answer("🐒 <b>ПОПАДАНИЕ!</b>\nТы метко кинул кусок говна! Жертва обмазана на 1 час и получит иконку 💩 во всех своих постах.", parse_mode="HTML")
     try:
-        await message.delete()
-    except: pass
+        await message.bot.send_message(target_id, "🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\nКакой-то анон обмазал тебя. У тебя статус 💩 на 1 час.\nЛекарство от статуса: Аминазин в /shop.", parse_mode="HTML")
+    except TelegramForbiddenError:
+        await purge_users_from_board_ram(board_id, [target_id])
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
+    except (TelegramBadRequest, TelegramAPIError, Exception):
+        pass
+
 @dp.message(Command("curse", "vomit"))
 async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
     if not message.reply_to_message:
-        await message.answer("⚠️ Сделай Reply на пост жертвы!")
+        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, чтобы подлить слабительное!", parse_mode="HTML")
         return
-
     import time, json
     db = await get_pool()
-    current_time = int(time.time())
-
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("laxative_gun"):
+        await message.answer("🚽 У тебя нет Слабительного! Купи его в магазине: /shop")
+        return
     target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0:
-        await message.answer("🚫 Не удалось найти автора.")
+    if not target_id or target_id == 0 or target_id == user_id: 
+        await message.answer("⚠️ Не удалось найти цель или ты пытаешься проклясть сам себя.")
         return
-    if target_id == user_id:
-        await message.answer("Самопроклятие? Дожили.")
+    
+    current_time = int(time.time())
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    
+    # Идемпотентность: цель уже проклята
+    if t_items.get("cursed_until", 0) > current_time:
+        await message.answer("🚽 У этого анона И ТАК словесный понос! Выбери другую жертву. Слабительное осталось у тебя.")
         return
-
-    has_item = False
-    is_shielded = False
+        
+    active_items["laxative_gun"] = False
+    t_items["cursed_until"] = current_time + 3600
 
     async with db_lock:
-        active_items = await _get_user_active_items(db, user_id, board_id)
-        if active_items.get("laxative_gun"):
-            has_item = True
-            t_items = await _get_user_active_items(db, target_id, board_id)
-            if t_items.get("tinfoil_hat", 0) > current_time:
-                is_shielded = True
-                active_items["laxative_gun"] = False
-                active_items["cursed_until"] = current_time + 3600
-                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                                 (user_id, board_id, json.dumps(active_items)))
-                await db.commit()
-            else:
-                active_items["laxative_gun"] = False
-                t_items["cursed_until"] = current_time + 3600
-                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                                 (user_id, board_id, json.dumps(active_items)))
-                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                                 (target_id, board_id, json.dumps(t_items)))
-                await db.commit()
-
-    if not has_item:
-        await message.answer("У тебя нет Слабительного! Ищи его в магазине: /shop")
-        return
-
-    if is_shielded:
-        await message.answer("🛡️ <b>Шапочка из Фольги!</b>\nЦель защищена. Проклятие обрушилось на тебя самого! Понос обеспечен на 1 час.", parse_mode="HTML")
-        return
-
-    curse_msg = (
-        f"🤢 <b>ПРОКЛЯТИЕ ПОНОСА!</b>\n\n"
-        f"Анон опоил автора этого поста Слабительным!\n"
-        f"Слова жертвы теперь прорываются неконтролируемыми приступами... (1 час)\n"
-        f"<i>(Слабительное израсходовано)</i>"
-    )
-    await message.bot.send_message(message.chat.id, curse_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
-    try: await message.delete()
-    except: pass
-@dp.message(Command("schizopill", "шизотаблетка"))
-async def cmd_schizopill(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
-    user_id = message.from_user.id
-    if not message.reply_to_message:
-        await message.answer("⚠️ Сделай Reply на пост жертвы!")
-        return
-
-    import time, json
-    db = await get_pool()
-    current_time = int(time.time())
-
-    target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0:
-        await message.answer("🚫 Не удалось найти автора.")
-        return
-    if target_id == user_id:
-        await message.answer("Ты и так уже.")
-        return
-
-    has_item = False
-    is_shielded = False
-
-    async with db_lock:
-        active_items = await _get_user_active_items(db, user_id, board_id)
-        if active_items.get("schizopill_gun"):
-            has_item = True
-            t_items = await _get_user_active_items(db, target_id, board_id)
-            if t_items.get("tinfoil_hat", 0) > current_time:
-                is_shielded = True
-                active_items["schizopill_gun"] = False
-                active_items["schizo_pill_until"] = current_time + 3600
-                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                                 (user_id, board_id, json.dumps(active_items)))
-                await db.commit()
-            else:
-                active_items["schizopill_gun"] = False
-                t_items["schizo_pill_until"] = current_time + 3600
-                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                                 (user_id, board_id, json.dumps(active_items)))
-                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-                                 (target_id, board_id, json.dumps(t_items)))
-                await db.commit()
-
-    if not has_item:
-        await message.answer("У тебя нет Шизо-Таблетки. Купи в /shop")
-        return
-
-    if is_shielded:
-        await message.answer(f"👽 <b>ШИЗО-РИКОШЕТ!</b>\nАнон попытался отравить автора этого поста Шизо-Таблеткой, но Шапочка из фольги отразила эффект обратно! Теперь отправитель будет писать шизой.", parse_mode="HTML")
-        return
-
-    curse_msg = (
-        f"💊 <b>ШИЗО-ТАБЛЕТКА!</b>\n\n"
-        f"Анон подмешал Шизо-Таблетку автору этого поста!\n"
-        f"У цели начался приступ шизофазии и паранойи... (1 час)\n"
-        f"<i>(Шизо-Таблетка израсходована)</i>"
-    )
-    await message.bot.send_message(message.chat.id, curse_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
-    try: await message.delete()
-    except: pass
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (user_id, board_id, json.dumps(active_items))
+        )
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (target_id, board_id, json.dumps(t_items))
+        )
+        await db.commit()
+    await message.answer("🚽 <b>ПРОКЛЯТИЕ СРАБОТАЛО!</b>\nТы подлил слабительное в чай этому анону. У него начался словесный понос: он целый час не сможет писать посты длиннее 50 символов!", parse_mode="HTML")
 
 @dp.message(Command("partyvan"))
 async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
     if not message.reply_to_message:
-        await message.answer("⚠️ Сделай Reply на пост, куда отправить ПатиВэн!")
+        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на донос-пост жертвы, чтобы вызвать Пативэн!", parse_mode="HTML")
         return
-
+    import json
     from datetime import datetime, timedelta, UTC
     db = await get_pool()
-
-    has_item = False
-    async with db_lock:
-        active_items = await _get_user_active_items(db, user_id, board_id)
-        if active_items.get("partyvan_gun"):
-            has_item = True
-            active_items["partyvan_gun"] = False
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", 
-                             (json.dumps(active_items), user_id, board_id))
-            await db.commit()
-
-    if not has_item:
-        await message.answer("У тебя нет Вызова ПатиВэна! Ищи его в /shop")
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("partyvan_gun"):
+        await message.answer("🚔 У тебя нет рации для вызова Пативэна! Купи её в /shop")
         return
-
     target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0:
-        await message.answer("🚫 Не удалось найти автора. ПатиВэн развернулся (но заряд потрачен).")
+    if not target_id or target_id == 0 or target_id == user_id: 
+        await message.answer("⚠️ Не удалось определить цель доноса.")
         return
-
+        
+    # Идемпотентность: цель уже в КПЗ
     async with storage_lock:
-        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=7200)
+        mute_end = board_data[board_id]['mutes'].get(target_id)
+    if mute_end and mute_end > datetime.now(UTC) + timedelta(hours=11):
+        await message.answer("🚔 Этот анон УЖЕ откисает в КПЗ надолго! Не трать вызов зря, рация осталась у тебя.")
+        return
+    
+    active_items["partyvan_gun"] = False
+    async with db_lock:
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+        await db.commit()
+    
+    async with storage_lock:
+        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(hours=12)
+    await apply_regular_mute(target_id, board_id, 12 * 3600)
+    await message.bot.send_message(message.chat.id, f"🚔 <b>ВНИМАНИЕ! РАБОТАЕТ ОМОН!</b> 🚔\nПо доносу анона за автором этого поста выехал пативэн! Жертва отправлена в КПЗ (жесткий мут) на 12 часов!\n<i>Выйти раньше можно только дав взятку в /shop.</i>", reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
 
-    await apply_regular_mute(target_id, board_id, 7200)
-
-    msg_txt = (
-        f"🚓 <b>ЗА ТОБОЙ ВЫЕХАЛ ПАТИВЭН!</b>\n\n"
-        f"По доносу анона за автором этого поста выехал спецназ!\n"
-        f"Жертву повязали и отправили в автозак на 2 часа (MUTE).\n"
-        f"<i>(ПатиВэн израсходован)</i>"
-    )
-    await message.bot.send_message(message.chat.id, msg_txt, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
-    try: await message.delete()
-    except: pass
 @dp.message(Command("mega"))
 async def cmd_mega(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
-    raw_text = message.text or ""
-    parts = raw_text.split(maxsplit=1)
-    text_content = parts[1].strip() if len(parts) > 1 else ""
-    if not text_content:
-        await message.answer("⚠️ Напиши текст, который нужно прокричать: `/mega Я дебил!`", parse_mode="Markdown")
+    if not message.reply_to_message:
+        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост, который хочешь объявить в Мегафон!", parse_mode="HTML")
         return
-
     import json
     db = await get_pool()
-    has_item = False
-    
-    async with db_lock:
-        active_items = await _get_user_active_items(db, user_id, board_id)
-        if active_items.get("megaphone_gun"):
-            has_item = True
-            active_items["megaphone_gun"] = False
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", 
-                             (json.dumps(active_items), user_id, board_id))
-            await db.commit()
-
-    if not has_item:
-        await message.answer("У тебя нет Мегафона! Ищи его в /shop")
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("megaphone_gun"):
+        await message.answer("📣 У тебя нет Мегафона! Купи его в /shop")
         return
 
-    broadcast = f"📢 <b>[МЕГАФОН В БОРДУ]</b>\n\n{escape_html(text_content)}"
-    await message.bot.send_message(message.chat.id, broadcast, parse_mode="HTML")
-    try: await message.delete()
-    except: pass
+    async with storage_lock:
+        key = (message.chat.id, message.reply_to_message.message_id)
+        pnum = message_to_post.get(key)
+        
+    if not pnum:
+        await message.answer("⚠️ Не удалось найти этот пост в памяти доски.")
+        return
+        
+    # Идемпотентность: пост уже закреплен
+    if board_data[board_id].get('active_pin') == pnum:
+        await message.answer("📣 Этот пост И ТАК уже висит в закрепе! Мегафон остался у тебя.")
+        return
+        
+    active_items["megaphone_gun"] = False
+    async with db_lock:
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+        await db.commit()
+        
+    board_data[board_id]['active_pin'] = pnum
+    await update_board_settings(board_id, {'active_pin': pnum})
+    
+    await message.bot.send_message(message.chat.id, f"📣 <b>Внимание на всю палату!</b>\nАнон использовал Мегафон! Пост #{pnum} глобально закреплен для всех читателей борды!", parse_mode="HTML")
 
 
 @dataclass
@@ -4869,38 +4774,85 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
 async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
 
-    db = await get_pool()
-
-    # Топ по балансу — показываем только anon_id (пост-номер паспорта), не username
-    async with db.execute(
-        """SELECT user_id, SUM(balance) as bal, MAX(custom_prefix) as prefix
-           FROM Users WHERE board_id = ?
-           GROUP BY user_id HAVING bal > 0
-           ORDER BY bal DESC LIMIT 15""",
-        (board_id,)
-    ) as c:
-        rows = await c.fetchall()
-
-    if not rows:
-        await message.answer("Пока никто не накопил ничего.")
-        return
-
-    medals = ["🥇", "🥈", "🥉"]
-    caller_id = message.from_user.id
-
-    lines = [f"💰 <b>Топ богачей /{board_id}/</b>\n{'—'*20}"]
-    for i, (uid, bal, prefix) in enumerate(rows):
-        medal  = medals[i] if i < 3 else f"<b>{i+1}.</b>"
-        # Паспортный номер = последние 4 цифры user_id (детерминировано, не раскрывает личность)
-        anon_tag = f"Анон-{uid % 10000:04d}"
-        pfx = f" {prefix}" if prefix else ""
-        you = " ← ты" if uid == caller_id else ""
-        lines.append(f"{medal} {anon_tag}{pfx} — <code>{int(bal)} RUB</code>{you}")
-
-    lines.append(f"\n<i>Имена не раскрываются. Заработай в реакциях или /shop.</i>")
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    raw_text = message.text or message.caption or ""
+    args = raw_text.split()[1:]
+    mode = "posts" if args and args[0].lower() in ["posts", "post", "посты", "пост", "актив", "activity"] else "balance"
+    
+    text, kb = await _build_leaderboard_content(board_id, mode, message.from_user.id)
+    await message.answer(text, reply_markup=kb, parse_mode="HTML")
     try: await message.delete()
     except Exception: pass
+
+@dp.callback_query(F.data.startswith("top_switch_"))
+async def cb_top_switch(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    parts = callback.data.split("_")
+    mode = parts[2] if len(parts) > 2 else "balance"
+    text, kb = await _build_leaderboard_content(board_id, mode, callback.from_user.id)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
+
+async def _build_leaderboard_content(board_id: str, mode: str, caller_id: int):
+    db = await get_pool()
+    medals = ["🥇", "🥈", "🥉"]
+
+    if mode == "posts":
+        async with db.execute(
+            """SELECT p.author_id, COUNT(*) as cnt, MAX(u.custom_prefix) as prefix
+               FROM Posts p
+               LEFT JOIN Users u ON p.author_id = u.user_id AND p.board_id = u.board_id
+               WHERE p.board_id = ? AND p.author_id > 0
+               GROUP BY p.author_id
+               ORDER BY cnt DESC LIMIT 15""",
+            (board_id,)
+        ) as c:
+            rows = await c.fetchall()
+
+        if not rows:
+            return "Пока никто ничего не запостил.", None
+
+        lines = [f"📝 <b>Топ шитпостеров /{board_id}/</b>\n{'—'*22}"]
+        for i, (uid, cnt, prefix) in enumerate(rows):
+            medal = medals[i] if i < 3 else f"<b>{i+1}.</b>"
+            anon_tag = f"Анон-{uid % 10000:04d}"
+            pfx = f" {prefix}" if prefix else ""
+            you = " ← ты" if uid == caller_id else ""
+            lines.append(f"{medal} {anon_tag}{pfx} — <code>{cnt:,} постов</code>{you}")
+
+        lines.append(f"\n<i>Рейтинг активности на доске. Пиши посты, чтобы расти в топе.</i>")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💰 Топ по балансу", callback_data="top_switch_balance")]
+        ])
+    else:
+        async with db.execute(
+            """SELECT user_id, SUM(balance) as bal, MAX(custom_prefix) as prefix
+               FROM Users WHERE board_id = ?
+               GROUP BY user_id HAVING bal > 0
+               ORDER BY bal DESC LIMIT 15""",
+            (board_id,)
+        ) as c:
+            rows = await c.fetchall()
+
+        if not rows:
+            return "Пока никто не накопил ничего.", None
+
+        lines = [f"💰 <b>Топ богачей /{board_id}/</b>\n{'—'*22}"]
+        for i, (uid, bal, prefix) in enumerate(rows):
+            medal = medals[i] if i < 3 else f"<b>{i+1}.</b>"
+            anon_tag = f"Анон-{uid % 10000:04d}"
+            pfx = f" {prefix}" if prefix else ""
+            you = " ← ты" if uid == caller_id else ""
+            lines.append(f"{medal} {anon_tag}{pfx} — <code>{int(bal):,} RUB</code>{you}")
+
+        lines.append(f"\n<i>Имена скрыты. Заработай шекели на реакциях или в /shop.</i>")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Топ по постам", callback_data="top_switch_posts")]
+        ])
+
+    return "\n".join(lines), kb
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -5476,11 +5428,13 @@ class PassportContext:
     is_verified: int
     rank: str
     role: str
+    custom_prefix: str = None
     active_items: dict = None
 
 def _generate_passport_text(ctx: PassportContext) -> str:
     if ctx.active_items is None: ctx.active_items = {}
     import random
+    import time
     from datetime import datetime, UTC
     current_data = _PASSPORT_DATA.get(ctx.lang, _PASSPORT_DATA['ru'])
     seed_val = f"{ctx.user_id}_{datetime.now(UTC).date()}"
@@ -5490,7 +5444,36 @@ def _generate_passport_text(ctx: PassportContext) -> str:
     elif social_credit > 500: sc_emoji = "🇨🇳"
     else: sc_emoji = "📉"
     state_val = rng.choice(current_data['mental'])
-    inv_val = rng.choice(current_data['inv'])
+    
+    # Check for real equipped items from the black market
+    now_ts = int(time.time())
+    equipped = []
+    if ctx.active_items.get("tinfoil_hat", 0) > now_ts:
+        equipped.append("👽 Фольга")
+    if ctx.active_items.get("reflect_shield_until", 0) > now_ts:
+        equipped.append("🛡️ Щит")
+    if ctx.active_items.get("janitor_until", 0) > now_ts:
+        equipped.append(f"🧹 Дворник ({ctx.active_items.get('janitor_deletes_left', 0)})")
+    if ctx.active_items.get("mute_gun"):
+        equipped.append("🔫 Мут-Ган")
+    if ctx.active_items.get("shit_gun"):
+        equipped.append("💩 Говномёт")
+    if ctx.active_items.get("knife_gun"):
+        equipped.append("🔪 Заточка")
+    if ctx.active_items.get("partyvan_gun"):
+        equipped.append("🚔 Пативэн")
+    if ctx.active_items.get("megaphone_gun"):
+        equipped.append("📣 Мегафон")
+    if ctx.active_items.get("laxative_gun"):
+        equipped.append("🚽 Слабительное")
+    if ctx.active_items.get("schizopill_gun"):
+        equipped.append("💊 Шизо-Таблетка")
+
+    if equipped:
+        inv_val = ", ".join(equipped)
+    else:
+        inv_val = rng.choice(current_data['inv'])
+
     secret_val = rng.choice(current_data['sec'])
     flag = "🏴‍☠️"
     if ctx.board_id == 'po': flag = "🤡"
@@ -5505,10 +5488,13 @@ def _generate_passport_text(ctx: PassportContext) -> str:
     else:
         labels = ["ПАСПОРТ ТГАЧЕРА", "ID", "Ранг", "Роль", "Постов", "Диагноз", "Инвентарь", "Компромат", "Соц. рейтинг"]
         anon_tag = f"Анон-{ctx.user_id % 10000:04d}"
+
+    prefix_line = f"👑 <b>Титул:</b> {ctx.custom_prefix}\n" if ctx.custom_prefix else ""
     return (
         f"🪪 <b>{labels[0]} {flag}</b>\n"
         f"<code>{'—'*22}</code>\n"
         f"🆔 <b>{labels[1]}:</b> <code>{anon_tag}</code>\n"
+        f"{prefix_line}"
         f"🏷 <b>{labels[2]}:</b> {ctx.rank}\n"
         f"💼 <b>{labels[3]}:</b> {ctx.role}\n"
         f"💩 <b>{labels[4]}:</b> {ctx.post_count}\n"
@@ -5541,9 +5527,14 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     post_count, balance, is_verified = stats
     
     db = await get_pool()
-    async with db.execute("SELECT active_items FROM Users WHERE user_id = ?", (user_id,)) as c:
+    custom_prefix = None
+    async with db.execute("SELECT active_items, custom_prefix, prefix_expires_at FROM Users WHERE user_id = ?", (user_id,)) as c:
         row = await c.fetchone()
         active_items_str = row[0] if row and row[0] else "{}"
+        if row and len(row) > 2 and row[1] and row[2]:
+            import time
+            if int(time.time()) < row[2]:
+                custom_prefix = row[1]
     try:
         import json
         active_items = json.loads(active_items_str)
@@ -5560,6 +5551,7 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
         is_verified=is_verified,
         rank=rank,
         role=role,
+        custom_prefix=custom_prefix,
         active_items=active_items
     )
     passport_text = _generate_passport_text(ctx)
@@ -5573,6 +5565,102 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
             pass
     try: await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError): pass
+
+
+@dp.message(Command("dossier", "досье", "дело", "case", "личноедело"))
+async def cmd_dossier(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Генерирует секретное 'Личное Дело Анона' (по реплаю на чужой пост или на себя).
+    """
+    if not board_id: return
+
+    try: spawn_task(delete_message_after_delay(message, 5))
+    except Exception: pass
+
+    caller_id = message.from_user.id
+    target_id = None
+
+    if message.reply_to_message:
+        target_id = await get_author_id_by_reply(message)
+    
+    if not target_id or target_id == 0:
+        target_id = caller_id
+
+    import random
+    from stats_generator import fetch_user_stats_data, generate_schizo_name
+
+    stats = fetch_user_stats_data(target_id, board_id)
+    schizo_name = generate_schizo_name(target_id)
+    
+    # Детерминированный seed для выписок из картотеки
+    rng = random.Random(target_id * 31 + 42)
+    
+    cases = [
+        "Ст. 228 ч.3 — Хранение тяжелых мемов в особо крупном размере",
+        "Ст. 1488 — Оскорбление чувств подпивасов и скуфов",
+        "Ст. 105 — Злостное покушение на здравый смысл",
+        "Ст. 210 — Организация преступного шитпостинг-сообщества",
+        "Ст. 282 — Возбуждение ненависти к нормисам и зумерам",
+        "Ст. 159 — Мошенничество с рулеткой и шекелями",
+        "Ст. 330 — Самоуправство в ночных тредах",
+        "Ст. 119 — Угрозы обмазать говном из /shit",
+        "Ст. 213 — Хулиганство с применением мут-гана"
+    ]
+    
+    notes = [
+        "Склонен к ночному шитпостингу. При задержании кричит про базу.",
+        "Регулярно скупает шапочки из фольги на Черном рынке. Подозревается в шизофрении.",
+        "Опасный полемист. При первых признаках сажи уходит в глухую оборону.",
+        "Вспыльчив, дерзок. Мечтает свергнуть модераторов и захватить /b/.",
+        "Постоянный клиент санитаров. Ранее привлекался за вайп баянами.",
+        "Тихий подпивас. В трезвом состоянии неопасен, под пивом пишет пасты на 10 экранов."
+    ]
+
+    chosen_cases = rng.sample(cases, k=2)
+    chosen_note = rng.choice(notes)
+    
+    if stats['mutes_count'] > 5 or stats['cringe_factor'] > 60:
+        reliability = "🔴 ОСОБО ОПАСЕН ДЛЯ ОБЩЕСТВА"
+    elif stats['mutes_count'] > 0 or stats['cringe_factor'] > 30:
+        reliability = "🟡 ПОД НАБЛЮДЕНИЕМ САНИТАРОВ"
+    else:
+        reliability = "🟢 УСЛОВНО БЛАГОНАДЕЖЕН"
+
+    prefix_str = f" [{stats['custom_prefix']}]" if stats['custom_prefix'] else ""
+    is_self = " (Твоё личное дело)" if target_id == caller_id else ""
+
+    lines = [
+        f"📂 <b>ЛИЧНОЕ ДЕЛО АНОНА №{target_id % 10000:04d}</b>{is_self}",
+        f"<code>{'═'*26}</code>",
+        f"👤 <b>Позывной:</b> {schizo_name}{prefix_str}",
+        f"🎖 <b>Статус:</b> {stats['role'].upper()}",
+        f"⚖️ <b>Благонадежность:</b> {reliability}",
+        f"<code>{'—'*26}</code>",
+        f"📝 <b>Постов на борде:</b> <code>{stats['posts_count']:,}</code> (Ранг #{stats['rank']}/{stats['total_users']})",
+        f"🎭 <b>Реакций получено:</b> <code>+{stats['rx_received']:,}</code>",
+        f"⚡ <b>Реакций поставлено:</b> <code>{stats['rx_given']:,}</code>",
+        f"🌀 <b>Кринж-индекс:</b> <code>{stats['cringe_factor']}%</code>",
+        f"💰 <b>Активы:</b> <code>{int(stats['balance']):,} RUB</code>",
+        f"🔇 <b>Приводов в карцер:</b> <code>{stats['mutes_count']} мутов</code>",
+        f"<code>{'—'*26}</code>",
+        f"📋 <b>Инкриминируемые статьи:</b>",
+        f" • <i>{chosen_cases[0]}</i>",
+        f" • <i>{chosen_cases[1]}</i>",
+        f"\n🕵️ <b>Оперативная заметка:</b>",
+        f"<i>\"{chosen_note}\"</i>",
+        f"<code>{'═'*26}</code>"
+    ]
+    
+    dossier_text = "\n".join(lines)
+    try:
+        await message.reply(dossier_text, parse_mode="HTML")
+    except Exception:
+        try:
+            await message.answer(dossier_text, parse_mode="HTML")
+        except Exception:
+            pass
+
+
 async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = None, limit: int = 25) -> str:
     """
     Получает последние посты на доске для понимания текущей атмосферы чата (до 25 последних сообщений).
@@ -6904,43 +6992,44 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
         
         if lang == 'en':
             start_text = (
-                f"⚡ <b>Welcome to TGACH — Anonymous Imageboard ({board_name})!</b>\n\n"
-                "💬 <b>How it works:</b>\n"
-                "• Any text or image you send is posted anonymously on the board.\n"
-                "• To answer an anon, simply <b>Reply</b> to their message.\n"
-                "• React with emojis: 👍 like (+12 RUB to author), 👎 sage (-5.5 RUB penalty).\n"
-                "• Earn shekels via /work, buy gear in /shop, check /wallet.\n"
-                "• Create custom demotivators: <code>/dem Title | Subline</code>\n\n"
-                "👉 Use the quick menu below or type /help for the full command list."
+                f"⚡ <b>TGACH — Anonymous {board_name}</b>\n\n"
+                "🌐 <b>Pure Imageboard Culture</b>\n"
+                "A true reincarnation of classic imageboards inside Telegram, blending the authentic /b/ spirit with the speed of a messenger — no VPNs, no captchas, no lag. No profiles, avatars, or saved dossiers. Every text, image, or voice note dissolves anonymously into the collective stream. Your identity resets with every post: words are judged solely on merit, not status. You are simply Anon, equal among equals.\n\n"
+                "⚙️ <b>Autonomous Living Entity</b>\n"
+                "The board thrives as a self-regulating hivemind. Direct replies weave into branching threads, while reactions drive the shadow economy: quality posts earn shekels, while dullness sinks in sage. Forge demotivators on the fly, spin the roulette, fight in duels, and trigger board-wide speech mode transformations.\n\n"
+                "☕ <b>Sanctuary from Social Media</b>\n"
+                "No janitor power-trips, fragile egos, or fake positivity. Shed the normie mask: throw questions into the void, share midnight thoughts, or spectate digital chaos with a cup of tea. From deep existential talks to absurd humor and anime.\n\n"
+                "<i>Brew some tea, settle in, and dive into the eternal stream — you are home, Anon.</i>"
             )
-            menu_text = "👇 <b>Quick Menu:</b>"
         elif lang == 'jp':
             start_text = (
-                f"⚡ <b>TGACHへようこそ — 匿名画像掲示板 ({board_name})！</b>\n\n"
-                "💬 <b>使い方:</b>\n"
-                "• 送信したメッセージは匿名で板に投稿されます。\n"
-                "• 他のアノンに返信するには <b>返信 (Reply)</b> を使用します。\n"
-                "• リアクション: 👍 (+12 RUB), 👎 (-5.5 RUB)。\n"
-                "• /work で稼ぎ、/shop でアイテムを購入、/wallet で残高確認。\n"
-                "• デモティベーター作成: <code>/dem タイトル | サブ</code>\n\n"
-                "👉 下のメニューまたは /help をご利用ください。"
+                f"⚡ <b>TGACH — 匿名画像掲示板 ({board_name})</b>\n\n"
+                "🌐 <b>完全匿名の掲示板文化</b>\n"
+                "Telegram内で蘇るクラシックな画像掲示板。VPNやキャプチャなしで即座にアクセス。プロフィールもアイコンも履歴も存在しません。投稿されたテキストや画像はすべて匿名で全体ストリームに溶け込みます。発言者の肩書きではなく、言葉そのものが評価される世界です。\n\n"
+                "⚙️ <b>自律的に呼吸するシステム</b>\n"
+                "返信でリアルタイムにスレッドが形成され、リアクションが経済を動かします。良質な投稿にはシェケルが集まり、sageで沈められます。デモティベーター生成、ルーレット、決闘、掲示板全体を変化させるシゾモードなど多彩な機能を搭載。\n\n"
+                "☕ <b>深夜の居場所</b>\n"
+                "SNSの虚飾から離れ、日常では言えない本音や深夜の思索、アニメや不条理なユーモアを自由に語り合えます。\n\n"
+                "<i>お茶を用意して、混沌のストリームへようこそ。ここは君の居場所だ、名無しさん。</i>"
             )
-            menu_text = "👇 <b>クイックメニュー:</b>"
         else:
             start_text = (
-                f"⚡ <b>Добро пожаловать в ТГАЧ — Анонимную борду ({board_name})!</b>\n\n"
-                "💬 <b>Как здесь общаться:</b>\n"
-                "• <b>Постинг:</b> Отправь любой текст, фото или стикер — он мгновенно и анонимно появится на доске.\n"
-                "• <b>Ответы:</b> Чтобы ответить анону, сделай <b>Reply (Ответить)</b> на его сообщение.\n"
-                "• <b>Экономика:</b> Ставь реакции! 👍 Лайк даёт автору <b>+12₽</b>, а 👎 дизлайк и сажа списывают штраф.\n"
-                "• <b>Заработок:</b> Заходи в /work (сдавай бутылки), получай /daily, закупай пушки в /shop и проверяй /wallet.\n"
-                "• <b>Демотиваторы:</b> Ответь на картинку <code>/dem Заголовок | Подпись</code> для создания плаката!\n\n"
-                "👉 Выбирай раздел в меню ниже или пиши /help для полного списка команд."
+                f"⚡ <b>ТГАЧ — Твой анонимный {board_name}</b>\n\n"
+                "🌐 <b>Культура имиджборд без цензуры</b>\n"
+                "Это реинкарнация классических бордов прямо в Телеграме, объединившая дух старого Двача и скорость мессенджера — без VPN, капчи и бесконечных экранов загрузки. Здесь нет профилей, аватарок, контактов и архивов компромата. Любое отправленное сообщение, картинка или войс мгновенно растворяются в общем потоке. Твоя личность обнуляется с каждым постом: оценивается не тот, кто пишет, а исключительно то, что написано. Ты просто Аноним, равный среди равных.\n\n"
+                "⚙️ <b>Живой саморегулирующийся организм</b>\n"
+                "Доска живёт как автономный коллективный разум. Ответы через реплай моментально сплетаются в разветвлённые ветки тредов, а реакции формируют баланс: годные мысли поощряются шекелями, а духота топится сажей. Прямо на лету можно перерабатывать пикчи в демотиваторы, крутить рулетку, устраивать дуэли, грабежи и запускать безумные события, которые на время трансформируют стиль общения всей борды.\n\n"
+                "☕ <b>Сычевальня и антидот от соцсетей</b>\n"
+                "Здесь нет админов с синдромом вахтёра, обиженных модераторов и показного глянца. Сюда приходят сбросить маску нормиса: задать вопрос в пустоту, поделиться тем, о чём молчишь в реале, или понаблюдать за цифровым хаосом со стороны. Можно обсуждать что угодно — от глубоких ночных откровений и экзистенциальной тоски до абсурдного юмора, аниме и локальных мемов.\n\n"
+                "<i>Заваривай чай, устраивайся поудобнее и вливайся в вечный /b/ред — здесь рады любой твоей шизе. Ты дома, Анон.</i>"
             )
-            menu_text = "👇 <b>Быстрое меню ТГАЧ:</b>"
-            
-        await message.answer(start_text, parse_mode="HTML", disable_web_page_preview=True)
-        await message.answer(menu_text, reply_markup=get_quick_menu_keyboard(board_id, stream=stream), parse_mode="HTML")
+
+        await message.answer(
+            start_text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=get_quick_menu_keyboard(board_id, stream=stream)
+        )
         try: await message.delete()
         except Exception: pass
 @dp.callback_query(F.data.startswith("set_stream_"))
@@ -9070,7 +9159,12 @@ async def cmd_yer(message: types.Message, board_id: str | None, stream: str = 'r
     try: await message.delete()
     except TelegramBadRequest: pass
 
+UNFINISHED_NEW_MODES = {'matrix_mode', 'america_mode', 'holiday_mode', 'oldweb_mode', 'jewish_mode'}
+
 async def _trigger_generic_mode(message: types.Message, board_id: str | None, stream: str, mode_key: str, start_phrases: list, duration_sec: int, prefix_title: str):
+    if mode_key in UNFINISHED_NEW_MODES:
+        await message.answer("⚠️ Данный режим не активен и находится в разработке.")
+        return
     if not board_id or board_id == 'int':
         try: await message.delete()
         except Exception: pass
@@ -9135,9 +9229,6 @@ async def cmd_rus(message: types.Message, board_id: str | None, stream: str = 'r
 async def cmd_abu(message: types.Message, board_id: str | None, stream: str = 'ru'):
     await _trigger_generic_mode(message, board_id, stream, 'abu_mode', ABU_PHRASES_START, 300, "АБУ В СЕРВЕРНОЙ")
 
-@dp.message(Command("anime"))
-async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    await _trigger_generic_mode(message, board_id, stream, 'anime_mode', ["Аниме режим активирован! 🌸"], 300, "ANIME MODE")
 @dp.message(Command("stop"))
 async def cmd_stop(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -16596,63 +16687,6 @@ async def analyze_report_with_ai(reported_post_text: str, dossier_text: str) -> 
         }
 
 
-async def process_report_pipeline(bot, message: types.Message, reported_msg: types.Message, author_id: int, board_id: str, stream: str = 'ru'):
-    """
-    Background pipeline: fetches suspect history, runs AI analysis, sends feedback to user, notifies all admins.
-    """
-    chat_id = message.chat.id
-    msg_id = reported_msg.message_id
-    reporter_id = message.from_user.id
-    reporter_name = message.from_user.username or message.from_user.full_name or str(reporter_id)
-
-    # 1. Resolve post_num and thread_id if available
-    post_num = None
-    thread_id = None
-    async with storage_lock:
-        lookup_key = (reported_msg.chat.id, reported_msg.message_id)
-        post_num = message_to_post.get(lookup_key)
-    if not post_num:
-        info = await get_post_info_by_copy(reported_msg.chat.id, reported_msg.message_id)
-        if info:
-            post_num = info[0]
-
-    reported_text = reported_msg.text or reported_msg.caption or '<медиа>'
-    if post_num:
-        p_data = await get_post_by_num(post_num)
-        if p_data:
-            thread_id = p_data.get("thread_id") or post_num
-            if not reported_msg.text and not reported_msg.caption and p_data.get("text_content"):
-                reported_text = p_data.get("text_content")
-
-    # 2. Fetch suspect dossier (15-20 posts + media descriptions)
-    dossier_text, total_posts, posts_24h = await fetch_user_report_dossier(author_id, limit=15)
-
-    # 3. AI analysis
-    ai_res = await analyze_report_with_ai(reported_text, dossier_text)
-    analysis_text = ai_res["full_analysis"]
-
-    # 4. Extract anon verdict for reporting user
-    anon_verdict = ""
-    for line in analysis_text.splitlines():
-        if "Вердикт для анона" in line or "вердикт" in line.lower():
-            anon_verdict = line.strip()
-            break
-    if not anon_verdict:
-        anon_verdict = "Жалоба принята. Модераторы уже изучают твоё досье."
-
-    # 5. Feedback to reporting user
-    try:
-        user_reply = (
-            f"✅ Репорт принят на рассмотрение. <b>СПАСИБО УЁБОК!</b>\n\n"
-            f"🤖 <b>Вердикт нейромодератора:</b>\n"
-            f"<blockquote>{anon_verdict}</blockquote>\n"
-            f"<i>Досье подозреваемого ({total_posts} постов) направлено администраторам.</i>"
-        )
-        feedback_msg = await message.answer(user_reply, parse_mode="HTML")
-        spawn_task(delete_message_after_delay(feedback_msg, 20))
-    except Exception as e:
-        runtime_logger.warning(f"Failed sending report feedback to user {reporter_id}: {e}")
-
 def build_report_mod_keyboard(mask: int, author_id: int, post_num: int, board_id: str, chat_id: int, msg_id: int):
     """
     Builds an interactive multi-select inline keyboard for report moderation.
@@ -17004,7 +17038,7 @@ async def on_report_dismiss(callback: types.CallbackQuery, board_id: str | None 
     """
     parts = callback.data.split(":")
     b_id = parts[3]
-    post_num = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+    post_num = int(parts[2]) if len(parts) > 2 and parts[2].isdecimal() else 0
 
     if not is_admin(callback.from_user.id, b_id):
         await callback.answer("У вас нет прав администратора.", show_alert=True)

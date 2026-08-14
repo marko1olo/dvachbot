@@ -220,11 +220,12 @@ const FailedMediaCache = {
     normalizeUrl(url) {
         if (!url || typeof url !== 'string' || url.startsWith('data:')) return '';
         try {
-            const loc = (typeof window !== 'undefined' && window.location) ? window.location.href : 'http://localhost';
+            const loc = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : 'http://localhost';
             const parsed = new URL(url, loc);
-            return parsed.origin + parsed.pathname;
+            return parsed.pathname;
         } catch (e) {
-            return String(url).split('?')[0].split('#')[0];
+            const pathOnly = String(url).split('?')[0].split('#')[0];
+            return pathOnly.replace(/^https?:\/\/[^\/]+/, '') || pathOnly;
         }
     },
     markFailed(url) {
@@ -232,7 +233,8 @@ const FailedMediaCache = {
         if (key) this._failedUrls.add(key);
     },
     isFailed(url) {
-        return false; // T.A.R.S Mode: Never blindly cache failures, force browser to try loading media.
+        const key = this.normalizeUrl(url);
+        return Boolean(key && this._failedUrls.has(key));
     },
     clear() {
         this._failedUrls.clear();
@@ -10883,10 +10885,11 @@ const WSManager = {
 };
 
 function getBrokenMediaPlaceholderHtml(originalUrl = '') {
+    const label = (typeof t === 'function' ? t('media_unavailable', '⚠️ Media Unavailable') : '⚠️ Media Unavailable');
     const dlLink = originalUrl ? `<a href="${originalUrl}" target="_blank" class="broken-media-dl" style="color:var(--accent-primary, #e25822); text-decoration:none; font-size:0.75rem; margin-top:4px; display:inline-flex; align-items:center; gap:3px;">📂 Скачать оригинал</a>` : '';
     return `<div class="broken-media-card" style="display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; height:100%; min-height:85px; padding:8px; box-sizing:border-box; text-align:center;">
-        <img src="/static/img/mascot/mascot_confused.png" class="broken-mascot" style="max-height:48px; width:auto; opacity:0.75; object-fit:contain;" alt="Файл недоступен">
-        <span style="font-size:0.75rem; color:var(--text-secondary, #888); margin-top:4px;">Файл недоступен</span>
+        <img src="/static/img/mascot/mascot_confused.png" class="broken-mascot" style="max-height:48px; width:auto; opacity:0.75; object-fit:contain;" alt="${label}">
+        <span style="font-size:0.75rem; color:var(--text-secondary, #888); margin-top:4px;">${label}</span>
         ${dlLink}
     </div>`;
 }
@@ -11021,14 +11024,21 @@ const PostRenderer = {
                     }
                 }
                 const url = (f.original_file_id ? `/files/${f.original_file_id}` : f.original_url) || "";
+                const origUrl = f.original_url || "";
                 let thumbCandidate = (f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : (f.original_file_id ? `/files/${f.original_file_id}` : (f.thumbnail_url || f.original_url))) || null;
 
-                if (typeof FailedMediaCache !== 'undefined' && url && FailedMediaCache.isFailed(url)) {
-                    imgContent += `<div class="file-thumb broken-media">${getBrokenMediaPlaceholderHtml(url)}</div>`;
+                const isFailedMedia = typeof FailedMediaCache !== 'undefined' && (
+                    (url && FailedMediaCache.isFailed(url)) ||
+                    (origUrl && FailedMediaCache.isFailed(origUrl)) ||
+                    (f.thumbnail_url && FailedMediaCache.isFailed(f.thumbnail_url))
+                );
+
+                if (isFailedMedia) {
+                    imgContent += `<div class="file-thumb broken-media">${getBrokenMediaPlaceholderHtml(origUrl || url)}</div>`;
                     return;
                 }
 
-                if (thumbCandidate && typeof FailedMediaCache !== 'undefined' && FailedMediaCache.isFailed(thumbCandidate)) {
+                if (thumbCandidate && typeof FailedMediaCache !== 'undefined' && (FailedMediaCache.isFailed(thumbCandidate) || (origUrl && FailedMediaCache.isFailed(origUrl)))) {
                     thumbCandidate = url;
                 }
                 const isVideoType = ['video', 'gif', 'animation', 'video_note'].includes(f.type);
@@ -11481,6 +11491,11 @@ function handleImageError(img) {
     const originalUrl = parent ? (parent.href || parent.dataset.src || currentSrc) : (img.dataset.src || currentSrc);
 
     const renderStaticError = () => {
+        img.onerror = null;
+        if (typeof FailedMediaCache !== 'undefined') {
+            if (currentSrc) FailedMediaCache.markFailed(currentSrc);
+            if (originalUrl) FailedMediaCache.markFailed(originalUrl);
+        }
         img.classList.add('broken-final');
         if (parent) {
             parent.classList.remove('is-loading');
@@ -11492,14 +11507,13 @@ function handleImageError(img) {
     };
 
     if (typeof FailedMediaCache !== 'undefined') {
-        if (FailedMediaCache.isFailed(currentSrc) && (currentSrc === originalUrl || FailedMediaCache.isFailed(originalUrl))) {
+        if (FailedMediaCache.isFailed(currentSrc) || FailedMediaCache.isFailed(originalUrl)) {
             renderStaticError();
             return;
         }
     }
 
     if (!originalUrl) {
-        if (typeof FailedMediaCache !== 'undefined' && currentSrc) FailedMediaCache.markFailed(currentSrc);
         renderStaticError();
         return;
     }
@@ -11540,24 +11554,19 @@ function handleImageError(img) {
     else if (currentSrc.includes("telegram.org")) failedType = "telegram";
     else if (currentSrc.includes("huggingface.co")) failedType = "huggingface";
 
+    if (!failedType) {
+        renderStaticError();
+        return;
+    }
+
     let skipped = img.dataset.skippedHosts ? img.dataset.skippedHosts.split(",").filter(Boolean) : [];
-    if (failedType && !skipped.includes(failedType)) {
+    if (!skipped.includes(failedType)) {
         skipped.push(failedType);
     }
     img.dataset.skippedHosts = skipped.join(",");
 
-    if (skipped.length >= 6 || (!failedType && skipped.length >= 2)) {
-        if (typeof FailedMediaCache !== 'undefined') {
-            FailedMediaCache.markFailed(originalUrl);
-            FailedMediaCache.markFailed(currentSrc);
-        }
-        img.classList.add('broken-final');
-        img.style.display = 'none';
-        if (parent) {
-            parent.classList.remove('is-loading');
-            parent.classList.add('broken-media');
-            parent.innerHTML = getBrokenMediaPlaceholderHtml(originalUrl);
-        }
+    if (skipped.length >= 6) {
+        renderStaticError();
         return;
     }
 
@@ -11571,12 +11580,12 @@ function handleImageError(img) {
         }
         const newUrl = urlObj.toString();
 
-        if (newUrl === currentSrc && !failedType) {
+        if (newUrl === currentSrc) {
             renderStaticError();
             return;
         }
 
-        console.log(`[MediaRescue] Redirect failed for type: ${failedType || 'local'}. Swapping to skip parameter: ${img.dataset.skippedHosts}`);
+        console.log(`[MediaRescue] Redirect failed for type: ${failedType}. Swapping to skip parameter: ${img.dataset.skippedHosts}`);
 
         if (img.tagName === 'VIDEO') {
             img.onerror = () => handleImageError(img);
@@ -11611,9 +11620,6 @@ function handleImageError(img) {
 
         if (parent) parent.classList.remove('is-loading');
     } catch (e) {
-        if (typeof FailedMediaCache !== 'undefined') {
-            FailedMediaCache.markFailed(originalUrl);
-        }
         renderStaticError();
     }
 }

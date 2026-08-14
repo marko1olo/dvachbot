@@ -142,6 +142,18 @@ POLISH_DATA = {
         'босс': 'Panie Kierowniku',
         'вор': 'złodziej',
         'воры': 'złodzieje',
+        'двач': ['Wykop', 'czat'],
+        'сосач': 'jebany Wykop',
+        'анон': ['Anon', 'mirek', 'Anonim'],
+        'аноны': ['mirki', 'wykopki'],
+        'модератор': ['moderator', 'pan z PiS-u', 'jany mod', 'admin', 'cieć'],
+        'бан': ['banicja', 'wypierdalaj', 'ban'],
+        'деньги': ['złote', 'hajs', 'cebule', 'pięćset plus', 'pieniądze'],
+        'пиво': ['Żubrówka', 'Tyskie', 'Harnaś', 'Żywiec', 'piwo', 'browar', 'piwko'],
+        'водка': ['wódeczka', 'Żubrówka z trawą', 'czysta', 'wódka'],
+        'машина': ['Passat 1.9 TDI', 'Fiat 126p Maluch', 'Golf trójka', 'samochód', 'Passat TDI', 'Maluch'],
+        'работа': ['Januszex', 'fabryka azbestu', 'robota u Janusza', 'robota'],
+        'еда': ['pierogi ruskie', 'bigos', 'kiełbasa śląska', 'schabowy z kapustą', 'jedzenie', 'pierogi'],
         'немцы': 'Niemcy',
         'немец': 'Niemiec',
 
@@ -221,9 +233,6 @@ POLISH_DATA = {
         # ─── Бытовые понятия ─────────────────────────────────────────
         'дом': 'dom',
         'квартира': 'mieszkanie',
-        'машина': ['samochód', 'Passat TDI', 'Maluch'],
-        'работа': 'robota',
-        'деньги': ['pieniądze', 'hajs'],
         'бабки': 'hajs',
         'зарплата': ['wypłata', 'hajs'],
         'магазин': ['sklep', 'Biedronka'],
@@ -236,10 +245,7 @@ POLISH_DATA = {
         'уник': 'studia',
 
         # ─── Еда и напитки (Pierogi, Bigos, Kiełbasa...) ────────────
-        'еда': ['jedzenie', 'pierogi', 'bigos'],
         'вода': 'woda',
-        'пиво': ['piwo', 'browar', 'piwko'],
-        'водка': ['wódka', 'Żubrówka'],
         'колбаса': 'kiełbasa',
         'сосиска': 'kiełbasa',
         'пельмени': ['pierogi', 'pierogi z mięsem', 'uszka'],
@@ -287,7 +293,6 @@ POLISH_DATA = {
         'сообщение': 'wiadomość',
         'админ': 'admin',
         'тгач': 'czat',
-        'двач': 'czat',
 
         # ─── Эмоции и состояния ──────────────────────────────────────
         'счастье': 'szczęście',
@@ -738,9 +743,7 @@ POLISH_DATA = {
         'мамка': ['stara', 'matka', 'matula'],
         'конча':['spust', 'sperma'],
         'малафья': 'sperma',
-        'бан': 'ban',
         'забанили': ['zbanowali', 'wyjebali'],
-        'модератор':['jany mod', 'admin', 'cieć'],
         'модер': 'mod',
         'школьник': ['gimbus', 'szkolniak'],
         'школота':['gimbaza', 'dzieciarnia'],

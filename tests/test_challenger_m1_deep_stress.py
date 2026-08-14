@@ -36,11 +36,11 @@ class TestChallengerM1DeepStress(unittest.TestCase):
     def test_02_corrupted_trailing_quotes_entities_and_text(self):
         """Test corrupted URL trailing quotes, HTML entities, and Cyrillic text"""
         test_cases = [
-            (">>1234 https://domain.com/b/res/343717.html'>ТГАЧ", "https://domain.com/b/res/343717.html", "&gt;ТГАЧ"),
-            ('>>1234 https://domain.com/b/res/343717.html">ТГАЧ', "https://domain.com/b/res/343717.html", "&quot;&gt;ТГАЧ"),
-            (">>1234 https://domain.com/path?a=1&b=2&#039;&gt;ТГАЧ", "https://domain.com/path?a=1&amp;b=2", "&gt;ТГАЧ"),
-            (">>1234 https://domain.com/path?a=1&b=2&#x27;&gt;ТГАЧ", "https://domain.com/path?a=1&amp;b=2", "&gt;ТГАЧ"),
-            (">>1234 https://domain.com/path?a=1&b=2&quot;&gt;ТГАЧ", "https://domain.com/path?a=1&amp;b=2", "&quot;&gt;ТГАЧ"),
+            (">>1234 https://domain.com/b/res/343717.html'>ТГАЧ", "https://domain.com/b/res/343717.html", "ТГАЧ"),
+            ('>>1234 https://domain.com/b/res/343717.html">ТГАЧ', "https://domain.com/b/res/343717.html", "ТГАЧ"),
+            (">>1234 https://domain.com/path?a=1&b=2&#039;&gt;ТГАЧ", "https://domain.com/path?a=1&amp;b=2", "ТГАЧ"),
+            (">>1234 https://domain.com/path?a=1&b=2&#x27;&gt;ТГАЧ", "https://domain.com/path?a=1&amp;b=2", "ТГАЧ"),
+            (">>1234 https://domain.com/path?a=1&b=2&quot;&gt;ТГАЧ", "https://domain.com/path?a=1&amp;b=2", "ТГАЧ"),
         ]
         for raw, expected_href, expected_suffix_end in test_cases:
             res_site = format_post_text_site(raw)

@@ -804,7 +804,7 @@ URL_PATTERN = re.compile(r'(https?://[^\s<>"\'`]+)')
 
 def _clean_url_and_suffix(full: str):
     delim_match = re.search(
-        r"&(?:quot|gt|lt|apos|#0*39|#0*38|#x0*27|#X0*27);", full, flags=re.IGNORECASE
+        r"&(?:amp;)?(?:quot|gt|lt|apos|#0*39|#0*38|#x0*27|#X0*27);", full, flags=re.IGNORECASE
     )
     if delim_match:
         url_part = full[: delim_match.start()]
@@ -1184,9 +1184,6 @@ class PostNumsRequest(BaseModel):
 
 class TokenAuth(BaseModel):
     token: str
-
-class TMAAuthRequest(BaseModel):
-    initData: str
 
 
 class FavouriteThreads(BaseModel):
@@ -1711,7 +1708,6 @@ manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global SPAM_WORDS_CACHE
     tasks = []
 
     def startup_mark(label: str, started_at: float | None = None) -> float:

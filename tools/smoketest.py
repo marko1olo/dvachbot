@@ -109,20 +109,19 @@ def stage_schema(ctx):
         with contextlib.redirect_stdout(io.StringIO()):
             asyncio.run(D.initialize_database())
         with contextlib.closing(sqlite3.connect(D.DB_NAME)) as con:
-        missing = []
-        for table, cols in {need}.items():
-            have = [r[1] for r in con.execute(f"PRAGMA table_info({{table}})")]
-            if not have:
-                missing.append(f"{{table}} (таблицы нет)")
-                continue
-            for c in cols:
-                if c not in have:
-                    missing.append(f"{{table}}.{{c}}")
-        n_tables = con.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0]
-        n_idx = con.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='index'").fetchone()[0]
-        con.close()
+            missing = []
+            for table, cols in {need}.items():
+                have = [r[1] for r in con.execute(f"PRAGMA table_info({{table}})")]
+                if not have:
+                    missing.append(f"{{table}} (таблицы нет)")
+                    continue
+                for c in cols:
+                    if c not in have:
+                        missing.append(f"{{table}}.{{c}}")
+            n_tables = con.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'").fetchone()[0]
+            n_idx = con.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index'").fetchone()[0]
         print(f"MISSING={{'|'.join(missing)}}")
         print(f"TABLES={{n_tables}} INDEXES={{n_idx}}")
         print("SCHEMA_OK")
@@ -164,8 +163,13 @@ def stage_handlers(ctx):
             obs = getattr(main.dp, obs_name, None)
             if obs is None:
                 continue
-            counts[obs_name] = len(obs.handlers)
-            for h in obs.handlers:
+            handlers = list(obs.handlers)
+            for r in getattr(main.dp, "sub_routers", []):
+                r_obs = getattr(r, obs_name, None)
+                if r_obs:
+                    handlers.extend(r_obs.handlers)
+            counts[obs_name] = len(handlers)
+            for h in handlers:
                 cb = h.callback
                 params = list(inspect.signature(cb).parameters)
                 if not params:
@@ -246,6 +250,10 @@ STAGES = {
 
 
 def main(argv=None):
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("stages", nargs="*", help="какие этапы прогнать (по умолчанию все)")

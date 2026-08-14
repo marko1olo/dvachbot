@@ -1,65 +1,63 @@
 import unittest
-from unittest.mock import patch
 import os
 import sys
 
 # Ensure import paths work
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from new_modes import _choose, matrix_transform, _PROFILES, _apply_matrix_effects
+from new_modes import (
+    matrix_transform,
+    rus_transform,
+    abu_transform,
+    oldweb_transform,
+    jewish_transform,
+    america_transform,
+    holiday_transform,
+    transform_america,
+    transform_holiday,
+)
 
-class TestChoose(unittest.TestCase):
-    @patch('new_modes.random.choice')
-    def test_choose_with_list(self, mock_choice):
-        mock_choice.return_value = 'b'
-        values = ['a', 'b', 'c']
-        result = _choose(values)
-        self.assertEqual(result, 'b')
-        mock_choice.assert_called_once_with(('a', 'b', 'c'))
+class TestNewModes(unittest.TestCase):
+    def test_matrix_transform(self):
+        mode, text = matrix_transform("hello world test text")
+        self.assertEqual(mode, "text")
+        self.assertTrue("MATRIX" in text.upper() or "SIGNAL" in text.upper() or "DECRYPT" in text.upper() or "TRACE" in text.upper())
 
-    @patch('new_modes.random.choice')
-    def test_choose_with_tuple(self, mock_choice):
-        mock_choice.return_value = 'x'
-        values = ('x', 'y')
-        result = _choose(values)
-        self.assertEqual(result, 'x')
-        mock_choice.assert_called_once_with(('x', 'y'))
+    def test_rus_transform(self):
+        mode, text = rus_transform("я пошел пить воду")
+        self.assertEqual(mode, "text")
+        self.assertIn("Байкал", text)
 
-    @patch('new_modes.random.choice')
-    def test_choose_with_set(self, mock_choice):
-        mock_choice.return_value = '1'
-        values = {'1', '2'}
-        result = _choose(values)
-        self.assertEqual(result, '1')
+    def test_abu_transform(self):
+        mode, text = abu_transform("привет двач. как дела?")
+        self.assertEqual(mode, "text")
+        self.assertTrue("АБУ" in text.upper() or "2CH" in text.upper() or "ДВАЧ" in text.upper())
 
-        # We can't guarantee order with set, so we check if the arg is a tuple with those elements
-        args, _ = mock_choice.call_args
-        self.assertIsInstance(args[0], tuple)
-        self.assertEqual(set(args[0]), {'1', '2'})
+    def test_oldweb_transform(self):
+        mode, text = oldweb_transform("автор привет медведь круто")
+        self.assertEqual(mode, "text")
+        self.assertIn("Winamp", text)
+        self.assertTrue("аффтар" in text.lower())
 
-    def test_choose_empty_sequence(self):
-        # random.choice raises IndexError when choosing from an empty sequence
-        with self.assertRaises(IndexError):
-            _choose([])
+    def test_jewish_transform(self):
+        mode, text = jewish_transform("почем рыба на привозе")
+        self.assertEqual(mode, "text")
+        self.assertIn("ДЕРИБАСОВСКАЯ", text)
 
+    def test_america_transform(self):
+        mode, text = america_transform("i want my money back")
+        self.assertEqual(mode, "text")
+        self.assertIn("DISTRICT COURT", text)
 
+    def test_holiday_transform(self):
+        mode, text = holiday_transform("с новым годом аноны")
+        self.assertEqual(mode, "text")
+        self.assertIn("НОВОГОДНИЙ", text)
 
-class TestMatrixTransform(unittest.TestCase):
-    @patch('new_modes._decorate_custom')
-    def test_matrix_transform_basic(self, mock_decorate):
-        mock_decorate.return_value = "decorated text"
-        result = matrix_transform("input text")
-
-        self.assertEqual(result, ("text", "decorated text"))
-        mock_decorate.assert_called_once_with("input text", _PROFILES["matrix"], _apply_matrix_effects)
-
-    @patch('new_modes._decorate_custom')
-    def test_matrix_transform_with_header(self, mock_decorate):
-        mock_decorate.return_value = "decorated text"
-        result = matrix_transform("input text", header="some header")
-
-        self.assertEqual(result, ("text", "decorated text"))
-        mock_decorate.assert_called_once_with("input text", _PROFILES["matrix"], _apply_matrix_effects)
+    def test_aliases(self):
+        self.assertIs(america_transform, transform_america)
+        self.assertIs(holiday_transform, transform_holiday)
 
 if __name__ == '__main__':
     unittest.main()
+
