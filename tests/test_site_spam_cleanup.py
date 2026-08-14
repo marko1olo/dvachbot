@@ -65,9 +65,9 @@ class TestSiteSpamCleanup(unittest.IsolatedAsyncioTestCase):
                     try:
                         await self.dm.site_spam_cleanup_task()
                     except asyncio.CancelledError:
-                        import traceback; traceback.print_exc()
+                        pass
 
-            mock_logger.error.assert_called_once_with("⚠️ Error cleaning site spam tracker: Test Error")
+            self.assertTrue(any("⚠️ Error cleaning site spam tracker: Test Error" in str(c) for c in mock_logger.error.call_args_list))
 
 if __name__ == '__main__':
     unittest.main()

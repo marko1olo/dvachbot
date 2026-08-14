@@ -4784,7 +4784,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
 # ══════════════════════════════════════════════════════════════════════════════
 # /daily — ежедневный бонус
 # ══════════════════════════════════════════════════════════════════════════════
-@dp.message(Command("daily", "bonus", "╨╡╨╢╨╡╨┤╨╜╨╡╨▓╨╜╨╛"))
+@dp.message(Command("daily", "bonus", "ежедневно", "бонус"))
 async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -4859,7 +4859,7 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
 # ══════════════════════════════════════════════════════════════════════════════
 # /top — топ аноны по балансу (анонимно — только номер из паспорта)
 # ══════════════════════════════════════════════════════════════════════════════
-@dp.message(Command("top", "leaderboard", "╤é╨╛╨┐"))
+@dp.message(Command("top", "leaderboard", "топ", "лидеры"))
 async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
 
@@ -4904,7 +4904,7 @@ async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'r
 
 
 
-@dp.message(Command("accept", "yes", "ok", "╨┐╤Ç╨╕╨╜╤Å╤é╤î"))
+@dp.message(Command("accept", "yes", "ok", "принять", "согласен"))
 async def cmd_accept_shortcut(message: Message, board_id: str | None):
     if not board_id: return
     # Срабатывает СТРОГО по Reply к сообщению дуэли
@@ -4922,7 +4922,7 @@ async def cmd_accept_shortcut(message: Message, board_id: str | None):
     if found_ch:
         await accept_duel_logic(message, found_ch, board_id)
 
-@dp.message(Command("decl", "no", "╨╛╤é╨║╨╗╨╛╨╜╨╕╤é╤î"))
+@dp.message(Command("decl", "no", "отклонить", "отказ"))
 async def cmd_decline_shortcut(message: Message, board_id: str | None):
     if not board_id: return
     # Срабатывает СТРОГО по Reply к сообщению дуэли
@@ -5342,7 +5342,7 @@ async def cb_support_prank(callback: types.CallbackQuery):
     except Exception:
         await callback.message.answer(SUPPORT_RESPONSES['text'], parse_mode="HTML")
     await callback.answer()
-@dp.message(Command("my_stats", "mystats", "statsme", "╨┐╤Ç╨╛╤ä╨╕╨╗╤î"))
+@dp.message(Command("my_stats", "mystats", "statsme", "профиль", "паспорт"))
 async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     try: spawn_task(delete_message_after_delay(message, 5))
@@ -7340,7 +7340,7 @@ async def cmd_contextual_replies(message: types.Message, board_id: str | None, s
     await message.delete()
 
 
-@dp.message(Command("roast", "prozharka", "╨┐╤Ç╨╛╨╢╨░╤Ç╨║╨░"))
+@dp.message(Command("roast", "prozharka", "прожарка", "база"))
 async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
     🔥 Прожарка борды нейросетью.
@@ -8274,7 +8274,7 @@ async def cq_show_active_threads(callback: types.CallbackQuery, board_id: str | 
         pass
     except Exception as e:
         print(f"⛔ Непредвиденная ошибка в cq_show_active_threads: {e}")
-@dp.message(Command("tags", "tagcloud", "╤é╨╡╨│╨╕", "╤é╨╡╨│"))
+@dp.message(Command("tags", "tagcloud", "теги", "тег", "облако_тегов"))
 async def cmd_tag_cloud(message: types.Message, board_id: str | None = None, stream: str = 'ru'):
     """
     Выводит облако тегов медиафайлов из FileRegistry с кнопками просмотра.
@@ -8463,7 +8463,7 @@ async def cmd_dice(message: types.Message, board_id: str | None, stream: str = '
         pass
 
 
-@dp.message(Command("quote", "╤å╨╕╤é╨░╤é╨░", "random_post"))
+@dp.message(Command("quote", "цитата", "пост", "random_post"))
 async def cmd_quote(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     import html
@@ -14927,7 +14927,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
                 )
             )
             pending_edit_tasks[post_num] = new_task
-@dp.message(Command("roll", "roulette", "ruletka", "rulet", "fortune", "╤ä╨╛╤Ç╤é╤â╨╜╨░"))
+@dp.message(Command("roll", "roulette", "ruletka", "rulet", "fortune", "фортуна", "рулетка"))
 async def cmd_roll(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
@@ -17080,7 +17080,7 @@ STOP_WORDS = set([
     'всегда', 'конечно', 'всю', 'между', 'это', 'просто', 'блин', 'бля', 'ебать'
 ])
 
-@dp.message(Command("wordcloud", "words", "╨╛╨▒╨╗╨░╨║╨╛"))
+@dp.message(Command("wordcloud", "words", "облако", "слова"))
 async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
