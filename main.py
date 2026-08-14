@@ -4251,32 +4251,25 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
                 (user_id, board_id, -loss, json.dumps(active_items), loss)
             )
             await db.commit()
-        await message.answer(f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss}</code> шекелей!", parse_mode="HTML")
+        tinfoil_text = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss}</code> шекелей!"
+        try:
+            from combat_visuals import draw_rob_poster
+            from aiogram.types import BufferedInputFile
+            buf = draw_rob_poster(user_id, target_id, loss, outcome="tinfoil", board_id=board_id)
+            photo_file = BufferedInputFile(buf.getvalue(), filename="rob_tinfoil.png")
+            await message.answer_photo(photo=photo_file, caption=tinfoil_text, parse_mode="HTML")
+        except Exception:
+            await message.answer(tinfoil_text, parse_mode="HTML")
         return
 
     async with db_lock:
-        # СНАЧАЛА списываем у жертвы, и только если сумма реально есть.
-        # t_balance читался выше вне лока и к этому моменту мог устареть: жертва
-        # успела потратиться или её уже грабанул кто-то другой. Условие
-        # `balance >= ?` делает проверку и списание одной атомарной операцией.
-        # Прежний код списывал безусловным upsert-ом, причём ПОСЛЕ начисления
-        # грабителю: несколько одновременных грабежей уводили баланс жертвы в
-        # минус, а грабителям начислялось то, чего у неё не было.
         cursor = await db.execute(
             "UPDATE Users SET balance = balance - ? "
             "WHERE user_id = ? AND board_id = ? AND balance >= ?",
             (stolen, target_id, board_id, stolen)
         )
-        # Корректность обеспечивает само условие в UPDATE: списать больше, чем
-        # есть, оно не даст ни при какой конкуренции. rowcount нужен только
-        # чтобы решить, начислять ли грабителю. Доверяем ему лишь когда это
-        # настоящее целое: aiosqlite всегда отдаёт int, а тестовые дубли - то
-        # None, то авто-атрибут MagicMock. В неясном случае считаем, что
-        # списание прошло, то есть ведём себя как прежний код.
         rowcount = getattr(cursor, "rowcount", None)
         robbed = (rowcount == 1) if isinstance(rowcount, int) else True
-        # Заточка расходуется при любом исходе - попытка была. Начисление
-        # нулевое, если списать не удалось.
         await db.execute(
             "INSERT INTO Users (user_id, board_id, balance, active_items) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?, active_items = excluded.active_items",
@@ -4289,9 +4282,19 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
             "🔪 Пока ты замахивался, у жертвы кончились шекели. Заточка сломалась впустую.",
             parse_mode="HTML")
         return
-    await message.answer(f"🔪 <b>ОГРАБЛЕНИЕ УДАЛОСЬ!</b>\nТы подкрался и спиздил <code>{stolen}</code> шекелей у жертвы.", parse_mode="HTML")
+
+    rob_success_text = f"🔪 <b>ОГРАБЛЕНИЕ УДАЛОСЬ!</b>\nТы подкрался и спиздил <code>{stolen}</code> шекелей у жертвы."
     try:
-        await message.bot.send_message(target_id, f"🔪 <b>Тебя ограбили в /b/!</b>\nКакой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей. Защититься можно, купив Шапочку из фольги в /shop.", parse_mode="HTML")
+        from combat_visuals import draw_rob_poster
+        from aiogram.types import BufferedInputFile
+        buf = draw_rob_poster(user_id, target_id, stolen, outcome="success", board_id=board_id)
+        photo_file = BufferedInputFile(buf.getvalue(), filename="rob_success.png")
+        await message.answer_photo(photo=photo_file, caption=rob_success_text, parse_mode="HTML")
+    except Exception:
+        await message.answer(rob_success_text, parse_mode="HTML")
+
+    try:
+        await message.bot.send_message(target_id, f"🔪 <b>Тебя ограбили в /{board_id}/!</b>\nКакой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей. Защититься можно, купив Шапочку из фольги в /shop.", parse_mode="HTML")
     except TelegramForbiddenError:
         await purge_users_from_board_ram(board_id, [target_id])
     except TelegramRetryAfter as e:

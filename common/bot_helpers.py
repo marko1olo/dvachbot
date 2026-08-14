@@ -79,13 +79,32 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
     l_tag = f"Анон-{loser_id%10000:04d}"
     you_w = " (ты)" if winner_id == user_id else ""
     you_l = " (ты)" if loser_id  == user_id else ""
-    await message.answer(
-        f"⚔️ <b>ДУЭЛЬ!</b>\n\n"
-        f"🎲 Монета летит...\n\n"
-        f"🏆 Победитель: <b>{w_tag}</b>{you_w} +{amount} RUB\n"
-        f"💀 Проигравший: <b>{l_tag}</b>{you_l} -{amount} RUB",
-        parse_mode="HTML"
+    duel_text = (
+        f"⚔️ <b>ДУЭЛЬ ЗАВЕРШЕНА!</b>\n\n"
+        f"🎲 Монета решила исход битвы:\n"
+        f"🏆 Победитель: <b>{w_tag}</b>{you_w} <code>+{amount:,} RUB</code>\n"
+        f"💀 Проигравший: <b>{l_tag}</b>{you_l} <code>-{amount:,} RUB</code>"
     )
+    try:
+        from combat_visuals import draw_duel_poster
+        from aiogram.types import BufferedInputFile
+        pfx_w = None
+        pfx_l = None
+        try:
+            async with db.execute("SELECT custom_prefix FROM Users WHERE user_id=? AND board_id=?", (winner_id, board_id)) as c:
+                r = await c.fetchone()
+                pfx_w = r[0] if r else None
+            async with db.execute("SELECT custom_prefix FROM Users WHERE user_id=? AND board_id=?", (loser_id, board_id)) as c:
+                r = await c.fetchone()
+                pfx_l = r[0] if r else None
+        except Exception:
+            pass
+
+        buf = draw_duel_poster(winner_id, loser_id, amount, board_id, pfx_w, pfx_l)
+        photo_file = BufferedInputFile(buf.getvalue(), filename="duel_poster.png")
+        await message.answer_photo(photo=photo_file, caption=duel_text, parse_mode="HTML")
+    except Exception:
+        await message.answer(duel_text, parse_mode="HTML")
 
 async def decline_duel_logic(message: types.Message, challenger_id: int):
     user_id = message.from_user.id

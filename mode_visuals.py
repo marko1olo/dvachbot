@@ -89,7 +89,8 @@ DYNAMIC_MODES = {
     'polish': 'templates/polish',
     'ukrainian': 'templates/ukrainian',
     'shizo': 'templates/shizo',
-    'zaputin': 'templates/zaputin'
+    'zaputin': 'templates/zaputin',
+    'gopnik': 'templates/gopnik'
 }
 
 FONTS_POOL = ['font1.ttf', 'font2.ttf']
@@ -228,9 +229,21 @@ def create_visual_post(mode, text, header=None):
                 f_ticker = get_font_by_size(24)
                 f_text = get_font_by_size(36)
                 
-                banner_title = "⚡ ТЕРМІНОВА БАВОВНА | ТГАЧ NEWS 24/7" if mode == 'ukrainian' else "⚡ СРОЧНАЯ МОЛНИЯ | ТГАЧ NEWS 24/7"
-                odraw.rectangle([0, 560, 1024, 760], fill=(10, 14, 22, 235))
-                odraw.rectangle([0, 560, 1024, 606], fill=(220, 35, 45, 255))
+                if mode == 'ukrainian':
+                    banner_title = "⚡ ТЕРМІНОВА БАВОВНА | ТГАЧ NEWS 24/7"
+                    bg_col = (20, 40, 70, 240)
+                    top_bar = (0, 140, 255, 255)
+                elif mode == 'zaputin':
+                    banner_title = "⚡ СРОЧНАЯ СВОДКА С ФРОНТА | ТГАЧ Z-NEWS"
+                    bg_col = (40, 15, 15, 240)
+                    top_bar = (220, 30, 20, 255)
+                else:
+                    banner_title = "⚡ СРОЧНАЯ МОЛНИЯ | ТГАЧ NEWS 24/7"
+                    bg_col = (10, 14, 22, 235)
+                    top_bar = (220, 35, 45, 255)
+
+                odraw.rectangle([0, 560, 1024, 760], fill=bg_col)
+                odraw.rectangle([0, 560, 1024, 606], fill=top_bar)
                 odraw.text((32, 572), banner_title, font=f_ticker, fill=(255, 255, 255, 255))
                 
                 wrapped = wrap_text_str(odraw, text, f_text, 960)
@@ -249,7 +262,13 @@ def create_visual_post(mode, text, header=None):
                 tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
                 bx, by, bw, bh = 100, 480, 824, min(240, th + 50)
                 
-                border_c = (0, 140, 255, 255) if mode == 'ukrainian' else (255, 60, 60, 255)
+                if mode == 'ukrainian':
+                    border_c = (0, 140, 255, 255)
+                elif mode == 'zaputin':
+                    border_c = (220, 30, 20, 255)
+                else:
+                    border_c = (255, 60, 60, 255)
+
                 odraw.rounded_rectangle([bx, by, bx + bw, by + bh], radius=22, fill=(255, 255, 255, 245), outline=border_c, width=3)
                 odraw.polygon([(bx + 80, by), (bx + 110, by - 30), (bx + 140, by)], fill=(255, 255, 255, 245), outline=border_c)
                 
@@ -271,7 +290,14 @@ def create_visual_post(mode, text, header=None):
                 f_dem_head = get_font_by_size(42)
                 f_dem_sub = get_font_by_size(24, bold=False)
                 
-                head_txt = clean_h if clean_h else ("СЛАВА УКРАЇНІ!" if mode == 'ukrainian' else "БАЗА ДВАЧА")
+                if mode == 'ukrainian':
+                    def_head = "СЛАВА УКРАЇНІ!"
+                elif mode == 'zaputin':
+                    def_head = "ГОЙДА, БРАТЬЯ!"
+                else:
+                    def_head = "БАЗА ДВАЧА"
+
+                head_txt = clean_h if clean_h else def_head
                 hw = draw.textlength(head_txt, font=f_dem_head)
                 draw.text(((1024 - hw)/2, 680), head_txt, font=f_dem_head, fill=(255, 215, 40, 255))
                 
