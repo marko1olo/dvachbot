@@ -91,8 +91,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("llama-3.3-70b-versatile", "groq"),
         ]
     elif model_preference == "summary" or model_preference == "gemini":
-        # Summarization priority: Smart Flash models first for maximum intelligence and deep reasoning
+        # Summarization priority: Gemini 3.7 Flash first, then Flash 3.6/3.5/2.5
         models_cascade = [
+            ("gemini-3.7-flash", "gemini"),
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-2.5-flash", "gemini"),
@@ -103,6 +104,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     elif model_preference == "qwen":
         models_cascade = [
             ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-3.7-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-2.5-flash-lite", "gemini"),
@@ -110,13 +112,15 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     elif model_preference == "llama":
         models_cascade = [
             ("llama-3.3-70b-versatile", "groq"),
+            ("gemini-3.7-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-2.5-flash-lite", "gemini"),
         ]
     else:
-        # Default summarization cascade: Smart Flash models first, then Lite models
+        # Default summarization cascade: Gemini 3.7 Flash first, then Smart Flash, then Lite models
         models_cascade = [
+            ("gemini-3.7-flash", "gemini"),
             ("gemini-3.6-flash", "gemini"),
             ("gemini-3.5-flash", "gemini"),
             ("gemini-2.5-flash", "gemini"),
@@ -126,6 +130,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("gemini-2.5-flash-lite", "gemini"),
             ("llama-3.3-70b-versatile", "groq"),
         ]
+
+
     
     system_instruction = prompt + (
         "\n\nCRITICAL OUTPUT FORMAT RULES:\n"
@@ -166,6 +172,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
         model_max_tokens = None if provider == "gemini" else 6000
 
         skip_model = False
+        consecutive_429 = 0
         for api_key in active_keys:
             if skip_model:
                 break
@@ -210,6 +217,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             except Exception as e:
                 err_str = str(e)
                 logger.warning(f"⚠️ {provider} call failed ({model_name}) key=...{api_key[-6:]}: {err_str[:120]}")
+                if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str.lower():
+                    logger.warning(f"⚠️ {provider} model {model_name} not found (404). Skipping model.")
+                    break
                 if provider == "groq" and ("401" in err_str or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower()):
                     logger.error(f"❌ Groq key {api_key[:12]}... is unauthorized (401). Removing from pool.")
                     groq_pool.ban_token(api_key)
@@ -232,20 +242,27 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} is 403 BANNED for {model_name}. Trying next key...")
                     await asyncio.sleep(3.0)
                     continue  # try next key, NOT next model
+                if "tokens per day" in err_str.lower() or "tpd" in err_str.lower():
+                    logger.warning(f"⚠️ {provider} daily token limit (TPD) reached for {model_name}. Skipping model.")
+                    break
                 if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower() or "exhausted" in err_str.lower():
-                    # 429 = rate limit on this key. Cooldown and try next key.
-                    _key_cooldowns[(provider, api_key)] = time.time() + 90.0
+                    consecutive_429 += 1
+                    _key_cooldowns[(provider, api_key)] = time.time() + 120.0
                     if provider == "gemini":
-                        google_pool.penalize_token(api_key, 90.0)
+                        google_pool.penalize_token(api_key, 120.0)
                     else:
-                        groq_pool.penalize_token(api_key, 90.0)
-                    logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} rate limited (429) for {model_name}. Trying next key...")
+                        groq_pool.penalize_token(api_key, 120.0)
+                    logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} rate limited (429) for {model_name}.")
+                    if consecutive_429 >= 2:
+                        logger.warning(f"⚠️ {provider} hit multiple consecutive 429s ({consecutive_429}) for {model_name}. Halting {provider} attempts to protect keys from spam.")
+                        break
                     await asyncio.sleep(3.0)
                     continue  # try next key
                 # Any other error: skip model entirely
                 logger.warning(f"⚠️ Unhandled error for {model_name}: {err_str[:80]}. Skipping model.")
-                await asyncio.sleep(3.0)
+                await asyncio.sleep(0.5)
                 break
+
 
     return "Нейронка сдохла. Не удалось сгенерировать саммари."
 

@@ -43,6 +43,8 @@ GROQ_MODELS = ["qwen/qwen3.6-27b"]
 GROQ_MODEL = GROQ_MODELS[0]
 GROQ_TIMEOUT = 45.0
 
+
+
 # === ПРОМПТЫ (Централизованное хранение) ===
 
 # Этот промпт импортируется в tagging_worker.py для первичной обработки

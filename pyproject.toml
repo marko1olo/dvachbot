@@ -10,3 +10,5 @@ dependencies = []
 asyncio_mode = "strict"
 testpaths = ["tests"]
 timeout = 30
+pythonpath = ["."]
+

@@ -164,6 +164,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             
             skip_gemini_models = False
 
+
+
             permanent_model_failures = 0
 
             timeout = httpx.Timeout(
@@ -349,15 +351,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     return json.dumps({"tags": "parse_error", "description": content}, ensure_ascii=False)
 
                             else:
-                                # Empty response (Safety filter rejection when using json_object on Gemini)
-                                if provider == "gemini":
-                                    logger.warning(f"⚠️ [VISION] [{source}] Gemini Safety Filter triggered. Skipping remaining Gemini models and falling back to Groq.")
-                                    skip_gemini_models = True
-                                    break
-                                else:
-                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) returned empty content. Trying next key.")
-                                    available_keys.remove(selected_key)
-                                    continue
+                                 # Empty response (Safety filter or empty candidates)
+                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) returned empty content. Trying next candidate...")
+                                 available_keys.remove(selected_key)
+                                 continue
                         except Exception as e:
                             err_str = str(e).lower()
                             if "413" in err_str: return "error_413"

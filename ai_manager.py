@@ -201,24 +201,13 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                     "5. Используй сочный двачерский сленг и мат по делу.\n\n"
                     f"Слова автора: «{transcript}»"
                 )
-                from common.token_pool import groq_pool
-                token = groq_pool.get_token() or os.getenv("GROQ_API_KEY")
-                if token:
-                    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-                    data = {
-                        "model": "llama-3.3-70b-versatile",
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 150,
-                        "temperature": 0.8
-                    }
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        resp = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data)
-                        if resp.status_code == 200:
-                            raw_roast = resp.json()["choices"][0]["message"]["content"]
-                            if raw_roast and len(raw_roast.strip()) > 5:
-                                roast = raw_roast.strip()
+                from summarize import summarize_text_with_hf
+                raw_roast = await summarize_text_with_hf(prompt, f"Слова автора: «{transcript}»", model_preference="persona")
+                if raw_roast and len(raw_roast.strip()) > 5:
+                    roast = clean_html_tags(raw_roast).strip()
             except Exception as roast_err:
                 logger.warning(f"⚠️ Ошибка генерации роаста: {roast_err}")
+
 
         if not roast:
             roasts = CONTEXTUAL_REPLIES.get(r'\b(голосов[ауи]|кружоч[еик]|гс|записал|послушай|аудио)\b', [

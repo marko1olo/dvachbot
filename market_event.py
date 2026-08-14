@@ -43,27 +43,41 @@ async def market_event_generator():
                 bot_instance = list(GLOBAL_BOTS.values())[0]
             
             if bot_instance:
+                from common.database import create_post
                 for board_id in BOARDS:
                     msg_text = f"📉 <b>НОВОСТИ ЧЕРНОГО РЫНКА (/shop)</b> 📈\n\n{event_text}\n\n<i>Цены на товары изменились!</i>"
-                    state['post_counter'] += 1
-                    post_num = state['post_counter']
                     content = {'type': 'text', 'text': msg_text}
-                    post_to_messages[post_num] = {}
-                    messages_storage[post_num] = {
-                        'board_id': board_id,
-                        'author_id': -1,
-                        'content': content,
-                        'timestamp': time.time()
-                    }
-                    await enqueue_board_message(board_id, {
-                        'board_id': board_id,
-                        'post_num': post_num,
-                        'author_id': -1,
-                        'author_name': 'Black Market',
-                        'content': content,
-                        'reply_to': None,
-                        'is_op': False
-                    })
+                    try:
+                        post_num = await create_post(
+                            author_id=-1,
+                            board_id=board_id,
+                            content=content,
+                            timestamp=time.time(),
+                            stream='ru'
+                        )
+                    except Exception:
+                        state['post_counter'] += 1
+                        post_num = state['post_counter']
+
+                    if post_num:
+                        state['post_counter'] = max(state.get('post_counter', 0), post_num)
+                        post_to_messages[post_num] = {}
+                        messages_storage[post_num] = {
+                            'board_id': board_id,
+                            'author_id': -1,
+                            'content': content,
+                            'timestamp': time.time()
+                        }
+                        await enqueue_board_message(board_id, {
+                            'board_id': board_id,
+                            'post_num': post_num,
+                            'author_id': -1,
+                            'author_name': 'Black Market',
+                            'content': content,
+                            'reply_to': None,
+                            'is_op': False
+                        })
+
             
             runtime_logger.info(f"Market event generated: {event_text}")
             

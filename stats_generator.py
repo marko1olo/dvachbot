@@ -11,6 +11,13 @@ import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
+import warnings
+import logging
+
+warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+warnings.filterwarnings("ignore", message=".*Glyph.*")
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
+logging.getLogger("matplotlib.category").setLevel(logging.WARNING)
 
 from common.chart_lock import matplotlib_guard
 
@@ -2184,25 +2191,22 @@ def _generate_chart_38(c, images):
         if not rows:
             return
 
-        # Unicode emoji regex (broad coverage)
+        # Standard emoji regex (emoticons, pictographs, symbols only)
         EMOJI_RE = _re.compile(
             "["
-            "\U0001F600-\U0001F64F"  # emoticons
-            "\U0001F300-\U0001F5FF"  # misc symbols
-            "\U0001F680-\U0001F6FF"  # transport
-            "\U0001F1E0-\U0001F1FF"  # flags
-            "\U00002702-\U000027B0"
-            "\U000024C2-\U0001F251"
-            "\U0001f926-\U0001f937"
-            "\U00010000-\U0010ffff"
-            "\u2640-\u2642"
-            "\u2600-\u2B55"
-            "\u200d"
-            "\u23cf"
-            "\u23e9"
-            "\u231a"
-            "\ufe0f"
-            "\u3030"
+            "\U0001F600-\U0001F64F"  # Emoticons
+            "\U0001F300-\U0001F5FF"  # Misc Symbols and Pictographs
+            "\U0001F680-\U0001F6FF"  # Transport and Map
+            "\U0001F1E0-\U0001F1FF"  # Flags
+            "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+            "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+            "\u2600-\u26FF"          # Misc Symbols
+            "\u2700-\u27BF"          # Dingbats
+            "\u231A-\u231B"
+            "\u23E9-\u23EC"
+            "\u23F0-\u23F3"
+            "\u200D"                 # ZWJ
+            "\uFE0F"                 # Variation Selector
             "]+", flags=_re.UNICODE)
 
         from collections import Counter

@@ -15,7 +15,12 @@ import sqlite3
 import aiohttp
 from typing import Optional, Tuple, Dict, List, Union
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
-import qrcode
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
+
+
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(_BASE_DIR, "fonts")
@@ -324,17 +329,28 @@ def create_procedural_background(width: int = 800, height: int = 800, style: int
     return img
 
 def generate_qr(target_url: str, box_size: int = 4, border: int = 1, fill_color: str = "#ff8800", back_color: str = "#0e0e14") -> Image.Image:
-    """Generates a customizable high-contrast QR code."""
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
-        box_size=box_size,
-        border=border,
-    )
-    qr.add_data(target_url)
-    qr.make(fit=True)
-    qr_img = qr.make_image(fill_color=fill_color, back_color=back_color).convert("RGBA")
-    return qr_img
+    """Generates a customizable high-contrast QR code with graceful fallback."""
+    if qrcode is not None:
+        try:
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_M,
+                box_size=box_size,
+                border=border,
+            )
+            qr.add_data(target_url)
+            qr.make(fit=True)
+            return qr.make_image(fill_color=fill_color, back_color=back_color).convert("RGBA")
+        except Exception:
+            pass
+    # Fallback placeholder if qrcode is missing or fails
+    size = max(60, box_size * 29 + border * 2)
+    fallback = Image.new("RGBA", (size, size), back_color)
+    fdraw = ImageDraw.Draw(fallback)
+    fdraw.rectangle([border, border, size - border - 1, size - border - 1], outline=fill_color, width=2)
+    fdraw.text((size // 2 - 22, size // 2 - 6), "TGACH", fill=fill_color)
+    return fallback
+
 
 def wrap_text(text: str, font: ImageFont.ImageFont, max_width: int, draw: ImageDraw.ImageDraw) -> List[str]:
     """Wraps text within a given pixel width."""
@@ -368,21 +384,41 @@ async def fetch_random_post_image(db_path: Optional[str] = None) -> Optional[Ima
         
     candidates = []
     try:
-        conn = sqlite3.connect(db_path)
-        c = conn.cursor()
-        c.execute("""
-            SELECT original_file_id, original_url FROM PostFiles 
-            WHERE file_type = 'photo' AND (original_file_id LIKE 'http%' OR original_url LIKE 'http%')
-            ORDER BY RANDOM() LIMIT 20
-        """)
-        rows = c.fetchall()
-        conn.close()
-        for fid, url in rows:
-            u = url if (url and url.startswith("http")) else fid
-            if u and u.startswith("http"):
-                candidates.append(u)
+        from common.db_pool import get_pool, db_lock
+        async with db_lock:
+            db = await get_pool()
+            async with db.execute("""
+                SELECT original_file_id, original_url FROM PostFiles 
+                WHERE file_type = 'photo' AND (original_file_id LIKE 'http%' OR original_url LIKE 'http%')
+                ORDER BY id DESC LIMIT 100
+            """) as cursor:
+                rows = await cursor.fetchall()
+            for fid, url in rows:
+                u = url if (url and url.startswith("http")) else fid
+                if u and u.startswith("http"):
+                    candidates.append(u)
     except Exception:
-        return None
+        # Fallback to sync sqlite in thread if get_pool fails
+        def _get_sync():
+            res = []
+            try:
+                conn = sqlite3.connect(db_path, timeout=5.0)
+                c = conn.cursor()
+                c.execute("""
+                    SELECT original_file_id, original_url FROM PostFiles 
+                    WHERE file_type = 'photo' AND (original_file_id LIKE 'http%' OR original_url LIKE 'http%')
+                    ORDER BY id DESC LIMIT 100
+                """)
+                for fid, url in c.fetchall():
+                    u = url if (url and url.startswith("http")) else fid
+                    if u and u.startswith("http"):
+                        res.append(u)
+                conn.close()
+            except Exception:
+                pass
+            return res
+        candidates = await asyncio.to_thread(_get_sync)
+
 
     if not candidates:
         return None

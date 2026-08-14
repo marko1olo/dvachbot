@@ -804,10 +804,12 @@ async def _create_indices(db):
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_backlinks_source ON Backlinks(source_post_num);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_crosslinks_target ON CrossLinks(target_board, target_post);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_crosslinks_source_post ON CrossLinks(source_post);")
-        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_crosslinks_target_post ON CrossLinks(target_post);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_bottles_recipient ON Bottles(recipient_id, is_read);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_mirror_queue_run ON MirrorQueue(next_run_at);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_pending_time ON PendingHF(created_at);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_fileregistry_pending_tags ON FileRegistry(created_at DESC) WHERE tags IS NULL OR tags = '';")
+
+
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_modqueue_status ON ModQueue(status);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_notif_recipient ON NotificationQueue(recipient_id);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_notif_source_post ON NotificationQueue(source_post_num);")
@@ -1218,13 +1220,9 @@ async def load_state_from_db(thread_boards: set) -> dict:
                         "reply_to_post_num": reply_to_post_num,
                     }
                     
-                    if thread_id and board_id in thread_boards:
-                        threads_data = state_data['board_data'][board_id]['threads_data']
-                        if thread_id in threads_data:
-                            threads_data[thread_id]['posts'].insert(0, post_num)
-                    
                     if post_num > max_post_num_loaded:
                         max_post_num_loaded = post_num
+
 
             async with db.execute("SELECT MAX(post_num) FROM Posts") as cursor:
                 result = await cursor.fetchone()

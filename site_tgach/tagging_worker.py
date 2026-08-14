@@ -351,14 +351,15 @@ async def get_neuro_tags(resized_image_bytes: bytes) -> str | None:
 async def get_tasks(db) -> list[dict]:
     tasks = []
     # 1. Из реестра (все необработанные файлы без ограничения по времени)
-    query_registry = f"""
+    query_registry = """
         SELECT file_id, file_type, thumbnail_id
         FROM FileRegistry
-        WHERE file_type IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document') 
-        AND (tags IS NULL OR tags = '')
+        WHERE (tags IS NULL OR tags = '')
         ORDER BY created_at DESC
-        LIMIT {BATCH_SIZE * 5}
+        LIMIT 50
     """
+
+
     try:
         async with db.execute(query_registry) as cursor:
             async for row in cursor:
@@ -772,19 +773,23 @@ async def tagging_loop():
                             description = parsed.get("description", "")
                         except json.JSONDecodeError:
                             tags = ai_response
-                    else:
-                        tags = ai_response
-
                 if tags is None and ai_response in (None, "error_api_exhausted"):
-                    logger.warning(f"⚠️ [TAGGER] API exhausted or internal error. Skipping DB update for {file_id} to retry later.")
-                    if ai_response == "error_api_exhausted":
-                        await asyncio.sleep(60)
+                    entry = TEMP_FAILED_FILES.get(file_id)
+                    fail_cnt = ((entry.get("cnt", 0) + 1) if isinstance(entry, dict) else 1)
+                    if fail_cnt >= 3:
+                        logger.warning(f"⚠️ [TAGGER] AI tagging failed {fail_cnt} times for {file_id[:15]}. Saving visual hashes and marking as 'no_tags'.")
+                        tags = "no_tags"
+                        if file_id in TEMP_FAILED_FILES:
+                            del TEMP_FAILED_FILES[file_id]
                     else:
-                        await asyncio.sleep(10)
-                    continue
-                    
-                if not tags:
-                    tags = "no_tags"
+                        logger.warning(f"⚠️ [TAGGER] API exhausted or internal error (attempt {fail_cnt}/3). Skipping DB update for {file_id} to retry later.")
+                        TEMP_FAILED_FILES[file_id] = {
+                            "until": time.time() + 300,
+                            "cnt": fail_cnt,
+                        }
+                        await asyncio.sleep(5)
+                        continue
+
 
                 tag_mark = "🏷️" if (tags and "error" not in tags) else "⚪"
 

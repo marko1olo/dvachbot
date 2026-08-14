@@ -39,14 +39,14 @@ HELP_HUB_PAGES_RU = {
         "• <code>/wallet</code> (<code>/кошелек</code>, <code>/баланс</code>) — Баланс, история операций и вывод.\n"
         "• <code>/work</code> (<code>/earn</code>, <code>/bomj</code>, <code>/работа</code>) — Пойти на заработки (сдать бутылки, взломать пентагон, продать почку).\n"
         "• <code>/daily</code> (<code>/bonus</code>, <code>/ежедневно</code>) — Ежедневный бонус (+75 ₽ + множитель за непрерывную серию дней).\n"
-        "• <code>/shop</code> (<code>/market</code>, <code>/магазин</code>) — Теневой Черный Рынок: шапочки из фольги, бронежилеты, пушки, сыворотка правды.\n"
+        "• <code>/shop</code> (<code>/market</code>, <code>/магазин</code>) — Теневой Чёрный Рынок: шапочки из фольги, бронежилеты, пушки, сыворотка правды.\n"
         "• <code>/top</code> (<code>/leaders</code>, <code>/богачи</code>) — Рейтинг богатейших олигархов борды.\n"
         "• <code>/duel &lt;ставка&gt;</code> — Вызвать анона на дуэль на шекели (50/50 случайная перестрелка по реплаю).\n"
         "• <code>/duel accept</code> — Принять активный вызов на дуэль."
     ),
     "media": (
         "🖼 <b>Раздел: Медиа, Инвайты и Демотиваторы</b>\n\n"
-        "• <code>/dem Заголовок | Подпись</code> — <b>Генератор демотиваторов!</b> Ответь реплаем на любое фото/картинку, и бот соберет каноничный постер с черной рамкой и шрифтом Impact.\n"
+        "• <code>/dem Заголовок | Подпись</code> — <b>Генератор демотиваторов!</b> Ответь реплаем на любое фото/картинку, и бот соберёт каноничный постер с чёрной рамкой и шрифтом Impact.\n"
         "• <code>/invite_pic</code> — Сгенерировать стильный постер с QR-кодом для вербовки друзей (7 визуальных стилей: Киберпанк, Демотиватор, Матрица, Аниме, Вейпорвейв и др.).\n"
         "• <code>/invite</code> — Получить порцию отборных текстовых фраз для зазыва анонов.\n"
         "• <code>/fap</code> (<code>/hent</code>, <code>/nsfw</code>) [число] — Случайный аниме/хентай арт (можно писать <code>/fap 5</code> для пака из 5 штук).\n"
@@ -56,12 +56,12 @@ HELP_HUB_PAGES_RU = {
     ),
     "ai": (
         "🧠 <b>Раздел: Нейросети и Аналитика</b>\n\n"
-        "• <code>/mystats</code> (<code>/профиль</code>) — <b>Личная карта деградации!</b> Генерирует стильную HD-карточку с реальным количеством постов, реакций, кринж-индексом и рангом.\n"
-        "• <code>/passport</code> (<code>/me</code>, <code>/паспорт</code>) — <b>Паспорт Тгачера:</b> статус, экипировка из /shop, титул, диагноз и соц. рейтинг.\n"
+        "• <code>/passport</code> (<code>/me</code>, <code>/паспорт</code>, <code>/деградация</code>, <code>/я</code>) — <b>Паспорт Тгачера!</b> HD-карточка с реальной статистикой, рангом, диагнозом, соц. рейтингом и экипировкой.\n"
         "• <code>/dossier</code> (<code>/дело</code>, <code>/досье</code>) — <b>Личное дело анона:</b> выписка из картотеки КГБ, инкриминируемые статьи и оперативная заметка (по реплаю или на себя).\n"
+        "• <code>/inv</code> (<code>/рюкзак</code>) — Рюкзак: активные баффы, оружие и предметы с Чёрного рынка.\n"
         "• <code>/summarize</code> (<code>/саммари</code>) — ИИ анализирует последние 50 постов треда и выдает краткую суть всех срачей.\n"
-        "• <code>/roast</code> (<code>/прожарка</code>) — Жесткая нейросетевая прожарка атмосферы и участников борды.\n"
-        "• <code>/stats</code> (<code>/activity</code>) — Полноценные графики активности доски (ритмы, тепловые карты и календарь).\n"
+        "• <code>/roast</code> (<code>/прожарка</code>) — Жёсткая нейросетевая прожарка атмосферы и участников борды.\n"
+        "• <code>/stats</code> (<code>/activity</code>) — Полноценные графики активности доски.\n"
         "• <code>/tags</code> (<code>/теги</code>) — Облако ключевых тем и популярных слов за сутки."
     ),
     "modes": (
@@ -104,7 +104,7 @@ HELP_HUB_PAGES_RU = {
     "all": (
         "📋 <b>Полный список всех команд ТГАЧ:</b>\n\n"
         "<b>Общение:</b> /start, /help, /redact, /whisper, /poll, /report, /quote, /dice\n"
-        "<b>Профиль/Досье:</b> /mystats, /passport, /dossier, /me\n"
+        "<b>Профиль/Досье:</b> /passport (/me, /я, /паспорт), /dossier, /inv\n"
         "<b>Экономика:</b> /wallet, /work, /daily, /shop, /top, /duel\n"
         "<b>Медиа:</b> /dem, /invite_pic, /invite, /fap, /loli, /roll, /ruletka\n"
         "<b>ИИ/Аналитика:</b> /summarize, /roast, /stats, /tags\n"
@@ -163,11 +163,13 @@ HELP_HUB_PAGES_EN = {
     ),
     "ai": (
         "🧠 <b>Section: AI & Analytics</b>\n\n"
+        "• <code>/passport</code> (<code>/me</code>, <code>/profile</code>, <code>/ya</code>) — <b>Anon Passport!</b> HD stats card with real post count, rank, diagnosis, social credit & equipped items.\n"
+        "• <code>/dossier</code> (<code>/case</code>) — <b>Secret Dossier:</b> KGB file with charges & operative note (reply to target or self).\n"
+        "• <code>/inv</code> — Backpack: active buffs, weapons & items from /shop.\n"
         "• <code>/summarize</code> — AI summary of last 50 thread posts.\n"
         "• <code>/roast</code> — Brutal AI roast of current discussions.\n"
         "• <code>/stats</code> — Activity graphs and heatmaps.\n"
-        "• <code>/tags</code> — Trending word cloud.\n"
-        "• <code>/me</code> (<code>/profile</code>) — Anon passport and stats."
+        "• <code>/tags</code> — Trending word cloud."
     ),
     "modes": (
         "🎭 <b>Section: Speech Modes (5 Minutes)</b>\n\n"
@@ -203,9 +205,10 @@ HELP_HUB_PAGES_EN = {
     "all": (
         "📋 <b>All Commands:</b>\n\n"
         "<b>Core:</b> /start, /help, /redact, /whisper, /poll, /report\n"
+        "<b>Profile/Dossier:</b> /passport (/me, /profile), /dossier, /inv\n"
         "<b>Economy:</b> /wallet, /work, /daily, /shop, /top, /duel\n"
         "<b>Media:</b> /dem, /invite_pic, /invite, /fap, /loli, /roll, /ruletka\n"
-        "<b>AI:</b> /summarize, /roast, /stats, /tags, /me\n"
+        "<b>AI:</b> /summarize, /roast, /stats, /tags\n"
         "<b>PvP:</b> /rob, /shit, /curse, /partyvan, /deanon\n"
         "<b>Settings:</b> /nsfw, /hide, /togglegif, /token\n"
         "<b>Modes:</b> /anime, /zaputin, /slavaukraine, /warhammer, /imperial, /gopnik, /schizo, /polish, /rus, /abu, /matrix, /oldweb, /jewish, /america\n"
@@ -298,9 +301,10 @@ HELP_HUB_PAGES_JP = {
     "all": (
         "📋 <b>全コマンド一覧:</b>\n\n"
         "<b>基本:</b> /start, /help, /redact, /whisper, /poll, /report\n"
+        "<b>プロフィール:</b> /passport (/me), /dossier, /inv\n"
         "<b>経済:</b> /wallet, /work, /daily, /shop, /top, /duel\n"
         "<b>メディア:</b> /dem, /invite_pic, /invite, /fap, /loli, /roll, /ruletka\n"
-        "<b>AI:</b> /summarize, /roast, /stats, /tags, /me\n"
+        "<b>AI:</b> /summarize, /roast, /stats, /tags\n"
         "<b>PvP:</b> /rob, /shit, /curse, /partyvan, /deanon\n"
         "<b>設定:</b> /nsfw, /hide, /togglegif, /token\n"
         "<b>モード:</b> /anime, /zaputin, /slavaukraine, /warhammer, /imperial, /gopnik, /schizo, /polish, /rus, /abu, /matrix, /oldweb, /jewish, /america\n"

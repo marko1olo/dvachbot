@@ -5684,34 +5684,8 @@ async def cb_work_refresh(callback: types.CallbackQuery, board_id: str | None):
     await callback.answer("🔄 Биржа обновлена")
 @dp.message(Command("mystats", "my_stats", "statsme", "карта", "деградация", "карточка"))
 async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
-    try: spawn_task(delete_message_after_delay(message, 5))
-    except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
-
-    user_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name or "Аноним"
-    
-    sent_msg = await message.answer("📊 Рисую твою личную карту деградации...")
-    
-    from stats_generator import generate_user_stats_card
-    from aiogram.types import BufferedInputFile
-    import asyncio
-
-    try:
-        loop = asyncio.get_running_loop()
-        photo_buf, text_report = await loop.run_in_executor(None, generate_user_stats_card, user_id, board_id, username)
-        if photo_buf:
-            photo = BufferedInputFile(photo_buf.getvalue(), filename='mystats.png')
-            await message.answer_photo(photo, caption=text_report, parse_mode="HTML")
-        else:
-            await message.answer(text_report, parse_mode="HTML")
-    except Exception:
-        await message.answer("⚠️ Ошибка генерации статистики. Пожалуйста, попробуйте позже.")
-
-    try: await sent_msg.delete()
-    except Exception: pass
-    try: await message.delete()
-    except Exception: pass
+    """Делегирует в cmd_passport — то же самое, без дублирования кода."""
+    await cmd_passport(message, board_id, stream)
 
 
 _PASSPORT_DATA = {
@@ -5880,7 +5854,7 @@ def _generate_passport_text(ctx: PassportContext) -> str:
         f"🏷 <b>{labels[2]}:</b> {ctx.rank}\n"
         f"💼 <b>{labels[3]}:</b> {ctx.role}\n"
         f"💩 <b>{labels[4]}:</b> {ctx.post_count}\n"
-        f"💸 <b>Баланс:</b> {int(ctx.balance)} RUB ({'Verified B' if ctx.is_verified else 'Limited A'})\n"
+        f"💸 <b>{'Balance' if ctx.lang=='en' else ('残高' if ctx.lang=='jp' else 'Баланс')}:</b> {int(ctx.balance)} {'RUB' if ctx.lang!='jp' else 'ルーブル'} ({'Verified B' if ctx.is_verified else 'Limited A'})\n"
         f"<code>{'—'*22}</code>\n"
         f"🧠 <b>{labels[5]}:</b> <i>{state_val}</i>\n"
         f"🎒 <b>{labels[6]}:</b> <i>{inv_val}</i>\n"
@@ -5892,98 +5866,96 @@ def _generate_passport_text(ctx: PassportContext) -> str:
 @dp.message(Command("passport", "me", "profile", "stats_me", "паспорт", "профиль", "я"))
 async def cmd_passport(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
-    Генерирует 'Паспорт Анона' с интерактивным меню (Карта деградации, Личное дело, Кошелек, Рынок).
+    Генерирует паспорт анона — сразу красивая PNG-карточка с кнопками навигации.
     """
     if not board_id: return
 
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception: pass
 
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     user_id = message.from_user.id
+    username = message.from_user.username or message.from_user.first_name or "Аноним"
 
-    stats = await _get_passport_stats(user_id)
-    if stats is None:
-        return
-    post_count, balance, is_verified = stats
-    
-    db = await get_pool()
-    custom_prefix = None
-    async with db.execute("SELECT active_items, custom_prefix, prefix_expires_at FROM Users WHERE user_id = ?", (user_id,)) as c:
-        row = await c.fetchone()
-        active_items_str = row[0] if row and row[0] else "{}"
-        if row and len(row) > 2 and row[1] and row[2]:
-            import time
-            if int(time.time()) < row[2]:
-                custom_prefix = row[1]
-    try:
-        import json
-        active_items = json.loads(active_items_str)
-    except Exception:
-        active_items = {}
-
-    rank, role = _get_passport_rank_and_role(lang, post_count)
-    ctx = PassportContext(
-        user_id=user_id,
-        lang=lang,
-        board_id=board_id,
-        post_count=post_count,
-        balance=balance,
-        is_verified=is_verified,
-        rank=rank,
-        role=role,
-        custom_prefix=custom_prefix,
-        active_items=active_items
-    )
-    passport_text = _generate_passport_text(ctx)
+    from stats_generator import generate_user_stats_card
+    from aiogram.types import BufferedInputFile
+    import asyncio
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📊 Карта деградации", callback_data="prof_card"),
-            InlineKeyboardButton(text="📂 Личное дело", callback_data="prof_dossier")
+            InlineKeyboardButton(text="📂 Личное дело", callback_data="prof_dossier"),
+            InlineKeyboardButton(text="💰 Кошелёк", callback_data="prof_wallet"),
         ],
         [
-            InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet"),
-            InlineKeyboardButton(text="🎒 Рюкзак", callback_data="prof_inventory")
+            InlineKeyboardButton(text="🎒 Рюкзак", callback_data="prof_inventory"),
+            InlineKeyboardButton(text="🛒 Чёрный рынок", callback_data="prof_shop"),
         ],
         [
-            InlineKeyboardButton(text="🛒 Черный рынок", callback_data="prof_shop")
-        ]
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="prof_card"),
+        ],
     ])
 
     try:
-        await message.reply(passport_text, reply_markup=kb, parse_mode="HTML")
-    except (TelegramBadRequest, TelegramForbiddenError):
-        try:
-            await message.answer(passport_text, reply_markup=kb, parse_mode="HTML")
-        except (TelegramBadRequest, TelegramForbiddenError):
-            pass
+        loop = asyncio.get_running_loop()
+        photo_buf, text_report = await loop.run_in_executor(
+            None, generate_user_stats_card, user_id, board_id, username
+        )
+        if photo_buf:
+            photo = BufferedInputFile(photo_buf.getvalue(), filename='passport.png')
+            await message.answer_photo(photo, caption=text_report, reply_markup=kb, parse_mode="HTML")
+        else:
+            await message.answer(text_report, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        runtime_logger.warning("cmd_passport: failed generating stats card: %s", e)
+        await message.answer("⚠️ Ошибка генерации паспорта. Попробуй позже.", reply_markup=kb)
+
     try: await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError): pass
 
 
+
 @dp.callback_query(F.data == "prof_card")
-async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None):
+async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = callback.from_user.id
     username = callback.from_user.username or callback.from_user.first_name or "Аноним"
-    await callback.answer("📊 Генерирую карту деградации...")
-    
+    await callback.answer("🔄 Обновляю паспорт...", show_alert=False)
+
     from stats_generator import generate_user_stats_card
     from aiogram.types import BufferedInputFile
     import asyncio
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📂 Личное дело", callback_data="prof_dossier"),
+            InlineKeyboardButton(text="💰 Кошелёк", callback_data="prof_wallet"),
+        ],
+        [
+            InlineKeyboardButton(text="🎒 Рюкзак", callback_data="prof_inventory"),
+            InlineKeyboardButton(text="🛒 Чёрный рынок", callback_data="prof_shop"),
+        ],
+        [
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="prof_card"),
+        ],
+    ])
 
     try:
         loop = asyncio.get_running_loop()
         photo_buf, text_report = await loop.run_in_executor(None, generate_user_stats_card, user_id, board_id, username)
         if photo_buf:
-            photo = BufferedInputFile(photo_buf.getvalue(), filename='mystats.png')
-            await callback.message.answer_photo(photo, caption=text_report, parse_mode="HTML")
+            photo = BufferedInputFile(photo_buf.getvalue(), filename='passport.png')
+            try:
+                await callback.message.edit_media(
+                    media=types.InputMediaPhoto(media=photo, caption=text_report, parse_mode="HTML"),
+                    reply_markup=kb
+                )
+            except Exception:
+                await callback.message.answer_photo(photo, caption=text_report, reply_markup=kb, parse_mode="HTML")
         else:
-            await callback.message.answer(text_report, parse_mode="HTML")
+            await callback.message.answer(text_report, reply_markup=kb, parse_mode="HTML")
     except Exception as e:
-        runtime_logger.warning("Failed generating user stats card: %s", e)
-        await callback.message.answer("⚠️ Ошибка генерации карты деградации.")
+        runtime_logger.warning("cb_prof_card: failed generating stats card: %s", e)
+        await callback.message.answer("⚠️ Ошибка обновления паспорта.")
+
 
 
 @dp.callback_query(F.data == "prof_dossier")
@@ -12583,12 +12555,12 @@ async def cmd_invite_pic(message: types.Message, board_id: str | None, stream: s
     invite_text_raw = random.choice(source_list)
     invite_text = invite_text_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
 
-    from invite_image_generator import generate_invite_image_async
-    from aiogram.types import BufferedInputFile
-
     try:
+        from invite_image_generator import generate_invite_image_async
+        from aiogram.types import BufferedInputFile
         buf = await generate_invite_image_async(board_id=board_id, bot_username=board_username, custom_text=invite_text)
         input_file = BufferedInputFile(buf.getvalue(), filename=f"invite_{board_id}.jpg")
+
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=site_btn, url=site_url)]
         ])
@@ -17059,8 +17031,8 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="wallet", description="Баланс кошелька"),
         BotCommand(command="shop", description="Теневой Магазин"),
         BotCommand(command="inv", description="Рюкзак и активные баффы"),
-        BotCommand(command="passport", description="Паспорт и статистика"),
-        BotCommand(command="my_stats", description="Персональная карта статистики"),
+        BotCommand(command="passport", description="Паспорт и карта статистики"),
+        BotCommand(command="dossier", description="Личное дело анона"),
         BotCommand(command="threads", description="Список тредов"),
         BotCommand(command="search", description="Поиск постов"),
         BotCommand(command="create", description="Создать новый тред"),
