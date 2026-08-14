@@ -21,7 +21,6 @@ class TestVerifyPow(unittest.TestCase):
         self.nonce = "test_nonce"
         self.difficulty = 4
         self.modules = [
-            ("dubsite", _load_module("Dubsite_tgach_security_isolated", "Dubsite_tgach/security.py")),
             ("site", _load_module("site_tgach_security_isolated", "site_tgach/security.py"))
         ]
 

@@ -1006,3 +1006,105 @@ def get_random_auto_invite_content(board_id: str = "b", bot_username: str = "@dv
     caption = random.choice(AUTO_POST_COMPANION_TEXTS)
     caption = caption.replace("@dvach_chatbot", bot_username).replace("@tgchan_chatbot", bot_username)
     return slogan, caption
+
+def render_custom_demotivator(
+    base_image: Optional[Image.Image] = None,
+    title: str = "ШИЗОФРЕНИЯ",
+    subtitle: Optional[str] = None,
+    bot_username: str = "@dvach_chatbot"
+) -> io.BytesIO:
+    """
+    Renders a classic high-impact 2ch Demotivator with dual frame, centered Impact title,
+    subline, and crisp Tgach vector badge.
+    """
+    target_width, target_height = 800, 850
+    canvas = Image.new("RGB", (target_width, target_height), (0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    
+    img_box_w = 680
+    img_box_h = 520
+    img_box_x = (target_width - img_box_w) // 2
+    img_box_y = 50
+    
+    if base_image is None:
+        img_content = create_procedural_background(img_box_w, img_box_h, style=1)
+    else:
+        im = base_image.convert("RGB")
+        w, h = im.size
+        scale = max(img_box_w / w, img_box_h / h)
+        nw, nh = int(w * scale), int(h * scale)
+        im = im.resize((nw, nh), Image.Resampling.LANCZOS)
+        left = (nw - img_box_w) // 2
+        top = (nh - img_box_h) // 2
+        img_content = im.crop((left, top, left + img_box_w, top + img_box_h))
+        
+    canvas.paste(img_content, (img_box_x, img_box_y))
+    
+    # Classic Demotivator white border frame around image
+    border_pad = 6
+    draw.rectangle(
+        [
+            img_box_x - border_pad,
+            img_box_y - border_pad,
+            img_box_x + img_box_w + border_pad,
+            img_box_y + img_box_h + border_pad
+        ],
+        outline=(255, 255, 255),
+        width=3
+    )
+    
+    # Typography
+    title_clean = clean_text_for_font(title.strip().upper())
+    subtitle_clean = clean_text_for_font(subtitle.strip()) if subtitle else ""
+    
+    title_font = ImageFont.truetype(IMPACT_FONT or MAIN_FONT, 38)
+    sub_font = ImageFont.truetype(MAIN_FONT, 20)
+    
+    title_lines = wrap_text(title_clean, title_font, target_width - 80, draw)
+    sub_lines = wrap_text(subtitle_clean, sub_font, target_width - 100, draw) if subtitle_clean else []
+    
+    curr_y = img_box_y + img_box_h + 35
+    for line in title_lines:
+        w = draw.textlength(line, font=title_font)
+        x = (target_width - w) // 2
+        draw.text((x, curr_y), line, font=title_font, fill=(255, 255, 255))
+        curr_y += 44
+        
+    curr_y += 6
+    for line in sub_lines:
+        w = draw.textlength(line, font=sub_font)
+        x = (target_width - w) // 2
+        draw.text((x, curr_y), line, font=sub_font, fill=(220, 220, 220))
+        curr_y += 26
+        
+    # Tgach watermark in bottom-right corner
+    logo = draw_tgach_logo(36)
+    logo_w, logo_h = logo.size
+    canvas.paste(logo, (target_width - logo_w - 20, target_height - logo_h - 15), logo)
+    draw.text((target_width - logo_w - 180, target_height - 28), f"ТГАЧ /b/ • {bot_username}", font=ImageFont.truetype(MAIN_FONT, 13), fill=(120, 120, 120))
+    
+    buf = io.BytesIO()
+    canvas.save(buf, format="JPEG", quality=93, optimize=True)
+    buf.seek(0)
+    return buf
+
+async def generate_custom_demotivator_async(
+    base_image: Optional[Image.Image] = None,
+    title: str = "ШИЗОФРЕНИЯ",
+    subtitle: Optional[str] = None,
+    bot_username: str = "@dvach_chatbot"
+) -> io.BytesIO:
+    """Non-blocking async runner for custom demotivators."""
+    if base_image is None:
+        base_image = await fetch_random_post_image()
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        lambda: render_custom_demotivator(
+            base_image=base_image,
+            title=title,
+            subtitle=subtitle,
+            bot_username=bot_username
+        )
+    )
+

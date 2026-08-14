@@ -3864,9 +3864,9 @@ async def _handle_shoot_bounce(ctx: ShootContext):
     await apply_regular_mute(ctx.user_id, ctx.board_id, 3600)
     bounce = (
         f"🛡️ <b>ЗЕРКАЛЬНЫЙ ЩИТ!</b>\n\n"
-        f"Анон попытался выстрелить из Мут-Гана в <code>{ctx.target_id}</code>, "
+        f"Анон попытался выстрелить из Мут-Гана в автора этого поста, "
         f"но у цели сработал Зеркальный Щит!\n"
-        f"Выстрел срикошетил. Стрелок <code>{ctx.user_id}</code> улетает в мут на 1 час 🤡\n"
+        f"Выстрел срикошетил. Стрелок улетает в мут на 1 час 🤡\n"
         f"<i>(Щит цели израсходован.)</i>"
     )
     await ctx.message.bot.send_message(
@@ -3906,7 +3906,7 @@ async def _handle_shoot_success(ctx: ShootContext):
     alert = (
         f"💥 <b>ВЫСТРЕЛ ИЗ МУТ-ГАНА!</b>\n\n"
         f"Богатенький анон купил Мут-Ган за 500 RUB и пристрелил автора этого поста!\n"
-        f"Жертва <code>{ctx.target_id}</code> отправляется в мут на 1 час.\n"
+        f"Жертва отправляется в мут на 1 час.\n"
         f"<i>(Защита от Мут-Гана — Зеркальный Щит в /shop.)</i>"
     )
     await ctx.message.bot.send_message(
@@ -3999,7 +3999,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     
     shoot_msg = (
         f"🔫 <b>ПИУ-ПИУ!</b>\n\n"
-        f"Анон <code>{user_id}</code> выстрелил в <code>{target_id}</code> из Мут-Гана!\n"
+        f"Анон выстрелил из Мут-Гана в автора этого поста!\n"
         f"Жертва отправляется в мут на 1 час.\n"
         f"<i>(Оружие израсходовано)</i>"
     )
@@ -4182,7 +4182,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     # Успех
     shit_msg = (
         f"💩 <b>СМАЧНЫЙ ПЛЮХ!</b>\n\n"
-        f"Анон <code>{user_id}</code> выстрелил в <code>{target_id}</code> из Говномёта!\n"
+        f"Анон выстрелил в автора этого поста из Говномёта!\n"
         f"Теперь все сообщения жертвы в течение часа будут выглядеть как говно 🤎\n"
         f"<i>(Говномёт израсходован)</i>"
     )
@@ -4257,7 +4257,7 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
 
     curse_msg = (
         f"🤢 <b>ПРОКЛЯТИЕ ПОНОСА!</b>\n\n"
-        f"Анон <code>{user_id}</code> опоил <code>{target_id}</code> Слабительным!\n"
+        f"Анон опоил автора этого поста Слабительным!\n"
         f"Слова жертвы теперь прорываются неконтролируемыми приступами... (1 час)\n"
         f"<i>(Слабительное израсходовано)</i>"
     )
@@ -4316,12 +4316,12 @@ async def cmd_schizopill(message: types.Message, board_id: str | None, stream: s
         return
 
     if is_shielded:
-        await message.answer(f"👽 <b>ШИЗО-РИКОШЕТ!</b>\nАнон попытался отравить пользователя <code>{target_id}</code> Шизо-Таблеткой, но шапочка из фольги отразила эффект обратно! Теперь отправитель будет писать шизой.", parse_mode="HTML")
+        await message.answer(f"👽 <b>ШИЗО-РИКОШЕТ!</b>\nАнон попытался отравить автора этого поста Шизо-Таблеткой, но Шапочка из фольги отразила эффект обратно! Теперь отправитель будет писать шизой.", parse_mode="HTML")
         return
 
     curse_msg = (
         f"💊 <b>ШИЗО-ТАБЛЕТКА!</b>\n\n"
-        f"Анон <code>{user_id}</code> подмешал Шизо-Таблетку <code>{target_id}</code>!\n"
+        f"Анон подмешал Шизо-Таблетку автору этого поста!\n"
         f"У цели начался приступ шизофазии и паранойи... (1 час)\n"
         f"<i>(Шизо-Таблетка израсходована)</i>"
     )
@@ -4366,7 +4366,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
 
     msg_txt = (
         f"🚓 <b>ЗА ТОБОЙ ВЫЕХАЛ ПАТИВЭН!</b>\n\n"
-        f"Анон <code>{user_id}</code> вызвал спецназ по адресу <code>{target_id}</code>!\n"
+        f"По доносу анона за автором этого поста выехал спецназ!\n"
         f"Жертву повязали и отправили в автозак на 2 часа (MUTE).\n"
         f"<i>(ПатиВэн израсходован)</i>"
     )
@@ -4401,7 +4401,7 @@ async def cmd_mega(message: types.Message, board_id: str | None, stream: str = '
         await message.answer("У тебя нет Мегафона! Ищи его в /shop")
         return
 
-    broadcast = f"📢 <b>[МЕГАФОН ОТ <code>{user_id}</code>]</b>\n\n{escape_html(text_content)}"
+    broadcast = f"📢 <b>[МЕГАФОН В БОРДУ]</b>\n\n{escape_html(text_content)}"
     await message.bot.send_message(message.chat.id, broadcast, parse_mode="HTML")
     try: await message.delete()
     except: pass
@@ -5075,7 +5075,7 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
     if lang == 'en':
         text = (
             f"💳 <b>TGACH WALLET</b>\n{'—'*22}\n"
-            f"👤 <b>Account ID:</b> <code>{user_id}</code>\n"
+            f"👤 <b>Account ID:</b> <code>****{user_id % 10000:04d}</code>\n"
             f"🔋 <b>Verification:</b> {'<code>[B] Verified</code>' if is_verified else '<code>[A] Limited</code>'}\n"
             f"💵 <b>Balance:</b> <code>{int(balance)}.00 RUB</code>\n"
         )
@@ -5083,7 +5083,7 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
     else:
         text = (
             f"💳 <b>TGACH WALLET</b>\n{'—'*22}\n"
-            f"👤 <b>ID аккаунта:</b> <code>{user_id}</code>\n"
+            f"👤 <b>ID аккаунта:</b> <code>****{user_id % 10000:04d}</code>\n"
             f"🔋 <b>Уровень:</b> {'<code>[B] Verified</code>' if is_verified else '<code>[A] Limited</code>'}\n"
             f"💵 <b>Баланс:</b> <code>{int(balance)}.00 RUB</code>\n"
         )
@@ -11919,6 +11919,84 @@ async def cmd_invite_pic(message: types.Message, board_id: str | None, stream: s
     except Exception as e:
         runtime_logger.error(f"cmd_invite_pic error: {e}")
         await message.answer(f"<code>{escape_html(invite_text)}</code>", parse_mode="HTML")
+    finally:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+@dp.message(Command("dem", "demotivator", "дем", "демотиватор"))
+async def cmd_demotivator(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Creates a classic 2ch Demotivator by replying to any photo or with custom text.
+    Usage: /dem Заголовок | Подпись
+    """
+    if not board_id: return
+    board_username = BOARD_CONFIG.get(board_id, {}).get('username', '@dvach_chatbot')
+    
+    # Parse arguments: /dem Заголовок | Подпись
+    raw_args = message.text or message.caption or ""
+    parts = raw_args.split(maxsplit=1)
+    title = "ШИЗОФРЕНИЯ"
+    subtitle = None
+    
+    if len(parts) > 1:
+        text_arg = parts[1].strip()
+        if "|" in text_arg:
+            sub_parts = text_arg.split("|", 1)
+            title = sub_parts[0].strip() or "ШИЗОФРЕНИЯ"
+            subtitle = sub_parts[1].strip()
+        else:
+            title = text_arg
+            
+    from invite_image_generator import generate_custom_demotivator_async
+    from aiogram.types import BufferedInputFile
+    from PIL import Image
+    import io
+    
+    # Check if there is an image in reply or in current message
+    base_img = None
+    target_msg = message.reply_to_message or message
+    
+    if target_msg and (target_msg.photo or target_msg.document or target_msg.sticker):
+        try:
+            file_id = None
+            if target_msg.photo:
+                file_id = target_msg.photo[-1].file_id
+            elif target_msg.document and target_msg.document.mime_type and target_msg.document.mime_type.startswith("image"):
+                file_id = target_msg.document.file_id
+            elif target_msg.sticker and not target_msg.sticker.is_animated and not target_msg.sticker.is_video:
+                file_id = target_msg.sticker.file_id
+                
+            if file_id:
+                file_info = await message.bot.get_file(file_id)
+                file_bytes = io.BytesIO()
+                await message.bot.download_file(file_info.file_path, destination=file_bytes)
+                file_bytes.seek(0)
+                base_img = Image.open(file_bytes)
+        except Exception as e:
+            runtime_logger.warning(f"cmd_demotivator image download failed: {e}")
+            base_img = None
+            
+    try:
+        buf = await generate_custom_demotivator_async(
+            base_image=base_img,
+            title=title,
+            subtitle=subtitle,
+            bot_username=board_username
+        )
+        input_file = BufferedInputFile(buf.getvalue(), filename="demotivator.jpg")
+        cap = f"🖼 <b>{escape_html(title)}</b>"
+        if subtitle:
+            cap += f"\n<i>{escape_html(subtitle)}</i>"
+        await message.answer_photo(
+            photo=input_file,
+            caption=cap,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        runtime_logger.error(f"cmd_demotivator error: {e}")
+        await message.answer("❌ Ошибка при сборке демотиватора.")
     finally:
         try:
             await message.delete()

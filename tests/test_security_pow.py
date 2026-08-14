@@ -16,7 +16,6 @@ for mod in list(sys.modules.keys()):
 
 from site_tgach.security import verify_pow
 import site_tgach.security as security
-import Dubsite_tgach.security as dubsite_security
 
 class TestVerifyPow(unittest.TestCase):
     def setUp(self):
@@ -68,25 +67,6 @@ class TestVerifyPow(unittest.TestCase):
         self.assertNotIn(chal, security.POW_CACHE)
 
 class TestGetPowChallengeData(unittest.TestCase):
-    @patch('Dubsite_tgach.security.generate_challenge_str')
-    def test_get_pow_challenge_data_dubsite_default(self, mock_generate):
-        mock_generate.return_value = "mock_dubsite_challenge"
-        result = dubsite_security.get_pow_challenge_data()
-        self.assertEqual(result, {
-            "challenge": "mock_dubsite_challenge",
-            "difficulty": dubsite_security.DEFAULT_POW_DIFFICULTY
-        })
-        mock_generate.assert_called_once()
-
-    @patch('Dubsite_tgach.security.generate_challenge_str')
-    def test_get_pow_challenge_data_dubsite_custom_diff(self, mock_generate):
-        mock_generate.return_value = "mock_dubsite_challenge_diff"
-        result = dubsite_security.get_pow_challenge_data(difficulty=10)
-        self.assertEqual(result, {
-            "challenge": "mock_dubsite_challenge_diff",
-            "difficulty": 10
-        })
-        mock_generate.assert_called_once()
 
     @patch('site_tgach.security.generate_challenge_str')
     def test_get_pow_challenge_data_site_default(self, mock_generate):

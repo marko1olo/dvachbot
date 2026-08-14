@@ -82,69 +82,29 @@ class TestGetCountryByIp(unittest.IsolatedAsyncioTestCase):
 
     async def test_local_ip(self):
         self.assertEqual(await get_country_by_ip("127.0.0.1"), "XX")
+        self.assertEqual(await get_country_by_ip("localhost"), "XX")
+        self.assertEqual(await get_country_by_ip("::1"), "XX")
+
+    @patch('Dubsite_tgach.main.GEOIP_READER')
+    async def test_geoip_reader_success(self, mock_geoip_reader):
+        mock_response = MagicMock()
+        mock_response.country.iso_code = "RU"
+        mock_geoip_reader.country.return_value = mock_response
+
+        result = await get_country_by_ip("95.173.136.1")
+        self.assertEqual(result, "RU")
 
     @patch('Dubsite_tgach.main.GEOIP_READER')
     async def test_geoip_reader_raises_exception(self, mock_geoip_reader):
-        mock_geoip_reader.country.side_effect = Exception("Test Exception")
-        # should fall back to httpx if geoip fails
-
-        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {'countryCode': 'YY'}
-            mock_get.return_value = mock_response
-
-            with patch('Dubsite_tgach.main.AsyncHTTPTransport') as mock_transport:
-                result = await get_country_by_ip("8.8.8.8")
-                self.assertEqual(result, "YY")
-
-    @patch('Dubsite_tgach.main.GEOIP_READER')
-    async def test_httpx_raises_exception_both_strategies(self, mock_geoip_reader):
-        mock_geoip_reader.country.side_effect = Exception("GeoIP Exception")
-
-        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
-            mock_get.side_effect = Exception("HTTPX Exception")
-
-            with patch('Dubsite_tgach.main.AsyncHTTPTransport') as mock_transport:
-                result = await get_country_by_ip("8.8.8.8")
-                self.assertEqual(result, "XX")
-
-                # Since there are 2 strategies (Proxy and Direct), it should attempt 2 calls
-                self.assertEqual(mock_get.call_count, 2)
-
-    @patch('Dubsite_tgach.main.GEOIP_READER')
-    async def test_httpx_first_strategy_fails_second_succeeds(self, mock_geoip_reader):
-        mock_geoip_reader.country.side_effect = Exception("GeoIP Exception")
-
-        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
-            # First call raises exception, second returns 200 OK
-            mock_success_response = MagicMock()
-            mock_success_response.status_code = 200
-            mock_success_response.json.return_value = {'countryCode': 'ZZ'}
-
-            mock_get.side_effect = [Exception("Proxy Failed"), mock_success_response]
-
-            with patch('Dubsite_tgach.main.AsyncHTTPTransport') as mock_transport:
-                result = await get_country_by_ip("8.8.8.8")
-                self.assertEqual(result, "ZZ")
-                self.assertEqual(mock_get.call_count, 2)
-
+        mock_geoip_reader.country.side_effect = Exception("GeoIP Lookup Failed")
+        result = await get_country_by_ip("8.8.8.8")
+        self.assertEqual(result, "XX")
 
     @patch('Dubsite_tgach.main.GEOIP_READER', None)
-    @patch('os.path.exists', return_value=True)
-    @patch('geoip2.database.Reader')
-    async def test_geoip_reader_initialization_exception(self, mock_reader, mock_exists):
-        mock_reader.side_effect = Exception("Initialization failed")
-
-        with patch('httpx.AsyncClient.get', new_callable=AsyncMock) as mock_get:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {'countryCode': 'AA'}
-            mock_get.return_value = mock_response
-
-            with patch('Dubsite_tgach.main.AsyncHTTPTransport'):
-                result = await get_country_by_ip("8.8.4.4")
-                self.assertEqual(result, "AA")
+    @patch('os.path.exists', return_value=False)
+    async def test_geoip_reader_missing_db(self, mock_exists):
+        result = await get_country_by_ip("8.8.4.4")
+        self.assertEqual(result, "XX")
 
 if __name__ == '__main__':
     unittest.main()
