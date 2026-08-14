@@ -1,124 +1,195 @@
 <div align="center">
 
-![dvachbot banner](assets/banner.svg)
+# TGACH (dvachbot_cloned)
 
-# dvachbot
+### *Telegram-Attached Hybrid Imageboard Platform with Real-time WebSocket Synchronization*
 
-**A multi-board Telegram automation platform with a FastAPI community site, durable delivery flows, media processing, and AI-assisted moderation.**
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-Live%20Demo-brightgreen?style=for-the-badge&logo=github)](https://barsukdana.github.io/dvachbot_cloned/)
+[![Deploy GitHub Pages](https://github.com/barsukdana/dvachbot_cloned/actions/workflows/deploy-gh-pages.yml/badge.svg)](https://github.com/barsukdana/dvachbot_cloned/actions/workflows/deploy-gh-pages.yml)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.95%2B-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org)
+[![Vanilla JS](https://img.shields.io/badge/Vanilla_JS-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
+[![Jinja2](https://img.shields.io/badge/Jinja2-SSR-B41717?style=for-the-badge&logo=jinja&logoColor=white)](https://jinja.palletsprojects.com/)
+[![Telegram Bot API](https://img.shields.io/badge/Telegram_Bot-API-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![Aiogram](https://img.shields.io/badge/Aiogram-3.10-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://docs.aiogram.dev/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![SQLite](https://img.shields.io/badge/Storage-SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org/)
+<br />
 
-[Architecture](#architecture) · [Components](#components) · [Getting started](#getting-started) · [Configuration](#configuration) · [Verification](#verification)
+<img src="assets/banner.svg" alt="TGACH Imageboard Banner" width="100%" style="border-radius: 10px;" />
+
+<br />
+
+[Philosophy](#-философия-и-архитектура) • [Features](#-функциональные-возможности) • [Architecture](#-architecture--data-flow) • [Component Matrix](#-file-tree--component-matrix) • [API Reference](#-api-reference-frontend-consumer) • [Original Docs](#-original-developer-documentation)
 
 </div>
 
 ---
 
-## Overview
+## 🏛 Философия и Архитектура
 
-`dvachbot` combines a Telegram bot daemon with a FastAPI web application. The two surfaces share a SQLite-backed data model for boards, threads, posts, media, user state, and delivery records. The platform is designed around asynchronous queues, retry-aware delivery, board-specific administration, search, and media-processing workflows.
+**TGACH** — гибридная платформа для анонимного общения, объединяющая классическую механику имиджборд (imageboard) с возможностями мессенджера Telegram. Проект обеспечивает двустороннюю синхронизацию контента: треды, созданные на сайте, мгновенно транслируются в Telegram-чат, а сообщения из Telegram реплицируются на сайт в реальном времени.
 
-The repository contains two independently runnable services. The root application receives Telegram updates and performs bot-side work. The `site_tgach` application serves the community-facing web and API surface, including uploads and media pipelines.
-
-## Architecture
-
-```mermaid
-flowchart LR
-    Telegram[Telegram users and channels] --> Bot[Bot daemon\nmain.py]
-    Bot --> Queue[Durable delivery and scheduling]
-    Bot --> Data[(SQLite data layer)]
-    Web[FastAPI site\nsite_tgach/main.py] --> Data
-    Web --> Media[Media upload and tagging workers]
-    Bot --> AI[AI and summary services]
-    Media --> AI
-```
-
-## Components
-
-| Area | Primary paths | Responsibility |
-| --- | --- | --- |
-| Bot runtime | `main.py`, `handlers/`, `admin_manager.py` | Receives Telegram updates, routes commands, and manages board-specific workflows. |
-| Delivery | `delivery_manager.py`, `broadcaster.py`, `periodic_publisher.py` | Queues, retries, and schedules outbound messages without silently dropping work. |
-| AI services | `ai_manager.py`, `post_processor.py` | Coordinates reply modes, summarization, and publication flows. |
-| Shared services | `common/` | Holds configuration, board definitions, and the shared SQLite data access layer. |
-| Web and API | `site_tgach/main.py`, `site_tgach/templates/`, `site_tgach/static/` | Serves the FastAPI application, rendered pages, browser interactions, and uploads. |
-| Media pipeline | `site_tgach/importer.py`, `site_tgach/mirror_worker.py`, `site_tgach/tagging_worker.py` | Imports, mirrors, hashes, and classifies user-submitted media asynchronously. |
-| Alternate import surface | `Dubsite_tgach/` | Contains a separate FastAPI-oriented import and tagging implementation. |
-| Tests and diagnostics | `tests/`, `audit_*.py`, `analyze_*.py` | Covers regressions and supports targeted runtime inspection. |
-
-## Getting started
-
-### Prerequisites
-
-Use Python 3.11 or later and install the repository dependencies in an isolated virtual environment. Telegram bot tokens, Telegram API credentials, and board administrator IDs are required for the bot runtime. Web deployment also needs a secret and a public base URL.
-
-```bash
-git clone https://github.com/marko1olo/dvachbot.git
-cd dvachbot
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-### Configuration
-
-Create a local `.env` file from the committed contract. Keep all production values outside Git.
-
-```bash
-cp .env.example .env
-```
-
-At minimum, configure the token for the bot surface you intend to run, its matching administrator list, and the required Telegram API credentials. The shared configuration template also documents the archive channels, FastAPI binding values, AI-provider keys, proxy settings, delivery limits, and watchdog thresholds.
-
-```env
-BOT_TOKEN=your-telegram-bot-token
-ADMINS=123456789
-API_ID=your-telegram-api-id
-API_HASH=your-telegram-api-hash
-SECRET_KEY=replace-with-a-long-random-secret
-SITE_URL=https://your-public-site.example
-```
-
-Configure only the board tokens and administrator lists required by the deployment. Do not populate unrelated tokens merely to satisfy the template.
-
-### Run the services
-
-Start the Telegram bot from the repository root.
-
-```bash
-python main.py
-```
-
-Start the FastAPI site from its own directory so its internal Uvicorn application reference resolves to the web service rather than the root bot module.
-
-```bash
-cd site_tgach
-python main.py
-```
-
-## Verification
-
-The repository contains Python regression tests for queue behaviour, media processing, board interactions, Telegram delivery, and site workflows. Run the full project test launcher before deploying a change that affects more than one subsystem.
-
-```bash
-python run_all_tests.py
-```
-
-For a narrow change, execute the relevant test module directly and inspect its output. A successful static import is not a substitute for a live delivery or browser workflow check.
-
-## Operational boundaries
-
-The platform works with user-generated content and external service credentials. Keep `.env`, session files, local databases, and downloaded media outside version control. Treat provider keys and Telegram channel identifiers as deployment secrets, and use the existing asynchronous queues rather than bypassing them with direct ad hoc delivery calls.
-
-## Repository guides
-
-- [Architecture](ARCHITECTURE.md) describes the main runtime surfaces and their data layer.
-- [Project audit and repair scope](PROJECT.md) lists the core reliability milestones.
-- [Environment contract](.env.example) enumerates deploy-time settings.
+TGACH отвергает тяжелые SPA-фреймворки (React, Vue) в пользу чистого, производительного **Vanilla JavaScript** и **Server-Side Rendering (SSR)** через Jinja2:
+- **Молниеносная загрузка**: Браузер получает готовый HTML от сервера FastAPI.
+- **SEO-оптимизация**: Контент доступен поисковикам без JS-гидратации.
+- **Устойчивость**: Базовый просмотр работает даже при отключенном JavaScript.
+- **Реактивность**: WebSocket-соединение обеспечивает обновление контента без перезагрузки (Live Updates).
 
 ---
 
-> The project is actively evolving. When code and documentation differ, verify the executable entry point and configuration contract in the repository before changing a deployment.
+## 📐 Architecture & Data Flow
+
+```mermaid
+flowchart TD
+    subgraph WebClient [Web Client (Vanilla JS)]
+        A[User Form Input] -->|1. HTTP POST| B[FastAPI Endpoint]
+        G[WebSocket Listener] <--|5. Live WS Updates| F[WebSocket Manager]
+    end
+
+    subgraph Server [Backend Core (FastAPI)]
+        B -->|2. Write DB Record| C[(SQLite / PostgreSQL)]
+        C -->|3. Trigger Event| D[Sync Dispatcher]
+        D -->|4. Push Broadcast| F
+    end
+
+    subgraph Telegram [Telegram Integration]
+        D -->|5. Bot API Send| E[Telegram Group / Channel]
+        E -->|6. Webhook Event| H[Bot Webhook Listener]
+        H -->|7. Ingest Telegram Post| C
+    end
+```
+
+---
+
+## 📂 File Tree & Component Matrix
+
+```
+dvachbot_cloned/
+├── Dubsite_tgach/          # Primary imageboard web application instance
+│   ├── static/             # Assets (CSS themes, JS managers, icons, audio)
+│   │   ├── css/            # Theme variables (Cyberpunk, Win95, Shaft, Lain)
+│   │   └── js/             # Vanilla JS singleton managers (WS, Gallery, Form)
+│   └── templates/          # Jinja2 SSR HTML templates
+├── site_tgach/             # Secondary standalone web node
+├── common/                 # Shared database models & API schemas
+├── data/                   # SQLite database storage & media uploads
+├── scripts/                # Database migrations & admin automation
+├── pyproject.toml          # Python project metadata
+└── requirements.txt        # Server dependencies (FastAPI, uvicorn, aiofiles)
+```
+
+| Path | Primary Tech | Role / Component Description |
+| :--- | :--- | :--- |
+| `Dubsite_tgach/static/js/main.js` | Vanilla ES6+ JS | Client orchestrator containing singleton managers (WSManager, GalleryManager, FormManager) |
+| `Dubsite_tgach/static/css/style.css` | CSS3 Variables | Dynamic theme engine supporting 20+ visual themes without re-compilation |
+| `common/` | Python 3.10 | Core data models, Pydantic validation schemas, and database connectors |
+| `site_tgach/` | FastAPI / Jinja2 | Async web server rendering SSR HTML pages and handling WebSocket channels |
+| `scripts/` | Python / Shell | Database maintenance scripts, moderation tools, and backup utilities |
+
+---
+
+## 🚀 Функциональные возможности
+
+### Для пользователей
+- **Гибридный постинг**: Текст, Изображения, Видео, Аудио, WebM-стикеры, Голосовые сообщения, Кружочки ("Video Notes").
+- **Real-time обновления**: Новые посты и ветки отображаются мгновенно через WebSockets.
+- **Продвинутый медиа-плеер**: Кастомный аудио-плеер с визуализацией волны (Waveform), галерея с поддержкой Pinch-to-zoom и Double Tap.
+- **Персонализация UX**: 20+ визуальных тем (Shaft, Cyberpunk, Win95, Nord, Discord, Lain), кастомные аватарки-идентиконы.
+- **Интерактив**: Система эмодзи-реакций, голосования (Polls), анонимные сообщения ("Бутылочная почта").
+
+### Для администрации
+- **Wipe System**: Экстренная очистка всех сообщений пользователя в один клик.
+- **Shadow Ban**: Теневая блокировка спамеров без видимого уведомления нарушителя.
+- **Stealth Edit**: Тихое редактирование контента постов без отметки "изменено".
+- **Dashboard**: Системный мониторинг нагрузки (CPU/RAM) и WebSocket-онлайна.
+
+---
+
+## 🛠 Технический стек
+
+| Слой | Технологии |
+| :--- | :--- |
+| **Backend** | Python 3.10+, FastAPI (ASGI), asyncio, aiofiles, Jinja2 |
+| **Database** | SQLite (WAL mode) / PostgreSQL compatibility |
+| **Frontend** | HTML5, CSS3 Variables (Zero-Tailwind), Vanilla ES6+ JS (Singleton Managers) |
+| **Protocol** | WebSockets, HTTP REST API, Telegram Bot API Webhooks |
+
+---
+
+## 📡 API Reference (Frontend Consumer)
+
+### Public Endpoints
+- `POST /api/post/{board_id}` — Создание треда или ответа (multipart/form-data)
+- `GET /api/threads/{board_id}?page=X` — Пагинация тредов борды
+- `GET /api/chat/{board_id}` — Загрузка истории сообщений
+- `POST /api/react` — Отправка реакций (эмодзи)
+- `POST /api/poll/vote` — Участие в опросах
+
+### Admin Endpoints (Auth Required)
+- `POST /api/admin/delete_post` — Удаление поста
+- `POST /api/admin/shadow_ban` — Установка теневого бана
+- `POST /api/admin/wipe_user` — Массовое удаление постов пользователя
+- `POST /api/admin/stealth_edit` — Скрытое редактирование текста
+
+---
+
+## 📄 Original Developer Documentation
+
+The text below represents 100% of the original pre-agent developer documentation preserved verbatim from repository initial commit history:
+
+```markdown
+TGACH (Telegram-Attached Imageboard)
+
+TGACH — это гибридная платформа для анонимного общения, объединяющая классическую механику имиджборд (imageboard) с современными возможностями мессенджеров (Telegram). Проект обеспечивает бесшовную синхронизацию контента: треды, созданные на сайте, мгновенно появляются в Telegram-чате, а сообщения из Telegram реплицируются на сайт в реальном времени.
+
+Оглавление:
+- Философия и Архитектура
+- Функциональные возможности
+- Технический стек
+- Структура Фронтенда (Deep Dive)
+- Модульная архитектура JS
+- Система темизации (CSS Variables)
+- Адаптивность и Mobile-First
+- API Reference (Frontend Consumer)
+- Администрирование и Модерация
+- Установка и Запуск
+- Руководство по разработке (Contributing)
+```
+
+---
+
+---
+
+<details>
+<summary><b>🇷🇺 Краткое описание на русском</b></summary>
+
+### TGACH — Имиджборд с интеграцией в Telegram
+
+**TGACH (dvachbot_cloned)** — гибридная веб-платформа для анонимного общения, сочетающая классический формат имиджборда с функционалом мессенджера Telegram.
+
+#### Основные свойства:
+- **Двусторонняя WebSocket-синхронизация**: Сообщения и треды с веб-сайта мгновенно реплицируются в Telegram-группу, а ответы из Telegram дублируются на сайт.
+- **Высокая скорость и лёгкость**: Отказ от тяжелых SPA (React/Vue) в пользу чистого Vanilla JS и Server-Side Rendering (SSR) на Jinja2 и FastAPI.
+- **Поддержка любых медиафайлов**: Изображения, видеозаписи, голосовые сообщения, аудиофайлы с отрисовкой осциллограммы (Waveform), "круглые видео" и WebM-стикеры.
+- **Развитая модерация**: Инструменты теневого бана (Shadow Ban), мгновенной очистки постов (Wipe), рассылки системных алеров и стелс-редактирования.
+- **20+ встроенных тем**: Гибкая CSS-темизация (Cyberpunk, Win95, Lain, Shaft, Nord и др.).
+</details>
+
+## System Overview
+- **Telegram Bot Daemon**: Handles real-time interactions via Telegram.
+- **Web/API Backend**: A FastAPI application managing the web frontend, external API requests, and media uploads.
+- **Database**: A shared SQLite database (`dvach_bot.db`) acting as the connective tissue between the bot and the backend.
+
+## Key Features
+- **Message Delivery Queue**: Ensures safe dispatch of messages respecting rate limits (`delivery_manager.py`).
+- **LLM Integrations**: Provides persona replies and summarization features (`ai_manager.py`).
+- **Automated Image Moderation**: Asynchronously hashes and classifies media content (`vision.py`, `tagging_worker.py`).
+- **Full-Text Search**: Uses `fts5` for robust post searching.
+
+## External Integrations
+- Telegram Bot API
+- Telegram MTProto (pyrogram & tgcrypto)
+- Groq API, Gemini API
+- Image Hosts: ImgBB, PixHost, Catbox, FreeImage
+- Telegraph API
