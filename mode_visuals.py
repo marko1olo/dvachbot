@@ -88,7 +88,8 @@ TEMPLATE_CONFIG = {
 DYNAMIC_MODES = {
     'polish': 'templates/polish',
     'ukrainian': 'templates/ukrainian',
-    'shizo': 'templates/shizo'
+    'shizo': 'templates/shizo',
+    'zaputin': 'templates/zaputin'
 }
 
 FONTS_POOL = ['font1.ttf', 'font2.ttf']

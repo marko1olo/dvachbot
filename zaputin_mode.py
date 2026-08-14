@@ -987,12 +987,12 @@ def _apply_kancelarit(text: str) -> str:
     
     return text
     
-def zaputin_transform(text: str) -> str:
+def zaputin_transform(text: str, header: str = None):
     """
-    Преобразует текст в стиль режима zaputin. (ВЕРСИЯ С ОПТИМИЗАЦИЕЙ)
+    Преобразует текст в стиль режима zaputin с поддержкой генерации визуальных постов.
     """
     if not text:
-        return text
+        return text if not header else ('text', text)
 
     # *** ЭФФЕКТИВНАЯ ЗАМЕНА: Один проход по тексту для всех идеологических замен ***
     transformed_text = _ideological_regex.sub(_zaputin_ideological_replacer, text)
@@ -1002,8 +1002,6 @@ def zaputin_transform(text: str) -> str:
         'З': 'Z', 'з': 'Z',
         'В': 'V', 'в': 'V',
     }
-    # Этот цикл можно оставить, так как .replace() очень быстр для простых замен символов,
-    # и здесь их всего несколько.
     for old, new in replacements.items():
         transformed_text = transformed_text.replace(old, new)
     transformed_text = _apply_kancelarit(transformed_text)
@@ -1012,5 +1010,18 @@ def zaputin_transform(text: str) -> str:
     if len(transformed_text.split()) > 3 and random.random() < 0.25:
         slogan = random.choice(PATRIOTIC_PHRASES)
         transformed_text += f"\n\n<b>{slogan}</b>"
+
+    # Визуальный пост для коротких сообщений
+    if header:
+        if len(transformed_text) < 180 and random.random() < 0.25:
+            try:
+                from mode_visuals import create_visual_post
+                clean_text = transformed_text.replace('<b>', '').replace('</b>', '').strip()
+                image_bytes = create_visual_post(mode='zaputin', text=clean_text, header=header)
+                if image_bytes:
+                    return ('image', image_bytes)
+            except Exception:
+                pass
+        return ('text', transformed_text)
     
     return transformed_text

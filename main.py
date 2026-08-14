@@ -2867,6 +2867,8 @@ class ModeTransformer:
             return await loop.run_in_executor(None, rus_transform, self.plain_text, self.header)
         elif self.b_data.get('abu_mode'):
             return await loop.run_in_executor(None, abu_transform, self.plain_text, self.header)
+        elif self.b_data.get('zaputin_mode'):
+            return await loop.run_in_executor(None, zaputin_transform, self.plain_text, self.header)
         return None
 
     def _handle_transform_result(self, transform_result):
