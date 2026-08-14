@@ -713,7 +713,14 @@ class TestDownloadImageWithProxy(unittest.IsolatedAsyncioTestCase):
     async def test_download_image_proxy_import_error(self):
         """Test that if japanese_translator fails to import, the download continues with proxy=None."""
         from Dubsite_tgach.main import _download_image_with_proxy
-        with patch.dict('sys.modules', {'japanese_translator': None}):
+        import builtins
+        real_import = builtins.__import__
+        def fake_import(name, *args, **kwargs):
+            if name == "japanese_translator":
+                raise ImportError("No module named japanese_translator")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=fake_import):
             with patch('aiohttp.ClientSession') as mock_session_class:
                 mock_session = MagicMock()
                 mock_session_class.return_value.__aenter__.return_value = mock_session
