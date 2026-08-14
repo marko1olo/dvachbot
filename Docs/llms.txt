@@ -1,0 +1,18 @@
+# dvachbot — LLM Search Index
+# https://llmstxt.org/
+
+> Двач-бот (dvachbot) — высокопроизводительный imageboard-стрим-транскодер. FastAPI + asyncio + Telegram broadcaster. Dithering-пайплайн, real-time потоковое вещание контента с имиджборд.
+
+## Project
+- Name: dvachbot
+- Author: Adolf Petushkov (marko1olo)
+- Repository: https://github.com/marko1olo/dvachbot
+- Live Demo: https://marko1olo.github.io/dvachbot/
+- License: MIT
+
+## Architecture
+This project is part of the Adolf Petushkov Engineering Ecosystem — a portfolio of 12+ production-grade open-source applications spanning clinical AI, game engines, DSP audio, cybersecurity, and developer tooling.
+
+## Links
+- GitHub Profile: https://github.com/marko1olo
+- Portfolio: https://marko1olo.github.io/marko1olo/
