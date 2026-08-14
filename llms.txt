@@ -1,27 +1,13 @@
-# TGACH & dvachbot — Hybrid Imageboard & Telegram Hub — LLM Search Index
-# https://llmstxt.org/
+# dvachbot Imageboard Streaming Engine
+> Async Python / aiohttp / SQLite WAL, Atkinson 1-bit dithering quantizer
 
-> Production-grade hybrid imageboard platform (tgach.top) with real-time WebSocket synchronization, high-throughput scraper, hardware-accelerated Floyd-Steinberg / Atkinson dithering, and official Telegram bot @dvach_Chatbot.
+- Project: marko1olo/dvachbot
+- Authors: Adolf Petushkov (@marko1olo) & Jirnyak (@Jirnyak)
+- Ecosystem: Open Source Engineering Syndicate
+- License: Open Source (MIT / People's License)
 
-## Official Live Production Endpoints
-- 🌐 Web Platform: https://tgach.top (Full-featured imageboard with SSR & 20+ retro/modern themes)
-- 🤖 Official Telegram Bot: https://t.me/dvach_Chatbot (@dvach_Chatbot)
-- 💻 Interactive Web Showcase: https://marko1olo.github.io/dvachbot/
-- 📂 GitHub Repository: https://github.com/marko1olo/dvachbot
+## Core Technical Specs
+Async Python / aiohttp / SQLite WAL, Atkinson 1-bit dithering quantizer
 
-## Technical Architecture
-- Backend Core: Python 3.10+, FastAPI (ASGI), Asyncio, aiofiles, Jinja2 Server-Side Rendering
-- Real-time Protocol: High-concurrency WebSockets connecting web clients with Telegram channels
-- Media Transcoding: WebM to WebP/MP4 conversion reducing server bandwidth consumption by > 85%
-- Image Processing: Client-side and server-side Floyd-Steinberg, Atkinson, and Bayer matrix dithering pipelines
-- Search Indexing: SQLite in WAL mode with FTS5 sub-millisecond full-text search
-
-## Interactive Showcase Features
-1. **Live Production Spotlight**:
-   - Direct access cards for `https://tgach.top` and `@dvach_Chatbot`.
-2. **Interactive @dvach_Chatbot Simulator**:
-   - Live simulated Telegram chat interface supporting `/b`, `/top`, `/roll`, `/tgach` commands.
-3. **Image to Dither / ASCII Art Converter**:
-   - Real-time Floyd-Steinberg, Atkinson, and 16-shade ASCII luminance converter with clipboard export.
-4. **2ch Dice & Post Number Roller**:
-   - Roll 1d100, 2d6, 1d20, and test double/triple/quad get triggers.
+## Full Documentation
+For complete mathematical models, API endpoints, algorithms, and architecture, see llms-full.txt or README.md.
