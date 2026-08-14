@@ -41,7 +41,8 @@ HELP_TEXT_COMMANDS = [
         "• /me (/profile) — Твой паспорт и личная статистика\n\n"
         "<b>🎭 Режимы общения (на 5 минут):</b>\n"
         "🌸 /anime | 🇷🇺 /zaputin | 🇺🇦 /slavaukraine | 🇵🇱 /polish\n"
-        "⚔️ /warhammer | 📜 /imperial | 👊 /gopnik | 🧠 /schizo"
+        "⚔️ /warhammer | 📜 /imperial | 👊 /gopnik | 🧠 /schizo\n"
+        "🐊 /rus | 🐒 /abu | 🕶 /matrix | 📟 /oldweb | ✡️ /jewish | 🦅 /america | 🎄 /holiday"
     )
 ]
 
@@ -85,7 +86,8 @@ HELP_TEXT_EN_COMMANDS = [
         "• /me — Anon passport & stats\n\n"
         "<b>🎭 Speech Modes (5 min):</b>\n"
         "🌸 /anime | 🇷🇺 /zaputin | 🇺🇦 /slavaukraine | 🇵🇱 /polish\n"
-        "⚔️ /warhammer | 📜 /imperial | 👊 /gopnik | 🧠 /schizo"
+        "⚔️ /warhammer | 📜 /imperial | 👊 /gopnik | 🧠 /schizo\n"
+        "🐊 /rus | 🐒 /abu | 🕶 /matrix | 📟 /oldweb | ✡️ /jewish | 🦅 /america | 🎄 /holiday"
     )
 ]
 
@@ -114,7 +116,9 @@ HELP_TEXT_JP_COMMANDS = [
         "• /fap /hent /loli — アニメアート\n"
         "• /summarize — AIチャット要約\n"
         "• /roast — AI煽り要約\n"
-        "• /me — プロフィール"
+        "• /me — プロフィール\n\n"
+        "<b>🎭 特殊モード:</b>\n"
+        "🌸 /anime | 🇷🇺 /zaputin | ⚔️ /warhammer | 👊 /gopnik | 🧠 /schizo | 🐊 /rus | 🐒 /abu | 🕶 /matrix"
     )
 ]
 
@@ -134,15 +138,15 @@ THREAD_PROMO_TEXT_JP = [
 ]
 
 MODE_INFO_TEXT_RU = [
-    "🎭 <b>Режимы общения:</b>\nВключи временный режим на 5 минут: /anime, /zaputin, /slavaukraine, /polish, /warhammer, /imperial, /gopnik, /schizo!"
+    "🎭 <b>Режимы общения:</b>\nВключи временный режим на 5 минут: /anime, /zaputin, /slavaukraine, /polish, /warhammer, /imperial, /gopnik, /schizo, /rus, /abu, /matrix, /oldweb, /jewish, /america, /holiday!"
 ]
 
 MODE_INFO_TEXT_EN = [
-    "🎭 <b>Chat Modes:</b>\nActivate a 5-minute speech style: /anime, /zaputin, /slavaukraine, /polish, /warhammer, /imperial, /gopnik, /schizo!"
+    "🎭 <b>Chat Modes:</b>\nActivate a 5-minute speech style: /anime, /zaputin, /slavaukraine, /polish, /warhammer, /imperial, /gopnik, /schizo, /rus, /abu, /matrix, /oldweb, /jewish, /america, /holiday!"
 ]
 
 MODE_INFO_TEXT_JP = [
-    "🎭 <b>チャットモード:</b>\n5分間スタイル変更: /anime, /zaputin, /slavaukraine, /polish, /warhammer, /imperial, /gopnik, /schizo!"
+    "🎭 <b>チャットモード:</b>\n5分間スタイル変更: /anime, /zaputin, /slavaukraine, /polish, /warhammer, /imperial, /gopnik, /schizo, /rus, /abu, /matrix!"
 ]
 
 MECHANICS_INFO_TEXT_RU = [

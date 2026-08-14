@@ -248,6 +248,8 @@ from new_modes import (
     HOLIDAY_PHRASES_START, HOLIDAY_PHRASES_END, holiday_transform,
     OLDWEB_PHRASES_START, OLDWEB_PHRASES_END, oldweb_transform,
     JEWISH_PHRASES_START, JEWISH_PHRASES_END, jewish_transform,
+    RUS_PHRASES_START, RUS_PHRASES_END, rus_transform,
+    ABU_PHRASES_START, ABU_PHRASES_END, abu_transform,
 )
 from mode_punchup import punch_up_mode_text
 from aiogram import BaseMiddleware
@@ -2861,6 +2863,10 @@ class ModeTransformer:
             return await loop.run_in_executor(None, oldweb_transform, self.plain_text, self.header)
         elif self.b_data.get('jewish_mode'):
             return await loop.run_in_executor(None, jewish_transform, self.plain_text, self.header)
+        elif self.b_data.get('rus_mode'):
+            return await loop.run_in_executor(None, rus_transform, self.plain_text, self.header)
+        elif self.b_data.get('abu_mode'):
+            return await loop.run_in_executor(None, abu_transform, self.plain_text, self.header)
         return None
 
     def _handle_transform_result(self, transform_result):
@@ -8879,6 +8885,8 @@ MODE_END_PHRASES = {
     'holiday_mode': HOLIDAY_PHRASES_END,
     'oldweb_mode': OLDWEB_PHRASES_END,
     'jewish_mode': JEWISH_PHRASES_END,
+    'rus_mode': RUS_PHRASES_END,
+    'abu_mode': ABU_PHRASES_END,
 }
 
 async def disable_mode_after_delay(delay: int, board_id: str, mode_to_disable: str):
@@ -9063,12 +9071,7 @@ async def cmd_yer(message: types.Message, board_id: str | None, stream: str = 'r
     try: await message.delete()
     except TelegramBadRequest: pass
 
-UNFINISHED_NEW_MODES = {'matrix_mode', 'america_mode', 'holiday_mode', 'oldweb_mode', 'jewish_mode'}
-
 async def _trigger_generic_mode(message: types.Message, board_id: str | None, stream: str, mode_key: str, start_phrases: list, duration_sec: int, prefix_title: str):
-    if mode_key in UNFINISHED_NEW_MODES:
-        await message.answer("⚠️ Данный режим не активен и находится в разработке.")
-        return
     if not board_id or board_id == 'int':
         try: await message.delete()
         except Exception: pass
@@ -9105,25 +9108,33 @@ async def _trigger_generic_mode(message: types.Message, board_id: str | None, st
     try: await message.delete()
     except TelegramBadRequest: pass
 
-@dp.message(Command("matrix", "matrica", "matriza", "redpill", "neo"))
+@dp.message(Command("matrix", "matrica", "matriza", "redpill", "neo", "матрица", "нео"))
 async def cmd_matrix(message: types.Message, board_id: str | None, stream: str = 'ru'):
     await _trigger_generic_mode(message, board_id, stream, 'matrix_mode', MATRIX_PHRASES_START, 300, "МА ТРИ ЦА")
 
-@dp.message(Command("america", "usa", "liberty", "freedom"))
+@dp.message(Command("america", "usa", "liberty", "freedom", "америка", "сша", "техас"))
 async def cmd_america(message: types.Message, board_id: str | None, stream: str = 'ru'):
     await _trigger_generic_mode(message, board_id, stream, 'america_mode', AMERICA_PHRASES_START, 300, "GOD BLESS AMERICA")
 
-@dp.message(Command("holiday", "newyear", "xmas", "christmas", "ny"))
+@dp.message(Command("holiday", "newyear", "xmas", "christmas", "ny", "новыйгод", "праздник", "нг"))
 async def cmd_holiday(message: types.Message, board_id: str | None, stream: str = 'ru'):
     await _trigger_generic_mode(message, board_id, stream, 'holiday_mode', HOLIDAY_PHRASES_START, 300, "ПРАЗДНИК К НАМ ПРИХОДИТ")
 
-@dp.message(Command("oldweb", "oldnet", "icq", "winamp", "forum"))
+@dp.message(Command("oldweb", "oldnet", "icq", "winamp", "forum", "2007", "emo", "олдвеб", "аська", "упячка"))
 async def cmd_oldweb(message: types.Message, board_id: str | None, stream: str = 'ru'):
     await _trigger_generic_mode(message, board_id, stream, 'oldweb_mode', OLDWEB_PHRASES_START, 300, "ОЛДВЕБ 2007")
 
-@dp.message(Command("jewish", "talmud", "odessa", "shabbat", "rabbi", "evrei", "evrey"))
+@dp.message(Command("jewish", "talmud", "odessa", "shabbat", "rabbi", "evrei", "evrey", "еврей", "одесса", "талмуд", "гешефт"))
 async def cmd_jewish(message: types.Message, board_id: str | None, stream: str = 'ru'):
     await _trigger_generic_mode(message, board_id, stream, 'jewish_mode', JEWISH_PHRASES_START, 300, "ТАЛМУД И ГЕШЕФТ")
+
+@dp.message(Command("rus", "rusi", "yashcher", "baikal", "perun", "русы", "ящеры", "байкал", "перун"))
+async def cmd_rus(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    await _trigger_generic_mode(message, board_id, stream, 'rus_mode', RUS_PHRASES_START, 300, "РУСЫ ПРОТИВ ЯЩЕРОВ")
+
+@dp.message(Command("abu", "dvach", "makaka", "passcode", "абу", "двач", "макака", "пасскод"))
+async def cmd_abu(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    await _trigger_generic_mode(message, board_id, stream, 'abu_mode', ABU_PHRASES_START, 300, "АБУ В СЕРВЕРНОЙ")
 
 @dp.message(Command("anime"))
 async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 'ru'):

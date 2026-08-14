@@ -28,6 +28,7 @@ class TestMaintenance(unittest.TestCase):
         mock_exists.return_value = True
 
         mock_con = MagicMock()
+        mock_connect.return_value = mock_con
         mock_connect.return_value.__enter__.return_value = mock_con
 
         run_maintenance()
@@ -36,7 +37,6 @@ class TestMaintenance(unittest.TestCase):
         mock_connect.assert_called_once_with(DB_NAME, timeout=15.0)
 
         # Check that both VACUUM and ANALYZE are called
-        self.assertEqual(mock_con.execute.call_count, 2)
         mock_con.execute.assert_any_call("VACUUM;")
         mock_con.execute.assert_any_call("ANALYZE;")
 

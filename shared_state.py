@@ -304,6 +304,8 @@ board_data = defaultdict(lambda: {
     'holiday_mode': False,
     'oldweb_mode': False,
     'jewish_mode': False,
+    'rus_mode': False,
+    'abu_mode': False,
     'last_suka_blyat': None,
     'suka_blyat_counter': 0,
     'last_mode_activation': None,
@@ -347,7 +349,7 @@ state = {
     'post_counter': 0,
 }
 
-MODE_FLAGS = ['anime_mode', 'zaputin_mode', 'slavaukraine_mode', 'suka_blyat_mode', 'polish_mode', 'warhammer_mode', 'imperial_mode', 'gopnik_mode', 'schizo_mode', 'matrix_mode', 'america_mode', 'holiday_mode', 'oldweb_mode', 'jewish_mode']
+MODE_FLAGS = ['anime_mode', 'zaputin_mode', 'slavaukraine_mode', 'suka_blyat_mode', 'polish_mode', 'warhammer_mode', 'imperial_mode', 'gopnik_mode', 'schizo_mode', 'matrix_mode', 'america_mode', 'holiday_mode', 'oldweb_mode', 'jewish_mode', 'rus_mode', 'abu_mode']
 shadow_fake_post_counters = {}
 
 

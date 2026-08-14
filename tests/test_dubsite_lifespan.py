@@ -24,36 +24,28 @@ def mock_module(name):
     sys.modules[name] = mod
     return mod
 
-# Mock heavy/missing dependencies to allow import
+# Mock external third-party dependencies if not installed
 mocked_deps = [
-    'site_tgach', 'site_tgach.mirror_worker', 'site_tgach.tagging_worker',
-    'site_tgach.security', 'site_tgach.image_processing', 'site_tgach.catbox',
-    'site_tgach.neuro_poster', 'site_tgach.rss', 'site_tgach.backup',
-    'site_tgach.importer', 'site_tgach.neuro_scanner', 'site_tgach.admin_config',
-    'site_tgach.voice_processing', 'site_tgach.hf_batcher', 'warhammer_mode', 'japanese_translator',
     'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
     'fastapi', 'fastapi.responses', 'fastapi.middleware', 'fastapi.middleware.cors',
     'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip',
     'fastapi.staticfiles', 'fastapi.templating', 'fastapi.exceptions',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
-    'fastapi_cache.decorator', 'geoip2', 'geoip2.database', 'aiogram',
-    'aiogram.types', 'aiogram.exceptions', 'aiogram.enums', 'aiogram.client',
-    'aiogram.client.default', 'aiogram.client.session', 'aiogram.client.session.aiohttp', 'common.bot_pool',
-    'aiogram.filters', 'aiogram.fsm', 'aiogram.fsm.context', 'aiogram.fsm.state', 'aiogram.fsm.storage', 'aiogram.fsm.storage.memory',
-    'aiogram.webhook', 'aiogram.webhook.aiohttp_server', 'orjson', 'pydantic',
-    'aiogram.utils', 'aiogram.utils.media_group', 'aiogram.utils.keyboard',
-    'openai', 'pyrogram', 'pyrogram.errors', 'pyrogram.types',
-    'site_tgach.html_sanitizer',
+    'fastapi_cache.decorator', 'geoip2', 'geoip2.database',
+    'openai',
 ]
 
+_added_mocks = []
 for dep in mocked_deps:
     if dep not in sys.modules:
-        mock_module(dep)
+        _added_mocks.append(dep)
+        mod = mock_module(dep)
+        mod.__getattr__ = lambda name: MagicMock()
 
-# Return MagicMock for any attribute access on our mocked modules
-for mod_name in sys.modules:
-    if mod_name.startswith('site_tgach.') or mod_name in mocked_deps:
-        sys.modules[mod_name].__getattr__ = lambda name: MagicMock()
+def tearDownModule():
+    for dep in _added_mocks:
+        if dep in sys.modules:
+            del sys.modules[dep]
 
 import Dubsite_tgach.main as main_module
 from Dubsite_tgach.main import lifespan

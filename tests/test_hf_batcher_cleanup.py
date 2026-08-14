@@ -2,8 +2,16 @@ import os
 import shutil
 import tempfile
 import unittest
-from unittest.mock import patch
-from site_tgach.hf_batcher import cleanup_stale_temp_dirs
+from unittest.mock import patch, MagicMock
+import sys
+import asyncio
+
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+import site_tgach.hf_batcher as hf_batcher
 
 class TestCleanupStaleTempDirs(unittest.TestCase):
     def setUp(self):
@@ -15,8 +23,7 @@ class TestCleanupStaleTempDirs(unittest.TestCase):
         os.chdir(self.orig_cwd)
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    @patch("site_tgach.hf_batcher.logger")
-    def test_cleanup_stale_temp_dirs(self, mock_logger):
+    def test_cleanup_stale_temp_dirs(self):
         # Create matching directories
         os.makedirs("temp_hf_123")
         os.makedirs("temp_hf_456")
@@ -28,32 +35,31 @@ class TestCleanupStaleTempDirs(unittest.TestCase):
         with open("temp_hf_file.txt", "w") as f:
             f.write("test")
 
-        cleanup_stale_temp_dirs()
+        with patch.object(hf_batcher, "logger") as mock_logger:
+            hf_batcher.cleanup_stale_temp_dirs()
 
-        self.assertFalse(os.path.exists("temp_hf_123"))
-        self.assertFalse(os.path.exists("temp_hf_456"))
-        self.assertTrue(os.path.exists("other_dir"))
-        self.assertTrue(os.path.exists("temp_hf_file.txt"))
-        mock_logger.info.assert_called_with("🧹 Startup Cleanup: Removed 2 stale temp folders.")
+            self.assertFalse(os.path.exists("temp_hf_123"))
+            self.assertFalse(os.path.exists("temp_hf_456"))
+            self.assertTrue(os.path.exists("other_dir"))
+            self.assertTrue(os.path.exists("temp_hf_file.txt"))
+            mock_logger.info.assert_called_with("🧹 Startup Cleanup: Removed 2 stale temp folders.")
 
-    @patch("site_tgach.hf_batcher.logger")
-    def test_cleanup_handles_exception(self, mock_logger):
-        with patch("os.getcwd", side_effect=Exception("Test Exception")):
-            cleanup_stale_temp_dirs()
-            mock_logger.error.assert_called_with("Startup cleanup error: Test Exception")
+    def test_cleanup_handles_exception(self):
+        with patch.object(hf_batcher, "logger") as mock_logger:
+            with patch("os.getcwd", side_effect=Exception("Test Exception")):
+                hf_batcher.cleanup_stale_temp_dirs()
+                mock_logger.error.assert_called_with("Startup cleanup error: Test Exception", exc_info=True)
 
-    @patch("site_tgach.hf_batcher.logger")
-    @patch("site_tgach.hf_batcher.shutil.rmtree")
-    def test_cleanup_handles_rmtree_exception(self, mock_rmtree, mock_logger):
+    def test_cleanup_handles_rmtree_exception(self):
         os.makedirs("temp_hf_error")
-        mock_rmtree.side_effect = Exception("rmtree failed")
+        with patch.object(hf_batcher, "logger") as mock_logger:
+            with patch("shutil.rmtree", side_effect=Exception("rmtree failed")):
+                hf_batcher.cleanup_stale_temp_dirs()
 
-        cleanup_stale_temp_dirs()
-
-        # It shouldn't crash, and it shouldn't log "Removed N" since count is 0
-        mock_logger.info.assert_not_called()
-        # The directory will still exist because rmtree was mocked
-        self.assertTrue(os.path.exists("temp_hf_error"))
+                # It shouldn't crash, and it shouldn't log "Removed N" since count is 0
+                mock_logger.info.assert_not_called()
+                # The directory will still exist because rmtree was mocked
+                self.assertTrue(os.path.exists("temp_hf_error"))
 
 if __name__ == "__main__":
     unittest.main()
