@@ -28,7 +28,7 @@ from common.spam_filter import _check_cross_board_spam, check_rate_limit as _che
 from post_helpers import _quote_info_from_content
 from media_utils import extract_msg_media_file_id
 from shared_state import *
-from shared_state import _media_group_state_key
+from shared_state import _media_group_state_key, _active_duels, _DUEL_TIMEOUT
 
 from common.task_manager import spawn_task
 from delivery_manager import execute_delayed_edit, complete_media_group_after_delay
@@ -41,7 +41,7 @@ from common.database import get_post_info_by_copy
 from common.bot_helpers import process_new_post
 from common.bot_helpers import accept_duel_logic, decline_duel_logic
 from bot_helpers import is_admin, _get_msg_content_and_type
-from common.spam_filter import analyze_message_for_spam, SpamResult, is_spam_filtered, acquire_spam_lock, get_spam_violation_level
+from common.spam_filter import analyze_message_for_spam, SpamResult, is_spam_filtered, acquire_spam_lock, get_spam_violation_level, SPAM_RULES, _check_repeats
 from text_assets import (
     EARNING_NOTIFICATIONS, REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES, 
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP
@@ -173,7 +173,8 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
             if final_bot:
                 try:
                     board_name = BOARD_CONFIG[board_id]['name']
-                    caption = f"🔥 <b>Годнота с {board_name}</b> (Пост #{post_num})\n\n👉 <a href=\"https://t.me/{final_bot.token.split(':')[0]}\">Зайти в бота</a>"
+                    bot_uname = BOARD_CONFIG.get(board_id, {}).get('username', 'dvach_chatbot').lstrip('@')
+                    caption = f"🔥 <b>Годнота с {board_name}</b> (Пост #{post_num})\n\n👉 <a href=\"https://t.me/{bot_uname}\">Зайти в бота</a>"
                     await final_bot.copy_message(
                         chat_id=BEST_CHANNEL_ID,
                         from_chat_id=chat_id,
@@ -377,7 +378,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             try:
                 await message.delete()
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
             last_insult_time = b_data.get('last_roll_time', {}).get(user_id, 0)
             now = time.time()
             if now - last_insult_time > 5:
@@ -394,7 +395,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     spawn_task(delete_message_after_delay(sent_msg, 7))
                     b_data.setdefault('last_roll_time', {})[user_id] = now
                 except Exception: 
-                    import traceback; traceback.print_exc()
+                    pass
             return
         supported_types = ['text', 'photo', 'video', 'animation', 'document', 'audio', 'voice', 'sticker', 'video_note'] 
         if message.content_type not in supported_types:
@@ -417,15 +418,42 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         elif mute_until:
             b_data['mutes'].pop(user_id, None)
             
-        if message.content_type == 'text' and len(message.text) > 50:
+        cursed_text_override = None
+        if message.content_type == 'text' or (message.caption and message.content_type in ['photo', 'video', 'document', 'animation', 'audio', 'voice']):
             db_p = await get_pool()
             c_items = await _get_user_active_items(db_p, user_id, board_id)
             if c_items.get("cursed_until", 0) > time.time():
+                from summarize import summarize_text_with_hf
+                original_text = message.text or message.caption or ""
+                prompt = "Перепиши этот текст от лица человека, у которого прямо во время речи начался взрывной понос. Прерывай предложения многоточиями, вставляй крики боли (ААА, БЛЯЯ, УУУФ), звуки бульканья в животе (БУРЛК-БУРЛК) и панику. Обязательно сохрани изначальный смысл текста, но пропусти его через призму невыносимой боли в животе и попыток сдержать кал. Пиши грязно, сыро, без ИИ-шаблонов. Текст жертвы:"
+                try:
+                    rewritten = await summarize_text_with_hf(prompt, original_text, model_preference="llama")
+                    if len(rewritten) > 1000:
+                        rewritten = rewritten[:1000]
+                except Exception:
+                    rewritten = "БУРЛК-БУРЛК... БЛЯЯЯЯ! Я... я обосрался... " + original_text[:50]
+                
                 try: await message.delete()
                 except Exception: pass
-                sent = await message.answer("🚽 <b>ПРОКЛЯТИЕ ДРИСТНИ!</b>\nИз тебя лезет словесный понос, но ты не можешь высрать больше 50 символов за раз! Купи Аминазин в /shop, чтобы вылечиться.", parse_mode="HTML")
-                spawn_task(delete_message_after_delay(sent, 5))
-                return
+                
+                cursed_text_override = f"🚽 [ПРОКЛЯТЫЙ ПОНОСОМ]\n{rewritten}"
+
+            if c_items.get("schizo_pill_until", 0) > time.time() and not cursed_text_override:
+                from summarize import summarize_text_with_hf
+                original_text = message.text or message.caption or ""
+                prompt = "Перепиши этот текст от лица абсолютно поехавшего шизофреника, конспиролога и параноика. Везде заговоры, рептилоиды, ЦРУ, излучение от вышек 5G и массоны. Перескакивай с мысли на мысль, пиши капсом случайные СЛОВА, используй много восклицательных знаков и вопросов. Сохрани изначальный смысл текста, но пропусти его через шизофазию и паранойю. Текст пациента:"
+                try:
+                    rewritten = await summarize_text_with_hf(prompt, original_text, model_preference="llama")
+                    if len(rewritten) > 1000:
+                        rewritten = rewritten[:1000]
+                except Exception:
+                    rewritten = "ОНИ СЛЕДЯТ ЗА МНОЙ!! ВЫШКИ ОБЛУЧАЮТ!! " + original_text[:50]
+                
+                try: await message.delete()
+                except Exception: pass
+                
+                cursed_text_override = f"👽 [ШИЗО-ТАБЛЕТКА]\n{rewritten}"
+
                 
         b_data['last_activity'][user_id] = datetime.now(UTC)
         if user_id not in b_data['users']['active']:
@@ -449,7 +477,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             try:
                 spawn_task(message.answer(phrase))
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
                 
         is_sage = False 
         h_val = getattr(message, 'html_text', None)
@@ -467,7 +495,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         print(f"Error in handle_message: {e}")
         return
     # Собираем текст для поиска мульти-ответов из текста или подписи к медиа
-    input_text = message.text or message.caption or ""
+    input_text = cursed_text_override if cursed_text_override else (message.text or message.caption or "")
     multi_reply_blocks, limit_hit = _parse_and_split_multi_replies(input_text)
     
     is_shadow_muted = (user_id in b_data['shadow_mutes'] and 
@@ -792,28 +820,17 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         return False
     elif result == SpamResult.BAN_REQUIRED:
         return False
-    return True
-
-    if content:
-        if not _check_cross_board_spam(user_id, board_id, content, msg_type, msg.content_type):
-            return False
 
     rules = SPAM_RULES.get(msg_type)
     if not rules:
         return True
 
-    b_data = board_data[board_id]
+    from common.spam_filter import _spam_violations
     now = datetime.now(UTC)
-    violations = b_data['spam_violations'].setdefault(user_id, {'level': 0, 'last_reset': now})
+    violations = _spam_violations[board_id].setdefault(user_id, {'level': 0, 'last_reset': now})
 
-    if (now - violations['last_reset']) > timedelta(hours=1):
-        violations['level'] = 0
-        violations['last_reset'] = now
-
+    b_data = board_data[board_id]
     if not _check_repeats(user_id, b_data, (content, msg_type), rules, violations):
-        return False
-
-    if not _check_rate_limit(user_id, b_data, rules, violations):
         return False
 
     return True
@@ -985,7 +1002,7 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass  # Race condition: another message in the media group already deleted it
         
     if media_group_key in sent_media_groups:
         return

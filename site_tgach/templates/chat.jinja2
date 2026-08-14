@@ -239,7 +239,8 @@
                                                     <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
                                                         <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                             data-src="{{ file_thumb_src }}" 
-                                                            class="post-image lazy-load" alt="img" referrerpolicy="no-referrer">
+                                                            data-file-id="{{ file.original_file_id }}"
+                                                            class="post-image lazy-load" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="handleImageError(this)">
                                                     </a>
                                                 {% elif file.type == 'sticker' %}
                                                     <div class="sticker-wrapper" style="display:inline-block; vertical-align:bottom;">
@@ -254,9 +255,9 @@
                                                             {% else %}
                                                                 <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                     data-src="{{ file_thumb_src }}" 
-                                                                    class="post-sticker lazy-load" 
-                                                                    onclick="event.stopPropagation();" 
-                                                                    referrerpolicy="no-referrer"
+                                                                    data-file-id="{{ file.original_file_id }}"
+                                                                    class="post-sticker lazy-load" referrerpolicy="no-referrer" 
+                                                                    style="max-height: 150px; width: auto; background: transparent; display: block;"
                                                                     onerror="handleImageError(this)">
                                                             {% endif %}
                                                         </a>

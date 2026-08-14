@@ -41,6 +41,17 @@ class MultiStreamBotPool:
         # Кулдауны ботов по времени (bot_id -> timestamp истечения)
         self.cooldown_bots: Dict[int, float] = {}
 
+        # Обязательно добавляем основной BOT_TOKEN в кэш для возможности скачивания его файлов
+        main_token = os.getenv("BOT_TOKEN")
+        if main_token and ':' in main_token:
+            try:
+                bot_id = int(main_token.split(':')[0])
+                bot = Bot(token=main_token, session=AiohttpSession())
+                self._shared_bots[bot_id] = bot
+                self.all_bots.append(bot)
+            except Exception as e:
+                logger.error(f"Error loading main BOT_TOKEN into BotPool: {e}")
+
     def _get_stream_pool(self, stream_code: str) -> str:
         if stream_code == 'en':
             return os.getenv("UPLOAD_BOT_POOL_EN", "")

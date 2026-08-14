@@ -4,7 +4,7 @@ import logging
 import asyncio
 from html.parser import HTMLParser
 from openai import AsyncOpenAI
-from common.token_pool import groq_pool
+from common.token_pool import groq_pool, google_pool
 
 logger = logging.getLogger("summarize")
 
@@ -68,7 +68,7 @@ def _load_google_keys() -> list[str]:
 
 _key_cooldowns: dict[tuple[str, str], float] = {}
 
-async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
+async def summarize_text_with_hf(prompt: str, text_dump: str, model_preference: str | None = None) -> str:
     """
     Summarize text using a cascade of OpenAI-compatible endpoints:
     Supports choosing model/provider: gemini, qwen, llama, or default groq (Qwen + Llama + Gemini fallback).
@@ -77,8 +77,8 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, hf_token: str | No
     if model_preference == "persona" or model_preference == "persona_gemini":
         # Persona Bot: строго 1 параллельный вызов через семафор
         async with _get_persona_semaphore():
-            return await _summarize_inner(prompt, text_dump, hf_token, model_preference)
-    return await _summarize_inner(prompt, text_dump, hf_token, model_preference)
+            return await _summarize_inner(prompt, text_dump, None, model_preference)
+    return await _summarize_inner(prompt, text_dump, None, model_preference)
 
 
 async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
@@ -147,14 +147,10 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
 
     for model_name, provider in models_cascade:
         if provider == "gemini":
-            keys = _load_google_keys()
+            keys = google_pool.get_all_active_tokens()
             base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
         else:
-            keys = []
-            for _ in range(5):
-                token = groq_pool.get_token()
-                if token and token not in keys:
-                    keys.append(token)
+            keys = groq_pool.get_all_active_tokens()
             base_url = "https://api.groq.com/openai/v1"
             
         if not keys:
@@ -216,7 +212,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                 logger.warning(f"⚠️ {provider} call failed ({model_name}) key=...{api_key[-6:]}: {err_str[:120]}")
                 if provider == "groq" and ("401" in err_str or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower()):
                     logger.error(f"❌ Groq key {api_key[:12]}... is unauthorized (401). Removing from pool.")
-                    groq_pool.remove_token(api_key)
+                    groq_pool.ban_token(api_key)
                     await asyncio.sleep(2.5)
                     continue  # try next key
                 if "413" in err_str or "too large" in err_str.lower() or "context_length_exceeded" in err_str.lower():
@@ -226,13 +222,29 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     messages[1]["content"] = text_dump
                     await asyncio.sleep(2.5)
                     continue  # retry same key with smaller input
+                if "403" in err_str:
+                    # 403 = this specific key/project is banned. Cooldown it and try the NEXT KEY.
+                    _key_cooldowns[(provider, api_key)] = time.time() + 3600.0  # 1h cooldown for banned keys
+                    if provider == "gemini":
+                        google_pool.ban_token(api_key)
+                    else:
+                        groq_pool.ban_token(api_key)
+                    logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} is 403 BANNED for {model_name}. Trying next key...")
+                    await asyncio.sleep(3.0)
+                    continue  # try next key, NOT next model
                 if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower() or "exhausted" in err_str.lower():
+                    # 429 = rate limit on this key. Cooldown and try next key.
                     _key_cooldowns[(provider, api_key)] = time.time() + 90.0
-                    logger.warning(f"⚠️ {provider} Rate Limit on key ...{api_key[-6:]} for model {model_name}. Switching to next model in cascade immediately.")
-                    skip_model = True
-                    break
-                # Any other error: skip this key, try next
-                logger.warning(f"⚠️ Unhandled error for {model_name}, skipping to next model in cascade...")
+                    if provider == "gemini":
+                        google_pool.penalize_token(api_key, 90.0)
+                    else:
+                        groq_pool.penalize_token(api_key, 90.0)
+                    logger.warning(f"⚠️ {provider} key ...{api_key[-6:]} rate limited (429) for {model_name}. Trying next key...")
+                    await asyncio.sleep(3.0)
+                    continue  # try next key
+                # Any other error: skip model entirely
+                logger.warning(f"⚠️ Unhandled error for {model_name}: {err_str[:80]}. Skipping model.")
+                await asyncio.sleep(3.0)
                 break
 
     return "Нейронка сдохла. Не удалось сгенерировать саммари."

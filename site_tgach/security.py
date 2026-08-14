@@ -3,6 +3,10 @@ import secrets
 import time
 import logging
 import random
+import os
+import hmac
+from urllib.parse import parse_qsl
+
 logger = logging.getLogger("security")
 
 # --- PoW (Защита от спама) ---
@@ -110,3 +114,55 @@ def check_ddos(ip: str) -> bool:
         return True
 
     return False
+
+def verify_telegram_webapp_data(init_data: str) -> dict | None:
+    """Verifies Telegram WebApp initData and returns parsed dict if valid.
+
+    Tries every *_BOT_TOKEN variable found in the environment so that
+    multiple bots pointing at the same site all work without extra config.
+    """
+    # Collect all non-empty *_BOT_TOKEN values (deduplicated, order stable).
+    seen: set[str] = set()
+    tokens: list[str] = []
+    for key, val in os.environ.items():
+        if key.endswith("_BOT_TOKEN") and val and val not in seen:
+            seen.add(val)
+            tokens.append(val)
+
+    if not tokens:
+        logger.error("No *_BOT_TOKEN variables found in env")
+        return None
+
+    try:
+        parsed_data = dict(parse_qsl(init_data, keep_blank_values=True))
+        if "hash" not in parsed_data:
+            return None
+
+        received_hash = parsed_data.pop("hash")
+
+        data_check_string = "\n".join(
+            f"{k}={v}" for k, v in sorted(parsed_data.items())
+        )
+
+        for bot_token in tokens:
+            secret_key = hmac.new(
+                b"WebAppData",
+                bot_token.encode("utf-8"),
+                hashlib.sha256,
+            ).digest()
+
+            calculated_hash = hmac.new(
+                secret_key,
+                data_check_string.encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+
+            if hmac.compare_digest(calculated_hash, received_hash):
+                return parsed_data  # valid — return without "hash" key
+
+        logger.warning("TMA initData hash mismatch against all %d known bot tokens", len(tokens))
+        return None
+
+    except Exception as e:
+        logger.error("Error verifying TMA auth: %s", e)
+        return None

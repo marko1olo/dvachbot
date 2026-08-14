@@ -583,8 +583,9 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 10) 
                     continue
-                else:
-                    return
+                return 
+            except main.TelegramForbiddenError:
+                return
             except Exception as e:
                 print(f"⚠️ Непредвиденная ошибка в _edit_one: {e}")
                 return

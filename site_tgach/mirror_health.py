@@ -95,43 +95,19 @@ def clear_hf_failure(repo: str | None) -> None:
 
 
 def is_hf_repo_available(repo: str | None) -> bool:
-    if _is_disabled_by_env():
-        return False
-    if not repo:
-        return False
-    with _LOCK:
-        disabled_until = float(_STATE["hf_disabled_until"].get(repo) or 0)
-    return disabled_until <= time.time()
+    return False
 
 
 def get_configured_hf_repos() -> set[str]:
-    repos = set()
-    for account in os.getenv("HF_ACCOUNTS", "").split(","):
-        account = account.strip()
-        if ":" not in account:
-            continue
-        repo = account.split(":", 1)[1].strip()
-        if repo:
-            repos.add(repo)
-    return repos
+    return set()
 
 
 def has_available_hf_repo() -> bool:
-    repos = get_configured_hf_repos()
-    if not repos:
-        return False
-    return any(is_hf_repo_available(repo) for repo in repos)
+    return False
 
 
 def is_hf_link_allowed(url: str | None, valid_repos: set[str]) -> bool:
-    if not url:
-        return False
-    if not valid_repos:
-        return not _is_disabled_by_env()
-
-    for repo in valid_repos:
-        if repo in url:
-            return is_hf_repo_available(repo)
     return False
+
 
 

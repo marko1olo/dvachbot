@@ -379,7 +379,7 @@ async def get_tasks(db) -> list[dict]:
             WHERE p.post_num > (SELECT COALESCE(MAX(post_num), 0) - 250 FROM Posts)
               AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document')
               AND fid IS NOT NULL
-              AND fid NOT IN (SELECT file_id FROM FileRegistry)
+              AND fid NOT IN (SELECT file_id FROM FileRegistry WHERE file_id IS NOT NULL)
             LIMIT 10
         """
         query_gaps_single = """
@@ -391,7 +391,7 @@ async def get_tasks(db) -> list[dict]:
             WHERE p.post_num > (SELECT COALESCE(MAX(post_num), 0) - 250 FROM Posts)
               AND ftype IN ('image', 'photo', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document')
               AND fid IS NOT NULL
-              AND fid NOT IN (SELECT file_id FROM FileRegistry)
+              AND fid NOT IN (SELECT file_id FROM FileRegistry WHERE file_id IS NOT NULL)
             LIMIT 10
         """
         try:
@@ -505,10 +505,12 @@ async def download_file_with_fallback(file_id: str, primary_bot=None):
             continue
         except asyncio.CancelledError:
             raise
-        except TelegramBadRequest:
+        except TelegramBadRequest as e:
+            logger.debug(f"TelegramBadRequest for {file_id[:15]} on bot {b.id}: {e}")
             continue
         except Exception as e:
             err_str = str(e).lower()
+            logger.warning(f"⚠️ [TAGGER] Неизвестная ошибка при скачивании {file_id[:15]} ботом {b.id}: {repr(e)}")
             if (
                 "logged out" in err_str
                 or "unauthorized" in err_str
@@ -775,6 +777,10 @@ async def tagging_loop():
 
                 if tags is None and ai_response in (None, "error_api_exhausted"):
                     logger.warning(f"⚠️ [TAGGER] API exhausted or internal error. Skipping DB update for {file_id} to retry later.")
+                    if ai_response == "error_api_exhausted":
+                        await asyncio.sleep(60)
+                    else:
+                        await asyncio.sleep(10)
                     continue
                     
                 if not tags:

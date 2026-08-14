@@ -79,3 +79,7 @@ bot.lock
 AUTONOMOUS_PROGRESS.md
 security_reports/
 .venv/
+.agents/
+scratch/
+scratch_*.py
+

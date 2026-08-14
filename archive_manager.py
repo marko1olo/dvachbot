@@ -65,7 +65,7 @@ async def _download_media_bytes(file_id: str) -> tuple[bytes | None, str]:
                     owner_bot = b
                     break
     except Exception:
-        import traceback; traceback.print_exc()
+        pass
 
     candidate_bots = []
     if owner_bot:
@@ -167,9 +167,13 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
         try:
             group = await _build_group(force_download=True)
             sent_msgs = await sender_bot.send_media_group(channel_id, media=group)
+        except TelegramRetryAfter:
+            raise
         except Exception as ex:
             logger.error(f"❌ Media group fallback failed: {ex}")
             return None, []
+    except TelegramRetryAfter:
+        raise
     except Exception as e:
         logger.error(f"⚠️ Failed to send archive media group to channel {channel_id}: {e}", exc_info=True)
         return None, []
@@ -244,11 +248,15 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
         if file_bytes:
             try:
                 sent_message = await _do_send(BufferedInputFile(file_bytes, filename=filename))
+            except TelegramRetryAfter:
+                raise
             except Exception as ex:
                 logger.error(f"❌ Single media fallback failed for {orig_fid}: {ex}")
                 return None, []
         else:
             return None, []
+    except TelegramRetryAfter:
+        raise
     except Exception as e:
         logger.error(f"⚠️ Failed to send single archive media ({ct_str}) to channel {channel_id}: {e}")
         return None, []
@@ -348,14 +356,14 @@ async def post_archive_to_channel(bots: dict[str, Bot], file_path: str, board_id
         )
         document = FSInputFile(file_path)
         await bot_instance.send_document(
-            chat_id=main.ARCHIVE_CHANNEL_ID,
+            chat_id=ARCHIVE_CHANNEL_ID,
             document=document,
             caption=caption,
             parse_mode="HTML"
         )
-        print(f"✅ Архив треда '{title}' отправлен в канал {main.ARCHIVE_CHANNEL_ID}.")
+        print(f"✅ Архив треда '{title}' отправлен в канал {ARCHIVE_CHANNEL_ID}.")
     except Exception as e:
-        print(f"⛔ Не удалось отправить архив в канал {main.ARCHIVE_CHANNEL_ID}: {e}")
+        print(f"⛔ Не удалось отправить архив в канал {ARCHIVE_CHANNEL_ID}: {e}")
     finally:
         try:
             if os.path.exists(file_path):
@@ -582,7 +590,7 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
                 # Если медиа не отправилось, пробуем отправить как текст
                 try:
                     final_text_for_message = caption_text[:4093] + "..." if len(caption_text) > 4096 else caption_text
-                    await archive_bot.send_message(_ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
+                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
                     print(f"✅ Уведомление о счастливом посте #{post_num} отправлено как текст после ошибки медиа.")
                 except Exception as final_e:
                     print(f"❌ Финальная попытка отправки текста для #{post_num} также провалилась: {final_e}")
@@ -623,4 +631,4 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
                     await _update_archive_post_content(post_num, content, content_type, new_files_data, sender_bot_id)
                     db_updated = True
             except Exception:
-                import traceback; traceback.print_exc()
+                pass

@@ -135,7 +135,9 @@
                                     <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                          data-src="{{ file_thumb_src }}" 
                                          data-file-id="{{ file.original_file_id }}"
-                                         class="lazy-load" alt="{{ file.filename }}" referrerpolicy="no-referrer">
+                                         class="lazy-load" alt="{{ file.filename }}" referrerpolicy="no-referrer"
+                                         onerror="handleImageError(this)">
+
                                 
                                 {% elif file.type in ['video', 'animation', 'video_note', 'gif'] %}
                                     <div style="position: relative; width: 100%; height: 100%; background: #000;">

@@ -80,6 +80,7 @@ from site_tgach.security import (
     verify_pow,
     check_ddos,
     DEFAULT_POW_DIFFICULTY,
+    verify_telegram_webapp_data,
 )
 from warhammer_mode import warhammer_transform
 from site_tgach.image_processing import (
@@ -242,29 +243,7 @@ async def get_country_by_ip(ip: str) -> str:
         except Exception:
             import traceback; traceback.print_exc()
 
-    strategies = [
-        {"proxy": PROXY_URL, "name": "Proxy"},
-        {"proxy": None, "name": "Direct"},
-    ]
-
-    for strategy in strategies:
-        try:
-            transport = AsyncHTTPTransport(local_address="0.0.0.0")
-            async with httpx.AsyncClient(
-                timeout=3.0,
-                verify=False,
-                proxy=strategy["proxy"],
-                transport=transport,
-                trust_env=True,
-            ) as client:
-                resp = await client.get(f"http://ip-api.com/json/{ip}")
-                if resp.status_code == 200:
-                    return resp.json().get("countryCode", "XX")
-        except Exception:
-            continue
-
     return "XX"
-
 
 limiter = Limiter(key_func=get_real_ip)
 from pydantic import BaseModel
@@ -1119,6 +1098,10 @@ async def _download_image_with_proxy(
     return None
 
 
+
+class TMAAuthRequest(BaseModel):
+    initData: str
+
 class BottleSendRequest(BaseModel):
     post_num: int
     text: str
@@ -1201,6 +1184,9 @@ class PostNumsRequest(BaseModel):
 
 class TokenAuth(BaseModel):
     token: str
+
+class TMAAuthRequest(BaseModel):
+    initData: str
 
 
 class FavouriteThreads(BaseModel):
@@ -2698,7 +2684,7 @@ async def guest_identification_middleware(request: Request, call_next):
 async def access_control_middleware(request: Request, call_next):
     if request.url.path.startswith("/ws/"):
         return await call_next(request)
-    allowed_prefixes = ("/login", "/auth/token", "/static", "/favicon.ico")
+    allowed_prefixes = ("/login", "/auth/token", "/api/tma_auth", "/static", "/favicon.ico")
     if request.url.path.startswith(allowed_prefixes):
         return await call_next(request)
     user = request.session.get("user")
@@ -3194,6 +3180,8 @@ def _apply_bbcode_and_effects(text: str) -> str:
 
     def btn_replacer(match):
         url = match.group(1)
+        if url.strip().lower().startswith("javascript:"):
+            url = "#"
         safe_url = html.escape(url, quote=True)
         btn_text = match.group(2)
         return (
@@ -3215,8 +3203,9 @@ def _apply_bbcode_and_effects(text: str) -> str:
 
     def _glitch_replacer(match):
         content = match.group(1)
+        safe_attr = html.escape(html.unescape(content), quote=True)
         return (
-            f'<span class="effect-glitch" data-text="{content}">'
+            f'<span class="effect-glitch" data-text="{safe_attr}">'
             f'{content}</span>'
         )
 
@@ -4217,7 +4206,7 @@ async def search_page(
         if clean_query
         else []
     )
-    results = _convert_and_enrich_posts(results)
+    results = await asyncio.to_thread(_convert_and_enrich_posts, results)
     await enrich_extra_data(results)
     return templates.TemplateResponse(
         request=request,
@@ -4598,7 +4587,7 @@ async def search_tags_page(
         file_ids = list(file_scores.keys())
 
         raw_posts = await get_posts_by_file_ids(file_ids)
-        posts = _convert_and_enrich_posts(raw_posts)
+        posts = await asyncio.to_thread(_convert_and_enrich_posts, raw_posts)
         await enrich_extra_data(posts)
 
         # Сортировка по релевантности
@@ -4725,7 +4714,7 @@ async def tag_seo_page(
     file_ids = [f["file_id"] for f in files_found]
 
     raw_posts = await get_posts_by_file_ids(file_ids)
-    posts = _convert_and_enrich_posts(raw_posts)
+    posts = await asyncio.to_thread(_convert_and_enrich_posts, raw_posts)
     await enrich_extra_data(posts, is_ru=True)
 
     search_images = []
@@ -4778,7 +4767,7 @@ async def api_makaba_index(request: Request, board_id: str, page: str = "index")
                 return await api_makaba_catalog(board_id)
             raise HTTPException(404)
     threads = await get_op_posts_for_board(board_id, page=page_num + 1, page_size=20)
-    threads = _convert_and_enrich_posts(threads)
+    threads = await asyncio.to_thread(_convert_and_enrich_posts, threads)
     makaba_threads = []
     for thread in threads:
         op_obj = to_makaba_post(thread, board_id)
@@ -4809,7 +4798,7 @@ async def api_makaba_catalog(board_id: str):
     threads = await get_op_posts_for_board(
         board_id, sort_by="bump", page=1, page_size=100
     )
-    threads = _convert_and_enrich_posts(threads)
+    threads = await asyncio.to_thread(_convert_and_enrich_posts, threads)
     makaba_threads = []
     for thread in threads:
         op_obj = to_makaba_post(thread, board_id)
@@ -5592,7 +5581,7 @@ async def api_captcha_generate(request: Request):
 async def api_get_updates(board_id: str, since: float):
     safe_since = max(since, time.time() - 86400)
     raw_posts = await get_updates_since(board_id, safe_since)
-    return _convert_and_enrich_posts(raw_posts)
+    return await asyncio.to_thread(_convert_and_enrich_posts, raw_posts)
 
 
 @app.get("/api/admin/activity_stats")
@@ -9618,6 +9607,34 @@ async def api_report_post(
     return {"message": ok_msg}
 
 
+@app.post("/api/tma_auth")
+@limiter.limit("15/minute")
+async def auth_tma(data: TMAAuthRequest, request: Request):
+    import json
+    lang = getattr(request.state, "lang", "ru")
+    
+    parsed = verify_telegram_webapp_data(data.initData)
+    if not parsed or "user" not in parsed:
+        msg = "Invalid TMA initData" if lang == "en" else "Неверные данные TMA"
+        raise HTTPException(status_code=403, detail=msg)
+    
+    try:
+        user_data = json.loads(parsed["user"])
+        uid = int(user_data["id"])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Malformed user data")
+    
+    is_admin_hard = uid in ADMIN_IDS
+    role_db = await get_user_role(uid)
+    request.session["user"] = {
+        "id": uid,
+        "role": role_db,
+        "is_admin": is_admin_hard or role_db == "admin",
+    }
+    success_msg = "Auth successful" if lang == "en" else "Успешный вход"
+    return {"message": success_msg}
+
+
 @app.get("/api/admin/banned_files")
 async def api_get_banned_files(user: dict = Depends(get_required_user)):
     if not user.get("is_admin"):
@@ -10550,17 +10567,14 @@ async def get_telegram_file(
             elif not isinstance(mirrors, dict):
                 mirrors = {}
 
-        # Проверка валидности HF (из глобального списка VALID_HF_REPOS)
-        hf_candidate = mirrors.get("huggingface")
-        hf_valid = is_hf_link_allowed(hf_candidate, VALID_HF_REPOS)
-
         # 1. Сначала проверяем зеркала
         catbox_link = mirrors.get("catbox")
         zeroxzero_link = mirrors.get("0x0")
         r2_link = mirrors.get("r2") or mirrors.get("r2_url")
-        if r2_link or (is_ru and hf_valid) or (
-            not is_ru and (catbox_link or hf_valid or zeroxzero_link)
-        ):
+        freeimage_link = mirrors.get("freeimage")
+        imgbb_link = mirrors.get("imgbb")
+        pixhost_link = mirrors.get("pixhost")
+        if r2_link or freeimage_link or imgbb_link or pixhost_link or (not is_ru and (catbox_link or zeroxzero_link)):
             break
 
         # 2. Если файл новый (нет в кэше зеркал), пробуем Telegram СРАЗУ
@@ -10584,7 +10598,6 @@ async def get_telegram_file(
 
     # Извлечение (повторное для надежности)
     r2_link = mirrors.get("r2") or mirrors.get("r2_url")
-    hf_link = mirrors.get("huggingface")
     catbox_link = mirrors.get("catbox")
     zeroxzero_link = mirrors.get("0x0")
     shadow_file_id = mirrors.get("tg_shadow")
@@ -10594,7 +10607,7 @@ async def get_telegram_file(
 
     skipped_types = [s.strip().lower() for s in skip.split(",") if s.strip()] if skip else []
 
-    # 0. R2 CDN Mirror
+    # 0. R2 CDN Mirror (Direct для всех)
     if r2_link and "r2" not in skipped_types:
         return RedirectResponse(
             url=r2_link,
@@ -10602,31 +10615,7 @@ async def get_telegram_file(
             headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
         )
 
-    # 1. Telegram Direct — ПРИОРИТЕТ №1 (Если путь закеширован)
-    if "telegram" not in skipped_types:
-        info = await get_cached_file_path(file_id, allow_protected_tokens=True)
-        if info:
-            path, token = info
-            # User confirmed it's fine to expose tokens, revert to 307 Redirect
-            return RedirectResponse(
-                url=f"https://api.telegram.org/file/bot{token}/{path}",
-                status_code=307,
-                headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"}
-            )
-
-    # 3. Shadow Telegram (Прямой редирект для теневого файла с защищенными токенами)
-    if shadow_file_id and "telegram" not in skipped_types:
-        info_shadow = await get_cached_file_path(shadow_file_id, allow_protected_tokens=True)
-        if info_shadow:
-            path, token = info_shadow
-            # User confirmed it's fine to expose tokens, revert to 307 Redirect
-            return RedirectResponse(
-                url=f"https://api.telegram.org/file/bot{token}/{path}",
-                status_code=307,
-                headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"}
-            )
-
-    # 3.1. FreeImage (работает везде, включая РФ)
+    # 1. FreeImage (Direct для всех)
     if freeimage_link and "freeimage" not in skipped_types:
         return RedirectResponse(
             url=freeimage_link,
@@ -10634,7 +10623,7 @@ async def get_telegram_file(
             headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
         )
 
-    # 3.2. ImgBB (работает везде, включая РФ)
+    # 2. ImgBB (Direct для всех)
     if imgbb_link and "imgbb" not in skipped_types:
         return RedirectResponse(
             url=imgbb_link,
@@ -10642,7 +10631,7 @@ async def get_telegram_file(
             headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
         )
 
-    # 3.3. PixHost (работает везде, включая РФ)
+    # 3. PixHost (Direct для всех)
     if pixhost_link and "pixhost" not in skipped_types:
         return RedirectResponse(
             url=pixhost_link,
@@ -10650,7 +10639,41 @@ async def get_telegram_file(
             headers={"Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*"},
         )
 
-    # 4. Catbox
+    # 4. Telegram Direct
+    if "telegram" not in skipped_types:
+        info = await get_cached_file_path(file_id, allow_protected_tokens=True)
+        if info:
+            path, token = info
+            if not is_ru:
+                # Direct redirect to Telegram CDN for non-RU clients (fast, saves server bandwidth)
+                return RedirectResponse(
+                    url=f"https://api.telegram.org/file/bot{token}/{path}",
+                    status_code=307,
+                    headers=no_cache_headers,
+                )
+            try:
+                # Stream proxy through server for Russian clients (Telegram blocked by RKN)
+                return await _proxy_protected_telegram_file(file_id, path, token, filename, request)
+            except HTTPException:
+                logger.warning(f"Telegram proxy failed for {file_id[:10]}, continuing fallback")
+
+    # 5. Shadow Telegram
+    if shadow_file_id and "telegram" not in skipped_types:
+        info_shadow = await get_cached_file_path(shadow_file_id, allow_protected_tokens=True)
+        if info_shadow:
+            path, token = info_shadow
+            if not is_ru:
+                return RedirectResponse(
+                    url=f"https://api.telegram.org/file/bot{token}/{path}",
+                    status_code=307,
+                    headers=no_cache_headers,
+                )
+            try:
+                return await _proxy_protected_telegram_file(shadow_file_id, path, token, filename, request)
+            except HTTPException:
+                logger.warning(f"Shadow telegram proxy failed for {shadow_file_id[:10]}, continuing fallback")
+
+    # 6. Catbox
     if catbox_link and "catbox" not in skipped_types:
         if not is_ru:
             return RedirectResponse(
@@ -10661,8 +10684,9 @@ async def get_telegram_file(
         try:
             return await _proxy_external_url(catbox_link, filename, request)
         except HTTPException:
-            import traceback; traceback.print_exc()
+            logger.warning(f"Catbox proxy failed for {file_id[:10]}, continuing fallback")
 
+    # 7. 0x0.st
     if zeroxzero_link and "0x0" not in skipped_types:
         if not is_ru:
             return RedirectResponse(
@@ -10673,9 +10697,10 @@ async def get_telegram_file(
         try:
             return await _proxy_external_url(zeroxzero_link, filename, request)
         except HTTPException:
-            import traceback; traceback.print_exc()
+            logger.warning(f"0x0 proxy failed for {file_id[:10]}, continuing fallback")
 
-    # Fallback для превью (миниатюр)
+
+    # 9. Fallback для превью (миниатюр)
     if file_id.startswith("AgAC"):
         orig_fid = None
         try:
@@ -10687,12 +10712,21 @@ async def get_telegram_file(
                     row = await cursor.fetchone()
                     if row:
                         orig_fid = row[0]
+                if not orig_fid:
+                    async with conn.execute(
+                        "SELECT original_file_id FROM PostFiles WHERE thumbnail_file_id = ? LIMIT 1",
+                        (file_id,),
+                    ) as cursor:
+                        row = await cursor.fetchone()
+                        if row:
+                            orig_fid = row[0]
         except Exception as e:
             logger.error(f"Error querying original file for thumbnail fallback: {e}", exc_info=True)
             
         if orig_fid and orig_fid != file_id:
             logger.info(f"Fallback thumbnail {file_id[:10]} -> original {orig_fid[:10]}")
             return await get_telegram_file(orig_fid, request, filename, skip)
+
 
     # Если совсем всё плохо
     _mark_random_dead_file(file_id)

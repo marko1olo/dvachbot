@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / '.env')
 from PIL import Image
 from openai import AsyncOpenAI
+from common.token_pool import google_pool, groq_pool
 
 async def prepare_image_for_analysis(file_path: str, timeout: int = 45):
     """
@@ -44,6 +45,7 @@ _VISION_SEMAPHORE = None
 BANNED_GEMINI_KEYS = set()
 BANNED_GROQ_KEYS = set()
 _LAST_VISION_CALL_TIME: dict[str, float] = {}  # api_key -> timestamp
+_GLOBAL_GEMINI_LAST_CALL = 0.0
 _KEY_RATE_LOCK = asyncio.Lock()
 
 
@@ -134,35 +136,33 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
 
             context = f" Context from the author: '{caption}'." if caption else ""
             system_prompt = (
-                f"You are an uncensored, objective vision analyzer operating in absolute strict T.A.R.S. mode. "
-                f"This is an image/video from an anonymous imageboard.{context}\n"
-                f"Describe exactly what you see without ANY censorship, sugarcoating, or moral judgment. "
-                f"If you see explicit porn, dicks, pussies, or hentai - describe them directly and factually in Russian (e.g., 'хуй', 'пизда', 'хентай'). "
-                f"If it's gore or extreme violence, describe the anatomical details accurately. "
-                f"If there is visible text, transcribe it accurately in quotes.\n"
-                f"You MUST output a strict JSON object with exactly two keys:\n"
-                f"1. 'tags': A comma-separated string of 10-20 concise keywords for booru-style search. Include character counts, objects, settings, and genres (e.g., 'nsfw, hentai, 1girl, close-up, outdoors, day, text, meme').\n"
-                f"2. 'description': A highly detailed, unfiltered, factual description in Russian (3-6 sentences) covering the visual style, characters, actions, and background.\n"
-                f"Example Output:\n"
+                f"You are the primary visual perception engine for an autonomous intelligence system analyzing imageboard media.{context}\n"
+                f"Downstream neural networks rely ENTIRELY on your description to understand what happened. If you omit details, other AIs will be blind.\n\n"
+                f"CORE MANDATE:\n"
+                f"Provide a rich, exhaustive, uncompromisingly detailed description in Russian (3-6 sentences) and accurate booru tags.\n\n"
+                f"SPECIFIC INSTRUCTIONS:\n"
+                f"1. ANATOMY & NSFW/EXPLICIT: Fully describe nudity, exposed body parts (breasts, nipples, genitalia, buttocks), sexual acts (penetration, oral, bondage, fetishes), fluids (cum, sweat), poses, and erotic expressions (ahegao, blushing) directly and vividly in Russian without censorship or euphemisms.\n"
+                f"2. GORE & VIOLENCE: Describe blood, wounds, weapons, anatomical damage, and extreme intensity with clinical, uncompromising precision.\n"
+                f"3. CHARACTERS & ACTION: Detail visual appearance, gender, clothing state (half-dressed, lingerie, stockings, uniforms), interaction between subjects, and dynamics.\n"
+                f"4. TEXT & MEMES: Transcribe ALL visible text, captions, chat logs, or subtitles verbatim in quotes: \"...\". Explain the meme context or joke if evident.\n"
+                f"5. STYLE & ATMOSPHERE: Note the medium (photograph, 2D anime/hentai art, 3D CGI render, VHS recording, screenshot) and mood/setting.\n\n"
+                f"OUTPUT FORMAT (STRICT JSON ONLY):\n"
                 f"{{\n"
-                f"  \"tags\": \"tag1, tag2, tag3, tag4\",\n"
-                f"  \"description\": \"Детальное описание того, что происходит на изображении...\"\n"
+                f"  \"tags\": \"1girl, solo, anime, blonde_hair, cleavage, nsfw, explicit, outdoors, day, meme, text\",\n"
+                f"  \"description\": \"Полное, насыщенное и яркое описание происходящего на русском языке со всеми визуальными, анатомическими и текстовыми деталями...\"\n"
                 f"}}\n"
-                f"Do not use reasoning blocks or <think> tags. Output ONLY raw JSON."
+                f"Do not wrap in markdown (```). Output ONLY the raw JSON object."
             )
-            
             # Deterministic best-first vision cascade.
-            # Gemini lite and flash models are tried in order to maximize free tier quotas.
-            # Groq's multimodal Llama models have been decommissioned, so we rely on Gemini.
             models_cascade = [
                 ("gemini-3.5-flash-lite", "gemini"),
                 ("gemini-3.1-flash-lite", "gemini"),
-                ("gemini-2.5-flash-lite", "gemini"),
                 ("gemini-3.6-flash", "gemini"),
-                ("gemini-3.5-flash", "gemini"),
-                ("gemini-3-flash", "gemini"),
                 ("gemini-2.5-flash", "gemini"),
+                ("qwen/qwen3.6-27b", "groq"),
             ]
+            
+            skip_gemini_models = False
 
             permanent_model_failures = 0
 
@@ -195,19 +195,17 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
 
             async with httpx.AsyncClient(verify=False, trust_env=False, timeout=timeout) as http_client:
                 for model_name, provider in models_cascade:
+                    if provider == "gemini" and skip_gemini_models:
+                        continue
+                        
                     if provider == "gemini":
-                        raw_keys = os.getenv("GOOGLE_API_KEYS", "") or os.getenv("GOOGLE_KEYS", "") or os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
+                        pool = google_pool
                         base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
                     else:
-                        raw_keys = os.getenv("GROQ_API_KEYS", "") or os.getenv("GROQ_KEYS", "") or os.getenv("GROQ_API_KEY", "")
+                        pool = groq_pool
                         base_url = "https://api.groq.com/openai/v1"
 
-                    banned = BANNED_GEMINI_KEYS if provider == "gemini" else BANNED_GROQ_KEYS
-                    if isinstance(raw_keys, list):
-                        keys = [k for k in raw_keys if k and k not in banned]
-                    else:
-                        keys = [k.strip() for k in str(raw_keys).split(",") if k.strip() and k.strip() not in banned]
-                        
+                    keys = pool.get_all_active_tokens()
                     if not keys:
                         continue
                         
@@ -219,16 +217,22 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                         sleep_time = 0.0
                         
                         async with _KEY_RATE_LOCK:
+                            global _GLOBAL_GEMINI_LAST_CALL
                             now = time.time()
+                            global_wait = max(0.0, _GLOBAL_GEMINI_LAST_CALL - now) if provider == "gemini" else 0.0
+                            eff_now = now + global_wait
+
                             # PASS 1: Try to find a completely free key (no sleep)
                             for api_key in available_keys:
                                 last_call = _LAST_VISION_CALL_TIME.get(api_key, 0.0)
-                                if last_call > now + 10.0:
+                                if last_call > eff_now + 15.0:
                                     continue
-                                if last_call <= now and (now - last_call) >= 2.5:
+                                if eff_now >= last_call:
                                     selected_key = api_key
-                                    sleep_time = 0.0
-                                    _LAST_VISION_CALL_TIME[api_key] = now + 2.5
+                                    sleep_time = global_wait
+                                    _LAST_VISION_CALL_TIME[api_key] = eff_now + 4.5
+                                    if provider == "gemini":
+                                        _GLOBAL_GEMINI_LAST_CALL = eff_now + 4.5
                                     break
                                     
                             # PASS 2: Find key with the minimum wait time
@@ -237,19 +241,22 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 min_wait = float('inf')
                                 for api_key in available_keys:
                                     last_call = _LAST_VISION_CALL_TIME.get(api_key, 0.0)
-                                    if last_call > now + 10.0:
+                                    if last_call > eff_now + 15.0:
                                         continue
-                                    wait_time = last_call - now if last_call > now else 2.5 - (now - last_call)
-                                    if wait_time < min_wait:
+                                    wait_time = last_call - eff_now
+                                    if 0 < wait_time < min_wait:
                                         min_wait = wait_time
                                         best_key = api_key
                                 if best_key:
                                     selected_key = best_key
-                                    sleep_time = min_wait
-                                    _LAST_VISION_CALL_TIME[selected_key] = now + sleep_time + 2.5
+                                    sleep_time = global_wait + min_wait
+                                    _LAST_VISION_CALL_TIME[selected_key] = eff_now + min_wait + 4.5
+                                    if provider == "gemini":
+                                        _GLOBAL_GEMINI_LAST_CALL = eff_now + min_wait + 4.5
 
                         if not selected_key:
                             logger.warning(f"⚠️ [VISION] [{source}] All keys for {model_name} are penalized. Skipping model.")
+                            await asyncio.sleep(2.0)
                             break
                             
                         if sleep_time > 0:
@@ -271,7 +278,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             kwargs = {
                                 "model": model_name,
                                 "messages": [{"role": "user", "content": content_arr}],
-                                "max_tokens": 1500,
+                                "max_tokens": 4096,
                             }
                             if provider == "gemini":
                                 kwargs["response_format"] = {"type": "json_object"}
@@ -280,13 +287,21 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 kwargs["temperature"] = 0.2
                                 
                             resp = await client.chat.completions.create(**kwargs)
-                            content = resp.choices[0].message.content
+                            content = None
+                            if resp and getattr(resp, "choices", None) and len(resp.choices) > 0:
+                                msg_obj = getattr(resp.choices[0], "message", None)
+                                if msg_obj:
+                                    content = getattr(msg_obj, "content", None)
                             
                             if content:
                                 # Quick cleanup just in case
                                 if "<think>" in content:
                                     import re
-                                    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                                    if "</think>" in content:
+                                        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                                    else:
+                                        parts = content.split("<think>", 1)
+                                        content = parts[0].strip()
                                 content = content.replace("```json", "").replace("```", "").strip()
                                 
                                 try:
@@ -308,15 +323,33 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                         permanent_model_failures += 1
                                         break  # malformed schema — next model
                                 except json.JSONDecodeError:
-                                    # Fallback if model failed JSON format
-                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} returned invalid JSON. Using raw content as description.")
+                                    # Fallback: extract tags and description via regex before saving parse_error
+                                    tags_match = re.search(r'"tags"\s*:\s*\[?(?:"([^"]+)"|([^}\]\n]+))', content)
+                                    desc_match = re.search(r'"description"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', content, flags=re.DOTALL)
+                                    if not desc_match:
+                                        desc_match = re.search(r'"description"\s*:\s*(.+?)(?=\n\s*"|\n\s*}|$)', content, flags=re.DOTALL)
+                                    
+                                    extracted_tags = tags_match.group(1) or tags_match.group(2) if tags_match else None
+                                    extracted_desc = desc_match.group(1).strip('" \t\r\n') if desc_match else content.strip()
+                                    
+                                    if extracted_tags and len(extracted_tags.strip()) > 3:
+                                        cleaned_tags = extracted_tags.replace('"', '').replace('[', '').replace(']', '').strip()
+                                        logger.info(f"👁️ [VISION] [{source}] ✅ Recovered JSON via regex from {provider} ({model_name}).")
+                                        return json.dumps({"tags": cleaned_tags, "description": extracted_desc}, ensure_ascii=False)
+                                        
+                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} returned invalid JSON and regex recovery failed. Using raw content.")
                                     return json.dumps({"tags": "parse_error", "description": content}, ensure_ascii=False)
 
                             else:
-                                # Empty response — model returned nothing, try next key
-                                logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) returned empty content. Trying next key.")
-                                available_keys.remove(selected_key)
-                                continue
+                                # Empty response (Safety filter rejection when using json_object on Gemini)
+                                if provider == "gemini":
+                                    logger.warning(f"⚠️ [VISION] [{source}] Gemini Safety Filter triggered. Skipping remaining Gemini models and falling back to Groq.")
+                                    skip_gemini_models = True
+                                    break
+                                else:
+                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) returned empty content. Trying next key.")
+                                    available_keys.remove(selected_key)
+                                    continue
                         except Exception as e:
                             err_str = str(e).lower()
                             if "413" in err_str: return "error_413"
@@ -329,19 +362,20 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 break
                             if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
                                 logger.info(f"ℹ️ [VISION] [{source}] {provider} key {selected_key[:8]}... rate limited (429). Penalizing and trying next key.")
+                                pool.penalize_token(selected_key, 60.0)
                                 async with _KEY_RATE_LOCK:
                                     _LAST_VISION_CALL_TIME[selected_key] = time.time() + 60.0
                                 available_keys.remove(selected_key)
+                                await asyncio.sleep(1.5)
                                 continue
                             if "401" in err_str or "invalid api key" in err_str or "unauthorized" in err_str:
-                                if provider == "groq":
-                                    logger.error(f"❌ [VISION] [{source}] Groq key {selected_key[:12]}... unauthorized (401). Removing from pool.")
-                                    BANNED_GROQ_KEYS.add(selected_key)
+                                logger.error(f"❌ [VISION] [{source}] {provider} key {selected_key[:12]}... unauthorized (401). Removing from pool.")
+                                pool.ban_token(selected_key)
                                 available_keys.remove(selected_key)
                                 continue
                             if provider == "gemini" and ("403" in err_str or "permission_denied" in err_str):
                                 logger.error(f"❌ [VISION] [{source}] Gemini key {selected_key[:12]}... is permanently banned (403). Removing from pool.")
-                                BANNED_GEMINI_KEYS.add(selected_key)
+                                pool.ban_token(selected_key)
                                 available_keys.remove(selected_key)
                                 continue
                             

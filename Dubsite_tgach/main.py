@@ -22,6 +22,7 @@ from common.audio_effects import get_audio_filter
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from site_tgach.mirror_worker import process_mirror_queue
 from site_tgach.tagging_worker import tagging_loop
+from site_tgach.security import verify_telegram_webapp_data
 import logging
 from collections import defaultdict
 from fastapi.responses import StreamingResponse
@@ -117,27 +118,6 @@ async def get_country_by_ip(ip: str) -> str:
             logging.warning(f"GeoIP reader failed for IP {ip}: {e}")
             logging.warning(f"Failed to lookup IP {ip} in GeoIP database: {e}")
 
-    strategies = [
-        {"proxy": PROXY_URL, "name": "Proxy"},
-        {"proxy": None, "name": "Direct"}
-    ]
-
-    for strategy in strategies:
-        try:
-            transport = AsyncHTTPTransport(local_address="0.0.0.0")
-            async with httpx.AsyncClient(
-                timeout=3.0, 
-                verify=False,
-                proxy=strategy["proxy"], 
-                transport=transport,
-                trust_env=True
-            ) as client:
-                resp = await client.get(f"http://ip-api.com/json/{ip}")
-                if resp.status_code == 200:
-                    return resp.json().get('countryCode', 'XX')
-        except Exception:
-            continue
-        
     return "XX"
 limiter = Limiter(key_func=get_real_ip)
 from pydantic import BaseModel
@@ -548,6 +528,8 @@ class PostNumsRequest(BaseModel):
     post_nums: List[int]
 class TokenAuth(BaseModel):
     token: str
+class TMAAuthRequest(BaseModel):
+    initData: str
 class FavouriteThreads(BaseModel):
     thread_ids: List[int]
 class ShadowBanRequest(BaseModel):
@@ -1439,7 +1421,7 @@ async def guest_identification_middleware(request: Request, call_next):
 async def access_control_middleware(request: Request, call_next):
     if request.url.path.startswith("/ws/"):
         return await call_next(request)
-    allowed_prefixes = ("/login", "/auth/token", "/static", "/favicon.ico")
+    allowed_prefixes = ("/login", "/auth/token", "/api/tma_auth", "/static", "/favicon.ico")
     if request.url.path.startswith(allowed_prefixes):
         return await call_next(request)
     user = request.session.get("user")
@@ -1690,6 +1672,8 @@ def format_post_text(text: str) -> str:
     processed_text = re.sub(r'\[h1\](.*?)\[/h1\]', r'<h3 class="post-heading">\1</h3>', processed_text, flags=re.DOTALL)
     def btn_replacer(match):
         url = match.group(1)
+        if url.strip().lower().startswith("javascript:"):
+            url = "#"
         safe_url = html.escape(url, quote=True) 
         text = match.group(2)
         return f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-small post-btn">{text}</a>'
@@ -1712,7 +1696,8 @@ def format_post_text(text: str) -> str:
     
     def _glitch_replacer(match):
         content = match.group(1)
-        return f'<span class="effect-glitch" data-text="{content}">{content}</span>'
+        safe_attr = html.escape(html.unescape(content), quote=True)
+        return f'<span class="effect-glitch" data-text="{safe_attr}">{content}</span>'
         
     processed_text = re.sub(r'\[glitch\](.*?)\[/glitch\]', _glitch_replacer, processed_text, flags=re.DOTALL)
     processed_text = SPOILER_PATTERN.sub(r'<span class="spoiler">\1</span>', processed_text)
@@ -2453,7 +2438,7 @@ async def search_page(request: Request, query: str = "", archive: int = 0, user:
     observer_id = user['id'] if user else getattr(request.state, 'guest_id', 0)
     
     results = await search_posts(clean_query, observer_id=observer_id, only_archived=bool(archive)) if clean_query else []
-    results = _convert_and_enrich_posts(results)
+    results = await asyncio.to_thread(_convert_and_enrich_posts, results)
     await enrich_extra_data(results)
     return templates.TemplateResponse("search_results.jinja2", {
         "request": request, "query": query, "posts": results, "boards": BOARD_CONFIG,
@@ -2534,7 +2519,7 @@ async def overboard_page(request: Request, user: dict | None = Depends(get_optio
             include_chat=True,
             sort_by=sort_mode
         )
-    posts = _convert_and_enrich_posts(raw_posts)
+    posts = await asyncio.to_thread(_convert_and_enrich_posts, raw_posts)
     is_ru = await is_request_from_ru(request)
     await enrich_extra_data(posts, is_ru=is_ru)
     
@@ -2657,7 +2642,7 @@ async def api_makaba_index(request: Request, board_id: str, page: str = "index")
             if page == "catalog": return await api_makaba_catalog(board_id)
             raise HTTPException(404)
     threads = await get_op_posts_for_board(board_id, page=page_num + 1, page_size=20)
-    threads = _convert_and_enrich_posts(threads)
+    threads = await asyncio.to_thread(_convert_and_enrich_posts, threads)
     makaba_threads = []
     for thread in threads:
         op_obj = to_makaba_post(thread, board_id)
@@ -2681,7 +2666,7 @@ async def api_makaba_catalog(board_id: str):
 
     if board_id not in BOARD_CONFIG: return JSONResponse({}, status_code=404)
     threads = await get_op_posts_for_board(board_id, sort_by="bump", page=1, page_size=100)
-    threads = _convert_and_enrich_posts(threads)
+    threads = await asyncio.to_thread(_convert_and_enrich_posts, threads)
     makaba_threads = []
     for thread in threads:
         op_obj = to_makaba_post(thread, board_id)
@@ -3249,7 +3234,7 @@ async def api_captcha_generate(request: Request):
 async def api_get_updates(board_id: str, since: float):
     safe_since = max(since, time.time() - 86400)
     raw_posts = await get_updates_since(board_id, safe_since)
-    return _convert_and_enrich_posts(raw_posts)
+    return await asyncio.to_thread(_convert_and_enrich_posts, raw_posts)
 @app.get("/api/admin/activity_stats")
 async def api_admin_activity_stats(user: dict = Depends(get_required_user)):
     if not user.get('is_admin'): raise HTTPException(403, "Forbidden")
@@ -6288,6 +6273,30 @@ async def auth_by_token(data: TokenAuth, request: Request):
     }
     success_msg = "Auth successful" if lang == 'en' else ("認証成功" if lang == 'jp' else "Успешный вход")
     return {"message": success_msg}
+
+@app.post("/api/tma_auth")
+@limiter.limit("15/minute")
+async def auth_tma(data: TMAAuthRequest, request: Request):
+    import json as _json
+    lang = getattr(request.state, "lang", "ru")
+    parsed = verify_telegram_webapp_data(data.initData)
+    if not parsed or "user" not in parsed:
+        msg = "Invalid TMA initData" if lang == "en" else "Неверные данные TMA"
+        raise HTTPException(status_code=403, detail=msg)
+    try:
+        user_data = _json.loads(parsed["user"])
+        uid = int(user_data["id"])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Malformed user data")
+    is_admin_hard = uid in ADMIN_IDS
+    role_db = await get_user_role(uid)
+    request.session["user"] = {
+        "id": uid,
+        "role": role_db,
+        "is_admin": is_admin_hard or role_db == "admin",
+    }
+    return {"message": "Auth successful" if lang == "en" else "Успешный вход"}
+
 @app.post("/api/get-my-posts")
 async def api_get_my_posts(
     post_nums: List[int] = Body(...), 

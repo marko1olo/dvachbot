@@ -48,6 +48,52 @@ def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
         return True
     return False
 
+def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules: dict, violations: dict) -> bool:
+    """Check if the user is repeatedly sending the same or highly similar messages."""
+    content, msg_type = msg_info
+    max_repeats = rules.get('max_repeats')
+    if not max_repeats or not content:
+        return True
+
+    last_items_deque = None
+    if msg_type == 'text':
+        last_items_deque = b_data['last_texts'][user_id]
+    elif msg_type == 'sticker':
+        last_items_deque = b_data['last_stickers'][user_id]
+    elif msg_type == 'animation':
+        last_items_deque = b_data['last_animations'][user_id]
+    elif msg_type == 'audio':
+        last_items_deque = b_data['last_audios'][user_id]
+
+    if last_items_deque is not None:
+        now = time.time()
+        # Очищаем элементы старше 30 секунд
+        while last_items_deque and (not isinstance(last_items_deque[0], tuple) or now - last_items_deque[0][0] > 30):
+            if not isinstance(last_items_deque[0], tuple):
+                last_items_deque.popleft()
+            elif now - last_items_deque[0][0] > 30:
+                last_items_deque.popleft()
+            else:
+                break
+                
+        last_items_deque.append((now, content))
+        
+        if len(last_items_deque) >= max_repeats:
+            contents = [item[1] for item in last_items_deque]
+            
+            if len(set(contents)) == 1:
+                violations['level'] += 1
+                last_items_deque.clear()
+                return False
+            elif msg_type == 'text':
+                from difflib import SequenceMatcher
+                similarities = [SequenceMatcher(None, contents[0], c).ratio() for c in contents[1:]]
+                if all(sim > 0.85 for sim in similarities):
+                    violations['level'] += 1
+                    last_items_deque.clear()
+                    return False
+    return True
+
 def _check_cross_board_spam(user_id: int, board_id: str, content: str, msg_type: str, raw_content_type: str) -> bool:
     """Check for cross-board spam (echodown detection) returning False if detected."""
     now_ts = time.time()

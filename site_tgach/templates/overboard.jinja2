@@ -204,7 +204,8 @@
                                                     {% endif %}
                                                     <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                         data-src="{{ file_thumb_src }}" 
-                                                        class="post-image lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
+                                                        data-file-id="{{ file.original_file_id }}"
+                                                        class="post-image lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" alt="img" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="handleImageError(this)">
                                                     {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                 </a>
                                             {% elif file.type == 'video_note' %}

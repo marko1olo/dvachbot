@@ -307,6 +307,9 @@ def is_admin(uid: int, board_id: str) -> bool:
 
     if not board_id:
         return False
+    from site_tgach.admin_config import ADMIN_IDS
+    if uid in ADMIN_IDS:
+        return True
     from common.board_config import BOARD_CONFIG
     bconf = BOARD_CONFIG.get(board_id, {})
     admins = bconf.get('admins', [])

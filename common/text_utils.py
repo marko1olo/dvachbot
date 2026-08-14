@@ -1,5 +1,6 @@
 import re
 import html
+from common.html_utils import escape_html
 
 RE_HTML_TAGS = re.compile(r'<[^>]+>')
 RE_YOU_PATTERN = re.compile(r">>(\d+)")

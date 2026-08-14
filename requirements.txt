@@ -19,6 +19,7 @@ seaborn>=0.13.2
 
 # Image Processing
 Pillow>=10.2.0
+qrcode[pil]>=8.0
 
 # Memory Analysis (Optional, but useful for diagnostics)
 Pympler==1.0.1

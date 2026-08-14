@@ -334,7 +334,7 @@
                                                             data-src="{{ file_thumb_src }}" 
                                                             data-file-id="{{ file.original_file_id }}"
                                                             loading="lazy"
-                                                            class="post-image lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ post.id }}] {{ post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer">
+                                                            class="post-image lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ post.id }}] {{ post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="handleImageError(this)">
                                                         <noscript><img src="{{ file_orig_src }}" alt="[Пост /{{ board_id }}/ #{{ post.id }}] {{ post.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"></noscript>
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                      </a>
@@ -351,7 +351,8 @@
                                                                     data-file-id="{{ file.original_file_id }}"
                                                                     loading="lazy"
                                                                     class="post-sticker lazy-load{% if post.content.is_censored %} blurred-media{% endif %}" 
-                                                                    referrerpolicy="no-referrer">
+                                                                    referrerpolicy="no-referrer"
+                                                                    onerror="handleImageError(this)">
                                                                 <noscript><img src="{{ file_orig_src }}" alt="Стикер"></noscript>
                                                             </a>
                                                         {% endif %}
@@ -490,8 +491,9 @@
                                                             {% endif %}
                                                             <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                 data-src="{{ file_thumb_src }}" 
+                                                                data-file-id="{{ file.original_file_id }}"
                                                                 loading="lazy"
-                                                                class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">
+                                                                class="post-image lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="handleImageError(this)">
                                                             <noscript><img src="{{ file_orig_src }}" alt="[Пост /{{ board_id }}/ #{{ reply.id }}] {{ reply.content.text | striptags | truncate(80) | replace('\"', '\\\"') }}"></noscript>
                                                             {% if file.dupe_count is defined and file.dupe_count > 1 %}<div class="bayan-text">{{ file.dupe_count | bayan_label(request.state.lang) }}</div>{% endif %}
                                                         </a>
@@ -505,13 +507,16 @@
                                                                 <a href="{{ file_orig_src }}" class="gallery-trigger" data-type="image" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
                                                                     <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                                         data-src="{{ file_thumb_src }}" 
+                                                                        data-file-id="{{ file.original_file_id }}"
                                                                         loading="lazy"
                                                                         class="post-sticker lazy-load{% if reply.content.is_censored %} blurred-media{% endif %}" 
-                                                                        referrerpolicy="no-referrer">
+                                                                        referrerpolicy="no-referrer"
+                                                                        onerror="handleImageError(this)">
                                                                     <noscript><img src="{{ file_orig_src }}" alt="Стикер"></noscript>
                                                                 </a>
                                                             {% endif %}
                                                         </div>
+
                                                     {% elif file.type == 'video_note' %}
                                                         <div class="lazy-media-wrapper is-note" data-src="{{ file_orig_src }}" data-filename="{{ file.filename }}" data-type="note">
                                                             <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 

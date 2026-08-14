@@ -157,6 +157,7 @@ __all__ = [
     'enqueue_board_message',
     'current_deliveries',
     'posts_pending_deletion',
+    'market_state',
     'MIRROR_CHANNELS',
     'ARCHIVE_CHANNEL_ID',
     'ARCHIVE_POSTING_BOT_ID',
@@ -237,6 +238,12 @@ def _trim_messages_storage_unlocked(max_posts: int) -> int:
     return removed
 
 
+
+market_state = {
+    'event_text': 'Цены стабильны. Никаких событий.',
+    'multipliers': {},
+    'last_update': 0
+}
 is_shutting_down = False
 drain_shutdown_requested = False
 durable_delivery_stats = {

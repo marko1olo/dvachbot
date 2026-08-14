@@ -65,13 +65,17 @@ from common.bot_helpers import _get_user_active_items, delete_message_after_dela
 from handlers.message_router import check_spam, apply_penalty, process_shadow_reject
 from handlers.message_router import build_quick_quote_info, handle_message_reaction
 from delivery_manager import site_posts_broadcaster, thread_notifier, current_media_groups, media_group_timers, get_board_activity_last_hours
+try:
+    from market_event import market_event_generator
+except ImportError:
+    market_event_generator = None
 
 try:
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding='utf-8')
         sys.stderr.reconfigure(encoding='utf-8')
 except Exception:
-    import traceback; traceback.print_exc()
+    pass
 import io
 import time
 import periodic_publisher
@@ -381,7 +385,7 @@ class BoardMiddleware(BaseMiddleware):
                             elif isinstance(event, types.CallbackQuery):
                                 pass 
                         except Exception: 
-                            import traceback; traceback.print_exc()
+                            pass
                         return 
                         
                     # Анти-рейд
@@ -460,7 +464,7 @@ def _enable_fatal_crash_dump() -> None:
         try:
             print(f"⚠️ Fatal crash dump disabled: {type(exc).__name__}: {exc}")
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
 
 _enable_fatal_crash_dump()
 REALTIME_ARCHIVE_CHANNEL_ID = MIRROR_CHANNELS[0] if MIRROR_CHANNELS else 0
@@ -633,7 +637,7 @@ class _RawHealthcheckServer:
                 try:
                     conn.close()
                 except OSError:
-                    import traceback; traceback.print_exc()
+                    pass
 
     def _safe_handle_connection(self, conn: socket.socket):
         try:
@@ -652,11 +656,11 @@ class _RawHealthcheckServer:
                     ),
                 )
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
             try:
                 conn.close()
             except OSError:
-                import traceback; traceback.print_exc()
+                pass
 
     def _handle_connection(self, conn: socket.socket):
         with conn:
@@ -665,11 +669,11 @@ class _RawHealthcheckServer:
                 try:
                     conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 except OSError:
-                    import traceback; traceback.print_exc()
+                    pass
                 try:
                     conn.recv(2048)
                 except (socket.timeout, OSError):
-                    import traceback; traceback.print_exc()
+                    pass
                 status_code, body = _build_healthcheck_body()
                 status_text = "OK" if status_code == 200 else "Service Unavailable"
                 headers = (
@@ -684,7 +688,7 @@ class _RawHealthcheckServer:
                 try:
                     conn.shutdown(socket.SHUT_RDWR)
                 except OSError:
-                    import traceback; traceback.print_exc()
+                    pass
             except OSError:
                 return
 
@@ -693,7 +697,7 @@ class _RawHealthcheckServer:
         try:
             self._sock.close()
         except OSError:
-            import traceback; traceback.print_exc()
+            pass
 
     def server_close(self):
         self.shutdown()
@@ -1084,7 +1088,7 @@ def _mode_punchup_queue_pressure_sec(board_id: str) -> float:
                     continue
                 max_age = max(max_age, max(0.0, now - float(enqueued_at)))
     except Exception:
-        import traceback; traceback.print_exc()
+        pass
     try:
         current = current_deliveries.get(board_id)
         if isinstance(current, dict):
@@ -1092,7 +1096,7 @@ def _mode_punchup_queue_pressure_sec(board_id: str) -> float:
             if enqueued_at is not None:
                 max_age = max(max_age, max(0.0, now - float(enqueued_at)))
     except Exception:
-        import traceback; traceback.print_exc()
+        pass
     return max_age
 def _mode_punchup_can_run(board_id: str) -> tuple[bool, str | None, float]:
 
@@ -1646,7 +1650,7 @@ async def _handle_telegram_bad_request(exception: Exception, update) -> None:
             else:
                 await chat_obj.answer("⚠️ Телега послала нахуй твой запрос. Пробуй снова.", parse_mode=None)
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
 
     # Always clear locks if a command aborted due to BadRequest
     user_id = chat_obj.from_user.id if chat_obj else None
@@ -1676,13 +1680,13 @@ async def _handle_unhandled_exception(exception: Exception, update) -> None:
             try:
                 await update.callback_query.answer("Ошибка. Попробуй ещё раз.", show_alert=True)
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
 
         if chat_obj:
             try:
                 await chat_obj.answer("⚠️ Произошла ошибка при выполнении команды.\nРазработчик уже уведомлен.", parse_mode=None)
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
 
         # Always clear locks if a command crashed!
         user_id = chat_obj.from_user.id if chat_obj else None
@@ -1804,7 +1808,7 @@ async def _drain_save_executor(timeout: float = SAVE_EXECUTOR_DRAIN_SEC) -> None
             try:
                 loop.call_soon_threadsafe(finished.set)
             except RuntimeError:
-                import traceback; traceback.print_exc()  # цикл уже закрыт — ждать всё равно некому
+                pass  # цикл уже закрыт — ждать всё равно некому
 
     threading.Thread(target=_shutdown_and_signal, name="save-executor-drain", daemon=True).start()
     try:
@@ -2283,28 +2287,29 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
         last_items_deque = b_data['last_audios'][user_id]
 
     if last_items_deque is not None:
-        last_items_deque.append(content)
+        now = time.time()
+        # Очищаем элементы старше 30 секунд
+        while last_items_deque and (not isinstance(last_items_deque[0], tuple) or now - last_items_deque[0][0] > 30):
+            if not isinstance(last_items_deque[0], tuple):
+                last_items_deque.popleft()
+            elif now - last_items_deque[0][0] > 30:
+                last_items_deque.popleft()
+            else:
+                break
+                
+        last_items_deque.append((now, content))
+        
         if len(last_items_deque) >= max_repeats:
-            if len(set(last_items_deque)) == 1:
+            contents = [item[1] for item in last_items_deque]
+            
+            if len(set(contents)) == 1:
                 violations['level'] += 1
                 last_items_deque.clear()
                 return False
             elif msg_type == 'text':
                 from difflib import SequenceMatcher
-                contents = list(last_items_deque)
                 similarities = [SequenceMatcher(None, contents[0], c).ratio() for c in contents[1:]]
                 if all(sim > 0.85 for sim in similarities):
-                    violations['level'] += 1
-                    last_items_deque.clear()
-                    return False
-
-        # Check alternating patterns (ABAB) for text
-        if msg_type == 'text' and len(last_items_deque) == 4:
-            if len(set(last_items_deque)) == 2:
-                contents = list(last_items_deque)
-                p1 = [contents[0], contents[1]] * 2
-                p2 = [contents[1], contents[0]] * 2
-                if contents == p1 or contents == p2:
                     violations['level'] += 1
                     last_items_deque.clear()
                     return False
@@ -2424,7 +2429,7 @@ async def _clean_posts_from_ram(posts_to_delete_nums: list[int], board_id: str):
                                 if 'posts' in threads_data[thread_id]:
                                     threads_data[thread_id]['posts'].remove(post_num)
                             except (ValueError, KeyError):
-                                import traceback; traceback.print_exc()
+                                pass
             message_copies_in_mem = post_to_messages.pop(post_num, {})
             for uid, mid_or_list in message_copies_in_mem.items():
                 if isinstance(mid_or_list, list):
@@ -2455,7 +2460,7 @@ async def _delete_posts_from_channels(channel_messages_to_delete: list, bot_inst
         try:
             await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
 
 async def _delete_posts_from_pm_api(messages_to_delete_from_api: list, bot_instance) -> int:
     import asyncio
@@ -2485,14 +2490,14 @@ async def _delete_message_with_retries(bot_instance, uid: int, mid: int, b_id: s
                     await bot_instance.delete_message(uid, mid)
                     return True
                 except Exception:
-                    import traceback; traceback.print_exc()
+                    pass
             for other_bid, other_bot in GLOBAL_BOTS.items():
                 if other_bot != deleter and other_bot != bot_instance:
                     try:
                         await other_bot.delete_message(uid, mid)
                         return True
                     except Exception:
-                        import traceback; traceback.print_exc()
+                        pass
             return False
         except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
             if attempt < max_attempts - 1:
@@ -2542,7 +2547,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
             if row:
                 board_id = row[0]
     except Exception:
-        import traceback; traceback.print_exc()
+        pass
 
     channel_copies = await get_all_channel_copies(post_num)
     messages_to_delete_info = await get_post_copies(post_num)
@@ -2564,7 +2569,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
                             if 'posts' in threads_data[thread_id]:
                                 threads_data[thread_id]['posts'].remove(post_num)
                         except (ValueError, KeyError):
-                            import traceback; traceback.print_exc()
+                            pass
         message_copies_in_mem = post_to_messages.pop(post_num, {})
         for uid, mid_or_list in message_copies_in_mem.items():
             if isinstance(mid_or_list, list):
@@ -2579,7 +2584,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
             try:
                 await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
     if not messages_to_delete_info:
         return 0 if deleted_from_db else 0
         
@@ -2977,10 +2982,10 @@ def generate_wipe_image(text: str) -> bytes | None:
                 distorted_array[:shift, x] = img_array[-shift:, x]
             else:
                 distorted_array[:, x] = img_array[:, x]
-        distorted_layer = Image.fromarray(distorted_array, 'RGBA')
+        distorted_layer = Image.fromarray(distorted_array)
         background.alpha_composite(distorted_layer)
         noise_array = np.random.randint(0, 50, (IMAGE_SIZE[1], IMAGE_SIZE[0]), dtype=np.uint8)
-        noise_layer = Image.fromarray(noise_array, 'L').convert('RGBA')
+        noise_layer = Image.fromarray(noise_array).convert('RGBA')
         noise_layer.putalpha(Image.new('L', IMAGE_SIZE, 30))
         final_image = Image.alpha_composite(background, noise_layer)
         buffer = io.BytesIO()
@@ -3239,7 +3244,7 @@ async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: s
         try:
             await bot.send_message(chat_id, secondary_message, parse_mode="HTML", disable_web_page_preview=True)
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
 async def send_active_pin_to_new_user(bot: Bot, user_id: int, board_id: str):
     """
     Проверяет, есть ли на доске активный глобальный закреп.
@@ -3303,7 +3308,7 @@ def throttle(rate: int):
                 try:
                     await message.answer(f"⚠️ Пожалуйста, подождите {int(rate - (now - cooldowns[user_id]))} сек.", disable_notification=True)
                 except Exception:
-                    import traceback; traceback.print_exc()
+                    pass
                 return
             cooldowns[user_id] = now
             return await func(message, *args, **kwargs)
@@ -3494,30 +3499,59 @@ async def cmd_shop(message: types.Message, board_id: str | None, stream: str = '
     async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
         row = await c.fetchone()
         balance = row[0] if row and row[0] is not None else 0
+    from shared_state import market_state
+    
+    base_prices = {
+        'janitor': 1000,
+        'mute': 600,
+        'shield': 800,
+        'prefix': 400,
+        'partyvan': 2000,
+        'shit': 100,
+        'pills': 100,
+        'knife': 400,
+        'tinfoil': 800,
+        'bribe': 1200,
+        'laxative': 800,
+        'megaphone': 2000,
+        'schizopill': 1000
+    }
+    
+    current_prices = {}
+    multipliers = market_state.get('multipliers', {})
+    for item, base in base_prices.items():
+        mult = multipliers.get(item, 1.0)
+        current_prices[item] = int(base * mult)
+        
+    market_event = market_state.get('event_text', 'Цены стабильны. Никаких событий.')
+    
     text = (
         f"🛒 <b>Теневой Магазин (Black Market)</b>\n"
         f"Твой баланс: <code>{int(balance)}.00 Шекелей</code>\n\n"
+        f"<b>📰 Биржа:</b> {market_event}\n\n"
         f"Трать свои шекели на грязь и власть:\n"
-        f"1. 🧹 <b>Билет Дворника (6ч)</b> — <i>1000 Шек</i> (Права /del)\n"
-        f"2. 🔇 <b>Мут-Ган (1ч)</b> — <i>600 Шек</i> (Кикнуть реплаем /shoot)\n"
-        f"3. 🛡️ <b>Зеркальный Щит (6ч)</b> — <i>800 Шек</i> (Рикошет Мут-Гана)\n"
-        f"4. 👑 <b>VIP Префикс (24ч)</b> — <i>400 Шек</i> (Кастомный префикс)\n"
-        f"5. 🚔 <b>Пативэн-Ган</b> — <i>2000 Шек</i> (Вызов ОМОНа через /partyvan)\n"
-        f"6. 🐒 <b>Кусок говна</b> — <i>100 Шек</i> (Кинуть /shit, дебафф на час)\n"
-        f"7. 💊 <b>Аминазин</b> — <i>100 Шек</i> (Снять дебаффы)\n"
-        f"8. 🔪 <b>Заточка</b> — <i>400 Шек</i> (Ограбить анона на 10-30% через /rob)\n"
-        f"9. 👽 <b>Шапочка из фольги (6ч)</b> — <i>800 Шек</i> (Защита от /shit и /rob)\n"
-        f"10. 📜 <b>Взятка (Индульгенция)</b> — <i>1200 Шек</i> (Снимает мут)\n"
-        f"11. 🚽 <b>Слабительное</b> — <i>800 Шек</i> (Проклятие: посты до 50 симв. через /curse)\n"
-        f"12. 📣 <b>Мегафон</b> — <i>2000 Шек</i> (Закрепить свой пост через /mega)\n"
+        f"1. 🧹 <b>Билет Дворника (6ч)</b> — <i>{current_prices['janitor']} Шек</i> (Права /del)\n"
+        f"2. 🔇 <b>Мут-Ган (1ч)</b> — <i>{current_prices['mute']} Шек</i> (Кикнуть реплаем /shoot)\n"
+        f"3. 🛡️ <b>Зеркальный Щит (6ч)</b> — <i>{current_prices['shield']} Шек</i> (Рикошет Мут-Гана)\n"
+        f"4. 👑 <b>VIP Префикс (24ч)</b> — <i>{current_prices['prefix']} Шек</i> (Кастомный префикс)\n"
+        f"5. 🚔 <b>Пативэн-Ган</b> — <i>{current_prices['partyvan']} Шек</i> (Вызов ОМОНа через /partyvan)\n"
+        f"6. 🐒 <b>Кусок говна</b> — <i>{current_prices['shit']} Шек</i> (Кинуть /shit, дебафф на час)\n"
+        f"7. 💊 <b>Аминазин</b> — <i>{current_prices['pills']} Шек</i> (Снять дебаффы)\n"
+        f"8. 🔪 <b>Заточка</b> — <i>{current_prices['knife']} Шек</i> (Ограбить анона на 10-30% через /rob)\n"
+        f"9. 👽 <b>Шапочка из фольги (6ч)</b> — <i>{current_prices['tinfoil']} Шек</i> (Защита от /shit и /rob)\n"
+        f"10. 📜 <b>Взятка (Индульгенция)</b> — <i>{current_prices['bribe']} Шек</i> (Снимает мут)\n"
+        f"11. 🚽 <b>Слабительное</b> — <i>{current_prices['laxative']} Шек</i> (Проклятие поноса: /curse)\n"
+        f"12. 📣 <b>Мегафон</b> — <i>{current_prices['megaphone']} Шек</i> (Закрепить свой пост через /mega)\n"
+        f"13. 💊 <b>Шизо-Таблетка</b> — <i>{current_prices['schizopill']} Шек</i> (Проклятие шизы: /schizopill)\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🧹 Дворник (1000)", callback_data="shop_buy_janitor"), InlineKeyboardButton(text="🔇 Мут-Ган (600)", callback_data="shop_buy_mute")],
-        [InlineKeyboardButton(text="🛡️ Щит (800)", callback_data="shop_buy_shield"), InlineKeyboardButton(text="👑 Префикс (400)", callback_data="shop_buy_prefix")],
-        [InlineKeyboardButton(text="🚔 Пативэн (2000)", callback_data="shop_buy_partyvan"), InlineKeyboardButton(text="🐒 Кусок говна (100)", callback_data="shop_buy_shit")],
-        [InlineKeyboardButton(text="💊 Аминазин (100)", callback_data="shop_buy_pills"), InlineKeyboardButton(text="🔪 Заточка (400)", callback_data="shop_buy_knife")],
-        [InlineKeyboardButton(text="👽 Фольга (800)", callback_data="shop_buy_tinfoil"), InlineKeyboardButton(text="📜 Взятка (1200)", callback_data="shop_buy_bribe")],
-        [InlineKeyboardButton(text="🚽 Слабительное (800)", callback_data="shop_buy_laxative"), InlineKeyboardButton(text="📣 Мегафон (2000)", callback_data="shop_buy_megaphone")],
+        [InlineKeyboardButton(text=f"🧹 Дворник ({current_prices['janitor']})", callback_data="shop_buy_janitor"), InlineKeyboardButton(text=f"🔇 Мут-Ган ({current_prices['mute']})", callback_data="shop_buy_mute")],
+        [InlineKeyboardButton(text=f"🛡️ Щит ({current_prices['shield']})", callback_data="shop_buy_shield"), InlineKeyboardButton(text=f"👑 Префикс ({current_prices['prefix']})", callback_data="shop_buy_prefix")],
+        [InlineKeyboardButton(text=f"🚔 Пативэн ({current_prices['partyvan']})", callback_data="shop_buy_partyvan"), InlineKeyboardButton(text=f"🐒 Говно ({current_prices['shit']})", callback_data="shop_buy_shit")],
+        [InlineKeyboardButton(text=f"💊 Аминазин ({current_prices['pills']})", callback_data="shop_buy_pills"), InlineKeyboardButton(text=f"🔪 Заточка ({current_prices['knife']})", callback_data="shop_buy_knife")],
+        [InlineKeyboardButton(text=f"👽 Фольга ({current_prices['tinfoil']})", callback_data="shop_buy_tinfoil"), InlineKeyboardButton(text=f"📜 Взятка ({current_prices['bribe']})", callback_data="shop_buy_bribe")],
+        [InlineKeyboardButton(text=f"🚽 Слабительное ({current_prices['laxative']})", callback_data="shop_buy_laxative"), InlineKeyboardButton(text=f"📣 Мегафон ({current_prices['megaphone']})", callback_data="shop_buy_megaphone")],
+        [InlineKeyboardButton(text=f"💊 Шизо-Таблетка ({current_prices['schizopill']})", callback_data="shop_buy_schizopill")]
     ])
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
@@ -3530,166 +3564,189 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         await callback.answer("Ошибка в callback данных", show_alert=True)
         return
     item = parts[2]  # janitor, mute, shield, prefix
-    costs = {"janitor": 1000, "mute": 600, "shield": 800, "prefix": 400, "partyvan": 2000, "shit": 100, "pills": 100, "knife": 400, "tinfoil": 800, "bribe": 1200, "laxative": 800, "megaphone": 2000}
+    from shared_state import market_state
+    base_prices = {"janitor": 1000, "mute": 600, "shield": 800, "prefix": 400, "partyvan": 2000, "shit": 100, "pills": 100, "knife": 400, "tinfoil": 800, "bribe": 1200, "laxative": 800, "megaphone": 2000, "schizopill": 1000}
+    costs = {}
+    multipliers = market_state.get('multipliers', {})
+    for k, v in base_prices.items():
+        costs[k] = int(v * multipliers.get(k, 1.0))
     price = costs.get(item, 999999)
-    db = await get_pool()
-    async with db.execute("SELECT SUM(balance), MAX(active_items) FROM Users WHERE user_id = ?", (user_id,)) as c:
-        row = await c.fetchone()
-        balance = row[0] if row and row[0] is not None else 0
-        active_items_str = row[1] if row and len(row) > 1 and row[1] else "{}"
-    if balance < price:
-        await callback.answer(f"❌ Не хватает бабок! Нужно {price} Шекелей, у тебя {int(balance)} Шекелей.", show_alert=True)
-        return
     import json
     import time
     import random
-    try:
-        active_items = json.loads(active_items_str)
-    except Exception:
-        active_items = {}
-    msg = ""
-    # 0. Janitor Ticket
-    if item == "janitor":
-        current_time = int(time.time())
-        base_time = max(current_time, active_items.get("janitor_until", 0))
-        active_items["janitor_until"] = base_time + 6 * 3600
-        active_items["janitor_deletes_left"] = active_items.get("janitor_deletes_left", 0) + 10
-        left = active_items["janitor_deletes_left"]
-        msg = (
-            f"🧹 Ты купил Билет Дворника на 6 часов!\n"
-            f"Как использовать: найди спам в чате, нажми Reply и отправь /del.\n"
-            f"Лимит удалений: {left}. Каждый успешный /del уменьшает счётчик на 1."
-        )
-    # 1. Mute-Gun
-    elif item == "mute":
-        if active_items.get("mute_gun"):
-            await callback.answer("У тебя уже есть Мут-Ган! Сделай Reply на пост с командой /shoot", show_alert=True)
-            return
-        active_items["mute_gun"] = True
-        msg = (
-            f"🔫 Ты купил Мут-Ган!\n"
-            f"Как использовать: найди пост жертвы, нажми Reply и отправь /shoot.\n"
-            f"Эффект: жертва получает мут на 1 час.\n"
-            f"⚠️ Осторожно: если у цели активен Зеркальный Щит, выстрел отразится обратно в тебя!"
-        )
-    # 2. Reflect Shield
-    elif item == "shield":
-        current_time = int(time.time())
-        base_time = max(current_time, active_items.get("reflect_shield_until", 0))
-        active_items["reflect_shield_until"] = base_time + 24 * 3600
-        msg = (
-            f"🛡️ Ты купил Зеркальный Щит на 24 часа!\n"
-            f"Щит работает пассивно: при первой попытке выстрелить в тебя из Мут-Гана\n"
-            f"выстрел автоматически отразится в стрелка (мут 1 час), а щит израсходуется."
-        )
-    # 3. Prefix
-    elif item == "prefix":
-        prefixes = [
-            "[Скуф]", "[Опущенный]",
-            "[Калоед]", "[Подпивас]",
-            "[Шитпостер]", "[Гой]",
-            "[Мамкин Трейдер]",
-            "[Инцел]", "[Анимешник]",
-            "[Чмо]", "[Вумен ☕️]",
-            "[Гигачад]", "[Бог Борды]",
-            "[VIP Анон]", "[Владелец]"
-        ]
-        chosen = random.choice(prefixes[:10]) if random.random() < 0.9 else random.choice(prefixes[10:])
-        expires = int(time.time()) + 86400
-        async with db_lock:
-            await db.execute("UPDATE Users SET custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ?", (chosen, expires, user_id))
-        msg = (
-            f"👑 Рулетка крутится...\n"
-            f"Тебе выпал префикс: {chosen}\n"
-            f"Виден в /passport и заголовках постов 24 часа."
-        )
-
-    # 4. Partyvan
-    elif item == "partyvan":
-        if active_items.get("partyvan_gun"):
-            await callback.answer("Ты уже купил вызов Пативэна! Сделай Reply на пост с командой /partyvan", show_alert=True)
-            return
-        active_items["partyvan_gun"] = True
-        msg = (
-            f"🚔 Ты оплатил вызов Пативэна!\n"
-            f"Сделай Reply на пост жертвы с командой /partyvan.\n"
-            f"Нарушитель отлетит в мут на 12 часов с анимацией бобика."
-        )
-    # 5. Shit
-    elif item == "shit":
-        if active_items.get("shit_gun"):
-            await callback.answer("Полные карманы говна! Сделай Reply на пост с командой /shit", show_alert=True)
-            return
-        active_items["shit_gun"] = True
-        msg = (
-            f"🐒 Ты подобрал кусок говна!\n"
-            f"Сделай Reply на пост жертвы с командой /shit.\n"
-            f"Жертва будет обмазана говном на 1 час. Осторожно, ветер может сдуть обратно (20% шанс)."
-        )
-    # 6. Pills
-    elif item == "pills":
-        active_items.pop("shit_until", None)
-        async with db_lock:
-            await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-            await db.commit()
-        msg = "💊 Ты выпил Аминазин. Шизофрения, говно и проклятия сняты. Разум ясен."
-    # 7. Knife
-    elif item == "knife":
-        if active_items.get("knife_gun"):
-            await callback.answer("У тебя уже есть заточка! Сделай Reply на пост с командой /rob", show_alert=True)
-            return
-        active_items["knife_gun"] = True
-        msg = (
-            f"🔪 Ты купил заточку!\n"
-            f"Сделай Reply на пост жертвы с командой /rob.\n"
-            f"Ты сможешь ограбить анона на 10-30% его шекелей (до 1000).\n"
-            f"Осторожно: если у жертвы шапочка из фольги, ты порежешься сам."
-        )
-    # 8. Tinfoil
-    elif item == "tinfoil":
-        current_time = int(time.time())
-        base_time = max(current_time, active_items.get("tinfoil_hat", 0))
-        active_items["tinfoil_hat"] = base_time + 24 * 3600
-        msg = (
-            f"👽 Ты надел Шапочку из фольги на 24 часа!\n"
-            f"Защищает от говна (/shit) и ограблений (/rob).\n"
-            f"Нападающие обмажутся говном сами или порежутся своей заточкой!"
-        )
-    # 9. Bribe
-    elif item == "bribe":
-
-        await apply_regular_mute(user_id, board_id, 0) # Clear mute
-        msg = "📜 Ты дал взятку модератору! Твой мут снят, ты снова можешь шитпостить."
-    # 10. Laxative
-    elif item == "laxative":
-        if active_items.get("laxative_gun"):
-            await callback.answer("У тебя уже есть слабительное! Сделай Reply на пост с командой /curse", show_alert=True)
-            return
-        active_items["laxative_gun"] = True
-        msg = (
-            f"🚽 Ты купил слабительное!\n"
-            f"Сделай Reply на пост жертвы с командой /curse.\n"
-            f"Цель проклинается на 1 час: она не сможет писать посты длиннее 50 символов."
-        )
-    # 11. Megaphone
-    elif item == "megaphone":
-        if active_items.get("megaphone_gun"):
-            await callback.answer("У тебя уже есть мегафон! Сделай Reply на свой пост с командой /mega", show_alert=True)
-            return
-        active_items["megaphone_gun"] = True
-        msg = (
-            f"📣 Ты арендовал Мегафон!\n"
-            f"Сделай Reply на СВОЙ пост с командой /mega.\n"
-            f"Твой пост будет закреплен на 24 часа для всех на борде."
-        )
-
-    # Списываем баланс
+    db = await get_pool()
     async with db_lock:
+        async with db.execute("SELECT balance, active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+        
+        balance = row[0] if row and row[0] is not None else 0
+        active_items_str = row[1] if row and len(row) > 1 and row[1] else "{}"
+        
+        if balance < price:
+            await callback.answer(f"❌ Не хватает бабок! Нужно {price} Шекелей, у тебя {int(balance)} Шекелей.", show_alert=True)
+            return
+            
+        try:
+            active_items = json.loads(active_items_str)
+        except Exception:
+            active_items = {}
+            
+        msg = ""
+        # 0. Janitor Ticket
+        if item == "janitor":
+            current_time = int(time.time())
+            base_time = max(current_time, active_items.get("janitor_until", 0))
+            active_items["janitor_until"] = base_time + 6 * 3600
+            active_items["janitor_deletes_left"] = active_items.get("janitor_deletes_left", 0) + 10
+            left = active_items["janitor_deletes_left"]
+            msg = (
+                f"🧹 Ты купил Билет Дворника на 6 часов!\n"
+                f"Как использовать: найди спам в чате, нажми Reply и отправь /del.\n"
+                f"Лимит удалений: {left}. Каждый успешный /del уменьшает счётчик на 1."
+            )
+        # 1. Mute-Gun
+        elif item == "mute":
+            if active_items.get("mute_gun"):
+                await callback.answer("У тебя уже есть Мут-Ган! Сделай Reply на пост с командой /shoot", show_alert=True)
+                return
+            active_items["mute_gun"] = True
+            msg = (
+                f"🔫 Ты купил Мут-Ган!\n"
+                f"Как использовать: найди пост жертвы, нажми Reply и отправь /shoot.\n"
+                f"Эффект: жертва получает мут на 1 час.\n"
+                f"⚠️ Осторожно: если у цели активен Зеркальный Щит, выстрел отразится обратно в тебя!"
+            )
+        # 2. Reflect Shield
+        elif item == "shield":
+            current_time = int(time.time())
+            base_time = max(current_time, active_items.get("reflect_shield_until", 0))
+            active_items["reflect_shield_until"] = base_time + 24 * 3600
+            msg = (
+                f"🛡️ Ты купил Зеркальный Щит на 24 часа!\n"
+                f"Щит работает пассивно: при первой попытке выстрелить в тебя из Мут-Гана\n"
+                f"выстрел автоматически отразится в стрелка (мут 1 час), а щит израсходуется."
+            )
+        # 3. Prefix
+        elif item == "prefix":
+            prefixes = [
+                "[Скуф]", "[Опущенный]",
+                "[Калоед]", "[Подпивас]",
+                "[Шитпостер]", "[Гой]",
+                "[Мамкин Трейдер]",
+                "[Инцел]", "[Анимешник]",
+                "[Чмо]", "[Вумен ☕️]",
+                "[Гигачад]", "[Бог Борды]",
+                "[VIP Анон]", "[Владелец]"
+            ]
+            chosen = random.choice(prefixes[:10]) if random.random() < 0.9 else random.choice(prefixes[10:])
+            expires = int(time.time()) + 86400
+            await db.execute("UPDATE Users SET custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ?", (chosen, expires, user_id))
+            msg = (
+                f"👑 Рулетка крутится...\n"
+                f"Тебе выпал префикс: {chosen}\n"
+                f"Виден в /passport и заголовках постов 24 часа."
+            )
+
+        # 4. Partyvan
+        elif item == "partyvan":
+            if active_items.get("partyvan_gun"):
+                await callback.answer("Ты уже купил вызов Пативэна! Сделай Reply на пост с командой /partyvan", show_alert=True)
+                return
+            active_items["partyvan_gun"] = True
+            msg = (
+                f"🚔 Ты оплатил вызов Пативэна!\n"
+                f"Сделай Reply на пост жертвы с командой /partyvan.\n"
+                f"Нарушитель отлетит в мут на 12 часов с анимацией бобика."
+            )
+        # 5. Shit
+        elif item == "shit":
+            if active_items.get("shit_gun"):
+                await callback.answer("Полные карманы говна! Сделай Reply на пост с командой /shit", show_alert=True)
+                return
+            active_items["shit_gun"] = True
+            msg = (
+                f"🐒 Ты подобрал кусок говна!\n"
+                f"Сделай Reply на пост жертвы с командой /shit.\n"
+                f"Жертва будет обмазана говном на 1 час. Осторожно, ветер может сдуть обратно (20% шанс)."
+            )
+        # 6. Pills
+        elif item == "pills":
+            active_items.pop("shit_until", None)
+            await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            msg = "💊 Ты выпил Аминазин. Шизофрения, говно и проклятия сняты. Разум ясен."
+            
+        # 7. Knife
+        elif item == "knife":
+            if active_items.get("knife_gun"):
+                await callback.answer("У тебя уже есть заточка! Сделай Reply на пост с командой /rob", show_alert=True)
+                return
+            active_items["knife_gun"] = True
+            msg = (
+                f"🔪 Ты купил заточку!\n"
+                f"Сделай Reply на пост жертвы с командой /rob.\n"
+                f"Ты сможешь ограбить анона на 10-30% его шекелей (до 1000).\n"
+                f"Осторожно: если у жертвы шапочка из фольги, ты порежешься сам."
+            )
+        # 8. Tinfoil
+        elif item == "tinfoil":
+            current_time = int(time.time())
+            base_time = max(current_time, active_items.get("tinfoil_hat", 0))
+            active_items["tinfoil_hat"] = base_time + 24 * 3600
+            msg = (
+                f"👽 Ты надел Шапочку из фольги на 24 часа!\n"
+                f"Защищает от говна (/shit) и ограблений (/rob).\n"
+                f"Нападающие обмажутся говном сами или порежутся своей заточкой!"
+            )
+        # 9. Bribe
+        elif item == "bribe":
+            # Just clear mute, handled externally mostly but let's assume apply_regular_mute is done outside
+            pass
+            
+        # 10. Laxative
+        elif item == "laxative":
+            if active_items.get("laxative_gun"):
+                await callback.answer("У тебя уже есть слабительное! Сделай Reply на пост с командой /curse", show_alert=True)
+                return
+            active_items["laxative_gun"] = True
+            msg = (
+                f"🚽 Ты купил слабительное!\n"
+                f"Сделай Reply на пост жертвы с командой /curse.\n"
+                f"Цель проклинается на 1 час: она не сможет писать посты длиннее 50 символов."
+            )
+        # 11. Megaphone
+        elif item == "megaphone":
+            if active_items.get("megaphone_gun"):
+                await callback.answer("У тебя уже есть мегафон! Сделай Reply на свой пост с командой /mega", show_alert=True)
+                return
+            active_items["megaphone_gun"] = True
+            msg = (
+                f"📣 Ты арендовал Мегафон!\n"
+                f"Сделай Reply на СВОЙ пост с командой /mega.\n"
+                f"Твой пост будет закреплен на 24 часа для всех на борде."
+            )
+        # 12. Schizopill
+        elif item == "schizopill":
+            if active_items.get("schizopill_gun"):
+                await callback.answer("У тебя уже есть Шизо-Таблетка! Сделай Reply на пост с командой /schizopill", show_alert=True)
+                return
+            active_items["schizopill_gun"] = True
+            msg = (
+                f"💊 Ты купил Шизо-Таблетку!\n"
+                f"Сделай Reply на пост жертвы с командой /schizopill.\n"
+                f"Цель проклинается на 1 час: её посты будут переписываться нейросетью в стиле конспиролога-шизофреника."
+            )
+
+        # Списываем баланс
         await db.execute(
             "UPDATE Users SET balance = balance - ?, active_items = ? WHERE user_id = ? AND board_id = ?",
             (price, json.dumps(active_items), user_id, board_id)
         )
         await db.commit()
+        
+    if item == "bribe":
+        await apply_regular_mute(user_id, board_id, 0) # Clear mute
+        msg = "📜 Ты дал взятку модератору! Твой мут снят, ты снова можешь шитпостить."
+        
     await callback.answer(msg, show_alert=True)
     new_bal = balance - price
     text = callback.message.html_text.replace(f"{int(balance)}.00", f"{int(new_bal)}.00")
@@ -3697,7 +3754,6 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         await callback.message.edit_text(text, reply_markup=callback.message.reply_markup, parse_mode="HTML")
     except Exception:
         pass
-
 @dataclass
 class ShootContext:
     message: types.Message
@@ -3725,14 +3781,7 @@ class ShootContext:
 # правка верхнего не влияла ни на что. Оставлено одно, выше по файлу.
 
 async def _handle_shoot_bounce(ctx: ShootContext):
-    ctx.t_items["reflect_shield_until"] = 0
-    ctx.active_items["mute_gun"] = False
-    async with ctx.db_lock:
-        await ctx.db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (json.dumps(ctx.t_items), ctx.target_id, ctx.board_id))
-        await ctx.db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (json.dumps(ctx.active_items), ctx.user_id, ctx.board_id))
-        await ctx.db.commit()
+    # DB logic has been moved to cmd_shoot inside db_lock. This just handles network/UI.
     async with storage_lock:
         board_data[ctx.board_id]['mutes'][ctx.user_id] = datetime.now(UTC) + timedelta(seconds=3600)
     await apply_regular_mute(ctx.user_id, ctx.board_id, 3600)
@@ -3765,7 +3814,6 @@ async def _handle_shoot_bounce(ctx: ShootContext):
         await ctx.message.delete()
     except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
         pass
-
 async def _handle_shoot_success(ctx: ShootContext):
     # Распаковка ctx в локальные имена удалена: тело функции целиком обращается
     # к ctx.<поле>, ни одно из семи имён не читалось. Остаток того же
@@ -3818,11 +3866,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
 
     import time
     db = await get_pool()
-
-    active_items = await _get_user_active_items(db, user_id, board_id)
-    if not active_items.get("mute_gun"):
-        await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
-        return
+    current_time = int(time.time())
 
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0:
@@ -3832,39 +3876,76 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         await message.answer("Ты пытаешься выстрелить в самого себя? Идиот.")
         return
 
-    # Проверяем Зеркальный Щит у цели
-    t_items = await _get_user_active_items(db, target_id, board_id)
-    current_time = int(time.time())
-
-    if t_items.get("reflect_shield_until", 0) > current_time:
-        # Рикошет!
-        # t_items передаём ВНУТРИ контекста: живая _handle_shoot_bounce
-        # принимает один аргумент. Вторым позиционным это был TypeError,
-        # то есть Зеркальный Щит не срабатывал ни разу.
-        await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items, t_items))
-        return
-
-    # Идемпотентность: цель уже в муте
     from datetime import datetime, UTC
-
     async with storage_lock:
         current_mute = board_data[board_id]['mutes'].get(target_id)
         
     if current_mute and current_mute > datetime.now(UTC):
         await message.answer("⚠️ Эта цель УЖЕ находится в муте! Выбери кого-то другого. Мут-Ган остался у тебя.")
-        # Здесь стоял вызов _handle_shoot_bounce. Он РАБОТАЛ, и в этом была
-        # проблема: рикошет списывает мут-ган и сажает в мут на час самого
-        # стрелка, отправляя вдогонку «🛡️ ЗЕРКАЛЬНЫЙ ЩИТ!». То есть на попытку
-        # выстрелить в уже замученного пользователь получал два сообщения
-        # подряд с противоположным смыслом и терял предмет — прямо вопреки
-        # строке выше, где ему сказано «Мут-Ган остался у тебя».
-        # Ветка «цель уже в муте» не рикошет: предупреждаем и выходим, ничего
-        # не списывая. Это сознательное изменение поведения, а не фикс падения.
         return
 
-    # Обычный мут цели
-    await _handle_shoot_success(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items))
+    has_item = False
+    is_bounced = False
 
+    async with db_lock:
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        if active_items.get("mute_gun"):
+            has_item = True
+            t_items = await _get_user_active_items(db, target_id, board_id)
+            if t_items.get("reflect_shield_until", 0) > current_time:
+                is_bounced = True
+                t_items["reflect_shield_until"] = 0
+                active_items["mute_gun"] = False
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(t_items), target_id, board_id))
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(active_items), user_id, board_id))
+                await db.commit()
+            else:
+                active_items["mute_gun"] = False
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(active_items), user_id, board_id))
+                await db.commit()
+
+    if not has_item:
+        await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
+        return
+
+    if is_bounced:
+        await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items, t_items))
+        return
+
+    async with storage_lock:
+        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=3600)
+
+    await apply_regular_mute(target_id, board_id, 3600)
+    
+    shoot_msg = (
+        f"🔫 <b>ПИУ-ПИУ!</b>\n\n"
+        f"Анон <code>{user_id}</code> выстрелил в <code>{target_id}</code> из Мут-Гана!\n"
+        f"Жертва отправляется в мут на 1 час.\n"
+        f"<i>(Оружие израсходовано)</i>"
+    )
+    await message.bot.send_message(message.chat.id, shoot_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+
+    try:
+        await message.bot.send_message(
+            target_id,
+            "💥 <b>В тебя выстрелили из Мут-Гана!</b>\n"
+            "Тебя отправили в мут на 1 час — ты временно не можешь писать на этой доске.\n"
+            "Защититься от будущих выстрелов можно купив Зеркальный Щит в /shop.",
+            parse_mode="HTML"
+        )
+    except TelegramForbiddenError:
+        await purge_users_from_board_ram(board_id, [target_id])
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
+    except (TelegramBadRequest, TelegramAPIError, Exception):
+        pass
+    try:
+        await message.delete()
+    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
+        pass
 @dp.message(Command("rob"))
 async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -3972,182 +4053,279 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     if not board_id: return
     user_id = message.from_user.id
     if not message.reply_to_message:
-        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, в которую хочешь кинуть говном!", parse_mode="HTML")
+        await message.answer("⚠️ Сделай Reply на пост того, кого хочешь обмазать говном!")
         return
+
     import time
-    import json
     db = await get_pool()
-    active_items = await _get_user_active_items(db, user_id, board_id)
-    if not active_items.get("shit_gun"):
-        await message.answer("🐒 У тебя нет куска говна! Купи его в теневом магазине: /shop")
-        return
-    target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0 or target_id == user_id: 
-        await message.answer("⚠️ Не удалось прицелиться или ты пытаешься обмазать сам себя.")
-        return
-    
-    t_items = await _get_user_active_items(db, target_id, board_id)
     current_time = int(time.time())
-    
-    # Идемпотентность: цель уже в говне
-    if t_items.get("shit_until", 0) > current_time:
-        await message.answer("💩 Эта цель УЖЕ обмазана говном! Выбери кого-нибудь чистого. Кусок говна остался у тебя.")
+
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0:
+        await message.answer("🚫 Не удалось найти автора поста...")
+        return
+    if target_id == user_id:
+        await message.answer("Ты обмазался говном самостоятельно. Поздравляю.")
         return
 
-    active_items["shit_gun"] = False
-    
-    if t_items.get("tinfoil_hat", 0) > current_time:
-        active_items["shit_until"] = current_time + 3600
-        async with db_lock:
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
-            await db.commit()
-        await message.answer("👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Говно отскочило от фольги прямо тебе в лицо. Теперь ТЫ обмазан говном на 1 час!", parse_mode="HTML")
-        return
+    has_item = False
+    is_shielded = False
 
-    t_items["shit_until"] = current_time + 3600
     async with db_lock:
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-            (user_id, board_id, json.dumps(active_items))
-        )
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-            (target_id, board_id, json.dumps(t_items))
-        )
-        await db.commit()
-    await message.answer("🐒 <b>ПОПАДАНИЕ!</b>\nТы метко кинул кусок говна! Жертва обмазана на 1 час и получит иконку 💩 во всех своих постах.", parse_mode="HTML")
-    try:
-        await message.bot.send_message(target_id, "🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\nКакой-то анон обмазал тебя. У тебя статус 💩 на 1 час.\nЛекарство от статуса: Аминазин в /shop.", parse_mode="HTML")
-    except TelegramForbiddenError:
-        await purge_users_from_board_ram(board_id, [target_id])
-    except TelegramRetryAfter as e:
-        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
-    except (TelegramBadRequest, TelegramAPIError, Exception):
-        pass
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        if active_items.get("shit_gun"):
+            has_item = True
+            t_items = await _get_user_active_items(db, target_id, board_id)
+            if t_items.get("tinfoil_hat", 0) > current_time:
+                is_shielded = True
+                active_items["shit_gun"] = False
+                active_items["shit_until"] = current_time + 3600
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", 
+                                 (json.dumps(active_items), user_id, board_id))
+                await db.commit()
+            else:
+                active_items["shit_gun"] = False
+                t_items["shit_until"] = current_time + 3600
+                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                                 (user_id, board_id, json.dumps(active_items)))
+                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                                 (target_id, board_id, json.dumps(t_items)))
+                await db.commit()
 
+    if not has_item:
+        await message.answer("У тебя нет Говномёта! Иди в /shop")
+        return
+
+    if is_shielded:
+        await message.answer("🛡️ <b>Шапочка из Фольги!</b>\nГовнометание отражено! Заряд говномёта угодил прямо тебе в лицо. Ты весь в говне на 1 час!", parse_mode="HTML")
+        return
+
+    # Успех
+    shit_msg = (
+        f"💩 <b>СМАЧНЫЙ ПЛЮХ!</b>\n\n"
+        f"Анон <code>{user_id}</code> выстрелил в <code>{target_id}</code> из Говномёта!\n"
+        f"Теперь все сообщения жертвы в течение часа будут выглядеть как говно 🤎\n"
+        f"<i>(Говномёт израсходован)</i>"
+    )
+    await message.bot.send_message(message.chat.id, shit_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+    
+    try:
+        await message.bot.send_message(
+            target_id,
+            "💩 <b>В тебя выстрелили говном!</b>\n"
+            "Твои сообщения будут измазаны в течение 1 часа.\n"
+            "Покупай Шапочку из Фольги в /shop для защиты.",
+            parse_mode="HTML"
+        )
+    except: pass
+    try:
+        await message.delete()
+    except: pass
 @dp.message(Command("curse", "vomit"))
 async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
     if not message.reply_to_message:
-        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, чтобы подлить слабительное!", parse_mode="HTML")
+        await message.answer("⚠️ Сделай Reply на пост жертвы!")
         return
+
     import time, json
     db = await get_pool()
-    active_items = await _get_user_active_items(db, user_id, board_id)
-    if not active_items.get("laxative_gun"):
-        await message.answer("🚽 У тебя нет Слабительного! Купи его в магазине: /shop")
-        return
-    target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0 or target_id == user_id: 
-        await message.answer("⚠️ Не удалось найти цель или ты пытаешься проклясть сам себя.")
-        return
-    
     current_time = int(time.time())
-    t_items = await _get_user_active_items(db, target_id, board_id)
-    
-    # Идемпотентность: цель уже проклята
-    if t_items.get("cursed_until", 0) > current_time:
-        await message.answer("🚽 У этого анона И ТАК словесный понос! Выбери другую жертву. Слабительное осталось у тебя.")
+
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0:
+        await message.answer("🚫 Не удалось найти автора.")
         return
-        
-    active_items["laxative_gun"] = False
-    t_items["cursed_until"] = current_time + 3600
+    if target_id == user_id:
+        await message.answer("Самопроклятие? Дожили.")
+        return
+
+    has_item = False
+    is_shielded = False
 
     async with db_lock:
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-            (user_id, board_id, json.dumps(active_items))
-        )
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-            (target_id, board_id, json.dumps(t_items))
-        )
-        await db.commit()
-    await message.answer("🚽 <b>ПРОКЛЯТИЕ СРАБОТАЛО!</b>\nТы подлил слабительное в чай этому анону. У него начался словесный понос: он целый час не сможет писать посты длиннее 50 символов!", parse_mode="HTML")
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        if active_items.get("laxative_gun"):
+            has_item = True
+            t_items = await _get_user_active_items(db, target_id, board_id)
+            if t_items.get("tinfoil_hat", 0) > current_time:
+                is_shielded = True
+                active_items["laxative_gun"] = False
+                active_items["cursed_until"] = current_time + 3600
+                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                                 (user_id, board_id, json.dumps(active_items)))
+                await db.commit()
+            else:
+                active_items["laxative_gun"] = False
+                t_items["cursed_until"] = current_time + 3600
+                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                                 (user_id, board_id, json.dumps(active_items)))
+                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                                 (target_id, board_id, json.dumps(t_items)))
+                await db.commit()
+
+    if not has_item:
+        await message.answer("У тебя нет Слабительного! Ищи его в магазине: /shop")
+        return
+
+    if is_shielded:
+        await message.answer("🛡️ <b>Шапочка из Фольги!</b>\nЦель защищена. Проклятие обрушилось на тебя самого! Понос обеспечен на 1 час.", parse_mode="HTML")
+        return
+
+    curse_msg = (
+        f"🤢 <b>ПРОКЛЯТИЕ ПОНОСА!</b>\n\n"
+        f"Анон <code>{user_id}</code> опоил <code>{target_id}</code> Слабительным!\n"
+        f"Слова жертвы теперь прорываются неконтролируемыми приступами... (1 час)\n"
+        f"<i>(Слабительное израсходовано)</i>"
+    )
+    await message.bot.send_message(message.chat.id, curse_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+    try: await message.delete()
+    except: pass
+@dp.message(Command("schizopill", "шизотаблетка"))
+async def cmd_schizopill(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ Сделай Reply на пост жертвы!")
+        return
+
+    import time, json
+    db = await get_pool()
+    current_time = int(time.time())
+
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0:
+        await message.answer("🚫 Не удалось найти автора.")
+        return
+    if target_id == user_id:
+        await message.answer("Ты и так уже.")
+        return
+
+    has_item = False
+    is_shielded = False
+
+    async with db_lock:
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        if active_items.get("schizopill_gun"):
+            has_item = True
+            t_items = await _get_user_active_items(db, target_id, board_id)
+            if t_items.get("tinfoil_hat", 0) > current_time:
+                is_shielded = True
+                active_items["schizopill_gun"] = False
+                active_items["schizo_pill_until"] = current_time + 3600
+                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                                 (user_id, board_id, json.dumps(active_items)))
+                await db.commit()
+            else:
+                active_items["schizopill_gun"] = False
+                t_items["schizo_pill_until"] = current_time + 3600
+                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                                 (user_id, board_id, json.dumps(active_items)))
+                await db.execute("INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                                 (target_id, board_id, json.dumps(t_items)))
+                await db.commit()
+
+    if not has_item:
+        await message.answer("У тебя нет Шизо-Таблетки. Купи в /shop")
+        return
+
+    if is_shielded:
+        await message.answer(f"👽 <b>ШИЗО-РИКОШЕТ!</b>\nАнон попытался отравить пользователя <code>{target_id}</code> Шизо-Таблеткой, но шапочка из фольги отразила эффект обратно! Теперь отправитель будет писать шизой.", parse_mode="HTML")
+        return
+
+    curse_msg = (
+        f"💊 <b>ШИЗО-ТАБЛЕТКА!</b>\n\n"
+        f"Анон <code>{user_id}</code> подмешал Шизо-Таблетку <code>{target_id}</code>!\n"
+        f"У цели начался приступ шизофазии и паранойи... (1 час)\n"
+        f"<i>(Шизо-Таблетка израсходована)</i>"
+    )
+    await message.bot.send_message(message.chat.id, curse_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+    try: await message.delete()
+    except: pass
 
 @dp.message(Command("partyvan"))
 async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
     if not message.reply_to_message:
-        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на донос-пост жертвы, чтобы вызвать Пативэн!", parse_mode="HTML")
+        await message.answer("⚠️ Сделай Reply на пост, куда отправить ПатиВэн!")
         return
-    import json
+
     from datetime import datetime, timedelta, UTC
     db = await get_pool()
-    active_items = await _get_user_active_items(db, user_id, board_id)
-    if not active_items.get("partyvan_gun"):
-        await message.answer("🚔 У тебя нет рации для вызова Пативэна! Купи её в /shop")
-        return
-    target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0 or target_id == user_id: 
-        await message.answer("⚠️ Не удалось определить цель доноса.")
-        return
-        
-    # Идемпотентность: цель уже в КПЗ
-    async with storage_lock:
-        mute_end = board_data[board_id]['mutes'].get(target_id)
-    if mute_end and mute_end > datetime.now(UTC) + timedelta(hours=11):
-        await message.answer("🚔 Этот анон УЖЕ откисает в КПЗ надолго! Не трать вызов зря, рация осталась у тебя.")
-        return
-    
-    active_items["partyvan_gun"] = False
-    async with db_lock:
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
-        await db.commit()
-    
-    async with storage_lock:
-        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(hours=12)
-    await apply_regular_mute(target_id, board_id, 12 * 3600)
-    
-    await message.bot.send_message(message.chat.id, f"🚔 <b>ВНИМАНИЕ! РАБОТАЕТ ОМОН!</b> 🚔\nПо доносу анона за автором этого поста выехал пативэн! Жертва <code>{target_id}</code> отправлена в КПЗ (жесткий мут) на 12 часов!\n<i>Выйти раньше можно только дав взятку в /shop.</i>", reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
 
+    has_item = False
+    async with db_lock:
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        if active_items.get("partyvan_gun"):
+            has_item = True
+            active_items["partyvan_gun"] = False
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", 
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+
+    if not has_item:
+        await message.answer("У тебя нет Вызова ПатиВэна! Ищи его в /shop")
+        return
+
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0:
+        await message.answer("🚫 Не удалось найти автора. ПатиВэн развернулся (но заряд потрачен).")
+        return
+
+    async with storage_lock:
+        board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=7200)
+
+    await apply_regular_mute(target_id, board_id, 7200)
+
+    msg_txt = (
+        f"🚓 <b>ЗА ТОБОЙ ВЫЕХАЛ ПАТИВЭН!</b>\n\n"
+        f"Анон <code>{user_id}</code> вызвал спецназ по адресу <code>{target_id}</code>!\n"
+        f"Жертву повязали и отправили в автозак на 2 часа (MUTE).\n"
+        f"<i>(ПатиВэн израсходован)</i>"
+    )
+    await message.bot.send_message(message.chat.id, msg_txt, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+    try: await message.delete()
+    except: pass
 @dp.message(Command("mega"))
 async def cmd_mega(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
-    if not message.reply_to_message:
-        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост, который хочешь объявить в Мегафон!", parse_mode="HTML")
+    text_content = message.text.replace("/mega", "").replace(f"@{message.bot.me.username}", "").strip()
+    if not text_content:
+        await message.answer("⚠️ Напиши текст, который нужно прокричать: `/mega Я дебил!`", parse_mode="Markdown")
         return
+
     import json
     db = await get_pool()
-    active_items = await _get_user_active_items(db, user_id, board_id)
-    if not active_items.get("megaphone_gun"):
-        await message.answer("📣 У тебя нет Мегафона! Купи его в /shop")
-        return
-
-    async with storage_lock:
-        key = (message.chat.id, message.reply_to_message.message_id)
-        pnum = message_to_post.get(key)
-        
-    if not pnum:
-        await message.answer("⚠️ Не удалось найти этот пост в памяти доски.")
-        return
-        
-    # Идемпотентность: пост уже закреплен
-    if board_data[board_id].get('active_pin') == pnum:
-        await message.answer("📣 Этот пост И ТАК уже висит в закрепе! Мегафон остался у тебя.")
-        return
-        
-    active_items["megaphone_gun"] = False
-    async with db_lock:
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
-        await db.commit()
-        
-    board_data[board_id]['active_pin'] = pnum
-    await update_board_settings(board_id, {'active_pin': pnum})
+    has_item = False
     
-    await message.bot.send_message(message.chat.id, f"📣 <b>Внимание на всю палату!</b>\nАнон использовал Мегафон! Пост #{pnum} глобально закреплен для всех читателей борды!", parse_mode="HTML")
+    async with db_lock:
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        if active_items.get("megaphone_gun"):
+            has_item = True
+            active_items["megaphone_gun"] = False
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", 
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
 
-# ── /stats cache ──────────────────────────────────────────────────────────────
-import time as _time_module
-_stats_cache: dict = {}   # board_id -> {ts: float, photos: list[bytes]}
-_STATS_TTL = 3600         # seconds
+    if not has_item:
+        await message.answer("У тебя нет Мегафона! Ищи его в /shop")
+        return
+
+    broadcast = f"📢 <b>[МЕГАФОН ОТ <code>{user_id}</code>]</b>\n\n{escape_html(text_content)}"
+    await message.bot.send_message(message.chat.id, broadcast, parse_mode="HTML")
+    try: await message.delete()
+    except: pass
 
 
 @dataclass
@@ -4485,7 +4663,7 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
                 sent = await message.answer(f"⏳ Команда /stats на кулдауне. Ты можешь вызвать её через {min_left} мин {sec_left} сек.")
                 spawn_task(delete_message_after_delay(sent, 10))
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
             try: await message.delete()
             except Exception: pass
             return
@@ -5307,7 +5485,7 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
         try:
             await message.answer(passport_text, parse_mode="HTML")
         except (TelegramBadRequest, TelegramForbiddenError):
-            import traceback; traceback.print_exc()
+            pass
     try: await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError): pass
 async def build_board_atmosphere_context(board_id: str, exclude_post_num: int = None, limit: int = 25) -> str:
@@ -5448,7 +5626,7 @@ async def analyze_telegram_photo(bot, photo_file_id: str, caption: str = None) -
         try:
             os.remove(tmp_path)
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
         if description:
             logger.info(f"✅ [TG_BOT] Photo analysis complete (desc='{description[:60]}...')")
         else:
@@ -5836,14 +6014,14 @@ async def cmd_global_unpin(message: types.Message, board_id: str | None, stream:
         await status_msg.edit_text(final)
 async def _send_motivation_message(board_id: str, stream: str, recipients: set):
     """
-    Sends a motivational message or site promo to active users.
+    Sends a motivational message, auto graphic invite card, or site promo to active users.
     """
-    # 35% шанс на рекламу сайта (с новыми текстами), 65% на рекламу бота
-    is_site_promo = random.random() < 0.35
+    rand_choice = random.random()
+    board_username = BOARD_CONFIG.get(board_id, {}).get('username', '@dvach_chatbot')
+    site_url = f"https://tgach.top/{board_id}/"
 
-    if is_site_promo:
-        site_url = f"https://tgach.top/{board_id}/"
-        # ИСПОЛЬЗУЕМ НОВЫЕ ФРАЗЫ ИЗ text_assets.py
+    if rand_choice < 0.25:
+        # 1. Реклама веб-версии
         if stream == 'en':
             text_body = random.choice(SITE_PROMO_PHRASES_EN)
             btn_text = "🔗 Open Website"
@@ -5854,34 +6032,72 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
             text_body = random.choice(SITE_PROMO_PHRASES)
             btn_text = "🔗 Перейти на сайт"
 
-        # Формируем сообщение с кнопкой
         message_text = f"{text_body}\n\n👉 <a href='{site_url}'>{site_url}</a>"
-
-        # Для сайта можно добавить Inline кнопку
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=btn_text, url=site_url)]
         ])
+        content = {'type': 'text', 'text': message_text, 'is_system_message': True}
+
+    elif rand_choice < 0.80:
+        # 2. Автоматическая генерация графической инвайт-карточки с уникальным текстом поста
+        from invite_image_generator import generate_invite_image_async, get_random_auto_invite_content
+        slogan, companion_caption = get_random_auto_invite_content(board_id=board_id, bot_username=board_username)
+        site_btn = "🌐 Web Version" if stream == 'en' else ("🌐 ウェブ版" if stream == 'jp' else "🌐 Веб-версия")
+        pic_btn = "🖼 Graphic Invite" if stream == 'en' else ("🖼 QR画像" if stream == 'jp' else "🖼 Картинка с QR")
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=site_btn, url=site_url),
+                InlineKeyboardButton(text=pic_btn, callback_data=f"gen_invite_pic:{board_id}")
+            ]
+        ])
+
+        try:
+            buf = await generate_invite_image_async(board_id=board_id, bot_username=board_username, slogan_dict=slogan)
+            content = {
+                'type': 'photo',
+                'caption': companion_caption,
+                'image_bytes': buf.getvalue(),
+                'is_system_message': True
+            }
+        except Exception as e:
+            logger.error(f"Error generating auto invite image: {e}")
+            content = {'type': 'text', 'text': companion_caption, 'is_system_message': True}
+
     else:
-        # Старая логика (реклама бота/инвайта)
+        # 3. Текстовая мотивация/инвайт
         if stream == 'en':
             motivation = random.choice(MOTIVATIONAL_MESSAGES_EN)
             invite_text = random.choice(INVITE_TEXTS_EN)
             copy_lbl = "Copy and send to anons:"
+            site_btn = "🌐 Web Version"
+            pic_btn = "🖼 Graphic Invite"
         elif stream == 'jp':
             motivation = random.choice(MOTIVATIONAL_MESSAGES_JP)
             invite_text = random.choice(INVITE_TEXTS_JP)
             copy_lbl = "コピーしてアノンに送信:"
+            site_btn = "🌐 ウェブ版"
+            pic_btn = "🖼 QR画像"
         else:
             motivation = random.choice(MOTIVATIONAL_MESSAGES)
             invite_text = random.choice(INVITE_TEXTS)
             copy_lbl = "Скопируй и отправь анончикам:"
+            site_btn = "🌐 Веб-версия"
+            pic_btn = "🖼 Картинка с QR"
 
         message_text = (
             f"💭 {motivation}\n\n"
             f"{copy_lbl}\n"
             f"<code>{escape_html(invite_text)}</code>"
         )
-        keyboard = None
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=site_btn, url=site_url),
+                InlineKeyboardButton(text=pic_btn, callback_data=f"gen_invite_pic:{board_id}")
+            ]
+        ])
+        content = {'type': 'text', 'text': message_text, 'is_system_message': True}
+
 
     now_dt = datetime.now(UTC)
     content = {'type': 'text', 'text': message_text, 'is_system_message': True}
@@ -5920,7 +6136,8 @@ async def _board_motivation_worker(board_id: str):
     """
     while True:
         try:
-            delay = random.randint(6000, 18000)
+            # Авто-постинг каждые ~4.5 часа (16200 сек)
+            delay = random.randint(15500, 16900)
             await asyncio.sleep(delay)
             activity = await get_board_activity_last_hours(board_id, hours=2)
             if activity < 20:
@@ -6509,7 +6726,7 @@ async def _send_thread_info_if_applicable(message: types.Message, board_id: str,
     try:
         await message.answer(info_text, reply_markup=keyboard, parse_mode="HTML")
     except (TelegramForbiddenError, TelegramBadRequest):
-        import traceback; traceback.print_exc()
+        pass
 
 def detect_suggested_stream(lang_code: str | None) -> str:
     """
@@ -6684,7 +6901,7 @@ async def cmd_show_board_info(message: types.Message, board_id: str | None, stre
         await message.answer(full_response_text, parse_mode="HTML", disable_web_page_preview=True)
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        import traceback; traceback.print_exc()
+        pass
     except Exception as e:
         logger.error(f"[board_info] Ошибка в cmd_show_board_info: {e}", exc_info=True)
 async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str, notify_users: bool = True, initiator_id: int = None):
@@ -6723,7 +6940,7 @@ async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str,
             try:
                 await bot_instance.send_message(uid, notify_text)
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
     print(f"[THREAD DELETE] [{board_id}] Тред {thread_id} удалён. Пользователей переведено: {len(users_in_thread)}. Инициатор: {initiator_id}")
 
 _RE_ANIME_STACK = RE_ANIME_STACK
@@ -6836,7 +7053,7 @@ class StackedAnimeHandler:
                     spawn_task(delete_message_after_delay(sent, 15))
                     await self.message.delete()
                 except Exception:
-                    import traceback; traceback.print_exc()
+                    pass
                 return True
             tracker['count'] += requested_count
         return False
@@ -6854,7 +7071,7 @@ class StackedAnimeHandler:
                 spawn_task(delete_message_after_delay(sent, 15))
                 await self.message.delete()
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
             return True
         return False
 
@@ -6885,7 +7102,7 @@ class StackedAnimeHandler:
                 spawn_task(delete_message_after_delay(sent_msg, 10))
                 await self.message.delete()
             except (TelegramBadRequest, TelegramForbiddenError):
-                import traceback; traceback.print_exc()
+                pass
             return True
         return False
 
@@ -7111,7 +7328,7 @@ async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 
     
     processing_msg = await message.reply("🔥 Готовим прожарку..." if lang == 'ru' else "🔥 Roasting...")
     try:
-        summary = await summarize_text_with_hf(prompt, chunk, hf_token)
+        summary = await summarize_text_with_hf(prompt, chunk)
         summary = clean_html_for_tg(summary)
     except Exception as e:
         print(f"[roast] Error: {e}")
@@ -7439,7 +7656,7 @@ def _parse_summarize_args(text: str | None) -> tuple[int | None, str, str, str]:
                         paragraph_count = val
                         continue
                 except ValueError:
-                    import traceback; traceback.print_exc()
+                    pass
                 
                 # Check keywords
                 if arg in ['short', 'краткое', 'короткое', 'быстрое', 'к']:
@@ -7524,7 +7741,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
             await message.answer(cooldown_text)
             await message.delete()
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
         return
     thread_id = None
     thread_info = {}
@@ -7583,7 +7800,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     await message.answer(status_text)
 
     try:
-        summary = await summarize_text_with_hf(prompt, chunk, hf_token, model_preference=model_preference)
+        summary = await summarize_text_with_hf(prompt, chunk, model_preference=model_preference)
         summary = clean_html_for_tg(summary)
     except Exception as e:
         print(f"[summarize] Error during HF summarize: {e}")
@@ -7945,7 +8162,7 @@ async def cq_show_active_threads(callback: types.CallbackQuery, board_id: str | 
         try:
             await callback.answer("This action is not available here.", show_alert=True)
         except TelegramBadRequest:
-            import traceback; traceback.print_exc() # Игнорируем, если даже ответ на колбэк не прошел
+            pass # Игнорируем, если даже ответ на колбэк не прошел
         return
     b_data = board_data[board_id]
     lang = 'en' if board_id == 'int' else 'ru'
@@ -7976,7 +8193,7 @@ async def cq_show_active_threads(callback: types.CallbackQuery, board_id: str | 
         else:
             print(f"⛔ Ошибка TelegramBadRequest в cq_show_active_threads: {e}")
     except (TelegramForbiddenError, TelegramNetworkError):
-        import traceback; traceback.print_exc()
+        pass
     except Exception as e:
         print(f"⛔ Непредвиденная ошибка в cq_show_active_threads: {e}")
 @dp.message(Command("tags", "tagcloud", "╤é╨╡╨│╨╕", "╤é╨╡╨│"))
@@ -8145,7 +8362,7 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 @dp.message(Command("dice", "roll100", "d100"))
 async def cmd_dice(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -8165,7 +8382,7 @@ async def cmd_dice(message: types.Message, board_id: str | None, stream: str = '
         await message.answer(roll_text)
         await message.delete()
     except (TelegramForbiddenError, TelegramBadRequest):
-        import traceback; traceback.print_exc()
+        pass
 
 
 @dp.message(Command("quote", "╤å╨╕╤é╨░╤é╨░", "random_post"))
@@ -8207,7 +8424,7 @@ async def cmd_quote(message: types.Message, board_id: str | None, stream: str = 
         await message.answer(text, parse_mode="HTML")
         await message.delete()
     except Exception:
-        import traceback; traceback.print_exc()
+        pass
 
 
 @dp.message(Command("addmoney"))
@@ -8235,7 +8452,7 @@ async def cmd_add_money_admin(message: Message, board_id: str | None):
         try:
             await message.bot.send_message(target_id, f"🎁 <b>Администрация начислила вам бонус: {amount} RUB! Кошелек - /wallet </b>", parse_mode="HTML")
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
     except Exception as e:
         await message.answer(f"Ошибка: {e}", parse_mode=None)
 @dp.message(Command("slavaukraine", "slava_ukraine", "ukraine", "ukraina", "hohol"))
@@ -8428,7 +8645,7 @@ async def activate_lightweight_mode(
         try:
             await message.delete()
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
         return
     b_data = board_data[board_id]
     if not await check_cooldown(message, board_id):
@@ -8449,7 +8666,7 @@ async def activate_lightweight_mode(
         try:
             await message.delete()
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         return
     header = await format_header(board_id, pnum)
     prefix = prefix_by_stream.get(stream, prefix_by_stream.get('ru', "### АДМИН ###"))
@@ -8474,7 +8691,7 @@ async def activate_lightweight_mode(
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 
 MODE_END_PHRASES = {
     'slavaukraine_mode': [
@@ -8646,7 +8863,7 @@ async def cmd_kurwa(message: types.Message, board_id: str | None, stream: str = 
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 @dp.message(Command("wh40k", "waha", "warhammer", "warhamer"))
 async def cmd_wh40k(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -9050,7 +9267,7 @@ async def cmd_graph(message: types.Message, board_id: str | None, stream: str = 
                 days = int(arg[:-1])
                 days = max(1, min(30, days))
             except ValueError:
-                import traceback; traceback.print_exc()
+                pass
     working_msg = None
     try:
         await message.delete()
@@ -9093,7 +9310,7 @@ async def cmd_graph(message: types.Message, board_id: str | None, stream: str = 
                 error_text = "Произошла ошибка при создании графика."
             await message.answer(error_text)
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
 @dp.message(Command("create"))
 async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -9116,7 +9333,7 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
             await message.answer(text)
             await message.delete()
         except (TelegramForbiddenError, TelegramBadRequest):
-            import traceback; traceback.print_exc()
+            pass
         return
     command_args = (message.text or message.caption or "").split(maxsplit=1)
     if len(command_args) > 1 and command_args[1].strip():
@@ -9154,7 +9371,7 @@ async def cmd_create_fsm_entry(message: types.Message, state: FSMContext, board_
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 
 async def _handle_quick_menu_ruletka(callback, board_id: str, user_id: int, lang: str):
     if not ROULETTE_EVENTS:
@@ -9177,7 +9394,7 @@ async def _handle_quick_menu_ruletka(callback, board_id: str, user_id: int, lang
         try:
             await callback.message.answer(cooldown_msg)
         except (TelegramBadRequest, TelegramForbiddenError):
-            import traceback; traceback.print_exc()
+            pass
         return
     event = get_random_event(ROULETTE_EVENTS)
     if event:
@@ -9332,7 +9549,7 @@ async def _handle_quick_menu_anime(callback, board_id: str, action: str, lang: s
         try:
             await search_msg.edit_text("Error occurred.")
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
     finally:
         if gate_acquired:
             anime_media_gate.release()
@@ -9350,7 +9567,7 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
     try:
         await callback.answer(activation_text)
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
     class SafeMessageProxy:
         def __init__(self, original_msg, user):
             self._msg = original_msg
@@ -9381,7 +9598,7 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         try:
             await callback.message.edit_text(menu_text, reply_markup=get_quick_menu_keyboard(board_id, stream=stream), parse_mode="HTML")
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
     elif action == "profile":
         fake_msg = SafeMessageProxy(callback.message, callback.from_user)
         await cmd_passport(fake_msg, board_id)
@@ -9433,7 +9650,7 @@ async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | No
         try:
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except TelegramBadRequest: 
-            import traceback; traceback.print_exc() # Если меню устарело, не страшно, настройки применились
+            pass # Если меню устарело, не страшно, настройки применились
         if lang == 'en': alert = "NSFW updated"
         elif lang == 'jp': alert = "NSFW更新"
         else: alert = "NSFW обновлен"
@@ -9470,7 +9687,7 @@ async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | No
             await callback.message.edit_text(title, reply_markup=kb, parse_mode="HTML")
             await callback.answer()
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
 async def _check_create_thread_cooldown(callback: types.CallbackQuery, user_s: dict, lang: str, now_ts: float) -> bool:
     """Checks if the user is on cooldown for creating a thread."""
     last_creation_ts = user_s.get('last_thread_creation', 0)
@@ -9564,7 +9781,7 @@ async def _process_op_post_and_enter(callback: types.CallbackQuery, user_id: int
     try:
         await callback.bot.send_message(user_id, enter_message, reply_markup=entry_keyboard, parse_mode="HTML")
     except (TelegramForbiddenError, TelegramBadRequest):
-        import traceback; traceback.print_exc()
+        pass
     spawn_task(post_thread_notification_to_channel(
         bots=GLOBAL_BOTS, board_id=board_id, thread_id=thread_id,
         thread_info=thread_info, event_type='new_thread'
@@ -9581,7 +9798,7 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
     try:
         await callback.answer()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc() # Игнорируем, если запрос устарел, продолжаем выполнение
+        pass # Игнорируем, если запрос устарел, продолжаем выполнение
     if not isinstance(callback.message, types.Message):
         return
     user_id = callback.from_user.id
@@ -9602,13 +9819,13 @@ async def cb_create_thread_confirm(callback: types.CallbackQuery, state: FSMCont
             await callback.message.answer("Error: Post data not found. Please start over.")
             await callback.message.delete()
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         return
 
     try:
         await callback.message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 
     threads_data = get_threads_data(board_id)
     thread_id = secrets.token_hex(4)
@@ -10201,7 +10418,7 @@ async def cmd_cancel_fsm(message: types.Message, state: FSMContext, board_id: st
         try:
             await message.delete()
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         return
     await state.clear()
     if board_id:
@@ -10211,7 +10428,7 @@ async def cmd_cancel_fsm(message: types.Message, state: FSMContext, board_id: st
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 async def thread_lifecycle_manager(bots: dict[str, Bot]):
 
     while True:
@@ -10695,7 +10912,7 @@ async def memory_restarter(bots: list[Bot], healthcheck_site: web.TCPSite | None
                     json.dumps(_collect_runtime_snapshot(), ensure_ascii=False, separators=(",", ":"))
                 )
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
             try:
                 await asyncio.wait_for(
                     graceful_shutdown(bots, healthcheck_site, emergency=True),
@@ -10763,7 +10980,7 @@ async def process_op_post_invalid(message: types.Message, state: FSMContext, boa
         await message.answer(response_text)
         await message.delete()
     except (TelegramForbiddenError, TelegramBadRequest):
-        import traceback; traceback.print_exc()
+        pass
 @dp.callback_query(F.data == "create_thread_start")
 async def cb_create_thread_start(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -10786,13 +11003,13 @@ async def cb_create_thread_start(callback: types.CallbackQuery, state: FSMContex
     try:
         await callback.answer()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc() # Игнорируем, если кнопка устарела, главное отправить сообщение
+        pass # Игнорируем, если кнопка устарела, главное отправить сообщение
     if isinstance(callback.message, types.Message):
         try:
             await callback.message.answer(prompt_text)
             await callback.message.delete()
         except (TelegramForbiddenError, TelegramBadRequest):
-            import traceback; traceback.print_exc()
+            pass
 @dp.callback_query(F.data.startswith("threads_page_"))
 async def cq_threads_page(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     """
@@ -10806,7 +11023,7 @@ async def cq_threads_page(callback: types.CallbackQuery, board_id: str | None, s
         try:
             await callback.answer("Слишком быстро! / Too fast!", show_alert=False)
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         return
     user_last_thread_action[user_id] = now
     try:
@@ -10827,7 +11044,7 @@ async def cq_threads_page(callback: types.CallbackQuery, board_id: str | None, s
             try:
                 await callback.message.delete()
             except TelegramBadRequest:
-                import traceback; traceback.print_exc() # Сообщение уже удалено или слишком старое
+                pass # Сообщение уже удалено или слишком старое
             await callback.bot.send_message(user_id, text, reply_markup=keyboard, parse_mode="HTML")
     except (ValueError, IndexError):
         try:
@@ -10842,7 +11059,7 @@ async def cq_threads_page(callback: types.CallbackQuery, board_id: str | None, s
         try:
             await callback.answer()
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
 @dp.callback_query(F.data.startswith("view_thread_"))
 async def cq_view_thread(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
 
@@ -10869,7 +11086,7 @@ async def cq_view_thread(callback: types.CallbackQuery, board_id: str | None, st
     try:
         await callback.answer(load_txt)
     except TelegramBadRequest:
-        import traceback; traceback.print_exc() # Игнорируем, если запрос устарел, главное показать тред
+        pass # Игнорируем, если запрос устарел, главное показать тред
     thread_data = await get_thread_by_op_post(op_post_num)
     if not thread_data:
         err_txt = "Thread not found." if lang == 'en' else ("スレッドが見つかりません。" if lang == 'jp' else "Тред не найден.")
@@ -10920,7 +11137,7 @@ async def cq_thread_history(callback: types.CallbackQuery, board_id: str | None,
         try:
             await callback.answer(cooldown_msg, show_alert=True)
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         return
     thread_info = get_thread_info(board_id, thread_id)
     if not thread_info:
@@ -10935,7 +11152,7 @@ async def cq_thread_history(callback: types.CallbackQuery, board_id: str | None,
     try:
         await callback.answer(load_txt)
     except TelegramBadRequest:
-        import traceback; traceback.print_exc() # Игнорируем, главное отправить историю
+        pass # Игнорируем, главное отправить историю
     temp_user_state = user_s.copy()
     temp_user_state.setdefault('last_seen_threads', {})[thread_id] = 0
     b_data['user_state'][user_id] = temp_user_state
@@ -10960,7 +11177,7 @@ async def _enter_thread_logic(bot: Bot, board_id: str, user_id: int, thread_id: 
             sent_msg = await bot.send_message(user_id, cooldown_msg)
             spawn_task(delete_message_after_delay(sent_msg, 5))
         except (TelegramForbiddenError, TelegramBadRequest):
-            import traceback; traceback.print_exc()
+            pass
         return
     current_location = user_s.get('location', 'main')
     if current_location == thread_id:
@@ -10975,7 +11192,7 @@ async def _enter_thread_logic(bot: Bot, board_id: str, user_id: int, thread_id: 
         try:
             await message_to_delete.delete()
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
     was_missed, show_history_button = await send_missed_messages(bot, board_id, user_id, thread_id, stream=stream)
     if not was_missed:
         thread_title = threads_data[thread_id].get('title', '...')
@@ -10990,7 +11207,7 @@ async def _enter_thread_logic(bot: Bot, board_id: str, user_id: int, thread_id: 
         try:
             await bot.send_message(user_id, response_text, reply_markup=entry_keyboard, parse_mode="HTML")
         except (TelegramForbiddenError, TelegramBadRequest):
-            import traceback; traceback.print_exc()
+            pass
     await _send_op_commands_info(bot, user_id, board_id)
 @dp.callback_query(F.data.startswith("enter_thread_"))
 async def cq_enter_thread(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
@@ -11010,7 +11227,7 @@ async def cq_enter_thread(callback: types.CallbackQuery, board_id: str | None, s
     try:
         await callback.answer()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc() # Если запрос устарел, всё равно пытаемся войти
+        pass # Если запрос устарел, всё равно пытаемся войти
     await _enter_thread_logic(
         bot=callback.bot,
         board_id=board_id,
@@ -11040,14 +11257,14 @@ async def cb_leave_thread(callback: types.CallbackQuery, board_id: str | None, s
     try:
         await callback.answer()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc() # Игнорируем, продолжаем выполнение логику выхода
+        pass # Игнорируем, продолжаем выполнение логику выхода
     user_s = b_data['user_state'].setdefault(user_id, {})
     current_location = user_s.get('location', 'main')
     if current_location == 'main':
         try:
             await callback.message.delete()
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         return
     thread_id = current_location
     thread_info = get_thread_info(board_id, thread_id)
@@ -11069,11 +11286,11 @@ async def cb_leave_thread(callback: types.CallbackQuery, board_id: str | None, s
     try:
         await callback.message.answer(response_text, reply_markup=leave_keyboard)
     except Exception:
-        import traceback; traceback.print_exc() # Если не удалось отправить, юзер все равно перемещен логически
+        pass # Если не удалось отправить, юзер все равно перемещен логически
     try:
         await callback.message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
     await send_missed_messages(callback.bot, board_id, user_id, 'main', stream=stream)
 @dp.message(Command("leave"))
 async def cmd_leave(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -11276,7 +11493,7 @@ async def cmd_shadowmute(message: Message, board_id: str | None, stream: str = '
             if len(args) > 1:
                 duration_str = args[1]
         except ValueError:
-            import traceback; traceback.print_exc()
+            pass
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if not target_id:
         if lang == 'en':
@@ -11533,7 +11750,7 @@ async def cmd_unshadowmute(message: types.Message, board_id: str | None, stream:
     try:
         await message.delete()
     except Exception:
-        import traceback; traceback.print_exc()
+        pass
 @dp.message(Command("invite"))
 async def cmd_invite(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -11543,10 +11760,13 @@ async def cmd_invite(message: types.Message, board_id: str | None, stream: str =
 
     if lang == 'en':
         source_list = INVITE_TEXTS_EN
+        pic_btn = "🖼 Generate Picture + QR"
     elif lang == 'jp':
         source_list = INVITE_TEXTS_JP
+        pic_btn = "🖼 QR画像作成"
     else:
         source_list = INVITE_TEXTS
+        pic_btn = "🖼 Картинка с QR"
     invite_text_raw = random.choice(source_list)
     invite_text = invite_text_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
     
@@ -11564,7 +11784,10 @@ async def cmd_invite(message: types.Message, board_id: str | None, stream: str =
         site_btn = "🌐 Веб-версия"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=site_btn, url=site_url)]
+        [
+            InlineKeyboardButton(text=site_btn, url=site_url),
+            InlineKeyboardButton(text=pic_btn, callback_data=f"gen_invite_pic:{board_id}")
+        ]
     ])
 
     await message.answer(
@@ -11572,7 +11795,104 @@ async def cmd_invite(message: types.Message, board_id: str | None, stream: str =
         parse_mode="HTML",
         reply_markup=keyboard
     )
-    await message.delete()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+@dp.message(Command("invite_pic", "picinvite", "invitepic"))
+async def cmd_invite_pic(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    board_username = BOARD_CONFIG[board_id]['username']
+    site_url = f"https://tgach.top/{board_id}/"
+
+    if lang == 'en':
+        source_list = INVITE_TEXTS_EN
+        caption_header = "📨 <b>Graphic invite for this board:</b>"
+        site_btn = "🌐 Web Version"
+    elif lang == 'jp':
+        source_list = INVITE_TEXTS_JP
+        caption_header = "📨 <b>この板の画像招待状:</b>"
+        site_btn = "🌐 ウェブ版"
+    else:
+        source_list = INVITE_TEXTS
+        caption_header = "🖼 <b>Картинка-приглашение с QR-кодом:</b>"
+        site_btn = "🌐 Веб-версия"
+
+    invite_text_raw = random.choice(source_list)
+    invite_text = invite_text_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
+
+    from invite_image_generator import generate_invite_image_async
+    from aiogram.types import BufferedInputFile
+
+    try:
+        buf = await generate_invite_image_async(board_id=board_id, bot_username=board_username, custom_text=invite_text)
+        input_file = BufferedInputFile(buf.getvalue(), filename=f"invite_{board_id}.jpg")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=site_btn, url=site_url)]
+        ])
+        await message.answer_photo(
+            photo=input_file,
+            caption=f"{caption_header}\n\n<code>{escape_html(invite_text)}</code>",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        runtime_logger.error(f"cmd_invite_pic error: {e}")
+        await message.answer(f"<code>{escape_html(invite_text)}</code>", parse_mode="HTML")
+    finally:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+@dp.callback_query(F.data.startswith("gen_invite_pic:"))
+async def callback_gen_invite_pic(callback: types.CallbackQuery, board_id: str | None = None, stream: str = 'ru'):
+    target_board = callback.data.split(":", 1)[1] if ":" in callback.data else (board_id or "b")
+    board_username = BOARD_CONFIG.get(target_board, {}).get('username', '@dvach_chatbot')
+    lang = stream if ENABLE_MULTILANG else ('en' if target_board == 'int' else 'ru')
+    site_url = f"https://tgach.top/{target_board}/"
+
+    if lang == 'en':
+        source_list = INVITE_TEXTS_EN
+        caption_header = "📨 <b>Graphic invite for this board:</b>"
+        site_btn = "🌐 Web Version"
+    elif lang == 'jp':
+        source_list = INVITE_TEXTS_JP
+        caption_header = "📨 <b>この板の画像招待状:</b>"
+        site_btn = "🌐 ウェブ版"
+    else:
+        source_list = INVITE_TEXTS
+        caption_header = "🖼 <b>Картинка-приглашение с QR-кодом:</b>"
+        site_btn = "🌐 Веб-версия"
+
+    invite_text_raw = random.choice(source_list)
+    invite_text = invite_text_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
+
+    from invite_image_generator import generate_invite_image_async
+    from aiogram.types import BufferedInputFile
+
+    try:
+        await callback.answer("Генерирую картинку...")
+    except Exception:
+        pass
+
+    try:
+        buf = await generate_invite_image_async(board_id=target_board, bot_username=board_username, custom_text=invite_text)
+        input_file = BufferedInputFile(buf.getvalue(), filename=f"invite_{target_board}.jpg")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=site_btn, url=site_url)]
+        ])
+        await callback.message.answer_photo(
+            photo=input_file,
+            caption=f"{caption_header}\n\n<code>{escape_html(invite_text)}</code>",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        runtime_logger.error(f"callback_gen_invite_pic error: {e}")
+
 @dp.message(Command("queues"))
 async def cmd_check_queues(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id): return
@@ -11787,11 +12107,11 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                             parse_mode="HTML"
                         )
                     except Exception:
-                        import traceback; traceback.print_exc()
+                        pass
             success_count += 1
             await asyncio.sleep(0.04)
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
 
     # Get and update all channel copies (mirrors)
     from common.database import get_all_channel_copies
@@ -11820,11 +12140,11 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
                                 parse_mode="HTML"
                             )
                         except Exception:
-                            import traceback; traceback.print_exc()
+                            pass
                 success_count += 1
                 await asyncio.sleep(0.04)
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
 
     async with storage_lock:
         if post_num in messages_storage:
@@ -12049,7 +12369,7 @@ async def cmd_anime(message: types.Message, board_id: str | None, stream: str = 
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 async def check_anime_cmd_cooldown(message: types.Message, board_id: str) -> bool:
     current_time = time.time()
     async with anime_cmd_lock:
@@ -12067,11 +12387,11 @@ async def check_anime_cmd_cooldown(message: types.Message, board_id: str) -> boo
                 sent_msg = await message.answer(cooldown_msg)
                 spawn_task(delete_message_after_delay(sent_msg, 15))
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
             try:
                 await message.delete()
             except TelegramBadRequest:
-                import traceback; traceback.print_exc()
+                pass
             return False
         return True
 def detect_media_type(data: bytes, url: str) -> str:
@@ -12550,7 +12870,7 @@ async def _safe_delete_user_message(message: types.Message):
         if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
             await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 
 @dp.message(Command("deanon"))
 async def cmd_deanon(message: Message, board_id: str | None, stream: str = 'ru'):
@@ -12726,7 +13046,7 @@ async def cmd_zaputin(message: types.Message, board_id: str | None, stream: str 
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 @dp.message(Command("app"))
 async def cmd_app(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -12763,7 +13083,7 @@ async def cmd_suka_blyat(message: types.Message, board_id: str | None, stream: s
         try:
             await message.delete()
         except (TelegramBadRequest, TelegramForbiddenError):
-            import traceback; traceback.print_exc()
+            pass
         return
     if not await check_cooldown(message, board_id):
         return
@@ -12831,7 +13151,7 @@ async def cmd_suka_blyat(message: types.Message, board_id: str | None, stream: s
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 @dp.message(Command("say"))
 async def cmd_admin_say(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -12919,7 +13239,7 @@ async def cmd_troll_toggle(message: Message, board_id: str | None, stream: str =
         try:
             target_id = int(parts[1])
         except ValueError:
-            import traceback; traceback.print_exc()
+            pass
 
     if not target_id:
         await message.answer("⚠️ Ответьте на сообщение юзера или укажите его ID: <code>/troll &lt;ID&gt;</code>", parse_mode="HTML")
@@ -13098,7 +13418,7 @@ async def cmd_togglereactions(message: types.Message, board_id: str | None, stre
         await message.answer(response_text, parse_mode="HTML")
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        import traceback; traceback.print_exc()
+        pass
 @dp.message(Command("reactions"))
 async def cmd_reactions(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -13175,7 +13495,7 @@ async def cmd_reactions(message: types.Message, board_id: str | None, stream: st
         await message.answer(response_text, parse_mode="HTML")
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        import traceback; traceback.print_exc()
+        pass
 @dp.message(Command("filter"))
 async def cmd_filter(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -13282,7 +13602,7 @@ async def admin_save_all(callback: types.CallbackQuery):
     try:
         await callback.answer(start_txt)
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
     try:
         db = await get_pool()
         await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
@@ -13337,7 +13657,7 @@ async def admin_stats_board(callback: types.CallbackQuery):
     try:
         await callback.message.edit_text(stats_text, reply_markup=keyboard)
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
     try: await callback.answer()
     except TelegramBadRequest: pass
 @dp.callback_query(F.data.startswith("restrictions_"))
@@ -13477,7 +13797,7 @@ async def admin_filter_list(callback: types.CallbackQuery):
     try:
         await callback.message.edit_text(final_text, parse_mode="HTML", reply_markup=keyboard)
     except TelegramBadRequest: 
-        import traceback; traceback.print_exc()
+        pass
     try: await callback.answer()
     except TelegramBadRequest: pass
 @dp.callback_query(F.data.startswith("reaction_bans_"))
@@ -13517,7 +13837,7 @@ async def admin_reaction_bans(callback: types.CallbackQuery):
     try:
         await callback.message.edit_text(response_text, parse_mode="HTML", reply_markup=keyboard)
     except TelegramBadRequest: 
-        import traceback; traceback.print_exc()
+        pass
     try: await callback.answer()
     except TelegramBadRequest: pass
 @dp.callback_query(F.data.startswith("admin_main_"))
@@ -13607,7 +13927,7 @@ async def admin_back_to_main(callback: types.CallbackQuery):
     try:
         await callback.answer()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 async def get_author_id_by_reply(msg: types.Message) -> int | None:
     if not msg.reply_to_message:
         return None
@@ -13682,7 +14002,7 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
     try:
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        import traceback; traceback.print_exc()
+        pass
 
 @dp.message(Command("ban"))
 async def cmd_ban(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -13865,7 +14185,7 @@ async def cmd_restrict_anime(message: Message, board_id: str | None, stream: str
     try:
         await message.delete()
     except Exception:
-        import traceback; traceback.print_exc()
+        pass
 @dp.message(Command("shadowmute_threads"))
 async def cmd_shadowmute_threads(message: Message, board_id: str | None, stream: str = 'ru'):
 
@@ -13931,7 +14251,7 @@ async def cmd_delete_thread(message: Message, board_id: str | None, stream: str 
         try:
             await message.delete()
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         return
 
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -14000,7 +14320,7 @@ async def cmd_delete_thread(message: Message, board_id: str | None, stream: str 
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 @dp.message(Command("sdel", "swipe"))
 async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -14054,7 +14374,7 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
     try:
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        import traceback; traceback.print_exc()
+        pass
 @dp.message(Command("unban"))
 async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id):
@@ -14069,7 +14389,7 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
         try:
             target_id = int(args[1])
         except ValueError:
-            import traceback; traceback.print_exc()
+            pass
             
     if target_id is None:
         if lang == 'en': usage = "Usage: <code>/unban &lt;user_id&gt;</code> or reply to user message."
@@ -14106,77 +14426,57 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
 async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
+    target_msg = message.reply_to_message
+
+    if not target_msg:
+        try: await message.delete()
+        except: pass
+        return
+
     admin_status = is_admin(user_id, board_id)
     is_janitor = False
     janitor_deletes_left = 0
     active_items = {}
-    db = None
+    
     if not admin_status:
-        import json
-        import time
         db = await get_pool()
-        async with db.execute(
-            "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)
-        ) as c:
-            row = await c.fetchone()
-            ai_str = row[0] if row and row[0] else "{}"
-        try:
-            active_items = json.loads(ai_str)
-        except Exception:
-            active_items = {}
-        janitor_until = active_items.get("janitor_until", 0)
-        janitor_deletes_left = active_items.get("janitor_deletes_left", 0)
-        if janitor_until > time.time() and janitor_deletes_left > 0:
-            is_janitor = True
-    if not admin_status and not is_janitor:
-        return
-    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    if not message.reply_to_message:
-        msg = "Reply to a message: <code>/del</code>" if lang == 'en' else               ("返信して使ってください: <code>/del</code>" if lang == 'jp' else                "⚠️ Ответьте на сообщение, которое хотите удалить: <code>/del</code>")
-        await message.answer(msg, parse_mode="HTML")
-        return
-    post_num = None
-    async with storage_lock:
-        key = (message.chat.id, message.reply_to_message.message_id)
-        post_num = message_to_post.get(key)
-    if not post_num:
-        info = await get_post_info_by_copy(message.chat.id, message.reply_to_message.message_id)
-        if info: post_num = info[0]
-    if post_num is None:
-        err = "Post not found." if lang == 'en' else               ("投稿が見つかりません。" if lang == 'jp' else                "Не нашёл этот пост (возможно, он слишком старый или удалён).")
-        await message.answer(err)
-        return
-    if is_janitor:
-        import json
-        if not db:
-            db = await get_pool()
-        janitor_deletes_left -= 1
-        active_items["janitor_deletes_left"] = janitor_deletes_left
         async with db_lock:
-            await db.execute(
-                "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                (json.dumps(active_items), user_id, board_id)
-            )
-            await db.commit()
-    deleted_count = await delete_single_post(post_num, message.bot)
-    role_str = "Админ" if admin_status else "Дворник"
-    await log_global_event('bot', f"🗑️ DEL: {role_str} {user_id} удалил пост #{post_num} на /{board_id}/ (и {deleted_count} копий)")
-    if lang == 'en':
-        resp = f"🗑 Post #{post_num} deleted ({deleted_count} copies)."
-        if is_janitor:
-            resp += f" 🧹 Janitor Ticket: {janitor_deletes_left} deletes remaining."
-    elif lang == 'jp':
-        resp = f"🗑 投稿 #{post_num} とコピー ({deleted_count}件) を削除しました。"
-        if is_janitor:
-            resp += f" 🧹 掃除員チケット: 残り {janitor_deletes_left} 回。"
-    else:
-        resp = f"🗑 Пост №{post_num} и копии ({deleted_count}) удалены."
-        if is_janitor:
-            resp += f" 🧹 Удалено как Дворник (по Билету). Осталось: {janitor_deletes_left} удалений."
-    await message.answer(resp)
-    try: await message.delete()
-    except Exception: pass
+            async with db.execute(
+                "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)
+            ) as c:
+                row = await c.fetchone()
+                ai_str = row[0] if row and row[0] else "{}"
+            try:
+                active_items = json.loads(ai_str)
+            except Exception:
+                active_items = {}
+            janitor_until = active_items.get("janitor_until", 0)
+            janitor_deletes_left = active_items.get("janitor_deletes_left", 0)
+            if janitor_until > time.time() and janitor_deletes_left > 0:
+                is_janitor = True
+                janitor_deletes_left -= 1
+                active_items["janitor_deletes_left"] = janitor_deletes_left
+                await db.execute(
+                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (json.dumps(active_items), user_id, board_id)
+                )
+                await db.commit()
 
+    if not admin_status and not is_janitor:
+        try: await message.delete()
+        except: pass
+        return
+
+    try:
+        await target_msg.delete()
+    except Exception as e:
+        if admin_status:
+            pass
+
+    try:
+        await message.delete()
+    except:
+        pass
 @dp.message(Command("token"))
 async def cmd_token(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -14218,7 +14518,7 @@ async def cmd_token(message: types.Message, board_id: str | None, stream: str = 
     try:
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError):
-        import traceback; traceback.print_exc()
+        pass
 @dp.message(Command("poll", "opros"))
 async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -14245,7 +14545,7 @@ async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | No
             sent = await message.answer(cooldown_msg)
             spawn_task(delete_message_after_delay(sent, 5))
         except (TelegramForbiddenError, TelegramBadRequest):
-            import traceback; traceback.print_exc()
+            pass
         return
     full_text = message.text or message.caption or ""
     if message.reply_to_message and message.reply_to_message.media_group_id:
@@ -14264,7 +14564,7 @@ async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | No
         try:
             await message.answer(error_text)
         except (TelegramForbiddenError, TelegramBadRequest):
-            import traceback; traceback.print_exc()
+            pass
         return
     command_part, *data_parts = full_text.split('|', 1)
     question_text = command_part.replace("/poll", "").replace("/opros", "").strip()
@@ -14298,7 +14598,7 @@ async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | No
         try:
             await message.answer(usage_text, parse_mode="HTML")
         except (TelegramForbiddenError, TelegramBadRequest):
-            import traceback; traceback.print_exc()
+            pass
         return
     attached_media = None
     reply_to_check = message
@@ -14361,7 +14661,7 @@ async def cmd_poll(message: types.Message, state: FSMContext, board_id: str | No
             await message.answer(err_msg)
             await message.delete()
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
 @dp.callback_query(F.data == "poll_cancel_create", PollCreationStates.waiting_for_confirmation)
 async def cq_poll_cancel_create(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -14380,7 +14680,7 @@ async def cq_poll_cancel_create(callback: types.CallbackQuery, state: FSMContext
         await callback.answer(text) 
         await callback.message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 @dp.callback_query(F.data == "poll_confirm_create", PollCreationStates.waiting_for_confirmation)
 async def cq_poll_confirm_create(callback: types.CallbackQuery, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     """
@@ -14391,7 +14691,7 @@ async def cq_poll_confirm_create(callback: types.CallbackQuery, state: FSMContex
         try:
             await callback.answer("Ошибка: не удалось определить доску.")
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         await state.clear()
         return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -14449,7 +14749,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         try:
             await callback.answer("Какая-то хуйня. Проголосовать не вышло", show_alert=True)
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         return
     user_id = callback.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -14458,7 +14758,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         try:
             await callback.answer()
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         return
     last_poll_vote_time[user_id] = now
     b_data = board_data[board_id]
@@ -14471,7 +14771,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         try:
             await callback.answer(random.choice(success_phrases))
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         return # ВАЖНО: Выходим, не трогая базу данных!
     try:
         parts = callback.data.split('_')
@@ -14481,7 +14781,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         try:
             await callback.answer("Error: Invalid poll data.", show_alert=True)
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         return
     post_updated = False
     content_for_db = None
@@ -14523,7 +14823,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
             if clear_markup:
                 await callback.message.edit_reply_markup(reply_markup=None)
         except (TelegramBadRequest, TelegramForbiddenError):
-            import traceback; traceback.print_exc()
+            pass
         return
 
     if post_updated:
@@ -14533,7 +14833,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
         try:
             await callback.answer(random.choice(phrases))
         except TelegramBadRequest:
-            import traceback; traceback.print_exc()
+            pass
         if content_for_db:
             await update_post_content(post_num, content_for_db)
         async with pending_edit_lock:
@@ -14642,7 +14942,7 @@ async def handle_unknown_command_spam(message: types.Message):
             try:
                 await message.delete()
             except TelegramBadRequest:
-                import traceback; traceback.print_exc()
+                pass
             return
     unknown_command_tracker[user_id].append(current_time)
     command_timestamps = [t for t in unknown_command_tracker[user_id] if isinstance(t, (int, float))]
@@ -14659,11 +14959,11 @@ async def handle_unknown_command_spam(message: types.Message):
                 msg = "Too many unknown commands. Wait 20 seconds."
             await message.answer(msg, disable_notification=True)
         except (TelegramForbiddenError, TelegramBadRequest):
-            import traceback; traceback.print_exc()
+            pass
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 
 @dp.message(F.audio, ~F.media_group_id)
 async def handle_audio(message: Message, board_id: str | None, stream: str = 'ru'): 
@@ -14924,11 +15224,11 @@ async def handle_poll(message: types.Message, board_id: str | None, stream: str 
     try:
         await message.answer(text, parse_mode="HTML")
     except (TelegramForbiddenError, TelegramBadRequest):
-        import traceback; traceback.print_exc()
+        pass
     try:
         await message.delete()
     except TelegramBadRequest:
-        import traceback; traceback.print_exc()
+        pass
 
 async def database_cleanup_task():
     """
@@ -15061,7 +15361,7 @@ async def periodic_board_summary():
 
             logger.debug(f"📝 [PERIODIC SUMMARY] paragraphs={auto_paragraph_count} blat={is_blat} chunk_len={len(chunk)} chars")
             hf_token = os.getenv("HF_TOKEN")
-            summary = await summarize_text_with_hf(prompt, chunk, hf_token)
+            summary = await summarize_text_with_hf(prompt, chunk)
             raw_len = len(summary) if summary else 0
             summary = clean_html_for_tg(summary)
             logger.debug(f"📝 [PERIODIC SUMMARY] raw_len={raw_len} cleaned_len={len(summary) if summary else 0}")
@@ -15462,7 +15762,7 @@ async def event_loop_health_tick_task():
                 await asyncio.to_thread(_write_heartbeat_payload, payload)
                 event_loop_last_tick = time.time()
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
         await asyncio.sleep(1)
 
 def _write_heartbeat_payload(payload: dict) -> None:
@@ -15609,7 +15909,7 @@ def _event_loop_stall_watchdog_loop():
                 try:
                     print(f"⚠️ [WATCHDOG] Failed to write event-loop stall dump: {type(exc).__name__}: {exc}")
                 except Exception:
-                    import traceback; traceback.print_exc()
+                    pass
         shutdown_event.wait(5)
 
 def start_event_loop_stall_watchdog():
@@ -15655,6 +15955,8 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "site_posts_broadcaster": lambda: site_posts_broadcaster(),
         "reaction_queue_processor": lambda: reaction_queue_processor(),
         "site_reaction_processor": lambda: site_reaction_processor(),
+        "market_event_generator": lambda: market_event_generator() if callable(market_event_generator) else asyncio.sleep(0),
+
         "mode_auto_disabler": lambda: mode_auto_disabler(),
         "periodic_thread_digest": lambda: periodic_thread_digest(),
         "periodic_board_summary": lambda: periodic_board_summary(),
@@ -15910,6 +16212,7 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="nsfw", description="Включить/выключить NSFW"),
         BotCommand(command="hide", description="Скрыть конкретный пост"),
         BotCommand(command="invite", description="Пригласить на доску"),
+        BotCommand(command="invite_pic", description="Картинка-инвайт с QR-кодом"),
         BotCommand(command="whisper", description="Анонимное сообщение"),
         BotCommand(command="work", description="Биржа труда (Заработок Шекелей)"),
         BotCommand(command="partyvan", description="Вызвать пативэн (реплай)"),
@@ -16029,7 +16332,7 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
                 parse_mode="HTML"
             )
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
 
 @dp.callback_query(F.data.startswith("rep:"))
 async def process_report_action(callback: types.CallbackQuery, board_id: str | None):
@@ -16054,7 +16357,7 @@ async def process_report_action(callback: types.CallbackQuery, board_id: str | N
         try:
             await callback.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
         await callback.message.edit_text(callback.message.html_text + "\n\n<i>🗑 Пост удален модератором.</i>", parse_mode="HTML")
         await callback.answer("Пост удален")
         return
@@ -16078,7 +16381,7 @@ async def process_report_action(callback: types.CallbackQuery, board_id: str | N
         try:
             await callback.bot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
         except Exception:
-            import traceback; traceback.print_exc()
+            pass
             
         await callback.message.edit_text(callback.message.html_text + f"\n\n<i>🔨 Автор забанен на {duration_hours}ч модератором.</i>", parse_mode="HTML")
         await callback.answer(f"Пользователь забанен на {duration_hours}ч")
@@ -16190,7 +16493,7 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
     try:
         await callback.message.edit_text(text, reply_markup=get_help_keyboard(cat, board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
     except Exception:
-        import traceback; traceback.print_exc()
+        pass
     await callback.answer()
 
 try:
@@ -16482,7 +16785,7 @@ async def main():
                 await session.close()
                 print("✅ Общая HTTP сессия закрыта.")
             except Exception:
-                import traceback; traceback.print_exc()
+                pass
             if hasattr(session, '_connector') and session._connector and not session._connector.closed:
                 await session._connector.close()
                 print("✅ Коннектор закрыт.")

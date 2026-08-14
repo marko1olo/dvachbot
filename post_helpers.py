@@ -158,7 +158,7 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                 if row[1] and row[2] and int(time.time()) < row[2]:
                     prefix_str = f"<b>{row[1]}</b> "
         if has_poop:
-            custom_prefix = "≡ƒÆ⌐ " + prefix_str
+            custom_prefix = "💩 " + prefix_str
         else:
             custom_prefix = prefix_str
                     
@@ -265,7 +265,7 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
         
     hf_token = os.getenv("HF_TOKEN")
     try:
-        summary = await summarize_text_with_hf(prompt, chunk, hf_token)
+        summary = await summarize_text_with_hf(prompt, chunk)
         summary = clean_html_for_tg(summary)
     except Exception as e:
         print(f"[auto-roast] Error: {e}")

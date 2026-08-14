@@ -189,7 +189,7 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
         
     hf_token = os.getenv("HF_TOKEN")
     try:
-        summary = await summarize_text_with_hf(prompt, chunk, hf_token)
+        summary = await summarize_text_with_hf(prompt, chunk)
         summary = clean_html_for_tg(summary)
     except Exception as e:
         print(f"[auto-roast] Error: {e}")

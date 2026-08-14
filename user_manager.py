@@ -311,10 +311,13 @@ async def cmd_invite(message: types.Message, board_id: str | None, stream: str =
 
     if lang == 'en':
         source_list = INVITE_TEXTS_EN
+        pic_btn = "🖼 Generate Picture + QR"
     elif lang == 'jp':
         source_list = INVITE_TEXTS_JP
+        pic_btn = "🖼 QR画像作成"
     else:
         source_list = INVITE_TEXTS
+        pic_btn = "🖼 Картинка с QR"
     invite_text_raw = random.choice(source_list)
     invite_text = invite_text_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
     
@@ -332,7 +335,10 @@ async def cmd_invite(message: types.Message, board_id: str | None, stream: str =
         site_btn = "🌐 Веб-версия"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=site_btn, url=site_url)]
+        [
+            InlineKeyboardButton(text=site_btn, url=site_url),
+            InlineKeyboardButton(text=pic_btn, callback_data=f"gen_invite_pic:{board_id}")
+        ]
     ])
 
     await message.answer(
@@ -340,7 +346,104 @@ async def cmd_invite(message: types.Message, board_id: str | None, stream: str =
         parse_mode="HTML",
         reply_markup=keyboard
     )
-    await message.delete()
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+@router.message(Command("invite_pic", "picinvite", "invitepic"))
+async def cmd_invite_pic(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    board_username = BOARD_CONFIG[board_id]['username']
+    site_url = f"https://tgach.top/{board_id}/"
+
+    if lang == 'en':
+        source_list = INVITE_TEXTS_EN
+        caption_header = "📨 <b>Graphic invite for this board:</b>"
+        site_btn = "🌐 Web Version"
+    elif lang == 'jp':
+        source_list = INVITE_TEXTS_JP
+        caption_header = "📨 <b>この板の画像招待状:</b>"
+        site_btn = "🌐 ウェブ版"
+    else:
+        source_list = INVITE_TEXTS
+        caption_header = "🖼 <b>Картинка-приглашение с QR-кодом:</b>"
+        site_btn = "🌐 Веб-версия"
+
+    invite_text_raw = random.choice(source_list)
+    invite_text = invite_text_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
+
+    from invite_image_generator import generate_invite_image_async
+    from aiogram.types import BufferedInputFile
+
+    try:
+        buf = await generate_invite_image_async(board_id=board_id, bot_username=board_username, custom_text=invite_text)
+        input_file = BufferedInputFile(buf.getvalue(), filename=f"invite_{board_id}.jpg")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=site_btn, url=site_url)]
+        ])
+        await message.answer_photo(
+            photo=input_file,
+            caption=f"{caption_header}\n\n<code>{escape_html(invite_text)}</code>",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        runtime_logger.error(f"cmd_invite_pic error: {e}")
+        await message.answer(f"<code>{escape_html(invite_text)}</code>", parse_mode="HTML")
+    finally:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+@router.callback_query(F.data.startswith("gen_invite_pic:"))
+async def callback_gen_invite_pic(callback: types.CallbackQuery, board_id: str | None = None, stream: str = 'ru'):
+    target_board = callback.data.split(":", 1)[1] if ":" in callback.data else (board_id or "b")
+    board_username = BOARD_CONFIG.get(target_board, {}).get('username', '@dvach_chatbot')
+    lang = stream if ENABLE_MULTILANG else ('en' if target_board == 'int' else 'ru')
+    site_url = f"https://tgach.top/{target_board}/"
+
+    if lang == 'en':
+        source_list = INVITE_TEXTS_EN
+        caption_header = "📨 <b>Graphic invite for this board:</b>"
+        site_btn = "🌐 Web Version"
+    elif lang == 'jp':
+        source_list = INVITE_TEXTS_JP
+        caption_header = "📨 <b>この板の画像招待状:</b>"
+        site_btn = "🌐 ウェブ版"
+    else:
+        source_list = INVITE_TEXTS
+        caption_header = "🖼 <b>Картинка-приглашение с QR-кодом:</b>"
+        site_btn = "🌐 Веб-версия"
+
+    invite_text_raw = random.choice(source_list)
+    invite_text = invite_text_raw.replace("@dvach_chatbot", board_username).replace("@tgchan_chatbot", board_username)
+
+    from invite_image_generator import generate_invite_image_async
+    from aiogram.types import BufferedInputFile
+
+    try:
+        await callback.answer("Генерирую картинку...")
+    except Exception:
+        pass
+
+    try:
+        buf = await generate_invite_image_async(board_id=target_board, bot_username=board_username, custom_text=invite_text)
+        input_file = BufferedInputFile(buf.getvalue(), filename=f"invite_{target_board}.jpg")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=site_btn, url=site_url)]
+        ])
+        await callback.message.answer_photo(
+            photo=input_file,
+            caption=f"{caption_header}\n\n<code>{escape_html(invite_text)}</code>",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        runtime_logger.error(f"callback_gen_invite_pic error: {e}")
+
 
 @router.message(Command("queues"))
 async def cmd_check_queues(message: types.Message, board_id: str | None, stream: str = 'ru'):

@@ -38,7 +38,8 @@ logger = logging.getLogger("neuro_mod")
 
 # === НАСТРОЙКИ ===
 PROXY_URL = os.getenv("PROXY_URL") or os.getenv("HTTPS_PROXY") or None
-GROQ_MODELS = ["llama-3.3-70b-versatile", "qwen/qwen3.6-27b", "llama-3.1-8b-instant"]
+# Groq Models for DeepCheck (MUST BE VISION MODELS!)
+GROQ_MODELS = ["qwen/qwen3.6-27b"]
 GROQ_MODEL = GROQ_MODELS[0]
 GROQ_TIMEOUT = 45.0
 
@@ -101,7 +102,6 @@ async def _safe_groq_json(messages, max_tokens=300):
                                 "messages": messages,
                                 "max_tokens": max_tokens,
                                 "temperature": 0.1,
-                                "response_format": {"type": "json_object"},
                             },
                         )
 

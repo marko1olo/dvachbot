@@ -10881,6 +10881,16 @@ const WSManager = {
         }
     }
 };
+
+function getBrokenMediaPlaceholderHtml(originalUrl = '') {
+    const dlLink = originalUrl ? `<a href="${originalUrl}" target="_blank" class="broken-media-dl" style="color:var(--accent-primary, #e25822); text-decoration:none; font-size:0.75rem; margin-top:4px; display:inline-flex; align-items:center; gap:3px;">📂 Скачать оригинал</a>` : '';
+    return `<div class="broken-media-card" style="display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; height:100%; min-height:85px; padding:8px; box-sizing:border-box; text-align:center;">
+        <img src="/static/img/mascot/mascot_confused.png" class="broken-mascot" style="max-height:48px; width:auto; opacity:0.75; object-fit:contain;" alt="Файл недоступен">
+        <span style="font-size:0.75rem; color:var(--text-secondary, #888); margin-top:4px;">Файл недоступен</span>
+        ${dlLink}
+    </div>`;
+}
+
 const PostRenderer = {
     create(data, type) {
         const filterRes = (typeof FilterManager !== 'undefined') ? FilterManager.check(data) : null;
@@ -11014,9 +11024,10 @@ const PostRenderer = {
                 let thumbCandidate = (f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : (f.original_file_id ? `/files/${f.original_file_id}` : (f.thumbnail_url || f.original_url))) || null;
 
                 if (typeof FailedMediaCache !== 'undefined' && url && FailedMediaCache.isFailed(url)) {
-                    imgContent += `<div class="file-thumb broken-media" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+                    imgContent += `<div class="file-thumb broken-media">${getBrokenMediaPlaceholderHtml(url)}</div>`;
                     return;
                 }
+
                 if (thumbCandidate && typeof FailedMediaCache !== 'undefined' && FailedMediaCache.isFailed(thumbCandidate)) {
                     thumbCandidate = url;
                 }
@@ -11251,7 +11262,7 @@ const PostRenderer = {
             const thumbUrl = (f.thumbnail_file_id ? `/files/${f.thumbnail_file_id}` : (f.original_file_id ? `/files/${f.original_file_id}` : (f.thumbnail_url || f.original_url))) || "";
             
             if (typeof FailedMediaCache !== 'undefined' && ((mediaUrl && FailedMediaCache.isFailed(mediaUrl)) || (thumbUrl && FailedMediaCache.isFailed(thumbUrl)))) {
-                thumbHtml = `<div class="catalog-thumb broken-media" style="background-color: #1e1e1e; display:flex; align-items:center; justify-content:center;"><span style="font-size:2em">⚠️</span></div>`;
+                thumbHtml = `<div class="catalog-thumb broken-media" style="background-color: rgba(0,0,0,0.25); display:flex; align-items:center; justify-content:center;"><img src="/static/img/mascot/mascot_confused.png" style="max-height:48px; width:auto; opacity:0.6;" alt="Недоступно"></div>`;
             } else if (isVid) {
                 const vidUrl = mediaUrl;
                 // Use overlay img (NOT poster=) to avoid browser black rect on 404
@@ -11374,7 +11385,7 @@ window.initializePostFeatures = function(el) {
                 if (parent) {
                     parent.classList.remove('is-loading');
                     parent.classList.add('broken-media');
-                    parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+                    parent.innerHTML = getBrokenMediaPlaceholderHtml(src);
                 } else {
                     img.classList.add('broken-final');
                     img.style.display = 'none';
@@ -11474,7 +11485,7 @@ function handleImageError(img) {
         if (parent) {
             parent.classList.remove('is-loading');
             parent.classList.add('broken-media');
-            parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+            parent.innerHTML = getBrokenMediaPlaceholderHtml(originalUrl);
         } else {
             img.style.display = 'none';
         }
@@ -11527,25 +11538,15 @@ function handleImageError(img) {
     else if (currentSrc.includes("catbox.moe")) failedType = "catbox";
     else if (currentSrc.includes("0x0.st")) failedType = "0x0";
     else if (currentSrc.includes("telegram.org")) failedType = "telegram";
+    else if (currentSrc.includes("huggingface.co")) failedType = "huggingface";
 
-    const isLocalFile = currentSrc.includes("/files/") || originalUrl.includes("/files/") || !failedType;
-
-    if (isLocalFile) {
-        if (typeof FailedMediaCache !== 'undefined') {
-            FailedMediaCache.markFailed(originalUrl);
-            FailedMediaCache.markFailed(currentSrc);
-        }
-        renderStaticError();
-        return;
-    }
-
-    let skipped = img.dataset.skippedHosts ? img.dataset.skippedHosts.split(",") : [];
+    let skipped = img.dataset.skippedHosts ? img.dataset.skippedHosts.split(",").filter(Boolean) : [];
     if (failedType && !skipped.includes(failedType)) {
         skipped.push(failedType);
     }
     img.dataset.skippedHosts = skipped.join(",");
 
-    if (skipped.length >= 6) {
+    if (skipped.length >= 6 || (!failedType && skipped.length >= 2)) {
         if (typeof FailedMediaCache !== 'undefined') {
             FailedMediaCache.markFailed(originalUrl);
             FailedMediaCache.markFailed(currentSrc);
@@ -11555,7 +11556,7 @@ function handleImageError(img) {
         if (parent) {
             parent.classList.remove('is-loading');
             parent.classList.add('broken-media');
-            parent.innerHTML = `<div class="broken-media" title="Media failed"><a href="${originalUrl}" target="_blank" style="color:#fff;text-decoration:none;">📂 Скачать</a></div>`;
+            parent.innerHTML = getBrokenMediaPlaceholderHtml(originalUrl);
         }
         return;
     }
@@ -11563,11 +11564,19 @@ function handleImageError(img) {
     delete img.dataset.finalError;
     try {
         const loc = (typeof window !== 'undefined' && window.location) ? window.location.href : 'http://localhost';
-        const urlObj = new URL(originalUrl, loc);
-        urlObj.searchParams.set("skip", img.dataset.skippedHosts);
+        const targetUrl = originalUrl.includes('/files/') ? originalUrl : (img.dataset.src || currentSrc);
+        const urlObj = new URL(targetUrl, loc);
+        if (img.dataset.skippedHosts) {
+            urlObj.searchParams.set("skip", img.dataset.skippedHosts);
+        }
         const newUrl = urlObj.toString();
 
-        console.log(`[MediaRescue] Redirect failed for type: ${failedType}. Swapping to skip parameter: ${img.dataset.skippedHosts}`);
+        if (newUrl === currentSrc && !failedType) {
+            renderStaticError();
+            return;
+        }
+
+        console.log(`[MediaRescue] Redirect failed for type: ${failedType || 'local'}. Swapping to skip parameter: ${img.dataset.skippedHosts}`);
 
         if (img.tagName === 'VIDEO') {
             img.onerror = () => handleImageError(img);
@@ -14397,7 +14406,7 @@ const SmartLoader = {
                 if (parent) {
                     parent.classList.remove('is-loading');
                     parent.classList.add('broken-media');
-                    parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+                    parent.innerHTML = getBrokenMediaPlaceholderHtml(src);
                 }
                 return;
             }
@@ -14415,7 +14424,7 @@ const SmartLoader = {
             if (parent) {
                 parent.classList.remove('is-loading');
                 parent.classList.add('broken-media');
-                parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+                parent.innerHTML = getBrokenMediaPlaceholderHtml(targetSrc);
             }
             return;
         }
@@ -14439,7 +14448,7 @@ const SmartLoader = {
                 if (parent) {
                     parent.classList.remove('is-loading');
                     parent.classList.add('broken-media');
-                    parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+                    parent.innerHTML = getBrokenMediaPlaceholderHtml(targetSrc);
                 }
             }
             if (parent) parent.classList.remove('is-loading');
@@ -14521,7 +14530,7 @@ const SmartLoader = {
                 vid.onerror = () => {
                     const errDiv = document.createElement('div');
                     errDiv.className = 'broken-media';
-                    errDiv.innerHTML = '<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>';
+                    errDiv.innerHTML = getBrokenMediaPlaceholderHtml(img.dataset.src || img.src);
                     vid.replaceWith(errDiv);
                 };
                 img.replaceWith(vid);
@@ -14535,7 +14544,7 @@ const SmartLoader = {
                 } else if (parent) {
                     parent.classList.remove('is-loading');
                     parent.classList.add('broken-media');
-                    parent.innerHTML = `<div class="broken-media" title="Media Unavailable" style="display:flex; align-items:center; justify-content:center; width:100%; height:100%; min-height:80px; background:#1e1e1e; color:#888; font-size:1.2em;">⚠️ Media Unavailable</div>`;
+                    parent.innerHTML = getBrokenMediaPlaceholderHtml(img.dataset.src || img.src);
                 }
             }
         }

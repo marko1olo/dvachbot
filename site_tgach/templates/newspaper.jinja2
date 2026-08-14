@@ -310,15 +310,17 @@
                             {% if post.content.files %}
                                 <div class="photo-card">
                                     {% for file in post.content.files %}
+                                        {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
                                         {% if file.type in ['image', 'photo'] %}
-                                            <img src="{{ file.original_url }}" alt="Иллюстрация события">
+                                            <img src="{{ file_orig_src }}" alt="Иллюстрация события" loading="lazy" referrerpolicy="no-referrer">
                                         {% elif file.type in ['video', 'gif'] %}
-                                            <video src="{{ file.original_url }}" controls muted playsinline></video>
+                                            <video src="{{ file_orig_src }}" controls muted playsinline></video>
                                         {% endif %}
                                     {% endfor %}
                                     <div class="photo-caption">Рис. {{ loop.index }} — Медиа-материалы к посту #{{ post.id }}</div>
                                 </div>
                             {% endif %}
+
                         </div>
                     {% endfor %}
                 {% else %}

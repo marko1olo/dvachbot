@@ -11,7 +11,7 @@ $sshOptions = @(
     "-4"
     "-o ServerAliveInterval=10"
     "-o ServerAliveCountMax=3"
-    "-o ExitOnForwardFailure=no" # <--- Твоя новая опция для теста
+    "-o ExitOnForwardFailure=yes" # <--- Must be yes to prevent silent failure if port is busy
     "-o StrictHostKeyChecking=no"
     "-o TCPKeepAlive=yes"
     "-o ConnectTimeout=10"

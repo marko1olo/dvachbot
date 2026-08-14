@@ -128,20 +128,64 @@ def _generate_chart_1(thirty_days_ago, c, images):
         save_chart(images, '1_posts.png')
 
 def _generate_chart_2(c, images):
-    # 2. Уникальные шизы (Weekly Active Users)
+    # 2. Уникальные шизы (Weekly Active Users) — улучшенное
     c.execute('''
-        SELECT strftime('%Y-%W', datetime(timestamp, 'unixepoch', 'localtime')) as week, COUNT(DISTINCT author_id) as cnt
+        SELECT strftime('%Y-%W', datetime(timestamp, 'unixepoch', 'localtime')) as week,
+               COUNT(DISTINCT author_id) as cnt
         FROM Posts
         WHERE timestamp > ?
         GROUP BY week ORDER BY week
-    ''', (time.time() - (60 * 24 * 3600),)) # 60 days to show weekly trends better
+    ''', (time.time() - (60 * 24 * 3600),))
     data = c.fetchall()
     if data:
+        import numpy as _np
         df = pd.DataFrame(data)
-        fig, ax = plt.subplots(figsize=(10, 5))
-        sns.barplot(data=df, x='week', y='cnt', color="#00ffcc", ax=ax)
-        plt.title('2. Размер онлайна (Уникальные шизы за НЕДЕЛЮ)', fontsize=16, fontweight='bold', color="#00ffcc")
-        plt.xticks(rotation=45)
+        weeks = df['week'].tolist()
+        counts = df['cnt'].tolist()
+        xs = list(range(len(weeks)))
+
+        # Gradient bars: color by value (low=cool, high=warm)
+        cmap_wau = plt.get_cmap('YlGnBu')
+        max_c = max(counts) or 1
+        bar_colors = [cmap_wau(0.3 + 0.65 * v / max_c) for v in counts]
+
+        fig, ax = plt.subplots(figsize=(12, 5))
+        bars = ax.bar(xs, counts, color=bar_colors, edgecolor='#0d1117', linewidth=0.7, zorder=2)
+
+        # Trend line (rolling 3)
+        roll3 = pd.Series(counts).rolling(3, min_periods=1).mean().tolist()
+        ax.plot(xs, roll3, color='#ff6e40', linewidth=2.5, zorder=3, label='Тренд 3 нед')
+
+        # Annotate all bars
+        for i, (x, v) in enumerate(zip(xs, counts)):
+            ax.text(x, v + max_c * 0.01, str(v), ha='center', va='bottom',
+                    fontsize=8, color='#e6edf3', fontweight='bold')
+
+        # Mark max & min
+        idx_max = counts.index(max(counts))
+        idx_min = counts.index(min(counts))
+        ax.annotate(f'Пик: {counts[idx_max]}',
+                    xy=(idx_max, counts[idx_max]), xytext=(idx_max, counts[idx_max] + max_c * 0.08),
+                    arrowprops=dict(arrowstyle='->', color='#39d353', lw=1.5),
+                    fontsize=8.5, color='#39d353', ha='center', fontweight='bold')
+        ax.annotate(f'Мин: {counts[idx_min]}',
+                    xy=(idx_min, counts[idx_min]), xytext=(idx_min, counts[idx_min] + max_c * 0.12),
+                    arrowprops=dict(arrowstyle='->', color='#f78166', lw=1.5),
+                    fontsize=8.5, color='#f78166', ha='center', fontweight='bold')
+
+        ax.set_xticks(xs)
+        ax.set_xticklabels([w.replace('20', '') for w in weeks], rotation=40, ha='right', fontsize=8)
+        ax.set_ylabel('Уникальных авторов в неделю')
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{int(v):,}'))
+        ax.legend(fontsize=8, loc='upper left')
+        ax.set_title('2. Размер онлайна (Уникальные шизы за НЕДЕЛЮ)',
+                     fontsize=15, fontweight='bold', color='#58a6ff')
+        # Stats box
+        avg_c = sum(counts) / len(counts)
+        ax.text(0.99, 0.97,
+                f'Ср. активных: {avg_c:.0f}/нед  |Пик: {max(counts)}  |Мин: {min(counts)}',
+                transform=ax.transAxes, fontsize=8, color='#8b949e',
+                ha='right', va='top', style='italic')
         plt.tight_layout()
         save_chart(images, '2_wau.png')
 
@@ -250,34 +294,73 @@ def _generate_chart_5(thirty_days_ago, c, images):
         save_chart(images, '5_provocateurs.png', bbox_inches='tight')
 
 def _generate_chart_6(thirty_days_ago, c, images):
-    # 6. Гистограмма длины постов (Одноклеточные vs Пасты)
-    c.execute('''
-        SELECT content FROM Posts WHERE timestamp > ?
-    ''', (thirty_days_ago,))
+    # 6. Гистограмма длины постов — улучшенное
+    c.execute('SELECT content FROM Posts WHERE timestamp > ?', (thirty_days_ago,))
     data = c.fetchall()
     if data:
         lengths = []
         for r in data:
             try:
-                content_dict = json.loads(r['content'])
-                text = content_dict.get('text') or content_dict.get('caption') or ''
+                cd = json.loads(r['content'])
+                text = cd.get('text') or cd.get('caption') or ''
                 if text:
                     lengths.append(len(text))
-            except:
+            except Exception:
                 pass
 
         if lengths:
-            df = pd.DataFrame({'length': lengths})
-            df = df[df['length'] < 1000]
-            fig, ax = plt.subplots(figsize=(10, 5))
-            sns.histplot(df['length'], bins=50, color="#cc00ff", kde=True, ax=ax)
-            plt.title('6. Формат общения (Длина постов)', fontsize=16, fontweight='bold', color="#cc00ff")
-            plt.xlabel('Длина текста (символы)')
-            plt.ylabel('Количество постов')
-            plt.axvline(x=20, color='r', linestyle='--')
-            plt.text(25, ax.get_ylim()[1]*0.9, 'Одноклеточные (<20)', color='r')
-            plt.axvline(x=300, color='g', linestyle='--')
-            plt.text(310, ax.get_ylim()[1]*0.8, 'Пасто-писатели (>300)', color='g')
+            import numpy as _np
+            arr = _np.array(lengths)
+            arr_clipped = arr[arr < 800]  # tighter clip to show detail
+
+            fig, ax = plt.subplots(figsize=(12, 5))
+            # Zone fills
+            ax.axvspan(0,   20,  alpha=0.08, color='#ff3366', zorder=0)
+            ax.axvspan(20,  150, alpha=0.06, color='#58a6ff', zorder=0)
+            ax.axvspan(150, 800, alpha=0.06, color='#39d353', zorder=0)
+
+            n, bins, patches = ax.hist(arr_clipped, bins=60, color='#cc00ff',
+                                       edgecolor='#0d1117', linewidth=0.4, zorder=2)
+
+            # Color bins by zone
+            for patch, left in zip(patches, bins[:-1]):
+                if left < 20:  patch.set_facecolor('#ff3366')
+                elif left < 150: patch.set_facecolor('#9933ff')
+                else: patch.set_facecolor('#39d353')
+
+            # Percentile lines
+            p50  = _np.percentile(arr, 50)
+            p75  = _np.percentile(arr, 75)
+            p90  = _np.percentile(arr, 90)
+            for pv, label, col in [(p50, f'Медиан\n{p50:.0f}сим', '#ffcc00'),
+                                   (p75, f'75th\n{p75:.0f}сим', '#ff9933'),
+                                   (p90, f'90th\n{p90:.0f}сим', '#ff3366')]:
+                if pv < 800:
+                    ax.axvline(pv, color=col, linestyle='--', linewidth=1.3, alpha=0.85, zorder=3)
+                    ax.text(pv + 4, ax.get_ylim()[1] * 0.85, label,
+                            color=col, fontsize=7.5, va='top', fontweight='bold')
+
+            # Zone labels
+            ax.text(10,  ax.get_ylim()[1] * 0.92, 'Одноклет\n<20', color='#ff3366',
+                    fontsize=7, ha='center', fontweight='bold')
+            ax.text(310, ax.get_ylim()[1] * 0.92, 'Пасты\n>150', color='#39d353',
+                    fontsize=7, ha='center', fontweight='bold')
+
+            # Stats box
+            one_liners = int((arr < 20).sum())
+            pastas     = int((arr > 300).sum())
+            pct_one    = 100 * one_liners / len(arr)
+            pct_pasta  = 100 * pastas / len(arr)
+            stats_txt  = (f'Всего: {len(arr):,}  |Одноклет: {pct_one:.1f}%  '
+                          f'|Пасты: {pct_pasta:.1f}%  |Ср.: {arr.mean():.0f}с')
+            ax.text(0.99, 0.97, stats_txt, transform=ax.transAxes,
+                    fontsize=8, color='#8b949e', ha='right', va='top', style='italic')
+
+            ax.set_xlabel('Длина текста (символы)')
+            ax.set_ylabel('Количество постов')
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{int(v):,}'))
+            ax.set_title('6. Формат общения (Длина постов, 30д)',
+                         fontsize=15, fontweight='bold', color='#cc00ff')
             plt.tight_layout()
             save_chart(images, '6_post_length.png')
 
@@ -352,7 +435,7 @@ def _generate_chart_8(thirty_days_ago, c, images):
 
 def _generate_chart_9(thirty_days_ago, c, images):
     edges_data = None
-    # 11. Граф Социального Пузыря (Echo Chambers)
+    # 11. Граф Социального Пузыря (Эхо-камеры) — улучшенное
     try:
         c.execute('''
             SELECT repl.author_id as replier, orig.author_id as original, COUNT(*) as weight
@@ -374,24 +457,50 @@ def _generate_chart_9(thirty_days_ago, c, images):
                     G.add_edge(u, v, weight=w)
 
             if len(G) > 0:
-                top_nodes = [node for node, degree in sorted(G.degree(), key=lambda x: x[1], reverse=True)[:100]]
+                # Take top-60 by degree — fewer nodes = better spread
+                top_nodes = [node for node, degree in
+                             sorted(G.degree(), key=lambda x: x[1], reverse=True)[:60]]
                 G_sub = G.subgraph(top_nodes).copy()
 
-                communities = nx.community.louvain_communities(G_sub)
+                # Prune weak edges to reduce visual noise
+                weak_edges = [(u, v) for u, v, d in G_sub.edges(data=True) if d['weight'] < 2]
+                G_sub2 = G_sub.copy()
+                G_sub2.remove_edges_from(weak_edges)
+
+                communities = nx.community.louvain_communities(G_sub2, seed=42)
                 community_map = {}
                 for i, comm in enumerate(communities):
                     for node in comm:
                         community_map[node] = i
 
-                colors = [community_map.get(node, 0) for node in G_sub.nodes()]
+                node_colors = [community_map.get(node, 0) for node in G_sub2.nodes()]
+                # Node size = degree
+                node_sizes = [max(40, G_sub2.degree(n) * 25) for n in G_sub2.nodes()]
+                edge_weights_raw = [d['weight'] for _, _, d in G_sub2.edges(data=True)]
+                max_ew = max(edge_weights_raw) if edge_weights_raw else 1
+                edge_widths = [0.4 + 2.0 * (w / max_ew) for w in edge_weights_raw]
 
-                fig, ax = plt.subplots(figsize=(10, 8))
-                pos = nx.spring_layout(G_sub, k=0.18, seed=42)
-
-                nx.draw_networkx_nodes(G_sub, pos, node_size=120, node_color=colors, cmap=plt.cm.tab20, ax=ax)
-                nx.draw_networkx_edges(G_sub, pos, alpha=0.3, edge_color='#555555', ax=ax)
-
-                plt.title('11. Граф Социального Пузыря (Эхо-камеры)', fontsize=16, fontweight='bold', color="#00ffcc")
+                fig, ax = plt.subplots(figsize=(12, 10))
+                ax.set_facecolor('#0d1117')
+                # k=0.5 for better spread, rescale to fill canvas
+                pos = nx.spring_layout(G_sub2, k=0.5, iterations=100, seed=42)
+                nx.draw_networkx_nodes(G_sub2, pos, node_size=node_sizes,
+                                       node_color=node_colors, cmap=plt.cm.tab20,
+                                       ax=ax, alpha=0.92)
+                nx.draw_networkx_edges(G_sub2, pos, width=edge_widths,
+                                       alpha=0.25, edge_color='#58a6ff', ax=ax)
+                # Label only top-15 by degree
+                top15 = sorted(G_sub2.nodes(), key=lambda n: G_sub2.degree(n), reverse=True)[:15]
+                labels = {n: generate_schizo_name(n).split(' ')[0] for n in top15}
+                nx.draw_networkx_labels(G_sub2, pos, labels, font_size=6.5,
+                                        font_color='#e6edf3', ax=ax)
+                # Community count annotation
+                ax.text(0.01, 0.01,
+                        f'Кластеров: {len(communities)}  |Узлов: {len(G_sub2)}  |Связей: {G_sub2.number_of_edges()}',
+                        transform=ax.transAxes, fontsize=8, color='#8b949e', va='bottom')
+                plt.title('11. Граф Социального Пузыря (Эхо-камеры)\n'
+                         'Цвет = кластер, размер = связность, подписаны топ-15',
+                         fontsize=14, fontweight='bold', color='#00ffcc', pad=10)
                 ax.axis('off')
                 plt.tight_layout()
                 save_chart(images, '11_echo_chambers.png')
@@ -513,14 +622,58 @@ def _generate_chart_12(thirty_days_ago, c, images):
                 session_durations.append(duration)
 
             if session_durations:
+                import numpy as _np
                 df_sess = pd.DataFrame({'duration': session_durations})
-                df_sess = df_sess[df_sess['duration'] < 180]
+                flash_count = int((df_sess['duration'] < 1).sum())
+                df_sess = df_sess[(df_sess['duration'] >= 1) & (df_sess['duration'] < 180)]
+                arr_s = df_sess['duration'].values
 
-                fig, ax = plt.subplots(figsize=(10, 5))
-                sns.histplot(df_sess['duration'], bins=30, color="#ff9933", kde=True, ax=ax)
-                plt.title('14. Длина непрерывного залипания (Сессии)', fontsize=16, fontweight='bold', color="#ff9933")
-                plt.xlabel('Длительность сессии (минуты, лимит 15 мин на паузу)')
-                plt.ylabel('Количество сессий')
+                fig, ax = plt.subplots(figsize=(11, 5))
+
+                # Zone fills
+                ax.axvspan(0,  5,   alpha=0.10, color='#58a6ff', zorder=0)  # flash
+                ax.axvspan(5,  30,  alpha=0.07, color='#39d353', zorder=0)  # normal
+                ax.axvspan(30, 180, alpha=0.07, color='#ffa657', zorder=0)  # deep dive
+
+                n, bins, patches = ax.hist(arr_s, bins=40, color='#ff9933',
+                                           edgecolor='#0d1117', linewidth=0.4, zorder=2)
+                # Color bins by zone
+                for patch, left in zip(patches, bins[:-1]):
+                    if left < 5:  patch.set_facecolor('#58a6ff')
+                    elif left < 30: patch.set_facecolor('#ff9933')
+                    else: patch.set_facecolor('#ffa657')
+
+                # Percentile lines
+                p50 = _np.percentile(arr_s, 50)
+                p90 = _np.percentile(arr_s, 90)
+                for pv, label, col in [(p50, f'Медиан\n{p50:.0f}мин', '#ffcc00'),
+                                       (p90, f'90th\n{p90:.0f}мин', '#ff3366')]:
+                    ax.axvline(pv, color=col, linestyle='--', linewidth=1.5, alpha=0.9, zorder=3)
+                    ax.text(pv + 1, ax.get_ylim()[1] * 0.82, label,
+                            color=col, fontsize=8, va='top', fontweight='bold')
+
+                # Zone labels
+                ax.text(2.5, ax.get_ylim()[1]*0.92, 'Мгнов\n<5м', color='#58a6ff',
+                        fontsize=7, ha='center', fontweight='bold')
+                ax.text(17,  ax.get_ylim()[1]*0.92, 'Норма', color='#39d353',
+                        fontsize=7, ha='center', fontweight='bold')
+                ax.text(100, ax.get_ylim()[1]*0.92, 'Длинные залипания', color='#ffa657',
+                        fontsize=7, ha='center', fontweight='bold')
+
+                # Stats box — include original flash count
+                flash_pct  = 100 * (arr_s < 5).sum() / len(arr_s)
+                deep_pct   = 100 * (arr_s > 30).sum() / len(arr_s)
+                total_sess = len(arr_s) + flash_count
+                stats_txt  = (f'Всего: {total_sess:,}  |Мгнов.<1м: {flash_count:,}  '
+                              f'|Длинных: {deep_pct:.1f}%  |Ср.: {arr_s.mean():.1f}мин')
+                ax.text(0.99, 0.97, stats_txt, transform=ax.transAxes,
+                        fontsize=8, color='#8b949e', ha='right', va='top', style='italic')
+
+                ax.set_xlabel('Длительность сессии (минуты, пауза 15 мин = новая сессия)')
+                ax.set_ylabel('Количество сессий')
+                ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{int(v):,}'))
+                ax.set_title('14. Длина непрерывного залипания (Сессии, 30д)',
+                             fontsize=15, fontweight='bold', color='#ff9933')
                 plt.tight_layout()
                 save_chart(images, '14_sessions.png')
     except Exception as e:
@@ -827,7 +980,7 @@ def _generate_chart_16(thirty_days_ago, c, images):
         print(f"Error Chart 18: {e}")
 
 def _generate_chart_17(thirty_days_ago, c, images):
-    # 19. Популярность разделов (Посты по доскам)
+    # 19. Популярность разделов — заменяем pie на hbar
     try:
         c.execute('''
             SELECT board_id, COUNT(*) as cnt
@@ -839,18 +992,44 @@ def _generate_chart_17(thirty_days_ago, c, images):
         board_data = c.fetchall()
         if board_data:
             df_board = pd.DataFrame(board_data, columns=['board_id', 'cnt'])
-            if len(df_board) > 6:
-                top_boards = df_board.head(5).copy()
-                others_cnt = df_board.iloc[5:]['cnt'].sum()
-                others_row = pd.DataFrame([{'board_id': 'other', 'cnt': others_cnt}])
-                df_board_plot = pd.concat([top_boards, others_row], ignore_index=True)
-            else:
-                df_board_plot = df_board
+            total = df_board['cnt'].sum() or 1
+            df_board['pct'] = df_board['cnt'] / total * 100
 
-            fig, ax = plt.subplots(figsize=(8, 8))
-            ax.pie(df_board_plot['cnt'], labels=df_board_plot['board_id'], autopct='%1.1f%%', startangle=140,
-                   colors=sns.color_palette("hls", len(df_board_plot)))
-            plt.title('19. Популярность разделов (Посты по доскам)', fontsize=16, fontweight='bold', color="#ffffff")
+            if len(df_board) > 8:
+                top = df_board.head(7).copy()
+                others_cnt = df_board.iloc[7:]['cnt'].sum()
+                others_pct = df_board.iloc[7:]['pct'].sum()
+                top = pd.concat([top,
+                    pd.DataFrame([{'board_id': 'other', 'cnt': others_cnt, 'pct': others_pct}])],
+                    ignore_index=True)
+                df_board = top
+
+            # Sort ascending for hbar (top at top)
+            df_board = df_board.sort_values('cnt').reset_index(drop=True)
+
+            cmap_b = plt.get_cmap('RdYlGn')
+            max_cnt = df_board['cnt'].max() or 1
+            colors_b = [cmap_b(0.15 + 0.75 * v / max_cnt) for v in df_board['cnt']]
+
+            fig, ax = plt.subplots(figsize=(10, 5))
+            bars_b = ax.barh(df_board['board_id'], df_board['cnt'],
+                             color=colors_b, edgecolor='#0d1117', linewidth=0.6)
+
+            for bar, row in zip(bars_b, df_board.itertuples()):
+                ax.text(bar.get_width() + max_cnt * 0.008,
+                        bar.get_y() + bar.get_height() / 2,
+                        f'{row.cnt:,}  ({row.pct:.1f}%)',
+                        va='center', ha='left', fontsize=9, color='#e6edf3', fontweight='bold')
+
+            ax.set_xlim(0, max_cnt * 1.22)
+            ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{int(v):,}'))
+            ax.set_xlabel('Постов за 30 дней')
+            ax.set_title('19. Популярность разделов (Посты по доскам, 30д)',
+                         fontsize=14, fontweight='bold', color='#ffffff')
+            # Total annotation
+            ax.text(0.99, 0.02, f'Всего: {total:,} постов',
+                    transform=ax.transAxes, fontsize=9, color='#8b949e',
+                    ha='right', va='bottom', style='italic')
             plt.tight_layout()
             save_chart(images, '19_boards.png')
     except Exception as e:
@@ -1244,20 +1423,40 @@ def _generate_chart_25(images):
                 angles = [n / float(N) * 2 * 3.14159 for n in range(N)]
                 angles += angles[:1]
                 vals_r = ref_vals + ref_vals[:1]
-                fig = plt.figure(figsize=(6, 6))
+                fig = plt.figure(figsize=(7, 7))
                 ax = fig.add_subplot(111, polar=True)
                 ax.set_facecolor('#0d1117')
-                ax.plot(angles, vals_r, color='#39d353', linewidth=2)
-                ax.fill(angles, vals_r, color='#39d353', alpha=0.25)
+
+                # Fill + border
+                ax.fill(angles, vals_r, color='#39d353', alpha=0.22)
+                ax.plot(angles, vals_r, color='#39d353', linewidth=2.5)
+                # Mark each point with dot + value label
+                for angle, val, cat in zip(angles[:-1], ref_vals, categories):
+                    ax.plot(angle, val, 'o', color='#39d353', markersize=7, zorder=5)
+                    label_r = val + 0.1 if val < 0.85 else val - 0.15
+                    clean_cat = cat.replace('\n', ' ')
+                    ax.text(angle, label_r, f'{val*100:.0f}%',
+                            ha='center', va='center', fontsize=8,
+                            color='#80ffaa', fontweight='bold')
+
+                # Gridlines
                 ax.set_xticks(angles[:-1])
-                ax.set_xticklabels(categories, fontsize=8.5, color='#e6edf3')
+                ax.set_xticklabels(categories, fontsize=9, color='#e6edf3')
                 ax.set_ylim(0, 1)
                 ax.set_yticks([0.25, 0.5, 0.75, 1.0])
-                ax.set_yticklabels(['25%', '50%', '75%', '100%'], fontsize=6, color='#8b949e')
-                ax.grid(color='#21262d', linewidth=0.7)
-                ax.spines['polar'].set_color('#21262d')
-                ax.set_title('27. Радар здоровья борды', fontsize=13, fontweight='bold',
-                             color='#39d353', pad=18)
+                ax.set_yticklabels(['25%', '50%', '75%', '100%'], fontsize=6.5, color='#484f58')
+                ax.grid(color='#21262d', linewidth=0.8, linestyle='--')
+                ax.spines['polar'].set_color('#30363d')
+
+                # Overall health score
+                score = sum(ref_vals) / len(ref_vals) * 100
+                score_color = '#39d353' if score > 66 else '#ffa657' if score > 33 else '#f78166'
+                ax.text(0, -0.22, f'Индекс здоровья: {score:.0f}%',
+                        transform=ax.transAxes, ha='center', va='center',
+                        fontsize=12, color=score_color, fontweight='bold')
+
+                ax.set_title('27. Радар здоровья борды',
+                             fontsize=14, fontweight='bold', color='#39d353', pad=22)
                 plt.tight_layout()
                 save_chart(images, '27_radar.png')
     except Exception as e:
@@ -1482,6 +1681,672 @@ def _generate_chart_30(images):
     except Exception as e:
         print(f"Error Chart 32: {e}")
 
+
+def _generate_chart_31(c, images):
+    # ── 33. Velocity Map: Скорость Деградации ────────────────────────────────
+    try:
+        import numpy as _np
+        t30 = time.time() - 30 * 86400
+        c.execute('''
+            SELECT
+                date(timestamp, 'unixepoch', 'localtime') as d,
+                cast(strftime('%H', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as h,
+                COUNT(*) as cnt
+            FROM Posts
+            WHERE timestamp > ?
+            GROUP BY d, h ORDER BY d, h
+        ''', (t30,))
+        rows = c.fetchall()
+        if rows:
+            from collections import defaultdict
+            day_hours = defaultdict(lambda: _np.zeros(24))
+            for r in rows:
+                day_hours[r['d']][r['h']] = r['cnt']
+            days_sorted = sorted(day_hours.keys())
+            daily_peak = [day_hours[d].max() for d in days_sorted]
+            daily_total = [int(day_hours[d].sum()) for d in days_sorted]
+
+            df_v = pd.DataFrame({'d': days_sorted, 'peak': daily_peak, 'total': daily_total})
+            roll7 = pd.Series(daily_total).rolling(7, min_periods=1).mean().tolist()
+
+            xs = list(range(len(df_v)))
+            fig, ax1 = plt.subplots(figsize=(13, 5))
+            ax2 = ax1.twinx()
+
+            ax1.bar(xs, df_v['total'], color='#334455', alpha=0.6, label='Постов/день')
+            ax1.plot(xs, roll7, color='#58a6ff', linewidth=2.5, label='Скользящее ср. 7д', zorder=3)
+
+            ax2.plot(xs, df_v['peak'], color='#ff3366', linewidth=1.5, linestyle='--', alpha=0.85, label='Пиковый час')
+
+            # Annotate top 3 velocity spikes
+            peaks_idx = sorted(range(len(daily_total)), key=lambda i: daily_total[i], reverse=True)[:3]
+            for pi in peaks_idx:
+                ax1.annotate(f"{daily_total[pi]}",
+                             xy=(pi, daily_total[pi]), xytext=(pi, daily_total[pi] * 1.05),
+                             fontsize=7.5, color='#80ffaa', ha='center', fontweight='bold')
+
+            step = max(1, len(df_v) // 10)
+            ax1.set_xticks(xs[::step])
+            ax1.set_xticklabels(df_v['d'].tolist()[::step], rotation=30, ha='right', fontsize=7.5)
+            ax1.set_ylabel('Постов в день', color='#58a6ff')
+            ax2.set_ylabel('Пиковых постов/час', color='#ff3366')
+            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f'{int(v):,}'))
+
+            lines1, lbs1 = ax1.get_legend_handles_labels()
+            lines2, lbs2 = ax2.get_legend_handles_labels()
+            ax1.legend(lines1 + lines2, lbs1 + lbs2, fontsize=8, loc='upper left')
+            ax1.set_title('33. Velocity Map — Скорость деградации борды (30д)',
+                          fontsize=13, fontweight='bold', color='#58a6ff')
+            plt.tight_layout()
+            save_chart(images, '33_velocity.png')
+    except Exception as e:
+        print(f"Error Chart 33: {e}")
+
+
+def _generate_chart_32(c, images):
+    # ── 34. Churned Users — Кто Слился ────────────────────────────────────────
+    try:
+        now = time.time()
+        t7  = now - 7  * 86400
+        t14 = now - 14 * 86400
+        # Users active 8-14 days ago
+        c.execute('''
+            SELECT author_id, COUNT(*) as old_posts
+            FROM Posts
+            WHERE timestamp BETWEEN ? AND ? AND author_id IS NOT NULL AND author_id != 0
+            GROUP BY author_id
+        ''', (t14, t7))
+        old_active = {r['author_id']: r['old_posts'] for r in c.fetchall()}
+
+        # Users active last 7 days
+        c.execute('''
+            SELECT DISTINCT author_id FROM Posts
+            WHERE timestamp > ? AND author_id IS NOT NULL AND author_id != 0
+        ''', (t7,))
+        recent_active = {r['author_id'] for r in c.fetchall()}
+
+        churned = [(uid, cnt) for uid, cnt in old_active.items() if uid not in recent_active]
+        churned = sorted(churned, key=lambda x: x[1], reverse=True)[:15]
+
+        if churned:
+            df_ch = pd.DataFrame(churned, columns=['author_id', 'posts'])
+            df_ch['name'] = df_ch['author_id'].apply(generate_schizo_name)
+            df_ch = df_ch.iloc[::-1].reset_index(drop=True)  # reverse for hbar
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            cmap_ch = plt.get_cmap('Reds')
+            max_p = df_ch['posts'].max() or 1
+            colors_ch = [cmap_ch(0.4 + 0.55 * v / max_p) for v in df_ch['posts']]
+            bars_ch = ax.barh(df_ch['name'], df_ch['posts'], color=colors_ch,
+                              edgecolor='#1c2128', linewidth=0.7)
+            for bar, val in zip(bars_ch, df_ch['posts']):
+                ax.text(bar.get_width() + max_p * 0.01,
+                        bar.get_y() + bar.get_height() / 2,
+                        f'{val}п', va='center', ha='left', fontsize=8.5, color='#e6edf3')
+            ax.set_xlim(0, max_p * 1.25)
+            ax.set_xlabel('Постов за предыдущую неделю')
+            ax.set_title('34. Churned Users — Кто слился за последнюю неделю (топ-15)',
+                         fontsize=12, fontweight='bold', color='#f78166')
+            plt.tight_layout()
+            save_chart(images, '34_churned.png')
+    except Exception as e:
+        print(f"Error Chart 34: {e}")
+
+
+def _generate_chart_33(c, images):
+    # ── 35. Bump Chart — Недельный рейтинг топ-5 авторов (8 нед) ─────────────
+    try:
+        import numpy as _np
+        t56 = time.time() - 56 * 86400
+        c.execute('''
+            SELECT
+                strftime('%Y-%W', datetime(timestamp, 'unixepoch', 'localtime')) as wk,
+                author_id,
+                COUNT(*) as cnt
+            FROM Posts
+            WHERE timestamp > ? AND author_id IS NOT NULL AND author_id != 0
+            GROUP BY wk, author_id
+        ''', (t56,))
+        rows = c.fetchall()
+        if not rows:
+            return
+
+        df_b = pd.DataFrame(rows)
+        weeks = sorted(df_b['wk'].unique())
+        if len(weeks) < 3:
+            return
+
+        # Find top-5 authors by total posts
+        top5 = df_b.groupby('author_id')['cnt'].sum().sort_values(ascending=False).head(5).index.tolist()
+
+        # Build rank table: week × author → rank (1=top)
+        rank_data = {uid: [] for uid in top5}
+        for wk in weeks:
+            wk_df = df_b[df_b['wk'] == wk].sort_values('cnt', ascending=False).reset_index(drop=True)
+            wk_ranks = {row['author_id']: idx + 1 for idx, row in wk_df.iterrows()}
+            for uid in top5:
+                rank_data[uid].append(wk_ranks.get(uid, len(wk_df) + 1))
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        colors_bump = ['#58a6ff', '#ffa657', '#39d353', '#f78166', '#d2a8ff']
+        x_positions = list(range(len(weeks)))
+
+        for idx, uid in enumerate(top5):
+            ranks = rank_data[uid]
+            color = colors_bump[idx % len(colors_bump)]
+            name_short = generate_schizo_name(uid)
+            ax.plot(x_positions, ranks, marker='o', linewidth=2.5, markersize=8,
+                    color=color, label=name_short, zorder=3)
+            # Rank labels
+            for xi, rk in zip(x_positions, ranks):
+                ax.text(xi, rk - 0.18, f'#{rk}', ha='center', va='bottom',
+                        fontsize=7.5, color=color, fontweight='bold')
+
+        ax.set_xticks(x_positions)
+        ax.set_xticklabels([w.replace('20', '') for w in weeks], rotation=30, ha='right', fontsize=8)
+        ax.invert_yaxis()
+        ax.set_ylabel('Место в рейтинге')
+        max_rank = max(max(ranks) for ranks in rank_data.values()) if rank_data else 10
+        ax.set_ylim(max(max_rank + 1, 8), 0.5)   # always show at least 8 positions
+        ax.set_yticks(range(1, max(max_rank + 1, 8)))
+        ax.legend(fontsize=7.5, loc='lower right', framealpha=0.7)
+        ax.set_title('35. Bump Chart — Недельный рейтинг топ-5 авторов (8 нед)',
+                     fontsize=13, fontweight='bold', color='#d2a8ff')
+        ax.grid(axis='x', alpha=0.3)
+        plt.tight_layout()
+        save_chart(images, '35_bump_chart.png')
+    except Exception as e:
+        print(f"Error Chart 35: {e}")
+
+
+def _generate_chart_34(c, images):
+    # ── 36. Хронотип — Scatter авторов по среднему часу активности ───────────
+    try:
+        t30 = time.time() - 30 * 86400
+        c.execute('''
+            SELECT author_id,
+                   AVG(cast(strftime('%H', datetime(timestamp,'unixepoch','localtime')) as real)) as mean_hour,
+                   COUNT(*) as posts
+            FROM Posts
+            WHERE timestamp > ? AND author_id IS NOT NULL AND author_id != 0
+            GROUP BY author_id
+            HAVING COUNT(*) >= 5
+        ''', (t30,))
+        rows = c.fetchall()
+        if not rows:
+            return
+
+        df_chr = pd.DataFrame(rows)
+
+        def chronotype(h):
+            if h < 6:  return 'Ночник (00-06)', '#6600cc'
+            elif h < 12: return 'Утренник (06-12)', '#ffcc00'
+            elif h < 18: return 'Дневник (12-18)', '#00ccff'
+            else: return 'Вечерник (18-24)', '#ff6600'
+
+        df_chr['label'], df_chr['color'] = zip(*df_chr['mean_hour'].apply(chronotype))
+
+        fig, ax = plt.subplots(figsize=(11, 7))
+        for lbl, grp in df_chr.groupby('label'):
+            ax.scatter(grp['mean_hour'], grp['posts'],
+                       c=grp['color'], s=grp['posts'].clip(upper=500) * 0.8 + 20,
+                       alpha=0.75, edgecolors='#0d1117', linewidths=0.5, label=lbl)
+
+        # Annotate top-3 per chronotype
+        for lbl, grp in df_chr.groupby('label'):
+            top3 = grp.nlargest(3, 'posts')
+            for _, row in top3.iterrows():
+                short = generate_schizo_name(int(row['author_id'])).split(' ')[0]
+                ax.annotate(short, (row['mean_hour'], row['posts']),
+                            fontsize=6.5, color=row['color'], alpha=0.9,
+                            xytext=(3, 3), textcoords='offset points')
+
+        ax.set_xlabel('Средний час активности (МСК)')
+        ax.set_ylabel('Постов за 30 дней')
+        ax.set_xticks(range(0, 24, 2))
+        ax.set_xticklabels([f'{h:02d}:00' for h in range(0, 24, 2)], fontsize=8)
+        ax.axvline(6,  color='#ffcc00', linestyle='--', alpha=0.4, linewidth=1)
+        ax.axvline(12, color='#00ccff', linestyle='--', alpha=0.4, linewidth=1)
+        ax.axvline(18, color='#ff6600', linestyle='--', alpha=0.4, linewidth=1)
+        ax.legend(fontsize=9, framealpha=0.7)
+        ax.set_title('36. Хронотип — Когда сидит каждый анон (30д)',
+                     fontsize=13, fontweight='bold', color='#ffcc00')
+
+        # Board chronotype summary annotation
+        board_mean = df_chr['mean_hour'].mean()
+        chtype_board = chronotype(board_mean)[0]
+        ax.text(0.99, 0.98, f'Борда в целом: {chtype_board}',
+                transform=ax.transAxes, fontsize=9, color='#ffffff',
+                ha='right', va='top', style='italic',
+                bbox=dict(facecolor='#21262d', edgecolor='#30363d', boxstyle='round,pad=0.4'))
+
+        plt.tight_layout()
+        save_chart(images, '36_chronotype.png')
+    except Exception as e:
+        print(f"Error Chart 36: {e}")
+
+
+def _generate_chart_35(c, images):
+    # ── 37. Матрица Хайпа — 7×24 со стрелками тренда ────────────────────────
+    try:
+        import numpy as _np
+        now = time.time()
+        t28  = now - 28 * 86400
+        t14  = now - 14 * 86400
+
+        def _fetch_grid(since, until=None):
+            if until:
+                c.execute('''
+                    SELECT cast(strftime('%w', datetime(timestamp,'unixepoch','localtime')) as integer) as w,
+                           cast(strftime('%H', datetime(timestamp,'unixepoch','localtime')) as integer) as h,
+                           COUNT(*) as cnt
+                    FROM Posts WHERE timestamp BETWEEN ? AND ?
+                    GROUP BY w, h
+                ''', (since, until))
+            else:
+                c.execute('''
+                    SELECT cast(strftime('%w', datetime(timestamp,'unixepoch','localtime')) as integer) as w,
+                           cast(strftime('%H', datetime(timestamp,'unixepoch','localtime')) as integer) as h,
+                           COUNT(*) as cnt
+                    FROM Posts WHERE timestamp > ?
+                    GROUP BY w, h
+                ''', (since,))
+            g = _np.zeros((7, 24))
+            for r in c.fetchall():
+                g[r['w']][r['h']] = r['cnt']
+            return g
+
+        grid_cur  = _fetch_grid(t14)        # last 14 days
+        grid_prev = _fetch_grid(t28, t14)   # 14 days before that
+
+        # Trend: +1 up, -1 down, 0 flat
+        delta = grid_cur - grid_prev
+        trend = _np.sign(delta).astype(int)
+
+        # Normalize current for coloring
+        vmax = _np.percentile(grid_cur[grid_cur > 0], 95) if grid_cur.max() > 0 else 1
+        grid_norm = _np.clip(grid_cur / (vmax or 1), 0, 1)
+
+        days_ru_s = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб']
+        fig, ax = plt.subplots(figsize=(16, 5))
+        ax.set_facecolor('#0d1117')
+
+        from matplotlib.colors import LinearSegmentedColormap
+        CMAP = LinearSegmentedColormap.from_list('hype', ['#0d1117','#003d20','#39d353','#80ffaa'])
+
+        for d in range(7):
+            for h in range(24):
+                val = grid_norm[d][h]
+                color = CMAP(val)
+                rect = plt.Rectangle([h - 0.45, d - 0.45], 0.9, 0.9,
+                                     facecolor=color, edgecolor='#21262d', linewidth=0.4)
+                ax.add_patch(rect)
+                # Trend arrow
+                tr = trend[d][h]
+                if tr == 1:
+                    ax.text(h, d + 0.32, '▲', ha='center', va='center',
+                            fontsize=5.5, color='#39d353', alpha=0.9)
+                elif tr == -1:
+                    ax.text(h, d + 0.32, '▼', ha='center', va='center',
+                            fontsize=5.5, color='#f78166', alpha=0.9)
+                # Post count (small)
+                cnt_val = int(grid_cur[d][h])
+                if cnt_val > 0:
+                    ax.text(h, d - 0.08, str(cnt_val), ha='center', va='center',
+                            fontsize=4.5, color='#e6edf3', alpha=0.75)
+
+        ax.set_xlim(-0.5, 23.5)
+        ax.set_ylim(-0.5, 6.5)
+        ax.set_xticks(range(24))
+        ax.set_xticklabels([f'{h:02d}' for h in range(24)], fontsize=7.5)
+        ax.set_yticks(range(7))
+        ax.set_yticklabels(days_ru_s, fontsize=9)
+        ax.set_xlabel('Час суток')
+        ax.set_title('37. Матрица Хайпа — активность 7×24 со стрелками тренда (▲▼ vs прошлые 2 нед)',
+                     fontsize=12, fontweight='bold', color='#80ffaa')
+        plt.tight_layout()
+        save_chart(images, '37_hype_matrix.png')
+    except Exception as e:
+        print(f"Error Chart 37: {e}")
+
+
+def _generate_chart_36(c, images):
+    # ── 38. Эмодзи-Борда — Топ-20 эмодзи из постов ───────────────────────────
+    try:
+        import re as _re
+        t30 = time.time() - 30 * 86400
+        c.execute('''
+            SELECT content FROM Posts
+            WHERE timestamp > ? AND content IS NOT NULL
+        ''', (t30,))
+        rows = c.fetchall()
+        if not rows:
+            return
+
+        # Unicode emoji regex (broad coverage)
+        EMOJI_RE = _re.compile(
+            "["
+            "\U0001F600-\U0001F64F"  # emoticons
+            "\U0001F300-\U0001F5FF"  # misc symbols
+            "\U0001F680-\U0001F6FF"  # transport
+            "\U0001F1E0-\U0001F1FF"  # flags
+            "\U00002702-\U000027B0"
+            "\U000024C2-\U0001F251"
+            "\U0001f926-\U0001f937"
+            "\U00010000-\U0010ffff"
+            "\u2640-\u2642"
+            "\u2600-\u2B55"
+            "\u200d"
+            "\u23cf"
+            "\u23e9"
+            "\u231a"
+            "\ufe0f"
+            "\u3030"
+            "]+", flags=_re.UNICODE)
+
+        from collections import Counter
+        emoji_counter = Counter()
+        for r in rows:
+            raw = r['content'] or ''
+            # Extract text from JSON
+            try:
+                d = json.loads(raw)
+                text = d.get('text', '') or d.get('caption', '') or ''
+            except Exception:
+                text = raw
+            found = EMOJI_RE.findall(text)
+            for em_group in found:
+                # Split compound emoji to individual graphemes where possible
+                for char in em_group:
+                    if EMOJI_RE.match(char):
+                        emoji_counter[char] += 1
+
+        top_emoji = emoji_counter.most_common(20)
+        if not top_emoji:
+            return
+
+        emojis  = [e for e, _ in top_emoji]
+        counts  = [c for _, c in top_emoji]
+        max_cnt = max(counts) or 1
+
+        # Color gradient by count
+        cmap_em = plt.get_cmap('YlOrRd')
+        colors_em = [cmap_em(0.3 + 0.65 * v / max_cnt) for v in counts]
+
+        fig, ax = plt.subplots(figsize=(10, 7))
+        bars_em = ax.barh(range(len(emojis)), counts, color=colors_em,
+                          edgecolor='#21262d', linewidth=0.6)
+        ax.set_yticks(range(len(emojis)))
+        # Direct path lookup for Windows emoji font (findfont fails for color fonts)
+        import matplotlib.font_manager as _fm
+        import os as _os
+        emoji_font_prop = None
+        _win_emoji_paths = [
+            r'C:\Windows\Fonts\seguiemj.ttf',   # Segoe UI Emoji
+            r'C:\Windows\Fonts\seguisym.ttf',   # Segoe UI Symbol fallback
+        ]
+        for _fp in _win_emoji_paths:
+            if _os.path.exists(_fp):
+                try:
+                    emoji_font_prop = _fm.FontProperties(fname=_fp)
+                    break
+                except Exception:
+                    pass
+        try:
+            if emoji_font_prop:
+                ax.set_yticklabels(emojis, fontsize=13, fontproperties=emoji_font_prop)
+            else:
+                # No emoji font found — show Unicode codepoints
+                hex_labels = ['+'.join(f'U+{ord(c):04X}' for c in e if ord(c) > 127) or e for e in emojis]
+                ax.set_yticklabels(hex_labels, fontsize=8.5)
+        except Exception:
+            ax.set_yticklabels([str(i+1) for i in range(len(emojis))], fontsize=9)
+
+        for bar, val in zip(bars_em, counts):
+            ax.text(bar.get_width() + max_cnt * 0.01,
+                    bar.get_y() + bar.get_height() / 2,
+                    f'{val:,}', va='center', fontsize=9, color='#e6edf3', fontweight='bold')
+
+        ax.set_xlim(0, max_cnt * 1.2)
+        ax.set_xlabel('Упоминаний за 30 дней')
+        ax.invert_yaxis()
+        ax.set_title('38. Эмодзи-Борда — Топ-20 эмодзи (30д)',
+                     fontsize=13, fontweight='bold', color='#ffa657')
+        plt.tight_layout()
+        save_chart(images, '38_emoji_board.png')
+    except Exception as e:
+        print(f"Error Chart 38: {e}")
+
+
+def _generate_chart_37(c, images):
+    # ── 39. Сеть Тредов — граф тредов соединённых общими авторами ────────────
+    try:
+        import networkx as _nx
+        t30 = time.time() - 30 * 86400
+        c.execute('''
+            SELECT author_id, thread_id, COUNT(*) as cnt
+            FROM Posts
+            WHERE timestamp > ? AND author_id IS NOT NULL AND thread_id IS NOT NULL
+              AND author_id != 0 AND thread_id != 0
+            GROUP BY author_id, thread_id
+        ''', (t30,))
+        rows = c.fetchall()
+        if not rows:
+            return
+
+        from collections import defaultdict
+        author_threads = defaultdict(set)
+        thread_posts = defaultdict(int)
+        for r in rows:
+            author_threads[r['author_id']].add(r['thread_id'])
+            thread_posts[r['thread_id']] += r['cnt']
+
+        # Top-40 threads by posts
+        top_threads = set(sorted(thread_posts, key=thread_posts.get, reverse=True)[:40])
+
+        G_t = _nx.Graph()
+        for uid, threads in author_threads.items():
+            threads_top = [t for t in threads if t in top_threads]
+            for i, t1 in enumerate(threads_top):
+                for t2 in threads_top[i+1:]:
+                    if G_t.has_edge(t1, t2):
+                        G_t[t1][t2]['weight'] += 1
+                    else:
+                        G_t.add_edge(t1, t2, weight=1)
+
+        if len(G_t) < 3:
+            return
+
+        # Remove only truly weak edges (keep weight >= 1 — any shared author is a connection)
+        weak = [(u, v) for u, v, d in G_t.edges(data=True) if d['weight'] < 1]
+        G_t.remove_edges_from(weak)
+        if len(G_t) < 3:
+            return
+
+        # Node size = posts, color = degree
+        node_sizes = [max(30, thread_posts.get(n, 1) * 0.3) for n in G_t.nodes()]
+        degrees = dict(G_t.degree())
+        node_colors = [degrees[n] for n in G_t.nodes()]
+        edge_weights = [d['weight'] for _, _, d in G_t.edges(data=True)]
+        max_ew = max(edge_weights) if edge_weights else 1
+        edge_widths = [0.5 + 2.5 * (w / max_ew) for w in edge_weights]
+
+        fig, ax = plt.subplots(figsize=(11, 9))
+        ax.set_facecolor('#0d1117')
+        pos = _nx.spring_layout(G_t, k=0.4, seed=42)
+        _nx.draw_networkx_nodes(G_t, pos, node_size=node_sizes,
+                                node_color=node_colors, cmap=plt.cm.plasma, ax=ax, alpha=0.9)
+        _nx.draw_networkx_edges(G_t, pos, width=edge_widths, alpha=0.35,
+                                edge_color='#58a6ff', ax=ax)
+        # Label top-10 nodes by post count
+        top10_nodes = sorted(G_t.nodes(), key=lambda n: thread_posts.get(n, 0), reverse=True)[:10]
+        labels = {n: f'#{n}' for n in top10_nodes}
+        _nx.draw_networkx_labels(G_t, pos, labels, font_size=7, font_color='#e6edf3', ax=ax)
+
+        ax.axis('off')
+        ax.set_title('39. Сеть тредов — связи через общих авторов (30д)\n'
+                     'Размер = постов, ширина ребра = общих авторов, цвет = связность',
+                     fontsize=12, fontweight='bold', color='#58a6ff', pad=12)
+        plt.tight_layout()
+        save_chart(images, '39_thread_network.png')
+    except Exception as e:
+        print(f"Error Chart 39: {e}")
+
+
+def _generate_chart_38(images):
+    # ── 40. AI Weekly Digest — нарратив от Groq ──────────────────────────────
+    try:
+        import os as _os
+        import requests as _req
+        from dotenv import load_dotenv as _ld
+        _ld(_os.path.join(_os.path.dirname(__file__), '.env'))
+
+        # --- Gather key metrics from DB ---
+        with contextlib.closing(connect_stats_db()) as _conn:
+            _conn.row_factory = dict_factory
+            with contextlib.closing(_conn.cursor()) as _c:
+                t7  = time.time() - 7 * 86400
+                t30 = time.time() - 30 * 86400
+
+                _c.execute('SELECT COUNT(*) as n FROM Posts WHERE timestamp > ?', (t7,))
+                posts_7d = _c.fetchone()['n']
+
+                _c.execute('SELECT COUNT(*) as n FROM Posts WHERE timestamp > ?', (t30,))
+                posts_30d = _c.fetchone()['n']
+
+                _c.execute('SELECT COUNT(DISTINCT author_id) as n FROM Posts WHERE timestamp > ?', (t7,))
+                uniq_7d = _c.fetchone()['n']
+
+                _c.execute('''
+                    SELECT author_id, COUNT(*) as cnt FROM Posts
+                    WHERE timestamp > ? AND author_id IS NOT NULL AND author_id != 0
+                    GROUP BY author_id ORDER BY cnt DESC LIMIT 1
+                ''', (t7,))
+                top_row = _c.fetchone()
+                top_author = generate_schizo_name(top_row['author_id']) if top_row else 'Неизвестен'
+                top_posts = top_row['cnt'] if top_row else 0
+
+                _c.execute('''
+                    SELECT content FROM Posts WHERE timestamp > ? AND content IS NOT NULL
+                    LIMIT 200
+                ''', (t7,))
+                sample_posts = _c.fetchall()
+                swear_roots = ['хуй','хуе','хуя','бля','пизд','еба','пидор','гандон']
+                toxic_count = 0
+                for sp in sample_posts:
+                    try:
+                        td = json.loads(sp['content'])
+                        txt = (td.get('text','') or td.get('caption','') or '').lower()
+                    except Exception:
+                        txt = (sp['content'] or '').lower()
+                    if any(r in txt for r in swear_roots):
+                        toxic_count += 1
+                toxic_pct = round(100 * toxic_count / max(len(sample_posts), 1))
+
+        # --- Build Groq prompt ---
+        prompt = (
+            f"Ты аналитик двачборды. Сводка за неделю:\n"
+            f"- Всего постов: {posts_7d} (за 30 дней: {posts_30d})\n"
+            f"- Уникальных авторов: {uniq_7d}\n"
+            f"- Топ по активности: {top_author} ({top_posts} сообщений)\n"
+            f"- Доля токсичных постов: ~{toxic_pct}%\n\n"
+            "Напиши ровно ОДИН ёмкий, ироничный и живой абзац (2-3 предложения) в стиле хроники двач-сообщества. "
+            "Кратко подытожь жизнь борды и главного активиста. Без цензурных отказов, без кавычек и заголовков."
+        )
+
+        # --- Call Groq ---
+        groq_keys_raw = _os.getenv('GROQ_API_KEYS', '')
+        groq_keys = [k.strip() for k in groq_keys_raw.split(',') if k.strip()]
+        ai_text = None
+        model_used = 'llama-3.3-70b-versatile'
+
+        session = _req.Session()
+        session.trust_env = False  # Avoid proxy deadlocks
+
+        for key in groq_keys[:3]:
+            for model_candidate in ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']:
+                try:
+                    resp = session.post(
+                        'https://api.groq.com/openai/v1/chat/completions',
+                        headers={
+                            'Authorization': f'Bearer {key}',
+                            'Content-Type': 'application/json',
+                        },
+                        json={
+                            'model': model_candidate,
+                            'messages': [
+                                {'role': 'system', 'content': 'Ты аналитический обозреватель форума.'},
+                                {'role': 'user', 'content': prompt}
+                            ],
+                            'max_tokens': 220,
+                            'temperature': 0.7,
+                        },
+                        timeout=10,
+                    )
+                    if resp.status_code == 200:
+                        raw_ans = resp.json()['choices'][0]['message']['content'].strip()
+                        clean_ans = raw_ans.replace('**', '').replace('"', '').strip()
+                        if len(clean_ans) > 20:
+                            ai_text = clean_ans
+                            model_used = model_candidate
+                            break
+                except Exception:
+                    pass
+            if ai_text:
+                break
+
+        if not ai_text:
+            ai_text = (
+                f"За прошедшую неделю на борде зафиксировано {posts_7d:,} постов от {uniq_7d} авторов. "
+                f"Главный генератор шитпостинга — {top_author} ({top_posts} сообщений). "
+                f"Уровень токсичности стабилен на отметке ~{toxic_pct}%."
+            )
+
+        # --- Render figure ---
+        import textwrap as _tw
+        wrapped = _tw.fill(ai_text, width=72)
+
+        fig = plt.figure(figsize=(10, 4.2))
+        fig.patch.set_facecolor('#0d1117')
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.set_facecolor('#0d1117')
+        ax.axis('off')
+
+        # Header strip
+        ax.add_patch(plt.Rectangle([0.03, 0.70], 0.94, 0.24,
+                                    facecolor='#161b22', edgecolor='#30363d',
+                                    linewidth=1.2, transform=ax.transAxes, clip_on=False))
+        ax.text(0.5, 0.84,
+                '40. AI Weekly Digest — Еженедельный дайджест борды',
+                transform=ax.transAxes, fontsize=13, fontweight='bold',
+                color='#58a6ff', ha='center', va='center')
+
+        # Stats strip
+        stats_line = (
+            f"[ Постов: {posts_7d:,} ]   [ Авторов: {uniq_7d} ]   "
+            f"[ Топ: {top_author.split('(')[0].strip()} ]   [ Токсичность: {toxic_pct}% ]"
+        )
+        ax.text(0.5, 0.74, stats_line,
+                transform=ax.transAxes, fontsize=8.5,
+                color='#39d353', ha='center', va='center', fontweight='bold')
+
+        # AI text body
+        ax.text(0.5, 0.38, wrapped,
+                transform=ax.transAxes, fontsize=10.5,
+                color='#e6edf3', ha='center', va='center',
+                linespacing=1.55)
+
+        # Footer
+        ax.text(0.5, 0.05,
+                f'ИИ-модель: Groq {model_used}  |  Данные: 7 дней  |  Генерация: раз в неделю',
+                transform=ax.transAxes, fontsize=7.5,
+                color='#484f58', ha='center', va='bottom')
+
+        save_chart(images, '40_ai_digest.png')
+    except Exception as e:
+        print(f"Error Chart 40: {e}")
+
+
 def generate_all_charts():
     """Generates exactly 10 toxic charts and returns a list of io.BytesIO objects"""
     # pyplot глобален, а генераторов графиков в боте три и все в пулах потоков.
@@ -1530,10 +2395,20 @@ def _generate_all_charts_locked():
                 _generate_chart_28(images)
                 _generate_chart_29(images)
                 _generate_chart_30(images)
+                _generate_chart_31(c, images)
+                _generate_chart_32(c, images)
+                _generate_chart_33(c, images)
+                _generate_chart_34(c, images)
+                _generate_chart_35(c, images)
+                _generate_chart_36(c, images)
+                _generate_chart_37(c, images)
+                _generate_chart_38(images)
             except Exception as e:
                 print(f"Error generating charts: {e}")
 
     return images
+
+
 def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
     with contextlib.closing(connect_stats_db()) as conn:
         with contextlib.closing(conn.cursor()) as c:
