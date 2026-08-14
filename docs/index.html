@@ -253,6 +253,81 @@
       </div>
     </section>
 
+    <!-- Interactive Anonymous Board Simulation Sandbox -->
+    <section id="board-sandbox" aria-labelledby="sandbox-title" style="margin-top: 4rem;">
+      <div class="intro">
+        <div><p class="eyebrow">Interactive Board Sandbox</p><h2 id="sandbox-title">Simulate Real-time Anonymous Thread Feed</h2></div>
+        <p>Experience the reactive FastAPI / WebSocket stream model in real-time. Test post dispatch, SHA256 media hashing, and instant broadcast.</p>
+      </div>
+
+      <div style="background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.75rem; margin-top: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 0.75rem;">
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <span style="display: inline-block; width: 10px; height: 10px; background: #22c55e; border-radius: 50%; box-shadow: 0 0 8px #22c55e;"></span>
+            <span style="font-size: 0.85rem; font-weight: 700; color: var(--purple);">/b/ — Random Stream (WebSocket Active)</span>
+          </div>
+          <div style="font-family: monospace; font-size: 0.8rem; color: var(--muted);" id="stream-stats">
+            Active Nodes: 12 · Latency: 18ms · Media Queue: 0
+          </div>
+        </div>
+
+        <!-- Interactive Thread Feed Container -->
+        <div id="thread-feed" style="display: flex; flex-direction: column; gap: 1rem; max-height: 380px; overflow-y: auto; padding-right: 0.5rem;">
+          <div style="background: var(--surface-deep); border-left: 3px solid var(--purple); border-radius: 8px; padding: 1rem;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--muted); margin-bottom: 0.4rem;">
+              <span style="color: var(--rose); font-weight: 700;">Anonymous</span>
+              <span>№ 10948201 · 2026-08-14 14:18:22</span>
+            </div>
+            <p style="margin: 0; font-size: 0.95rem; color: var(--ink);">Архитектура микросервисов dvachbot синхронизирует Telegram каналы с FastAPI в реальном времени через SQLite WAL.</p>
+          </div>
+
+          <div style="background: var(--surface-deep); border-left: 3px solid var(--blue); border-radius: 8px; padding: 1rem;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--muted); margin-bottom: 0.4rem;">
+              <span style="color: var(--blue); font-weight: 700;">Anonymous</span>
+              <span>№ 10948202 · 2026-08-14 14:18:35</span>
+            </div>
+            <p style="margin: 0; font-size: 0.95rem; color: var(--ink);">Хеширование медиа через SHA256 предотвращает дубликаты картинок и видео в хранилище.</p>
+          </div>
+        </div>
+
+        <!-- Post Action Controls -->
+        <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem; flex-wrap: wrap;">
+          <input type="text" id="demo-post-input" placeholder="Введите анонимное сообщение для симуляции..." style="flex: 1; min-width: 240px; background: var(--night); border: 1px solid var(--line); border-radius: 8px; padding: 0.75rem 1rem; color: #fff; font-size: 0.9rem; outline: none;" onkeydown="if(event.key==='Enter') sendDemoPost();">
+          <button type="button" onclick="sendDemoPost()" style="background: linear-gradient(135deg, var(--purple), var(--violet)); border: none; border-radius: 8px; padding: 0.75rem 1.5rem; color: #fff; font-weight: 700; cursor: pointer; transition: transform 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">🚀 Отправить в /b/</button>
+        </div>
+      </div>
+    </section>
+
+    <script>
+      let demoPostId = 10948203;
+      function sendDemoPost() {
+        const input = document.getElementById('demo-post-input');
+        const text = input.value.trim();
+        if (!text) return;
+        
+        const feed = document.getElementById('thread-feed');
+        const postCard = document.createElement('div');
+        postCard.style.background = 'var(--surface-deep)';
+        postCard.style.borderLeft = '3px solid var(--rose)';
+        postCard.style.borderRadius = '8px';
+        postCard.style.padding = '1rem';
+        postCard.style.animation = 'fadeIn 0.3s ease-out';
+        
+        const d = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        postCard.innerHTML = `
+          <div style="display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--muted); margin-bottom: 0.4rem;">
+            <span style="color: var(--rose); font-weight: 700;">Anonymous (You)</span>
+            <span>№ ${demoPostId++} · ${d}</span>
+          </div>
+          <p style="margin: 0; font-size: 0.95rem; color: var(--ink);">${text.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>
+        `;
+        
+        feed.prepend(postCard);
+        input.value = '';
+        document.getElementById('stream-stats').innerText = `Active Nodes: 14 · Latency: 12ms · Broadcast: OK`;
+      }
+    </script>
+
     <section id="run" aria-labelledby="run-title">
       <div class="intro">
         <div><p class="eyebrow">Run the actual service</p><h2 id="run-title">Pages shows the project; Python runs it.</h2></div>
