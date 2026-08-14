@@ -197,6 +197,85 @@ TGACH — это гибридная платформа для анонимног
 
 ---
 
+
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/marko1olo/gigahrush/main/docs/dvachbot_cyberpunk.jpg" width="100%" alt="dvachbot & TGACH Retro-Terminal Imageboard Engine"/>
+
+</div>
+
+---
+
+## 📻 Low-Level Imageboard Ingestion & Atkinson Dithering Core
+
+dvachbot captures live anonymous imageboard threads, quantizes high-resolution media into 1-bit monochrome retro-buffers, and streams them into Telegram channels without main-thread blocking:
+
+```mermaid
+graph LR
+    A[Imageboard JSON Stream] -->|Async aiohttp Worker| B[Media Ingestion Ring Buffer]
+    B -->|Pillow / NumPy Matrix| C[Atkinson 1-Bit Dithering Quantizer]
+    C -->|Monochrome PNG / WebP| D[Telegram Dispatch Queue]
+    D -->|Token Bucket Rate Limiter 30 msg/s| E[Telegram Channel / Bot API]
+    B -->|Thread Metadata Index| F[(SQLite WAL Storage / 5000ms Busy Timeout)]
+```
+
+### ⚡ 1. Atkinson 1-Bit Error Diffusion Quantizer (NumPy)
+
+Unlike Floyd-Steinberg dithering which diffuses 100% of quantization errors (causing noisy grain), the Atkinson kernel diffuses exactly $\frac{6}{8} = 75\%$ of error across 6 spatial neighbors, preserving crisp retro-monochrome edges:
+
+```python
+import numpy as np
+from PIL import Image
+
+def atkinson_quantize(img: Image.Image) -> Image.Image:
+    # Convert to grayscale 16-bit integer array to prevent underflow
+    arr = np.array(img.convert('L'), dtype=np.int16)
+    height, width = arr.shape
+    
+    for y in range(height):
+        for x in range(width):
+            old_val = arr[y, x]
+            new_val = 255 if old_val > 127 else 0
+            arr[y, x] = new_val
+            
+            # Error calculation
+            err = (old_val - new_val) >> 3  # 1/8 error bitshift
+            
+            # 6-Neighbor spatial diffusion kernel:
+            #   (x+1, y), (x+2, y), (x-1, y+1), (x, y+1), (x+1, y+1), (x, y+2)
+            if x + 1 < width: arr[y, x + 1] += err
+            if x + 2 < width: arr[y, x + 2] += err
+            if y + 1 < height:
+                if x - 1 >= 0: arr[y + 1, x - 1] += err
+                arr[y + 1, x] += err
+                if x + 1 < width: arr[y + 1, x + 1] += err
+            if y + 2 < height:
+                arr[y + 2, x] += err
+                
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode='L')
+```
+
+---
+
+### 🗄️ 2. SQLite WAL Ring-Buffer Configuration
+
+```sql
+-- Zero-Locking Concurrency Tuning
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
+PRAGMA busy_timeout = 5000;
+PRAGMA cache_size = -64000; -- 64MB memory cache
+
+CREATE TABLE IF NOT EXISTS thread_archive (
+    thread_num BIGINT PRIMARY KEY,
+    board_code VARCHAR(16) NOT NULL,
+    post_count INT DEFAULT 1,
+    last_modified_timestamp BIGINT NOT NULL,
+    dithered_thumbnail_blob BLOB
+);
+CREATE INDEX IF NOT EXISTS idx_board_timestamp ON thread_archive (board_code, last_modified_timestamp DESC);
+```
+
 ## 🌐 Connected Ecosystem & Sister Projects
 
 Part of the **Адольф Петушков (Adolf Petushkov)** open-source engineering ecosystem:
