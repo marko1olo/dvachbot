@@ -4778,18 +4778,54 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# /top — топ аноны по балансу (анонимно — только номер из паспорта)
+# /top — графическая карточка топ анонов (Богачи, Шитпостеры, Реакции)
 # ══════════════════════════════════════════════════════════════════════════════
+def get_leaderboard_keyboard(board_id: str, current_mode: str) -> InlineKeyboardMarkup:
+    btn_bal = "• 💰 Богачи •" if current_mode == "balance" else "💰 Богачи"
+    btn_posts = "• 📝 Шитпостеры •" if current_mode == "posts" else "📝 Шитпостеры"
+    btn_rx = "• 🎭 Реакции •" if current_mode == "reactions" else "🎭 Реакции"
+    
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=btn_bal, callback_data="top_switch_balance"),
+            InlineKeyboardButton(text=btn_posts, callback_data="top_switch_posts"),
+            InlineKeyboardButton(text=btn_rx, callback_data="top_switch_reactions")
+        ],
+        [
+            InlineKeyboardButton(text="🪪 Мой паспорт", callback_data="prof_card"),
+            InlineKeyboardButton(text="🛒 Черный рынок", callback_data="prof_shop")
+        ]
+    ])
+
 @dp.message(Command("top", "leaderboard", "топ", "лидеры"))
 async def cmd_top(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
 
     raw_text = message.text or message.caption or ""
     args = raw_text.split()[1:]
-    mode = "posts" if args and args[0].lower() in ["posts", "post", "посты", "пост", "актив", "activity"] else "balance"
+    if args and args[0].lower() in ["posts", "post", "посты", "пост", "актив", "activity"]:
+        mode = "posts"
+    elif args and args[0].lower() in ["reactions", "reaction", "rx", "реакции", "карма", "karma"]:
+        mode = "reactions"
+    else:
+        mode = "balance"
     
-    text, kb = await _build_leaderboard_content(board_id, mode, message.from_user.id)
-    await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    from leaderboard_card import generate_leaderboard_payload
+    from aiogram.types import BufferedInputFile
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+        caller_id = message.from_user.id
+        photo_buf, caption_text = await loop.run_in_executor(None, generate_leaderboard_payload, board_id, mode, caller_id)
+        
+        photo = BufferedInputFile(photo_buf.getvalue(), filename=f"leaderboard_{mode}.png")
+        kb = get_leaderboard_keyboard(board_id, mode)
+        await message.answer_photo(photo, caption=caption_text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        runtime_logger.warning("Error generating leaderboard card: %s", e)
+        await message.answer("⚠️ Не удалось сформировать карточку лидеров.")
+
     try: await message.delete()
     except Exception: pass
 
@@ -4798,71 +4834,30 @@ async def cb_top_switch(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     parts = callback.data.split("_")
     mode = parts[2] if len(parts) > 2 else "balance"
-    text, kb = await _build_leaderboard_content(board_id, mode, callback.from_user.id)
+    caller_id = callback.from_user.id
+
+    from leaderboard_card import generate_leaderboard_payload
+    from aiogram.types import BufferedInputFile, InputMediaPhoto
+    import asyncio
+
     try:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        pass
-    await callback.answer()
+        loop = asyncio.get_running_loop()
+        photo_buf, caption_text = await loop.run_in_executor(None, generate_leaderboard_payload, board_id, mode, caller_id)
+        
+        photo = BufferedInputFile(photo_buf.getvalue(), filename=f"leaderboard_{mode}.png")
+        kb = get_leaderboard_keyboard(board_id, mode)
 
-async def _build_leaderboard_content(board_id: str, mode: str, caller_id: int):
-    db = await get_pool()
-    medals = ["🥇", "🥈", "🥉"]
-
-    if mode == "posts":
-        async with db.execute(
-            """SELECT p.author_id, COUNT(*) as cnt, MAX(u.custom_prefix) as prefix
-               FROM Posts p
-               LEFT JOIN Users u ON p.author_id = u.user_id AND p.board_id = u.board_id
-               WHERE p.board_id = ? AND p.author_id > 0
-               GROUP BY p.author_id
-               ORDER BY cnt DESC LIMIT 15""",
-            (board_id,)
-        ) as c:
-            rows = await c.fetchall()
-
-        if not rows:
-            return "Пока никто ничего не запостил.", None
-
-        lines = [f"📝 <b>Топ шитпостеров /{board_id}/</b>\n{'—'*22}"]
-        for i, (uid, cnt, prefix) in enumerate(rows):
-            medal = medals[i] if i < 3 else f"<b>{i+1}.</b>"
-            anon_tag = f"Анон-{uid % 10000:04d}"
-            pfx = f" {prefix}" if prefix else ""
-            you = " ← ты" if uid == caller_id else ""
-            lines.append(f"{medal} {anon_tag}{pfx} — <code>{cnt:,} постов</code>{you}")
-
-        lines.append(f"\n<i>Рейтинг активности на доске. Пиши посты, чтобы расти в топе.</i>")
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💰 Топ по балансу", callback_data="top_switch_balance")]
-        ])
-    else:
-        async with db.execute(
-            """SELECT user_id, SUM(balance) as bal, MAX(custom_prefix) as prefix
-               FROM Users WHERE board_id = ?
-               GROUP BY user_id HAVING bal > 0
-               ORDER BY bal DESC LIMIT 15""",
-            (board_id,)
-        ) as c:
-            rows = await c.fetchall()
-
-        if not rows:
-            return "Пока никто не накопил ничего.", None
-
-        lines = [f"💰 <b>Топ богачей /{board_id}/</b>\n{'—'*22}"]
-        for i, (uid, bal, prefix) in enumerate(rows):
-            medal = medals[i] if i < 3 else f"<b>{i+1}.</b>"
-            anon_tag = f"Анон-{uid % 10000:04d}"
-            pfx = f" {prefix}" if prefix else ""
-            you = " ← ты" if uid == caller_id else ""
-            lines.append(f"{medal} {anon_tag}{pfx} — <code>{int(bal):,} RUB</code>{you}")
-
-        lines.append(f"\n<i>Имена скрыты. Заработай шекели на реакциях или в /shop.</i>")
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📝 Топ по постам", callback_data="top_switch_posts")]
-        ])
-
-    return "\n".join(lines), kb
+        if callback.message.photo:
+            await callback.message.edit_media(
+                media=InputMediaPhoto(media=photo, caption=caption_text, parse_mode="HTML"),
+                reply_markup=kb
+            )
+        else:
+            await callback.message.edit_text(caption_text, reply_markup=kb, parse_mode="HTML")
+        await callback.answer()
+    except Exception as e:
+        runtime_logger.warning("Error switching leaderboard: %s", e)
+        await callback.answer("⚠️ Ошибка переключения топа.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
