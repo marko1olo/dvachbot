@@ -76,7 +76,7 @@ from common.database import (
 )
 from collections import deque, defaultdict
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Union
 from async_lru import alru_cache
 from functools import lru_cache
@@ -1796,7 +1796,8 @@ def format_bayan_label(count: int, lang: str = 'ru') -> str:
 def format_iso_time(ts: float) -> str:
 
     try:
-        return datetime.fromtimestamp(ts).isoformat()
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        return dt.isoformat()
     except Exception:
         return ""
 def format_timestamp(ts: float) -> str:

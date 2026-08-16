@@ -23,12 +23,12 @@ class TestFormatIsoTime(unittest.TestCase):
     def test_valid_timestamp(self):
         ts = 1609459200.0 # 2021-01-01 00:00:00 UTC
         result = format_iso_time(ts)
-        self.assertTrue(result.startswith("2021-01-01T"))
+        self.assertEqual(result, "2021-01-01T00:00:00+00:00")
 
     def test_zero_timestamp(self):
         ts = 0.0
         result = format_iso_time(ts)
-        self.assertTrue(result.startswith("1970-01-01T"))
+        self.assertEqual(result, "1970-01-01T00:00:00+00:00")
 
     def test_invalid_timestamp_type(self):
         self.assertEqual(format_iso_time("not a float"), "")
