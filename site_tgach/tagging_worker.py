@@ -33,6 +33,7 @@ Functions:
 - tagging_loop(): Main asynchronous loop for processing tagging tasks.
 """
 import logging
+import re
 import base64
 import os
 import tempfile
@@ -856,10 +857,17 @@ async def tagging_loop():
                 # === МОДЕРАЦИЯ (Deep Check) ===
                 should_deep_check = False
 
-                # Проверка исключительно по ключевым словам в тегах и описании (без слепого триггера на все видео)
+                # Проверка исключительно по ключевым словам в тегах и описании с контролем границ слов
                 if save_success and tags and "error" not in tags:
                     full_text = f"{tags} {description or ''}".lower()
-                    has_suspicious = any(w in full_text for w in SUSPICIOUS_KEYWORDS)
+                    # Исключаем ложные срабатывания (например, вейп charon_baby)
+                    cleaned_text = re.sub(r'\bcharon[_\s]*baby\b', '', full_text)
+                    
+                    # Проверяем строго границы слов, чтобы не триггерить подстроки (kid в skid, baby в charon_baby и т.д.)
+                    has_suspicious = any(
+                        re.search(r'\b' + re.escape(w).replace(r'\ ', r'[\s_]+') + r'\b', cleaned_text)
+                        for w in SUSPICIOUS_KEYWORDS
+                    )
                     is_safe_style = any(s in full_text for s in SAFE_KEYWORDS)
 
                     # Чекаем только если есть подозрительные слова И ЭТО НЕ безопасный стиль (аниме/арт)

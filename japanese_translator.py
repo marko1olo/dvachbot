@@ -1775,6 +1775,15 @@ BOORU_API_CONFIGS = {
         'negative_tags': [],
         'user': None,
         'key': None,
+    },
+    'safebooru': {
+        'url': "https://safebooru.org/index.php",
+        'params': {'page': 'dapi', 's': 'post', 'q': 'index', 'json': 1, 'limit': 10},
+        'user_param': None,
+        'key_param': None,
+        'negative_tags': [],
+        'user': None,
+        'key': None,
     }
 }
 
@@ -2034,6 +2043,49 @@ async def fetch_waifu_im(session, headers, tags: List[str], is_nsfw: bool, proxy
         return None
     except Exception: return None
 
+async def fetch_pic_re(session, headers, proxy=None, **kwargs):
+    """Fetch high-res random anime artwork from pic.re."""
+    url = "https://pic.re/image"
+    try:
+        async with session.get(url, headers=headers, proxy=proxy, timeout=aiohttp.ClientTimeout(total=8), allow_redirects=False) as resp:
+            if resp.status in (301, 302, 303, 307, 308):
+                loc = resp.headers.get("Location")
+                if loc: return loc
+            if resp.status == 200:
+                return str(resp.url)
+    except Exception:
+        return None
+
+async def fetch_nekobot_nsfw(session, headers, ntype: str = "hentai", proxy=None, **kwargs) -> Optional[str]:
+    """Fetch high-res explicit hentai / ecchi / lewd from NekoBot API."""
+    url = f"https://nekobot.xyz/api/image?type={ntype}"
+    try:
+        async with session.get(url, headers=headers, proxy=proxy, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if data and isinstance(data, dict):
+                    return data.get("message")
+    except Exception:
+        return None
+
+async def fetch_4chan_live_image(session, headers, board: str = "h", proxy=None, **kwargs) -> Optional[str]:
+    """Fetch authentic live imageboard media from 4chan catalog (/h/ Hentai, /e/ Ecchi, /u/ Yuri, /c/ Cute)."""
+    url = f"https://a.4cdn.org/{board}/catalog.json"
+    try:
+        async with session.get(url, headers=headers, proxy=proxy, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+            if resp.status == 200:
+                pages = await resp.json()
+                media_list = []
+                for page in pages:
+                    for th in page.get("threads", []):
+                        tim, ext = th.get("tim"), th.get("ext")
+                        if tim and ext in (".jpg", ".png", ".webm", ".gif"):
+                            media_list.append(f"https://i.4cdn.org/{board}/{tim}{ext}")
+                if media_list:
+                    return random.choice(media_list)
+    except Exception:
+        return None
+
 async def get_random_anime_image() -> Optional[str]:
     # Опции для Yande.re
     yandere_sfw_options = [
@@ -2057,10 +2109,22 @@ async def get_random_anime_image() -> Optional[str]:
     
     # Опции для Yande.re (NSFW)
     yandere_nsfw_options = [
+        {"tag": "sex", "max_page": 50},
+        {"tag": "paizuri", "max_page": 30},
+        {"tag": "fellatio", "max_page": 40},
+        {"tag": "nipples", "max_page": 120},
+        {"tag": "pussy", "max_page": 100},
+        {"tag": "nopan", "max_page": 80},
         {"tag": "bikini", "max_page": 62},
         {"tag": "pantsu", "max_page": 312},
         {"tag": "ass", "max_page": 332},
-        {"tag": "dress", "max_page": 50},
+        {"tag": "swimsuits", "max_page": 80},
+        {"tag": "cleavage", "max_page": 150},
+        {"tag": "wet", "max_page": 50},
+        {"tag": "see_through", "max_page": 60},
+        {"tag": "skirt_lift", "max_page": 70},
+        {"tag": "uncensored", "max_page": 40},
+        {"tag": "oppai", "max_page": 50},
     ]
     selected_nsfw_option = random.choice(yandere_nsfw_options)
     
@@ -2091,6 +2155,10 @@ async def get_random_anime_image() -> Optional[str]:
                     "site_url": "https://konachan.com/post.json"
                 }
             },
+            # Safebooru (Fast fallback)
+            {"source": "safebooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "safebooru", "base_tags": "1girl", "rating_tag": "rating:general"})}},
+            # Pic.re
+            {"source": "pic.re", "fetch_func": fetch_pic_re, "params": {}},
             # Waifu.im (NSFW)
             {"source": "waifu.im", "fetch_func": fetch_waifu_im, "params": {"tags": WAIFUIM_NSFW_TAGS, "is_nsfw": True}},
             # Gelbooru (Explicit)
@@ -2106,6 +2174,10 @@ async def get_random_anime_image() -> Optional[str]:
         ])
     else:
         apis.extend([
+            # Safebooru (Fast high-res SFW)
+            {"source": "safebooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "safebooru", "base_tags": "1girl", "rating_tag": "rating:general"})}},
+            # Pic.re
+            {"source": "pic.re", "fetch_func": fetch_pic_re, "params": {}},
             # Waifu.im (SFW)
             {"source": "waifu.im", "fetch_func": fetch_waifu_im, "params": {"tags": WAIFUIM_SFW_TAGS, "is_nsfw": False}},
             # Yande.re (SFW/Questionable)
@@ -2144,12 +2216,26 @@ async def get_random_anime_image() -> Optional[str]:
     return await _fetch_image_from_apis(apis, "Все SFW/NSFW API не смогли предоставить изображение.")
 
 async def get_nsfw_anime_image() -> Optional[str]:
-    # Список проверенных NSFW тегов и их максимальных страниц для Yande.re
+    # Список проверенных NSFW / Hentai тегов и их максимальных страниц для Yande.re
     yandere_nsfw_options = [
+        {"tag": "sex", "max_page": 50},
+        {"tag": "paizuri", "max_page": 30},
+        {"tag": "fellatio", "max_page": 40},
+        {"tag": "nakadashi", "max_page": 30},
+        {"tag": "nipples", "max_page": 120},
+        {"tag": "pussy", "max_page": 100},
+        {"tag": "nopan", "max_page": 80},
         {"tag": "bikini", "max_page": 62},
         {"tag": "pantsu", "max_page": 312},
         {"tag": "ass", "max_page": 332},
-        {"tag": "dress", "max_page": 50},
+        {"tag": "swimsuits", "max_page": 80},
+        {"tag": "cleavage", "max_page": 150},
+        {"tag": "wet", "max_page": 50},
+        {"tag": "see_through", "max_page": 60},
+        {"tag": "skirt_lift", "max_page": 70},
+        {"tag": "uncensored", "max_page": 40},
+        {"tag": "maid", "max_page": 60},
+        {"tag": "oppai", "max_page": 50},
     ]
     selected_option = random.choice(yandere_nsfw_options)
 
@@ -2203,6 +2289,12 @@ async def get_nsfw_anime_image() -> Optional[str]:
             }
         },
         
+        # NekoBot (Fast High-Res Hentai & Lewd API)
+        {"source": "nekobot", "fetch_func": fetch_nekobot_nsfw, "params": {"ntype": random.choice(["hentai", "paizuri", "hneko", "hthigh", "lewd", "boobs", "ass", "4k"])}},
+        # 4chan Live Imageboards (/h/ Hentai & /e/ Ecchi)
+        {"source": "4chan_h", "fetch_func": fetch_4chan_live_image, "params": {"board": "h"}},
+        {"source": "4chan_e", "fetch_func": fetch_4chan_live_image, "params": {"board": "e"}},
+        
         # Gelbooru
         {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:explicit"})}},
         {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": random.choice(GELBOORU_NSFW_BASE_TAGS), "rating_tag": "rating:questionable"})}},
@@ -2220,8 +2312,8 @@ async def get_nsfw_anime_image() -> Optional[str]:
 
 async def get_monogatari_image() -> Optional[str]:
     apis = [
-        {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "danbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"})}},
-        {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"})}},
+        # Safebooru (Fast high-res Monogatari)
+        {"source": "safebooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "safebooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:general"})}},
         {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "danbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"})}},
         {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"})}},
         {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": "monogatari_(series)", "rating_tag": "rating:questionable"})}},
@@ -2280,6 +2372,8 @@ async def get_loli_image() -> Optional[str]:
     """Legacy /loli image command: loli tag, non-explicit ratings, no shota."""
     loli_query = "loli score:>5 " + " ".join(LOLI_IMAGE_NEGATIVE_TAGS)
     apis = [
+        # Safebooru (Fast SFW Loli)
+        {"source": "safebooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "safebooru", "base_tags": "loli", "rating_tag": "rating:general"})}},
         {"source": "aibooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "aibooru", "base_tags": loli_query, "rating_tag": "rating:questionable"})}},
         {"source": "danbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "danbooru", "base_tags": loli_query, "rating_tag": "rating:questionable"})}},
         {"source": "gelbooru", "fetch_func": _fetch_from_booru_api, "params": {"booru_params": BooruAPIParams(**{"api_type": "gelbooru", "base_tags": loli_query, "rating_tag": "rating:questionable"})}},
@@ -2381,6 +2475,8 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
             main_params.update({'tags': final_tags, 'random': 'true', 'login': config.get('user'), 'api_key': config.get('key')})
         elif api_type == 'aibooru':
             main_params.update({'tags': final_tags, 'random': 'true'})
+        elif api_type == 'safebooru':
+            main_params.update({'tags': f'{base_tags}'.strip()})
 
         # Чистим параметры
         main_params = {k: v for k, v in main_params.items() if v is not None}
@@ -2401,6 +2497,12 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
         if not valid_posts: return None
 
         post = random.choice(valid_posts)
+        if api_type == 'safebooru':
+            d = post.get('directory')
+            img = post.get('image')
+            if d and img:
+                return f"https://safebooru.org/images/{d}/{img}"
+        
         url = post.get('file_url') or post.get('large_file_url')
         
         if url:
@@ -2487,7 +2589,7 @@ async def get_event_anime_images(is_nsfw: bool, is_loli: bool = False, count: in
         print(f"[events] Gelbooru failed for '{base_tags}': {e}")
 
     # Danbooru fallback when Gelbooru returns nothing useful
-    if not raw_urls:
+    if len(raw_urls) < count:
         try:
             db_rating = 'e' if is_nsfw else 'q'
             db_params = {
@@ -2507,6 +2609,43 @@ async def get_event_anime_images(is_nsfw: bool, is_loli: bool = False, count: in
                                 raw_urls.append(url)
         except Exception as e:
             print(f"[events] Danbooru fallback failed for '{base_tags}': {e}")
+
+    # Safebooru fallback for reliable SFW / Character images
+    if len(raw_urls) < count:
+        try:
+            safe_tag = base_tags.split()[0] if base_tags else "1girl"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&limit={count * 2}&tags={safe_tag}",
+                    timeout=aiohttp.ClientTimeout(total=8)
+                ) as resp:
+                    if resp.status == 200:
+                        posts = await resp.json()
+                        if isinstance(posts, list):
+                            for p in posts:
+                                d, img = p.get('directory'), p.get('image')
+                                if d and img:
+                                    raw_urls.append(f"https://safebooru.org/images/{d}/{img}")
+        except Exception as e:
+            print(f"[events] Safebooru fallback failed: {e}")
+
+    # Yande.re fallback
+    if len(raw_urls) < count:
+        try:
+            r_tag = "rating:e" if is_nsfw else "rating:s"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"https://yande.re/post.json?limit={count * 2}&tags={r_tag}",
+                    timeout=aiohttp.ClientTimeout(total=8)
+                ) as resp:
+                    if resp.status == 200:
+                        posts = await resp.json()
+                        if isinstance(posts, list):
+                            for p in posts:
+                                u = p.get('file_url') or p.get('jpeg_url')
+                                if u: raw_urls.append(u)
+        except Exception as e:
+            print(f"[events] Yande.re fallback failed: {e}")
 
     # Filter: only supported Telegram media types — drop .webm and unknown formats
     urls = [

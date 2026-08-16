@@ -6,9 +6,10 @@ import time
 import random
 
 try:
-    asyncio.get_event_loop()
+    asyncio.get_running_loop()
 except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
+    pass
+
 
 from pyrogram import Client
 from pyrogram.errors import FileReferenceExpired

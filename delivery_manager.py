@@ -132,6 +132,10 @@ PRIORITY_SPLIT_MIN_PASSIVE = 200
 WORKER_RESTART_DELAY_SEC = 5.0
 WORKER_RESTART_MAX_DELAY_SEC = 60.0
 PASSIVE_MAX_PREEMPTIONS = 5
+# Cumulative delivery metrics across phases for consolidated post summary printing
+cumulative_post_metrics = defaultdict(lambda: {
+    'success': 0, 'priority': 0, 'passive': 0, 'errors': 0, 'blocks': 0, 'start_time': 0, 'total': 0
+})
 # ENABLE_MULTILANG is canonical in shared_state.py (imported via *)
 RE_YOU_PATTERN = re.compile(r'>>(\d+)')
 
@@ -809,6 +813,34 @@ class MessageDeliveryTask:
                 passive_recipients_for_later.update(budget_deferred)
                 budget_reason = getattr(delivery_results, "interrupted_reason", None) or "phase_budget"
                 deferred_reason = f"{deferred_reason}+{budget_reason}" if deferred_reason else budget_reason
+
+            # Track cumulative delivery metrics for single consolidated summary
+            d_stats = getattr(delivery_results, "stats", {})
+            post_key = (self.board_id, self.post_num)
+            cum = cumulative_post_metrics[post_key]
+            if not cum['start_time']:
+                cum['start_time'] = self.started_at or time.time()
+                cum['total'] = original_recipients_for_post or len(recipients_to_send)
+            cum['success'] += d_stats.get('success', len(delivery_results))
+            cum['priority'] += d_stats.get('priority_recipients', 0)
+            cum['passive'] += d_stats.get('passive_recipients', 0)
+            cum['errors'] += d_stats.get('errors', 0)
+            cum['blocks'] += d_stats.get('blocks', 0)
+
+            # Stage 2 milestone: Log when priority / active recipients phase completes
+            if delivery_phase_for_send == "priority" and not cum.get('priority_logged'):
+                cum['priority_logged'] = True
+                p_num = self.post_num if self.post_num is not None else "sys"
+                prio_elapsed = max(0.05, time.time() - cum['start_time'])
+                prio_success = d_stats.get('priority_recipients', len(delivery_results))
+                prio_total = len(recipients_to_send)
+                try:
+                    print(f"⚡ Пост #{p_num} [/{self.board_id}/] разослан активным: {prio_success}/{prio_total} | Время: {prio_elapsed:.1f}с")
+                except Exception:
+                    try:
+                        print(f"[Active] Post #{p_num} [/{self.board_id}/] sent to active: {prio_success}/{prio_total} | Time: {prio_elapsed:.1f}s")
+                    except Exception:
+                        pass
         except Exception:
             if planned_passive_durable_id and passive_recipients_for_later:
                 planned_passive_item["durable_delivery_id"] = planned_passive_durable_id
@@ -869,8 +901,24 @@ class MessageDeliveryTask:
                     separators=(",", ":"),
                 ),
             )
-        elif self.msg_data.get("durable_delivery_id"):
-            await _delete_durable_delivery_item(self.msg_data, "completed")
+        else:
+            if self.msg_data.get("durable_delivery_id"):
+                await _delete_durable_delivery_item(self.msg_data, "completed")
+            # Stage 3 milestone: Post delivery is completely finished for all recipients!
+            post_key = (self.board_id, self.post_num)
+            cum = cumulative_post_metrics.pop(post_key, None)
+            if cum:
+                elapsed = max(0.1, time.time() - cum['start_time'])
+                p_num = self.post_num if self.post_num is not None else "sys"
+                p_total = cum['total'] or (cum['success'] + cum['errors'] + cum['blocks'])
+                log_msg = f"📊 Пост #{p_num} [/{self.board_id}/] разослан всем: {cum['success']}/{p_total} (прио: {cum['priority']}, пасс: {cum['passive']}) | Ошибок: {cum['errors']} | Блоков: {cum['blocks']} | Время: {elapsed:.1f}с"
+                try:
+                    print(log_msg)
+                except Exception:
+                    try:
+                        print(f"[Completed] Post #{p_num} [/{self.board_id}/] sent to all: {cum['success']}/{p_total} (prio: {cum['priority']}, pass: {cum['passive']}) | Errors: {cum['errors']} | Blocks: {cum['blocks']} | Time: {elapsed:.1f}s")
+                    except Exception:
+                        pass
 
     async def _handle_preemption(self):
         """Обрабатывает логику прерывания для пассивной фазы."""
@@ -1108,7 +1156,7 @@ async def board_help_worker(board_id: str):
     await asyncio.sleep(random.randint(10, 300))
     while True:
         try:
-            delay = random.randint(10800, 72000)  # от 3 до 20 часов
+            delay = random.randint(28800, 43200) # от 8 до 12 часов (не чаще 8ч)
             await asyncio.sleep(delay)
             activity = await main.get_board_activity_last_hours(board_id, hours=24)
             if activity < 15: # Если меньше 15 постов за сутки - доска мертва
@@ -1156,7 +1204,18 @@ async def board_help_worker(board_id: str):
                     elif choice == 5: message_text = random.choice(main.CHANNEL_PROMO_TEXT_RU)
                     else: message_text = random.choice(main.MECHANICS_INFO_TEXT_RU)
                 now_dt = datetime.now(UTC)
-                content = {'type': 'text', 'text': message_text, 'is_system_message': True}
+                from banner_manager import get_banner_file
+                banner_cat = "start" if choice == 1 else "calm"
+                fname, photo_payload = get_banner_file(category=banner_cat)
+                fid = photo_payload if isinstance(photo_payload, str) else None
+                content = {
+                    'type': 'photo' if fid else 'text',
+                    'file_id': fid,
+                    'caption': message_text,
+                    'text': message_text,
+                    'is_system_message': True,
+                    'archive_allowed': True
+                }
                 post_num = await create_post(
                     board_id=board_id, author_id=0, content=content,
                     timestamp=now_dt.timestamp(), is_from_site=False, stream=stream

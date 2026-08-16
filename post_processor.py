@@ -383,6 +383,18 @@ class NewPostProcessor:
                         message_to_post[(self.user_id, m.message_id)] = self.current_post_num
 
     async def _enqueue_and_notify(self):
+        p_num = self.current_post_num
+        c_type = self.final_content.get('type', 'text')
+        t_info = f" (тред: #{self.thread_id})" if self.thread_id else ""
+        recip_count = len(self.recipients) if self.recipients else 0
+        try:
+            print(f"📥 Пост #{p_num} [/{self.board_id}/]{t_info} получен (тип: {c_type}, получателей: {recip_count})")
+        except Exception:
+            try:
+                print(f"[Received] Post #{p_num} [/{self.board_id}/]{t_info} (type: {c_type}, recipients: {recip_count})")
+            except Exception:
+                pass
+
         if not self.is_shadow_muted and self.recipients:
             from delivery_manager import enqueue_board_message
             await enqueue_board_message(self.board_id, {

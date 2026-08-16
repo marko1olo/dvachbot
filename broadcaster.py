@@ -195,10 +195,11 @@ def _order_recipients_for_delivery(board_id: str, recipients) -> tuple[list[int]
     return priority + passive, len(priority), len(passive)
 
 class DeliveryResults(list):
-    def __init__(self, values=(), remaining_recipients=None, interrupted_reason: str | None = None):
+    def __init__(self, values=(), remaining_recipients=None, interrupted_reason: str | None = None, stats: dict | None = None):
         super().__init__(values)
         self.remaining_recipients = set(remaining_recipients or ())
         self.interrupted_reason = interrupted_reason
+        self.stats = stats or {}
 
 async def _build_lie_media_content(content: dict, board_id: str) -> dict:
     ctype = str(content.get('type') or '').split('.')[-1].lower()
@@ -358,6 +359,7 @@ class MessageBroadcaster:
             self.all_results,
             remaining_recipients=remaining_recipients_for_later,
             interrupted_reason=interrupted_reason,
+            stats=self.stats,
         )
 
     async def _prepare_content_and_mentions(self):
@@ -543,7 +545,6 @@ class MessageBroadcaster:
                                 ),
                             )
                     else:
-                        print(f"❌ Ошибка отправки {uid}: {res}")
                         self.stats['errors'] += 1
                 elif res:
                     self.all_results.append((uid, res))
@@ -554,12 +555,8 @@ class MessageBroadcaster:
                     remaining_recipients_for_later.update(queue)
                     queue.clear()
                     interrupted_reason = "phase_budget_before_floodwait"
-                    if self.verbose:
-                        print(f"⏳ FloodWait: пауза {wait_real} сек. (перенос бюджета) ...")
                     await asyncio.sleep(wait_real)
                     break
-                if self.verbose:
-                    print(f"⏳ FloodWait: пауза {wait_real} сек. В очереди: {len(queue)}...")
                 await asyncio.sleep(wait_real)
                 CHUNK_SIZE = max(DELIVERY_MIN_CHUNK_SIZE, CHUNK_SIZE - 5)
             else:
@@ -591,62 +588,48 @@ class MessageBroadcaster:
                 queue_total_sec = max(0.0, time.time() - float(self.queue_enqueued_at))
             except (TypeError, ValueError):
                 queue_total_sec = None
-        if self.verbose:
-            log_line = (
-                f"📊 #{self.post_num} [{self.delivery_phase}] | "
-                f"✅ {self.stats['success']}/{len(active_recipients)} phase "
-                f"({len(active_recipients)}/{original_recipients_count}, def {self.delivery_deferred_recipients}) | "
-                f"🚫 {self.stats['blocks']} | "
-                f"❌ {self.stats['errors']} | "
-                f"👻 {self.stats['ghosts']} | "
-                f"🔄 {self.stats['retries']} | "
-                f"⏲ {self.stats['timeouts']} | "
-                f"⏭ {len(remaining_recipients_for_later)} | "
-                f"prio {self.stats['priority_recipients']}/{len(active_recipients)} | "
-                f"⏱ {time_taken:.1f}s"
-            )
-            print(log_line)
-            delivery_record = {
-                "ts": round(time.time(), 3),
-                "board_id": self.board_id,
-                "post_num": self.post_num,
-                "phase": self.delivery_phase,
-                "type": str(self.content.get("type")),
-                "recipients": len(active_recipients),
-                "phase_recipients": len(active_recipients),
-                "original_recipients": original_recipients_count,
-                "deferred_recipients": self.delivery_deferred_recipients,
-                "priority_recipients": self.stats["priority_recipients"],
-                "passive_recipients": self.stats["passive_recipients"],
-                "success": self.stats["success"],
-                "blocks": self.stats["blocks"],
-                "errors": self.stats["errors"],
-                "ghosts": self.stats["ghosts"],
-                "retries": self.stats["retries"],
-                "timeouts": self.stats["timeouts"],
-                "budget_deferred": len(remaining_recipients_for_later),
-                "interrupted_reason": interrupted_reason,
-                "phase_budget_sec": phase_budget_sec,
-                "seconds": round(time_taken, 3),
-                "post_age_sec": round(post_age_sec, 3) if post_age_sec is not None else None,
-                "queue_wait_sec": round(self.queue_wait_sec, 3) if self.queue_wait_sec is not None else None,
-                "queue_total_sec": round(queue_total_sec, 3) if queue_total_sec is not None else None,
-            }
-            main.delivery_metrics[self.board_id].append(delivery_record)
+
+        delivery_record = {
+            "ts": round(time.time(), 3),
+            "board_id": self.board_id,
+            "post_num": self.post_num,
+            "phase": self.delivery_phase,
+            "type": str(self.content.get("type")),
+            "recipients": len(active_recipients),
+            "phase_recipients": len(active_recipients),
+            "original_recipients": original_recipients_count,
+            "deferred_recipients": self.delivery_deferred_recipients,
+            "priority_recipients": self.stats["priority_recipients"],
+            "passive_recipients": self.stats["passive_recipients"],
+            "success": self.stats["success"],
+            "blocks": self.stats["blocks"],
+            "errors": self.stats["errors"],
+            "ghosts": self.stats["ghosts"],
+            "retries": self.stats["retries"],
+            "timeouts": self.stats["timeouts"],
+            "budget_deferred": len(remaining_recipients_for_later),
+            "interrupted_reason": interrupted_reason,
+            "phase_budget_sec": phase_budget_sec,
+            "seconds": round(time_taken, 3),
+            "post_age_sec": round(post_age_sec, 3) if post_age_sec is not None else None,
+            "queue_wait_sec": round(self.queue_wait_sec, 3) if self.queue_wait_sec is not None else None,
+            "queue_total_sec": round(queue_total_sec, 3) if queue_total_sec is not None else None,
+        }
+        main.delivery_metrics[self.board_id].append(delivery_record)
+        main.runtime_logger.debug(
+            "delivery_result %s",
+            json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
+        )
+        if time_taken >= DELIVERY_SLOW_PHASE_SEC or (queue_total_sec is not None and queue_total_sec >= DELIVERY_SLOW_PHASE_SEC):
             main.runtime_logger.debug(
-                "delivery_result %s",
+                "delivery_slow %s",
                 json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
             )
-            if time_taken >= DELIVERY_SLOW_PHASE_SEC or (queue_total_sec is not None and queue_total_sec >= DELIVERY_SLOW_PHASE_SEC):
-                main.runtime_logger.debug(
-                    "delivery_slow %s",
-                    json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
-                )
-            if remaining_recipients_for_later:
-                main.runtime_logger.debug(
-                    "delivery_phase_budget_deferred %s",
-                    json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
-                )
+        if remaining_recipients_for_later:
+            main.runtime_logger.debug(
+                "delivery_phase_budget_deferred %s",
+                json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
+            )
 
 
     async def _save_copies_to_db(self):

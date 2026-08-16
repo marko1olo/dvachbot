@@ -37,6 +37,14 @@ async def _download_image_with_proxy(url: str, timeout: int=90, depth: int=0) ->
         headers['Referer'] = 'https://danbooru.donmai.us/'
     elif 'aibooru' in domain:
         headers['Referer'] = 'https://aibooru.online/'
+    elif 'safebooru' in domain:
+        headers['Referer'] = 'https://safebooru.org/'
+    elif 'nekobot' in domain:
+        headers['Referer'] = 'https://nekobot.xyz/'
+    elif '4cdn' in domain or '4chan' in domain:
+        headers['Referer'] = 'https://boards.4channel.org/'
+    elif 'pic.re' in domain:
+        headers['Referer'] = 'https://pic.re/'
     else:
         headers['Referer'] = f'{scheme}://{domain}/'
     for attempt in range(2):
@@ -107,8 +115,9 @@ def extract_msg_media_file_id(msg):
 
 def _resize_image_if_needed(image_bytes: bytes) -> bytes:
     """
-    (СИНХРОННАЯ) Оптимизированная проверка.
-    ВАЖНО: Пропускает видео (MP4, WebM) и GIF без изменений, чтобы не ломать кодировку.
+    (СИНХРОННАЯ) Оптимизированная проверка и ресайз.
+    ВАЖНО: Пропускает видео (MP4, WebM) и анимированные GIF без изменений, чтобы не ломать кодировку.
+    Корректно обрабатывает прозрачность RGBA/LA на белый фон без черных артефактов.
     """
     MAX_DIMENSION_SUM = 10000
     MAX_ASPECT_RATIO = 20.0
@@ -132,7 +141,16 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
                     pass
                 else:
                     return image_bytes
-            img = img.convert('RGB')
+
+            # Корректная обработка прозрачности (белый фон вместо черного)
+            if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                alpha_img = img.convert('RGBA')
+                bg = Image.new('RGB', alpha_img.size, (255, 255, 255))
+                bg.paste(alpha_img, mask=alpha_img.split()[3])
+                img = bg
+            else:
+                img = img.convert('RGB')
+
             new_width, new_height = (width, height)
             if width + height > MAX_DIMENSION_SUM:
                 scale_factor = MAX_DIMENSION_SUM / (width + height)

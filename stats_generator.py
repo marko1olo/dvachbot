@@ -3,10 +3,13 @@ import sqlite3
 import contextlib
 import time
 import json
+import math
+from collections import defaultdict, deque
 from dataclasses import dataclass
 import io
 import random
 import re
+import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -603,7 +606,7 @@ def _generate_chart_10(thirty_days_ago, c, images):
 
 def _generate_chart_11(thirty_days_ago, c, images):
     edges_data = None
-    # 11. Граф Социального Пузыря (Эхо-камеры) — улучшенное
+    # 11. Граф Социального Пузыря (Эхо-камеры) — профессиональный кластерный вид
     try:
         c.execute('''
             SELECT repl.author_id as replier, orig.author_id as original, COUNT(*) as weight
@@ -625,52 +628,112 @@ def _generate_chart_11(thirty_days_ago, c, images):
                     G.add_edge(u, v, weight=w)
 
             if len(G) > 0:
-                # Take top-60 by degree — fewer nodes = better spread
-                top_nodes = [node for node, degree in
-                             sorted(G.degree(), key=lambda x: x[1], reverse=True)[:60]]
+                # Top 45 nodes for crystal clear readability without central hairballs
+                top_nodes = [node for node, deg in sorted(G.degree(weight='weight'), key=lambda x: x[1], reverse=True)[:45]]
                 G_sub = G.subgraph(top_nodes).copy()
 
-                # Prune weak edges to reduce visual noise
+                # Filter weak single-link edges
                 weak_edges = [(u, v) for u, v, d in G_sub.edges(data=True) if d['weight'] < 2]
-                G_sub2 = G_sub.copy()
-                G_sub2.remove_edges_from(weak_edges)
+                G_sub.remove_edges_from(weak_edges)
 
-                communities = nx.community.louvain_communities(G_sub2, seed=42)
-                community_map = {}
+                try:
+                    communities = nx.community.louvain_communities(G_sub, seed=42)
+                except Exception:
+                    communities = [set(G_sub.nodes())]
+
+                communities = sorted(communities, key=len, reverse=True)
+
+                PALETTE = [
+                    '#00f0ff', # Neon Cyan
+                    '#ff3366', # Neon Red/Pink
+                    '#00ff99', # Neon Mint
+                    '#ffb800', # Electric Amber
+                    '#a855f7', # Vivid Purple
+                    '#38bdf8', # Sky Blue
+                    '#f43f5e'  # Rose
+                ]
+
+                # Position community clusters in an organized radial layout
+                pos = {}
+                num_comm = len(communities)
                 for i, comm in enumerate(communities):
-                    for node in comm:
-                        community_map[node] = i
+                    angle = 2 * math.pi * i / max(1, num_comm)
+                    radius = 1.8 if num_comm > 1 else 0.0
+                    center_x = radius * math.cos(angle)
+                    center_y = radius * math.sin(angle)
 
-                node_colors = [community_map.get(node, 0) for node in G_sub2.nodes()]
-                # Node size = degree
-                node_sizes = [max(40, G_sub2.degree(n) * 25) for n in G_sub2.nodes()]
-                edge_weights_raw = [d['weight'] for _, _, d in G_sub2.edges(data=True)]
-                max_ew = max(edge_weights_raw) if edge_weights_raw else 1
-                edge_widths = [0.4 + 2.0 * (w / max_ew) for w in edge_weights_raw]
+                    sub_g = G_sub.subgraph(comm)
+                    if len(comm) > 1:
+                        sub_pos = nx.spring_layout(sub_g, k=0.6 / math.sqrt(len(comm)), iterations=80, seed=42 + i)
+                        for node, (nx_x, nx_y) in sub_pos.items():
+                            pos[node] = (center_x + nx_x * 0.9, center_y + nx_y * 0.9)
+                    else:
+                        node = list(comm)[0]
+                        pos[node] = (center_x, center_y)
 
-                fig, ax = plt.subplots(figsize=(12, 10))
-                ax.set_facecolor('#0d1117')
-                # k=0.5 for better spread, rescale to fill canvas
-                pos = nx.spring_layout(G_sub2, k=0.5, iterations=100, seed=42)
-                nx.draw_networkx_nodes(G_sub2, pos, node_size=node_sizes,
-                                       node_color=node_colors, cmap=plt.cm.tab20,
-                                       ax=ax, alpha=0.92)
-                nx.draw_networkx_edges(G_sub2, pos, width=edge_widths,
-                                       alpha=0.25, edge_color='#58a6ff', ax=ax)
-                # Label only top-15 by degree
-                top15 = sorted(G_sub2.nodes(), key=lambda n: G_sub2.degree(n), reverse=True)[:15]
-                labels = {n: generate_schizo_name(n).split(' ')[0] for n in top15}
-                nx.draw_networkx_labels(G_sub2, pos, labels, font_size=6.5,
-                                        font_color='#e6edf3', ax=ax)
-                # Community count annotation
-                ax.text(0.01, 0.01,
-                        f'Кластеров: {len(communities)}  |Узлов: {len(G_sub2)}  |Связей: {G_sub2.number_of_edges()}',
-                        transform=ax.transAxes, fontsize=8, color='#8b949e', va='bottom')
-                plt.title('11. Граф Социального Пузыря (Эхо-камеры)\n'
-                         'Цвет = кластер, размер = связность, подписаны топ-15',
-                         fontsize=14, fontweight='bold', color='#00ffcc', pad=10)
+                fig, ax = plt.subplots(figsize=(13, 10), facecolor='#0b0f17')
+                ax.set_facecolor('#0b0f17')
+
+                # Draw subtle background glow clouds around clusters
+                for i, comm in enumerate(communities):
+                    if len(comm) >= 3:
+                        pts = np.array([pos[n] for n in comm])
+                        center = pts.mean(axis=0)
+                        color = PALETTE[i % len(PALETTE)]
+                        max_dist = max(np.linalg.norm(pt - center) for pt in pts) + 0.35
+                        circle = plt.Circle(center, max_dist, color=color, alpha=0.04, zorder=1)
+                        ax.add_patch(circle)
+                        circle_inner = plt.Circle(center, max_dist * 0.7, color=color, alpha=0.06, zorder=1)
+                        ax.add_patch(circle_inner)
+
+                # Draw edges
+                for u, v, d in G_sub.edges(data=True):
+                    p1, p2 = pos[u], pos[v]
+                    w = d['weight']
+                    u_comm = next((i for i, c in enumerate(communities) if u in c), 0)
+                    v_comm = next((i for i, c in enumerate(communities) if v in c), 0)
+                    if u_comm == v_comm:
+                        color = PALETTE[u_comm % len(PALETTE)]
+                        alpha = min(0.65, 0.20 + 0.08 * math.log(w + 1))
+                        lw = min(3.5, 0.8 + 0.5 * math.log(w + 1))
+                    else:
+                        color = '#64748b'
+                        alpha = 0.15
+                        lw = 0.6
+                    ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color=color, alpha=alpha, linewidth=lw, zorder=2)
+
+                # Draw nodes
+                for i, comm in enumerate(communities):
+                    color = PALETTE[i % len(PALETTE)]
+                    comm_nodes = list(comm)
+                    comm_pts = [pos[n] for n in comm_nodes]
+                    comm_sizes = [max(120, min(800, G_sub.degree(n, weight='weight') * 18)) for n in comm_nodes]
+                    xs = [pt[0] for pt in comm_pts]
+                    ys = [pt[1] for pt in comm_pts]
+                    ax.scatter(xs, ys, s=[s * 1.5 for s in comm_sizes], color=color, alpha=0.15, zorder=3, edgecolors='none')
+                    ax.scatter(xs, ys, s=comm_sizes, color=color, alpha=0.92, zorder=4, edgecolors='#ffffff', linewidths=1.2)
+
+                # Label the top leader node of each cluster with a framed neon badge
+                for idx, comm in enumerate(communities):
+                    leader = max(comm, key=lambda n: G_sub.degree(n, weight='weight'))
+                    px, py = pos[leader]
+                    raw_name = generate_schizo_name(leader)
+                    short_name = raw_name.split(' (')[0] if ' (' in raw_name else raw_name
+                    txt = ax.text(px, py + 0.16, f"Лидер: {short_name}", fontsize=8.5, fontweight='bold', color='#ffffff',
+                                  ha='center', va='bottom', zorder=6)
+                    txt.set_bbox(dict(facecolor='#0b0f17', edgecolor=PALETTE[idx % len(PALETTE)], boxstyle='round,pad=0.3', alpha=0.92, linewidth=1.0))
+
+                # Clean Title & Subtitle
+                fig.text(0.5, 0.96, "11. Граф Социальных Пузырей (Эхо-Камеры)",
+                         fontsize=16, fontweight='bold', color='#00f0ff', ha='center', va='top')
+                fig.text(0.5, 0.925, "Кластеры взаимных ответов и переписок (30 дней) • Каждый цвет = отдельная эхо-камера",
+                         fontsize=10, color='#94a3b8', ha='center', va='top')
+
+                stats_str = f"Социальных пузырей: {len(communities)}   •   Активных узлов: {len(G_sub)}   •   Сильных связей: {G_sub.number_of_edges()}"
+                fig.text(0.5, 0.03, stats_str, fontsize=9.5, fontweight='bold', color='#64748b', ha='center', va='bottom')
+
                 ax.axis('off')
-                plt.tight_layout()
+                plt.subplots_adjust(left=0.04, right=0.96, top=0.89, bottom=0.07)
                 save_chart(images, '11_echo_chambers.png')
     except Exception as e:
         print(f"Error Chart 11: {e}")
@@ -1024,7 +1087,7 @@ def _generate_chart_16(thirty_days_ago, c, images):
         print(f"Error Chart 16: {e}")
 
 def _generate_chart_17(thirty_days_ago, c, images):
-    # 17. Индекс Токсичности (Сентимент)
+    # 17. Индекс Базы и Сажи (Двачевский сентимент)
     try:
         c.execute('''
             SELECT date(timestamp, 'unixepoch', 'localtime') as d, content
@@ -1033,15 +1096,46 @@ def _generate_chart_17(thirty_days_ago, c, images):
         ''', (thirty_days_ago,))
         sentiment_posts = c.fetchall()
         if sentiment_posts:
-            pos_words = {'база', 'базирован', 'красавчик', 'хорош', 'круто', 'ахуенно', 'охуенно', 'люблю', 'спасибо', 'четко', 'класс', 'лучший', 'добро'}
-            neg_words = {'говно', 'хуйня', 'пидор', 'сука', 'урод', 'ненавижу', 'смерть', 'боль', 'плохо', 'худший', 'тупой', 'дебил', 'долбоеб', 'даун', 'мразь', 'ебать', 'хуй', 'бля', 'пиздец'}
+            POS_PREFIXES = (
+                # База, истина, факты, канон
+                'баз', 'годн', 'шедевр', 'истин', 'факт', 'правд', 'канон', 'верн', 'правильн',
+                # Одобрение, двачевание, плюсование
+                'двачу', 'тричу', 'плюсу', 'плюсан', 'соглас', 'одобря', 'поддержив', 'подпишус', 'рекаю', 'рекоменд',
+                # Нормас, найс, гуд
+                'норм', 'нормас', 'нормальн', 'найс', 'гуд',
+                # Вин, эпик, мощь, тащит
+                'вин', 'винрар', 'эпик', 'затащ', 'тащ', 'мощн', 'мощь', 'гени', 'божеств', 'богич', 'великолеп', 'великан', 'титан',
+                # Слон, гигачад, сигма, альфа, красава
+                'слон', 'слоняр', 'гигачад', 'чад', 'сигм', 'альфа', 'красав', 'батя', 'батян', 'легенд',
+                # Имба, пушка, огонь, вышка, сочно
+                'имб', 'пушк', 'огнищ', 'вышк', 'сочн', 'смачн', 'зачет', 'зачёт', 'четк', 'чётк', 'ништ', 'ништяк', 'зашибис', 'разъеб', 'разъёб',
+                # Ламповость, уют, чилл, милота, няшность
+                'лампов', 'лампот', 'душевн', 'атмосфер', 'уютн', 'кайф', 'балд', 'чилл', 'расслаб', 'милот', 'няш', 'кавай',
+                # Угар, кек, рофл, смех, вголос, ор
+                'кек', 'рофл', 'вголос', 'голосин', 'орнул', 'орут', 'орешь', 'орёшь', 'орали', 'проорал', 'проору', 'ржу', 'ржем', 'ржём', 'смешн', 'смехот', 'достав', 'угар', 'угор', 'лол',
+                # Ценность, статус
+                'золот', 'платин', 'бриллиант', 'жемчуж', 'респект', 'уваж', 'жиз', 'вайб', 'топч', 'топов',
+                # Бордовый высший балл (позитивный мат и любовь)
+                'охуен', 'ахуен', 'пиздат', 'заебис', 'заебок', 'люблю', 'обожа', 'спасибо', 'благодар', 'добро', 'приятн', 'радует', 'нравит'
+            )
+            NEG_PREFIXES = (
+                'саж', 'зашквар', 'срач', 'срут', 'срет', 'срёт', 'срали', 'батхерт', 'батхёрт',
+                'попобол', 'бомб', 'порва', 'рвет', 'рвёт', 'рвут', 'маня', 'шиз', 'слил', 'слив',
+                'попущ', 'опущ', 'обоср', 'обосс', 'соев', 'сояк', 'куколд', 'чухан', 'чушк',
+                'нищук', 'нищ', 'кукарек', 'петух', 'петуш', 'гной', 'раков', 'ракует', 'чмо',
+                'чмон', 'чмыр', 'гнид', 'мраз', 'мразот', 'вырод', 'уеб', 'уёб', 'параш', 'шлак',
+                'позор', 'говн', 'хуйн', 'хует', 'хуес', 'хуёс', 'пидор', 'пидар', 'пидарас',
+                'пидорас', 'сук', 'сучар', 'урод', 'туп', 'дебил', 'долбоеб', 'долбоёб', 'даун',
+                'ебат', 'ебет', 'ебёт', 'ебут', 'ебал', 'заеб', 'выеб', 'доеб', 'хуй', 'нахуй',
+                'похуй', 'охуел', 'бля', 'пиздец', 'пиздабол'
+            )
 
-            daily_sent = {}
+            daily_scores = defaultdict(list)
+            total_pos_matches = 0
+            total_neg_matches = 0
+
             for r in sentiment_posts:
                 d = r['d']
-                if d not in daily_sent:
-                    daily_sent[d] = []
-
                 try:
                     content_dict = json.loads(r['content'])
                     text = (content_dict.get('text') or content_dict.get('caption') or '').lower()
@@ -1051,37 +1145,66 @@ def _generate_chart_17(thirty_days_ago, c, images):
                 if not text:
                     continue
 
-                words = text.split()
-                score = 0
+                words = re.findall(r'[а-яёa-z0-9]+', text)
+                post_score = 0
                 for w in words:
-                    w_clean = w.strip('.,!?-()":;')
-                    if w_clean in pos_words:
-                        score += 1
-                    elif w_clean in neg_words:
-                        score -= 1
-                daily_sent[d].append(score)
+                    if any(w.startswith(p) for p in POS_PREFIXES):
+                        post_score += 1
+                        total_pos_matches += 1
+                    elif any(w.startswith(p) for p in NEG_PREFIXES):
+                        post_score -= 1
+                        total_neg_matches += 1
+                daily_scores[d].append(post_score)
 
             plot_data = []
-            for d, scores in sorted(daily_sent.items()):
-                avg_score = sum(scores) / len(scores) if scores else 0.0
-                plot_data.append({'d': d, 'sentiment': avg_score})
+            for d, sc_list in sorted(daily_scores.items()):
+                avg_s = np.mean(sc_list) if sc_list else 0.0
+                plot_data.append({'d': d, 'sentiment': avg_s})
 
-            if plot_data:
-                df_sent = pd.DataFrame(plot_data)
-                fig, ax = plt.subplots(figsize=(10, 5))
-                xs17 = list(range(len(df_sent)))
-                vals17 = df_sent['sentiment'].tolist()
-                ax.plot(xs17, vals17, marker='o', color='#aaaaaa', linewidth=1.5, zorder=3)
-                ax.fill_between(xs17, vals17, 0, where=[v >= 0 for v in vals17], color='#33cc66', alpha=0.3, label='База')
-                ax.fill_between(xs17, vals17, 0, where=[v < 0 for v in vals17], color='#ff3333', alpha=0.3, label='Токсик')
-                ax.axhline(0, color='#555555', linewidth=1, linestyle='--')
-                step17 = max(1, len(df_sent)//10)
-                ax.set_xticks(xs17[::step17])
-                ax.set_xticklabels(df_sent['d'].tolist()[::step17], rotation=45, ha='right', fontsize=7)
-                ax.legend(fontsize=9)
-                plt.title('17. Индекс Токсичности (Двачевский сентимент)', fontsize=16, fontweight='bold', color='#ff3333')
-                plt.ylabel('Средний сентимент (выше = база, ниже = токсик)')
-                plt.tight_layout()
+            df = pd.DataFrame(plot_data)
+            if not df.empty:
+                df['ema'] = df['sentiment'].ewm(span=3, adjust=False).mean()
+
+                fig, ax = plt.subplots(figsize=(12, 6), facecolor='#0b0f17')
+                ax.set_facecolor('#0b0f17')
+
+                xs = np.arange(len(df))
+                vals = df['sentiment'].values
+                ema_vals = df['ema'].values
+
+                ax.fill_between(xs, 0, np.maximum(vals, 0), color='#10b981', alpha=0.35, label='Зона Базы / Годноты (+)', zorder=2)
+                ax.fill_between(xs, 0, np.minimum(vals, 0), color='#f43f5e', alpha=0.35, label='Зона Сажи / Срача (−)', zorder=2)
+
+                ax.plot(xs, vals, color='#94a3b8', alpha=0.5, linewidth=1.2, marker='o', markersize=4, zorder=3, label='Дневной сентимент')
+                ax.plot(xs, ema_vals, color='#00f0ff', linewidth=2.5, zorder=4, label='Тренд сентимента (EMA)')
+
+                ax.axhline(0, color='#ffffff', linewidth=1.2, linestyle='--', alpha=0.7, zorder=1)
+
+                step = max(1, len(df) // 10)
+                ax.set_xticks(xs[::step])
+                ax.set_xticklabels(df['d'].values[::step], rotation=30, ha='right', fontsize=8.5, color='#94a3b8')
+
+                ax.set_ylabel("Сентимент борды (выше = База, ниже = Сажа)", fontsize=9.5, color='#94a3b8', labelpad=8)
+                ax.tick_params(colors='#94a3b8')
+                ax.grid(color='#1e293b', linestyle='--', alpha=0.5)
+
+                total_words = max(1, total_pos_matches + total_neg_matches)
+                saja_pct = round((total_neg_matches / total_words) * 100, 1)
+                baza_pct = round((total_pos_matches / total_words) * 100, 1)
+
+                kpi_box = f"Сводка за 30 дней:\n• Сажа / Срач: {saja_pct}%\n• База / Годнота: {baza_pct}%\n• Оценено маркеров: {total_words:,}"
+                ax.text(0.02, 0.12, kpi_box, transform=ax.transAxes, fontsize=9, fontweight='bold',
+                        color='#ffffff', va='bottom', zorder=6,
+                        bbox=dict(facecolor='#1e293b', edgecolor='#334155', boxstyle='round,pad=0.5', alpha=0.9))
+
+                ax.legend(loc='upper right', facecolor='#1e293b', edgecolor='#334155', labelcolor='#ffffff', fontsize=8.5)
+
+                fig.text(0.5, 0.96, "17. Индекс Базы и Сажи (Двачевский сентимент)",
+                         fontsize=15, fontweight='bold', color='#f43f5e', ha='center', va='top')
+                fig.text(0.5, 0.925, "Соотношение базированных постов и сажевого угара за 30 дней",
+                         fontsize=9.5, color='#94a3b8', ha='center', va='top')
+
+                plt.subplots_adjust(left=0.08, right=0.95, top=0.88, bottom=0.15)
                 save_chart(images, '17_sentiment.png')
     except Exception as e:
         print(f"Error Chart 17: {e}")
@@ -1320,7 +1443,8 @@ def _generate_chart_21(c, images):
 def _generate_chart_22(c, images):
     # ── 22. Ритм активности по дням недели (90д) ───────────────────────────
     try:
-        import numpy as _np
+        from scipy.interpolate import make_interp_spline
+        from collections import defaultdict
         since_90 = time.time() - 90 * 86400
         c.execute('''
             SELECT cast(strftime('%w', datetime(timestamp, 'unixepoch', 'localtime')) as integer) as w,
@@ -1332,45 +1456,77 @@ def _generate_chart_22(c, images):
         ''', (since_90,))
         data = c.fetchall()
         if data:
-            from collections import defaultdict
-            dh = defaultdict(lambda: _np.zeros(24))
+            dh = defaultdict(lambda: np.zeros(24))
             for row in data:
                 dh[row['w']][row['h']] = row['cnt']
 
-            days_ru = ['Вс','Пн','Вт','Ср','Чт','Пт','Сб']
-            day_colors = ['#f78166','#58a6ff','#79c0ff','#d2a8ff','#ffa657','#39d353','#e3b341']
-            hrs = _np.arange(24)
-            global_max = max((dh[d].max() for d in range(7)), default=1) or 1
+            day_indices = [1, 2, 3, 4, 5, 6, 0] # Mon -> Sun
+            days_ru = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС']
+            DAY_COLORS = [
+                '#38bdf8', # Mon: Sky Blue
+                '#60a5fa', # Tue: Royal Blue
+                '#a855f7', # Wed: Purple
+                '#ec4899', # Thu: Pink
+                '#10b981', # Fri: Emerald
+                '#f59e0b', # Sat: Gold
+                '#ef4444'  # Sun: Coral Red
+            ]
 
-            def _smooth(y, w=1):
-                k = _np.ones(w*2+1)/(w*2+1)
-                return _np.convolve(y, k, mode='same')
+            fig = plt.figure(figsize=(13, 8), facecolor='#0b0f17')
+            gs = fig.add_gridspec(7, 1, hspace=0.15, left=0.12, right=0.92, top=0.88, bottom=0.10)
 
-            fig, axes = plt.subplots(7, 1, figsize=(12, 7), sharex=True)
-            fig.subplots_adjust(hspace=-0.08)
-            for idx, d in enumerate(range(6, -1, -1)):
-                ax2 = axes[idx]
-                ax2.set_facecolor('#121212')
-                y = _smooth(dh[d], w=1)
-                y_n = y / global_max
-                color = day_colors[d]
-                ax2.fill_between(hrs, 0, y_n, color=color, alpha=0.42, clip_on=False)
-                ax2.plot(hrs, y_n, color=color, linewidth=2, alpha=0.95, clip_on=False)
-                ax2.set_xlim(-0.5, 23.5)
-                ax2.set_ylim(0, 0.8)
-                ax2.text(-0.5, 0.24, days_ru[d], ha='right', va='center',
-                        color=color, fontsize=9, fontweight='bold',
-                        transform=ax2.get_yaxis_transform())
-                total_d = int(dh[d].sum())
-                ax2.text(23.4, 0.40, f'{total_d//1000 if total_d>=1000 else total_d}{"k" if total_d>=1000 else ""}',
-                        ha='left', va='center', color=color, fontsize=7.5)
-                ax2.set_yticks([])
-                ax2.spines[:].set_visible(False)
-            axes[-1].set_xticks(hrs)
-            axes[-1].set_xticklabels([f'{h:02d}' for h in hrs], fontsize=7.5)
-            axes[-1].set_xlabel('Час суток')
-            fig.suptitle('22. Ритм по дням недели (90д)', fontsize=15, y=0.99, color='#ffffff', fontweight='bold')
-            plt.tight_layout(rect=[0.05, 0, 1, 0.98])
+            hrs = np.arange(24)
+            x_smooth = np.linspace(0, 23, 120)
+            global_max = max(dh[d].max() for d in day_indices) or 1
+
+            axes = []
+            for idx, d_idx in enumerate(day_indices):
+                ax = fig.add_subplot(gs[idx, 0])
+                axes.append(ax)
+                ax.set_facecolor('#0b0f17')
+
+                raw_y = dh[d_idx]
+                total_posts = int(raw_y.sum())
+                peak_hour = int(np.argmax(raw_y))
+                peak_val = raw_y[peak_hour]
+
+                spl = make_interp_spline(hrs, raw_y, k=3)
+                y_smooth = np.clip(spl(x_smooth), 0, None)
+                color = DAY_COLORS[idx]
+
+                ax.fill_between(x_smooth, 0, y_smooth, color=color, alpha=0.35, zorder=2)
+                ax.fill_between(x_smooth, 0, y_smooth * 0.5, color=color, alpha=0.20, zorder=3)
+                ax.plot(x_smooth, y_smooth, color=color, linewidth=2.2, zorder=4)
+
+                ax.scatter([peak_hour], [peak_val], color='#ffffff', s=32, zorder=5, edgecolors=color, linewidths=2)
+                ax.text(peak_hour, peak_val + global_max * 0.05, f"{peak_hour:02d}:00", color='#ffffff',
+                        fontsize=7.5, fontweight='bold', ha='center', va='bottom', zorder=6)
+
+                ax.axhline(0, color='#1e293b', linewidth=1, zorder=1)
+
+                ax.text(-0.02, 0.45, days_ru[idx], transform=ax.transAxes, fontsize=11, fontweight='bold',
+                        color=color, ha='right', va='center')
+
+                badge_text = f"{total_posts:,}".replace(',', ' ') + " постов"
+                ax.text(1.01, 0.45, badge_text, transform=ax.transAxes, fontsize=8.5, fontweight='bold',
+                        color='#94a3b8', ha='left', va='center')
+
+                ax.set_xlim(-0.5, 23.5)
+                ax.set_ylim(0, global_max * 1.35)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.spines[:].set_visible(False)
+                ax.grid(axis='x', color='#1e293b', linestyle='--', alpha=0.4, zorder=0)
+
+            last_ax = axes[-1]
+            last_ax.set_xticks(hrs)
+            last_ax.set_xticklabels([f"{h:02d}" for h in hrs], fontsize=8, color='#94a3b8')
+            last_ax.set_xlabel("Час суток (00:00 — 23:00)", fontsize=9.5, color='#94a3b8', labelpad=8)
+
+            fig.text(0.5, 0.96, "22. Суточный Ритм Активности по Дням Недели (90 Дней)",
+                     fontsize=15, fontweight='bold', color='#ffffff', ha='center', va='top')
+            fig.text(0.5, 0.925, "Распределение постов по часам (Пн–Вс) • Белые точки — пик активности дня",
+                     fontsize=9.5, color='#94a3b8', ha='center', va='top')
 
             save_chart(images, '22_ridge_weekday.png')
     except Exception as e:

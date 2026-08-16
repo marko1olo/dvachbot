@@ -9579,9 +9579,9 @@
     "Error:     [████████████████████] 100%"
   ],
   "REFERRAL_BONUS_MESSAGES": {
-    "ru": "🤝 <b>РЕФЕРАЛ-БОНУС!</b>\nПо твоей ссылке зашел новый анон. Тебе начислено <b>+50.00 RUB</b>.\n💰 Текущий баланс: <code>{balance} RUB</code>",
-    "en": "🤝 <b>REFERRAL BONUS!</b>\nA new anon joined via your link. You've been credited with <b>+50.00 RUB</b>.\n💰 Current balance: <code>{balance} RUB</code>",
-    "jp": "🤝 <b>紹介ボーナス！</b>\nあなたのリンクから新しいアノンが参加しました。<b>+50.00 RUB</b>が加算されました。\n💰 現在の残高: <code>{balance} RUB</code>"
+    "ru": "🤝 <b>РЕФЕРАЛ-БОНУС!</b>\nПо твоей ссылке зашел новый анон. Тебе начислено <b>+1488.00 шекелей</b>! 💰\nТекущий баланс: <code>{balance} RUB</code>",
+    "en": "🤝 <b>REFERRAL BONUS!</b>\nA new anon joined via your link. You've been credited with <b>+1488.00 shekels</b>! 💰\nCurrent balance: <code>{balance} RUB</code>",
+    "jp": "🤝 <b>紹介ボーナス！</b>\nあなたのリンクから新しいアノンが参加しました。<b>+1488.00 シェケル</b>が加算されました！ 💰\n現在の残高: <code>{balance} RUB</code>"
   },
   "VERIFICATION_SUCCESS_MESSAGES": {
     "ru": "🎉 <b>РАНГ ПОВЫШЕН!</b>\nПоздравляем, ты больше не бесправное уебище. Твой уровень повышен до <b>Ранга B</b> за твои 10+ высеров в чат. Теперь ты можешь попробовать вывести виртуальное бабло (и получить хуй за щеку).",

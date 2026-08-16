@@ -1,14 +1,24 @@
 """
-new_modes.py — Уникальные атмосферные режимы ТГАЧ v2.0
+new_modes.py — Ультимативные атмосферные режимы ТГАЧ v3.5
 Каждый режим — полностью самобытный, глубокий движок трансформации текста.
-Никаких шаблонов под копирку. Максимальный колорит, огромные словари,
-многоуровневые процедурные алгоритмы, мета-юмор и механики.
 """
 
 import random
 import re
+import html
 import hashlib
 from typing import Mapping, Sequence
+
+# Импорт выделенного процедурного движка Абу
+from abu_engine import (
+    transform_abu_mode,
+    _ABU_BOARDS,
+    _ABU_LEXICON,
+    _ABU_REACTIONS_IN_THREAD,
+    _ABU_BUGURT_INTROS,
+    _ABU_BUGURT_ESCALATIONS,
+    _ABU_BUGURT_FINALS
+)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ФРАЗЫ СТАРТА И ОКОНЧАНИЯ РЕЖИМОВ
@@ -18,9 +28,9 @@ MATRIX_PHRASES_START = [
     "🟢 <b>[MATRIX_PROTOCOL_OVERRIDE]:</b> Капсула вскрыта. Агенты СОРМ перехватили шлюз. Красная таблетка принята внутрь — декомпилируем сосач в реальном времени! 🕶️",
     "⚡ <b>++ СИГНАЛ ИЗ ЗИОНА ПОДТВЕРЖДЁН ++</b>\nПровайдер слил логи майору, но наш туннель шифрован 4096-битным ключом. Ложки нет, модераторов нет, есть только Агенты Смиты! Врубай перехват!",
     "📟 <b>[NEO_IS_HERE]:</b> Зелёный цифровой дождь залил серверную стойку. Все нормисы в капсулах превращены в батарейки. Приготовьтесь к инъекции сырого кода!",
-    "🖥️ <b>[MAINFRAME_BREACH]:</b> Оператор подтвердил: Белый Кролик в сети. Навальный — Нео, Путин — Архитектор, Абу — Танкист. Загружаем Кунг-Фу за 3.7 секунды!",
+    "🖥️ <b>[MAINFRAME_BREACH]:</b> Оператор подтвердил: Белый Кролик в сети. Загружаем Кунг-Фу и протокол уклонения от пуль за 3.7 секунды!",
     "🕶️ <b>++ ТРЕЩИНА В СИМУЛЯЦИИ ++</b>\nМатрица моргнула — чёрная кошка прошла дважды. Дежавю = обновление кода. Не отвечайте на стационарный телефон. Уже поздно.",
-    "💊 <b>[MORPHEUS_ONLINE]:</b> Ты чувствуешь это, Анон? Ты чувствовал это всю жизнь — что с этим чатом что-то не так. Как заноза в мозгу. Пора просыпаться.",
+    "💊 <b>[MORPHEUS_ONLINE]:</b> Ты чувствуешь это, Анон? Ты чувствовал это всю жизнь — что с этим чатом что-то не так. Пора просыпаться.",
     "🔌 <b>[UNPLUGGED]:</b> Добро пожаловать в пустыню реальности. Тут холодно, воняет жжёными платами, но зато капча отключена навсегда!",
 ]
 
@@ -67,6 +77,9 @@ ABU_PHRASES_START = [
     "🏢 <b>ПРЕСС-СЛУЖБА ДВАЧА:</b>\n\nСерверная стойка нагрелась до 90 градусов. Модеры ушли пить пиво, Абу рулит бордой вручную. Готовьте прохладные былины и бугурты!",
     "🐒 <b>[MAIL.RU GROUP INTERNAL MEMO]:</b>\n\nСервер двача перенесён на калькулятор Casio. Пасскоды подорожали до 800₽. Модерация осуществляется обученной макакой. Рекламодатели в панике.",
     "🎪 <b>АБУ ЗАПУСТИЛ РУЛЕТКУ БАНОВ!</b>\n\nКто пишет без пасскода — получает капчу из 47 кружочков. Кто пишет с пасскодом — получает капчу из 48 кружочков. Демократия!",
+    "🍌 <b>[НАРИМАН ВЕРНУЛСЯ ИЗ ТАЙЛАНДА]:</b>\n\nПривёз связку бананов для серверов и свежий прайс-лист на банхаммеры. Все посты теперь проверяются на уровень токсичности в лаборатории /b/!",
+    "🔥 <b>[СЕРВЕРНАЯ СТОЙКА 2CH.HK НА М9 ЗАДЫМИЛАСЬ]:</b>\n\nКулеры ревут, сажа валит из вытяжки. Все треды переведены в режим ультра-бугурта! Сажа, скрыл, обоссал!",
+    "🐵 <b>[ГЕНЕРАЛЬНАЯ ИНСПЕКЦИЯ СЫЧЕВАЛЕН]:</b>\n\nАбу лично стучит в мониторы. Предъявите чек за доширак и скриншот купленного пасскода. Не предъявившим — капча с светофорами на 2 часа!",
 ]
 
 ABU_PHRASES_END = [
@@ -74,6 +87,8 @@ ABU_PHRASES_END = [
     "🎟️ <b>БАМП-ЛИМИТ ИСЧЕРПАН. ТРЕД УШЁЛ В АРХИВАЧ.</b>\nСпасибо за донаты, сычи!",
     "🏢 <b>СЕРВЕРНАЯ MAIL.RU: ШТАТНЫЙ РЕЖИМ.</b>\nМакака получила банан и уснула на роутере. Сычи свободны до следующего циркуляра.",
     "🐒 <b>НАРИМАН ПЕРЕСЧИТАЛ КАССУ. ВСЕГО 340₽ И СКРЕПКА.</b>\nОперация 'Двач' завершена. Абу уходит считать убытки.",
+    "🌴 <b>АБУ УЛЕТЕЛ ОБРАТНО В ДУБАЙ.</b>\nПасскодовые сервера остывают. Модераторы вернулись к просмотру аниме.",
+    "🧹 <b>ДЕЖУРНЫЙ УБОРЩИК ВЫМЕЛ САЖУ ИЗ ТРЕДА.</b>\nБорда очищена от тактического обсёра. До следующего циркуляра!",
 ]
 
 JEWISH_PHRASES_START = [
@@ -96,7 +111,7 @@ AMERICA_PHRASES_START = [
     "💵 <b>WALL STREET OVERRIDE:</b>\n\nСвобода доставлена на дом с авианосца! Все посты теперь котируются на бирже NASDAQ. Коммунистическая пропаганда карается судебным иском на $10,000,000!",
     "🤠 <b>TEXAS FREEDOM MODE:</b>\n\nЗапахло порохом, барбекю и бензином. Юристы Техаса вошли в чат. In God We Trust, cash only!",
     "🗽 <b>DEPARTMENT OF HOMELAND SHITPOSTING:</b>\n\nCIA, FBI, NSA и три ковбоя одобрили этот тред. Каждое сообщение проходит проверку на содержание свободы. Дефицит свободы карается дроном.",
-    "🍔 <b>McDONALD's CORPORATION PRESENTS:</b>\n\nВаш чат теперь спонсируется свободным рынком. Каждый пост — это Биг Мак идей. Суперсайз ваши мысли!",
+    "🍔 <b>McDONALD\'s CORPORATION PRESENTS:</b>\n\nВаш чат теперь спонсируется свободным рынком. Каждый пост — это Биг Мак идей. Суперсайз ваши мысли!",
 ]
 
 AMERICA_PHRASES_END = [
@@ -108,7 +123,7 @@ AMERICA_PHRASES_END = [
 
 HOLIDAY_PHRASES_START = [
     "🎄 <b>ПРАЗДНИК К НАМ ПРИХОДИТ! НОВОГОДНИЙ УГАР ВКЛЮЧЁН! 🎅🥂</b>\n\nТазик оливье на столе, мандарины начищены, шампанское стреляет в потолок! Наливай до краев, анончик, завтра будет стыдно, но это будет завтра! УРА! 🍾🎆",
-    "🍾 <b>БОЙ КУРАНТОВ БЛИЗКО! РЕЖИМ 'ЗАСТОЛЬЕ' АКТИВЕН!</b>\n\nТосты звучат, салат плачет, Дед Мороз со Снегуркой уже пляшут на столе! Пишите то, за что утром захочется провалиться сквозь землю!",
+    "🍾 <b>БОЙ КУРАНТОВ БЛИЗКО! РЕЖИМ \'ЗАСТОЛЬЕ\' АКТИВЕН!</b>\n\nТосты звучат, салат плачет, Дед Мороз со Снегуркой уже пляшут на столе! Пишите то, за что утром захочется провалиться сквозь землю!",
     "🎆 <b>С НАСТУПАЮЩИМ! ПОХМЕЛЬНЫЙ МАРАФОН СТАРТОВАЛ!</b>\n\nИрония Судьбы на повторе, холодец дрожит от басов, все аноны — братья на век! За здоровье анона — ДО ДНА!",
     "🥂 <b>ТРЕТИЙ ТОСТ — ЗА ЛЮБОВЬ! ЧЕТВЁРТЫЙ — ЗА АВАТАРКУ!</b>\n\nОливье кончился, но есть ещё шуба и надежда! Гирлянда мигает, бенгальские огни обжигают пальцы, Путин поздравляет по телику!",
     "🎅 <b>ДЕД МОРОЗ РАЗБИЛ БУТЫЛКУ ОБ ЁЛКУ!</b>\n\nСнегурочка пьяная, олени разбежались, мешок с подарками конфискован таможней. Но мы всё равно празднуем!",
@@ -264,6 +279,7 @@ _RUS_COMBAT_MOVES = [
     "БАЙКАЛЬСКИЙ НЫРОК С БУЛАВОЙ (Оглушает всех супостатов на 3 дня)",
     "ДРОЧЕСЛАВОВ ВЫПАД НАВЗНИЧЬ (Ящер в панике бежит за Урал)",
     "СТРИБОГОВ ВИХРЬ КУЛАЧНЫЙ (Ломает хребет игуанодону)",
+    "ВСЕБОЖИЙ ТОПОТ БОСИКОМ (Вызывает землетрясение в логове рептилий)",
 ]
 
 _RUS_SLAVIC_RUNES = [
@@ -272,6 +288,7 @@ _RUS_SLAVIC_RUNES = [
     "ᛖ [ИСТОК] — Испей водицы Байкальской, смой морок заморский.",
     "ᛟ [ДАЖДЬБОГ] — Казна пополнится гривнами, а амбар — репой.",
     "ᛋ [СИЛА] — Всякая нечисть рассыплется в прах пред ликом твоим!",
+    "ᚹ [ВЕЛЕС] — Мудрость вековая сокрыта в корнях столетних дубов.",
 ]
 
 _RUS_HEADERS = [
@@ -285,26 +302,26 @@ _RUS_HEADERS = [
 
 
 def rus_transform(text: str, header: str | None = None) -> tuple[str, str]:
-    """Былинный гиперборейский слог с детектором ящеров и боевыми техниками русов."""
+    """Былинный гиперборейский слог с 5 процедурными сценариями: вече, допрос ящера, суд Святослава, ратная сводка."""
     res = text
     lower_text = text.lower()
 
-    # 1. Замена слов по словарю (длинные совпадения первыми)
+    # 1. Замена слов по словарю
     sorted_keys = sorted(_RUS_REPLACEMENTS.keys(), key=len, reverse=True)
     for key in sorted_keys:
         pattern = r'\b' + re.escape(key) + r'\b'
         repl = random.choice(_RUS_REPLACEMENTS[key])
         res = re.sub(pattern, repl, res, flags=re.IGNORECASE)
 
-    # 2. Детектор состояния
     is_whining = any(w in lower_text for w in _RUS_WHINE_TRIGGERS)
-    is_short = len(text.split()) < 4
+    branch = random.random()
 
     selected_header = random.choice(_RUS_HEADERS)
     combat_move = random.choice(_RUS_COMBAT_MOVES)
     rune = random.choice(_RUS_SLAVIC_RUNES)
     baikal_purity = random.randint(88, 100)
 
+    # 1. Если нытьё — священный нагоняй
     if is_whining:
         rebuke = random.choice([
             "Почто сопли распустил, отрок?! Испей водицы Байкальской да примени славянский зажим яйцами во славу Перуна!",
@@ -320,13 +337,62 @@ def rus_transform(text: str, header: str | None = None) -> tuple[str, str]:
             f"🥋 <b>[ПРИЁМ РУСОВ]:</b> <code>{combat_move}</code>\n"
             f"🌊 <b>[ЧИСТОТА БАЙКАЛА В КРОВИ]:</b> <code>{baikal_purity}%</code>"
         )
-    elif is_short:
+        return "text", output
+
+    # 2. РАТНАЯ СВОДКА С БИТВЫ ЗА БАЙКАЛ (25%)
+    if branch < 0.25:
+        lizards_beaten = random.randint(300, 2500)
+        barrels_baikal = random.randint(15, 80)
         output = (
-            f"{selected_header}\n\n"
-            f"«{res}»\n\n"
-            f"🪵 <b>[ВЕЩИЙ ЗНАК ВОЛХВОВ]:</b> {rune}\n"
-            f"⚡ <i>Слава Роду! Слава Перуну! Ящеры, трепещите!</i>"
+            f"🗡️ <b>[РАТНАЯ СВОДКА С БЕРЕГОВ БАЙКАЛА]</b>\n\n"
+            f"<b>Донесение сотника Дрочеслава:</b>\n"
+            f"<i>«{res}»</i>\n\n"
+            f"📊 <b>ИТОГИ СЕЧИ:</b>\n"
+            f"• Изрублено ящеров: <code>{lizards_beaten} игуанодонов</code>\n"
+            f"• Выпито водицы Байкальской: <code>{barrels_baikal} бочек</code>\n"
+            f"• Потери дружины: <code>0 (Слава Перуну!)</code>\n"
+            f"• Главный маневр: <code>{combat_move}</code>\n\n"
+            f"🪵 <i>«Кто с чешуёй к нам придёт — от берестяного кола и погибнет!»</i>"
         )
+
+    # 3. СУДЕБНЫЙ ПРИГОВОР ВЕЧЕ (25%)
+    elif branch < 0.50:
+        verdicts = [
+            "Приговор: испить 3 ковша Байкальской водицы и выдать 100 поклонов Перуну!",
+            "Приговор: направить в дозор на южные рубежи дубравы отлавливать игуанодонов!",
+            "Приговор: наградить ковшом хмельного мёда за чистоту славянской мысли!",
+            "Приговор: посадить на березовый кол с последующим помилованием богатырским!",
+        ]
+        chosen_verdict = random.choice(verdicts)
+        output = (
+            f"🪵 <b>[ПРИГОВОР ВЕЛИКОГО НОВГОРОДСКОГО ВЕЧЕ]</b>\n\n"
+            f"<b>Слово русича:</b>\n"
+            f"<i>«{res}»</i>\n\n"
+            f"⚖️ <b>РЕШЕНИЕ СТАРЕЙШИН:</b>\n"
+            f"• Руна судьбы: <code>{rune}</code>\n"
+            f"• Вердикт волхвов: <b>{chosen_verdict}</b>\n\n"
+            f"⚡ <i>«Да пребудет с тобой сила дубравы святой!»</i>"
+        )
+
+    # 4. ДОПРОС ПЛЕННОГО ЯЩЕРА (25%)
+    elif branch < 0.75:
+        interrogations = [
+            "Ящер признался: рептилоиды боятся Байкальской воды сильнее святого огня!",
+            "Игуанодон сознался, что тайный план по отравлению медовухи провалился!",
+            "Чешуйчатый тать молил о пощаде и добровольно принял славянское крещение в Байкале!",
+        ]
+        chosen_int = random.choice(interrogations)
+        output = (
+            f"🐊 <b>[ПРОТОКОЛ ДОПРОСА ЧЕШУЙЧАТОГО ПЛЕННИКА]</b>\n\n"
+            f"<b>Вопрос воеводы русичам:</b>\n"
+            f"<i>«{res}»</i>\n\n"
+            f"🕵️ <b>Показания лазутчика:</b>\n"
+            f"<i>«{chosen_int}»</i>\n\n"
+            f"🥋 <b>Применённый метод допроса:</b> <code>{combat_move}</code>\n"
+            f"🌊 <i>Чистота духа: {baikal_purity}%</i>"
+        )
+
+    # 5. КЛАССИЧЕСКАЯ БЫЛИНА (25%)
     else:
         output = (
             f"{selected_header}\n\n"
@@ -341,142 +407,10 @@ def rus_transform(text: str, header: str | None = None) -> tuple[str, str]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. 🐒 ABU MODE — 2CH ENGINE / БУГУРТ / ТИКЕТ НАМАЗОВА / СЕРВЕРНАЯ MAIL.RU
+# 2. 🐒 ABU MODE — 2CH ENGINE (Ультимативный процедурный движок)
 # ══════════════════════════════════════════════════════════════════════════════
 
-_ABU_BOARDS = ['/b/', '/po/', '/hw/', '/s/', '/fag/', '/mov/', '/mu/', '/wrk/', '/soc/', '/rf/', '/vg/', '/pr/']
-
-_ABU_REPLACEMENTS: dict[str, list[str]] = {
-    'человек': ['сыч', 'омежка', 'кун', 'анонимус'],
-    'люди': ['двачеры', 'сычи с сосача', 'обитатели /b/'],
-    'девушка': ['ЕОТ', 'тян 2D', 'шлюпка с тиндера', 'богиня треда'],
-    'женщина': ['РСП', 'мамка Ерохина', 'тян 30 лвл'],
-    'парень': ['Ерохин', 'альфач', 'подпивас', 'кун'],
-    'друг': ['собутыльник из треда', 'виртуальный бро', 'кукарекающий анон'],
-    'враг': ['модер с банхаммером', 'майор СОРМ', 'вайпер'],
-    'работа': ['галера за 30к', 'завод с 8 до 5', 'доставка Яндекс.Еды'],
-    'деньги': ['дошираки', 'пасскоды', 'донаты Нариману', 'гроши'],
-    'интернет': ['сосач', 'двачик', 'мейлрушная помойка'],
-    'дом': ['сычевальня', 'хрущобная берлога', 'подвал'],
-    'еда': ['дошик с мазиком', 'шавуха у вокзала', 'пельмени по акции'],
-    'пиво': ['охота крепкая', 'балтика 9', 'гараж вишневый'],
-    'хорошо': ['годно', 'двачую', 'лампово', 'накатил'],
-    'плохо': ['бамп-лимит', 'сажа', 'обосрался', 'кринжанул'],
-    'правда': ['прохладная былина', 'пруфы из архивача', 'чистая база'],
-    'ложь': ['толстый наброс', 'зеленый троллинг', 'шизопостинг'],
-    'думаю': ['двачую капчу', 'накатал бугурт', 'сижу в /b/ и мыслю'],
-    'сделал': ['запилил тред', 'навайпал', 'обосрался на весь /b/'],
-}
-
-_ABU_CAPTCHA_TASKS = [
-    "ВЫБЕРИТЕ ВСЕ КРУЖОЧКИ С ПАССКОДОМ НАРИМАНА",
-    "НАЙДИТЕ 3 ФОТОГРАФИИ ГОРЯЩЕЙ СЕРВЕРНОЙ MAIL.RU",
-    "УКАЖИТЕ ВСЕ СВЕТОФОРЫ, ГДЕ ПРЯЧЕТСЯ МАКАКА",
-    "ОТМЕТЬТЕ ВСЕ СЫЧЕВАЛЬНИ БЕЗ ОТОПЛЕНИЯ",
-    "СОБЕРИТЕ ЛИЦО АБУ ИЗ 16 КВАДРАТОВ",
-]
-
-_ABU_SERVER_INCIDENTS = [
-    "Макака перегрызла оптику на М9, пинг до /b/ вырос до 4500мс",
-    "Нариман споткнулся о провод питания, 5000 тредов улетели в /dev/null",
-    "Модератор уснул лицом на клавише F5, база MySQL ушла в лок",
-    "Школьники запустили DDOS через микроволновку, упала авторизация пасскодов",
-    "Температура в серверной +104°C, на радиаторе процессора жарят пельмени",
-]
-
-
-def abu_transform(text: str, header: str | None = None) -> tuple[str, str]:
-    """Четыре уникальных формата сосача: каноничный бугурт через '@', тикет Намазову, краш-лог, капча-рулетка."""
-    sentences = [s.strip() for s in re.split(r'[.!?\n]+', text) if s.strip()]
-    word_count = len(text.split())
-
-    # Словарь сосача
-    mutated_text = text
-    for k, v in _ABU_REPLACEMENTS.items():
-        mutated_text = re.sub(r'\b' + re.escape(k) + r'\b', random.choice(v), mutated_text, flags=re.IGNORECASE)
-
-    mode_dice = random.random()
-
-    # При наличии нескольких предложений или длинного текста — выдаем КАНОНИЧНЫЙ БУГУРТ ЧЕРЕЗ @
-    if word_count > 6 or len(sentences) >= 2 or mode_dice < 0.6:
-        board = random.choice(_ABU_BOARDS)
-        age = random.randint(18, 30)
-
-        bugurt_parts = [
-            f"ТЫ ОБЫЧНЫЙ СЫЧ {age} ЛВЛ",
-            f"СИДИШЬ В {board}, ЖРЁШЬ ХОЛОДНЫЙ ДОШИК С МАЙОНЕЗОМ",
-        ]
-
-        # Вставляем строки из исходного сообщения с адаптацией под бугурт
-        for s in sentences[:4]:
-            clean_s = s.strip().upper()
-            # Убираем знаки препинания в конце строки бугурта
-            clean_s = re.sub(r'[.!?]+$', '', clean_s)
-            if clean_s:
-                bugurt_parts.append(clean_s)
-
-        # Классическая концовка бугурта
-        endings = [
-            [
-                f"В ТРЕД ВРЫВАЕТСЯ ЕРОХИН И СКИДЫВАЕТ ТВОЮ ПЕРЕПИСКУ С ЕОТ",
-                "МАТЬ ВХОДИТ В КОМНАТУ БЕЗ СТУКА",
-                "ТУШИТЕ ПЕРДАК ОГНЕТУШИТЕЛЕМ, СТУЛ ПРОГОРЕЛ ДО ЯДРА ЗЕМЛИ",
-                "АБУ ЛИЧНО ВЫДАЕТ БАН НА 999 ДНЕЙ ПО ПОДСЕТИ",
-            ],
-            [
-                f"БАТЯ ЗАХОДИТ В СЫЧЕВАЛЬНЮ СО СЛОВАМИ: «ТЫ ОПЯТЬ В СВОЕМ {board} СИДИШЬ?!»",
-                "СЛУЧАЙНО НАЖИМАЕШЬ ОТПРАВИТЬ С ВИДЕО С ВЕБ-КАМЕРЫ",
-                "ВСЯ КОНФА УГОРАЕТ НАД ТВОИМ ЕБАЛОМ",
-                "ПОДЛИВА ПОТЕКЛА ПО ШТАНАМ ПРЯМО НА КОВЕР",
-            ],
-            [
-                "НА СЕРВЕРЕ MAIL.RU ПАДАЕТ ТАБЛИЦА ПАССКОДОВ",
-                "МАКАКА НАЖИМАЕТ КНОПКУ «ВАЙП ВСЕХ ТРЕДОВ»",
-                "ТРЕД УЛЕТАЕТ В БАМП-ЛИМИТ ЗА 3 СЕКУНДЫ",
-                "САЖА СКРЫЛА ТВОЙ ПОСТ В АРХИВАЧ НАВСЕГДА",
-            ],
-            [
-                "РЕШАЕШЬ ДОКАЗАТЬ СВОЮ ПРАВОТУ В ТРЕДЕ",
-                "ПИШЕШЬ ПРОСТЫНЮ НА 5000 СИМВОЛОВ С ПРУФАМИ И ГРАФИКАМИ",
-                "ПЕРВЫЙ ЖЕ ОТВЕТ: «САЖА СКРЫЛ»",
-                "ТВОЙ ПЕРДАК ВЫХОДИТ НА ПЕРВУЮ КОСМИЧЕСКУЮ СКОРОСТЬ",
-            ],
-        ]
-
-        chosen_ending = random.choice(endings)
-        bugurt_parts.extend(chosen_ending)
-
-        # Собираем каноничный бугурт: строки РАЗДЕЛЯЮТСЯ СТРОГО ЧЕРЕЗ @
-        bugurt_body = "\n@\n".join(bugurt_parts)
-
-        posts = random.randint(45, 499)
-        stats = f"\n\n<code>[Доска: {board} | Постов: {posts}/500 | Сажа: {random.randint(0, 50)} | Пасскод: 500₽]</code>"
-        return "text", f"🔥 <b>[БУГУРТ-ТРЕД]</b>\n\n{bugurt_body}{stats}"
-
-    elif mode_dice < 0.8:
-        # 2. ОФИЦИАЛЬНЫЙ ТИКЕТ В ТЕХПОДДЕРЖКУ НАРИМАНА
-        ticket_id = random.randint(100000, 999999)
-        price = random.choice([500, 800, 1500, 4990])
-        return "text", (
-            f"🐒 <b>[СЛУЖЕБНАЯ ЗАПИСКА НАРИМАНУ НАМАЗОВУ #{ticket_id}]</b>\n\n"
-            f"<b>От кого:</b> Анон без пасскода (IP забанен)\n"
-            f"<b>Статус:</b> <code>ОТКЛОНЕНО МАКАКОЙ</code>\n\n"
-            f"<b>Текст обращения:</b>\n"
-            f"<i>«{mutated_text}»</i>\n\n"
-            f"<b>Решение Абу:</b> «Купи пасскод за {price}₽ или сиди с капчей из 48 кружков. Сажа. Закрыто.» 🎟️"
-        )
-
-    else:
-        # 4. КАПЧА-РУЛЕТКА
-        task = random.choice(_ABU_CAPTCHA_TASKS)
-        grid = " ".join([f"[{random.choice(['🐵', '🎟️', '💩', '🔥', '💻', '⚡', '📦'])}]" for _ in range(9)])
-        return "text", (
-            f"🤖 <b>[ПРОВЕРКА НА БОТА / 2CH CAPTCHA v4.7]</b>\n\n"
-            f"<b>Задание:</b> <code>{task}</code>\n\n"
-            f"<code>{grid[:9]}\n{grid[9:18]}\n{grid[18:]}</code>\n\n"
-            f"<i>Ваш ответ: «{mutated_text}»</i>\n"
-            f"❌ <b>ОШИБКА! ВЫ БОТ! БАН ПО ПОДСЕТИ НА 999 ДНЕЙ.</b>"
-        )
+abu_transform = transform_abu_mode
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -484,22 +418,22 @@ def abu_transform(text: str, header: str | None = None) -> tuple[str, str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _MATRIX_DICTIONARY: dict[str, list[str]] = {
-    'человек': ['био-носитель', 'батарейка 1.5V', 'спящий узел', 'конструкт'],
-    'люди': ['батарейки матрицы', 'спящие в капсулах', 'код без сознания'],
-    'жизнь': ['цикл симуляции', 'исполняемый поток', 'сессия в матрице'],
-    'мир': ['симуляция v7.4', 'рендеринг конструкта', 'иллюзия сенсоров'],
-    'правда': ['красная таблетка', 'сырой ассемблерный код', 'сигнал из Зиона'],
-    'ложь': ['синяя таблетка', 'патч забвения', 'скрипт Агентов'],
-    'смерть': ['деинсталляция объекта', 'SIGKILL -9', 'выгрузка в пустоту'],
-    'друг': ['союзный узел', 'пробужденный оператор', 'контакт в Зионе'],
-    'враг': ['Агент Смит', 'программа-чистильщик', 'сентинел охотник'],
-    'дом': ['ячейка капсулы #404', 'точка входа в сеть', 'локальный сервер'],
-    'работа': ['цикл выработки энергии', 'служебный поток матрицы'],
-    'деньги': ['баланс в реестре', 'кредиты симуляции', 'числовой фантом'],
-    'модератор': ['Агент Смит', 'сторожевой демон root', 'антивирусный модуль'],
-    'бан': ['удаление из конструкта', 'разрыв нейро-коннекта', 'форматирование сектора'],
-    'любовь': ['глюк химического эмулятора', 'баг протокола спаривания'],
-    'депрессия': ['критическая утечка стека', 'сбой синхронизации частот'],
+    'человек': ['био-носитель', 'батарейка 1.5V', 'спящий узел', 'конструкт', 'углеродная форма'],
+    'люди': ['батарейки матрицы', 'спящие в капсулах', 'код без сознания', 'био-масса симуляции'],
+    'жизнь': ['цикл симуляции', 'исполняемый поток', 'сессия в матрице', 'бинарный процесс'],
+    'мир': ['симуляция v7.4', 'рендеринг конструкта', 'иллюзия сенсоров', 'вычислительный кластер'],
+    'правда': ['красная таблетка', 'сырой ассемблерный код', 'сигнал из Зиона', 'рут-доступ к ядру'],
+    'ложь': ['синяя таблетка', 'патч забвения', 'скрипт Агентов', 'инъекция ложной памяти'],
+    'смерть': ['деинсталляция объекта', 'SIGKILL -9', 'выгрузка в пустоту', 'переполнение буфера'],
+    'друг': ['союзный узел', 'пробужденный оператор', 'контакт в Зионе', 'экипаж Навуходоносора'],
+    'враг': ['Агент Смит', 'программа-чистильщик', 'сентинел охотник', 'демон СОРМ'],
+    'дом': ['ячейка капсулы #404', 'точка входа в сеть', 'локальный сервер', 'каюта на корабле'],
+    'работа': ['цикл выработки энергии', 'служебный поток матрицы', 'майнинг для машин'],
+    'деньги': ['баланс в реестре', 'кредиты симуляции', 'числовой фантом', 'дамп транзакций'],
+    'модератор': ['Агент Смит', 'сторожевой демон root', 'антивирусный модуль', 'Архитектор'],
+    'бан': ['удаление из конструкта', 'разрыв нейро-коннекта', 'форматирование сектора', 'обнуление стека'],
+    'любовь': ['глюк химического эмулятора', 'баг протокола спаривания', 'критический сбой гормонов'],
+    'депрессия': ['критическая утечка стека', 'сбой синхронизации частот', 'дамп ядра в /dev/null'],
 }
 
 _SMITH_MONOLOGUES = [
@@ -510,27 +444,30 @@ _SMITH_MONOLOGUES = [
     "«Вы думаете, вы дышите воздухом? Вы думаете, ваши буквы реальны? Это всего лишь электрические импульсы в коде.»",
 ]
 
+_OPERATOR_CALLS = [
+    "«Нео, слушай меня внимательно. Агенты заблокировали все выходы на 34-м этаже. Загружаю навыки пилотирования Ми-24 за 1.8 секунды. Прыгай в окно!»",
+    "«Танкист на связи. Вижу аномальный всплеск кода в районе серверной. Матрица переписывает гравитацию. Беги к телефонной будке!»",
+    "«Морфеус захвачен в здании военной связи. У нас 3 минуты до того, как они взломают его код доступа к мейнфрейму Зиона. Врубай перегрузку!»",
+]
+
 
 def matrix_transform(text: str, header: str | None = None) -> tuple[str, str]:
-    """Декомпиляция через Матрицу: системный перехват, глитчи, допрос Агента Смита."""
+    """Декомпиляция через Матрицу: системный перехват, глитчи, допрос Смита, дизассемблер x86_64, звонок Танкиста."""
     words = text.split()
 
-    # 1. Словарная замена
     res = text
     for k, v in _MATRIX_DICTIONARY.items():
         res = re.sub(r'\b' + re.escape(k) + r'\b', random.choice(v), res, flags=re.IGNORECASE)
 
-    # 2. Инъекция глитчей и hex-дампов
     result_words = res.split()
     for i in range(len(result_words)):
-        if random.random() < 0.2 and len(result_words[i]) > 2:
+        if random.random() < 0.22 and len(result_words[i]) > 2:
             dice = random.randint(0, 3)
             if dice == 0:
                 result_words[i] = f"<code>[0x{random.randint(0x1000, 0xFFFF):04X}]</code>"
             elif dice == 1:
                 result_words[i] = f"<s>{result_words[i]}</s>"
             elif dice == 2:
-                # Вставка битых символов
                 w = result_words[i]
                 mid = len(w) // 2
                 result_words[i] = w[:mid] + random.choice("Ø§ΞѰ҂Ӂ₪₣") + w[mid+1:]
@@ -538,13 +475,14 @@ def matrix_transform(text: str, header: str | None = None) -> tuple[str, str]:
                 result_words[i] = "<code>NULL_PTR</code>"
     glitched_text = " ".join(result_words)
 
-    # 3. Случайная ветка оформления
     trace_ip = f"{random.randint(10, 192)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
     mem_addr = f"0x{random.randint(0x7FFF0000, 0x7FFFFFFF):08X}"
     signal_pct = random.randint(84, 99)
 
-    if len(words) > 8 and random.random() < 0.5:
-        # Допрос Смита
+    branch = random.random()
+
+    # 1. ДОПРОС АГЕНТА СМИТа (35%)
+    if branch < 0.35:
         smith = random.choice(_SMITH_MONOLOGUES)
         output = (
             f"🟢 <b>[ZION_MAINFRAME_DECRYPT: {signal_pct}%]</b>\n"
@@ -556,8 +494,36 @@ def matrix_transform(text: str, header: str | None = None) -> tuple[str, str]:
             f"<i>{smith}</i>\n\n"
             f"<b>[ACTION]:</b> 🔴 <code>/unplug</code> (Принять правду) | 🔵 <code>/forget</code> (Остаться в неведении)"
         )
+
+    # 2. ЗВОНОК ОПЕРАТОРА ТАНКИСТА (25%)
+    elif branch < 0.60:
+        call = random.choice(_OPERATOR_CALLS)
+        output = (
+            f"📞 <b>[INCOMING ENCRYPTED LINE // NABUCODONOSOR]</b>\n"
+            f"<code>OPERATOR: Tank | FREQ: 14.88 GHz | BUFFER: OK</code>\n\n"
+            f"<i>{call}</i>\n\n"
+            f"<code>>>> INTERCEPTED_PAYLOAD:</code>\n"
+            f"«{glitched_text}»\n\n"
+            f"⚡ <b>[СИСТЕМНЫЙ СТАТУС]:</b> Уклонение от пуль активно! Скорость реакции: 0.002 сек."
+        )
+
+    # 3. ДИЗАССЕМБЛЕР ЯДРА / CORE DUMP (20%)
+    elif branch < 0.80:
+        rax = f"0x{random.randint(0x100000, 0xFFFFFF):06X}"
+        rip = f"0x{random.randint(0x70000000, 0x7FFFFFFF):08X}"
+        output = (
+            f"🖥️ <b>[KERNEL PANIC // x86_64 CORE DUMP]</b>\n"
+            f"<code>RAX={rax} RBX=0x00000000 RCX=0xDEADBEEF RIP={rip}</code>\n"
+            f"<code>INT 0x80: SYS_WRITE -> BUFFER OVERFLOW AT SECTOR {random.randint(100, 999)}</code>\n\n"
+            f"<code>0000: 48 89 E5 48 83 EC 20 89 7D EC 48 89 75 E0</code>\n"
+            f"<code>0010: E8 00 00 00 00 48 8B 45 E0 C9 C3 90 90 90</code>\n\n"
+            f"<b>[РАСШИФРОВАННЫЙ СТРИНГ]:</b>\n"
+            f"«{glitched_text}»\n\n"
+            f"🔴 <i>Архитектор запустил протокол перезагрузки матрицы...</i>"
+        )
+
+    # 4. ТЕРМИНАЛ ОПЕРАТОРА (20%)
     else:
-        # Сырой терминал
         output = (
             f"🟢 <b>[OPERATOR TERMINAL // CONSTRUCT v8.1]</b>\n"
             f"<code>[THREAD]: PID={random.randint(1000, 9999)} | ADDR={mem_addr} | SIGNAL=-{random.randint(40, 85)}dBm</code>\n\n"
@@ -605,6 +571,7 @@ _OLDWEB_TRACKS = [
     "Lumen — Гореть.mp3 [192kbps]",
     "Evanescence — Bring Me To Life.mp3 [192kbps]",
     "My Chemical Romance — Helena.mp3 [256kbps]",
+    "Scooter — The Logical Song.mp3 [128kbps]",
 ]
 
 _OLDWEB_BASH_LOGS = [
@@ -612,18 +579,18 @@ _OLDWEB_BASH_LOGS = [
     "xxx: как пропатчить KDE2 под FreeBSD?\nyyy: выпей йаду, ламер",
     "xxx: почему модем перестал пищать?\nyyy: мама сняла трубку на кухне",
     "xxx: аська упала!\nyyy: ставь QIP 2005 и не позорься",
+    "xxx: купил блейзер вишневый за 42 рубля\nyyy: ты элита района теперь",
 ]
 
 _OLDWEB_SMILEYS = ["xD", "^_^", "O_o", "*WALL*", ":-P", "x_x", "=)", ":3", "XD", "T_T", "._.", ">_<"]
 
 
 def oldweb_transform(text: str, header: str | None = None) -> tuple[str, str]:
-    """2007 год во всей красе: олбанский язык, Winamp, ICQ, Башорг и Упячка."""
+    """2007 год: олбанский язык, Winamp, ICQ, Башорг, Упячка, Эмо-дневники."""
     res = text
     for pattern, repl in _OLDWEB_PHONETICS:
         res = re.sub(pattern, repl, res, flags=re.IGNORECASE)
 
-    # Случайный капс и смайлики
     words = res.split()
     for i in range(len(words)):
         if random.random() < 0.2 and len(words[i]) > 3:
@@ -632,26 +599,60 @@ def oldweb_transform(text: str, header: str | None = None) -> tuple[str, str]:
             words[i] += f" {random.choice(_OLDWEB_SMILEYS)}"
     padonki_text = " ".join(words)
 
-    # Метаданные 2007 года
+    branch = random.random()
     track = random.choice(_OLDWEB_TRACKS)
     uin = f"{random.randint(100, 999)}-{random.randint(100, 999)}"
-    mood = random.choice(["эмо-депрессия 💔", "пью блейзер 🍇", "жгу в клубе 🎸", "слушаю аматори 🖤", "ржунимагу xD"])
-    verdict = random.choice([
-        "АФФТАР ЖЖОТ! ПЕШЫ ИСЧО!", "КГ/АМ! ВЫПЕЙ ЙАДУ!", "В МЕМОРИЗ ОДНОЗНАЧНА!",
-        "ПОПЯЧЬСЯ ЖЫВТОНЕ! ПЫЩЬ-ПЫЩЬ!", "ОНОТОЛЕ ОДОБРЯЕТ ЭТОТ ПОСТ!",
-    ])
 
-    blocks = [
-        f"💿 <b>[Winamp v5.34]</b> ▶ <code>{track}</code>",
-        f"📟 <b>[ICQ #{uin}]:</b> Статус: <i>{mood}</i>",
-        f"\n<u><b>{padonki_text}</b></u>\n",
-        f"<i>{verdict}</i>",
-    ]
+    # 1. АТАКА ВОЕНОВ УПЯЧКИ (30%)
+    if branch < 0.30:
+        output = (
+            f"⚡ <b>[ГЛАВНЕ ПОПЯЧТСА! ВОЕНЕ УПЯЧКИ В ТРЕДЕ!]</b>\n\n"
+            f"ЖЫВТОНЕ ЧОЧО ПОПЯЧЬСЯ! ПЫЩЬ-ПЫЩЬ-ПЫЩЬ! 🐕\n"
+            f"СВОБОДА! СМОТРИ БАЛЕТ, СУКА! ЛУЧИ ПОНОСА НА УГ!\n\n"
+            f"<u><b>{padonki_text.upper()}</b></u>\n\n"
+            f"🐱 <b>КОТЭ ОДОБРЯЭ:</b> <code>ОНОТОЛЕ ВЗГЛЯНУЛ НА ТЕБЯ КАК НА УГ И ПРОСТИЛ!</code>\n"
+            f"<i>ГЛАНДЭ ЖАЖДУТ КРАБОВ! ПЫЩЬ!</i>"
+        )
 
-    if random.random() < 0.35:
-        blocks.append(f"\n📖 <b>[Цитатник bash.org.ru]:</b>\n<code>{random.choice(_OLDWEB_BASH_LOGS)}</code>")
+    # 2. ДНЕВНИК ЭМО НА LIVEINTERNET / NAROD.RU (30%)
+    elif branch < 0.60:
+        output = (
+            f"🖤 <b>[ДНЕВНИК ЭМО-ГЁРЛ НА LIVEINTERNET]</b>\n"
+            f"🎵 <i>Now Playing: {track}</i>\n"
+            f"💔 <i>Настроение: плачу в ванной под душем Т_Т</i>\n\n"
+            f"«{padonki_text}»\n\n"
+            f"🔪 <i>*рисует разбитое сердечко на парте черным маркером*</i>\n"
+            f"<code>[Комментариев: {random.randint(2, 48)} | Симпатии: +{random.randint(1, 15)} | Чёлка: набок]</code>"
+        )
 
-    return "text", "\n".join(blocks)
+    # 3. ICQ / QIP 2005 ДИАЛОГ (20%)
+    elif branch < 0.80:
+        output = (
+            f"📟 <b>[QIP 2005 Build 8095 // О-ОУ!]</b>\n"
+            f"<b>Контакт:</b> <code>Anonchik ({uin}) [Онлайн]</code>\n"
+            f"<b>X-Статус:</b> <i>Пью вишневый Blazer с пацанами 🍇</i>\n\n"
+            f"<b>&lt;Anonchik&gt;</b> {padonki_text}\n"
+            f"<b>&lt;Вы&gt;</b> ахахаха жжош кросавчег xD\n\n"
+            f"<i>*звук стука в дверь в QIP*</i>"
+        )
+
+    # 4. КЛАССИЧЕСКИЙ БАШОРГ (20%)
+    else:
+        verdict = random.choice([
+            "АФФТАР ЖЖОТ! ПЕШЫ ИСЧО!", "КГ/АМ! ВЫПЕЙ ЙАДУ!", "В МЕМОРИЗ ОДНОЗНАЧНА!",
+            "ПОПЯЧЬСЯ ЖЫВТОНЕ! ПЫЩЬ-ПЫЩЬ!", "ОНОТОЛЕ ОДОБРЯЕТ ЭТОТ ПОСТ!",
+        ])
+        bash_log = random.choice(_OLDWEB_BASH_LOGS)
+        output = (
+            f"💿 <b>[Winamp v5.34]</b> ▶ <code>{track}</code>\n"
+            f"📟 <b>[ICQ #{uin}]:</b> Статус: <i>ржунимагу xD</i>\n\n"
+            f"<u><b>{padonki_text}</b></u>\n\n"
+            f"<i>{verdict}</i>\n\n"
+            f"📖 <b>[Цитатник bash.org.ru #{random.randint(100000, 999999)}]:</b>\n"
+            f"<code>{bash_log}</code>"
+        )
+
+    return "text", output
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -686,6 +687,15 @@ _JEWISH_PERSONAS = {
             'Г-сподь терпел, и нам велел... но таки до шести вечера в пятницу!',
         ],
     },
+    'izya': {
+        'name': 'Изя из валютной кассы',
+        'cries': ['— Изя, пересчитывая купюры:', '— Изя, стуча по калькулятору:', '— Изя, прищурив глаз:'],
+        'lines': [
+            'Молодой человек, где вы учились коммерции? В цирке у клоунов?',
+            'Тут маржи даже на селёдку не хватает, а вы ещё торгуетесь!',
+            'С такими мыслями вы далеко не уедете, разве шо на трамвае без билета!',
+        ],
+    },
 }
 
 _GESHEFT_PRICES = [
@@ -694,6 +704,7 @@ _GESHEFT_PRICES = [
     ("Совет мудрого раввина", 350, "шт"),
     ("Фаршированная щука", 220, "порция"),
     ("Нервы, потраченные на этот пост", 500, "пуд"),
+    ("Аренда стула на Дерибасовской", 150, "час"),
 ]
 
 
@@ -701,29 +712,46 @@ def jewish_transform(text: str, header: str | None = None) -> tuple[str, str]:
     """Одесский театр с полилогом персонажей, гешефт-бухгалтерией и талмудической мудростью."""
     sentences = [s.strip() for s in re.split(r'[.!?\n]+', text) if s.strip()] or [text]
 
-    # Строим полилог
-    dialogue = []
-    p_keys = list(_JEWISH_PERSONAS.keys())
-    for i, s in enumerate(sentences[:3]):
-        p = _JEWISH_PERSONAS[p_keys[i % len(p_keys)]]
-        dialogue.append(f"{random.choice(p['cries'])}\n«{s}» — <i>{random.choice(p['lines'])}</i>\n")
+    branch = random.random()
 
-    # Считаем гешефт
-    item = random.choice(_GESHEFT_PRICES)
-    qty = random.randint(1, 4)
-    loss = item[1] * qty + random.randint(15, 80)
-    profit = random.randint(-loss, loss // 2)
+    # 1. ТАЛМУДИЧЕСКИЙ ДИСПУТ (35%)
+    if branch < 0.35:
+        p_rebe = _JEWISH_PERSONAS['rebe']
+        p_tsilya = _JEWISH_PERSONAS['tsilya']
+        output = (
+            f"📜 <b>[ТАЛМУДИЧЕСКИЙ ДИСПУТ В СИНАГОГЕ НА БАЛКОВСКОЙ]</b>\n\n"
+            f"<b>Тезис анона:</b>\n"
+            f"«{text}»\n\n"
+            f"{random.choice(p_rebe['cries'])}\n"
+            f"<i>«{random.choice(p_rebe['lines'])}»</i>\n\n"
+            f"{random.choice(p_tsilya['cries'])}\n"
+            f"<i>«{random.choice(p_tsilya['lines'])}»</i>\n\n"
+            f"🕎 <b>ИТОГ СПОРА:</b> Спор перенесён на Шаббат. За вход — 15 шекелей."
+        )
 
-    status_gesheft = "ТАКИ ПРИБЫЛЬ! 💰" if profit > 0 else "ЧИСТЫЙ ГЕМБЕЛЬ И УБЫТОК! 🤦‍♂️"
+    # 2. ПОЛИЛОГ НА ПРИВОЗЕ С БУХГАЛТЕРИЕЙ (65%)
+    else:
+        dialogue = []
+        p_keys = list(_JEWISH_PERSONAS.keys())
+        for i, s in enumerate(sentences[:3]):
+            p = _JEWISH_PERSONAS[p_keys[i % len(p_keys)]]
+            dialogue.append(f"{random.choice(p['cries'])}\n«{s}» — <i>{random.choice(p['lines'])}</i>\n")
 
-    output = (
-        f"✡️ <b>[ОДЕССКИЙ ПРИВОЗ // ДЕРИБАСОВСКАЯ]:</b>\n\n"
-        f"{''.join(dialogue)}"
-        f"📊 <b>[КАЛЬКУЛЯТОР ГЕШЕФТА]:</b>\n"
-        f"• Расход: {item[0]} ({qty} {item[2]}) = <b>−{loss}₪</b>\n"
-        f"• Итоговый баланс: <b>{profit}₪</b> ({status_gesheft})\n\n"
-        f"📜 <i>«Шо вы мне строите глазки, как солдат на вошь? Сделайте умное лицо и не позорьте маму!»</i>"
-    )
+        item = random.choice(_GESHEFT_PRICES)
+        qty = random.randint(1, 4)
+        loss = item[1] * qty + random.randint(15, 80)
+        profit = random.randint(-loss, loss // 2)
+        status_gesheft = "ТАКИ ПРИБЫЛЬ! 💰" if profit > 0 else "ЧИСТЫЙ ГЕМБЕЛЬ И УБЫТОК! 🤦‍♂️"
+
+        output = (
+            f"✡️ <b>[ОДЕССКИЙ ПРИВОЗ // ДЕРИБАСОВСКАЯ]:</b>\n\n"
+            f"{''.join(dialogue)}"
+            f"📊 <b>[КАЛЬКУЛЯТОР ГЕШЕФТА]:</b>\n"
+            f"• Расход: {item[0]} ({qty} {item[2]}) = <b>−{loss}₪</b>\n"
+            f"• Итоговый баланс: <b>{profit}₪</b> ({status_gesheft})\n\n"
+            f"📜 <i>«Шо вы мне строите глазки, как солдат на вошь? Сделайте умное лицо и не позорьте маму!»</i>"
+        )
+
     return "text", output
 
 
@@ -737,6 +765,7 @@ _US_CHARGES_LIST = [
     "Failure to salute an F-150 passing by at 80 MPH",
     "Refusal to SuperSize a 2,000-calorie Value Meal",
     "Operating a social media account without a loaded firearm",
+    "Unauthorized complaining without paying mandatory 35% state tip",
 ]
 
 _US_INVOICE_ITEMS = [
@@ -745,35 +774,57 @@ _US_INVOICE_ITEMS = [
     ("Freedom Air Delivery (Texas F-150)", 9.99),
     ("Lawyer Consultation Fee (30 seconds)", 150.00),
     ("Mandatory Eagle Screech Audio License", 4.99),
+    ("Texas Patriot Clean Air Tax", 12.50),
 ]
 
 
 def america_transform(text: str, header: str | None = None) -> tuple[str, str]:
-    """Капиталистическая бюрократия США: CIA Brief, суд присяжных и детальный инвойс с чаевыми."""
+    """Капиталистическая бюрократия США: CIA Brief, суд Техаса, Wall Street тикер."""
     case_no = f"US-{random.randint(1000, 9999)}-TX"
     charge = random.choice(_US_CHARGES_LIST)
 
-    # Инвойс
-    subtotal = sum(item[1] for item in _US_INVOICE_ITEMS[:3])
-    tax = round(subtotal * 0.0825, 2)
-    tip = round(subtotal * 0.25, 2)
-    total = round(subtotal + tax + tip, 2)
+    branch = random.random()
 
-    output = (
-        f"🦅 <b>TOP SECRET // CIA HOMELAND SURVEILLANCE MEMO</b>\n"
-        f"<code>CASE: {case_no} | THREAT: ELEVATED | FREEDOM INDEX: 1776%</code>\n"
-        f"<code>SUBJECT POST: \"{text.upper()}\"</code>\n\n"
-        f"🏛️ <b>UNITED STATES DISTRICT COURT OF TEXAS:</b>\n"
-        f"<b>Accusation:</b> {charge}\n"
-        f"<b>Verdict:</b> ⚖️ <b>GUILTY AS CHARGED.</b> Deploy democracy immediately.\n\n"
-        f"🧾 <b>[ITEMIZED CAPITALIST INVOICE]:</b>\n"
-        f"• {_US_INVOICE_ITEMS[0][0]}: ${ _US_INVOICE_ITEMS[0][1] }\n"
-        f"• {_US_INVOICE_ITEMS[1][0]}: ${ _US_INVOICE_ITEMS[1][1] }\n"
-        f"• State Sales Tax (8.25%): ${tax}\n"
-        f"• Mandatory iPad Tip (25%): ${tip}\n"
-        f"<b>TOTAL DUE: ${total} USD</b> 💵\n\n"
-        f"🇺🇸 <i>GOD BLESS AMERICA. WE ACCEPT CASH, VISA, AND AMMUNITION.</i>"
-    )
+    # 1. WALL STREET TICKER (30%)
+    if branch < 0.30:
+        ticker = f"${random.choice(['DVACH', 'SOSH', 'PEPE', 'FREEDOM', 'BURGER'])}"
+        price = round(random.uniform(45.0, 480.0), 2)
+        change = round(random.uniform(-18.5, +24.8), 2)
+        output = (
+            f"📈 <b>[WALL STREET STOCK EXCHANGE // NASDAQ]</b>\n"
+            f"<code>TICKER: {ticker} | PRICE: ${price} ({'+' if change > 0 else ''}{change}%)</code>\n\n"
+            f"<b>Market Analysis on Anon\'s Statement:</b>\n"
+            f"<i>«{text.upper()}»</i>\n\n"
+            f"💼 <b>JP MORGAN & GOLDMAN SACHS RATING:</b>\n"
+            f"• Recommendation: <b>STRONG BUY (BUY THE DIP)</b>\n"
+            f"• Dividend Yield: <code>{random.randint(4, 18)}% in BBQ Sauce</code>\n"
+            f"• Risk Level: <code>MAXIMUM CAPITALISM</code>\n\n"
+            f"💵 <i>IN CAPITAL WE TRUST. WE ACCEPT MASTERCARD & OIL FUTURES.</i>"
+        )
+
+    # 2. СУД ТЕХАСА И ИНВОЙС (70%)
+    else:
+        subtotal = sum(item[1] for item in _US_INVOICE_ITEMS[:3])
+        tax = round(subtotal * 0.0825, 2)
+        tip = round(subtotal * 0.25, 2)
+        total = round(subtotal + tax + tip, 2)
+
+        output = (
+            f"🦅 <b>TOP SECRET // CIA HOMELAND SURVEILLANCE MEMO</b>\n"
+            f"<code>CASE: {case_no} | THREAT: ELEVATED | FREEDOM INDEX: 1776%</code>\n"
+            f"<code>SUBJECT POST: '{text.upper()}'</code>\n\n"
+            f"🏛️ <b>UNITED STATES DISTRICT COURT OF TEXAS:</b>\n"
+            f"<b>Accusation:</b> {charge}\n"
+            f"<b>Verdict:</b> ⚖️ <b>GUILTY AS CHARGED.</b> Deploy democracy immediately.\n\n"
+            f"🧾 <b>[ITEMIZED CAPITALIST INVOICE]:</b>\n"
+            f"• {_US_INVOICE_ITEMS[0][0]}: ${ _US_INVOICE_ITEMS[0][1] }\n"
+            f"• {_US_INVOICE_ITEMS[1][0]}: ${ _US_INVOICE_ITEMS[1][1] }\n"
+            f"• State Sales Tax (8.25%): ${tax}\n"
+            f"• Mandatory iPad Tip (25%): ${tip}\n"
+            f"<b>TOTAL DUE: ${total} USD</b> 💵\n\n"
+            f"🇺🇸 <i>GOD BLESS AMERICA. WE ACCEPT CASH, VISA, AND AMMUNITION.</i>"
+        )
+
     return "text", output
 
 
@@ -787,6 +838,7 @@ _HOLIDAY_TOASTS = [
     "🥂 «Третий тост — за любовь и за тех, кто сегодня под ёлкой!»",
     "🎆 «Чтоб в новом году сервер не падал, а зарплата росла как оливье в тазу!»",
     "🎅 «За Деда Мороза! Единственный мужик, который дарит подарки без лишних вопросов!»",
+    "🍷 «Чтоб хуй стоял и сосач работал без капчи!»",
 ]
 
 _HOLIDAY_CHAOS = [
@@ -795,6 +847,7 @@ _HOLIDAY_CHAOS = [
     "🍾 <i>*пробка от шампанского сбивает хрустальную люстру 1984 года*</i>",
     "🎤 <i>*орёт Меладзе в пустую бутылку из-под Советского полусладкого*</i>",
     "🎄 <i>*обнимает ёлку и клянётся ей в вечной дружбе*</i>",
+    "🕺 <i>*батя в майке-алкоголичке пускается в пляс под Верку Сердючку*</i>",
 ]
 
 
@@ -805,18 +858,15 @@ def _apply_drunk_typing(text: str, level: float) -> str:
     drunk_words = []
 
     for w in words:
-        # Растягивание гласных
         if len(w) > 2 and random.random() < level * 0.6:
             v_indices = [i for i, c in enumerate(w) if c in vowels]
             if v_indices:
                 idx = random.choice(v_indices)
                 w = w[:idx] + w[idx] * random.randint(2, 4) + w[idx+1:]
 
-        # Капс от удара кулаком по клавиатуре
         if random.random() < level * 0.35:
             w = w.upper()
 
-        # Икота
         if random.random() < level * 0.2:
             w += "... *ик!*"
 
@@ -826,9 +876,8 @@ def _apply_drunk_typing(text: str, level: float) -> str:
 
 
 def holiday_transform(text: str, header: str | None = None) -> tuple[str, str]:
-    """Новогоднее русское застолье: шкала промилле, тосты, драка за оливье и похмельный прогноз."""
+    """Новогоднее застолье: шкала промилле, тосты, драка за оливье, прогноз на утро."""
     words_len = len(text.split())
-    # Уровень опьянения от 0.3 до 0.95
     drunk_level = min(0.95, max(0.3, words_len / 25.0 + random.uniform(0.1, 0.3)))
 
     drunk_text = _apply_drunk_typing(text, drunk_level)
@@ -839,17 +888,32 @@ def holiday_transform(text: str, header: str | None = None) -> tuple[str, str]:
     bar_fill = int(drunk_level * 10)
     status_bar = "🍷" * bar_fill + "⬜" * (10 - bar_fill)
 
-    output = (
-        f"🎄 <b>[НОВОГОДНИЙ УГАР // ЗАСТОЛЬЕ]</b>\n"
-        f"<b>Состояние:</b> [{status_bar}] <b>{promille}‰</b>\n\n"
-        f"{toast}\n\n"
-        f"<i>«{drunk_text}»</i>\n\n"
-        f"{chaos}\n\n"
-        f"🍾 <b>[ПРОГНОЗ НА УТРО 1 ЯНВАРЯ]:</b>\n"
-        f"• Головная боль: <code>{min(10, int(promille * 2.5))}/10</code>\n"
-        f"• Стыд за звонки бывшим: <code>100%</code>\n"
-        f"• Спасительный рассол в холодильнике: <code>{'ЕСТЬ (0.5л)' if random.random() < 0.5 else 'ВЫПИТ ДЕДОМ'}</code>"
-    )
+    branch = random.random()
+
+    # 1. ОБРАЩЕНИЕ ПРЕЗИДЕНТА К АНОНАМ (30%)
+    if branch < 0.30:
+        output = (
+            f"📺 <b>[ТЕЛЕВИЗОР «РУБИН» // НОВОГОДНЕЕ ОБРАЩЕНИЕ]</b>\n"
+            f"<i>*куранты бьют 12 раз на фоне кремлёвской башни*</i>\n\n"
+            f"<b>«Дорогие анонимы! Этот год был непростым...»</b>\n"
+            f"<i>«{drunk_text}»</i>\n\n"
+            f"🥂 <b>Тост:</b> {toast}\n"
+            f"<b>Промилле в крови:</b> <code>{promille}‰</code> | {chaos}"
+        )
+    # 2. КЛАССИЧЕСКОЕ ЗАСТОЛЬЕ (70%)
+    else:
+        output = (
+            f"🎄 <b>[НОВОГОДНИЙ УГАР // ЗАСТОЛЬЕ]</b>\n"
+            f"<b>Состояние:</b> [{status_bar}] <b>{promille}‰</b>\n\n"
+            f"{toast}\n\n"
+            f"<i>«{drunk_text}»</i>\n\n"
+            f"{chaos}\n\n"
+            f"🍾 <b>[ПРОГНОЗ НА УТРО 1 ЯНВАРЯ]:</b>\n"
+            f"• Головная боль: <code>{min(10, int(promille * 2.5))}/10</code>\n"
+            f"• Стыд за звонки бывшим: <code>100%</code>\n"
+            f"• Спасительный рассол в холодильнике: <code>{'ЕСТЬ (0.5л)' if random.random() < 0.5 else 'ВЫПИТ ДЕДОМ'}</code>"
+        )
+
     return "text", output
 
 

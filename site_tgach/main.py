@@ -2327,8 +2327,10 @@ async def security_headers_middleware(request: Request, call_next):
         "img-src 'self' data: https: blob:; "
         "media-src 'self' https: blob:; "
         "connect-src 'self' https: wss:; "
-        "frame-src 'self' https://www.youtube.com;"
+        "frame-src 'self' https://www.youtube.com; "
+        "upgrade-insecure-requests;"
     )
+
     return response
 
 

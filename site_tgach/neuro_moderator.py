@@ -108,12 +108,21 @@ async def _safe_groq_json(messages, max_tokens=300):
                         )
 
                         if resp.status_code == 200:
-                            content = resp.json()["choices"][0]["message"]["content"].strip()
+                            raw_content = resp.json()["choices"][0]["message"]["content"].strip()
+                            content = raw_content
                             if "```" in content:
                                 match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
                                 if match:
-                                    content = match.group(1)
-                            return json.loads(content)
+                                    content = match.group(1).strip()
+                            # Извлекаем JSON объект по внешним фигурным скобкам, если модель добавила текст
+                            json_match = re.search(r"\{.*\}", content, re.DOTALL)
+                            if json_match:
+                                content = json_match.group(0).strip()
+                            try:
+                                return json.loads(content)
+                            except json.JSONDecodeError as jde:
+                                logger.error(f"DeepCheck JSON Parse Error: {jde} | Raw AI Response: {raw_content[:200]}")
+                                return None
                         elif resp.status_code == 429:
                             logger.warning(f"⚠️ Groq 429 Rate Limit for {current_model}, switching model immediately.")
                             break
@@ -134,9 +143,6 @@ async def _safe_groq_json(messages, max_tokens=300):
                                     "safety_flags": ["REFUSAL_HARD_CSAM"],
                                 }
                             break
-                except json.JSONDecodeError:
-                    logger.error("DeepCheck JSON Parse Error")
-                    return None
                 except Exception as e:
                     err_str = str(e).lower()
                     if (

@@ -85,15 +85,23 @@ TEMPLATE_CONFIG = {
     ]
 }
 
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 DYNAMIC_MODES = {
-    'polish': 'templates/polish',
-    'ukrainian': 'templates/ukrainian',
-    'shizo': 'templates/shizo',
-    'zaputin': 'templates/zaputin',
-    'gopnik': 'templates/gopnik'
+    'polish': os.path.join(_BASE_DIR, 'templates', 'polish'),
+    'ukrainian': os.path.join(_BASE_DIR, 'templates', 'ukrainian'),
+    'shizo': os.path.join(_BASE_DIR, 'templates', 'shizo'),
+    'zaputin': os.path.join(_BASE_DIR, 'templates', 'zaputin'),
+    'gopnik': os.path.join(_BASE_DIR, 'templates', 'gopnik')
 }
 
-FONTS_POOL = ['font1.ttf', 'font2.ttf']
+FONTS_POOL = [
+    os.path.join(_BASE_DIR, 'fonts', 'Impact.ttf'),
+    os.path.join(_BASE_DIR, 'fonts', 'segoeuib.ttf'),
+    'C:/Windows/Fonts/segoeuib.ttf',
+    'C:/Windows/Fonts/impact.ttf',
+    'C:/Windows/Fonts/arialbd.ttf'
+]
 
 def _wrap_text_by_pixel(draw, text, font, max_width):
     wrapped_lines = []
@@ -148,13 +156,20 @@ def create_visual_post(mode, text, header=None):
 
         if mode in TEMPLATE_CONFIG:
             config = random.choice(TEMPLATE_CONFIG[mode])
-            img_path = f"templates/{config['filename']}"
+            img_path = os.path.join(_BASE_DIR, "templates", config['filename'])
         elif mode in DYNAMIC_MODES:
             folder = DYNAMIC_MODES[mode]
-            files = (glob.glob(f"{folder}/*.png") + 
-                     glob.glob(f"{folder}/*.webp") + 
-                     glob.glob(f"{folder}/*.jpg") + 
-                     glob.glob(f"{folder}/*.jpeg"))
+            files = (glob.glob(os.path.join(folder, "*.png")) + 
+                     glob.glob(os.path.join(folder, "*.webp")) + 
+                     glob.glob(os.path.join(folder, "*.jpg")) + 
+                     glob.glob(os.path.join(folder, "*.jpeg")))
+            if not files:
+                # Fallback to ukrainian or templates pool if specific folder is empty
+                folder = os.path.join(_BASE_DIR, "templates", "ukrainian")
+                files = (glob.glob(os.path.join(folder, "*.png")) + 
+                         glob.glob(os.path.join(folder, "*.webp")) + 
+                         glob.glob(os.path.join(folder, "*.jpg")) + 
+                         glob.glob(os.path.join(folder, "*.jpeg")))
             if not files: return None
             img_path = random.choice(files)
             
@@ -519,7 +534,15 @@ def create_visual_post(mode, text, header=None):
         buf = io.BytesIO()
         img.convert("RGB").save(buf, format="PNG")
         buf.seek(0)
+        chosen_style = style if 'style' in locals() else (config.get('filename') if config else mode)
+        try:
+            print(f"🎨 [Visual Mode] Сгенерирован визуальный пост (режим: {mode}, стиль: {chosen_style})")
+        except Exception:
+            try:
+                print(f"[Visual Mode] Generated visual post (mode: {mode}, style: {chosen_style})")
+            except Exception:
+                pass
         return buf.getvalue()
 
-    except Exception:
+    except Exception as e:
         return None

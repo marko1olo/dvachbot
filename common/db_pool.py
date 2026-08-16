@@ -94,7 +94,7 @@ async def get_pool():
                     return _db_connection
             except Exception:
                 import traceback; traceback.print_exc()
-            print("⚠️ [DB] Обнаружен разрыв соединения. Запуск безопасного восстановления...")
+            print("[DB] Reconnecting to database...")
         
         # 3. Аккуратное закрытие старого трупа (если есть)
         if _db_connection:
@@ -124,14 +124,14 @@ async def get_pool():
                 # Нет await conn.commit(), так как мы в режиме autocommit (isolation_level=None)
                 
                 _db_connection = conn
-                print(f"✅ [DB] Восстановлено (попытка {attempt+1}, isolation_level=None)")
+                print(f"[DB] Connected successfully (attempt {attempt+1}, isolation_level=None)")
                 return _db_connection
             except Exception as e:
-                print(f"⚠️ [DB] Retry {attempt+1}/{retries} failed: {e}")
+                print(f"[DB] Retry {attempt+1}/{retries} failed: {e}")
                 if attempt < retries - 1:
                     await asyncio.sleep(2)  # Backoff перед retry
                 else:
-                    print(f"⛔ [DB] КРИТИЧЕСКАЯ ОШИБКА: {e}")
+                    print(f"[DB] CRITICAL ERROR: {e}")
                     raise e
             
         return _db_connection
@@ -147,9 +147,9 @@ async def close_pool():
         if _db_connection:
             try:
                 await _db_connection.close()
-                print("🔌 [DB] Соединение корректно закрыто.")
+                print("[DB] Connection closed successfully.")
             except Exception as e:
-                print(f"⚠️ [DB] Ошибка при закрытии: {e}")
+                print(f"[DB] Close error: {e}")
             finally:
                 _db_connection = None
 

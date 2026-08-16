@@ -261,13 +261,13 @@ class HfPairRotator:
 # === ГЛОБАЛЬНЫЕ ИНИЦИАЛИЗИРОВАННЫЕ ПУЛЫ ===
 
 hf_pool = TokenRotator(
-    raw=_load_env_keys(["HF_TOKENS", "HF_TOKEN"]),
+    raw=_load_env_keys(["HF_TOKENS", "HF_TOKEN"], extra_files=[".env"]),
     min_interval=2.0,
     name="HuggingFacePool"
 )
 
 groq_pool = TokenRotator(
-    raw=_load_env_keys(["GROQ_API_KEYS", "GROQ_KEYS", "GROQ_API_KEY"]),
+    raw=_load_env_keys(["GROQ_API_KEYS", "GROQ_KEYS", "GROQ_API_KEY"], extra_files=[".env", ".envgroq"]),
     min_interval=2.5,
     name="GroqPool"
 )

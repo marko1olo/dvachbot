@@ -375,68 +375,117 @@ def wrap_text(text: str, font: ImageFont.ImageFont, max_width: int, draw: ImageD
         lines.append(" ".join(current_line))
     return lines
 
-async def fetch_random_post_image(db_path: Optional[str] = None) -> Optional[Image.Image]:
-    """Asynchronously selects a random image URL from database and downloads it."""
+async def fetch_random_post_image(db_path: Optional[str] = None, bot: Optional[Any] = None) -> Optional[Image.Image]:
+    """
+    Selects a random authentic background image strictly from user posts (111,000+ photos) and Booru URLs in DB.
+    """
     if not db_path:
         db_path = os.path.join(_BASE_DIR, "dvach_bot.db")
-    if not os.path.exists(db_path):
-        return None
         
     candidates = []
-    try:
-        from common.db_pool import get_pool, db_lock
-        async with db_lock:
-            db = await get_pool()
-            async with db.execute("""
-                SELECT original_file_id, original_url FROM PostFiles 
-                WHERE file_type = 'photo' AND (original_file_id LIKE 'http%' OR original_url LIKE 'http%')
-                ORDER BY id DESC LIMIT 100
-            """) as cursor:
-                rows = await cursor.fetchall()
-            for fid, url in rows:
-                u = url if (url and url.startswith("http")) else fid
-                if u and u.startswith("http"):
-                    candidates.append(u)
-    except Exception:
-        # Fallback to sync sqlite in thread if get_pool fails
-        def _get_sync():
-            res = []
-            try:
-                conn = sqlite3.connect(db_path, timeout=5.0)
-                c = conn.cursor()
-                c.execute("""
+    file_id_candidates = []
+    if os.path.exists(db_path):
+        try:
+            from common.db_pool import get_pool, db_lock
+            async with db_lock:
+                db = await get_pool()
+                # 1. Sample from 111,594+ real user photos
+                async with db.execute("""
                     SELECT original_file_id, original_url FROM PostFiles 
-                    WHERE file_type = 'photo' AND (original_file_id LIKE 'http%' OR original_url LIKE 'http%')
-                    ORDER BY id DESC LIMIT 100
-                """)
-                for fid, url in c.fetchall():
-                    u = url if (url and url.startswith("http")) else fid
-                    if u and u.startswith("http"):
-                        res.append(u)
-                conn.close()
-            except Exception:
-                pass
-            return res
-        candidates = await asyncio.to_thread(_get_sync)
+                    WHERE file_type = 'photo' AND original_file_id IS NOT NULL
+                    ORDER BY RANDOM() LIMIT 40
+                """) as cursor:
+                    rows = await cursor.fetchall()
+                for fid, url in rows:
+                    if url and url.startswith("http"):
+                        candidates.append(url)
+                    elif fid and fid.startswith("http"):
+                        candidates.append(fid)
+                    elif fid:
+                        file_id_candidates.append(fid)
+                
+                # 2. Check Posts content JSON for image_url
+                if len(candidates) < 10:
+                    async with db.execute("""
+                        SELECT content FROM Posts 
+                        WHERE content LIKE '%http%' AND (content LIKE '%.jpg%' OR content LIKE '%.png%' OR content LIKE '%.jpeg%')
+                        ORDER BY RANDOM() LIMIT 40
+                    """) as cursor:
+                        p_rows = await cursor.fetchall()
+                    for (cnt_str,) in p_rows:
+                        try:
+                            cnt = json.loads(cnt_str)
+                            u = cnt.get('image_url') or cnt.get('url')
+                            if not u and cnt.get('type') == 'media_group' and 'media' in cnt:
+                                for m in cnt['media']:
+                                    if m.get('type') == 'photo':
+                                        u = m.get('media') or m.get('file_id')
+                                        break
+                            if u and str(u).startswith('http'):
+                                candidates.append(str(u))
+                        except Exception:
+                            pass
+        except Exception:
+            def _get_sync():
+                res_urls = []
+                res_fids = []
+                try:
+                    conn = sqlite3.connect(db_path, timeout=5.0)
+                    c = conn.cursor()
+                    c.execute("""
+                        SELECT original_file_id, original_url FROM PostFiles 
+                        WHERE file_type = 'photo' AND original_file_id IS NOT NULL
+                        ORDER BY RANDOM() LIMIT 40
+                    """)
+                    for fid, url in c.fetchall():
+                        if url and url.startswith("http"):
+                            res_urls.append(url)
+                        elif fid and fid.startswith("http"):
+                            res_urls.append(fid)
+                        elif fid:
+                            res_fids.append(fid)
+                    conn.close()
+                except Exception:
+                    pass
+                return res_urls, res_fids
+            candidates, file_id_candidates = await asyncio.to_thread(_get_sync)
 
-
-    if not candidates:
-        return None
-
-    random.shuffle(candidates)
-    timeout = aiohttp.ClientTimeout(total=3.0)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        for url in candidates:
+    # 1. Try downloading real user photo via Bot API if bot instance is available
+    if bot and file_id_candidates:
+        random.shuffle(file_id_candidates)
+        for fid in file_id_candidates[:3]:
             try:
-                async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                    if resp.status == 200:
-                        data = await resp.read()
-                        img = Image.open(io.BytesIO(data))
-                        img.verify()
-                        img = Image.open(io.BytesIO(data)).convert("RGB")
-                        return img
+                buf = io.BytesIO()
+                await bot.download(fid, destination=buf)
+                buf.seek(0)
+                if buf.getbuffer().nbytes > 4000:
+                    img = Image.open(buf)
+                    img.verify()
+                    buf.seek(0)
+                    return Image.open(buf).convert("RGB")
             except Exception:
                 continue
+
+    # 2. Try HTTP URLs from DB
+    if candidates:
+        random.shuffle(candidates)
+        timeout = aiohttp.ClientTimeout(total=3.0)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                for url in candidates[:8]:
+                    try:
+                        async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                            if resp.status == 200:
+                                data = await resp.read()
+                                if len(data) > 4000:
+                                    img = Image.open(io.BytesIO(data))
+                                    img.verify()
+                                    return Image.open(io.BytesIO(data)).convert("RGB")
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
     return None
 
 def _render_layout_cyber_board(
@@ -1016,10 +1065,11 @@ async def generate_invite_image_async(
     bot_username: str = "@dvach_chatbot",
     slogan_dict: Optional[Union[Dict[str, str], str]] = None,
     custom_text: Optional[str] = None,
-    layout_style: Optional[int] = None
+    layout_style: Optional[int] = None,
+    bot: Optional[Any] = None
 ) -> io.BytesIO:
     """High-level async helper to generate a complete invite image card."""
-    base_img = await fetch_random_post_image()
+    base_img = await fetch_random_post_image(bot=bot)
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,

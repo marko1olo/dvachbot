@@ -870,6 +870,9 @@ async def _create_indices(db):
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_reactionqueue_post_num ON ReactionQueue(post_num);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_board_posts_balance ON Users(board_id, posts_count DESC, balance DESC);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_mutes_expires_at ON Mutes(expires_at);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_modqueue_post_num ON ModQueue(post_num);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_notificationqueue_reply_post ON NotificationQueue(reply_post_num);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_reply_to ON Posts(reply_to_post_num) WHERE reply_to_post_num IS NOT NULL;")
         try:
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_activity_board_ts ON user_activity(board_id, timestamp);")
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_activity_action_ts ON user_activity(action, timestamp);")
@@ -8127,17 +8130,18 @@ def get_db_connection():
             
     return SafeConnection()
 
-async def clean_old_postcopies_daily():
+async def clean_old_postcopies_daily(retention_days: int = 14) -> int:
     """
-    Аккуратная ежедневная чистка PostCopies: храним данные ровно 14 дней.
+    Аккуратная ежедневная чистка PostCopies: храним данные ровно retention_days дней (по умолчанию 14).
+    Удаление происходит небольшими чанками по 50,000 строк с микро-паузами db_sleep.
     """
-    from common.db_pool import get_pool, db_lock
-    days_14_ago = time.time() - (14 * 86400)
+    from common.db_pool import get_pool, db_lock, db_sleep
+    cutoff_ts = time.time() - (retention_days * 86400)
     try:
         db = await get_pool()
         if not db:
             return 0
-        async with db.execute("SELECT MIN(post_num) FROM Posts WHERE timestamp >= ?", (days_14_ago,)) as cursor:
+        async with db.execute("SELECT MIN(post_num) FROM Posts WHERE timestamp >= ?", (cutoff_ts,)) as cursor:
             row = await cursor.fetchone()
             threshold_post_num = row[0] if row else None
             
@@ -8145,7 +8149,7 @@ async def clean_old_postcopies_daily():
             return 0
 
         total_deleted = 0
-        batch_size = 100000
+        batch_size = 50000
         while True:
             async with db_lock:
                 await db.execute("BEGIN IMMEDIATE")
@@ -8161,12 +8165,6 @@ async def clean_old_postcopies_daily():
                         deleted = cursor.rowcount
                     await db.execute("COMMIT")
                 except Exception:
-                    # Без отката транзакция оставалась ОТКРЫТОЙ на общем
-                    # соединении (isolation_level=None): держала RESERVED-блокировку
-                    # против процесса сайта, а последующие записи бота копились
-                    # незакоммиченными и терялись при SIGINT от memory_restarter.
-                    # Остальные ~85 мест с BEGIN IMMEDIATE в этом файле
-                    # откатываются именно так.
                     try:
                         await db.execute("ROLLBACK")
                     except Exception:
@@ -8175,13 +8173,15 @@ async def clean_old_postcopies_daily():
             total_deleted += deleted
             if deleted == 0:
                 break
-            await db_sleep(0.5)
+            await db_sleep(0.1)
 
         if total_deleted > 0:
-            logging.getLogger("database").info(f"🧹 [POSTCOPIES_CLEANUP] Удалено {total_deleted:,} устаревших записей (post_num < {threshold_post_num}). Храним данные за 14 дней.")
+            logging.getLogger("database").info(f"[POSTCOPIES_CLEANUP] Deleted {total_deleted:,} old records (post_num < {threshold_post_num}). Retention {retention_days} days.")
         return total_deleted
     except Exception as e:
-        logging.getLogger("database").error(f"⚠️ [POSTCOPIES_CLEANUP] Ошибка ежедневной чистки: {e}")
+        import traceback
+        traceback.print_exc()
+        logging.getLogger("database").error(f"[POSTCOPIES_CLEANUP] Cleanup error: {e}")
         return 0
 
 # Сколько держим запись о медиа, которое видели РОВНО ОДИН раз.
