@@ -28,7 +28,7 @@ import re
 from httpx import AsyncHTTPTransport
 
 from common.task_manager import spawn_task
-from common.token_pool import groq_pool
+from common.token_pool import groq_pool, google_pool
 from common.database import apply_auto_censure, get_post_by_num, update_shadow_mute, log_global_event, add_to_mod_queue
 from common.db_pool import db_lock, get_pool
 from common.bot_pool import global_bot_pool
@@ -161,6 +161,39 @@ async def _safe_groq_json(messages, max_tokens=300):
                     else:
                         logger.error(f"DeepCheck Req Failed ({strategy['name']}): {e}")
                         break
+
+    # === РЕЗЕРВНЫЙ ФОЛБЭК НА GEMINI VISION ===
+    gemini_keys = google_pool.get_all_active_tokens()
+    if gemini_keys:
+        for g_key in gemini_keys:
+            for g_model in ["gemini-3.5-flash-lite", "gemini-2.5-flash"]:
+                try:
+                    transport = AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
+                    async with httpx.AsyncClient(timeout=GROQ_TIMEOUT, transport=transport, verify=False) as client:
+                        resp = await client.post(
+                            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                            headers={"Authorization": f"Bearer {g_key}"},
+                            json={
+                                "model": g_model,
+                                "messages": messages,
+                                "temperature": 0.1
+                            }
+                        )
+                        if resp.status_code == 200:
+                            raw_content = resp.json()["choices"][0]["message"]["content"].strip()
+                            content = raw_content
+                            if "```" in content:
+                                match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
+                                if match: content = match.group(1).strip()
+                            json_match = re.search(r"\{.*\}", content, re.DOTALL)
+                            if json_match: content = json_match.group(0).strip()
+                            try:
+                                logger.info(f"✅ [DeepCheck] Succeeded via Gemini Vision fallback ({g_model})")
+                                return json.loads(content)
+                            except Exception:
+                                pass
+                except Exception as g_err:
+                    logger.debug(f"[DeepCheck] Gemini fallback error ({g_model}): {g_err}")
     return None
 
 
