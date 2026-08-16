@@ -63,8 +63,7 @@ class TestCmdMega(unittest.IsolatedAsyncioTestCase):
     @patch("economy_extension.db_lock", new_callable=AsyncMock)
     async def test_success_pin(self, mock_db_lock, mock_get_pool, mock_get_target):
         mock_get_target.return_value = 111
-        mock_db = MagicMock()
-        mock_db.commit = AsyncMock() # Fix commit error
+        mock_db = MagicMock(commit=AsyncMock())
         mock_get_pool.return_value = mock_db
 
         execute_calls = []
