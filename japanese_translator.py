@@ -2081,6 +2081,10 @@ async def fetch_4chan_live_image(session, headers, board: str = "h", proxy=None,
                         tim, ext = th.get("tim"), th.get("ext")
                         if tim and ext in (".jpg", ".png", ".webm", ".gif"):
                             media_list.append(f"https://i.4cdn.org/{board}/{tim}{ext}")
+                        for rep in th.get("last_replies", []):
+                            rtim, rext = rep.get("tim"), rep.get("ext")
+                            if rtim and rext in (".jpg", ".png", ".webm", ".gif"):
+                                media_list.append(f"https://i.4cdn.org/{board}/{rtim}{rext}")
                 if media_list:
                     return random.choice(media_list)
     except Exception:

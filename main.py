@@ -5847,42 +5847,47 @@ async def cb_dice_bet_quick(callback: types.CallbackQuery, board_id: str | None)
     user_id = callback.from_user.id
     raw_bet = callback.data.replace("dice_bet_", "")
     db = await get_pool()
-    async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
-        row = await c.fetchone()
-        balance = row[0] if row and row[0] is not None else 0
-
-    if raw_bet == "all":
-        bet = int(balance)
-    elif raw_bet.isdigit():
-        bet = int(raw_bet)
-    else:
-        bet = 0
-
-    if bet < 10:
-        await callback.answer("❌ Минимальная ставка: 10 ₪ (Недостаточно средств)", show_alert=True)
-        return
-    if bet > balance:
-        await callback.answer(f"❌ Не хватает шекелей! Баланс: {int(balance)} ₪", show_alert=True)
-        return
-
     result = random.randint(1, 100)
-    if result == 100:
-        win = bet * 3
-        delta = win
-        outcome_text = f"👑 <b>ДЖЕКПОТ 100/100!</b>\n🔥 Множитель x4! Чистый выигрыш: <code>+{win} ₪</code>"
-    elif result >= 55:
-        win = bet
-        delta = win
-        outcome_text = f"🎉 <b>ПОБЕДА!</b> Выпало {result} (≥55).\n💰 Ты поднял: <code>+{win} ₪</code>"
-    else:
-        delta = -bet
-        outcome_text = f"💀 <b>ПРОИГРЫШ!</b> Выпало {result} (&lt;55).\n📉 Ты слил: <code>-{bet} ₪</code>"
+    new_bal = 0
 
     async with db_lock:
+        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
+            row = await c.fetchone()
+            balance = row[0] if row and row[0] is not None else 0
+
+        if raw_bet == "all":
+            bet = int(balance)
+        elif raw_bet.isdigit():
+            bet = int(raw_bet)
+        else:
+            bet = 0
+
+        if bet < 10:
+            await callback.answer("❌ Минимальная ставка: 10 ₪ (Недостаточно средств)", show_alert=True)
+            return
+        if bet > balance:
+            await callback.answer(f"❌ Не хватает шекелей! Баланс: {int(balance)} ₪", show_alert=True)
+            return
+        if bet > 10000:
+            await callback.answer("❌ Максимальная ставка: 10 000 ₪", show_alert=True)
+            return
+
+        if result == 100:
+            win = bet * 3
+            delta = win
+            outcome_text = f"👑 <b>ДЖЕКПОТ 100/100!</b>\n🔥 Множитель x4! Чистый выигрыш: <code>+{win} ₪</code>"
+        elif result >= 55:
+            win = bet
+            delta = win
+            outcome_text = f"🎉 <b>ПОБЕДА!</b> Выпало {result} (≥55).\n💰 Ты поднял: <code>+{win} ₪</code>"
+        else:
+            delta = -bet
+            outcome_text = f"💀 <b>ПРОИГРЫШ!</b> Выпало {result} (&lt;55).\n📉 Ты слил: <code>-{bet} ₪</code>"
+
         await db.execute(
             "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
-            (user_id, board_id, delta, delta)
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = MAX(0, balance + ?)",
+            (user_id, board_id, max(0, delta), delta)
         )
         await db.commit()
         async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_sum:
