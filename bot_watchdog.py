@@ -342,17 +342,13 @@ def _monitor_child(child: subprocess.Popen) -> bool:
                     log("Stop request detected after child exit; supervisor exits")
                     return True
                 live_pid = _locked_live_bot_pid()
-                if return_code == 0 and live_pid:
+                if live_pid and live_pid != child.pid:
                     log(
-                        f"Child exited normally while bot.lock is owned by live pid={live_pid}; "
+                        f"Child exited while bot.lock is owned by another live pid={live_pid}; "
                         "supervisor exits instead of restart-looping"
                     )
                     return True
-                if return_code == 0:
-                    log(
-                        "Bot child exited normally without stop request; supervisor exits"
-                    )
-                    return True
+                log(f"Bot child exited (code={return_code}). Supervisor will restart the bot...")
                 return False
 
             uptime = time.time() - start_time
