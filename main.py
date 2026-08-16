@@ -8075,7 +8075,16 @@ def adjust_prompt_paragraphs(prompt: str, count: int, lang: str = 'ru') -> str:
         
     return prompt
 
-async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, thread_info: dict, lang: str, paragraph_count: int, is_blat: bool | None = None, is_warhammer: bool | None = None) -> tuple[str, str, str, bool, bool]:
+@dataclass
+class SummarizeModeArgs:
+    is_blat: bool | None = None
+    is_warhammer: bool | None = None
+
+async def _get_summarize_prompt_and_chunk(board_id: str, thread_id: str | None, thread_info: dict, lang: str, paragraph_count: int, mode_args: SummarizeModeArgs | None = None) -> tuple[str, str, str, bool, bool]:
+    if mode_args is None:
+        mode_args = SummarizeModeArgs()
+    is_blat = mode_args.is_blat
+    is_warhammer = mode_args.is_warhammer
     b_data = board_data.get(board_id, {})
     if is_warhammer is None and is_blat is None:
         if b_data.get('warhammer_mode'):
@@ -8478,7 +8487,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
 
     # Generate prompt and retrieve chat chunk
     prompt, info_text, chunk, is_blat, is_warhammer = await _get_summarize_prompt_and_chunk(
-        board_id, thread_id, thread_info, lang, paragraph_count, is_blat=is_blat, is_warhammer=is_warhammer
+        board_id, thread_id, thread_info, lang, paragraph_count, mode_args=SummarizeModeArgs(is_blat=is_blat, is_warhammer=is_warhammer)
     )
 
     hf_token = os.getenv("HF_TOKEN")
@@ -16200,7 +16209,7 @@ async def periodic_board_summary():
                 
             # Автосаммари: 5-7 абзацев для полноценного прогона
             auto_paragraph_count = random.randint(5, 7)
-            prompt, info_text, chunk, is_blat = await _get_summarize_prompt_and_chunk(board_id, None, {}, 'ru', auto_paragraph_count)
+            prompt, info_text, chunk, is_blat, _ = await _get_summarize_prompt_and_chunk(board_id, None, {}, 'ru', auto_paragraph_count)
             
             if not chunk or len(chunk) < 100:
                 logger.debug("❌ [PERIODIC SUMMARY] Слишком мало сообщений.")
