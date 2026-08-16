@@ -22,20 +22,18 @@ import __main__ as main
 
 
 def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, int]) -> str:
-    """Улучшенная версия: не использует замок, работает с переданным словарем авторов."""
+    """Улучшенная версия: не использует замок, защищена от порчи префиксов чисел постов."""
     if not text or ">>" not in text:
         return text
     
-    matches = RE_YOU_PATTERN.findall(text)
+    matches = set(RE_YOU_PATTERN.findall(text))
     for post_str in matches:
         try:
             p_num = int(post_str)
             author_id = post_authors.get(p_num)
             if author_id and author_id > 0 and user_id > 0 and author_id == user_id:
-                target = f">>{p_num}"
-                replacement = f">>{p_num} (You)"
-                if target in text and replacement not in text:
-                    text = text.replace(target, replacement)
+                pattern = rf'>>{p_num}(?!\s*\(You\))(?!\d)'
+                text = re.sub(pattern, f'>>{p_num} (You)', text)
         except ValueError:
             continue
     return text
