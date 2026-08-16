@@ -155,9 +155,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
             )
             # Deterministic best-first vision cascade.
             models_cascade = [
-                ("gemini-2.5-flash", "gemini"),
                 ("gemini-3.5-flash-lite", "gemini"),
-                ("gemini-flash-lite-latest", "gemini"),
+                ("gemini-3.1-flash-lite", "gemini"),
+                ("gemini-3.6-flash", "gemini"),
+                ("gemini-2.5-flash", "gemini"),
                 ("qwen/qwen3.6-27b", "groq"),
             ]
             
