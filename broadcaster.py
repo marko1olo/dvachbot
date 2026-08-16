@@ -652,7 +652,7 @@ class MessageBroadcaster:
                     trimmed_copy_posts, trimmed_copy_refs = _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
                     trimmed_msg_storage = _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
             if trimmed_copy_posts or trimmed_msg_storage:
-                main.runtime_logger.info(
+                main.runtime_logger.debug(
                     "ram_trim %s",
                     json.dumps(
                         {
@@ -684,18 +684,16 @@ class MessageBroadcaster:
                     self.b_data['users']['active'].discard(uid)
                     users_to_remove_db.append(uid)
 
-            # Раньше здесь чистились только user_settings, last_activity и
-            # spam_violations — три хранилища из двенадцати. Это массовый путь,
-            # именно он находит большинство заблокировавших бота, поэтому
-            # остальное (включая deque с текстами сообщений) утекало.
             freed = await main.purge_users_from_board_ram(self.board_id, users_to_remove_db)
 
             if users_to_remove_db:
                 from common.database import remove_users_from_board_batch
                 await remove_users_from_board_batch(users_to_remove_db, self.board_id)
 
-            print(f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} пользователей "
-                  f"(блокировка бота). Освобождено записей в RAM: {freed}.")
+            if freed > 0:
+                main.runtime_logger.debug(
+                    f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} заблокировавших пользователей. Освобождено RAM: {freed}."
+                )
 
     async def _send_one_guarded(self, uid: int, timeout_sec: float):
         request_timeout_sec = min(

@@ -649,8 +649,8 @@ async def tagging_loop():
                         if file_id in TEMP_FAILED_FILES:
                             del TEMP_FAILED_FILES[file_id]
                     else:
-                        logger.warning(
-                            f"❌ DL fail for {file_id[:15]} across all bots (attempt {fail_cnt}/3). Skipping temporarily."
+                        logger.debug(
+                            f"❌ DL skip for {file_id[:15]} across bots (attempt {fail_cnt}/3). Retrying later."
                         )
                         TEMP_FAILED_FILES[file_id] = {
                             "until": time.time() + 300,

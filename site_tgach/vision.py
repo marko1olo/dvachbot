@@ -290,9 +290,6 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 "messages": [{"role": "user", "content": content_arr}],
                                 "max_tokens": 4096,
                             }
-                            if provider == "gemini":
-                                kwargs["response_format"] = {"type": "json_object"}
-                                
                             if provider == "groq":
                                 kwargs["temperature"] = 0.2
                                 
