@@ -12,7 +12,7 @@ except RuntimeError:
 
 
 from pyrogram import Client
-from pyrogram.errors import FileReferenceExpired
+from pyrogram.errors import FileReferenceExpired, FloodWait
 from dotenv import load_dotenv
 from common.secret_redaction import secret_fingerprint
 
@@ -125,14 +125,17 @@ async def get_active_client(bot_token: str):
                     del _ACTIVE_CLIENTS[bot_token]
 
         short_token = secret_fingerprint(bot_token)
+        sess_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "sessions")
+        os.makedirs(sess_dir, exist_ok=True)
         
         client = Client(
-            name=f"mem_session_{short_token}",
+            name=f"bot_{short_token}",
             api_id=int(API_ID),
             api_hash=API_HASH,
             bot_token=bot_token,
+            workdir=sess_dir,
             no_updates=True, 
-            in_memory=True,
+            in_memory=False,
             ipv6=False
         )
 
@@ -217,11 +220,21 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
     except FileReferenceExpired:
         logger.warning(f"⚠️ [MTProto] File reference expired: {file_id[:10]}...")
         return False
+    except FloodWait as e:
+        wait_s = int(getattr(e, "value", 300) or 300)
+        logger.warning(f"⚠️ [MTProto] FloodWait ({wait_s}s) on bot {secret_fingerprint(bot_token)}. Switching to HTTP fallback.")
+        _CONNECTION_COOLDOWN[bot_token] = time.time() + wait_s
+        return False
     except Exception as e:
         err_str = str(e).upper()
         if "420" in err_str or "FLOOD_WAIT" in err_str:
-            logger.critical(f"⛔ [MTProto] FLOOD WAIT: {e}")
-            _CONNECTION_COOLDOWN[bot_token] = time.time() + 300 
+            wait_s = 300
+            for part in str(e).split():
+                if part.isdigit() and int(part) > 10:
+                    wait_s = int(part)
+                    break
+            logger.warning(f"⚠️ [MTProto] FLOOD WAIT: {e}. Cooldown {wait_s}s. Switching to HTTP fallback.")
+            _CONNECTION_COOLDOWN[bot_token] = time.time() + wait_s
         elif "THUMBNAIL_SOURCE" in err_str:
             logger.warning(f"⚠️ [MTProto] Pyrogram failed to parse thumb source for {file_id[:10]}")
         else:
