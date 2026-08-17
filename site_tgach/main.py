@@ -10590,8 +10590,8 @@ async def get_telegram_file(
         if cached_path_info:
             break
 
-        # Если это первая попытка и файл - картинка (AgAC), пробуем форсировать путь
-        if attempt == 0 and file_id.startswith("AgAC"):
+        # Если это первая попытка, пробуем форсировать получение пути из Telegram
+        if attempt == 0 and file_id.startswith(("AgAC", "AAMC", "BAAC", "CQAC", "BQAC")):
             cached_path_info = await get_cached_file_path(file_id)
             if cached_path_info:
                 break  # Путь есть, можно отдавать
@@ -10709,7 +10709,7 @@ async def get_telegram_file(
 
 
     # 9. Fallback для превью (миниатюр)
-    if file_id.startswith("AgAC"):
+    if file_id.startswith(("AgAC", "AAMC")):
         orig_fid = None
         try:
             async with get_db_connection() as conn:
