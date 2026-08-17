@@ -2,6 +2,7 @@ import os
 import io
 import random
 from PIL import Image, ImageDraw, ImageFont
+from common.anon_identity import get_anon_id, generate_anon_name
 
 def _get_combat_font(size: int, bold: bool = True):
     paths = [
@@ -69,7 +70,7 @@ def draw_duel_poster(winner_id: int, loser_id: int, amount: int, board_id: str =
                 if c < 2:
                     draw.rectangle([lx + 32 + (4 - c) * pw, ly + 76 + r * pw, lx + 32 + (5 - c) * pw - 1, ly + 76 + (r + 1) * pw - 1], fill=(0, 230, 140, 255))
 
-    w_tag = f"Анон-#{winner_id % 10000:04d}"
+    w_tag = f"Анон [{get_anon_id(winner_id)}]"
     draw.text((lx + 98, ly + 72), w_tag, font=f_title, fill=(240, 255, 245, 255))
     pfx_w = f"Титул: [{winner_prefix}]" if winner_prefix else "Мастер клинка борды"
     draw.text((lx + 98, ly + 102), pfx_w, font=f_label, fill=(120, 175, 145, 255))
@@ -109,7 +110,7 @@ def draw_duel_poster(winner_id: int, loser_id: int, amount: int, board_id: str =
                 if c < 2:
                     draw.rectangle([rx + 32 + (4 - c) * pw, ly + 76 + r * pw, rx + 32 + (5 - c) * pw - 1, ly + 76 + (r + 1) * pw - 1], fill=(255, 75, 85, 255))
 
-    l_tag = f"Анон-#{loser_id % 10000:04d}"
+    l_tag = f"Анон [{get_anon_id(loser_id)}]"
     draw.text((rx + 98, ly + 72), l_tag, font=f_title, fill=(255, 235, 235, 255))
     pfx_l = f"Титул: [{loser_prefix}]" if loser_prefix else "Повержен в честном бою"
     draw.text((rx + 98, ly + 102), pfx_l, font=f_label, fill=(180, 125, 130, 255))
@@ -188,7 +189,7 @@ def draw_rob_poster(robber_id: int, victim_id: int, amount: int, outcome: str = 
                 if c < 2:
                     draw.rectangle([lx + 32 + (4 - c) * pw, ly + 76 + r * pw, lx + 32 + (5 - c) * pw - 1, ly + 76 + (r + 1) * pw - 1], fill=(255, 75, 85, 255))
 
-    draw.text((lx + 98, ly + 72), f"Анон-#{robber_id % 10000:04d}", font=f_title, fill=(255, 235, 235, 255))
+    draw.text((lx + 98, ly + 72), f"Анон [{get_anon_id(robber_id)}]", font=f_title, fill=(255, 235, 235, 255))
     r_sub = "Орудует заточкой из /shop" if outcome == "success" else "В панике порезался сам"
     draw.text((lx + 98, ly + 102), r_sub, font=f_label, fill=(180, 125, 130, 255))
 
@@ -237,7 +238,7 @@ def draw_rob_poster(robber_id: int, victim_id: int, amount: int, outcome: str = 
                 if c < 2:
                     draw.rectangle([rx + 32 + (4 - c) * pw, ly + 76 + r * pw, rx + 32 + (5 - c) * pw - 1, ly + 76 + (r + 1) * pw - 1], fill=av_col)
 
-    draw.text((rx + 98, ly + 72), f"Анон-#{victim_id % 10000:04d}", font=f_title, fill=(245, 245, 250, 255))
+    draw.text((rx + 98, ly + 72), f"Анон [{get_anon_id(victim_id)}]", font=f_title, fill=(245, 245, 250, 255))
     v_sub = "Ограблен в темном переулке" if outcome == "success" else "Защищен Шапочкой из фольги"
     draw.text((rx + 98, ly + 102), v_sub, font=f_label, fill=(140, 160, 180, 255))
 

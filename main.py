@@ -56,6 +56,7 @@ import tracemalloc
 import uuid
 import math
 import random
+from common.anon_identity import get_anon_id, get_referral_code, generate_anon_name as _canonical_gen_anon_name
 import re
 import secrets
 import html
@@ -501,12 +502,8 @@ import random
 NICK_PREFIXES = ["Базированный", "Всратый", "Мамкин", "Поехавший", "Соевый", "Диванный", "Опущенный", "Гойский", "Толстый", "Порватый", "Латентный", "Просветленный", "Элитный", "Подпивасный", "Двачевский", "Педальный", "Токсичный", "Кринжовый", "Аутичный", "Думерский", "Рядовой", "Школьный", "Отбитый", "Метаироничный", "Скрытый", "Сигма", "Альфа", "Омега", "Сажный", "Вайбовый", "Копиумный", "Попущенный", "Лютый", "Абсолютный", "Печальный", "Нищуковский", "Душный", "Шизоидный", "Паленый", "Забивной", "Плюшевый", "Астральный", "Комнатный"]
 NICK_SUFFIXES = ["Битард", "Скуф", "Шиз", "Анон", "Ньюфаг", "Олдфаг", "Омеган", "Шитпостер", "Сыч", "Двачер", "Чухан", "Куколд", "Нормис", "Гигачад", "Подпивас", "Зумер", "Бумер", "Сояк", "Инцел", "Думер", "Говноед", "Симп", "Чмоня", "Байтер", "Ноулайфер", "Тролль", "Моралфаг", "Альтушка", "Масик", "Школьник", "Дед", "Хиккан", "Скуфидон", "Терпила", "Вахтер", "Тентакль", "Мыслитель", "Философ", "Дворник", "Эрудит", "Чел"]
 
-def generate_anon_name(user_id: int) -> str:
-    if not user_id: return "Анонимус"
-    rng = random.Random(user_id)
-    prefix = rng.choice(NICK_PREFIXES)
-    suffix = rng.choice(NICK_SUFFIXES)
-    return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
+def generate_anon_name(user_id: int, stream: str = 'ru') -> str:
+    return _canonical_gen_anon_name(user_id, stream=stream)
 
 
 def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
@@ -3759,7 +3756,7 @@ async def _build_inventory_content(user_id: int, board_id: str):
         weapons.append("💊 <b>Шизо-Таблетка:</b> 1 шт. <i>(Реплай + /schizopill)</i>")
 
     lines = [
-        f"🎒 <b>РЮКЗАК АНОНА №{user_id % 10000:04d}</b>",
+        f"🎒 <b>РЮКЗАК АНОНА [{get_anon_id(user_id)}]</b>",
         f"<code>{'—'*26}</code>",
         f"💵 <b>Баланс:</b> <code>{int(balance):,} RUB</code>\n"
     ]
@@ -5166,7 +5163,7 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
 
     # Отправляем сообщение-вызов
     sent_msg = await message.answer(
-        f"⚔️ <b>Анон-{user_id%10000:04d} вызывает на дуэль!</b>\n\n"
+        f"⚔️ <b>Анон [{get_anon_id(user_id)}] вызывает на дуэль!</b>\n\n"
         f"Ставка: <code>{amount} RUB</code>\n"
         f"Победитель забирает всё, рандом 50/50.\n\n"
         f"Чтобы принять — напиши <code>/duel accept</code> в ответ на это сообщение или просто в чат.\n"
@@ -5228,7 +5225,7 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
     if lang == 'en':
         text = (
             f"💳 <b>TGACH WALLET</b>\n{'—'*22}\n"
-            f"👤 <b>Account ID:</b> <code>****{user_id % 10000:04d}</code>\n"
+            f"👤 <b>Account ID:</b> <code>[{get_anon_id(user_id, 'en')}]</code>\n"
             f"🔋 <b>Verification:</b> {'<code>[B] Verified</code>' if is_verified else '<code>[A] Limited</code>'}\n"
             f"💵 <b>Balance:</b> <code>{int(balance)}.00 RUB</code>\n"
         )
@@ -5236,7 +5233,7 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
     else:
         text = (
             f"💳 <b>TGACH WALLET</b>\n{'—'*22}\n"
-            f"👤 <b>ID аккаунта:</b> <code>****{user_id % 10000:04d}</code>\n"
+            f"👤 <b>ID аккаунта:</b> <code>[{get_anon_id(user_id, 'ru')}]</code>\n"
             f"🔋 <b>Уровень:</b> {'<code>[B] Verified</code>' if is_verified else '<code>[A] Limited</code>'}\n"
             f"💵 <b>Баланс:</b> <code>{int(balance)}.00 RUB</code>\n"
         )
@@ -5264,7 +5261,11 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
     text += history_body
 
     bot_user = await message.bot.get_me()
-    ref_link = f"https://t.me/{bot_user.username}?start=ref_{user_id}"
+    ref_code = get_referral_code(user_id)
+    async with db_lock:
+        await db.execute("INSERT OR IGNORE INTO ReferralAliases (code, user_id) VALUES (?, ?)", (ref_code, user_id))
+        await db.commit()
+    ref_link = f"https://t.me/{bot_user.username}?start=ref_{ref_code}"
 
     if lang == 'en':
         btns = ["💸 Withdraw", f"🤝 Invite Friend (+1488 Shekels)", "📊 Rates", "📜 History"]
@@ -5958,7 +5959,7 @@ async def cmd_money_drop(message: types.Message, board_id: str | None, stream: s
             await message.reply("❌ Минимальная сумма для дропа — 10 ₪. Укажи корректную сумму: <code>/drop 500</code>.", parse_mode="HTML")
             return
 
-        donor_name = f"Анон #{user_id % 10000:04d}"
+        donor_name = f"Анон [{get_anon_id(user_id)}]"
         ok, msg, drop_rec = await drop_engine.create_money_drop(
             donor_id=user_id,
             donor_name=donor_name,
@@ -6017,7 +6018,7 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
 
     if action == "claim":
         drop_id = data[2] if len(data) > 2 else ""
-        claimer_name = f"Анон #{user_id % 10000:04d}"
+        claimer_name = f"Анон [{get_anon_id(user_id)}]"
         ok, msg, drop_rec = await drop_engine.claim_money_drop(
             drop_id=drop_id,
             claimer_id=user_id,
@@ -6053,7 +6054,7 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
             await callback.answer("❌ Минимальная сумма 10 ₪", show_alert=True)
             return
 
-        donor_name = f"Анон #{user_id % 10000:04d}"
+        donor_name = f"Анон [{get_anon_id(user_id)}]"
         ok, msg, drop_rec = await drop_engine.create_money_drop(
             donor_id=user_id,
             donor_name=donor_name,
@@ -6946,7 +6947,7 @@ async def cb_prof_dossier(callback: types.CallbackQuery, board_id: str | None):
     prefix_str = f" [{stats['custom_prefix']}]" if stats['custom_prefix'] else ""
 
     lines = [
-        f"📂 <b>ЛИЧНОЕ ДЕЛО АНОНА №{user_id % 10000:04d}</b> (Твоё личное дело)",
+        f"📂 <b>ЛИЧНОЕ ДЕЛО АНОНА [{get_anon_id(user_id)}]</b> (Твоё личное дело)",
         f"<code>{'═'*26}</code>",
         f"👤 <b>Позывной:</b> {schizo_name}{prefix_str}",
         f"🎖 <b>Статус:</b> {stats['role'].upper()}",
@@ -7054,7 +7055,7 @@ async def cmd_dossier(message: types.Message, board_id: str | None, stream: str 
     is_self = " (Твоё личное дело)" if target_id == caller_id else ""
 
     lines = [
-        f"📂 <b>ЛИЧНОЕ ДЕЛО АНОНА №{target_id % 10000:04d}</b>{is_self}",
+        f"📂 <b>ЛИЧНОЕ ДЕЛО АНОНА [{get_anon_id(target_id)}]</b>{is_self}",
         f"<code>{'═'*26}</code>",
         f"👤 <b>Позывной:</b> {schizo_name}{prefix_str}",
         f"🎖 <b>Статус:</b> {stats['role'].upper()}",
@@ -8448,7 +8449,13 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
         args = (message.text or message.caption or "").split()
         if len(args) > 1 and args[1].startswith("ref_"):
             try:
-                referrer_id = int(args[1].replace("ref_", ""))
+                ref_tok = args[1].replace("ref_", "").strip()
+                referrer_id = None
+                if ref_tok.isdigit() and len(ref_tok) >= 7:
+                    referrer_id = int(ref_tok)
+                else:
+                    from common.database import get_user_id_by_referral_code
+                    referrer_id = await get_user_id_by_referral_code(db, ref_tok)
                 if referrer_id != user_id:
                     async with db_lock:
                         # Начисляем 1488 шекелей рефереру (UPSERT: создаем запись, если её нет)
@@ -10207,7 +10214,8 @@ async def cmd_quote(message: types.Message, board_id: str | None, stream: str = 
     if len(content) > 400:
         excerpt += "…"
 
-    anon_tag = f"Anon-{author_id % 10000:04d}" if lang == 'en' else f"Анон-{author_id % 10000:04d}"
+    anon_id_val = get_anon_id(author_id, 'en' if lang == 'en' else 'ru')
+    anon_tag = f"Anon [{anon_id_val}]" if lang == 'en' else f"Анон [{anon_id_val}]"
     escaped = html.escape(excerpt)
     header = "🎲 <b>Random post:</b>" if lang == 'en' else "🎲 <b>Случайный пост:</b>"
 

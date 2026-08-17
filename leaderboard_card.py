@@ -14,6 +14,7 @@ from typing import List, Tuple, Optional, Dict, Any
 from PIL import Image, ImageDraw, ImageFont
 
 from stats_generator import connect_stats_db
+from common.anon_identity import get_anon_id, generate_anon_name
 
 LEADERBOARD_CACHE: Dict[str, Tuple[float, io.BytesIO, str]] = {}
 CACHE_TTL = 60.0  # 60 seconds cache per (board_id, mode)
@@ -165,10 +166,11 @@ def fetch_leaderboard_data(board_id: str, mode: str = "balance", caller_id: int 
             val = int(row[1])
             pfx = row[2] if len(row) > 2 and row[2] else None
             is_call = (uid == caller_id)
+            anon_tag = f"Anon [{get_anon_id(uid, 'en')}]" if board_id == "int" else f"Анон [{get_anon_id(uid)}]"
             entries.append(LeaderboardEntry(
                 user_id=uid,
                 rank=i + 1,
-                anon_tag=f"Анон-{uid % 10000:04d}",
+                anon_tag=anon_tag,
                 custom_prefix=pfx,
                 value=val,
                 is_caller=is_call

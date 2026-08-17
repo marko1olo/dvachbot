@@ -23,6 +23,7 @@ logging.getLogger("matplotlib").setLevel(logging.WARNING)
 logging.getLogger("matplotlib.category").setLevel(logging.WARNING)
 
 from common.chart_lock import matplotlib_guard
+from common.anon_identity import get_anon_id, generate_anon_name
 
 # Use non-interactive backend
 matplotlib.use('Agg')
@@ -3130,7 +3131,7 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
         data = UserStatsCardData(
             user_id=data.get('user_id', 0),
             board_id=data.get('board_id', 'b'),
-            schizo_name=data.get('schizo_name', f"Анон-#{data.get('user_id', 0)%10000:04d}"),
+            schizo_name=data.get('schizo_name', f"Анон [{get_anon_id(data.get('user_id', 0))}]"),
             role_name=data.get('role_name', 'Анонимус'),
             custom_prefix=data.get('custom_prefix', ''),
             role=data.get('role', 'user'),
@@ -3228,7 +3229,7 @@ def draw_user_stats_card(data, theme: str = 'auto') -> io.BytesIO:
     dot_color = t['accent_primary'] if data.cringe_factor < 50 else t['bar_danger']
     draw.ellipse([W - 225, 50, W - 213, 62], fill=dot_color)
     draw.text((W - 204, 40), f"TGACH {t['name'].upper()}", font=f_badge, fill=t['subtitle_color'])
-    draw.text((W - 204, 54), f"ID: Анон-#{data.user_id % 10000:04d}", font=f_label, fill=t['title_color'])
+    draw.text((W - 204, 54), f"ID: Анон [{get_anon_id(data.user_id)}]", font=f_label, fill=t['title_color'])
 
     # 3. Key Metrics (6 Cards in 3x2 Grid)
     cards = [

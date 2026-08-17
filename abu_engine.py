@@ -10,6 +10,7 @@ import re
 import html
 import time
 import hashlib
+from common.anon_identity import get_anon_id, generate_anon_name
 
 _ABU_BOARDS = [
     '/b/', '/po/', '/hw/', '/s/', '/fag/', '/mov/', '/mu/',
@@ -303,7 +304,7 @@ def _format_greentext_novel(text: str) -> str:
     ]
     body = "\n".join(gt_lines)
     reply = random.choice(_ABU_REACTIONS_IN_THREAD)
-    footer = f"<code>[2ch.hk{board} | Анон #{num % 10000:04d} | Ролл: {random.randint(1, 100)}/100]</code>\n<i>&gt;&gt;{num+1}: «{reply}»</i>"
+    footer = f"<code>[2ch.hk{board} | Анон [{get_anon_id(num)}] | Ролл: {random.randint(1, 100)}/100]</code>\n<i>&gt;&gt;{num+1}: «{reply}»</i>"
     return f"🟢 <b>[ГРИНТЕКСТ-ПАСТА]</b>\n\n{body}\n\n{footer}"
 
 
@@ -323,7 +324,7 @@ def _format_thread_mirror(text: str) -> str:
 
     return (
         f"🌐 <b>[2CH.HK THREAD MIRROR // {board}]</b>\n\n"
-        f"<b>Аноним</b> <i>(ОП-ХУЙ)</i> <code>#{op_id}</code> [ID: {op_id % 10000:04d}]:\n"
+        f"<b>Аноним</b> <i>(ОП-ХУЙ)</i> <code>#{op_id}</code> [ID: {get_anon_id(op_id)}]:\n"
         f"<blockquote>{mutated}</blockquote>\n"
         f"<code>— Ответы на пост:</code>\n"
         f"↳ <b>Аноним</b> <code>#{r1_id}</code>: &gt;&gt;{op_id}\n"

@@ -540,6 +540,12 @@ async def _create_tables(db):
             FOREIGN KEY (post_num) REFERENCES Posts(post_num) ON DELETE CASCADE
         );
         """)
+        await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ReferralAliases (
+            code TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL
+        );
+        """)
 
 
 async def _apply_migrations(db):
@@ -761,6 +767,15 @@ async def _apply_migrations(db):
             await cursor.execute("ALTER TABLE Posts ADD COLUMN is_shadow INTEGER DEFAULT 0;")
             print("✅ Migrated: Added 'is_shadow' to Posts.")
         except aiosqlite.OperationalError: pass
+        try:
+            await cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ReferralAliases (
+                code TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL
+            );
+            """)
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_aliases_user_id ON ReferralAliases(user_id);")
+        except aiosqlite.OperationalError: pass
 
 async def _create_indices(db):
     async with db.cursor() as cursor:
@@ -888,6 +903,7 @@ async def _create_indices(db):
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_board_posts_balance ON Users(board_id, posts_count DESC, balance DESC);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_mutes_expires_at ON Mutes(expires_at);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_modqueue_post_num ON ModQueue(post_num);")
+        await cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_aliases_user_id ON ReferralAliases(user_id);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_notificationqueue_reply_post ON NotificationQueue(reply_post_num);")
         await cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_reply_to ON Posts(reply_to_post_num) WHERE reply_to_post_num IS NOT NULL;")
         try:
@@ -977,6 +993,20 @@ async def initialize_database():
         print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать базу данных: {e}")
         import sys
         sys.exit(1)
+
+async def init_db(db=None):
+    """
+    Инициализирует базу данных: создает таблицы, индексы, триггеры и начальные данные.
+    """
+    if db is not None:
+        await _create_tables(db)
+        await _apply_migrations(db)
+        await _create_indices(db)
+        await _create_triggers(db)
+        await _insert_initial_data(db)
+    else:
+        await initialize_database()
+
 async def get_or_create_api_token(user_id: int, token_generator_func) -> str:
     """
     Получает существующий API токен или генерирует новый.
@@ -1408,6 +1438,7 @@ async def add_or_activate_user(user_id: int, board_id: str):
     Использует явные транзакции и глобальный лок.
     """
     from common.db_pool import get_pool, db_lock
+    from common.anon_identity import get_referral_code
     
     async with db_lock:
         for attempt in range(10):
@@ -1422,6 +1453,10 @@ async def add_or_activate_user(user_id: int, board_id: str):
                 await db.execute(
                     "UPDATE Users SET status = 'active' WHERE user_id = ? AND board_id = ?",
                     (user_id, board_id)
+                )
+                await db.execute(
+                    "INSERT OR IGNORE INTO ReferralAliases (code, user_id) VALUES (?, ?)",
+                    (get_referral_code(user_id), user_id)
                 )
                 
                 await db.execute("COMMIT")
@@ -8355,4 +8390,25 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
 
     new_total = await get_user_global_balance(db, user_id)
     return True, new_total
+
+
+async def get_user_id_by_referral_code(db, code: str) -> Optional[int]:
+    """
+    Находит user_id по реферальному коду или прямому ID пользователя.
+    Если code.isdigit() и len(code) >= 7: возвращает int(code).
+    Иначе выполняет SELECT user_id FROM ReferralAliases WHERE code = ? (case-insensitive).
+    Если найден, возвращает row[0]. Если не найден, возвращает None.
+    """
+    if not code:
+        return None
+    code_str = str(code).strip()
+    if code_str.isdigit() and len(code_str) >= 7:
+        return int(code_str)
+
+    async with db.execute("SELECT user_id FROM ReferralAliases WHERE code = ? COLLATE NOCASE LIMIT 1", (code_str,)) as cursor:
+        row = await cursor.fetchone()
+        if row and row[0] is not None:
+            return int(row[0])
+    return None
+
 

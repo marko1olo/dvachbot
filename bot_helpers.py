@@ -13,6 +13,7 @@ from common.database import delete_post_by_num
 
 from common.database import update_board_settings
 from post_helpers import update_post_content
+from common.anon_identity import get_anon_id, generate_anon_name as _anon_identity_generate_anon_name
 
 async def _activate_mode(board_id: str, mode_to_enable: str):
     """
@@ -288,12 +289,8 @@ async def _safe_delete_user_message(message: types.Message):
 NICK_PREFIXES = ["Базированный", "Всратый", "Мамкин", "Поехавший", "Соевый", "Диванный", "Опущенный", "Гойский", "Толстый", "Порватый", "Латентный", "Просветленный", "Элитный", "Подпивасный", "Двачевский", "Педальный", "Токсичный", "Кринжовый", "Аутичный", "Думерский", "Рядовой", "Школьный", "Отбитый", "Метаироничный", "Скрытый", "Сигма", "Альфа", "Омега", "Сажный", "Вайбовый", "Копиумный", "Попущенный", "Лютый", "Абсолютный", "Печальный", "Нищуковский", "Душный", "Шизоидный", "Паленый", "Забивной", "Плюшевый", "Астральный", "Комнатный"]
 NICK_SUFFIXES = ["Битард", "Скуф", "Шиз", "Анон", "Ньюфаг", "Олдфаг", "Омеган", "Шитпостер", "Сыч", "Двачер", "Чухан", "Куколд", "Нормис", "Гигачад", "Подпивас", "Зумер", "Бумер", "Сояк", "Инцел", "Думер", "Говноед", "Симп", "Чмоня", "Байтер", "Ноулайфер", "Тролль", "Моралфаг", "Альтушка", "Масик", "Школьник", "Дед", "Хиккан", "Скуфидон", "Терпила", "Вахтер", "Тентакль", "Мыслитель", "Философ", "Дворник", "Эрудит", "Чел"]
 
-def generate_anon_name(user_id: int) -> str:
-    if not user_id: return "Анонимус"
-    rng = random.Random(user_id)
-    prefix = rng.choice(NICK_PREFIXES)
-    suffix = rng.choice(NICK_SUFFIXES)
-    return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
+def generate_anon_name(user_id: int, stream: str = "ru") -> str:
+    return _anon_identity_generate_anon_name(user_id, stream=stream)
 
 async def git_commit_and_push_db() -> bool:
 

@@ -8,6 +8,7 @@ from shared_state import *
 from shared_state import NewPostParams
 from common.config import *
 from common.database import *
+from common.anon_identity import get_anon_id, generate_anon_name
 from post_processor import NewPostContext, NewPostProcessor, process_new_post
 
 async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
@@ -50,7 +51,7 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
             duel = _active_duels.pop(challenger_id)
             amount = duel["amount"]
             if ch_bal < amount:
-                reject_msg = f"⚔️ Вызывающий Анон-{challenger_id%10000:04d} уже не потянет ставку — слился."
+                reject_msg = f"⚔️ Вызывающий Анон [{get_anon_id(challenger_id)}] уже не потянет ставку — слился."
             elif op_bal < amount:
                 # Возвращаем дуэль обратно в пул
                 _active_duels[challenger_id] = duel
@@ -75,8 +76,8 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
         await message.answer(reject_msg)
         return
 
-    w_tag = f"Анон-{winner_id%10000:04d}"
-    l_tag = f"Анон-{loser_id%10000:04d}"
+    w_tag = f"Анон [{get_anon_id(winner_id)}]"
+    l_tag = f"Анон [{get_anon_id(loser_id)}]"
     you_w = " (ты)" if winner_id == user_id else ""
     you_l = " (ты)" if loser_id  == user_id else ""
     duel_text = (
@@ -118,7 +119,7 @@ async def decline_duel_logic(message: types.Message, challenger_id: int):
         return True
     else:
         _active_duels.pop(challenger_id, None)
-        await message.answer(f"⚔️ Вызов на дуэль отклонен Аноном-{user_id%10000:04d}.")
+        await message.answer(f"⚔️ Вызов на дуэль отклонен Анон [{get_anon_id(user_id)}].")
         return True
 
 
