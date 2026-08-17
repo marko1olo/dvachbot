@@ -857,7 +857,7 @@ class ThreadImporter:
                     await asyncio.sleep(0.05)
 
                 await conn.execute("BEGIN")
-                unique_authors = set(p["author_id"] for p in prepared_posts)
+                unique_authors = set(p["author_id"] for p in prepared_posts if p.get("author_id", 0) > 0)
                 users_data = [(uid, target_board, stream) for uid in unique_authors]
                 if users_data:
                     await conn.executemany(

@@ -903,7 +903,7 @@ class ThreadImporter:
                     await asyncio.sleep(0.05)
 
                 await conn.execute("BEGIN")
-                unique_authors = set(p["author_id"] for p in prepared_posts)
+                unique_authors = set(p["author_id"] for p in prepared_posts if p.get("author_id", 0) > 0)
                 user_params = [(uid, target_board, stream) for uid in unique_authors]
                 if user_params:
                     await conn.executemany("INSERT OR IGNORE INTO Users (user_id, board_id, stream) VALUES (?, ?, ?)", user_params)

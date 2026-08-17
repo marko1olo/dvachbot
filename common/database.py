@@ -1157,7 +1157,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
             
             print("  > Загрузка пользователей...")
             try:
-                async with db.execute("SELECT user_id, board_id, status, location, nsfw_spoiler, hidden_words, shadow_ban_gif, shadow_ban_sticker, shadow_ban_media, lie_media FROM Users") as cursor:
+                async with db.execute("SELECT user_id, board_id, status, location, nsfw_spoiler, hidden_words, shadow_ban_gif, shadow_ban_sticker, shadow_ban_media, lie_media FROM Users WHERE user_id > 0") as cursor:
                     async for row in cursor:
                         user_id, board_id, status, location, nsfw, words_json, s_gif, s_sticker, s_media, s_lie = row
                         if status == 'active':
@@ -1180,7 +1180,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
                         }
             except Exception:
                 # Fallback для старой схемы (на всякий случай)
-                async with db.execute("SELECT user_id, board_id, status, location FROM Users") as cursor:
+                async with db.execute("SELECT user_id, board_id, status, location FROM Users WHERE user_id > 0") as cursor:
                      async for row in cursor:
                         user_id, board_id, status, location = row
                         if status == 'active':
@@ -4916,7 +4916,7 @@ async def get_all_active_subscribers(board_id: str) -> list[int]:
     """Возвращает список ID всех пользователей со статусом active для конкретной доски."""
     db = await get_pool()
     try:
-        query = "SELECT user_id FROM Users WHERE board_id = ? AND status = 'active'"
+        query = "SELECT user_id FROM Users WHERE board_id = ? AND status = 'active' AND user_id > 0"
         async with db.execute(query, (board_id,)) as cursor:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
@@ -5021,7 +5021,7 @@ async def get_stream_active_users(board_id: str, stream: str) -> set[int]:
     db = await get_pool()
     users = set()
     try:
-        query = "SELECT user_id FROM Users WHERE board_id = ? AND status = 'active' AND stream = ?"
+        query = "SELECT user_id FROM Users WHERE board_id = ? AND status = 'active' AND stream = ? AND user_id > 0"
         async with db.execute(query, (board_id, stream)) as cursor:
             async for row in cursor:
                 users.add(row[0])
