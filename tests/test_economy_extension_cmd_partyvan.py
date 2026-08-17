@@ -89,8 +89,8 @@ class TestEconomyExtensionPartyvan(unittest.IsolatedAsyncioTestCase):
 
         await economy_extension.cmd_partyvan(message, board_id="test_board")
 
-        message.bot.send_message.assert_any_call(123, "🚔 Твой вызов ОМОНа отменили! У жертвы была надета Шапочка из фольги, они не смогли её запеленговать.", parse_mode="HTML")
-        message.bot.send_message.assert_any_call(456, f"👽 Анон <code>123</code> попытался вызвать на тебя Пативэн, но Шапочка из фольги скрыла твои координаты!", parse_mode="HTML")
+        from common.anon_identity import get_anon_id
+        message.bot.send_message.assert_any_call(456, f"👽 Анон <b>[{get_anon_id(123)}]</b> попытался вызвать на тебя Пативэн, но Шапочка из фольги скрыла твои координаты!", parse_mode="HTML")
         message.delete.assert_called_once()
 
         async with self.db.execute("SELECT active_items FROM Users WHERE user_id = 123") as cur:

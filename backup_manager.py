@@ -13,6 +13,22 @@ BACKUP_DIR = "data"
 # Импортируем централизованную конфигурацию
 from common.config import DB_NAME
 
+import sys
+import logging
+
+_logger = logging.getLogger("backup_manager")
+
+def _safe_print(msg: str):
+    _logger.info(msg)
+    try:
+        print(msg)
+    except Exception:
+        try:
+            sys.stdout.buffer.write(msg.encode("utf-8", errors="replace") + b"\n")
+            sys.stdout.buffer.flush()
+        except Exception:
+            pass
+
 def create_gzipped_dump(db_path: str, output_dir: str) -> str | None:
     """
     Создает сжатый Gzip SQL-дамп, используя только Python, с ротацией файлов.
@@ -24,7 +40,7 @@ def create_gzipped_dump(db_path: str, output_dir: str) -> str | None:
     :return: Путь к созданному файлу .sql.gz или None в случае ошибки.
     """
     if not os.path.exists(db_path):
-        print(f"Критическая ошибка: файл базы данных '{db_path}' не найден.")
+        _safe_print(f"Критическая ошибка: файл базы данных '{db_path}' не найден.")
         return None
 
     os.makedirs(output_dir, exist_ok=True)
@@ -33,7 +49,7 @@ def create_gzipped_dump(db_path: str, output_dir: str) -> str | None:
     dump_filename = f"db_backup_{timestamp}.sql.gz"
     dump_filepath = os.path.join(output_dir, dump_filename)
 
-    print(f"Начинаю создание дампа базы данных в '{dump_filepath}'...")
+    _safe_print(f"Начинаю создание дампа базы данных в '{dump_filepath}'...")
 
     try:
         with contextlib.closing(sqlite3.connect(db_path, timeout=15.0)) as con:
@@ -47,7 +63,7 @@ def create_gzipped_dump(db_path: str, output_dir: str) -> str | None:
                 for line in con.iterdump():
                     f.write(f'{line}\n')
         
-        print(f"Дамп базы данных успешно создан: {dump_filepath}")
+        _safe_print(f"Дамп базы данных успешно создан: {dump_filepath}")
 
         # --- НАЧАЛО ИЗМЕНЕНИЙ: Улучшенная логика ротации бэкапов ---
         try:
@@ -64,26 +80,26 @@ def create_gzipped_dump(db_path: str, output_dir: str) -> str | None:
             max_backups = 2
             if len(existing_backups) > max_backups:
                 backups_to_delete = existing_backups[:-max_backups]
-                print(f"Обнаружено {len(existing_backups)} бэкапов. Удаляю {len(backups_to_delete)} старых...")
+                _safe_print(f"Обнаружено {len(existing_backups)} бэкапов. Удаляю {len(backups_to_delete)} старых...")
                 for old_backup in backups_to_delete:
                     try:
                         os.remove(old_backup)
-                        print(f"  - Удален старый бэкап: {old_backup}")
+                        _safe_print(f"  - Удален старый бэкап: {old_backup}")
                     except OSError as e:
-                        print(f"  - Ошибка при удалении файла {old_backup}: {e}")
+                        _safe_print(f"  - Ошибка при удалении файла {old_backup}: {e}")
         except Exception as e:
-            print(f"Ошибка во время ротации бэкапов: {e}")
+            _safe_print(f"Ошибка во время ротации бэкапов: {e}")
         # --- КОНЕЦ ИЗМЕНЕНИЙ ---
 
         return dump_filepath
 
     except Exception as e:
-        print(f"Критическая ошибка: не удалось создать дамп базы данных. Причина: {e}")
+        _safe_print(f"Критическая ошибка: не удалось создать дамп базы данных. Причина: {e}")
         if os.path.exists(dump_filepath):
             try:
                 os.remove(dump_filepath)
             except OSError:
-                import traceback; traceback.print_exc()
+                pass
         return None
 
 if __name__ == "__main__":  # pragma: no cover

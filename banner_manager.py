@@ -248,7 +248,11 @@ async def send_banner_message(
                 disable_web_page_preview=True
             )
         except Exception as inner_e:
-            logger.error(f"[banner_manager] Fallback send_message failed: {inner_e}")
+            err_msg = str(inner_e).lower()
+            if "forbidden" in err_msg or "blocked" in err_msg or "deactivated" in err_msg or "not found" in err_msg:
+                logger.info(f"[banner_manager] User {chat_id} unreachable/blocked bot: {inner_e}")
+            else:
+                logger.error(f"[banner_manager] Fallback send_message failed for {chat_id}: {inner_e}")
             return None
 
 

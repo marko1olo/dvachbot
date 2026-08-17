@@ -11088,58 +11088,14 @@ async def check_if_ru(request: Request):
     client_ip = get_real_ip(request)
     user_country = await get_country_by_ip(client_ip)
     is_ru = user_country == "RU"
+    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
+        accept_lang = request.headers.get("accept-language", "").lower()
+        if "ru" in accept_lang or not accept_lang:
+            is_ru = True
     return {"is_ru": is_ru}
-
-
-# Legacy duplicate route serve_telegram_file_dev removed to prevent overriding /files/{file_id:path} with 307 redirects.
 
 
 if __name__ == "__main__":
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
     asyncio.run(main_serve())
-
-
-@app.get("/api/is-ru")
-async def check_if_ru(request: Request):
-    client_ip = get_real_ip(request)
-    user_country = await get_country_by_ip(client_ip)
-    is_ru = user_country == "RU"
-    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
-        accept_lang = request.headers.get("accept-language", "").lower()
-        if "ru" in accept_lang or not accept_lang:
-            is_ru = True
-    return {"is_ru": is_ru}
-
-@app.get("/api/is-ru")
-async def check_if_ru(request: Request):
-    client_ip = get_real_ip(request)
-    user_country = await get_country_by_ip(client_ip)
-    is_ru = user_country == "RU"
-    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
-        accept_lang = request.headers.get("accept-language", "").lower()
-        if "ru" in accept_lang or not accept_lang:
-            is_ru = True
-    return {"is_ru": is_ru}
-
-@app.get("/api/is-ru")
-async def check_if_ru(request: Request):
-    client_ip = get_real_ip(request)
-    user_country = await get_country_by_ip(client_ip)
-    is_ru = user_country == "RU"
-    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
-        accept_lang = request.headers.get("accept-language", "").lower()
-        if "ru" in accept_lang or not accept_lang:
-            is_ru = True
-    return {"is_ru": is_ru}
-
-@app.get("/api/is-ru")
-async def check_if_ru(request: Request):
-    client_ip = get_real_ip(request)
-    user_country = await get_country_by_ip(client_ip)
-    is_ru = user_country == "RU"
-    if user_country == "XX" or client_ip in ("127.0.0.1", "localhost", "::1"):
-        accept_lang = request.headers.get("accept-language", "").lower()
-        if "ru" in accept_lang or not accept_lang:
-            is_ru = True
-    return {"is_ru": is_ru}
