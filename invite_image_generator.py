@@ -13,7 +13,7 @@ import re
 import asyncio
 import sqlite3
 import aiohttp
-from typing import Optional, Tuple, Dict, List, Union
+from typing import Optional, Tuple, Dict, List, Union, Any
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 try:
     import qrcode
@@ -387,44 +387,47 @@ async def fetch_random_post_image(db_path: Optional[str] = None, bot: Optional[A
     if os.path.exists(db_path):
         try:
             from common.db_pool import get_pool, db_lock
-            async with db_lock:
-                db = await get_pool()
-                # 1. Sample from 111,594+ real user photos
-                async with db.execute("""
-                    SELECT original_file_id, original_url FROM PostFiles 
-                    WHERE file_type = 'photo' AND original_file_id IS NOT NULL
-                    ORDER BY RANDOM() LIMIT 40
-                """) as cursor:
-                    rows = await cursor.fetchall()
-                for fid, url in rows:
-                    if url and url.startswith("http"):
-                        candidates.append(url)
-                    elif fid and fid.startswith("http"):
-                        candidates.append(fid)
-                    elif fid:
-                        file_id_candidates.append(fid)
-                
-                # 2. Check Posts content JSON for image_url
-                if len(candidates) < 10:
+            db = await get_pool()
+            if db and getattr(db, '_running', False):
+                async with db_lock:
+                    # 1. Sample from 111,594+ real user photos
                     async with db.execute("""
-                        SELECT content FROM Posts 
-                        WHERE content LIKE '%http%' AND (content LIKE '%.jpg%' OR content LIKE '%.png%' OR content LIKE '%.jpeg%')
+                        SELECT original_file_id, original_url FROM PostFiles 
+                        WHERE file_type = 'photo' AND original_file_id IS NOT NULL
                         ORDER BY RANDOM() LIMIT 40
                     """) as cursor:
-                        p_rows = await cursor.fetchall()
-                    for (cnt_str,) in p_rows:
-                        try:
-                            cnt = json.loads(cnt_str)
-                            u = cnt.get('image_url') or cnt.get('url')
-                            if not u and cnt.get('type') == 'media_group' and 'media' in cnt:
-                                for m in cnt['media']:
-                                    if m.get('type') == 'photo':
-                                        u = m.get('media') or m.get('file_id')
-                                        break
-                            if u and str(u).startswith('http'):
-                                candidates.append(str(u))
-                        except Exception:
-                            pass
+                        rows = await cursor.fetchall()
+                    for fid, url in rows:
+                        if url and url.startswith("http"):
+                            candidates.append(url)
+                        elif fid and fid.startswith("http"):
+                            candidates.append(fid)
+                        elif fid:
+                            file_id_candidates.append(fid)
+                    
+                    # 2. Check Posts content JSON for image_url
+                    if len(candidates) < 10:
+                        async with db.execute("""
+                            SELECT content FROM Posts 
+                            WHERE content LIKE '%http%' AND (content LIKE '%.jpg%' OR content LIKE '%.png%' OR content LIKE '%.jpeg%')
+                            ORDER BY RANDOM() LIMIT 40
+                        """) as cursor:
+                            p_rows = await cursor.fetchall()
+                        for (cnt_str,) in p_rows:
+                            try:
+                                cnt = json.loads(cnt_str)
+                                u = cnt.get('image_url') or cnt.get('url')
+                                if not u and cnt.get('type') == 'media_group' and 'media' in cnt:
+                                    for m in cnt['media']:
+                                        if m.get('type') == 'photo':
+                                            u = m.get('media') or m.get('file_id')
+                                            break
+                                if u and str(u).startswith('http'):
+                                    candidates.append(str(u))
+                            except Exception:
+                                pass
+            else:
+                raise RuntimeError("db not running")
         except Exception:
             def _get_sync():
                 res_urls = []
@@ -466,23 +469,30 @@ async def fetch_random_post_image(db_path: Optional[str] = None, bot: Optional[A
             except Exception:
                 continue
 
-    # 2. Try HTTP URLs from DB
+    # 2. Try HTTP URLs from DB (parallel fast fetch)
     if candidates:
         random.shuffle(candidates)
-        timeout = aiohttp.ClientTimeout(total=3.0)
+        timeout = aiohttp.ClientTimeout(total=2.0)
+        async def _fetch_one(session, url):
+            try:
+                async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        if len(data) > 4000:
+                            img = Image.open(io.BytesIO(data))
+                            img.verify()
+                            return Image.open(io.BytesIO(data)).convert("RGB")
+            except Exception:
+                pass
+            return None
+
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                for url in candidates[:8]:
-                    try:
-                        async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
-                            if resp.status == 200:
-                                data = await resp.read()
-                                if len(data) > 4000:
-                                    img = Image.open(io.BytesIO(data))
-                                    img.verify()
-                                    return Image.open(io.BytesIO(data)).convert("RGB")
-                    except Exception:
-                        continue
+                tasks = [_fetch_one(session, u) for u in candidates[:5]]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for r in results:
+                    if isinstance(r, Image.Image):
+                        return r
         except Exception:
             pass
 

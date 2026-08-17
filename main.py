@@ -7592,12 +7592,13 @@ async def cmd_global_unpin(message: types.Message, board_id: str | None, stream:
 async def _send_motivation_message(board_id: str, stream: str, recipients: set):
     """
     Sends a motivational message, auto graphic invite card, or site promo to active users.
+    Pre-uploads generated invite images to obtain a real Telegram file_id for instant fanout.
     """
     rand_choice = random.random()
     board_username = BOARD_CONFIG.get(board_id, {}).get('username', '@dvach_chatbot')
     site_url = f"https://tgach.top/{board_id}/"
 
-    if rand_choice < 0.25:
+    if rand_choice < 0.20:
         # 1. Реклама веб-версии
         if stream == 'en':
             text_body = random.choice(SITE_PROMO_PHRASES_EN)
@@ -7628,8 +7629,8 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
             'archive_allowed': True
         }
 
-    elif rand_choice < 0.80:
-        # 2. Автоматическая генерация графической инвайт-карточки с уникальным текстом поста
+    elif rand_choice < 0.85:
+        # 2. Автоматическая генерация графической инвайт-карточки ("Позови друзей")
         from invite_image_generator import generate_invite_image_async, get_random_auto_invite_content
         slogan, companion_caption = get_random_auto_invite_content(board_id=board_id, bot_username=board_username)
         site_btn = "🌐 Web Version" if stream == 'en' else ("🌐 ウェブ版" if stream == 'jp' else "🌐 Веб-версия")
@@ -7642,13 +7643,31 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
             ]
         ])
 
+        file_id = None
         try:
-            buf = await generate_invite_image_async(board_id=board_id, bot_username=board_username, slogan_dict=slogan)
+            from common.config import STORAGE_CHANNELS
+            bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id)
+            buf = await generate_invite_image_async(board_id=board_id, bot_username=board_username, slogan_dict=slogan, bot=bot)
+
+            # Загружаем сгенерированную карточку 1 раз в Telegram для получения file_id
+            storage_channel = (STORAGE_CHANNELS.get(stream) if isinstance(STORAGE_CHANNELS, dict) else None) or ARCHIVE_CHANNEL_ID
+            if bot and storage_channel:
+                try:
+                    from aiogram.types import BufferedInputFile
+                    input_file = BufferedInputFile(buf.getvalue(), filename=f"invite_{board_id}.jpg")
+                    upload_msg = await bot.send_photo(storage_channel, input_file, caption=f"🖼 Invite Card #{board_id}")
+                    if upload_msg and upload_msg.photo:
+                        file_id = upload_msg.photo[-1].file_id
+                except Exception as upload_err:
+                    logger.warning(f"Failed to pre-upload invite image to storage channel: {upload_err}")
+
             content = {
-                'type': 'photo',
+                'type': 'photo' if file_id else 'text',
+                'file_id': file_id,
                 'caption': companion_caption,
-                'image_bytes': buf.getvalue(),
-                'is_system_message': True
+                'text': companion_caption,
+                'is_system_message': True,
+                'archive_allowed': True
             }
         except Exception as e:
             logger.error(f"Error generating auto invite image: {e}")
@@ -7732,39 +7751,46 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
 
 async def _board_motivation_worker(board_id: str):
     """
-    Worker loop to check activity and periodically trigger motivation messages.
+    Worker loop to check and periodically trigger motivation and invite card messages.
     """
+    # Начальная задержка при старте: разносим борды во времени (от 2 до 12 минут)
+    initial_delay = random.randint(120, 720)
+    await asyncio.sleep(initial_delay)
+
     while True:
         try:
-            # Авто-постинг каждые ~4.5 часа (16200 сек)
-            delay = random.randint(15500, 16900)
-            await asyncio.sleep(delay)
-            activity = await get_board_activity_last_hours(board_id, hours=2)
-            if activity < 20:
+            b_data = board_data.get(board_id)
+            if not b_data:
+                await asyncio.sleep(300)
                 continue
-            b_data = board_data[board_id]
+
             streams_to_process = ['ru'] # По дефолту
             if board_id == 'int':
                 streams_to_process = ['en']
             elif ENABLE_MULTILANG:
                 streams_to_process = ['ru', 'en', 'jp']
+
             for stream in streams_to_process:
                 if board_id == 'int':
-                    recipients = b_data['users']['active'] - b_data['users']['banned']
+                    recipients = b_data.get('users', {}).get('active', set()) - b_data.get('users', {}).get('banned', set())
                 else:
                     if ENABLE_MULTILANG:
                         stream_users = await get_stream_active_users(board_id, stream)
-                        recipients = stream_users.intersection(b_data['users']['active']) - b_data['users']['banned']
+                        recipients = stream_users.intersection(b_data.get('users', {}).get('active', set())) - b_data.get('users', {}).get('banned', set())
                     else:
-                        recipients = b_data['users']['active'] - b_data['users']['banned']
+                        recipients = b_data.get('users', {}).get('active', set()) - b_data.get('users', {}).get('banned', set())
                 if not recipients:
                     continue
 
                 await _send_motivation_message(board_id, stream, recipients)
 
+            # Следующая рассылка через ~3-4 часа (10800 - 14400 сек)
+            delay = random.randint(10800, 14400)
+            await asyncio.sleep(delay)
+
         except Exception as e:
             logger.error(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}", exc_info=True)
-            await asyncio.sleep(120)
+            await asyncio.sleep(300)
 
 
 async def motivation_broadcaster():
