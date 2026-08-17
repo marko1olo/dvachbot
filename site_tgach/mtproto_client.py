@@ -35,8 +35,33 @@ _ACTIVE_CLIENTS = {}
 _LAST_USED = {}  # {bot_token: timestamp}
 _CLIENT_LOCK = asyncio.Lock()   
 _CONNECTION_COOLDOWN = {}
+import json
+
+# Persistent FloodWait state across restarts
+_FLOOD_STATE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "mtproto_flood.json")
+
+def _load_flood_state() -> float:
+    try:
+        if os.path.exists(_FLOOD_STATE_FILE):
+            with open(_FLOOD_STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                val = float(data.get("flood_until", 0.0))
+                if val > time.time():
+                    return val
+    except Exception:
+        pass
+    return 0.0
+
+def _save_flood_state(flood_until: float):
+    try:
+        os.makedirs(os.path.dirname(_FLOOD_STATE_FILE), exist_ok=True)
+        with open(_FLOOD_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"flood_until": flood_until}, f)
+    except Exception:
+        pass
+
 # Глобальный FloodWait для auth.ExportAuthorization
-_GLOBAL_MTPROTO_FLOOD_UNTIL: float = 0.0
+_GLOBAL_MTPROTO_FLOOD_UNTIL: float = _load_flood_state()
 # Семафор: не более 1 параллельного MTProto-скачивания одновременно
 _MTPROTO_DOWNLOAD_SEM = asyncio.Semaphore(1)
 
@@ -245,6 +270,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
         wait_s = int(getattr(e, "value", 300) or 300)
         flood_until = time.time() + wait_s
         _GLOBAL_MTPROTO_FLOOD_UNTIL = max(_GLOBAL_MTPROTO_FLOOD_UNTIL, flood_until)
+        _save_flood_state(_GLOBAL_MTPROTO_FLOOD_UNTIL)
         _CONNECTION_COOLDOWN[bot_token] = flood_until
         logger.warning(f"⚠️ [MTProto] FloodWait ({wait_s}s) on bot {secret_fingerprint(bot_token)}. Global MTProto cooldown set until +{wait_s}s.")
         return False
@@ -258,6 +284,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
                     break
             flood_until = time.time() + wait_s
             _GLOBAL_MTPROTO_FLOOD_UNTIL = max(_GLOBAL_MTPROTO_FLOOD_UNTIL, flood_until)
+            _save_flood_state(_GLOBAL_MTPROTO_FLOOD_UNTIL)
             _CONNECTION_COOLDOWN[bot_token] = flood_until
             logger.warning(f"⚠️ [MTProto] FLOOD WAIT: {e}. Global cooldown {wait_s}s.")
         elif "THUMBNAIL_SOURCE" in err_str:

@@ -504,35 +504,44 @@ def _site_file_send_type(file_info: dict) -> str | None:
 
 async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_num: int, level: int, content: dict, author_id: int):
     """
-    (ИСПРАВЛЕННАЯ ВЕРСИЯ 3.0)
-    Отправляет уведомление о "счастливом" посте в канал архивов.
-    Надежно обрабатывает все типы медиа, отправляя сам файл, а не плейсхолдер.
+    Отправляет уведомление о "счастливом" посте (гет/квадрипл/пентипл и т.д.) в канал архивов/новостей.
+    Надежно обрабатывает все типы медиа, экранирует HTML и сохраняет связку копии в БД.
     """
     try:
-        bot_instance = bots.get(board_id)
-        archive_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-        
+        # 1. Надежный поиск бота для отправки
+        bot_instance = (bots.get(board_id) if bots else None) or \
+                       (GLOBAL_BOTS.get(board_id) if GLOBAL_BOTS else None) or \
+                       (getattr(shared_state, 'GLOBAL_BOTS', {}).get(board_id) if getattr(shared_state, 'GLOBAL_BOTS', None) else None)
+
+        archive_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else (
+            (GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID) if GLOBAL_BOTS else None) or
+            (getattr(shared_state, 'GLOBAL_BOTS', {}).get(ARCHIVE_POSTING_BOT_ID) if getattr(shared_state, 'GLOBAL_BOTS', None) else None) or
+            bot_instance or
+            (next(iter(GLOBAL_BOTS.values()), None) if GLOBAL_BOTS else None) or
+            (next(iter(getattr(shared_state, 'GLOBAL_BOTS', {}).values()), None) if getattr(shared_state, 'GLOBAL_BOTS', None) else None)
+        )
+
         if not archive_bot:
-            print("⛔ Ошибка: бот для постинга архивов не найден.")
+            print(f"⛔ Ошибка [post_special_num_to_channel]: бот для постинга в канал архивов не найден для поста #{post_num}.")
             return
 
         config = SPECIAL_NUMERALS_CONFIG.get(level, {'label': 'Get', 'emojis': ('🎯',)})
         emoji = random.choice(config['emojis'])
         label = config['label'].upper()
         board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
-        
+
         header = f"{emoji} <b>{label} #{post_num}</b> {emoji}\n\n<b>Доска:</b> {board_name}\n"
         text_content = content.get('text') or content.get('caption') or ''
-        
-        caption_text = f"{header}\n{text_content}"
+        safe_text = sanitize_html(text_content) if text_content else ''
+
+        caption_text = f"{header}\n{safe_text}".strip() if safe_text else header.strip()
         content_type_str = str(content.get("type", "")).split('.')[-1].lower()
 
         max_attempts = 5
         delay = 3.0
-        
+
         for attempt in range(max_attempts):
             try:
-                # --- НАЧАЛО ИСПРАВЛЕНИЙ (Надежная отправка медиа) ---
                 file_id = content.get('file_id')
                 if not file_id and content.get('files'):
                     files = content.get('files')
@@ -545,34 +554,40 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
                         content_type_str = media_list[0].get('type', content_type_str or 'photo')
 
                 final_caption = caption_text[:1021] + "..." if len(caption_text) > 1024 else caption_text
-                
-                # Явная обработка каждого типа, чтобы избежать ошибок с аргументами
+                sent_msg = None
+
                 if content_type_str == 'photo' and file_id:
-                    await archive_bot.send_photo(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
+                    sent_msg = await archive_bot.send_photo(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption, parse_mode="HTML")
                 elif content_type_str == 'video' and file_id:
-                    await archive_bot.send_video(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
+                    sent_msg = await archive_bot.send_video(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption, parse_mode="HTML")
                 elif content_type_str == 'animation' and file_id:
-                    await archive_bot.send_animation(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
+                    sent_msg = await archive_bot.send_animation(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption, parse_mode="HTML")
                 elif content_type_str == 'document' and file_id:
-                    await archive_bot.send_document(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
+                    sent_msg = await archive_bot.send_document(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption, parse_mode="HTML")
                 elif content_type_str == 'audio' and file_id:
-                    await archive_bot.send_audio(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption)
+                    sent_msg = await archive_bot.send_audio(ARCHIVE_CHANNEL_ID, file_id, caption=final_caption, parse_mode="HTML")
                 elif content_type_str == 'voice' and file_id:
                     await archive_bot.send_voice(ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
+                    sent_msg = await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, parse_mode="HTML", disable_web_page_preview=True)
                 elif content_type_str == 'sticker' and file_id:
                     await archive_bot.send_sticker(ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
+                    sent_msg = await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, parse_mode="HTML", disable_web_page_preview=True)
                 elif content_type_str == 'video_note' and file_id:
                     await archive_bot.send_video_note(ARCHIVE_CHANNEL_ID, file_id)
-                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, disable_web_page_preview=True)
-                else: # Если это текст или медиа без file_id
+                    sent_msg = await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, parse_mode="HTML", disable_web_page_preview=True)
+                else:
                     final_text_for_message = caption_text[:4093] + "..." if len(caption_text) > 4096 else caption_text
-                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
-                # --- КОНЕЦ ИСПРАВЛЕНИЙ ---
-                
+                    sent_msg = await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
+
+                if sent_msg:
+                    try:
+                        from common.database import add_channel_copy
+                        await add_channel_copy(post_num, ARCHIVE_CHANNEL_ID, sent_msg.message_id)
+                    except Exception:
+                        pass
+
                 print(f"✅ Уведомление о счастливом посте #{post_num} ({label}) отправлено в канал.")
-                return 
+                return
 
             except TelegramRetryAfter as e:
                 wait_time = e.retry_after + 1
@@ -586,15 +601,20 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
                 else:
                     raise e
             except TelegramBadRequest as e:
-                print(f"❌ BadRequest on happy post #{post_num}: {e}. No retry.")
-                # Если медиа не отправилось, пробуем отправить как текст
+                print(f"❌ BadRequest on happy post #{post_num}: {e}. Trying text fallback...")
                 try:
                     final_text_for_message = caption_text[:4093] + "..." if len(caption_text) > 4096 else caption_text
-                    await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
+                    sent_msg = await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
+                    if sent_msg:
+                        try:
+                            from common.database import add_channel_copy
+                            await add_channel_copy(post_num, ARCHIVE_CHANNEL_ID, sent_msg.message_id)
+                        except Exception:
+                            pass
                     print(f"✅ Уведомление о счастливом посте #{post_num} отправлено как текст после ошибки медиа.")
                 except Exception as final_e:
                     print(f"❌ Финальная попытка отправки текста для #{post_num} также провалилась: {final_e}")
-                return # Выходим в любом случае после BadRequest
+                return
     except Exception as e:
         import traceback
         print(f"⛔ Не удалось отправить счастливый пост #{post_num} в канал после всех попыток: {e}\n{traceback.format_exc()}")

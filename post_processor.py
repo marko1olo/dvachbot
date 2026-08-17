@@ -407,8 +407,9 @@ class NewPostProcessor:
             ))
         numeral_level = check_post_numerals(self.current_post_num)
         if numeral_level:
+            active_bots = shared_state.GLOBAL_BOTS or getattr(main, 'GLOBAL_BOTS', {}) or {self.board_id: self.bot_instance}
             spawn_task(post_special_num_to_channel(
-                bots=GLOBAL_BOTS, board_id=self.board_id, post_num=self.current_post_num,
+                bots=active_bots, board_id=self.board_id, post_num=self.current_post_num,
                 level=numeral_level, content=self.final_content, author_id=self.user_id
             ))
         if self.thread_id:
@@ -418,8 +419,9 @@ class NewPostProcessor:
                 milestones = [50, 150, 220]
                 if posts_count in milestones and posts_count not in thread_info.get('announced_milestones', []):
                     thread_info.setdefault('announced_milestones', []).append(posts_count)
+                    active_bots = shared_state.GLOBAL_BOTS or getattr(main, 'GLOBAL_BOTS', {}) or {self.board_id: self.bot_instance}
                     spawn_task(post_thread_notification_to_channel(
-                        bots=GLOBAL_BOTS, board_id=self.board_id, thread_id=self.thread_id,
+                        bots=active_bots, board_id=self.board_id, thread_id=self.thread_id,
                         thread_info=thread_info, event_type='milestone',
                         details={'posts': posts_count}
                     ))

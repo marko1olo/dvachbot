@@ -241,8 +241,12 @@ async def _process_single_task(task):
                                 async with client.stream("GET", dl_url) as r:
                                     if r.status_code == 200:
                                         await write_async_iter_bytes_to_file(r.aiter_bytes(), lpath)
-                                        download_success = True
-                                        logger.info(f"📥 HTTP Download success for {file_id[:10]}")
+                                        if os.path.exists(lpath) and os.path.getsize(lpath) > 0:
+                                            download_success = True
+                                            logger.info(f"📥 HTTP Download success for {file_id[:10]}")
+                                        else:
+                                            download_success = False
+                                            logger.warning(f"⚠️ HTTP Download received 0 bytes for {file_id[:10]}")
                                     else:
                                         logger.error(f"❌ HTTP Download failed: {r.status_code}")
                         else:

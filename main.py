@@ -19384,6 +19384,8 @@ async def main():
         if not GLOBAL_BOTS:
             print("❌ Не найдено ни одного токена бота. Завершение работы.")
             return
+        shared_state.GLOBAL_BOTS.clear()
+        shared_state.GLOBAL_BOTS.update(GLOBAL_BOTS)
         active_bots_list = list(GLOBAL_BOTS.values())
         print(f"✅ Инициализировано {len(active_bots_list)} ботов.")
         await setup_pinned_messages(GLOBAL_BOTS)
