@@ -22,8 +22,11 @@ API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 
 logger = logging.getLogger("mtproto")
-# Подавляем шумные ошибки Pyrogram (например, 400 Bad Request при протухших файлах)
+# Подавляем шумные ошибки Pyrogram (например, 400 Bad Request при протухших файлах и 420 FloodWait)
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.session.session").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.session.auth").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.client").setLevel(logging.WARNING)
 
 try:
     import tgcrypto
@@ -258,7 +261,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
                 timeout=300
             )
 
-            return bool(path and os.path.exists(output_path))
+            return bool(path and os.path.exists(output_path) and os.path.getsize(output_path) > 0)
     
     except asyncio.TimeoutError:
         logger.error(f"❌ [MTProto] Download Timed Out: {file_id[:15]}...")
@@ -276,7 +279,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
         return False
     except Exception as e:
         err_str = str(e).upper()
-        if "420" in err_str or "FLOOD_WAIT" in err_str:
+        if "420" in err_str or "FLOOD_WAIT" in err_str or "EXPORTAUTHORIZATION" in err_str:
             wait_s = 300
             for part in str(e).split():
                 if part.isdigit() and int(part) > 10:
@@ -286,7 +289,7 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
             _GLOBAL_MTPROTO_FLOOD_UNTIL = max(_GLOBAL_MTPROTO_FLOOD_UNTIL, flood_until)
             _save_flood_state(_GLOBAL_MTPROTO_FLOOD_UNTIL)
             _CONNECTION_COOLDOWN[bot_token] = flood_until
-            logger.warning(f"⚠️ [MTProto] FLOOD WAIT: {e}. Global cooldown {wait_s}s.")
+            logger.warning(f"⏳ [MTProto] Telegram ExportAuthorization FloodWait ({wait_s}s). Global MTProto cooldown set.")
         elif "THUMBNAIL_SOURCE" in err_str:
             logger.warning(f"⚠️ [MTProto] Pyrogram failed to parse thumb source for {file_id[:10]}")
         else:

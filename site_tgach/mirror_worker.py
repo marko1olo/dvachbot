@@ -220,7 +220,7 @@ async def _process_single_task(task):
                 
                 # 1. MTProto (skip for photos without context since it always fails in pyrogram)
                 use_mtproto = not (fresh_file_id.startswith("AgAC") and not (c_id and m_id))
-                if use_mtproto and await download_file_mtproto(bot.token, fresh_file_id, lpath, chat_id=c_id, message_id=m_id):
+                if use_mtproto and (await download_file_mtproto(bot.token, fresh_file_id, lpath, chat_id=c_id, message_id=m_id)) and os.path.exists(lpath) and os.path.getsize(lpath) > 0:
                     download_success = True
                 else:
                     if not use_mtproto:

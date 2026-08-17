@@ -50,15 +50,13 @@ def _cooldown_key(key: str, duration: float = _KEY_COOLDOWN_DURATION):
     logger.debug(f"[ImgBB] Key {key[:8]}... on cooldown for {duration:.0f}s")
 
 
-def get_next_imgbb_key() -> str:
+def get_next_imgbb_key() -> str | None:
     """Return next available key from pool, skipping cooled-down ones."""
     for _ in range(len(IMGBB_KEY_POOL)):
         key = next(_key_cycler)
         if _is_key_available(key):
             return key
-    # All keys on cooldown — return next anyway and let caller handle failure
-    logger.warning("[ImgBB] All keys are on cooldown! Using next anyway...")
-    return next(_key_cycler)
+    return None
 
 
 raw_proxy = os.getenv("PROXY_URL")
@@ -115,11 +113,9 @@ async def upload_file_to_imgbb(file_path: str) -> str | None:
     n_keys = len(IMGBB_KEY_POOL)
     for key_attempt in range(n_keys):
         current_key = get_next_imgbb_key()
-
-        # If this key is on cooldown and all others are too — bail early
-        if not _is_key_available(current_key):
-            logger.warning(f"[ImgBB] Key {current_key[:8]}... still on cooldown, skipping attempt {key_attempt+1}")
-            continue
+        if not current_key:
+            logger.debug("[ImgBB] All keys on cooldown, skipping to next provider.")
+            break
 
         for strategy in strategies:
             try:
