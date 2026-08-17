@@ -7589,16 +7589,45 @@ async def cmd_global_unpin(message: types.Message, board_id: str | None, stream:
         elif lang == 'jp': final = f"✅ 投稿 #{target_post_num} をピン留め設定から削除しました。"
         else: final = f"✅ Пост #{target_post_num} удален из настроек закрепа."
         await status_msg.edit_text(final)
+_MOTIVATION_STATE_FILE = os.path.join(DATA_DIR, "motivation_broadcast_state.json")
+
+def _load_motivation_state() -> dict:
+    try:
+        if os.path.exists(_MOTIVATION_STATE_FILE):
+            with open(_MOTIVATION_STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _save_motivation_state(state: dict):
+    try:
+        os.makedirs(os.path.dirname(_MOTIVATION_STATE_FILE), exist_ok=True)
+        with open(_MOTIVATION_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+def _get_last_motivation_time(board_id: str) -> float:
+    st = _load_motivation_state()
+    return float(st.get(board_id, 0.0))
+
+def _set_last_motivation_time(board_id: str, ts: float):
+    st = _load_motivation_state()
+    st[board_id] = ts
+    _save_motivation_state(st)
+
 async def _send_motivation_message(board_id: str, stream: str, recipients: set):
     """
     Sends a motivational message, auto graphic invite card, or site promo to active users.
-    Pre-uploads generated invite images to obtain a real Telegram file_id for instant fanout.
+    Pre-uploads generated invite images (rendered with authentic slogans + random user post photos from DB)
+    to obtain a real Telegram file_id for instant fanout.
     """
     rand_choice = random.random()
     board_username = BOARD_CONFIG.get(board_id, {}).get('username', '@dvach_chatbot')
     site_url = f"https://tgach.top/{board_id}/"
 
-    if rand_choice < 0.20:
+    if rand_choice < 0.15:
         # 1. Реклама веб-версии
         if stream == 'en':
             text_body = random.choice(SITE_PROMO_PHRASES_EN)
@@ -7751,14 +7780,33 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
 
 async def _board_motivation_worker(board_id: str):
     """
-    Worker loop to check and periodically trigger motivation and invite card messages.
+    Worker loop to check activity and periodically trigger motivation and invite card messages
+    strictly every 5-6 hours, independently of bot restarts.
     """
-    # Начальная задержка при старте: разносим борды во времени (от 2 до 12 минут)
-    initial_delay = random.randint(120, 720)
-    await asyncio.sleep(initial_delay)
+    # Небольшая пауза при старте, чтобы все боты успели инициализироваться
+    await asyncio.sleep(random.randint(15, 60))
 
     while True:
         try:
+            now = time.time()
+            last_time = _get_last_motivation_time(board_id)
+            # Интервал рассылки строго 5-6 часов (18000 - 21600 сек)
+            target_interval = 18000.0 # 5 часов
+
+            elapsed = now - last_time
+            if elapsed < target_interval and last_time > 0:
+                # Если 5 часов еще не прошло с прошлой рассылки, спим оставшееся время (чанками по 600 сек для отзывчивости)
+                wait_time = max(30.0, min(target_interval - elapsed, 600.0))
+                await asyncio.sleep(wait_time)
+                continue
+
+            # Проверка активности: оставляем activity < 20, чтобы не спамить на дохлые борды
+            activity = await get_board_activity_last_hours(board_id, hours=2)
+            if activity < 20:
+                # Доска пока не активна, проверяем снова через 15 минут, не сбрасывая 5-6 часовой таймер
+                await asyncio.sleep(900)
+                continue
+
             b_data = board_data.get(board_id)
             if not b_data:
                 await asyncio.sleep(300)
@@ -7770,6 +7818,7 @@ async def _board_motivation_worker(board_id: str):
             elif ENABLE_MULTILANG:
                 streams_to_process = ['ru', 'en', 'jp']
 
+            sent_any = False
             for stream in streams_to_process:
                 if board_id == 'int':
                     recipients = b_data.get('users', {}).get('active', set()) - b_data.get('users', {}).get('banned', set())
@@ -7783,10 +7832,15 @@ async def _board_motivation_worker(board_id: str):
                     continue
 
                 await _send_motivation_message(board_id, stream, recipients)
+                sent_any = True
 
-            # Следующая рассылка через ~3-4 часа (10800 - 14400 сек)
-            delay = random.randint(10800, 14400)
-            await asyncio.sleep(delay)
+            if sent_any:
+                _set_last_motivation_time(board_id, time.time())
+                # После успешной отправки следующая рассылка через 5-6 часов (18000 - 21600 сек)
+                next_sleep = random.randint(18000, 21600)
+                await asyncio.sleep(next_sleep)
+            else:
+                await asyncio.sleep(900)
 
         except Exception as e:
             logger.error(f"❌ [{board_id}] Ошибка в motivation_broadcaster: {e}", exc_info=True)

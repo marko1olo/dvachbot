@@ -456,10 +456,13 @@ async def fetch_random_post_image(db_path: Optional[str] = None, bot: Optional[A
     # 1. Try downloading real user photo via Bot API if bot instance is available
     if bot and file_id_candidates:
         random.shuffle(file_id_candidates)
-        for fid in file_id_candidates[:3]:
+        for fid in file_id_candidates[:8]:
             try:
                 buf = io.BytesIO()
-                await bot.download(fid, destination=buf)
+                file_info = await bot.get_file(fid)
+                if not file_info or not file_info.file_path:
+                    continue
+                await bot.download_file(file_info.file_path, destination=buf)
                 buf.seek(0)
                 if buf.getbuffer().nbytes > 4000:
                     img = Image.open(buf)
