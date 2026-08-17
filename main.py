@@ -10076,50 +10076,61 @@ async def cmd_dice(message: types.Message, board_id: str | None, stream: str = '
     result = random.randint(1, 100)
 
     if len(args) > 1:
-        arg_val = args[1].lower().strip()
+        arg_val = args[1].lower().strip().lstrip('+')
         db = await get_pool()
         async with db_lock:
             async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
                 row = await c.fetchone()
                 balance = row[0] if row and row[0] is not None else 0
 
+            bet = None
             if arg_val in ["all", "вабанк", "ва-банк", "всё", "все"]:
                 bet = int(balance)
             elif arg_val.isdigit():
                 bet = int(arg_val)
+            else:
+                try:
+                    f_val = float(arg_val)
+                    if not math.isnan(f_val) and not math.isinf(f_val) and f_val > 0:
+                        bet = int(f_val)
+                except (ValueError, OverflowError):
+                    bet = None
 
-            if bet is not None:
-                if bet < 10:
-                    await message.answer("❌ Минимальная ставка для игры в кости: 10 ₪.")
-                    return
-                if bet > balance:
-                    await message.answer(f"❌ Недостаточно шекелей! Твой баланс: <code>{int(balance)} ₪</code>.")
-                    return
-                if bet > 10000:
-                    await message.answer("❌ Максимальная ставка за один бросок: 10 000 ₪.")
-                    return
+            if bet is None or bet <= 0:
+                await message.answer("❌ Неверный формат ставки! Укажи число, например: <code>/dice 50</code> или <code>/dice all</code>.")
+                return
 
-                if result == 100:
-                    win = bet * 3
-                    delta = win
-                    outcome_text = f"👑 <b>ДЖЕКПОТ 100/100!</b>\n🔥 Множитель x4! Чистый выигрыш: <code>+{win} ₪</code>"
-                elif result >= 55:
-                    win = bet
-                    delta = win
-                    outcome_text = f"🎉 <b>ПОБЕДА!</b> Выпало {result} (≥55).\n💰 Ты поднял: <code>+{win} ₪</code>"
-                else:
-                    delta = -bet
-                    outcome_text = f"💀 <b>ПРОИГРЫШ!</b> Выпало {result} (&lt;55).\n📉 Ты слил ставку: <code>-{bet} ₪</code>"
+            if bet < 10:
+                await message.answer("❌ Минимальная ставка для игры в кости: 10 ₪.")
+                return
+            if bet > balance:
+                await message.answer(f"❌ Недостаточно шекелей! Твой баланс: <code>{int(balance)} ₪</code>.")
+                return
+            if bet > 10000:
+                await message.answer("❌ Максимальная ставка за один бросок: 10 000 ₪.")
+                return
 
-                await db.execute(
-                    "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-                    "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = MAX(0, balance + ?)",
-                    (user_id, board_id, max(0, delta), delta)
-                )
-                await db.commit()
-                async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_sum:
-                    sum_row = await c_sum.fetchone()
-                    new_bal = sum_row[0] if sum_row and sum_row[0] is not None else 0
+            if result == 100:
+                win = bet * 3
+                delta = win
+                outcome_text = f"👑 <b>ДЖЕКПОТ 100/100!</b>\n🔥 Множитель x4! Чистый выигрыш: <code>+{win} ₪</code>"
+            elif result >= 55:
+                win = bet
+                delta = win
+                outcome_text = f"🎉 <b>ПОБЕДА!</b> Выпало {result} (≥55).\n💰 Ты поднял: <code>+{win} ₪</code>"
+            else:
+                delta = -bet
+                outcome_text = f"💀 <b>ПРОИГРЫШ!</b> Выпало {result} (&lt;55).\n📉 Ты слил ставку: <code>-{bet} ₪</code>"
+
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = MAX(0, balance + ?)",
+                (user_id, board_id, max(0, delta), delta)
+            )
+            await db.commit()
+            async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_sum:
+                sum_row = await c_sum.fetchone()
+                new_bal = sum_row[0] if sum_row and sum_row[0] is not None else 0
 
         caption = (
             f"🎲 <b>ПОДПОЛЬНЫЕ КОСТИ ТГАЧА</b>\n"
