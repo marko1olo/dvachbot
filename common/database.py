@@ -1126,6 +1126,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
             'users': {'active': set(), 'banned': set()},
             'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set()}),
             'shadow_mutes': {},
+            'mutes': {},
             'threads_data': {},
             'user_state': {},
             'board_post_count': 0,

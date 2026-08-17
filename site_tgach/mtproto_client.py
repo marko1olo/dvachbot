@@ -35,6 +35,8 @@ _ACTIVE_CLIENTS = {}
 _LAST_USED = {}  # {bot_token: timestamp}
 _CLIENT_LOCK = asyncio.Lock()   
 _CONNECTION_COOLDOWN = {}
+# Глобальный FloodWait для auth.ExportAuthorization — блокирует все MTProto-загрузки до его истечения
+_GLOBAL_MTPROTO_FLOOD_UNTIL: float = 0.0
 
 _cleanup_in_progress = False
 
@@ -150,8 +152,15 @@ async def get_active_client(bot_token: str):
             return None
 
 async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, chat_id: int = None, message_id: int = None) -> bool:
+    global _GLOBAL_MTPROTO_FLOOD_UNTIL
     if not API_ID or not API_HASH:
         logger.error("API_ID/HASH missing in .env")
+        return False
+
+    # Глобальный FloodWait активен — все задачи пропускают MTProto и идут на HTTP fallback
+    remaining_flood = _GLOBAL_MTPROTO_FLOOD_UNTIL - time.time()
+    if remaining_flood > 0:
+        logger.debug(f"⏭️ [MTProto] Global FloodWait active ({remaining_flood:.0f}s left). Skipping MTProto for {file_id[:10]}.")
         return False
 
     out_dir = os.path.dirname(output_path)
@@ -222,8 +231,10 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
         return False
     except FloodWait as e:
         wait_s = int(getattr(e, "value", 300) or 300)
-        logger.warning(f"⚠️ [MTProto] FloodWait ({wait_s}s) on bot {secret_fingerprint(bot_token)}. Switching to HTTP fallback.")
-        _CONNECTION_COOLDOWN[bot_token] = time.time() + wait_s
+        flood_until = time.time() + wait_s
+        _GLOBAL_MTPROTO_FLOOD_UNTIL = max(_GLOBAL_MTPROTO_FLOOD_UNTIL, flood_until)
+        _CONNECTION_COOLDOWN[bot_token] = flood_until
+        logger.warning(f"⚠️ [MTProto] FloodWait ({wait_s}s) on bot {secret_fingerprint(bot_token)}. Global MTProto cooldown set until +{wait_s}s.")
         return False
     except Exception as e:
         err_str = str(e).upper()
@@ -233,8 +244,10 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
                 if part.isdigit() and int(part) > 10:
                     wait_s = int(part)
                     break
-            logger.warning(f"⚠️ [MTProto] FLOOD WAIT: {e}. Cooldown {wait_s}s. Switching to HTTP fallback.")
-            _CONNECTION_COOLDOWN[bot_token] = time.time() + wait_s
+            flood_until = time.time() + wait_s
+            _GLOBAL_MTPROTO_FLOOD_UNTIL = max(_GLOBAL_MTPROTO_FLOOD_UNTIL, flood_until)
+            _CONNECTION_COOLDOWN[bot_token] = flood_until
+            logger.warning(f"⚠️ [MTProto] FLOOD WAIT: {e}. Global cooldown {wait_s}s.")
         elif "THUMBNAIL_SOURCE" in err_str:
             logger.warning(f"⚠️ [MTProto] Pyrogram failed to parse thumb source for {file_id[:10]}")
         else:

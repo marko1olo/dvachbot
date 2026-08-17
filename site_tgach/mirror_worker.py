@@ -254,6 +254,10 @@ async def _process_single_task(task):
                 # 3. Загрузка (если скачали)
                 if download_success:
                     fsize = os.path.getsize(lpath)
+                    if fsize == 0:
+                        logger.warning(f"⚠️ Downloaded file is empty (0 bytes) for {file_id[:10]}. Rescheduling.")
+                        await reschedule_mirror_task(task_id, attempt)
+                        return
                     if mirror_type == 'catbox' and fsize > 200 * 1024 * 1024:
                         logger.warning(f"⚠️ File {file_id[:10]} is too large for Catbox ({fsize / 1024 / 1024:.1f} MB). Skipping upload and removing task.")
                         await remove_mirror_task(task_id)
