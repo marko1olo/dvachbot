@@ -5567,197 +5567,9 @@ async def cb_support_prank(callback: types.CallbackQuery):
     await callback.answer()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# /work — Биржа труда и заработок шекелей (7 сбалансированных карьерных уровней)
+# /work — Биржа труда и заработок шекелей (common.work_engine)
 # ══════════════════════════════════════════════════════════════════════════════
-WORK_VACANCIES = {
-    "bottles": {
-        "title": "🍾 Сдать стеклотару",
-        "desc": "Сбор пустых бутылок после пьянки скуфов за гаражами",
-        "reward_range": (15, 35),
-        "cooldown_sec": 300,  # 5 min
-        "risk_pct": 0.0,
-        "phrases": [
-            "Собрал ящик жигулёвского за гаражами и сдал в приёмку: <code>+{reward} ₪</code>!",
-            "Нашёл 2 метра медного кабеля на заброшенной стройке: выручил <code>+{reward} ₪</code>!",
-            "Отобрал мешок алюминиевых банок у спящего бомжа: <code>+{reward} ₪</code> на кармане!",
-            "Сдал 15 полторашек из-под Охоты Крепкой: <code>+{reward} ₪</code> чистой прибыли.",
-            "Порылся в мусорных баках элитного ЖК и нашёл 10 бутылок из-под вискаря: <code>+{reward} ₪</code>!",
-            "Местный дед отдал старый чугунный радиатор за чекушку: на металлобазе дали <code>+{reward} ₪</code>!",
-            "Нашёл в кустах аккумулятор от Жигулей: сдал скупщику за <code>+{reward} ₪</code>!",
-            "Собрал банки из-под Балтики 9 после концерта в ДК: профит <code>+{reward} ₪</code>!",
-            "Выловил со дна фонтана горсть меди и пустых банок: заработано <code>+{reward} ₪</code>!",
-            "Приёмщик дядя Толя сегодня в хорошем настроении и накинул сверху: <code>+{reward} ₪</code>!"
-        ]
-    },
-    "sweeper": {
-        "title": "🧹 Дворник /b/",
-        "desc": "Уборка спама, вайпов и унылых тредов из нулевой",
-        "reward_range": (35, 70),
-        "cooldown_sec": 900,  # 15 min
-        "risk_pct": 0.05,
-        "penalty": 20,
-        "phrases": [
-            "Подмёл нулевую от засохших баянов и нашёл в мусоре <code>+{reward} ₪</code>!",
-            "Снёс 15 тредов с унылыми вебмками: Абу лично выписал премию <code>+{reward} ₪</code>!",
-            "Забанил рейд школьников с Пикабу и залутал <code>+{reward} ₪</code>!",
-            "Удалил пасту про сырную фею и школьниц: благодарные аноны скинули <code>+{reward} ₪</code>!",
-            "Расчистил бамп-лимит в треде веб-разработки: получено <code>+{reward} ₪</code>!",
-            "Вычистил ЦП-спам за 0.2 секунды до приезда РКН: за спасение борды дали <code>+{reward} ₪</code>!",
-            "Вайпнул 5 тредов шизофреника с радиоприёмником: начислено <code>+{reward} ₪</code>!",
-            "Утилизировал 300 постов с рекламой скам-крипты: заработано <code>+{reward} ₪</code>!",
-            "Поймал автокликер в капче и конфисковал шекели: <code>+{reward} ₪</code> в карман!",
-            "Спас тред ламповых воспоминаний от толстого тролля: заработал <code>+{reward} ₪</code>!"
-        ],
-        "fail_phrases": [
-            "Случайно снёс закреплённый тред админа! Получил банхаммером по лбу: штраф <code>-{penalty} ₪</code>!",
-            "Забанил элитного донатера с пасскодом: Абу удержал из зарплаты <code>-{penalty} ₪</code>!",
-            "По ошибке стёр свой собственный тред! С горя пропил <code>-{penalty} ₪</code>!",
-            "Залил скрипт автовайпа не в ту борду: штраф от техподдержки <code>-{penalty} ₪</code>!",
-            "Тролль забайтил тебя на удаление правил: лишение премии <code>-{penalty} ₪</code>!",
-            "Капча заглючила и снесла тебе половину кармы: урон балансу <code>-{penalty} ₪</code>!"
-        ]
-    },
-    "courier": {
-        "title": "📦 Курьер Самоката",
-        "desc": "Доставка дошираков и соевого молока хикканам на 5 этаж без лифта",
-        "reward_range": (60, 120),
-        "cooldown_sec": 1800,  # 30 min
-        "risk_pct": 0.12,
-        "penalty": 30,
-        "phrases": [
-            "Доставил коробку пиццы и 2 литра колы альтушке: щедрые чаевые <code>+{reward} ₪</code>!",
-            "Взлетел на 9 этаж пешком за 2 минуты (лифт обоссан): клиент накинул <code>+{reward} ₪</code>!",
-            "Привёз пачку дошираков сычу-программисту в 3 часа ночи: заработано <code>+{reward} ₪</code>!",
-            "Успел объехать пробку по тротуару и не сбил ни одной бабки: премия <code>+{reward} ₪</code>!",
-            "Доставил соевый латте скуфу в автосервис, тот оценил скорость: <code>+{reward} ₪</code>!",
-            "Клиентка открыла дверь в одном полотенце и смущенно дала чаевые: <code>+{reward} ₪</code>!",
-            "Перепрыгнул через сугроб на электробайке: заказ закрыт вовремя, <code>+{reward} ₪</code>!",
-            "Доставил энергетики киберспортсменам на буткемп: поднял <code>+{reward} ₪</code>!",
-            "Поймал промокод на смену и выполнил комбо из 3 заказов: <code>+{reward} ₪</code>!",
-            "Клиент перепутал купюры и дал чаевых больше стоимости заказа: <code>+{reward} ₪</code>!"
-        ],
-        "fail_phrases": [
-            "🐕 На тебя напала свора бродячих собак у теплотрассы и разорвала рюкзак: штраф <code>-{penalty} ₪</code>!",
-            "🛴 Электросамокат сел в километре от клиента, суп разлился в рюкзаке: компенсация <code>-{penalty} ₪</code>!",
-            "Пьяный батя в трусах отобрал заказ в подъезде и не заплатил: убыток <code>-{penalty} ₪</code>!",
-            "ГИБДД оштрафовали за езду по встречке на тротуаре: протокол на <code>-{penalty} ₪</code>!",
-            "Уронил коробку с суши прямо перед дверью клиента: списание из баланса <code>-{penalty} ₪</code>!",
-            "Застрял в грузовом лифте с обоссанным полом на 2 часа: заказ отменен, штраф <code>-{penalty} ₪</code>!"
-        ]
-    },
-    "captcha": {
-        "title": "👁️ Разметка капчи и NSFW",
-        "desc": "Обучение нейросети отличать трапов от 2D-тян и чистить капчу",
-        "reward_range": (85, 170),
-        "cooldown_sec": 2700,  # 45 min
-        "risk_pct": 0.08,
-        "penalty": 40,
-        "phrases": [
-            "Разметил 200 картинок с трапами и фембоями: грант от исследователей <code>+{reward} ₪</code>!",
-            "Обучил нейросеть мгновенно детектировать вайпы на доске: премия <code>+{reward} ₪</code>!",
-            "Ввёл 100 нечитаемых кривых капчей за ленивых юзеров: получено <code>+{reward} ₪</code>!",
-            "Натренировал классификатор отличать сарказм от реальной шизофрении: <code>+{reward} ₪</code>!",
-            "Сгенерировал 500 синтетических постов для прогрева тредов: заработано <code>+{reward} ₪</code>!",
-            "Успешно верифицировал 50 баз с аниме-пикчами: капнуло <code>+{reward} ₪</code>!",
-            "Нашёл баг в распознавании текста и получил Bug Bounty от Абу: <code>+{reward} ₪</code>!",
-            "Разметил датасет с токсичными гринтекстами для модерации: начислено <code>+{reward} ₪</code>!",
-            "Обучил LLM материться в стиле двачера 2012 года: куратор накинул <code>+{reward} ₪</code>!",
-            "Провёл 2 часа за монотонным кликаньем светофоров и пешеходных переходов: заработал <code>+{reward} ₪</code>!"
-        ],
-        "fail_phrases": [
-            "🤯 Словил зрительный передоз шизофренией от разметки NSFW и потратил на таблетки <code>-{penalty} ₪</code>!",
-            "Перепутал кота с буханкой хлеба в 50 капчах: алгоритм оштрафовал за халтуру на <code>-{penalty} ₪</code>!",
-            "Нейросеть обучилась генерировать бред и взбунтовалась: удержание <code>-{penalty} ₪</code>!",
-            "Залил обучающий датасет с вирусами на продакшн: штраф от тимлида <code>-{penalty} ₪</code>!",
-            "Бот-проверяльщик посчитал тебя спамером и списал залог <code>-{penalty} ₪</code>!",
-            "Выгорел от кликания картинок с гидрами и разбил мышку: покупка новой <code>-{penalty} ₪</code>!"
-        ]
-    },
-    "spy": {
-        "title": "🕵️ Шпионаж на чужой борде",
-        "desc": "Скрытный рейд в /po/ или /int/ за инсайдами и скриншотами",
-        "reward_range": (130, 280),
-        "cooldown_sec": 4500,  # 75 min
-        "risk_pct": 0.20,
-        "penalty": 65,
-        "phrases": [
-            "Проник в закрытый тред на /po/ и утащил секретные инсайды: награда <code>+{reward} ₪</code>!",
-            "Завайпал тред конкурентов на /int/ и вернулся с трофеями: залутал <code>+{reward} ₪</code>!",
-            "Слил компромат на модератора чужой доски местным хейтерам: выручил <code>+{reward} ₪</code>!",
-            "Отыскал контакты скрытого админа борды и продал инфу троллям: <code>+{reward} ₪</code>!",
-            "Устроил психологическую спецоперацию в /sex/ и посеял хаос: профит <code>+{reward} ₪</code>!",
-            "Успешно замаскировался под олдфага и украл уникальный контент: заработано <code>+{reward} ₪</code>!",
-            "Перехватил базу переписки модераторов через открытый WebSocket: прибыль <code>+{reward} ₪</code>!",
-            "Запустил вирусный щитпост на 500 ответов на вражеской борде: куш <code>+{reward} ₪</code>!",
-            "Подменил аватарки в треде на клоунов и ушёл незамеченным: гонорар <code>+{reward} ₪</code>!",
-            "Заставил весь тред спорить 6 часов о политике: заказчик перевёл <code>+{reward} ₪</code>!"
-        ],
-        "fail_phrases": [
-            "🚨 <b>ТЕБЯ СПАЛИЛА МОДЕРАЦИЯ!</b> Админы связали твой IP и влепили штраф <code>-{penalty} ₪</code>!",
-            "Случайно запостил скриншот с открытой вкладкой своего аккаунта: деанон обошёлся в <code>-{penalty} ₪</code>!",
-            "Вражеский бот-антиспам перехватил твой прокси: потеря залога <code>-{penalty} ₪</code>!",
-            "Попался в ловушку вахтёров и отдал взятку за разбан: <code>-{penalty} ₪</code>!",
-            "Местные тролли затравили тебя так, что пришлось менять личность: расход <code>-{penalty} ₪</code>!",
-            "Сервер закрылся на техобслуживание прямо во время кражи логов: провал на <code>-{penalty} ₪</code>!"
-        ]
-    },
-    "factory": {
-        "title": "🏭 Ночная смена на Заводе",
-        "desc": "Тяжелая мужская работа у станка с перекурами и матом",
-        "reward_range": (260, 520),
-        "cooldown_sec": 7200,  # 2 hours
-        "risk_pct": 0.15,
-        "penalty": 100,
-        "phrases": [
-            "Отработал ночную смену на станке с ЧПУ без единого косяка: честная получка <code>+{reward} ₪</code>!",
-            "Выточил партию шестерней для комбайнов. Бригадир выписал премию: <code>+{reward} ₪</code>!",
-            "Подменил пьяного Михалыча на погрузчике и спас план цеха: заработано <code>+{reward} ₪</code>!",
-            "Отремонтировал главный паровой котел при помощи изоленты и мата: премия <code>+{reward} ₪</code>!",
-            "Сдал смену вовремя, бригадир пожал руку и насыпал премиальных: <code>+{reward} ₪</code>!",
-            "Выполнил двойную норму по отливке чугунных болванок: за стахановский труд <code>+{reward} ₪</code>!",
-            "Забрал ночную надбавку за работу во вредном цеху: получено <code>+{reward} ₪</code>!",
-            "Нашёл в цеху неучтённый моток медной проволоки и легально сдал: <code>+{reward} ₪</code>!",
-            "Завод закрыл квартальный план! Всему цеху выплатили 13-ю зарплату: <code>+{reward} ₪</code>!",
-            "Победил в соцсоревновании цеха по сборке подшипников: приз <code>+{reward} ₪</code>!"
-        ],
-        "fail_phrases": [
-            "🥴 Напился с мужиками в каптёрке и уронил деталь на ногу! Штраф от начальника цеха <code>-{penalty} ₪</code>!",
-            "Сломал алмазный резец на токарном станке по неосторожности: вычет из зарплаты <code>-{penalty} ₪</code>!",
-            "Проспал начало смены в раздевалке, мастер лишил премии: штраф <code>-{penalty} ₪</code>!",
-            "Забыл надеть каску и попался инженеру по ТБ: взыскание <code>-{penalty} ₪</code>!",
-            "Брак в партии деталей на 50 000 рублей: удержали с зарплаты <code>-{penalty} ₪</code>!",
-            "Охрана на проходной поймала с пачкой электродов в кармане: штраф <code>-{penalty} ₪</code>!"
-        ]
-    },
-    "scam": {
-        "title": "🧪 Опасная темка / Скам мамонтов",
-        "desc": "Высокорисковая спекуляция, крипта и развод лохов на Авито",
-        "reward_range": (500, 1000),
-        "cooldown_sec": 14400,  # 4 hours
-        "risk_pct": 0.28,
-        "penalty": 200,
-        "phrases": [
-            "Продал мамонту воздух в красивой обёртке под видом нового мемкоина: сорвал куш <code>+{reward} ₪</code>!",
-            "Успешно провернул арбитраж крипты через P2P-обменник: чистый профит <code>+{reward} ₪</code>!",
-            "Развёл перекупа на Авито на предоплату за фальшивую RTX 4090: наварил <code>+{reward} ₪</code>!",
-            "Запустил скам-бота в Телеграме и залутал депозиты доверчивых школьников: <code>+{reward} ₪</code>!",
-            "Продал инфоцыганский курс 'Как стать криптомиллионером за 3 дня': заработал <code>+{reward} ₪</code>!",
-            "Пампанул шиткоин в закрытом чате хомяков и вовремя вышел на пике: куш <code>+{reward} ₪</code>!",
-            "Оформил возврат на маркетплейсе по поддельному чеку: чистая прибыль <code>+{reward} ₪</code>!",
-            "Продал китайскую копию AirPods под видом оригинала в метро: профит <code>+{reward} ₪</code>!",
-            "Сдал в аренду несуществующую квартиру на Патриарших троим приезжим: залутал <code>+{reward} ₪</code>!",
-            "Перехватил дроп редких NFT и перепродал на OpenSea американцам: профит <code>+{reward} ₪</code>!"
-        ],
-        "fail_phrases": [
-            "🚔 <b>ОБЛАВА ОБЭП!</b> Следователь вышел на твой след, пришлось откупиться: взятка <code>-{penalty} ₪</code>!",
-            "Мамонт оказался оперуполномоченным под прикрытием: еле унёс ноги, потеряв <code>-{penalty} ₪</code>!",
-            "Криптобиржа заблокировала аккаунт по 115-ФЗ вместе с депозитом: убыток <code>-{penalty} ₪</code>!",
-            "Обманутый перекуп подкараулил у подъезда с битой: оплата больничного <code>-{penalty} ₪</code>!",
-            "Скам-смартконтракт взломали хакеры и увели всю кассу: потеряно <code>-{penalty} ₪</code>!",
-            "Дроп сбежал со всеми деньгами в Грузию: чистый убыток на <code>-{penalty} ₪</code>!"
-        ]
-    }
-}
+from common.work_engine import WORK_VACANCIES, execute_job_action
 
 async def _build_work_card(user_id: int, board_id: str):
     db = await get_pool()
@@ -5774,10 +5586,10 @@ async def _build_work_card(user_id: int, board_id: str):
     now = int(time.time())
 
     lines = [
-        f"💼 <b>БИРЖА ТРУДА /{board_id}/ • ЗАРАБОТОК ШЕКЕЛЕЙ</b>",
+        f"💼 <b>БИРЖА ТРУДА /{board_id}/ • КАРЬЕРНАЯ ЛЕСТНИЦА</b>",
         f"<code>{'—'*28}</code>",
         f"💵 <b>Твой баланс:</b> <code>{int(balance):,} ₪</code>",
-        "📍 <i>Выбирай халтуру, чтобы поднять шекелей на оружие и баффы:</i>\n"
+        "📍 <i>Выбирай профессию, поднимай шекели и лутай редкие предметы:</i>\n"
     ]
 
     kb_rows = []
@@ -5794,12 +5606,13 @@ async def _build_work_card(user_id: int, board_id: str):
             status = "🟢 Доступно"
             btn_text = f"{job['title']} (+{job['reward_range'][0]}–{job['reward_range'][1]} ₪)"
 
-        lines.append(f"<b>{job['title']}</b> — {status}")
+        tier_lbl = job.get("tier", "")
+        lines.append(f"<b>{job['title']}</b> <i>({tier_lbl})</i> — {status}")
         lines.append(f"└ <i>{job['desc']}</i>")
         kb_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"work_do_{job_id}")])
 
     lines.append(f"\n<code>{'—'*28}</code>")
-    lines.append("💡 <i>Заработанное можно потратить в /shop или вывести в /wallet.</i>")
+    lines.append("💡 <i>Шанс сорвать ДЖЕКПОТ (x3) и выбить предметы инвентаря в /shop.</i>")
 
     kb_rows.append([
         InlineKeyboardButton(text="🛒 Черный рынок", callback_data="prof_shop"),
@@ -5836,17 +5649,11 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
     user_id = callback.from_user.id
     job_id = callback.data.replace("work_do_", "")
 
-    if job_id not in WORK_VACANCIES:
-        await callback.answer("❌ Неизвестная вакансия.", show_alert=True)
-        return
-
-    job = WORK_VACANCIES[job_id]
     db = await get_pool()
-
     ans_text = None
     is_cd = False
+
     async with db_lock:
-        balance = await get_user_global_balance(db, user_id)
         async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
             row = await c.fetchone()
         ai_str = row[0] if row and len(row) > 0 and row[0] else "{}"
@@ -5855,43 +5662,47 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
         except Exception:
             items = {}
 
-        work_timers = items.setdefault("work_cooldowns", {})
-        now = int(time.time())
-        last_time = work_timers.get(job_id, 0)
-        passed = now - last_time
+        is_success, amount_change, outcome_msg, dropped_item = execute_job_action(job_id, items)
 
-        if passed < job["cooldown_sec"]:
-            left_min = ((job["cooldown_sec"] - passed) // 60) + 1
-            ans_text = f"⏳ Кулдаун! Эта работа будет доступна через {left_min} мин."
+        if not is_success and amount_change == 0:
             is_cd = True
+            ans_text = outcome_msg
+        elif is_success:
+            await add_user_global_balance(db, user_id, board_id, amount_change)
+            drop_note = ""
+            if dropped_item:
+                item_names = {
+                    "shit": "🐒 Кусок говна",
+                    "pills": "💊 Аминазин",
+                    "knife": "🔪 Заточка",
+                    "schizopill": "💊 Шизо-Таблетка",
+                    "tinfoil": "👽 Шапочка из фольги",
+                    "shield": "🛡️ Зеркальный Щит",
+                    "bribe": "📜 Взятка",
+                    "partyvan": "🚔 Пативэн",
+                    "megaphone": "📣 Мегафон"
+                }
+                if dropped_item in ["tinfoil", "shield"]:
+                    items[f"{dropped_item}_until"] = int(time.time()) + 21600
+                else:
+                    items[f"{dropped_item}_gun"] = True
+                drop_note = f"\n🎁 <b>БОНУС-ДРОП:</b> В карман упал артефакт <b>{item_names.get(dropped_item, dropped_item)}</b>!"
+
+            await db.execute(
+                "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                (json.dumps(items), user_id, board_id)
+            )
+            await db.commit()
+            ans_text = outcome_msg + (f" (Дроп: {dropped_item})" if dropped_item else "")
         else:
-            is_fail = (job.get("risk_pct", 0) > 0 and random.random() < job["risk_pct"])
-            if is_fail:
-                penalty = job.get("penalty", 30)
-                work_timers[job_id] = now
-                await deduct_user_global_balance(db, user_id, board_id, penalty)
-                await db.execute(
-                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                    (json.dumps(items), user_id, board_id)
-                )
-                await db.commit()
-                fail_list = job.get("fail_phrases", ["🚨 Штраф: -{penalty} ₪!"])
-                raw_fail = random.choice(fail_list).format(penalty=penalty, reward=0)
-                clean_fail = re.sub(r'<[^>]+>', '', raw_fail)
-                ans_text = clean_fail
-            else:
-                reward = random.randint(job["reward_range"][0], job["reward_range"][1])
-                work_timers[job_id] = now
-                await add_user_global_balance(db, user_id, board_id, reward)
-                await db.execute(
-                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                    (json.dumps(items), user_id, board_id)
-                )
-                await db.commit()
-                succ_list = job.get("phrases", ["✅ Успешно! +{reward} ₪"])
-                raw_succ = random.choice(succ_list).format(reward=reward, penalty=0)
-                clean_succ = re.sub(r'<[^>]+>', '', raw_succ)
-                ans_text = f"✅ {clean_succ}"
+            # Failure with penalty
+            await deduct_user_global_balance(db, user_id, board_id, amount_change)
+            await db.execute(
+                "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                (json.dumps(items), user_id, board_id)
+            )
+            await db.commit()
+            ans_text = outcome_msg
 
     if ans_text:
         await callback.answer(ans_text, show_alert=True)
