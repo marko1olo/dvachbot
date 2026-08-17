@@ -5567,54 +5567,118 @@ async def cb_support_prank(callback: types.CallbackQuery):
     await callback.answer()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# /work — Биржа труда и заработок шекелей (4 интерактивные работы)
+# /work — Биржа труда и заработок шекелей (7 сбалансированных карьерных уровней)
 # ══════════════════════════════════════════════════════════════════════════════
 WORK_VACANCIES = {
+    "bottles": {
+        "title": "🍾 Сдать стеклотару",
+        "desc": "Сбор пустых бутылок после пьянки скуфов за гаражами",
+        "reward_range": (15, 35),
+        "cooldown_sec": 300,  # 5 min
+        "risk_pct": 0.0,
+        "phrases": [
+            "Собрал ящик жигулёвского за гаражами и сдал в приёмку за <code>+{reward} ₪</code>!",
+            "Нашёл медный кабель в заброшенном треде, выручил <code>+{reward} ₪</code>!",
+            "Отобрал мешок банок у местного алкаша и поднял <code>+{reward} ₪</code>!",
+            "Сдал пустые полторашки из-под Охоты: <code>+{reward} ₪</code> на кармане."
+        ]
+    },
     "sweeper": {
         "title": "🧹 Дворник /b/",
-        "desc": "Уборка спама и мусора из тредов",
-        "reward_range": (30, 60),
+        "desc": "Уборка спама, вайпов и унылых тредов из нулевой",
+        "reward_range": (35, 70),
         "cooldown_sec": 900,  # 15 min
+        "risk_pct": 0.05,
+        "penalty": 20,
         "phrases": [
-            "Ты подмёл тред от щитпостов и нашёл в мусоре <code>+{reward} RUB</code>!",
-            "Убрал засохшие мемы из нулевой и заработал <code>+{reward} RUB</code>!",
-            "Расчистил бамп-лимит и получил от Абу <code>+{reward} RUB</code>!"
+            "Ты подмёл тред от щитпостов и нашёл в мусоре <code>+{reward} ₪</code>!",
+            "Убрал засохшие мемы из нулевой и заработал <code>+{reward} ₪</code>!",
+            "Расчистил бамп-лимит треда и получил от Абу <code>+{reward} ₪</code>!",
+            "Удалил 10 паст про школьниц, модератор отсыпал <code>+{reward} ₪</code>."
+        ],
+        "fail_phrases": [
+            "🧹 Случайно снёс важный тред админа и получил по шапке: штраф <code>-{penalty} ₪</code>!"
+        ]
+    },
+    "courier": {
+        "title": "📦 Курьер Самоката",
+        "desc": "Доставка дошираков и соевого молока хикканам на 5 этаж без лифта",
+        "reward_range": (60, 120),
+        "cooldown_sec": 1800,  # 30 min
+        "risk_pct": 0.12,
+        "penalty": 30,
+        "phrases": [
+            "Доставил коробку пиццы альтушке и получил щедрые чаевые: <code>+{reward} ₪</code>!",
+            "Быстро домчал на электровелосипеде сквозь сугробы: заработано <code>+{reward} ₪</code>!",
+            "Заказ закрыт вовремя! Клиент оставил 5 звезд и <code>+{reward} ₪</code>."
+        ],
+        "fail_phrases": [
+            "🐕 На тебя напали бродячие собаки и разорвали пакет с заказом! Штраф: <code>-{penalty} ₪</code>!",
+            "🛴 Электросамокат разрядился посреди промзоны. Заказ отменён, штраф: <code>-{penalty} ₪</code>!"
         ]
     },
     "captcha": {
-        "title": "👁️ Разметка капчи",
-        "desc": "Обучение нейросети распознавать трапы и NSFW",
-        "reward_range": (50, 95),
-        "cooldown_sec": 1800,  # 30 min
+        "title": "👁️ Разметка капчи и NSFW",
+        "desc": "Обучение нейросети отличать трапов от 2D-тян и чистить капчу",
+        "reward_range": (85, 170),
+        "cooldown_sec": 2700,  # 45 min
+        "risk_pct": 0.08,
+        "penalty": 40,
         "phrases": [
-            "Разметил 100 картинок с трапами и получил грант <code>+{reward} RUB</code>!",
-            "Успешно обучил нейросеть ловить ЦП, заработано <code>+{reward} RUB</code>!",
-            "Ввёл 50 кривых капчей за тупых ньюфагов. Начислено <code>+{reward} RUB</code>!"
+            "Разметил 100 картинок с трапами и получил грант: <code>+{reward} ₪</code>!",
+            "Успешно обучил нейросеть ловить ЦП, заработано <code>+{reward} ₪</code>!",
+            "Ввёл 50 кривых капчей за тупых ньюфагов. Начислено: <code>+{reward} ₪</code>!"
+        ],
+        "fail_phrases": [
+            "🤯 Словил передоз шизофренией от разметки гринтекстов и потратил на таблетки: <code>-{penalty} ₪</code>!"
         ]
     },
     "spy": {
-        "title": "🕵️ Шпионаж на чужой доске",
-        "desc": "Скрытный рейд на соседнюю борду за инсайдами",
-        "reward_range": (80, 160),
-        "cooldown_sec": 2700,  # 45 min
+        "title": "🕵️ Шпионаж на чужой борде",
+        "desc": "Скрытный рейд в /po/ или /int/ за инсайдами и скриншотами",
+        "reward_range": (130, 280),
+        "cooldown_sec": 4500,  # 75 min
         "risk_pct": 0.20,
-        "penalty": 45,
+        "penalty": 65,
         "phrases": [
-            "Успешно проник в /po/ и украл закрытый инсайд! Награда: <code>+{reward} RUB</code>!",
-            "Завайпал тред на /int/ и вернулся с трофеями на <code>+{reward} RUB</code>!"
+            "Успешно проник в /po/ и украл закрытый инсайд! Награда: <code>+{reward} ₪</code>!",
+            "Завайпал тред на /int/ и вернулся с трофеями на <code>+{reward} ₪</code>!",
+            "Слил компромат на модератора конкурирующего треда: получено <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
-            "🚨 <b>ТЕБЯ СПАЛИЛА МОДЕРАЦИЯ!</b> Местные админы поймали тебя за руку и оштрафовали на <code>-{penalty} RUB</code>!"
+            "🚨 <b>ТЕБЯ СПАЛИЛА МОДЕРАЦИЯ!</b> Админы поймали тебя за руку на чужой борде: штраф <code>-{penalty} ₪</code>!"
         ]
     },
-    "bottles": {
-        "title": "🍾 Сдать стеклотару и цветмет",
-        "desc": "Сбор пустых бутылок после пьянки скуфов",
-        "reward_range": (15, 35),
-        "cooldown_sec": 300,  # 5 min
+    "factory": {
+        "title": "🏭 Ночная смена на Заводе",
+        "desc": "Тяжелая мужская работа у станка с перекурами и матом",
+        "reward_range": (260, 520),
+        "cooldown_sec": 7200,  # 2 hours
+        "risk_pct": 0.15,
+        "penalty": 100,
         "phrases": [
-            "Собрал ящик жигулёвского за гаражами и сдал в приёмку за <code>+{reward} RUB</code>!",
-            "Нашёл медный кабель в заброшенном треде, выручил <code>+{reward} RUB</code>!"
+            "Отработал ночную смену за фрезерным станком без травм! Получка: <code>+{reward} ₪</code>!",
+            "Выточил партию болтов. Бригадир выдал щедрую премию: <code>+{reward} ₪</code>!",
+            "Подменил Михалыча на погрузчике, заработано честным трудом: <code>+{reward} ₪</code>!"
+        ],
+        "fail_phrases": [
+            "🥴 Напился с мужиками в каптёрке и уронил деталь на ногу! Штраф от мастера: <code>-{penalty} ₪</code>!"
+        ]
+    },
+    "scam": {
+        "title": "🧪 Опасная темка / Скам мамонтов",
+        "desc": "Высокорисковая спекуляция, крипта и развод лохов на Авито",
+        "reward_range": (500, 1000),
+        "cooldown_sec": 14400,  # 4 hours
+        "risk_pct": 0.28,
+        "penalty": 200,
+        "phrases": [
+            "Продал мамонту воздух под видом мемкоина: сорвал куш <code>+{reward} ₪</code>!",
+            "Успешно провернул арбитраж крипты через P2P: чистый профит <code>+{reward} ₪</code>!",
+            "Развёл перекупа на фальшивую видеокарту, профит: <code>+{reward} ₪</code>!"
+        ],
+        "fail_phrases": [
+            "🚔 <b>ОБЛАВА ОБЭП!</b> На твой след вышел следователь, пришлось откупиться: взятка <code>-{penalty} ₪</code>!"
         ]
     }
 }
@@ -5637,7 +5701,7 @@ async def _build_work_card(user_id: int, board_id: str):
         f"💼 <b>БИРЖА ТРУДА /{board_id}/ • ЗАРАБОТОК ШЕКЕЛЕЙ</b>",
         f"<code>{'—'*28}</code>",
         f"💵 <b>Твой баланс:</b> <code>{int(balance):,} ₪</code>",
-        f"📍 <i>Выбирай халтуру, чтобы поднять шекелей на оружие и баффы:</i>\n"
+        "📍 <i>Выбирай халтуру, чтобы поднять шекелей на оружие и баффы:</i>\n"
     ]
 
     kb_rows = []
@@ -5672,7 +5736,7 @@ async def _build_work_card(user_id: int, board_id: str):
 
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
-@dp.message(Command("work", "биржа", "работа", "job", "заработок"))
+@dp.message(Command("work", "биржа", "работа", "job", "заработок", "earn", "bomj", "economy"))
 async def cmd_work(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -5735,7 +5799,10 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
                     (json.dumps(items), user_id, board_id)
                 )
                 await db.commit()
-                ans_text = f"🚨 Попался модерации! Штраф -{penalty} RUB"
+                fail_list = job.get("fail_phrases", ["🚨 Штраф: -{penalty} ₪!"])
+                raw_fail = random.choice(fail_list).format(penalty=penalty, reward=0)
+                clean_fail = re.sub(r'<[^>]+>', '', raw_fail)
+                ans_text = clean_fail
             else:
                 reward = random.randint(job["reward_range"][0], job["reward_range"][1])
                 work_timers[job_id] = now
@@ -5745,7 +5812,10 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
                     (json.dumps(items), user_id, board_id)
                 )
                 await db.commit()
-                ans_text = f"✅ Успешно! +{reward} RUB"
+                succ_list = job.get("phrases", ["✅ Успешно! +{reward} ₪"])
+                raw_succ = random.choice(succ_list).format(reward=reward, penalty=0)
+                clean_succ = re.sub(r'<[^>]+>', '', raw_succ)
+                ans_text = f"✅ {clean_succ}"
 
     if ans_text:
         await callback.answer(ans_text, show_alert=True)
