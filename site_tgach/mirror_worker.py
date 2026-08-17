@@ -278,13 +278,20 @@ async def _process_single_task(task):
                     elif mirror_type == 'pixhost':
                         _, fext = os.path.splitext(lpath)
                         if fext.lower() not in PIXHOST_SUPPORTED_EXT:
-                            real_ext = _detect_real_ext(lpath)
-                            if real_ext and real_ext in PIXHOST_SUPPORTED_EXT:
-                                new_lpath = lpath + real_ext
+                            if file_info and getattr(file_info, 'file_path', None):
+                                _, ext_from_tg = os.path.splitext(file_info.file_path)
+                                if ext_from_tg and ext_from_tg.lower() in PIXHOST_SUPPORTED_EXT:
+                                    fext = ext_from_tg.lower()
+                            if fext.lower() not in PIXHOST_SUPPORTED_EXT:
+                                fext = _detect_real_ext(lpath)
+                            if not fext and file_id.startswith("AgAC"):
+                                fext = ".jpg"
+
+                            if fext and fext.lower() in PIXHOST_SUPPORTED_EXT:
+                                new_lpath = lpath + fext.lower()
                                 os.rename(lpath, new_lpath)
                                 lpath = new_lpath
-                                fext = real_ext
-                                logger.debug(f"🔍 Pixhost: detected {fext} from magic bytes for {file_id[:10]}")
+                                logger.debug(f"🔍 Pixhost: resolved {fext} for {file_id[:10]}")
                             else:
                                 logger.info(f"⏭️ Pixhost: cannot detect image type for {file_id[:10]} (ext={fext}). Removing task.")
                                 await remove_mirror_task(task_id)
@@ -293,13 +300,20 @@ async def _process_single_task(task):
                     elif mirror_type == 'imgbb':
                         _, fext = os.path.splitext(lpath)
                         if fext.lower() not in IMGBB_SUPPORTED_EXT:
-                            real_ext = _detect_real_ext(lpath)
-                            if real_ext and real_ext in IMGBB_SUPPORTED_EXT:
-                                new_lpath = lpath + real_ext
+                            if file_info and getattr(file_info, 'file_path', None):
+                                _, ext_from_tg = os.path.splitext(file_info.file_path)
+                                if ext_from_tg and ext_from_tg.lower() in IMGBB_SUPPORTED_EXT:
+                                    fext = ext_from_tg.lower()
+                            if fext.lower() not in IMGBB_SUPPORTED_EXT:
+                                fext = _detect_real_ext(lpath)
+                            if not fext and file_id.startswith("AgAC"):
+                                fext = ".jpg"
+
+                            if fext and fext.lower() in IMGBB_SUPPORTED_EXT:
+                                new_lpath = lpath + fext.lower()
                                 os.rename(lpath, new_lpath)
                                 lpath = new_lpath
-                                fext = real_ext
-                                logger.debug(f"🔍 ImgBB: detected {fext} from magic bytes for {file_id[:10]}")
+                                logger.debug(f"🔍 ImgBB: resolved {fext} for {file_id[:10]}")
                             else:
                                 logger.info(f"⏭️ ImgBB: cannot detect image type for {file_id[:10]} (ext={fext}). Removing task.")
                                 await remove_mirror_task(task_id)
