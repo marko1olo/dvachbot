@@ -54,6 +54,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, TelegramAPIError
 from common.anon_identity import get_anon_id
+from common.database import add_user_global_balance, get_user_global_balance
 
 from common.db_pool import get_pool, db_lock
 
@@ -124,9 +125,10 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 earned = random.randint(10, 50)
                 active_items["last_bottles"] = now
                 
+                await add_user_global_balance(db, user_id, board_id, earned)
                 await db.execute(
-                    "UPDATE Users SET balance = balance + ?, active_items = ? WHERE user_id = ? AND board_id = ?",
-                    (earned, json.dumps(active_items), user_id, board_id)
+                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (json.dumps(active_items), user_id, board_id)
                 )
                 await db.commit()
                 ans_text = f"🍾 Ты успешно сдал бутылки у теплотрассы и заработал {earned} Шекелей!"
@@ -139,8 +141,9 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 prefix = "[Продал мать]"
                 expires = 2147483647
                 
+                await add_user_global_balance(db, user_id, board_id, 10000)
                 await db.execute(
-                    "UPDATE Users SET balance = balance + 10000, active_items = ?, custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ? AND board_id = ?",
+                    "UPDATE Users SET active_items = ?, custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ? AND board_id = ?",
                     (json.dumps(active_items), prefix, expires, user_id, board_id)
                 )
                 await db.commit()

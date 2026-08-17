@@ -5459,8 +5459,12 @@ async def _run_delayed_prank(params: DelayedPrankParams):
         )
         await db_p.commit()
 
-    anon_id_val = get_anon_id(params.user_id)
-    final_user_label = f"{escape_html(params.shame_name)} [ID: {anon_id_val}]"
+    uid_raw = str(params.user_id)
+    if len(uid_raw) >= 6:
+        masked_uid = f"{uid_raw[:3]}***{uid_raw[-3:]}"
+    else:
+        masked_uid = f"{uid_raw[:2]}***{uid_raw[-1:]}"
+    final_user_label = f"{escape_html(params.shame_name)} (ID: {masked_uid})"
 
     raw_requisites = str(params.user_input).strip()
 
