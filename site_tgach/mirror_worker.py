@@ -351,7 +351,7 @@ async def process_mirror_queue():
     
     # Блок сброса таймеров УДАЛЕН для предотвращения шторма при рестарте
 
-    SEM = asyncio.Semaphore(20) 
+    SEM = asyncio.Semaphore(8)  # Снижен с 20 до 8 для уменьшения нагрузки
 
     async def runner(task):
         async with SEM:
@@ -360,7 +360,10 @@ async def process_mirror_queue():
     try:
         while True:
             try:
-                from site_tgach.imgbb import IMGBB_API_KEY
+                from site_tgach.imgbb import IMGBB_API_KEY, _KEY_COOLDOWN, _is_key_available
+                from site_tgach.pixhost import _pixhost_backoff_until
+                import time as _time
+
                 allowed_types = ['catbox', 'pixhost']
                 if is_0x0_available():
                     allowed_types.append('0x0')
@@ -369,11 +372,28 @@ async def process_mirror_queue():
                 if os.getenv("FREEIMAGE_API_KEY"):
                     allowed_types.append('freeimage')
 
-                tasks = await get_pending_mirror_tasks(limit=20, allowed_types=allowed_types)
+                # Если ImgBB забанил все ключи — исключаем его из пула
+                all_imgbb_cooled = (
+                    'imgbb' in allowed_types and
+                    all(not _is_key_available(k) for k in _KEY_COOLDOWN.keys() if k in _KEY_COOLDOWN)
+                    and len(_KEY_COOLDOWN) >= 3
+                )
+                if all_imgbb_cooled:
+                    allowed_types = [t for t in allowed_types if t != 'imgbb']
+                    logger.debug("[MirrorWorker] All ImgBB keys cooled down, skipping imgbb tasks this round.")
+
+                # Если Pixhost под backoff — исключаем
+                if _pixhost_backoff_until > _time.monotonic():
+                    allowed_types = [t for t in allowed_types if t != 'pixhost']
+                    logger.debug("[MirrorWorker] Pixhost backoff active, skipping pixhost tasks this round.")
+
+                tasks = await get_pending_mirror_tasks(limit=8, allowed_types=allowed_types)
                 if not tasks:
                     await asyncio.sleep(10)
                     continue
                 await asyncio.gather(*[runner(t) for t in tasks])
+                # Пауза между батчами чтобы не долбить хостинги залпом
+                await asyncio.sleep(2)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -381,3 +401,4 @@ async def process_mirror_queue():
                 await asyncio.sleep(10)
     finally:
         await close_internal_file_bots()
+

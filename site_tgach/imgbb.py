@@ -1,12 +1,12 @@
 """
-ImgBB upload module with multi-key rotating pool and automatic fallback.
+ImgBB upload module with multi-key rotating pool, per-key cooldowns, and global rate limiting.
 Supports images only (jpg, png, gif, bmp, webp). Max 32MB.
 """
 import httpx
 import os
 import logging
 import asyncio
-import base64
+import time
 import itertools
 
 logger = logging.getLogger("imgbb")
@@ -29,8 +29,37 @@ if _env_key and _env_key not in IMGBB_KEY_POOL:
 _key_cycler = itertools.cycle(IMGBB_KEY_POOL)
 IMGBB_API_KEY = IMGBB_KEY_POOL[0]
 
+# Per-key cooldown: {key: timestamp_available_again}
+_KEY_COOLDOWN: dict[str, float] = {}
+
+# Min seconds between consecutive ImgBB API requests (global rate limit)
+_IMGBB_MIN_INTERVAL = 0.5
+_imgbb_last_request_time: float = 0.0
+_imgbb_global_lock = asyncio.Lock()
+
+# Cooldown duration when a key returns 400 (seconds)
+_KEY_COOLDOWN_DURATION = 60.0
+
+
+def _is_key_available(key: str) -> bool:
+    return time.monotonic() >= _KEY_COOLDOWN.get(key, 0.0)
+
+
+def _cooldown_key(key: str, duration: float = _KEY_COOLDOWN_DURATION):
+    _KEY_COOLDOWN[key] = time.monotonic() + duration
+    logger.debug(f"[ImgBB] Key {key[:8]}... on cooldown for {duration:.0f}s")
+
+
 def get_next_imgbb_key() -> str:
+    """Return next available key from pool, skipping cooled-down ones."""
+    for _ in range(len(IMGBB_KEY_POOL)):
+        key = next(_key_cycler)
+        if _is_key_available(key):
+            return key
+    # All keys on cooldown — return next anyway and let caller handle failure
+    logger.warning("[ImgBB] All keys are on cooldown! Using next anyway...")
     return next(_key_cycler)
+
 
 raw_proxy = os.getenv("PROXY_URL")
 PROXY_URL = raw_proxy if raw_proxy and "://" in raw_proxy else (f"http://{raw_proxy}" if raw_proxy else None)
@@ -47,9 +76,11 @@ USER_AGENTS = [
 
 async def upload_file_to_imgbb(file_path: str) -> str | None:
     """
-    Uploads an image file to imgbb.com with rotating key fallback.
+    Uploads an image file to imgbb.com with rotating key fallback + rate limiting.
     Returns the direct image URL or None on failure.
     """
+    global _imgbb_last_request_time
+
     if not os.path.exists(file_path):
         logger.error(f"ImgBB: File not found: {file_path}")
         return None
@@ -60,6 +91,9 @@ async def upload_file_to_imgbb(file_path: str) -> str | None:
         return None
 
     file_size = os.path.getsize(file_path)
+    if file_size == 0:
+        logger.warning("ImgBB: File is 0 bytes, skipping")
+        return None
     if file_size > 32 * 1024 * 1024:
         logger.info(f"ImgBB: File too large ({file_size / 1024 / 1024:.1f} MB), max 32MB. Skipping.")
         return None
@@ -77,13 +111,27 @@ async def upload_file_to_imgbb(file_path: str) -> str | None:
     file_bytes = await asyncio.to_thread(_read_bytes)
     fname = os.path.basename(file_path)
 
-    # Try up to 3 keys from pool on failure
-    for key_attempt in range(min(3, len(IMGBB_KEY_POOL))):
+    # Try up to all available keys from pool on failure
+    n_keys = len(IMGBB_KEY_POOL)
+    for key_attempt in range(n_keys):
         current_key = get_next_imgbb_key()
+
+        # If this key is on cooldown and all others are too — bail early
+        if not _is_key_available(current_key):
+            logger.warning(f"[ImgBB] Key {current_key[:8]}... still on cooldown, skipping attempt {key_attempt+1}")
+            continue
 
         for strategy in strategies:
             try:
-                transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
+                # Global rate limiting: enforce minimum interval between requests
+                async with _imgbb_global_lock:
+                    now = time.monotonic()
+                    wait = _imgbb_last_request_time + _IMGBB_MIN_INTERVAL - now
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                    _imgbb_last_request_time = time.monotonic()
+
+                transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
                 async with httpx.AsyncClient(
                     timeout=60.0, verify=False,
                     proxy=strategy["proxy"], transport=transport,
@@ -104,16 +152,25 @@ async def upload_file_to_imgbb(file_path: str) -> str | None:
                         else:
                             logger.warning(f"⚠️ ImgBB: Unexpected response: {resp.text[:300]}")
                     elif resp.status_code == 400:
-                        err_code = resp.json().get('error', {}).get('code')
-                        err_msg = resp.json().get('error', {}).get('message', '')
-                        logger.warning(f"⚠️ ImgBB key {current_key[:8]}... rejected (code {err_code}: {err_msg}). Rotating key...")
+                        try:
+                            err_code = resp.json().get('error', {}).get('code')
+                            err_msg = resp.json().get('error', {}).get('message', '')
+                        except Exception:
+                            err_code, err_msg = '?', resp.text[:100]
+                        logger.warning(f"⚠️ ImgBB key {current_key[:8]}... rejected (code {err_code}: {err_msg}). Cooldown {_KEY_COOLDOWN_DURATION:.0f}s.")
+                        _cooldown_key(current_key)
                         break  # Break inner strategy loop to try next key
+                    elif resp.status_code == 429:
+                        # Rate limit hit — back off this key longer
+                        _cooldown_key(current_key, duration=120.0)
+                        logger.warning(f"⚠️ ImgBB key {current_key[:8]}... rate-limited (429). Cooldown 120s.")
+                        break
                     else:
                         logger.warning(f"❌ ImgBB ({strategy['name']}): HTTP {resp.status_code}: {resp.text[:200]}")
 
             except (httpx.ConnectError, httpx.ProxyError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
                 logger.warning(f"⚠️ ImgBB {strategy['name']} network error: {repr(e)}")
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
                 continue
             except Exception as e:
                 logger.error(f"⛔ ImgBB unexpected error ({strategy['name']}): {repr(e)}")
