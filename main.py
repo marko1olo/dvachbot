@@ -5373,8 +5373,12 @@ def _get_tgach_rates_content():
             InlineKeyboardButton(text="🔨 На Работу", callback_data="economy_work"),
         ],
         [
+            InlineKeyboardButton(text="🎰 Казино Тгача", callback_data="cas:hub"),
+            InlineKeyboardButton(text="💸 Дроп шекелей", callback_data="cas:menu:drop"),
+        ],
+        [
             InlineKeyboardButton(text="💳 Кошелек", callback_data="prof_wallet"),
-            InlineKeyboardButton(text="🎲 Сыграть в кости", callback_data="economy_dice"),
+            InlineKeyboardButton(text="🎲 Кости", callback_data="economy_dice"),
         ]
     ])
     return "\n".join(res), kb
@@ -11949,36 +11953,42 @@ def get_quick_menu_keyboard(board_id: str, stream: str = 'ru') -> InlineKeyboard
     Генерирует главное меню для /start и /help с учетом потока (языка).
     """
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-    if lang == 'en': btn_wallet = "💰 Wallet"
-    elif lang == 'jp': btn_wallet = "💰 財布"
-    else: btn_wallet = "💰 Кошелек"
-    if lang == 'en':
+    if lang == 'en': 
+        btn_wallet = "💰 Wallet"
+        btn_casino = "🎰 Casino"
+        btn_drop = "💸 Drop"
         btn_profile = "🪪 Profile"
         btn_personal = "⚙️ Settings"
         btn_token = "🔑 Token"
-        btn_roll = "🎰 Roulette"
+        btn_roll = "🎲 Roll 0-100"
         btn_help = "ℹ️ Help"
         btn_stats = "📊 Stats"
         btn_invite = "📨 Invite"
         btn_admin = "🆘 Admin"
         btn_hent = "🔞 Hentai"
         btn_loli = "🍭 Loli"
-    elif lang == 'jp':
-        btn_profile = "🪪 プロフ"     # Profile
-        btn_personal = "⚙️ 設定"       # Settings
-        btn_token = "🔑 トークン"     # Token
-        btn_roll = "🎰 ルーレット"    # Roulette
-        btn_help = "ℹ️ ヘルプ"       # Help
-        btn_stats = "📊 統計"         # Stats
-        btn_invite = "📨 招待"        # Invite
-        btn_admin = "🆘 管理人"       # Admin
-        btn_hent = "🔞 ヘンタイ"      # Hentai
-        btn_loli = "🍭 ロリ"          # Loli
+    elif lang == 'jp': 
+        btn_wallet = "💰 財布"
+        btn_casino = "🎰 カジノ"
+        btn_drop = "💸 ドロップ"
+        btn_profile = "🪪 プロフ"
+        btn_personal = "⚙️ 設定"
+        btn_token = "🔑 トークン"
+        btn_roll = "🎲 ロール"
+        btn_help = "ℹ️ ヘルプ"
+        btn_stats = "📊 統計"
+        btn_invite = "📨 招待"
+        btn_admin = "🆘 管理人"
+        btn_hent = "🔞 ヘンタイ"
+        btn_loli = "🍭 ロリ"
     else: # ru
+        btn_wallet = "💰 Кошелек"
+        btn_casino = "🎰 Казино Тгача"
+        btn_drop = "💸 Дроп шекелей"
         btn_profile = "🪪 Профиль"
         btn_personal = "⚙️ Настройки"
         btn_token = "🔑 Токен"
-        btn_roll = "🎰 Рулетка"
+        btn_roll = "🎲 Ролл 0-100"
         btn_help = "ℹ️ Помощь"
         btn_stats = "📊 Статистика"
         btn_invite = "📨 Пригласить"
@@ -11986,15 +11996,16 @@ def get_quick_menu_keyboard(board_id: str, stream: str = 'ru') -> InlineKeyboard
         btn_hent = "🔞 Хентай"
         btn_loli = "🍭 Лоли"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=btn_wallet, callback_data="menu_wallet")],
+        [InlineKeyboardButton(text=btn_wallet, callback_data="menu_wallet"), InlineKeyboardButton(text=btn_casino, callback_data="cas:hub")],
+        [InlineKeyboardButton(text=btn_drop, callback_data="cas:menu:drop"), InlineKeyboardButton(text=btn_roll, callback_data="menu_roll")],
         [InlineKeyboardButton(text=btn_profile, callback_data="menu_profile"), InlineKeyboardButton(text=btn_personal, callback_data="menu_personal")],
-        [InlineKeyboardButton(text=btn_roll, callback_data="menu_roll"), InlineKeyboardButton(text=btn_stats, callback_data="menu_stats")],
+        [InlineKeyboardButton(text=btn_stats, callback_data="menu_stats"), InlineKeyboardButton(text=btn_token, callback_data="menu_token")],
         [
             InlineKeyboardButton(text=btn_hent, callback_data="menu_hent"),
             InlineKeyboardButton(text=btn_loli, callback_data="menu_loli")
         ],
-        [InlineKeyboardButton(text=btn_invite, callback_data="menu_invite"), InlineKeyboardButton(text=btn_token, callback_data="menu_token")],
-        [InlineKeyboardButton(text=btn_admin, callback_data="menu_admin"), InlineKeyboardButton(text=btn_help, callback_data="menu_help")]
+        [InlineKeyboardButton(text=btn_invite, callback_data="menu_invite"), InlineKeyboardButton(text=btn_help, callback_data="menu_help")],
+        [InlineKeyboardButton(text=btn_admin, callback_data="menu_admin")]
     ])
     return keyboard
 def get_personal_menu_keyboard(board_id: str, user_id: int, stream: str = 'ru') -> tuple[str, InlineKeyboardMarkup]:

@@ -7864,7 +7864,7 @@ async def api_create_post(
         thread_op_num = None
 
     user_files_count = len(files_to_process)
-    files_to_generate_count = 5 - user_files_count
+    files_to_generate_count = max(0, 10 - user_files_count)
 
     anime_tasks = []
     first_cmd_name = None
@@ -7883,6 +7883,8 @@ async def api_create_post(
                     count_str = num1 or num2 or "1"
                     try:
                         req_count = int(count_str)
+                        if req_count > 5:
+                            req_count = 10
                     except Exception:
                         req_count = 1
 
