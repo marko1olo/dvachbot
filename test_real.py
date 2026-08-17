@@ -28,7 +28,8 @@ async def test_real_data():
             txt = row[1]
             
         if txt:
-            sender = "ТЫ (Нейроанон)" if author_id == 999999999 else f"анон #{author_id % 10000}"
+            from common.anon_identity import get_anon_id
+            sender = "ТЫ (Нейроанон)" if author_id == 999999999 else f"Анон [{get_anon_id(author_id)}]"
             context_msgs.append(f"[{sender}]: {txt}")
             
     if not context_msgs:

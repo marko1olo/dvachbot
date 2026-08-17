@@ -53,6 +53,7 @@ from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, TelegramAPIError
+from common.anon_identity import get_anon_id
 
 from common.db_pool import get_pool, db_lock
 
@@ -315,7 +316,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
             await db.commit()
         try: await message.bot.send_message(user_id, "🚔 Твой вызов ОМОНа отменили! У жертвы была надета Шапочка из фольги, они не смогли её запеленговать.", parse_mode="HTML")
         except Exception: pass
-        try: await message.bot.send_message(target_id, f"👽 Анон <code>{user_id}</code> попытался вызвать на тебя Пативэн, но Шапочка из фольги скрыла твои координаты!", parse_mode="HTML")
+        try: await message.bot.send_message(target_id, f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался вызвать на тебя Пативэн, но Шапочка из фольги скрыла твои координаты!", parse_mode="HTML")
         except Exception: pass
         try: await message.delete()
         except Exception: pass
@@ -497,7 +498,7 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
             await db.commit()
         try: await message.bot.send_message(user_id, "🔪 Твоя заточка сломалась о Шапочку из фольги жертвы! Ограбление не удалось.", parse_mode="HTML")
         except Exception: pass
-        try: await message.bot.send_message(target_id, f"👽 Анон <code>{user_id}</code> попытался ограбить тебя, но твоя Шапочка из фольги спасла твои шекели!", parse_mode="HTML")
+        try: await message.bot.send_message(target_id, f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался ограбить тебя, но твоя Шапочка из фольги спасла твои шекели!", parse_mode="HTML")
         except Exception: pass
         try: await message.delete()
         except Exception: pass
@@ -532,9 +533,9 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
         except Exception: pass
         return
 
-    try: await message.bot.send_message(target_id, f"🔪 В подворотне тебя пырнул Анон <code>{user_id}</code> и отобрал <b>{stolen} Шекелей</b>!", parse_mode="HTML")
+    try: await message.bot.send_message(target_id, f"🔪 В подворотне тебя пырнул Анон <b>[{get_anon_id(user_id)}]</b> и отобрал <b>{stolen} Шекелей</b>!", parse_mode="HTML")
     except Exception: pass
-    try: await message.bot.send_message(user_id, f"🔪 Ограбление прошло успешно! Ты отжал у лоха <code>{target_id}</code> <b>{stolen} Шекелей</b>.", parse_mode="HTML")
+    try: await message.bot.send_message(user_id, f"🔪 Ограбление прошло успешно! Ты отжал у Анона <b>[{get_anon_id(target_id)}]</b> <b>{stolen} Шекелей</b>.", parse_mode="HTML")
     except Exception: pass
     try: await message.delete()
     except Exception: pass
@@ -578,7 +579,7 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
             await db.commit()
         try: await message.bot.send_message(user_id, "🚽 Твоё проклятие отскочило от Шапочки из фольги жертвы! Своё слабительное ты потратил впустую.", parse_mode="HTML")
         except Exception: pass
-        try: await message.bot.send_message(target_id, f"👽 Анон <code>{user_id}</code> попытался подсыпать тебе слабительное, но твоя Шапочка из фольги спасла твои штаны!", parse_mode="HTML")
+        try: await message.bot.send_message(target_id, f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался подсыпать тебе слабительное, но твоя Шапочка из фольги спасла твои штаны!", parse_mode="HTML")
         except Exception: pass
         try: await message.delete()
         except Exception: pass
@@ -598,7 +599,7 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
         
     try: await message.bot.send_message(target_id, "🚽 Тебе подсыпали слабительное! В течение 1 часа ты не сможешь писать посты длиннее 50 символов (не успеешь дописать и побежишь в туалет).", parse_mode="HTML")
     except Exception: pass
-    try: await message.bot.send_message(user_id, f"🚽 Ты успешно подсыпал слабительное анону <code>{target_id}</code>!", parse_mode="HTML")
+    try: await message.bot.send_message(user_id, f"🚽 Ты успешно подсыпал слабительное Анону <b>[{get_anon_id(target_id)}]</b>!", parse_mode="HTML")
     except Exception: pass
     try: await message.delete()
     except Exception: pass

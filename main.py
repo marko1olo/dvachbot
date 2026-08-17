@@ -15933,7 +15933,8 @@ async def cmd_get_id(message: types.Message, board_id: str | None, stream: str =
     try:
         user_chat_info = await message.bot.get_chat(target_id)
         info = info_header
-        info += f"ID: <code>{target_id}</code>\n"
+        info += f"Anon ID: <b>[{get_anon_id(target_id)}]</b>\n"
+        info += f"Telegram ID: <code>{target_id}</code>\n"
         if user_chat_info.first_name:
             name_lbl = "Name" if lang == 'en' else ("名前" if lang == 'jp' else "Имя")
             info += f"{name_lbl}: {escape_html(user_chat_info.first_name)}\n"
