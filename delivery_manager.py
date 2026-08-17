@@ -85,16 +85,51 @@ def _board_queue_oldest_age_sec(board_id: str | None) -> float:
     return max(0.0, oldest)
 
 
+def _normalize_storage_timestamp(val) -> float:
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, datetime):
+        if val.tzinfo is None:
+            val = val.replace(tzinfo=timezone.utc)
+        return val.timestamp()
+    if isinstance(val, str):
+        try:
+            return float(val)
+        except ValueError:
+            try:
+                dt = datetime.fromisoformat(val)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
+            except Exception:
+                return 0.0
+    return 0.0
+
+
 async def get_board_activity_last_hours(board_id: str, hours: int = 2) -> float:
-    if hours <= 0: return 0.0
-    time_threshold = datetime.now(UTC) - timedelta(hours=hours)
+    if hours <= 0:
+        return 0.0
+    threshold_ts = time.time() - (float(hours) * 3600.0)
     post_count = 0
+    consecutive_old = 0
     async with storage_lock:
         for post_data in reversed(messages_storage.values()):
-            if post_data.get("timestamp") < time_threshold: break
+            if not isinstance(post_data, dict):
+                continue
+            ts = _normalize_storage_timestamp(post_data.get("timestamp"))
+            if ts > 0:
+                if ts < threshold_ts:
+                    consecutive_old += 1
+                    if consecutive_old >= 5:
+                        break
+                    continue
+                else:
+                    consecutive_old = 0
             if post_data.get("board_id") == board_id:
                 post_count += 1
-    return post_count / hours
+    return float(post_count) / float(hours)
 
 import asyncio
 import json
