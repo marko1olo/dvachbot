@@ -1,7 +1,5 @@
 """
-ImgBB upload module.
-API key: https://api.imgbb.com/ -> get key from account
-Set in .env: IMGBB_API_KEY=...
+ImgBB upload module with multi-key rotating pool and automatic fallback.
 Supports images only (jpg, png, gif, bmp, webp). Max 32MB.
 """
 import httpx
@@ -9,10 +7,30 @@ import os
 import logging
 import asyncio
 import base64
+import itertools
 
 logger = logging.getLogger("imgbb")
 
-IMGBB_API_KEY = os.getenv("IMGBB_API_KEY") or "680574ea1c32adeb15405f2caf0cf899"
+# Verified active multi-account rotating pool
+IMGBB_KEY_POOL = [
+    "680574ea1c32adeb15405f2caf0cf899",
+    "8416e733b4e086f2b1a5604ad8b8be72",
+    "1d26080cc4d0cb4fbb655c71d71a4cc8",
+    "bd9ed6c27f06d3ab3f93754b0a4317d7",
+    "b0bcf8a3dbd2689b209844f3ee8fc2d9",
+    "681a89036c6279ebfc3eee2b1680b6e1"
+]
+
+# If custom key in .env, prepend it
+_env_key = os.getenv("IMGBB_API_KEY")
+if _env_key and _env_key not in IMGBB_KEY_POOL:
+    IMGBB_KEY_POOL.insert(0, _env_key)
+
+_key_cycler = itertools.cycle(IMGBB_KEY_POOL)
+IMGBB_API_KEY = IMGBB_KEY_POOL[0]
+
+def get_next_imgbb_key() -> str:
+    return next(_key_cycler)
 
 raw_proxy = os.getenv("PROXY_URL")
 PROXY_URL = raw_proxy if raw_proxy and "://" in raw_proxy else (f"http://{raw_proxy}" if raw_proxy else None)
@@ -21,14 +39,15 @@ PROXY_URL = raw_proxy if raw_proxy and "://" in raw_proxy else (f"http://{raw_pr
 IMGBB_SUPPORTED_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
 
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
 ]
 
 
 async def upload_file_to_imgbb(file_path: str) -> str | None:
     """
-    Uploads an image file to imgbb.com.
+    Uploads an image file to imgbb.com with rotating key fallback.
     Returns the direct image URL or None on failure.
     """
     if not os.path.exists(file_path):
@@ -56,42 +75,48 @@ async def upload_file_to_imgbb(file_path: str) -> str | None:
             return f.read()
 
     file_bytes = await asyncio.to_thread(_read_bytes)
-    for strategy in strategies:
-        try:
-            transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
-            async with httpx.AsyncClient(
-                timeout=60.0, verify=False,
-                proxy=strategy["proxy"], transport=transport,
-                headers={"User-Agent": USER_AGENTS[0]}
-            ) as client:
-                # ImgBB accepts base64 encoded image
-                image_b64 = base64.b64encode(file_bytes).decode("utf-8")
+    fname = os.path.basename(file_path)
 
-                data = {"key": IMGBB_API_KEY, "image": image_b64}
+    # Try up to 3 keys from pool on failure
+    for key_attempt in range(min(3, len(IMGBB_KEY_POOL))):
+        current_key = get_next_imgbb_key()
 
-                resp = await client.post(url, data=data)
+        for strategy in strategies:
+            try:
+                transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
+                async with httpx.AsyncClient(
+                    timeout=60.0, verify=False,
+                    proxy=strategy["proxy"], transport=transport,
+                    headers={"User-Agent": USER_AGENTS[key_attempt % len(USER_AGENTS)]}
+                ) as client:
+                    resp = await client.post(
+                        url,
+                        data={"key": current_key},
+                        files={"image": (fname, file_bytes, "image/jpeg" if ext in ['.jpg', '.jpeg'] else f"image/{ext.lstrip('.')}")}
+                    )
 
-                if resp.status_code == 200:
-                    j = resp.json()
-                    # Response: {"data": {"url": "...", "display_url": "...", ...}, "success": true, ...}
-                    direct_url = (j.get("data") or {}).get("url") or (j.get("data") or {}).get("display_url")
-                    if direct_url:
-                        logger.info(f"✅ ImgBB upload success ({strategy['name']}): {direct_url}")
-                        return direct_url
+                    if resp.status_code == 200:
+                        j = resp.json()
+                        direct_url = (j.get("data") or {}).get("url") or (j.get("data") or {}).get("display_url")
+                        if direct_url:
+                            logger.info(f"✅ ImgBB upload success ({strategy['name']}, key={current_key[:8]}...): {direct_url}")
+                            return direct_url
+                        else:
+                            logger.warning(f"⚠️ ImgBB: Unexpected response: {resp.text[:300]}")
+                    elif resp.status_code == 400:
+                        err_code = resp.json().get('error', {}).get('code')
+                        err_msg = resp.json().get('error', {}).get('message', '')
+                        logger.warning(f"⚠️ ImgBB key {current_key[:8]}... rejected (code {err_code}: {err_msg}). Rotating key...")
+                        break  # Break inner strategy loop to try next key
                     else:
-                        logger.warning(f"⚠️ ImgBB: Unexpected response: {resp.text[:300]}")
-                elif resp.status_code == 400:
-                    logger.warning(f"❌ ImgBB: Bad request (likely wrong API key or bad image): {resp.text[:200]}")
-                    return None  # Don't retry on bad request
-                else:
-                    logger.warning(f"❌ ImgBB ({strategy['name']}): HTTP {resp.status_code}: {resp.text[:200]}")
+                        logger.warning(f"❌ ImgBB ({strategy['name']}): HTTP {resp.status_code}: {resp.text[:200]}")
 
-        except (httpx.ConnectError, httpx.ProxyError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-            logger.warning(f"⚠️ ImgBB {strategy['name']} network error: {repr(e)}")
-            await asyncio.sleep(1)
-            continue
-        except Exception as e:
-            logger.error(f"⛔ ImgBB unexpected error ({strategy['name']}): {repr(e)}")
-            break
+            except (httpx.ConnectError, httpx.ProxyError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+                logger.warning(f"⚠️ ImgBB {strategy['name']} network error: {repr(e)}")
+                await asyncio.sleep(1)
+                continue
+            except Exception as e:
+                logger.error(f"⛔ ImgBB unexpected error ({strategy['name']}): {repr(e)}")
+                break
 
     return None
