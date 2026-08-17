@@ -2173,13 +2173,13 @@ def _get_author_name(post: dict, content: dict, board_id: str, lang: str | None)
             lang = 'en' if board_id == 'int' else 'ru'
         author_id = post.get('author_id')
         if author_id and author_id != 0:
-            suffix = str(author_id)[-4:]
+            aid = get_anon_id(author_id, stream=lang)
             if lang == 'en':
-                name = f"Anon #{suffix}"
+                name = f"Anon [{aid}]"
             elif lang == 'jp':
-                name = f"名無し #{suffix}"
+                name = f"名無し [{aid}]"
             else:
-                name = f"Анон #{suffix}"
+                name = f"Анон [{aid}]"
         else:
             if lang == 'en':
                 name = "Anon"
@@ -6782,13 +6782,13 @@ def _generate_passport_text(ctx: PassportContext) -> str:
     elif ctx.board_id == 'sex': flag = "🍆"
     if ctx.lang == 'en':
         labels = ["TGACH PASSPORT", "ID", "Rank", "Role", "Posts", "Diagnosis", "Inventory", "Kompromat", "Social Credit"]
-        anon_tag = f"Anon-{ctx.user_id % 10000:04d}"
+        anon_tag = f"[{get_anon_id(ctx.user_id, 'en')}]"
     elif ctx.lang == 'jp':
         labels = ["TGちゃんパスポート", "ID", "ランク", "役割", "レス数", "診断", "持ち物", "秘密", "社会的信用"]
-        anon_tag = f"アノン-{ctx.user_id % 10000:04d}"
+        anon_tag = f"[{get_anon_id(ctx.user_id, 'ru')}]"
     else:
         labels = ["ПАСПОРТ ТГАЧЕРА", "ID", "Ранг", "Роль", "Постов", "Диагноз", "Инвентарь", "Компромат", "Соц. рейтинг"]
-        anon_tag = f"Анон-{ctx.user_id % 10000:04d}"
+        anon_tag = f"[{get_anon_id(ctx.user_id, 'ru')}]"
 
     prefix_line = f"👑 <b>Титул:</b> {ctx.custom_prefix}\n" if ctx.custom_prefix else ""
     return (

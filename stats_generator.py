@@ -1,3 +1,4 @@
+from common.anon_identity import generate_anon_name
 import os
 import sqlite3
 import contextlib
@@ -100,11 +101,7 @@ NICK_PREFIXES = ["Базированный", "Всратый", "Мамкин", "
 NICK_SUFFIXES = ["Битард", "Скуф", "Шиз", "Анон", "Ньюфаг", "Олдфаг", "Омеган", "Шитпостер", "Сыч", "Двачер", "Чухан", "Куколд", "Нормис", "Гигачад", "Подпивас", "Зумер", "Бумер", "Сояк", "Инцел", "Думер", "Говноед", "Симп", "Чмоня", "Байтер", "Ноулайфер", "Тролль", "Моралфаг", "Альтушка", "Масик", "Школьник", "Дед", "Хиккан", "Скуфидон", "Терпила", "Вахтер", "Тентакль", "Мыслитель", "Философ", "Дворник", "Эрудит", "Чел"]
 
 def generate_schizo_name(user_id: int) -> str:
-    if not user_id: return "Анонимус"
-    rng = random.Random(user_id)
-    prefix = rng.choice(NICK_PREFIXES)
-    suffix = rng.choice(NICK_SUFFIXES)
-    return f"{prefix}-{suffix} (#{str(user_id)[-4:]})"
+    return generate_anon_name(user_id)
 
 def save_chart(images: list, filename: str, bbox_inches=None):
     buf = io.BytesIO()

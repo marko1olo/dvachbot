@@ -1,3 +1,4 @@
+from common.anon_identity import get_anon_id
 import asyncio
 from aiogram import Bot
 from shared_state import *
@@ -327,13 +328,13 @@ def _get_author_name(post: dict, content: dict, board_id: str, lang: str | None)
             lang = 'en' if board_id == 'int' else 'ru'
         author_id = post.get('author_id')
         if author_id and author_id != 0:
-            suffix = str(author_id)[-4:]
+            aid = get_anon_id(author_id, stream=lang)
             if lang == 'en':
-                name = f"Anon #{suffix}"
+                name = f"Anon [{aid}]"
             elif lang == 'jp':
-                name = f"名無し #{suffix}"
+                name = f"名無し [{aid}]"
             else:
-                name = f"Анон #{suffix}"
+                name = f"Анон [{aid}]"
         else:
             if lang == 'en':
                 name = "Anon"
