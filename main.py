@@ -1637,6 +1637,18 @@ async def _handle_telegram_forbidden_error(update) -> None:
 
 async def _handle_telegram_bad_request(exception: Exception, update) -> None:
     err_msg = str(exception).lower()
+
+    # Silently ignore harmless, expected Telegram errors (expired queries from restarts, unmodified text, deleted messages)
+    if (
+        "query is too old" in err_msg
+        or "query_id_invalid" in err_msg
+        or "query id is invalid" in err_msg
+        or "message is not modified" in err_msg
+        or "message to delete not found" in err_msg
+        or "message can't be deleted" in err_msg
+    ):
+        return
+
     print(f"⚠️ TelegramBadRequest: {exception}")
 
     # Try to notify the user with a safe plain-text fallback
@@ -1652,12 +1664,8 @@ async def _handle_telegram_bad_request(exception: Exception, update) -> None:
                 await chat_obj.answer("⚠️ Ошибка форматирования ответа. Попробуй ещё раз.", parse_mode=None)
             elif "message is too long" in err_msg:
                 await chat_obj.answer("⚠️ Ответ слишком длинный. Попробуй более узкий запрос.", parse_mode=None)
-            elif "query is too old" in err_msg or "query_id_invalid" in err_msg:
-                pass  # Callback expired, nothing to do
-            elif "message is not modified" in err_msg:
-                pass  # Harmless, user already sees the correct text
             else:
-                await chat_obj.answer("⚠️ Телега послала нахуй твой запрос. Пробуй снова.", parse_mode=None)
+                await chat_obj.answer("⚠️ Телега отклонила запрос. Пробуй снова.", parse_mode=None)
         except Exception:
             pass
 
