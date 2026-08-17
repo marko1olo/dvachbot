@@ -211,8 +211,9 @@ async def send_banner_message(
     """
     fname, photo_payload = get_banner_file(category=category, banner_name=banner_name, user_id=chat_id)
     
-    if not photo_payload:
-        # No banners found, send text
+    # Telegram photo captions are limited to 1024 characters.
+    # If the text exceeds 1024 chars, directly send as a standard text message (supports up to 4096 chars).
+    if not photo_payload or len(caption) > 1024:
         return await bot.send_message(
             chat_id=chat_id,
             text=caption,
@@ -238,7 +239,11 @@ async def send_banner_message(
             
         return msg
     except Exception as e:
-        logger.warning(f"[banner_manager] send_photo failed for {fname}, falling back to text: {e}")
+        err_text = str(e).lower()
+        if "caption is too long" in err_text or "caption_too_long" in err_text:
+            logger.info(f"[banner_manager] Caption exceeds 1024 chars for {fname}, sending as text message.")
+        else:
+            logger.warning(f"[banner_manager] send_photo failed for {fname}, falling back to text: {e}")
         try:
             return await bot.send_message(
                 chat_id=chat_id,
