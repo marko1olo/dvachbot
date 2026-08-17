@@ -4255,13 +4255,8 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
     t_items = await _get_user_active_items(db, target_id, board_id)
     current_time = int(time.time())
     
-    async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
-        row = await c.fetchone()
-        t_balance = row[0] if row and row[0] else 0
-        
-    async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-        row = await c.fetchone()
-        u_balance = row[0] if row and row[0] else 0
+    t_balance = await get_user_global_balance(db, target_id)
+    u_balance = await get_user_global_balance(db, user_id)
 
     pct = random.uniform(0.1, 0.3)
     
@@ -4278,10 +4273,12 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         # Фольга защищает
         loss = min(int(u_balance * pct), 1000)
         async with db_lock:
+            if loss > 0:
+                await deduct_user_global_balance(db, user_id, board_id, loss)
             await db.execute(
-                "INSERT INTO Users (user_id, board_id, balance, active_items) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?, active_items = excluded.active_items",
-                (user_id, board_id, -loss, json.dumps(active_items), loss)
+                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                (user_id, board_id, json.dumps(active_items))
             )
             await db.commit()
         tinfoil_text = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss}</code> шекелей!"
@@ -4296,21 +4293,16 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         return
 
     async with db_lock:
-        cursor = await db.execute(
-            "UPDATE Users SET balance = balance - ? "
-            "WHERE user_id = ? AND board_id = ? AND balance >= ?",
-            (stolen, target_id, board_id, stolen)
-        )
-        rowcount = getattr(cursor, "rowcount", None)
-        robbed = (rowcount == 1) if isinstance(rowcount, int) else True
+        ok, _ = await deduct_user_global_balance(db, target_id, board_id, stolen)
+        if ok:
+            await add_user_global_balance(db, user_id, board_id, stolen)
         await db.execute(
-            "INSERT INTO Users (user_id, board_id, balance, active_items) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?, active_items = excluded.active_items",
-            (user_id, board_id, stolen if robbed else 0, json.dumps(active_items),
-             stolen if robbed else 0)
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (user_id, board_id, json.dumps(active_items))
         )
         await db.commit()
-    if not robbed:
+    if not ok:
         await message.answer(
             "🔪 Пока ты замахивался, у жертвы кончились шекели. Заточка сломалась впустую.",
             parse_mode="HTML")

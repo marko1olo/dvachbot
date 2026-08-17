@@ -57,9 +57,12 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
                 loser_id  = challenger_id if winner_id == user_id else user_id
                 
                 # Атомарное списание у проигравшего и начисление победителю
-                await deduct_user_global_balance(db, loser_id, board_id, amount)
-                await add_user_global_balance(db, winner_id, board_id, amount)
-                await db.commit()
+                ok, _ = await deduct_user_global_balance(db, loser_id, board_id, amount)
+                if ok:
+                    await add_user_global_balance(db, winner_id, board_id, amount)
+                    await db.commit()
+                else:
+                    reject_msg = "❌ У одного из участников изменился баланс во время принятия дуэли."
 
     if reject_msg is not None:
         await message.answer(reject_msg)

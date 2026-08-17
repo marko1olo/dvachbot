@@ -228,14 +228,18 @@ async def _process_single_task(task):
                     else:
                         logger.warning(f"⚠️ MTProto failed for {file_id[:10]}. Trying HTTP Fallback...")
                     try:
-                        # Получаем путь, если его нет (или если первый запрос упал)
+                        # Получаем путь, если его нет
                         if file_info is None:
-                            file_info = await bot.get_file(fresh_file_id)
-                        
+                            try:
+                                file_info = await bot.get_file(fresh_file_id)
+                            except Exception as gf_err:
+                                logger.warning(f"⚠️ HTTP Fallback bot.get_file failed for {file_id[:10]}: {gf_err}")
+                                file_info = None
+
                         file_path = getattr(file_info, "file_path", None) if file_info else None
                         if file_path:
                             dl_url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
-                            
+
                             transport = httpx.AsyncHTTPTransport(local_address="0.0.0.0", retries=2)
                             async with httpx.AsyncClient(timeout=60.0, verify=False, transport=transport) as client:
                                 async with client.stream("GET", dl_url) as r:
@@ -248,12 +252,12 @@ async def _process_single_task(task):
                                             download_success = False
                                             logger.warning(f"⚠️ HTTP Download received 0 bytes for {file_id[:10]}")
                                     else:
-                                        logger.error(f"❌ HTTP Download failed: {r.status_code}")
+                                        logger.warning(f"⚠️ HTTP Download returned status {r.status_code} for {file_id[:10]}")
                         else:
-                             logger.error("❌ HTTP Fallback failed: Could not get file_path")
+                            logger.warning(f"⚠️ HTTP Fallback skipped for {file_id[:10]}: no file_path available")
 
                     except Exception as e:
-                        logger.error(f"❌ HTTP Fallback crashed: {e}", exc_info=True)
+                        logger.warning(f"⚠️ HTTP Fallback error for {file_id[:10]}: {e}")
 
                 # 3. Загрузка (если скачали)
                 if download_success:

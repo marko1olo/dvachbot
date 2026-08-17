@@ -8327,6 +8327,8 @@ async def postcopies_daily_cleanup_loop():
             await asyncio.sleep(3600)
 
 
+import math
+
 async def get_user_global_balance(db, user_id: int) -> float:
     """
     Возвращает единый глобальный баланс пользователя со всех досок.
@@ -8341,6 +8343,8 @@ async def add_user_global_balance(db, user_id: int, board_id: str | None, amount
     Атомарно начисляет шекели на запись пользователя текущей доски (или создает её).
     Возвращает новый единый глобальный баланс.
     """
+    if not isinstance(amount, (int, float)) or math.isnan(amount) or math.isinf(amount) or amount <= 0:
+        return await get_user_global_balance(db, user_id)
     b_id = board_id or "b"
     await db.execute(
         "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
@@ -8356,9 +8360,14 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
     Сначала списывает с текущей доски, а если не хватает — остаток списывает с других досок.
     Возвращает (успех, новый_глобальный_баланс).
     """
+    if not isinstance(amount, (int, float)) or math.isnan(amount) or math.isinf(amount) or amount < 0:
+        return False, await get_user_global_balance(db, user_id)
+    if amount == 0:
+        return True, await get_user_global_balance(db, user_id)
+
     b_id = board_id or "b"
     total = await get_user_global_balance(db, user_id)
-    if total < amount or amount < 0:
+    if total < amount:
         return False, total
 
     async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, b_id)) as c:
@@ -8366,10 +8375,14 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
         curr_bal = float(row[0] or 0.0) if row and row[0] is not None else 0.0
 
     if curr_bal >= amount:
-        await db.execute(
-            "UPDATE Users SET balance = MAX(0.0, balance - ?) WHERE user_id = ? AND board_id = ?",
-            (amount, user_id, b_id)
+        cursor = await db.execute(
+            "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ? AND balance >= ?",
+            (amount, user_id, b_id, amount)
         )
+        rowcount = getattr(cursor, "rowcount", None)
+        if rowcount == 0:
+            total = await get_user_global_balance(db, user_id)
+            return False, total
     else:
         if curr_bal > 0:
             await db.execute(
@@ -8386,7 +8399,7 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
             if remaining <= 0:
                 break
             to_sub = min(float(bal or 0.0), remaining)
-            await db.execute("UPDATE Users SET balance = MAX(0.0, balance - ?) WHERE rowid = ?", (to_sub, rowid))
+            await db.execute("UPDATE Users SET balance = MAX(0.0, balance - ?) WHERE rowid = ? AND balance >= ?", (to_sub, rowid, to_sub))
             remaining -= to_sub
 
     new_total = await get_user_global_balance(db, user_id)
