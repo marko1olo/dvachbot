@@ -107,6 +107,9 @@ from common.chart_lock import ChartLockTimeout, matplotlib_guard
 from common.html_utils import escape_html, convert_site_tags_to_telegram
 from common.token_generator import generate_unique_token
 from common.database import (
+    get_user_global_balance,
+    add_user_global_balance,
+    deduct_user_global_balance,
     initialize_database, is_database_migrated, load_state_from_db, get_and_clear_reaction_queue, get_post_by_num, get_stream_active_users, 
     update_board_settings, add_or_activate_user, update_user_status, get_and_clear_broadcast_queue, mark_broadcast_posts_sent,
     create_post, update_shadow_mute, create_thread, update_user_location, get_op_posts_for_board, get_thread_by_op_post, add_channel_copy, get_all_channel_copies,
@@ -3847,11 +3850,10 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     err_msg = None
     msg = ""
     async with db_lock:
-        async with db.execute("SELECT balance, active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+        balance = await get_user_global_balance(db, user_id)
+        async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
             row = await c.fetchone()
-        
-        balance = row[0] if row and row[0] is not None else 0
-        active_items_str = row[1] if row and len(row) > 1 and row[1] else "{}"
+        active_items_str = row[0] if row and len(row) > 0 and row[0] else "{}"
         
         if balance < price:
             err_msg = f"❌ Не хватает бабок! Нужно {price} Шекелей, у тебя {int(balance)} Шекелей."
@@ -4006,10 +4008,11 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
                     )
 
             if not err_msg:
-                # Списываем баланс
+                # Списываем глобальный баланс
+                ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, price)
                 await db.execute(
-                    "UPDATE Users SET balance = balance - ?, active_items = ? WHERE user_id = ? AND board_id = ?",
-                    (price, json.dumps(active_items), user_id, board_id)
+                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (json.dumps(active_items), user_id, board_id)
                 )
                 await db.commit()
 
@@ -4893,14 +4896,13 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
     db = await get_pool()
 
     # active_items хранит daily_last_claim (unix timestamp)
+    balance = await get_user_global_balance(db, user_id)
     async with db.execute(
-        "SELECT active_items, SUM(balance) FROM Users WHERE user_id = ? AND board_id = ?",
+        "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?",
         (user_id, board_id)
     ) as c:
         row = await c.fetchone()
-
-    ai_str  = (row[0] if row and row[0] else "{}") if row else "{}"
-    balance = (row[1] if row and row[1] else 0) if row else 0
+    ai_str = (row[0] if row and row[0] else "{}") if row else "{}"
     try:
         ai = json.loads(ai_str)
     except Exception:
@@ -4935,9 +4937,10 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
     total_bonus  = bonus + streak_bonus
 
     async with db_lock:
+        await add_user_global_balance(db, user_id, board_id, total_bonus)
         await db.execute(
-            "UPDATE Users SET balance = balance + ?, active_items = ? WHERE user_id = ? AND board_id = ?",
-            (total_bonus, json.dumps(ai), user_id, board_id)
+            "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+            (json.dumps(ai), user_id, board_id)
         )
         await db.commit()
 
@@ -5146,9 +5149,7 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
     # Проверяем баланс под локом; ответ юзеру — уже без него, db_lock
     # сериализует весь доступ к базе в процессе.
     async with db_lock:
-        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            bal = row[0] if row and row[0] is not None else 0
+        bal = await get_user_global_balance(db, user_id)
     if bal < amount:
         await message.answer(f"❌ Не хватает бабок. Ставка {amount} RUB, у тебя {int(bal)} RUB.")
         return
@@ -5606,11 +5607,10 @@ WORK_VACANCIES = {
 
 async def _build_work_card(user_id: int, board_id: str):
     db = await get_pool()
-    async with db.execute("SELECT balance, active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+    balance = await get_user_global_balance(db, user_id)
+    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
         row = await c.fetchone()
-    
-    balance = row[0] if row and row[0] is not None else 0
-    ai_str = row[1] if row and len(row) > 1 and row[1] else "{}"
+    ai_str = row[0] if row and len(row) > 0 and row[0] else "{}"
     try:
         items = json.loads(ai_str)
     except Exception:
@@ -5692,11 +5692,10 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
     ans_text = None
     is_cd = False
     async with db_lock:
-        async with db.execute("SELECT balance, active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+        balance = await get_user_global_balance(db, user_id)
+        async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
             row = await c.fetchone()
-
-        balance = row[0] if row and row[0] is not None else 0
-        ai_str = row[1] if row and len(row) > 1 and row[1] else "{}"
+        ai_str = row[0] if row and len(row) > 0 and row[0] else "{}"
         try:
             items = json.loads(ai_str)
         except Exception:
@@ -5716,18 +5715,20 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
             if is_fail:
                 penalty = job.get("penalty", 30)
                 work_timers[job_id] = now
+                await deduct_user_global_balance(db, user_id, board_id, penalty)
                 await db.execute(
-                    "UPDATE Users SET balance = MAX(0.0, balance - ?), active_items = ? WHERE user_id = ? AND board_id = ?",
-                    (penalty, json.dumps(items), user_id, board_id)
+                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (json.dumps(items), user_id, board_id)
                 )
                 await db.commit()
                 ans_text = f"🚨 Попался модерации! Штраф -{penalty} RUB"
             else:
                 reward = random.randint(job["reward_range"][0], job["reward_range"][1])
                 work_timers[job_id] = now
+                await add_user_global_balance(db, user_id, board_id, reward)
                 await db.execute(
-                    "UPDATE Users SET balance = balance + ?, active_items = ? WHERE user_id = ? AND board_id = ?",
-                    (reward, json.dumps(items), user_id, board_id)
+                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (json.dumps(items), user_id, board_id)
                 )
                 await db.commit()
                 ans_text = f"✅ Успешно! +{reward} RUB"
@@ -5766,10 +5767,10 @@ async def cb_economy_daily(callback: types.CallbackQuery, board_id: str | None):
     user_id = callback.from_user.id
     import time, json
     db = await get_pool()
-    async with db.execute("SELECT active_items, SUM(balance) FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+    balance = await get_user_global_balance(db, user_id)
+    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
         row = await c.fetchone()
     ai_str = (row[0] if row and row[0] else "{}") if row else "{}"
-    balance = (row[1] if row and row[1] else 0) if row else 0
     try: ai = json.loads(ai_str)
     except Exception: ai = {}
 
@@ -5791,9 +5792,10 @@ async def cb_economy_daily(callback: types.CallbackQuery, board_id: str | None):
     streak_bonus = min(streak - 1, 7) * 10
     total_bonus = bonus + streak_bonus
     async with db_lock:
+        await add_user_global_balance(db, user_id, board_id, total_bonus)
         await db.execute(
-            "UPDATE Users SET balance = balance + ?, active_items = ? WHERE user_id = ? AND board_id = ?",
-            (total_bonus, json.dumps(ai), user_id, board_id)
+            "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+            (json.dumps(ai), user_id, board_id)
         )
         await db.commit()
     await callback.answer(f"✅ Получено +{total_bonus} ₪! Баланс: {int(balance + total_bonus)} ₪", show_alert=True)
@@ -5934,9 +5936,7 @@ async def cmd_money_drop(message: types.Message, board_id: str | None, stream: s
     db = await get_pool()
 
     async with db_lock:
-        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            balance = row[0] if row and row[0] is not None else 0
+        balance = await get_user_global_balance(db, user_id)
 
     if len(parts) > 1:
         raw_arg = parts[1].lower()
@@ -6097,9 +6097,7 @@ async def cmd_casino_hub(message: types.Message, board_id: str | None, stream: s
     user_id = message.from_user.id
     db = await get_pool()
     async with db_lock:
-        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            balance = row[0] if row and row[0] is not None else 0
+        balance = await get_user_global_balance(db, user_id)
 
     kb = casino_engine.get_casino_hub_keyboard()
     caption = (
@@ -6137,9 +6135,7 @@ async def cmd_slots(message: types.Message, board_id: str | None, stream: str = 
 async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int):
     db = await get_pool()
     async with db_lock:
-        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            balance = row[0] if row and row[0] is not None else 0
+        balance = await get_user_global_balance(db, user_id)
 
         if balance < bet:
             from banner_manager import send_banner_message
@@ -6156,15 +6152,11 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
         win_amt = int(bet * mult)
         net_change = win_amt - bet
 
-        await db.execute(
-            "UPDATE Users SET balance = MAX(0, balance + ?) WHERE user_id = ? AND board_id = ?",
-            (net_change, user_id, board_id)
-        )
+        if net_change >= 0:
+            new_balance = await add_user_global_balance(db, user_id, board_id, net_change)
+        else:
+            ok, new_balance = await deduct_user_global_balance(db, user_id, board_id, abs(net_change))
         await db.commit()
-
-        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            new_balance = row[0] if row and row[0] is not None else 0
 
     kb = casino_engine.get_slots_keyboard(bet)
     reel_display = f"║  {reels[0]}  │  {reels[1]}  │  {reels[2]}  ║"
@@ -6214,9 +6206,7 @@ async def cmd_coinflip(message: types.Message, board_id: str | None, stream: str
 async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str):
     db = await get_pool()
     async with db_lock:
-        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            balance = row[0] if row and row[0] is not None else 0
+        balance = await get_user_global_balance(db, user_id)
 
         if balance < bet:
             from banner_manager import send_banner_message
@@ -6233,15 +6223,11 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
         win_amt = int(bet * mult)
         net_change = win_amt - bet
 
-        await db.execute(
-            "UPDATE Users SET balance = MAX(0, balance + ?) WHERE user_id = ? AND board_id = ?",
-            (net_change, user_id, board_id)
-        )
+        if net_change >= 0:
+            new_balance = await add_user_global_balance(db, user_id, board_id, net_change)
+        else:
+            ok, new_balance = await deduct_user_global_balance(db, user_id, board_id, abs(net_change))
         await db.commit()
-
-        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            new_balance = row[0] if row and row[0] is not None else 0
 
     kb = casino_engine.get_coinflip_keyboard(bet)
     chosen_label = "🦅 ОРЕЛ" if chosen_side in ["heads", "орел", "орёл", "eagle", "h"] else "👑 РЕШКА"
@@ -6279,11 +6265,9 @@ async def cmd_blackjack(message: types.Message, board_id: str | None, stream: st
 async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, bet: int):
     db = await get_pool()
     async with db_lock:
-        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            balance = row[0] if row and row[0] is not None else 0
-
-        if balance < bet:
+        ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, bet)
+        if not ok:
+            balance = await get_user_global_balance(db, user_id)
             from banner_manager import send_banner_message
             await send_banner_message(
                 bot=bot,
@@ -6293,12 +6277,6 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
                 parse_mode="HTML"
             )
             return
-
-        # Deduct initial bet
-        await db.execute(
-            "UPDATE Users SET balance = MAX(0, balance - ?) WHERE user_id = ? AND board_id = ?",
-            (bet, user_id, board_id)
-        )
         await db.commit()
 
     deck = casino_engine.create_deck()
@@ -6313,11 +6291,8 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
         payout = int(bet * 2.5) if dealer_score != 21 else bet
         
         async with db_lock:
-            await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (payout, user_id, board_id))
+            new_bal = await add_user_global_balance(db, user_id, board_id, payout)
             await db.commit()
-            async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-                row = await c.fetchone()
-                new_bal = row[0] if row else 0
 
         caption = (
             f"🃏 <b>БЛЭКДЖЕК: НАТУРАЛЬНЫЕ 21! 🔥</b>\n\n"
@@ -6372,11 +6347,9 @@ async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_
     if not session:
         # First shot: deduct initial bet
         async with db_lock:
-            async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-                row = await c.fetchone()
-                balance = row[0] if row and row[0] is not None else 0
-
-            if balance < bet:
+            ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, bet)
+            if not ok:
+                balance = await get_user_global_balance(db, user_id)
                 from banner_manager import send_banner_message
                 await send_banner_message(
                     bot=bot,
@@ -6386,17 +6359,13 @@ async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_
                     parse_mode="HTML"
                 )
                 return
-
-            await db.execute("UPDATE Users SET balance = MAX(0, balance - ?) WHERE user_id = ? AND board_id = ?", (bet, user_id, board_id))
             await db.commit()
 
     survived, mult, streak, status = casino_engine.play_russian_roulette_shot(user_id, bet)
 
     if not survived:
         async with db_lock:
-            async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-                row = await c.fetchone()
-                new_bal = row[0] if row else 0
+            new_bal = await get_user_global_balance(db, user_id)
 
         caption = (
             f"💀 <b>РУССКАЯ РУЛЕТКА: САМОСТРЕЛ</b>\n\n"
@@ -6503,9 +6472,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 # Bust
                 casino_engine.active_bj_sessions.pop(user_id, None)
                 async with db_lock:
-                    async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-                        row = await c.fetchone()
-                        new_bal = row[0] if row else 0
+                    new_bal = await get_user_global_balance(db, user_id)
 
                 caption = (
                     f"🃏 <b>БЛЭКДЖЕК: ПЕРЕБОР! 💥</b>\n\n"
@@ -6540,13 +6507,10 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             if action == "double":
                 # Check balance for double
                 async with db_lock:
-                    async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-                        row = await c.fetchone()
-                        bal = row[0] if row and row[0] is not None else 0
-                    if bal < bet:
+                    ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, bet)
+                    if not ok:
                         await callback.answer("❌ Недостаточно средств для дабла!", show_alert=True)
                         return
-                    await db.execute("UPDATE Users SET balance = MAX(0, balance - ?) WHERE user_id = ? AND board_id = ?", (bet, user_id, board_id))
                     await db.commit()
                 bet *= 2
                 session["bet"] = bet
@@ -6558,9 +6522,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             if p_score > 21:
                 # Double bust
                 async with db_lock:
-                    async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-                        row = await c.fetchone()
-                        new_bal = row[0] if row else 0
+                    new_bal = await get_user_global_balance(db, user_id)
                 caption = (
                     f"🃏 <b>БЛЭКДЖЕК: ПЕРЕБОР НА ДАБЛЕ! 💥</b>\n\n"
                     f"👤 Твоя рука: {casino_engine.format_hand(p_hand)} (<b>{p_score}</b>)\n"
@@ -6619,11 +6581,8 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             casino_engine.active_bj_sessions.pop(user_id, None)
             refund = bet // 2
             async with db_lock:
-                await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (refund, user_id, board_id))
+                new_bal = await add_user_global_balance(db, user_id, board_id, refund)
                 await db.commit()
-                async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-                    row = await c.fetchone()
-                    new_bal = row[0] if row else 0
             caption = (
                 f"🏳️ <b>БЛЭКДЖЕК: СДАЧА</b>\n\n"
                 f"Ты сбросил карты и вернул половину ставки (<code>+{refund} ₪</code>).\n"
@@ -6650,11 +6609,8 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             payout = int(bet * mult)
             
             async with db_lock:
-                await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (payout, user_id, board_id))
+                new_bal = await add_user_global_balance(db, user_id, board_id, payout)
                 await db.commit()
-                async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-                    row = await c.fetchone()
-                    new_bal = row[0] if row else 0
 
             caption = (
                 f"💰 <b>РУССКАЯ РУЛЕТКА: КУШ ЗАБРАН!</b>\n\n"

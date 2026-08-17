@@ -49,27 +49,19 @@ async def create_money_drop(
     timeout_sec: float = 600.0,
 ) -> Tuple[bool, str, Optional[DropRecord]]:
     """
-    Atomically creates a public money drop by deducting funds from donor balance.
+    Atomically creates a public money drop by deducting funds from donor global balance.
     """
     if amount < 10:
         return False, "❌ Минимальная сумма для дропа — 10 ₪.", None
 
+    from common.database import deduct_user_global_balance, get_user_global_balance
+
     async with db_lock:
         try:
-            cursor = await db_conn.execute(
-                "SELECT balance FROM Users WHERE user_id = ? AND board_id = ?",
-                (donor_id, board_id),
-            )
-            row = await cursor.fetchone()
-            if not row or (row[0] or 0) < amount:
-                current_bal = row[0] if row else 0
-                return False, f"❌ Недостаточно средств! Твой баланс: {current_bal} ₪, а попытка дропнуть: {amount} ₪.", None
-
-            # Deduct balance atomically
-            await db_conn.execute(
-                "UPDATE Users SET balance = MAX(0, balance - ?) WHERE user_id = ? AND board_id = ?",
-                (amount, donor_id, board_id),
-            )
+            ok, new_bal = await deduct_user_global_balance(db_conn, donor_id, board_id, amount)
+            if not ok:
+                current_bal = await get_user_global_balance(db_conn, donor_id)
+                return False, f"❌ Недостаточно средств! Твой баланс: {int(current_bal)} ₪, а попытка дропнуть: {amount} ₪.", None
             await db_conn.commit()
         except Exception as e:
             return False, f"❌ Ошибка базы данных при создании дропа: {e}", None
@@ -130,12 +122,10 @@ async def claim_money_drop(
         record.claimed_at = time.time()
 
     # Atomically credit claimer in DB
+    from common.database import add_user_global_balance
     async with db_lock:
         try:
-            await db_conn.execute(
-                "UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?",
-                (record.amount, claimer_id, claimer_board_id),
-            )
+            await add_user_global_balance(db_conn, claimer_id, claimer_board_id, record.amount)
             await db_conn.commit()
         except Exception as e:
             # Revert status on severe db failure
@@ -168,12 +158,10 @@ async def cancel_money_drop(
         
         record.status = "cancelled"
 
+    from common.database import add_user_global_balance
     async with db_lock:
         try:
-            await db_conn.execute(
-                "UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?",
-                (record.amount, record.donor_id, record.board_id),
-            )
+            await add_user_global_balance(db_conn, record.donor_id, record.board_id, record.amount)
             await db_conn.commit()
         except Exception as e:
             return False, f"❌ Ошибка возврата средств: {e}"
@@ -185,6 +173,7 @@ async def expire_unclaimed_drops_step(db_lock: asyncio.Lock, db_conn) -> List[Dr
     """
     Background step: refunds drops older than their expiration timestamp.
     """
+    from common.database import add_user_global_balance
     now = time.time()
     expired_list: List[DropRecord] = []
 
@@ -200,11 +189,8 @@ async def expire_unclaimed_drops_step(db_lock: asyncio.Lock, db_conn) -> List[Dr
     async with db_lock:
         for rec in expired_list:
             try:
-                await db_conn.execute(
-                    "UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?",
-                    (rec.amount, rec.donor_id, rec.board_id),
-                )
-            except Exception as e:
+                await add_user_global_balance(db_conn, rec.donor_id, rec.board_id, rec.amount)
+            except Exception:
                 pass
         try:
             await db_conn.commit()

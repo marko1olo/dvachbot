@@ -8290,3 +8290,69 @@ async def postcopies_daily_cleanup_loop():
             logging.getLogger("database").error(f"⚠️ [POSTCOPIES_LOOP] Ошибка в цикле чистки: {e}")
             await asyncio.sleep(3600)
 
+
+async def get_user_global_balance(db, user_id: int) -> float:
+    """
+    Возвращает единый глобальный баланс пользователя со всех досок.
+    """
+    async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
+        row = await c.fetchone()
+        return float(row[0] or 0.0) if row and row[0] is not None else 0.0
+
+
+async def add_user_global_balance(db, user_id: int, board_id: str | None, amount: float) -> float:
+    """
+    Атомарно начисляет шекели на запись пользователя текущей доски (или создает её).
+    Возвращает новый единый глобальный баланс.
+    """
+    b_id = board_id or "b"
+    await db.execute(
+        "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+        "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
+        (user_id, b_id, amount, amount)
+    )
+    return await get_user_global_balance(db, user_id)
+
+
+async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amount: float) -> tuple[bool, float]:
+    """
+    Атомарно списывает шекели с глобального баланса пользователя.
+    Сначала списывает с текущей доски, а если не хватает — остаток списывает с других досок.
+    Возвращает (успех, новый_глобальный_баланс).
+    """
+    b_id = board_id or "b"
+    total = await get_user_global_balance(db, user_id)
+    if total < amount or amount < 0:
+        return False, total
+
+    async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, b_id)) as c:
+        row = await c.fetchone()
+        curr_bal = float(row[0] or 0.0) if row and row[0] is not None else 0.0
+
+    if curr_bal >= amount:
+        await db.execute(
+            "UPDATE Users SET balance = MAX(0.0, balance - ?) WHERE user_id = ? AND board_id = ?",
+            (amount, user_id, b_id)
+        )
+    else:
+        if curr_bal > 0:
+            await db.execute(
+                "UPDATE Users SET balance = 0.0 WHERE user_id = ? AND board_id = ?",
+                (user_id, b_id)
+            )
+        remaining = amount - curr_bal
+        async with db.execute(
+            "SELECT rowid, balance FROM Users WHERE user_id = ? AND board_id != ? AND balance > 0",
+            (user_id, b_id)
+        ) as c:
+            rows = await c.fetchall()
+        for rowid, bal in rows:
+            if remaining <= 0:
+                break
+            to_sub = min(float(bal or 0.0), remaining)
+            await db.execute("UPDATE Users SET balance = MAX(0.0, balance - ?) WHERE rowid = ?", (to_sub, rowid))
+            remaining -= to_sub
+
+    new_total = await get_user_global_balance(db, user_id)
+    return True, new_total
+
