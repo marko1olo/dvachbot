@@ -35,8 +35,10 @@ _ACTIVE_CLIENTS = {}
 _LAST_USED = {}  # {bot_token: timestamp}
 _CLIENT_LOCK = asyncio.Lock()   
 _CONNECTION_COOLDOWN = {}
-# Глобальный FloodWait для auth.ExportAuthorization — блокирует все MTProto-загрузки до его истечения
+# Глобальный FloodWait для auth.ExportAuthorization
 _GLOBAL_MTPROTO_FLOOD_UNTIL: float = 0.0
+# Семафор: не более 1 параллельного MTProto-скачивания одновременно
+_MTPROTO_DOWNLOAD_SEM = asyncio.Semaphore(1)
 
 _cleanup_in_progress = False
 
@@ -172,56 +174,66 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
         return False
 
     try:
-        target_to_download = file_id
-        
-        if chat_id and message_id:
-            msg = None
-            for attempt in range(2):
-                try:
-                    msg = await client.get_messages(chat_id, message_id)
-                    if msg and not msg.empty:
-                        break
-                except Exception as e:
-                    if "PEER_ID_INVALID" in str(e).upper() and attempt == 0:
-                        try:
-                            await client.get_chat(chat_id)
-                            await asyncio.sleep(1)
-                        except Exception as get_chat_err:
-                            logger.warning(f"MTProto get_chat failed for {chat_id}: {get_chat_err}")
-                            break
-                        continue
-                    break
+        # Семафор гарантирует, что только 1 задача одновременно в client.download_media.
+        # Когда первая поймает FloodWait и поставит глобальный флаг,
+        # все остальные задачи в очереди увидят его сразу после получения семафора.
+        async with _MTPROTO_DOWNLOAD_SEM:
+            # Повторная проверка после ожидания семафора
+            remaining_flood = _GLOBAL_MTPROTO_FLOOD_UNTIL - time.time()
+            if remaining_flood > 0:
+                logger.debug(f"⏭️ [MTProto] FloodWait detected after sem wait ({remaining_flood:.0f}s). Skipping {file_id[:10]}.")
+                return False
 
-            if msg and not msg.empty:
-                if not msg.media:
-                    logger.warning(f"⚠️ [MTProto] Message context for {file_id[:10]} contains no media.")
-                    return False
-                media_obj = getattr(msg, msg.media.value, None)
-                main_file_id = getattr(media_obj, "file_id", None) if media_obj else None
-                
-                if main_file_id and main_file_id != file_id:
-                    if hasattr(media_obj, "thumbs") and media_obj.thumbs:
-                        target_to_download = media_obj.thumbs[0]
-                    elif hasattr(media_obj, "thumbnail") and media_obj.thumbnail:
-                        target_to_download = media_obj.thumbnail
+            target_to_download = file_id
+
+            if chat_id and message_id:
+                msg = None
+                for attempt in range(2):
+                    try:
+                        msg = await client.get_messages(chat_id, message_id)
+                        if msg and not msg.empty:
+                            break
+                    except Exception as e:
+                        if "PEER_ID_INVALID" in str(e).upper() and attempt == 0:
+                            try:
+                                await client.get_chat(chat_id)
+                                await asyncio.sleep(1)
+                            except Exception as get_chat_err:
+                                logger.warning(f"MTProto get_chat failed for {chat_id}: {get_chat_err}")
+                                break
+                            continue
+                        break
+
+                if msg and not msg.empty:
+                    if not msg.media:
+                        logger.warning(f"⚠️ [MTProto] Message context for {file_id[:10]} contains no media.")
+                        return False
+                    media_obj = getattr(msg, msg.media.value, None)
+                    main_file_id = getattr(media_obj, "file_id", None) if media_obj else None
+
+                    if main_file_id and main_file_id != file_id:
+                        if hasattr(media_obj, "thumbs") and media_obj.thumbs:
+                            target_to_download = media_obj.thumbs[0]
+                        elif hasattr(media_obj, "thumbnail") and media_obj.thumbnail:
+                            target_to_download = media_obj.thumbnail
+                        else:
+                            target_to_download = msg
                     else:
                         target_to_download = msg
                 else:
-                    target_to_download = msg
-            else:
-                if file_id.startswith("AgAC"):
-                    logger.warning(f"⚠️ [MTProto] Cannot download BotAPI Photo {file_id[:10]} without message context.")
-                    return False
+                    if file_id.startswith("AgAC"):
+                        logger.warning(f"⚠️ [MTProto] Cannot download BotAPI Photo {file_id[:10]} without message context.")
+                        return False
 
-        path = await asyncio.wait_for(
-            client.download_media(
-                message=target_to_download,
-                file_name=output_path,
-            ),
-            timeout=300
-        )
-        
-        return bool(path and os.path.exists(output_path))
+            path = await asyncio.wait_for(
+                client.download_media(
+                    message=target_to_download,
+                    file_name=output_path,
+                ),
+                timeout=300
+            )
+
+            return bool(path and os.path.exists(output_path))
     
     except asyncio.TimeoutError:
         logger.error(f"❌ [MTProto] Download Timed Out: {file_id[:15]}...")
