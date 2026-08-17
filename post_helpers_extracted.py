@@ -24,43 +24,43 @@ async def format_thread_post_header(board_id: str, local_post_num: int, author_i
     circle = ""
     rand = random.random()
     if is_night:
-        if rand < 0.003: circle = "≡ƒîæ "
-        elif rand < 0.006: circle = "≡ƒîÆ "
-        elif rand < 0.009: circle = "≡ƒîô "
-        elif rand < 0.012: circle = "≡ƒîö "
-        elif rand < 0.015: circle = "≡ƒî¥ "
-        elif rand < 0.018: circle = "≡ƒîî "
+        if rand < 0.003: circle = "🌑 "
+        elif rand < 0.006: circle = "🌒 "
+        elif rand < 0.009: circle = "🌓 "
+        elif rand < 0.012: circle = "🌔 "
+        elif rand < 0.015: circle = "🌝 "
+        elif rand < 0.018: circle = "🌙 "
     else:
-        if rand < 0.003: circle = "≡ƒö┤ "
-        elif rand < 0.006: circle = "≡ƒƒó "
-        elif rand < 0.009: circle = "Γÿó∩╕Å "
-        elif rand < 0.012: circle = "≡ƒƒí "
-        elif rand < 0.015: circle = "≡ƒö╡ "
-        elif rand < 0.018: circle = "Γ¡ò "
-    if b_data['slavaukraine_mode']: return f"≡ƒÆÖ≡ƒÆ¢ ╨ƒi╤ü╤é Γäû{post_num_formatted}"
-    if b_data['zaputin_mode']: return f"≡ƒç╖≡ƒç║ ╨ƒ╨╛╤ü╤é Γäû{post_num_formatted}"
-    if b_data['anime_mode']: return f"≡ƒî╕ µèòτ¿┐ {post_num_formatted} τò¬"
-    if b_data['suka_blyat_mode']: return f"≡ƒÆó ╨ƒ╨╛╤ü╤é Γäû{post_num_formatted}"
-    if b_data['polish_mode']: return f"≡ƒç╡≡ƒç▒ Post Γäû{post_num_formatted}"
-    if b_data.get('schizo_mode'): return f"++ ╨í╨ÿ╨ô╨¥╨É╨¢ #{post_num_formatted} ++"
-    if b_data['warhammer_mode']: return f"ΓÜö∩╕Å ╨ö╨╛╨╜╨╡╤ü╨╡╨╜╨╕╨╡ Γäû{post_num_formatted}"
-    if b_data['imperial_mode']: return f"≡ƒô£ ╨ö╨╡╨┐╨╡╤ê╨░ Γäû{post_num_formatted}"
-    if b_data.get('matrix_mode'): return f"≡ƒƒ⌐ ╨ƒ╨░╨║╨╡╤é Γäû{post_num_formatted}"
-    if b_data.get('america_mode'): return f"≡ƒªà Freedom Post Γäû{post_num_formatted}"
-    if b_data.get('holiday_mode'): return f"≡ƒÄä ╨ƒ╨╛╨┤╨░╤Ç╨╛╨║ Γäû{post_num_formatted}"
-    if b_data.get('oldweb_mode'): return f"≡ƒûÑ∩╕Å ╨í╨╛╨╛╨▒╤ë╨╡╨╜╨╕╨╡ #{post_num_formatted}"
-    if b_data.get('jewish_mode'): return f"≡ƒô£ ╨Ü╨░╨╖╤â╤ü Γäû{post_num_formatted}"
+        if rand < 0.003: circle = "🔴 "
+        elif rand < 0.006: circle = "🟢 "
+        elif rand < 0.009: circle = "☢️ "
+        elif rand < 0.012: circle = "🟡 "
+        elif rand < 0.015: circle = "🔵 "
+        elif rand < 0.018: circle = "⭐ "
+    if b_data['slavaukraine_mode']: return f"💙💛 Пост №{post_num_formatted}"
+    if b_data['zaputin_mode']: return f"🇷🇺 Пост №{post_num_formatted}"
+    if b_data['anime_mode']: return f"🌸 投稿 {post_num_formatted} 番"
+    if b_data['suka_blyat_mode']: return f"💥 Пост №{post_num_formatted}"
+    if b_data['polish_mode']: return f"🇵🇱 Post №{post_num_formatted}"
+    if b_data.get('schizo_mode'): return f"++ СИГНАЛ #{post_num_formatted} ++"
+    if b_data['warhammer_mode']: return f"⚡ Донесение №{post_num_formatted}"
+    if b_data['imperial_mode']: return f"📜 Депеша №{post_num_formatted}"
+    if b_data.get('matrix_mode'): return f"🟩 Пакет №{post_num_formatted}"
+    if b_data.get('america_mode'): return f"🦅 Freedom Post №{post_num_formatted}"
+    if b_data.get('holiday_mode'): return f"🎅 Подарок №{post_num_formatted}"
+    if b_data.get('oldweb_mode'): return f"🖥️ Сообщение #{post_num_formatted}"
+    if b_data.get('jewish_mode'): return f"📜 Казус №{post_num_formatted}"
     prefix = _get_random_header_prefix(lang=stream)
     if stream == 'en':
         return f"{circle}{prefix}Post No.{post_num_formatted}"
     elif stream == 'jp':
-        return f"{circle}{prefix}πâ¼πé╣τò¬ {post_num_formatted}"
+        return f"{circle}{prefix}πâ¼πé╣番 {post_num_formatted}"
     else:
-        return f"{circle}{prefix}╨ƒ╨╛╤ü╤é Γäû{post_num_formatted}"
+        return f"{circle}{prefix}Пост №{post_num_formatted}"
 
 async def format_header(board_id: str, post_num: int, author_id: int = 0, stream: str = 'ru') -> str:
     """
-    ╨ñ╨╛╤Ç╨╝╨░╤é╨╕╤Ç╨╛╨▓╨░╨╜╨╕╨╡ ╨╖╨░╨│╨╛╨╗╨╛╨▓╨║╨░ ╤ü ╨┐╨╛╨┤╨┤╨╡╤Ç╨╢╨║╨╛╨╣ VIP ╨┐╤Ç╨╡╤ä╨╕╨║╤ü╨╛╨▓ ╨╕╨╖ ╨ó╨╡╨╜╨╡╨▓╨╛╨│╨╛ ╨£╨░╨│╨░╨╖╨╕╨╜╨░.
+    Форматирование заголовка с поддержкой VIP префиксов из Теневого Магазина.
     """
     custom_prefix = ""
     if author_id > 0:
@@ -82,7 +82,7 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                 if row[1] and row[2] and int(time.time()) < row[2]:
                     prefix_str = f"<b>{row[1]}</b> "
         if has_poop:
-            custom_prefix = "≡ƒÆ⌐ " + prefix_str
+            custom_prefix = "💩 " + prefix_str
         else:
             custom_prefix = prefix_str
                     
@@ -100,9 +100,9 @@ def apply_shadow_autoreplace(content: dict) -> dict:
         
     def die_replacer(match):
         matched_text = match.group(1).lower().replace(" ", "")
-        if "╤é╨╡" in matched_text:
-            return "╨╛╨▒╨╛╤ü╤ü╤ï╤é╨╡ ╨╝╨╡╨╜╤Å"
-        return "╨╛╨▒╨╛╤ü╤ü╤ï ╨╝╨╡╨╜╤Å"
+        if "те" in matched_text:
+            return "обоссыте меня"
+        return "обоссы меня"
         
     for key in ('text', 'caption'):
         text_val = modified.get(key)
@@ -119,9 +119,9 @@ def apply_shadow_autoreplace(content: dict) -> dict:
 
 def check_post_numerals(post_num: int) -> int | None:
     """
-    ╨ƒ╤Ç╨╛╨▓╨╡╤Ç╤Å╨╡╤é ╨╜╨╛╨╝╨╡╤Ç ╨┐╨╛╤ü╤é╨░ ╨╜╨░ ╨╜╨░╨╗╨╕╤ç╨╕╨╡ ╨┐╨╛╨▓╤é╨╛╤Ç╤Å╤Ä╤ë╨╕╤à╤ü╤Å ╤å╨╕╤ä╤Ç ╨▓ ╨║╨╛╨╜╤å╨╡.
-    ╨ÿ╤ü╨┐╨╛╨╗╤î╨╖╤â╨╡╤é ╨╛╨┐╤é╨╕╨╝╨╕╨╖╨╕╤Ç╨╛╨▓╨░╨╜╨╜╤ï╨╣ ╨┐╨╛╤ü╨╕╨╝╨▓╨╛╨╗╤î╨╜╤ï╨╣ ╨░╨╜╨░╨╗╨╕╨╖ ╤ü ╨║╨╛╨╜╤å╨░.
-    ╨Æ╨╛╨╖╨▓╤Ç╨░╤ë╨░╨╡╤é "╤â╤Ç╨╛╨▓╨╡╨╜╤î ╤Ç╨╡╨┤╨║╨╛╤ü╤é╨╕" (╨║╨╛╨╗╨╕╤ç╨╡╤ü╤é╨▓╨╛ ╨┐╨╛╨▓╤é╨╛╤Ç╨╛╨▓) ╨╕╨╗╨╕ None.
+    Проверяет номер поста на наличие повторяющихся цифр в конце.
+    Использует оптимизированный посимвольный анализ с конца.
+    Возвращает "уровень редкости" (количество повторов) или None.
     """
     s = str(post_num)
     length = len(s)
@@ -198,9 +198,9 @@ async def execute_auto_roast(board_id: str, stream: str = 'ru', bot_instance=Non
     if not summary:
         return
         
-    roast_text = f"≡ƒöÑ <b>╨É╨Æ╨ó╨₧-╨ƒ╨á╨₧╨û╨É╨á╨Ü╨É ╨í╨á╨É╨º╨É</b> ≡ƒöÑ\n\n{summary}" if lang == 'ru' else f"≡ƒöÑ <b>AUTO-ROAST</b> ≡ƒöÑ\n\n{summary}"
+    roast_text = f"🔥 <b>АВТО-ПРОЖАРКА СРАЧА</b> 🔥\n\n{summary}" if lang == 'ru' else f"🔥 <b>AUTO-ROAST</b> 🔥\n\n{summary}"
     if lang == 'jp':
-        roast_text = f"≡ƒöÑ <b>Φç¬σïòτà╜πéè</b> ≡ƒöÑ\n\n{summary}"
+        roast_text = f"🔥 <b>自動煽り</b> 🔥\n\n{summary}"
     
     content_payload = {
         'type': 'text',
