@@ -2022,7 +2022,10 @@ async def board_statistics_broadcaster():
                     full_stats_text, header_title = format_board_statistics(stream, posts_per_hour, board_data, BOARD_CONFIG)
                     from banner_manager import get_banner_file
                     fname, photo_payload = get_banner_file(category="stats")
-                    fid = photo_payload if isinstance(photo_payload, str) else None
+                    from banner_manager import _BANNER_CACHE
+                    fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
+                    if not fid and _BANNER_CACHE:
+                        fid = next(iter(_BANNER_CACHE.values()), None)
                     content = {
                         "type": "photo" if fid else "text",
                         "file_id": fid,
@@ -7458,23 +7461,32 @@ async def cmd_menu(message: types.Message, board_id: str | None, stream: str = '
     """
     Открывает быстрое меню по команде /menu.
     """
+@dp.message(Command("menu"))
+async def cmd_menu(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Открывает быстрое меню по команде /menu с баннером.
+    """
     if not board_id: return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if lang == 'en':
-        text = "👇 <b>Quick Menu:</b>"
+        text = "👇 <b>Quick Menu:</b>\n<i>Choose a section:</i>"
     elif lang == 'jp':
-        text = "👇 <b>クイックメニュー:</b>"
+        text = "👇 <b>クイックメニュー:</b>\n<i>項目を選択してください:</i>"
     else:
-        text = "👇 <b>Быстрое меню:</b>"
-    await message.answer(
-        text, 
-        reply_markup=get_quick_menu_keyboard(board_id, stream=stream), 
+        text = "👇 <b>Быстрое меню ТГАЧ:</b>\n<i>Выбери нужный раздел:</i>"
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=text,
+        reply_markup=get_quick_menu_keyboard(board_id, stream=stream),
+        category="start",
         parse_mode="HTML"
     )
     try:
         await message.delete()
-    except TelegramBadRequest:
-        logger.error(f"Error deleting menu message: {traceback.format_exc()}")
+    except Exception:
+        pass
 @dp.message(Command("whois", "info"))
 async def cmd_whois(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id):
@@ -7638,7 +7650,10 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
         ])
         from banner_manager import get_banner_file
         fname, photo_payload = get_banner_file(category="calm")
-        fid = photo_payload if isinstance(photo_payload, str) else None
+        from banner_manager import _BANNER_CACHE
+        fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
+        if not fid and _BANNER_CACHE:
+            fid = next(iter(_BANNER_CACHE.values()), None)
         content = {
             'type': 'photo' if fid else 'text',
             'file_id': fid,
@@ -7930,7 +7945,10 @@ async def dvach_thread_poster():
             
             from banner_manager import get_banner_file
             fname, photo_payload = get_banner_file(category="digest")
-            fid = photo_payload if isinstance(photo_payload, str) else None
+            from banner_manager import _BANNER_CACHE
+            fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
+            if not fid and _BANNER_CACHE:
+                fid = next(iter(_BANNER_CACHE.values()), None)
             
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔗 Открыть на 2ch.hk", url=link)]
@@ -11411,13 +11429,23 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
     elif action == "help":
         from help_text import get_help_hub_page
         start_text = get_help_hub_page("main", lang=lang)
+        kb = get_help_keyboard("main", board_id, stream)
         try:
-            await callback.message.edit_caption(caption=start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML")
+            await callback.message.edit_caption(caption=start_text, reply_markup=kb, parse_mode="HTML")
         except Exception:
             try:
-                await callback.message.edit_text(start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+                await callback.message.delete()
             except Exception:
-                await callback.message.answer(start_text, reply_markup=get_help_keyboard("main", board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+                pass
+            from banner_manager import send_banner_message
+            await send_banner_message(
+                bot=callback.bot,
+                chat_id=callback.message.chat.id,
+                caption=start_text,
+                reply_markup=kb,
+                category="start",
+                parse_mode="HTML"
+            )
     elif action == "invite":
         await _handle_quick_menu_invite(callback, board_id, lang)
     elif action == "admin":
@@ -17359,7 +17387,10 @@ async def periodic_board_summary():
                 
             from banner_manager import get_banner_file
             fname, photo_payload = get_banner_file(category="summary")
-            fid = photo_payload if isinstance(photo_payload, str) else None
+            from banner_manager import _BANNER_CACHE
+            fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
+            if not fid and _BANNER_CACHE:
+                fid = next(iter(_BANNER_CACHE.values()), None)
             content_obj = {
                 'type': 'photo' if fid else 'text',
                 'file_id': fid,
@@ -17420,7 +17451,10 @@ async def periodic_thread_digest():
                     continue
                 from banner_manager import get_banner_file
                 fname, photo_payload = get_banner_file(category="digest")
-                fid = photo_payload if isinstance(photo_payload, str) else None
+                from banner_manager import _BANNER_CACHE
+                fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
+                if not fid and _BANNER_CACHE:
+                    fid = next(iter(_BANNER_CACHE.values()), None)
                 content = {
                     'type': 'photo' if fid else 'text',
                     'file_id': fid,
@@ -17479,7 +17513,10 @@ async def periodic_newspaper_broadcast():
                     continue
                 from banner_manager import get_banner_file
                 fname, photo_payload = get_banner_file(category="newspaper")
-                fid = photo_payload if isinstance(photo_payload, str) else None
+                from banner_manager import _BANNER_CACHE
+                fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
+                if not fid and _BANNER_CACHE:
+                    fid = next(iter(_BANNER_CACHE.values()), None)
                 content = {
                     'type': 'photo' if fid else 'text',
                     'file_id': fid,
@@ -17539,7 +17576,10 @@ async def periodic_shop_broadcast():
                     continue
                 from banner_manager import get_banner_file
                 fname, photo_payload = get_banner_file(category="shop")
-                fid = photo_payload if isinstance(photo_payload, str) else None
+                from banner_manager import _BANNER_CACHE
+                fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
+                if not fid and _BANNER_CACHE:
+                    fid = next(iter(_BANNER_CACHE.values()), None)
                 content = {
                     'type': 'photo' if fid else 'text',
                     'file_id': fid,
@@ -17630,7 +17670,10 @@ async def periodic_economy_broadcast():
 
             from banner_manager import get_banner_file
             fname, photo_payload = get_banner_file(category="wallet")
-            fid = photo_payload if isinstance(photo_payload, str) else None
+            from banner_manager import _BANNER_CACHE
+            fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
+            if not fid and _BANNER_CACHE:
+                fid = next(iter(_BANNER_CACHE.values()), None)
 
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [

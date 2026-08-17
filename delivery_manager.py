@@ -1204,10 +1204,12 @@ async def board_help_worker(board_id: str):
                     elif choice == 5: message_text = random.choice(main.CHANNEL_PROMO_TEXT_RU)
                     else: message_text = random.choice(main.MECHANICS_INFO_TEXT_RU)
                 now_dt = datetime.now(UTC)
-                from banner_manager import get_banner_file
+                from banner_manager import get_banner_file, _BANNER_CACHE
                 banner_cat = "start" if choice == 1 else "calm"
                 fname, photo_payload = get_banner_file(category=banner_cat)
-                fid = photo_payload if isinstance(photo_payload, str) else None
+                fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
+                if not fid and _BANNER_CACHE:
+                    fid = next(iter(_BANNER_CACHE.values()), None)
                 content = {
                     'type': 'photo' if fid else 'text',
                     'file_id': fid,
