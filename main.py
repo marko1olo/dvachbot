@@ -6427,9 +6427,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             await cmd_money_drop(callback.message, board_id)
         elif game == "balance":
             async with db_lock:
-                async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-                    row = await c.fetchone()
-                    bal = row[0] if row and row[0] is not None else 0
+                bal = await get_user_global_balance(db, user_id)
             await callback.answer(f"💳 Твой баланс: {int(bal)} ₪", show_alert=True)
         await callback.answer()
         return
@@ -6562,11 +6560,10 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
 
             async with db_lock:
                 if payout > 0:
-                    await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (payout, user_id, board_id))
-                    await db.commit()
-                async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-                    row = await c.fetchone()
-                    new_bal = row[0] if row else 0
+                    new_bal = await add_user_global_balance(db, user_id, board_id, payout)
+                else:
+                    new_bal = await get_user_global_balance(db, user_id)
+                await db.commit()
 
             caption = (
                 f"🃏 <b>БЛЭКДЖЕК: ИТОГИ РАЗДАЧИ</b>\n\n"
