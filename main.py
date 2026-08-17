@@ -3682,17 +3682,17 @@ async def cmd_shop(message: types.Message, board_id: str | None, stream: str = '
 
 async def _build_inventory_content(user_id: int, board_id: str):
     db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
     async with db.execute(
-        "SELECT balance, active_items, custom_prefix, prefix_expires_at, cursed_until FROM Users WHERE user_id = ? AND board_id = ?",
+        "SELECT active_items, custom_prefix, prefix_expires_at, cursed_until FROM Users WHERE user_id = ? AND board_id = ?",
         (user_id, board_id)
     ) as c:
         row = await c.fetchone()
 
-    balance = row[0] if row and row[0] is not None else 0
-    active_items_str = row[1] if row and len(row) > 1 and row[1] else "{}"
-    prefix = row[2] if row and len(row) > 2 and row[2] else None
-    prefix_exp = row[3] if row and len(row) > 3 and row[3] else 0
-    cursed_until = row[4] if row and len(row) > 4 and row[4] else 0
+    active_items_str = row[0] if row and len(row) > 0 and row[0] else "{}"
+    prefix = row[1] if row and len(row) > 1 and row[1] else None
+    prefix_exp = row[2] if row and len(row) > 2 and row[2] else 0
+    cursed_until = row[3] if row and len(row) > 3 and row[3] else 0
 
     try:
         import json
@@ -4028,9 +4028,14 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         
     await callback.answer(msg, show_alert=True)
     new_bal = balance - price
-    text = callback.message.html_text.replace(f"{int(balance)}.00", f"{int(new_bal)}.00")
     try:
-        await callback.message.edit_text(text, reply_markup=callback.message.reply_markup, parse_mode="HTML")
+        if callback.message.photo:
+            cap = callback.message.caption or ""
+            text = cap.replace(f"{int(balance)}.00", f"{int(new_bal)}.00")
+            await callback.message.edit_caption(caption=text, reply_markup=callback.message.reply_markup, parse_mode="HTML")
+        elif callback.message.text:
+            text = callback.message.text.replace(f"{int(balance)}.00", f"{int(new_bal)}.00")
+            await callback.message.edit_text(text=text, reply_markup=callback.message.reply_markup, parse_mode="HTML")
     except Exception:
         pass
 @dataclass
@@ -18877,7 +18882,9 @@ async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str |
     if post_num and post_num > 0:
         try:
             db = await get_pool()
-            await db.execute("UPDATE Reports SET status = 'resolved' WHERE post_num = ?", (post_num,))
+            async with db_lock:
+                await db.execute("UPDATE Reports SET status = 'resolved' WHERE post_num = ?", (post_num,))
+                await db.commit()
         except Exception:
             pass
 
@@ -18911,7 +18918,9 @@ async def on_report_dismiss(callback: types.CallbackQuery, board_id: str | None 
     if post_num > 0:
         try:
             db = await get_pool()
-            await db.execute("UPDATE Reports SET status = 'dismissed' WHERE post_num = ?", (post_num,))
+            async with db_lock:
+                await db.execute("UPDATE Reports SET status = 'dismissed' WHERE post_num = ?", (post_num,))
+                await db.commit()
         except Exception:
             pass
 
