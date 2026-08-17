@@ -342,10 +342,11 @@ async def process_mirror_queue():
     try:
         while True:
             try:
+                from site_tgach.imgbb import IMGBB_API_KEY
                 allowed_types = ['catbox', 'pixhost']
                 if is_0x0_available():
                     allowed_types.append('0x0')
-                if os.getenv("IMGBB_API_KEY"):
+                if IMGBB_API_KEY:
                     allowed_types.append('imgbb')
                 if os.getenv("FREEIMAGE_API_KEY"):
                     allowed_types.append('freeimage')

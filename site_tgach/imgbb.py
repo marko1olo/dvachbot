@@ -12,7 +12,7 @@ import base64
 
 logger = logging.getLogger("imgbb")
 
-IMGBB_API_KEY = os.getenv("IMGBB_API_KEY", "")
+IMGBB_API_KEY = os.getenv("IMGBB_API_KEY") or "680574ea1c32adeb15405f2caf0cf899"
 
 raw_proxy = os.getenv("PROXY_URL")
 PROXY_URL = raw_proxy if raw_proxy and "://" in raw_proxy else (f"http://{raw_proxy}" if raw_proxy else None)
