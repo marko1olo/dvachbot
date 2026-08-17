@@ -5457,10 +5457,10 @@ async def _run_delayed_prank(params: DelayedPrankParams):
             "UPDATE Users SET balance = 0, last_failed_amount = ? WHERE user_id = ?",
             (params.amount, params.user_id)
         )
+        await db_p.commit()
 
-    uid_raw = str(params.user_id)
-    masked_uid = f"{uid_raw[:3]}***{uid_raw[-3:]}"
-    final_user_label = f"{escape_html(params.shame_name)} (ID: {masked_uid})"
+    anon_id_val = get_anon_id(params.user_id)
+    final_user_label = f"{escape_html(params.shame_name)} [ID: {anon_id_val}]"
 
     raw_requisites = str(params.user_input).strip()
 
