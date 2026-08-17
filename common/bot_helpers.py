@@ -31,13 +31,9 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
         return
 
     async with db_lock:
-        # Проверяем балансы обоих под локом
-        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (challenger_id, board_id)) as c:
-            row = await c.fetchone()
-            ch_bal = row[0] if row and row[0] is not None else 0
-        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id=? AND board_id=?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            op_bal = row[0] if row and row[0] is not None else 0
+        # Проверяем глобальные балансы обоих под локом
+        ch_bal = await get_user_global_balance(db, challenger_id)
+        op_bal = await get_user_global_balance(db, user_id)
 
         # Ответ юзеру откладываем до выхода из лока: db_lock сериализует ВЕСЬ
         # доступ к базе в процессе, и держать его на время сетевого вызова
@@ -57,19 +53,12 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
                 _active_duels[challenger_id] = duel
                 reject_msg = f"❌ У тебя недостаточно бабок. Нужно {amount} RUB, есть {int(op_bal)}."
             else:
-                import random
                 winner_id = random.choice([challenger_id, user_id])
                 loser_id  = challenger_id if winner_id == user_id else user_id
-                await db.execute(
-                    "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-                    "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
-                    (winner_id, board_id, amount, amount)
-                )
-                await db.execute(
-                    "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-                    "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance - ?",
-                    (loser_id, board_id, -amount, amount)
-                )
+                
+                # Атомарное списание у проигравшего и начисление победителю
+                await deduct_user_global_balance(db, loser_id, board_id, amount)
+                await add_user_global_balance(db, winner_id, board_id, amount)
                 await db.commit()
 
     if reject_msg is not None:

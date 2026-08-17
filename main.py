@@ -5223,6 +5223,7 @@ async def cmd_wallet(message: types.Message, board_id: str | None, stream: str =
                 "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = ?",
                 (user_id, board_id, start_bal, start_bal)
             )
+            await db.commit()
         balance, is_verified = start_bal, 0
 
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
