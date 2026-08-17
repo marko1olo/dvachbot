@@ -5915,7 +5915,753 @@ async def cb_dice_bet_quick(callback: types.CallbackQuery, board_id: str | None)
         category="roulette",
         parse_mode="HTML"
     )
-    await callback.answer()
+
+# =============================================================================
+# 🎰 ПОДПОЛЬНОЕ КАЗИНО ТГАЧА & 💸 ДРОП ШЕКЕЛЕЙ В ТРЕД (ЧЕКИ НА РЕАКЦИЮ)
+# =============================================================================
+import casino_engine
+import drop_engine
+
+@dp.message(Command("drop", "выбросить", "дроп", "чек", "throw", "giveaway"))
+async def cmd_money_drop(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    parts = (message.text or "").strip().split()
+    db = await get_pool()
+
+    async with db_lock:
+        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+            balance = row[0] if row and row[0] is not None else 0
+
+    if len(parts) > 1:
+        raw_arg = parts[1].lower()
+        if raw_arg in ["all", "всё", "все", "вабанк"]:
+            amount = int(balance)
+        elif raw_arg in ["half", "половина", "пол"]:
+            amount = int(balance // 2)
+        elif raw_arg in ["third", "треть"]:
+            amount = int(balance // 3)
+        elif raw_arg.isdigit():
+            amount = int(raw_arg)
+        else:
+            amount = 0
+
+        if amount < 10:
+            await message.reply("❌ Минимальная сумма для дропа — 10 ₪. Укажи корректную сумму: <code>/drop 500</code>.", parse_mode="HTML")
+            return
+
+        donor_name = f"Анон #{user_id % 10000:04d}"
+        ok, msg, drop_rec = await drop_engine.create_money_drop(
+            donor_id=user_id,
+            donor_name=donor_name,
+            board_id=board_id,
+            amount=amount,
+            db_lock=db_lock,
+            db_conn=db,
+        )
+        if not ok or not drop_rec:
+            await message.reply(msg, parse_mode="HTML")
+            return
+
+        kb = drop_engine.get_drop_claim_keyboard(drop_rec.drop_id, amount)
+        caption = (
+            f"💸 <b>ДРОП ШЕКЕЛЕЙ В ТРЕД!</b>\n\n"
+            f"👤 <b>{donor_name}</b> выбросил <b>{amount} ₪</b> прямо в тред!\n"
+            f"⚡ Кто первый нажмет на кнопку ниже — забирает весь куш себе!\n\n"
+            f"⏳ <i>Дроп сгорит и вернется анону через 10 минут, если никто не заберет.</i>"
+        )
+        from banner_manager import send_banner_message
+        await send_banner_message(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            caption=caption,
+            reply_markup=kb,
+            category="economy",
+            parse_mode="HTML"
+        )
+        return
+
+    # Interactive selector if no argument given
+    kb = drop_engine.get_drop_creator_keyboard(int(balance))
+    caption = (
+        f"💸 <b>ДРОП ШЕКЕЛЕЙ В ТРЕД (ЧЕК НА СКОРОСТЬ)</b>\n\n"
+        f"💳 Твой текущий баланс: <code>{int(balance)} ₪</code>\n"
+        f"Выбери, сколько шекелей ты хочешь выбросить в тред для всех анонов:\n"
+        f"<i>(Или введи команду с суммой, например: <code>/drop 500</code>)</i>"
+    )
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=caption,
+        reply_markup=kb,
+        category="economy",
+        parse_mode="HTML"
+    )
+
+@dp.callback_query(F.data.startswith("drop:"))
+async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    data = callback.data.split(":")
+    action = data[1] if len(data) > 1 else ""
+    db = await get_pool()
+
+    if action == "claim":
+        drop_id = data[2] if len(data) > 2 else ""
+        claimer_name = f"Анон #{user_id % 10000:04d}"
+        ok, msg, drop_rec = await drop_engine.claim_money_drop(
+            drop_id=drop_id,
+            claimer_id=user_id,
+            claimer_name=claimer_name,
+            claimer_board_id=board_id,
+            db_lock=db_lock,
+            db_conn=db,
+        )
+        if not ok:
+            await callback.answer(msg, show_alert=True)
+            return
+
+        await callback.answer(f"🎉 Ты успел забрать {drop_rec.amount} ₪!", show_alert=True)
+        new_text = (
+            f"💸 <b>ДРОП ШЕКЕЛЕЙ ПЕРЕХВАЧЕН!</b>\n\n"
+            f"👤 Создатель: <b>{drop_rec.donor_name}</b> (Сумма: <b>{drop_rec.amount} ₪</b>)\n"
+            f"🏆 Победитель: <b>{claimer_name}</b> оказался самым быстрым и забрал всё!\n\n"
+            f"⚡ <i>Дроп закрыт.</i>"
+        )
+        try:
+            if callback.message.caption:
+                await callback.message.edit_caption(caption=new_text, parse_mode="HTML", reply_markup=None)
+            else:
+                await callback.message.edit_text(text=new_text, parse_mode="HTML", reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    elif action == "create":
+        raw_amt = data[2] if len(data) > 2 else "0"
+        amount = int(raw_amt) if raw_amt.isdigit() else 0
+        if amount < 10:
+            await callback.answer("❌ Минимальная сумма 10 ₪", show_alert=True)
+            return
+
+        donor_name = f"Анон #{user_id % 10000:04d}"
+        ok, msg, drop_rec = await drop_engine.create_money_drop(
+            donor_id=user_id,
+            donor_name=donor_name,
+            board_id=board_id,
+            amount=amount,
+            db_lock=db_lock,
+            db_conn=db,
+        )
+        if not ok or not drop_rec:
+            await callback.answer(msg, show_alert=True)
+            return
+
+        await callback.answer("✅ Дроп отправлен в тред!")
+        kb = drop_engine.get_drop_claim_keyboard(drop_rec.drop_id, amount)
+        caption = (
+            f"💸 <b>ДРОП ШЕКЕЛЕЙ В ТРЕД!</b>\n\n"
+            f"👤 <b>{donor_name}</b> выбросил <b>{amount} ₪</b> прямо в тред!\n"
+            f"⚡ Кто первый нажмет на кнопку ниже — забирает весь куш себе!\n\n"
+            f"⏳ <i>Дроп сгорит и вернется анону через 10 минут, если никто не заберет.</i>"
+        )
+        from banner_manager import send_banner_message
+        await send_banner_message(
+            bot=callback.bot,
+            chat_id=callback.message.chat.id,
+            caption=caption,
+            reply_markup=kb,
+            category="economy",
+            parse_mode="HTML"
+        )
+        return
+
+    elif action == "cancel_menu":
+        try:
+            await callback.message.delete()
+        except Exception:
+            await callback.answer("Отменено")
+
+
+# --- КАЗИНО: ХАБ, СЛОТЫ, МОНЕТКА, БЛЭКДЖЕК, РУЛЕТКА ---
+
+@dp.message(Command("casino", "казино", "игры", "games"))
+async def cmd_casino_hub(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    db = await get_pool()
+    async with db_lock:
+        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+            balance = row[0] if row and row[0] is not None else 0
+
+    kb = casino_engine.get_casino_hub_keyboard()
+    caption = (
+        f"🎰 <b>ПОДПОЛЬНОЕ КАЗИНО ТГАЧА</b>\n\n"
+        f"💳 Твой баланс: <code>{int(balance)} ₪</code>\n\n"
+        f"Выбирай стол и умножай шекели:\n"
+        f"• 🎰 <b>Слоты 777</b> — Джекпот x50, Бриллианты x15, Клубнички x5\n"
+        f"• 🪙 <b>Монетка 50/50</b> — Орел или Решка с множителем x1.95\n"
+        f"• 🃏 <b>Блэкджек 21</b> — Классическая карточная битва против дилера (x2 / x2.5)\n"
+        f"• 💀 <b>Русская Рулетка</b> — 1 патрон на 6 камор. Серия выживания до x5.0!\n"
+        f"• 💸 <b>Дроп денег</b> — Раздать шекели в тред на реакцию"
+    )
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=caption,
+        reply_markup=kb,
+        category="roulette",
+        parse_mode="HTML"
+    )
+
+
+@dp.message(Command("slots", "казик", "слоты", "777", "spin"))
+async def cmd_slots(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    parts = (message.text or "").strip().split()
+    bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
+    bet = max(10, min(1000000, bet))
+
+    await _execute_slots_spin(message.bot, message.chat.id, user_id, board_id, bet)
+
+
+async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int):
+    db = await get_pool()
+    async with db_lock:
+        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+            balance = row[0] if row and row[0] is not None else 0
+
+        if balance < bet:
+            from banner_manager import send_banner_message
+            await send_banner_message(
+                bot=bot,
+                chat_id=chat_id,
+                caption=f"❌ <b>Недостаточно средств для спина!</b>\nТвой баланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.\nЗаработай в <code>/work</code> или уменьши ставку.",
+                category="roulette",
+                parse_mode="HTML"
+            )
+            return
+
+        reels, mult, title = casino_engine.roll_slots()
+        win_amt = int(bet * mult)
+        net_change = win_amt - bet
+
+        await db.execute(
+            "UPDATE Users SET balance = MAX(0, balance + ?) WHERE user_id = ? AND board_id = ?",
+            (net_change, user_id, board_id)
+        )
+        await db.commit()
+
+        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+            new_balance = row[0] if row and row[0] is not None else 0
+
+    kb = casino_engine.get_slots_keyboard(bet)
+    reel_display = f"║  {reels[0]}  │  {reels[1]}  │  {reels[2]}  ║"
+    
+    caption = (
+        f"🎰 <b>СЛОТЫ 777: КАЗИНО ТГАЧА</b>\n\n"
+        f"╔═════════════╗\n"
+        f"{reel_display}\n"
+        f"╚═════════════╝\n\n"
+        f"<b>{title}</b>\n"
+        f"• Ставка: <code>{bet} ₪</code> | Выплата: <b>+{win_amt} ₪</b>\n"
+        f"💳 Баланс: <code>{int(new_balance)} ₪</code>"
+    )
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=bot,
+        chat_id=chat_id,
+        caption=caption,
+        reply_markup=kb,
+        category="roulette",
+        parse_mode="HTML"
+    )
+
+
+@dp.message(Command("coinflip", "flip", "монетка", "монета", "орел", "решка"))
+async def cmd_coinflip(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    parts = (message.text or "").strip().split()
+    bet = 100
+    chosen_side = "heads"
+    
+    if len(parts) > 1:
+        if parts[1].isdigit():
+            bet = int(parts[1])
+            if len(parts) > 2:
+                chosen_side = parts[2].lower()
+        else:
+            chosen_side = parts[1].lower()
+            if len(parts) > 2 and parts[2].isdigit():
+                bet = int(parts[2])
+
+    bet = max(10, min(1000000, bet))
+    await _execute_coinflip(message.bot, message.chat.id, user_id, board_id, bet, chosen_side)
+
+
+async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str):
+    db = await get_pool()
+    async with db_lock:
+        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+            balance = row[0] if row and row[0] is not None else 0
+
+        if balance < bet:
+            from banner_manager import send_banner_message
+            await send_banner_message(
+                bot=bot,
+                chat_id=chat_id,
+                caption=f"❌ <b>Недостаточно шекелей для броска монетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.",
+                category="roulette",
+                parse_mode="HTML"
+            )
+            return
+
+        side_ru, is_win, mult, title = casino_engine.play_coinflip(chosen_side)
+        win_amt = int(bet * mult)
+        net_change = win_amt - bet
+
+        await db.execute(
+            "UPDATE Users SET balance = MAX(0, balance + ?) WHERE user_id = ? AND board_id = ?",
+            (net_change, user_id, board_id)
+        )
+        await db.commit()
+
+        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+            new_balance = row[0] if row and row[0] is not None else 0
+
+    kb = casino_engine.get_coinflip_keyboard(bet)
+    chosen_label = "🦅 ОРЕЛ" if chosen_side in ["heads", "орел", "орёл", "eagle", "h"] else "👑 РЕШКА"
+    
+    caption = (
+        f"🪙 <b>БРОСОК МОНЕТКИ: 50 / 50</b>\n\n"
+        f"Твой выбор: <b>{chosen_label}</b>\n"
+        f"Результат броска: <b>{side_ru}</b>\n\n"
+        f"<b>{title}</b>\n"
+        f"• Ставка: <code>{bet} ₪</code> | Выплата: <b>+{win_amt} ₪</b>\n"
+        f"💳 Баланс: <code>{int(new_balance)} ₪</code>"
+    )
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=bot,
+        chat_id=chat_id,
+        caption=caption,
+        reply_markup=kb,
+        category="roulette",
+        parse_mode="HTML"
+    )
+
+
+@dp.message(Command("blackjack", "bj", "блэкджек", "21", "очко"))
+async def cmd_blackjack(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    parts = (message.text or "").strip().split()
+    bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
+    bet = max(10, min(1000000, bet))
+
+    await _start_blackjack_game(message.bot, message.chat.id, user_id, board_id, bet)
+
+
+async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, bet: int):
+    db = await get_pool()
+    async with db_lock:
+        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+            row = await c.fetchone()
+            balance = row[0] if row and row[0] is not None else 0
+
+        if balance < bet:
+            from banner_manager import send_banner_message
+            await send_banner_message(
+                bot=bot,
+                chat_id=chat_id,
+                caption=f"❌ <b>Недостаточно средств для игры в Блэкджек!</b>\nТвой баланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.",
+                category="roulette",
+                parse_mode="HTML"
+            )
+            return
+
+        # Deduct initial bet
+        await db.execute(
+            "UPDATE Users SET balance = MAX(0, balance - ?) WHERE user_id = ? AND board_id = ?",
+            (bet, user_id, board_id)
+        )
+        await db.commit()
+
+    deck = casino_engine.create_deck()
+    player_hand = [deck.pop(), deck.pop()]
+    dealer_hand = [deck.pop(), deck.pop()]
+
+    player_score = casino_engine.calculate_hand(player_hand)
+    
+    # Check natural 21
+    if player_score == 21:
+        dealer_score = casino_engine.calculate_hand(dealer_hand)
+        payout = int(bet * 2.5) if dealer_score != 21 else bet
+        
+        async with db_lock:
+            await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (payout, user_id, board_id))
+            await db.commit()
+            async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                row = await c.fetchone()
+                new_bal = row[0] if row else 0
+
+        caption = (
+            f"🃏 <b>БЛЭКДЖЕК: НАТУРАЛЬНЫЕ 21! 🔥</b>\n\n"
+            f"👤 Твоя рука: {casino_engine.format_hand(player_hand)} (<b>21</b>)\n"
+            f"🎩 Дилер: {casino_engine.format_hand(dealer_hand)} (<b>{dealer_score}</b>)\n\n"
+            f"🎉 <b>БЛЭКДЖЕК! Выплата 3:2 (+{payout} ₪)!</b>\n"
+            f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
+        )
+        kb = casino_engine.get_casino_hub_keyboard()
+        from banner_manager import send_banner_message
+        await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+        return
+
+    # Store session
+    async with casino_engine.session_lock:
+        casino_engine.active_bj_sessions[user_id] = {
+            "bet": bet,
+            "deck": deck,
+            "player_hand": player_hand,
+            "dealer_hand": dealer_hand,
+            "board_id": board_id,
+            "chat_id": chat_id,
+        }
+
+    kb = casino_engine.get_blackjack_keyboard(bet, can_double=True)
+    caption = (
+        f"🃏 <b>БЛЭКДЖЕК: ИДЕТ ИГРА</b>\n\n"
+        f"👤 Твоя рука: {casino_engine.format_hand(player_hand)} (<b>{player_score}</b>)\n"
+        f"🎩 Дилер: {casino_engine.format_hand(dealer_hand, hide_dealer_card=True)}\n\n"
+        f"• Ставка: <code>{bet} ₪</code>\n"
+        f"👇 Твой ход: взять карту, остановиться или удвоить ставку?"
+    )
+    from banner_manager import send_banner_message
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+
+
+@dp.message(Command("rroulette", "гусар", "русская_рулетка", "самострел"))
+async def cmd_russian_roulette(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    parts = (message.text or "").strip().split()
+    bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
+    bet = max(10, min(1000000, bet))
+
+    await _execute_russian_roulette_shot(message.bot, message.chat.id, user_id, board_id, bet)
+
+
+async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: str, bet: int):
+    db = await get_pool()
+    session = casino_engine.active_roulette_sessions.get(user_id)
+
+    if not session:
+        # First shot: deduct initial bet
+        async with db_lock:
+            async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                row = await c.fetchone()
+                balance = row[0] if row and row[0] is not None else 0
+
+            if balance < bet:
+                from banner_manager import send_banner_message
+                await send_banner_message(
+                    bot=bot,
+                    chat_id=chat_id,
+                    caption=f"❌ <b>Недостаточно средств для Русской Рулетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.",
+                    category="roulette",
+                    parse_mode="HTML"
+                )
+                return
+
+            await db.execute("UPDATE Users SET balance = MAX(0, balance - ?) WHERE user_id = ? AND board_id = ?", (bet, user_id, board_id))
+            await db.commit()
+
+    survived, mult, streak, status = casino_engine.play_russian_roulette_shot(user_id, bet)
+
+    if not survived:
+        async with db_lock:
+            async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                row = await c.fetchone()
+                new_bal = row[0] if row else 0
+
+        caption = (
+            f"💀 <b>РУССКАЯ РУЛЕТКА: САМОСТРЕЛ</b>\n\n"
+            f"╔═════════════════╗\n"
+            f"║  💥 💀 💥 💀 💥  ║\n"
+            f"╚═════════════════╝\n\n"
+            f"<b>{status}</b>\n"
+            f"• Потеряно: <code>{bet} ₪</code>\n"
+            f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
+        )
+        kb = casino_engine.get_casino_hub_keyboard()
+        from banner_manager import send_banner_message
+        await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+        return
+
+    # Survived
+    kb = casino_engine.get_roulette_keyboard(bet, mult)
+    win_potential = int(bet * mult)
+    caption = (
+        f"💀 <b>РУССКАЯ РУЛЕТКА: ВЫЖИВАНИЕ</b>\n\n"
+        f"<b>{status}</b>\n\n"
+        f"• Начальная ставка: <code>{bet} ₪</code>\n"
+        f"• Текущий куш: <b>+{win_potential} ₪</b> (Множитель: <code>x{mult:.2f}</code>)\n"
+        f"• Выстрелов подряд: <b>{streak} / 6</b>\n\n"
+        f"Рискнешь нажать на спуск еще раз или заберешь деньги?"
+    )
+    from banner_manager import send_banner_message
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+
+
+@dp.callback_query(F.data.startswith("cas:"))
+async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    parts = callback.data.split(":")
+    section = parts[1] if len(parts) > 1 else ""
+    db = await get_pool()
+
+    if section == "hub":
+        await cmd_casino_hub(callback.message, board_id)
+        await callback.answer()
+        return
+
+    elif section == "menu":
+        game = parts[2] if len(parts) > 2 else ""
+        if game == "slots":
+            await _execute_slots_spin(callback.bot, callback.message.chat.id, user_id, board_id, 100)
+        elif game == "coin":
+            await _execute_coinflip(callback.bot, callback.message.chat.id, user_id, board_id, 100, "heads")
+        elif game == "bj":
+            await _start_blackjack_game(callback.bot, callback.message.chat.id, user_id, board_id, 100)
+        elif game == "roulette":
+            await _execute_russian_roulette_shot(callback.bot, callback.message.chat.id, user_id, board_id, 100)
+        elif game == "drop":
+            await cmd_money_drop(callback.message, board_id)
+        elif game == "balance":
+            async with db_lock:
+                async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                    row = await c.fetchone()
+                    bal = row[0] if row and row[0] is not None else 0
+            await callback.answer(f"💳 Твой баланс: {int(bal)} ₪", show_alert=True)
+        await callback.answer()
+        return
+
+    elif section == "slots":
+        action = parts[2] if len(parts) > 2 else ""
+        if action == "spin":
+            bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
+            await _execute_slots_spin(callback.bot, callback.message.chat.id, user_id, board_id, bet)
+            await callback.answer()
+
+    elif section == "coin":
+        side_or_action = parts[2] if len(parts) > 2 else "heads"
+        if side_or_action in ["heads", "tails"]:
+            bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
+            await _execute_coinflip(callback.bot, callback.message.chat.id, user_id, board_id, bet, side_or_action)
+            await callback.answer()
+        elif side_or_action == "preset":
+            bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
+            kb = casino_engine.get_coinflip_keyboard(bet)
+            try:
+                await callback.message.edit_reply_markup(reply_markup=kb)
+            except Exception:
+                pass
+            await callback.answer(f"Ставка изменена на {bet} ₪")
+
+    elif section == "bj":
+        action = parts[2] if len(parts) > 2 else ""
+        session = casino_engine.active_bj_sessions.get(user_id)
+        if not session:
+            await callback.answer("❌ Сессия блэкджека завершена или не найдена. Начни новую игру!", show_alert=True)
+            return
+
+        bet = session["bet"]
+        deck = session["deck"]
+        p_hand = session["player_hand"]
+        d_hand = session["dealer_hand"]
+
+        if action == "hit":
+            p_hand.append(deck.pop())
+            p_score = casino_engine.calculate_hand(p_hand)
+            
+            if p_score > 21:
+                # Bust
+                casino_engine.active_bj_sessions.pop(user_id, None)
+                async with db_lock:
+                    async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                        row = await c.fetchone()
+                        new_bal = row[0] if row else 0
+
+                caption = (
+                    f"🃏 <b>БЛЭКДЖЕК: ПЕРЕБОР! 💥</b>\n\n"
+                    f"👤 Твоя рука: {casino_engine.format_hand(p_hand)} (<b>{p_score}</b>)\n"
+                    f"🎩 Дилер: {casino_engine.format_hand(d_hand)} (<b>{casino_engine.calculate_hand(d_hand)}</b>)\n\n"
+                    f"💀 <b>Перебор! Ставка {bet} ₪ сгорела.</b>\n"
+                    f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
+                )
+                kb = casino_engine.get_casino_hub_keyboard()
+                from banner_manager import send_banner_message
+                await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+                await callback.answer("Перебор!")
+                return
+
+            # Still in game
+            kb = casino_engine.get_blackjack_keyboard(bet, can_double=False)
+            caption = (
+                f"🃏 <b>БЛЭКДЖЕК: ИДЕТ ИГРА</b>\n\n"
+                f"👤 Твоя рука: {casino_engine.format_hand(p_hand)} (<b>{p_score}</b>)\n"
+                f"🎩 Дилер: {casino_engine.format_hand(d_hand, hide_dealer_card=True)}\n\n"
+                f"• Ставка: <code>{bet} ₪</code>\n"
+                f"👇 Твой ход: взять карту или остановиться?"
+            )
+            try:
+                await callback.message.edit_caption(caption=caption, parse_mode="HTML", reply_markup=kb)
+            except Exception:
+                pass
+            await callback.answer()
+            return
+
+        elif action in ["stand", "double"]:
+            if action == "double":
+                # Check balance for double
+                async with db_lock:
+                    async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                        row = await c.fetchone()
+                        bal = row[0] if row and row[0] is not None else 0
+                    if bal < bet:
+                        await callback.answer("❌ Недостаточно средств для дабла!", show_alert=True)
+                        return
+                    await db.execute("UPDATE Users SET balance = MAX(0, balance - ?) WHERE user_id = ? AND board_id = ?", (bet, user_id, board_id))
+                    await db.commit()
+                bet *= 2
+                session["bet"] = bet
+                p_hand.append(deck.pop())
+
+            casino_engine.active_bj_sessions.pop(user_id, None)
+            p_score = casino_engine.calculate_hand(p_hand)
+            
+            if p_score > 21:
+                # Double bust
+                async with db_lock:
+                    async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                        row = await c.fetchone()
+                        new_bal = row[0] if row else 0
+                caption = (
+                    f"🃏 <b>БЛЭКДЖЕК: ПЕРЕБОР НА ДАБЛЕ! 💥</b>\n\n"
+                    f"👤 Твоя рука: {casino_engine.format_hand(p_hand)} (<b>{p_score}</b>)\n"
+                    f"🎩 Дилер: {casino_engine.format_hand(d_hand)} (<b>{casino_engine.calculate_hand(d_hand)}</b>)\n\n"
+                    f"💀 <b>Ставка {bet} ₪ сгорела.</b>\n"
+                    f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
+                )
+                kb = casino_engine.get_casino_hub_keyboard()
+                from banner_manager import send_banner_message
+                await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+                await callback.answer()
+                return
+
+            # Dealer plays: hits until >= 17
+            while casino_engine.calculate_hand(d_hand) < 17:
+                d_hand.append(deck.pop())
+
+            d_score = casino_engine.calculate_hand(d_hand)
+            
+            # Determine winner
+            if d_score > 21:
+                result_title = "🎉 ДИЛЕР ПЕРЕБРАЛ! ПОБЕДА!"
+                payout = bet * 2
+            elif p_score > d_score:
+                result_title = "🎉 ТЫ ПОБЕДИЛ ДИЛЕРА!"
+                payout = bet * 2
+            elif p_score == d_score:
+                result_title = "🤝 НИЧЬЯ (PUSH)! Возврат ставки."
+                payout = bet
+            else:
+                result_title = "💀 ДИЛЕР ПОБЕДИЛ! Ставка сгорела."
+                payout = 0
+
+            async with db_lock:
+                if payout > 0:
+                    await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (payout, user_id, board_id))
+                    await db.commit()
+                async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                    row = await c.fetchone()
+                    new_bal = row[0] if row else 0
+
+            caption = (
+                f"🃏 <b>БЛЭКДЖЕК: ИТОГИ РАЗДАЧИ</b>\n\n"
+                f"👤 Твоя рука: {casino_engine.format_hand(p_hand)} (<b>{p_score}</b>)\n"
+                f"🎩 Дилер: {casino_engine.format_hand(d_hand)} (<b>{d_score}</b>)\n\n"
+                f"<b>{result_title}</b>\n"
+                f"• Ставка: <code>{bet} ₪</code> | Выплата: <b>+{payout} ₪</b>\n"
+                f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
+            )
+            kb = casino_engine.get_casino_hub_keyboard()
+            from banner_manager import send_banner_message
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+            await callback.answer()
+
+        elif action == "surrender":
+            casino_engine.active_bj_sessions.pop(user_id, None)
+            refund = bet // 2
+            async with db_lock:
+                await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (refund, user_id, board_id))
+                await db.commit()
+                async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                    row = await c.fetchone()
+                    new_bal = row[0] if row else 0
+            caption = (
+                f"🏳️ <b>БЛЭКДЖЕК: СДАЧА</b>\n\n"
+                f"Ты сбросил карты и вернул половину ставки (<code>+{refund} ₪</code>).\n"
+                f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
+            )
+            kb = casino_engine.get_casino_hub_keyboard()
+            from banner_manager import send_banner_message
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+            await callback.answer()
+
+    elif section == "roulette":
+        action = parts[2] if len(parts) > 2 else ""
+        bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
+        
+        if action == "shoot":
+            await _execute_russian_roulette_shot(callback.bot, callback.message.chat.id, user_id, board_id, bet)
+            await callback.answer()
+        elif action == "cashout":
+            session = casino_engine.active_roulette_sessions.pop(user_id, None)
+            if not session:
+                await callback.answer("Сессия не найдена", show_alert=True)
+                return
+            mult = session.get("current_mult", 1.25)
+            payout = int(bet * mult)
+            
+            async with db_lock:
+                await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (payout, user_id, board_id))
+                await db.commit()
+                async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                    row = await c.fetchone()
+                    new_bal = row[0] if row else 0
+
+            caption = (
+                f"💰 <b>РУССКАЯ РУЛЕТКА: КУШ ЗАБРАН!</b>\n\n"
+                f"🎉 Ты вовремя вышел из игры и забрал выигрыш!\n"
+                f"• Выплата: <b>+{payout} ₪</b> (Множитель <code>x{mult:.2f}</code>)\n"
+                f"💳 Новый баланс: <code>{int(new_bal)} ₪</code>"
+            )
+            kb = casino_engine.get_casino_hub_keyboard()
+            from banner_manager import send_banner_message
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+            await callback.answer(f"Забрано +{payout} ₪!")
 
 @dp.message(Command("mystats", "my_stats", "statsme", "карта", "деградация", "карточка"))
 async def cmd_my_stats(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -17300,6 +18046,20 @@ def start_event_loop_stall_watchdog():
     )
     thread.start()
 
+async def drop_expiry_loop():
+    """Фоновая очистка и возврат шекелей за невостребованные дропы."""
+    while True:
+        try:
+            await asyncio.sleep(30)
+            db = await get_pool()
+            expired = await drop_engine.expire_unclaimed_drops_step(db_lock, db)
+            if expired:
+                runtime_logger.info("💸 [DROP_EXPIRE] Refunded %d unclaimed drops.", len(expired))
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            runtime_logger.warning("Drop expiry loop error: %s", e)
+
 async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCPSite | None):
 
     from conan import conan_roaster
@@ -17342,6 +18102,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "admin_action_sync_worker": lambda: admin_action_sync_worker(),
         "tagging_worker": lambda: tagging_loop(),
         "postcopies_daily_cleanup": lambda: postcopies_daily_cleanup_loop(),
+        "drop_expiry_cleaner": lambda: drop_expiry_loop(),
         "periodic_stats_publisher": lambda: periodic_publisher.periodic_stats_publisher(
             bots,
             lambda: board_data.get('b', {}).get('users', {}).get('active', set())

@@ -471,6 +471,23 @@ async def _create_tables(db):
         );
         """)
         await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS MoneyDrops (
+            drop_id TEXT PRIMARY KEY,
+            donor_id INTEGER NOT NULL,
+            board_id TEXT NOT NULL,
+            amount REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at REAL NOT NULL,
+            claimed_by INTEGER,
+            claimed_board_id TEXT,
+            claimed_at REAL,
+            refunded_at REAL
+        );
+        """)
+        await cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_moneydrops_status_created ON MoneyDrops (status, created_at);
+        """)
+        await cursor.execute("""
         CREATE TABLE IF NOT EXISTS ImportQueue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             task_id TEXT NOT NULL,
