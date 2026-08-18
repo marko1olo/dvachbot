@@ -4215,6 +4215,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         return
 
     import time
+    from shared_state import count_active_attacker_effects, register_attacker_effect
     db = await get_pool()
     current_time = int(time.time())
 
@@ -4231,7 +4232,18 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
         return
 
-    # Защита от спама мут-ганами и дебаффами (максимум 1 активный дебафф)
+    # Защита от спама: максимум 2 активных эффекта каждого типа от одного автора
+    if count_active_attacker_effects("mute_gun", user_id) >= 2:
+        await message.answer(
+            "⚠️ <b>Лимит активных атак!</b>\n"
+            "У тебя уже есть 2 одновременно активные цели от Мут-Гана.\n"
+            "Подожди окончания действия эффекта у жертв, прежде чем стрелять снова.\n"
+            "Мут-Ган остался в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
+        return
+
+    # Защита от спама мут-ганами и дебаффами (максимум 1 активный дебафф на цель)
     is_neut, reason = await is_target_neutralized(target_id, board_id, db)
     if is_neut:
         await message.answer(
@@ -4267,6 +4279,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
             await db.commit()
 
     if is_bounced:
+        register_attacker_effect("mute_gun", target_id, user_id, 3600)
         await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items, t_items))
         return
 
@@ -4274,6 +4287,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(seconds=3600)
 
     await apply_regular_mute(target_id, board_id, 3600)
+    register_attacker_effect("mute_gun", user_id, target_id, 3600)
     
     shoot_msg = (
         f"🔫 <b>ПИУ-ПИУ!</b>\n\n"
@@ -4408,6 +4422,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         return
 
     import time
+    from shared_state import count_active_attacker_effects, register_attacker_effect
     db = await get_pool()
     current_time = int(time.time())
 
@@ -4419,6 +4434,17 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0 or target_id == user_id: 
         await message.answer("⚠️ Не удалось прицелиться или ты пытаешься обмазать сам себя.")
+        return
+
+    # Защита от спама: максимум 2 активных обмазанных жертвы от одного автора
+    if count_active_attacker_effects("shit_gun", user_id) >= 2:
+        await message.answer(
+            "🐒 <b>Лимит активных бросков!</b>\n"
+            "Ты уже обмазал говном 2 анонов одновременно.\n"
+            "Подожди, пока хотя бы один отмоется, прежде чем кидать снова.\n"
+            "Кусок говна остался в твоих карманах.",
+            parse_mode="HTML"
+        )
         return
     
     t_items = await _get_user_active_items(db, target_id, board_id)
@@ -4447,6 +4473,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
             (target_id, board_id, json.dumps(t_items))
         )
         await db.commit()
+    register_attacker_effect("shit_gun", user_id, target_id, 3600)
     await message.answer("🐒 <b>ПОПАДАНИЕ!</b>\nТы метко кинул кусок говна! Жертва обмазана на 1 час и получит иконку 💩 во всех своих постах.", parse_mode="HTML")
     try:
         await message.bot.send_message(target_id, "🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\nКакой-то анон обмазал тебя. У тебя статус 💩 на 1 час.\nЛекарство от статуса: Аминазин в /shop.", parse_mode="HTML")
@@ -4465,6 +4492,7 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
         await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, чтобы подлить слабительное!", parse_mode="HTML")
         return
     import time, json
+    from shared_state import count_active_attacker_effects, register_attacker_effect
     db = await get_pool()
     current_time = int(time.time())
 
@@ -4475,6 +4503,17 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0 or target_id == user_id: 
         await message.answer("⚠️ Не удалось найти цель или ты пытаешься проклясть сам себя.")
+        return
+
+    # Защита от спама: максимум 2 активных проклятия от одного автора
+    if count_active_attacker_effects("laxative_gun", user_id) >= 2:
+        await message.answer(
+            "🚽 <b>Лимит активных проклятий!</b>\n"
+            "Ты уже отравил слабительным 2 анонов одновременно.\n"
+            "Подожди окончания действия эффекта у жертв, прежде чем подливать снова.\n"
+            "Слабительное осталось в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
         return
     
     # Защита от спама: 1 активный дебафф (кроме говна)
@@ -4513,6 +4552,7 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
             (target_id, board_id, json.dumps(t_items), current_time + 3600)
         )
         await db.commit()
+    register_attacker_effect("laxative_gun", user_id, target_id, 3600)
     await message.answer("🚽 <b>ПРОКЛЯТИЕ СРАБОТАЛО!</b>\nТы подлил слабительное в чай этому анону. У него начался словесный понос: он целый час не сможет писать посты длиннее 50 символов!", parse_mode="HTML")
 
 @dp.message(Command("partyvan"))
@@ -4524,6 +4564,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         return
     import json, time
     from datetime import datetime, timedelta, UTC
+    from shared_state import count_active_attacker_effects, register_attacker_effect
     db = await get_pool()
     current_time = int(time.time())
 
@@ -4534,6 +4575,17 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0 or target_id == user_id: 
         await message.answer("⚠️ Не удалось определить цель доноса или ты пытаешься посадить сам себя.")
+        return
+
+    # Защита от спама: максимум 2 активных вызова ОМОНа от одного автора
+    if count_active_attacker_effects("partyvan_gun", user_id) >= 2:
+        await message.answer(
+            "🚔 <b>Лимит активных вызовов!</b>\n"
+            "По твоим доносам уже отбывают срок 2 анона в КПЗ.\n"
+            "Подожди освобождения хотя бы одного, прежде чем вызывать новый пативэн.\n"
+            "Рация осталась в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
         return
         
     # Защита от спама: 1 активный дебафф (кроме говна)
@@ -4564,6 +4616,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     async with storage_lock:
         board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(hours=12)
     await apply_regular_mute(target_id, board_id, 12 * 3600)
+    register_attacker_effect("partyvan_gun", user_id, target_id, 12 * 3600)
     await message.bot.send_message(message.chat.id, f"🚔 <b>ВНИМАНИЕ! РАБОТАЕТ ОМОН!</b> 🚔\nПо доносу анона за автором этого поста выехал пативэн! Жертва отправлена в КПЗ (жесткий мут) на 12 часов!\n<i>Выйти раньше можно только дав взятку в /shop.</i>", reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
 
 @dp.message(Command("mega"))

@@ -302,6 +302,18 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
         await message.reply("У тебя нет доступа к вызову Пативэна! Купи его в /shop.")
         return
 
+    from shared_state import count_active_attacker_effects, register_attacker_effect
+    # Защита от спама: максимум 2 активных вызова ОМОНа от одного автора
+    if count_active_attacker_effects("partyvan_gun", user_id) >= 2:
+        await message.reply(
+            "🚔 <b>Лимит активных вызовов!</b>\n"
+            "По твоим доносам уже отбывают срок 2 анона в КПЗ.\n"
+            "Подожди освобождения хотя бы одного, прежде чем вызывать новый пативэн.\n"
+            "Рация осталась в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
+        return
+
     # Защита от спама дебаффами: на аноне может быть только 1 активный дебафф (кроме говна)
     try:
         import main
@@ -362,6 +374,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
         await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                          (json.dumps(active_items), user_id, board_id))
         await db.commit()
+    register_attacker_effect("partyvan_gun", user_id, target_id, 12 * 3600)
         
     try:
         await message.bot.send_message(
@@ -406,9 +419,20 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
     if not active_items.get("shit_gun"):
         await message.reply("У тебя нет говна в карманах! Купи его в /shop.")
         return
+
+    from shared_state import count_active_attacker_effects, register_attacker_effect
+    # Защита от спама: максимум 2 активных обмазанных жертвы от одного автора
+    if count_active_attacker_effects("shit_gun", user_id) >= 2:
+        await message.reply(
+            "🐒 <b>Лимит активных бросков!</b>\n"
+            "Ты уже обмазал говном 2 анонов одновременно.\n"
+            "Подожди, пока хотя бы один отмоется, прежде чем кидать снова.\n"
+            "Кусок говна остался в твоих карманах.",
+            parse_mode="HTML"
+        )
+        return
         
     active_items["shit_gun"] = False
-    
     now = int(time.time())
     
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
@@ -448,6 +472,7 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(final_items), target_id, board_id))
         await db.commit()
+    register_attacker_effect("shit_gun", user_id, final_target, 3600)
         
     if bounce:
         try:
@@ -583,6 +608,18 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
         await message.reply("У тебя нет слабительного! Купи его в /shop.")
         return
 
+    from shared_state import count_active_attacker_effects, register_attacker_effect
+    # Защита от спама: максимум 2 активных проклятия от одного автора
+    if count_active_attacker_effects("laxative_gun", user_id) >= 2:
+        await message.reply(
+            "🚽 <b>Лимит активных проклятий!</b>\n"
+            "Ты уже отравил слабительным 2 анонов одновременно.\n"
+            "Подожди окончания действия эффекта у жертв, прежде чем подливать снова.\n"
+            "Слабительное осталось в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
+        return
+
     # Защита от спама дебаффами: на аноне может быть только 1 активный дебафф (кроме говна)
     try:
         import main
@@ -633,6 +670,7 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
         except Exception:
             pass
         await db.commit()
+    register_attacker_effect("laxative_gun", user_id, target_id, 3600)
         
     try: await message.bot.send_message(target_id, "🚽 Тебе подсыпали слабительное! В течение 1 часа ты не сможешь писать посты длиннее 50 символов (не успеешь дописать и побежишь в туалет).", parse_mode="HTML")
     except Exception: pass

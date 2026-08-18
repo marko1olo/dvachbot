@@ -97,10 +97,34 @@ reaction_ratelimit = defaultdict(float)
 current_deliveries = {}
 posts_pending_deletion = set()
 
+# Трекинг активных атак для ограничения спама (макс. 2 активных эффекта каждого типа на автора)
+_ACTIVE_AUTHOR_ATTACKS: dict[str, dict[int, dict[int, float]]] = defaultdict(lambda: defaultdict(dict))
+
+def count_active_attacker_effects(item_type: str, attacker_id: int) -> int:
+    """
+    Возвращает количество одновременно активных жертв от данного атакующего для item_type.
+    Автоматически очищает истекшие эффекты.
+    """
+    now = time.time()
+    victim_map = _ACTIVE_AUTHOR_ATTACKS[item_type].get(attacker_id, {})
+    expired = [tgt for tgt, exp in list(victim_map.items()) if exp <= now]
+    for tgt in expired:
+        victim_map.pop(tgt, None)
+    return len(victim_map)
+
+def register_attacker_effect(item_type: str, attacker_id: int, target_id: int, duration_seconds: float):
+    """
+    Регистрирует активный эффект атакующего на жертву.
+    """
+    now = time.time()
+    _ACTIVE_AUTHOR_ATTACKS[item_type][attacker_id][target_id] = now + duration_seconds
+
 # Explicitly export private helpers so 'from shared_state import *' in
 # broadcaster.py, delivery_manager.py, post_processor.py, archive_manager.py
 # picks them up. Without __all__, Python excludes names starting with '_'.
 __all__ = [
+    'count_active_attacker_effects',
+    'register_attacker_effect',
     'RE_REPLY_QUOTE',
     'RE_REPLY_QUOTE_FORMAT',
     'RE_MULTI_REPLY',
