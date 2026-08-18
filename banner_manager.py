@@ -113,13 +113,35 @@ def _init_banners():
         "roulette": []
     }
 
-    for fname in all_files:
-        fn_lower = fname.lower()
-        for cat, keywords in CATEGORY_PATTERNS.items():
-            if cat == "start":
-                continue
-            if any(kw in fn_lower for kw in keywords):
-                _CATEGORIZED_BANNERS[cat].append(fname)
+    CATEGORIES_FILE = PROJECT_ROOT / "data" / "banner_categories.json"
+    loaded_from_file = False
+
+    if CATEGORIES_FILE.exists():
+        try:
+            with open(CATEGORIES_FILE, "r", encoding="utf-8") as f:
+                saved_categories = json.load(f)
+            if isinstance(saved_categories, dict) and "start" in saved_categories:
+                for cat in CATEGORY_PATTERNS:
+                    _CATEGORIZED_BANNERS[cat] = [
+                        fn for fn in saved_categories.get(cat, [])
+                        if (BANNERS_DIR / fn).exists()
+                    ]
+                _CATEGORIZED_BANNERS["all"] = all_files.copy()
+                _CATEGORIZED_BANNERS["start"] = all_files.copy()
+                loaded_from_file = True
+                logger.info(f"[banner_manager] Loaded {len(all_files)} visually audited banners across {len(CATEGORY_PATTERNS)} categories from banner_categories.json")
+        except Exception as e:
+            logger.warning(f"[banner_manager] Failed to load banner_categories.json: {e}")
+
+    if not loaded_from_file:
+        for fname in all_files:
+            fn_lower = fname.lower()
+            for cat, keywords in CATEGORY_PATTERNS.items():
+                if cat == "start":
+                    continue
+                if any(kw in fn_lower for kw in keywords):
+                    if fname not in _CATEGORIZED_BANNERS[cat]:
+                        _CATEGORIZED_BANNERS[cat].append(fname)
 
     # Ensure no empty categories and populate initial shuffle decks
     for cat in _CATEGORIZED_BANNERS:
