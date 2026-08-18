@@ -6096,6 +6096,7 @@ async def cmd_money_drop(message: types.Message, board_id: str | None, stream: s
             category="economy",
             parse_mode="HTML"
         )
+        spawn_task(_broadcast_money_drop(message.bot, board_id, message.chat.id, caption, kb))
         return
 
     # Interactive selector if no argument given
@@ -6115,6 +6116,21 @@ async def cmd_money_drop(message: types.Message, board_id: str | None, stream: s
         category="economy",
         parse_mode="HTML"
     )
+
+async def _broadcast_money_drop(bot, board_id: str, exclude_chat_id: int, caption: str, kb):
+    """Рассылает сообщение о дропе шекелей всем активным анонам на доске."""
+    active_users = list(board_data.get(board_id, {}).get('users', {}).get('active', []))
+    for target_uid in active_users:
+        if target_uid != exclude_chat_id:
+            try:
+                await bot.send_message(
+                    chat_id=target_uid,
+                    text=caption,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
 
 @dp.callback_query(F.data.startswith("drop:"))
 async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
@@ -6192,6 +6208,7 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
             category="economy",
             parse_mode="HTML"
         )
+        spawn_task(_broadcast_money_drop(callback.bot, board_id, callback.message.chat.id, caption, kb))
         return
 
     elif action == "cancel_menu":
