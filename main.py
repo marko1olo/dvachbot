@@ -6090,6 +6090,10 @@ async def cmd_casino_hub(message: types.Message, board_id: str | None, stream: s
         category="roulette",
         parse_mode="HTML"
     )
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 
 @dp.message(Command("slots", "казик", "слоты", "777", "spin"))
@@ -7421,12 +7425,7 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
     elif lang == 'jp': final = f"✅ ユーザー <code>{target_id}</code> を {count} 個の板でBAN/ミュート解除しました。"
     else: final = f"✅ Пользователь <code>{target_id}</code> разбанен/размучен на {count} досках."
     await status_msg.edit_text(final, parse_mode="HTML")
-@dp.message(Command("menu"))
-async def cmd_menu(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    """
-    Открывает быстрое меню по команде /menu.
-    """
-@dp.message(Command("menu"))
+@dp.message(Command("menu", "меню"))
 async def cmd_menu(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
     Открывает быстрое меню по команде /menu с баннером.
@@ -18370,6 +18369,12 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="start", description="Запустить бота"),
         BotCommand(command="help", description="Помощь по командам"),
         BotCommand(command="menu", description="Главное меню"),
+        BotCommand(command="casino", description="Подпольное Казино Тгача"),
+        BotCommand(command="games", description="Игры и казино"),
+        BotCommand(command="slots", description="Слоты 777"),
+        BotCommand(command="coinflip", description="Монетка 50/50"),
+        BotCommand(command="bj", description="Блэкджек 21"),
+        BotCommand(command="rroulette", description="Русская рулетка"),
         BotCommand(command="app", description="Открыть Mini App"),
         BotCommand(command="getid", description="Узнать свой ID"),
         BotCommand(command="whois", description="Информация о пользователе"),
