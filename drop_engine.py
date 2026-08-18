@@ -1,12 +1,12 @@
 """
 Drop Engine for DvachBot: Public Money Drop ("Чек / Дроп шекелей в тред на реакцию")
-100% race-condition protected inside atomic db_lock.
+100% race-condition protected inside atomic db_lock & drop_lock, with persistent DB backup in MoneyDrops table.
 """
 
 import asyncio
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -36,8 +36,49 @@ drop_lock = asyncio.Lock()
 
 
 # -----------------------------------------------------------------------------
-# Drop Creation & Claiming
+# Drop Creation, Claiming & Persistence
 # -----------------------------------------------------------------------------
+
+async def init_drop_engine(db_conn) -> int:
+    """
+    Загружает неистекшие активные дропы из БД при старте бота.
+    Если дроп истек во время оффлайна бота, автоматически возвращает шекели донору.
+    """
+    now = time.time()
+    loaded = 0
+    from common.database import add_user_global_balance
+    try:
+        async with db_conn.execute("SELECT drop_id, donor_id, board_id, amount, created_at FROM MoneyDrops WHERE status = 'active'") as c:
+            rows = await c.fetchall()
+        
+        async with drop_lock:
+            for r in rows:
+                d_id, donor, board, amt, c_at = r
+                exp_at = c_at + 600.0
+                if now < exp_at:
+                    donor_name = "Анон"
+                    active_drops[d_id] = DropRecord(
+                        drop_id=d_id,
+                        donor_id=donor,
+                        donor_name=donor_name,
+                        board_id=board,
+                        amount=int(amt),
+                        created_at=c_at,
+                        expires_at=exp_at,
+                        status="active",
+                    )
+                    loaded += 1
+                else:
+                    await db_conn.execute(
+                        "UPDATE MoneyDrops SET status = 'expired', refunded_at = ? WHERE drop_id = ?",
+                        (now, d_id),
+                    )
+                    await add_user_global_balance(db_conn, donor, board, int(amt))
+            await db_conn.commit()
+    except Exception:
+        pass
+    return loaded
+
 
 async def create_money_drop(
     donor_id: int,
@@ -50,11 +91,15 @@ async def create_money_drop(
 ) -> Tuple[bool, str, Optional[DropRecord]]:
     """
     Atomically creates a public money drop by deducting funds from donor global balance.
+    Persists drop in MoneyDrops DB table.
     """
     if amount < 10:
         return False, "❌ Минимальная сумма для дропа — 10 ₪.", None
 
     from common.database import deduct_user_global_balance, get_user_global_balance
+
+    drop_id = secrets.token_hex(6)
+    now = time.time()
 
     async with db_lock:
         try:
@@ -62,12 +107,15 @@ async def create_money_drop(
             if not ok:
                 current_bal = await get_user_global_balance(db_conn, donor_id)
                 return False, f"❌ Недостаточно средств! Твой баланс: {int(current_bal)} ₪, а попытка дропнуть: {amount} ₪.", None
+            
+            await db_conn.execute(
+                "INSERT INTO MoneyDrops (drop_id, donor_id, board_id, amount, status, created_at) VALUES (?, ?, ?, ?, 'active', ?)",
+                (drop_id, donor_id, board_id, float(amount), now),
+            )
             await db_conn.commit()
         except Exception as e:
             return False, f"❌ Ошибка базы данных при создании дропа: {e}", None
 
-    drop_id = secrets.token_hex(6)
-    now = time.time()
     record = DropRecord(
         drop_id=drop_id,
         donor_id=donor_id,
@@ -100,7 +148,7 @@ async def claim_money_drop(
     async with drop_lock:
         record = active_drops.get(drop_id)
         if not record:
-            return False, "❌ Дроп не найден или уже был удален из памяти.", None
+            return False, "❌ Дроп не найден или уже был завершен.", None
 
         if record.status == "claimed":
             winner = record.claimed_name or f"Анон #{record.claimed_by}"
@@ -121,11 +169,15 @@ async def claim_money_drop(
         record.claimed_name = claimer_name
         record.claimed_at = time.time()
 
-    # Atomically credit claimer in DB
+    # Atomically credit claimer in DB and update MoneyDrops record
     from common.database import add_user_global_balance
     async with db_lock:
         try:
             await add_user_global_balance(db_conn, claimer_id, claimer_board_id, record.amount)
+            await db_conn.execute(
+                "UPDATE MoneyDrops SET status = 'claimed', claimed_by = ?, claimed_board_id = ?, claimed_at = ? WHERE drop_id = ?",
+                (claimer_id, claimer_board_id, record.claimed_at, drop_id),
+            )
             await db_conn.commit()
         except Exception as e:
             # Revert status on severe db failure
@@ -159,9 +211,14 @@ async def cancel_money_drop(
         record.status = "cancelled"
 
     from common.database import add_user_global_balance
+    now = time.time()
     async with db_lock:
         try:
             await add_user_global_balance(db_conn, record.donor_id, record.board_id, record.amount)
+            await db_conn.execute(
+                "UPDATE MoneyDrops SET status = 'cancelled', refunded_at = ? WHERE drop_id = ?",
+                (now, drop_id),
+            )
             await db_conn.commit()
         except Exception as e:
             return False, f"❌ Ошибка возврата средств: {e}"
@@ -190,6 +247,10 @@ async def expire_unclaimed_drops_step(db_lock: asyncio.Lock, db_conn) -> List[Dr
         for rec in expired_list:
             try:
                 await add_user_global_balance(db_conn, rec.donor_id, rec.board_id, rec.amount)
+                await db_conn.execute(
+                    "UPDATE MoneyDrops SET status = 'expired', refunded_at = ? WHERE drop_id = ?",
+                    (now, rec.drop_id),
+                )
             except Exception:
                 pass
         try:

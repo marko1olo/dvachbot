@@ -19787,6 +19787,14 @@ async def main():
             healthcheck_site = None
         setup_lifecycle_handlers(loop, active_bots_list, healthcheck_site)
         await restore_durable_delivery_queue()
+        try:
+            import drop_engine
+            db_conn = await get_pool()
+            loaded_drops = await drop_engine.init_drop_engine(db_conn)
+            if loaded_drops > 0:
+                print(f"💸 [DropEngine] Восстановлено {loaded_drops} активных дропов шекелей.")
+        except Exception as e:
+            print(f"⚠️ Ошибка инициализации DropEngine: {e}")
         background_tasks = await start_background_tasks(GLOBAL_BOTS, healthcheck_site)
         print("⏳ Даем 1.5 секунд на инициализацию...")
         await asyncio.sleep(1.5)
