@@ -2962,6 +2962,10 @@ async def upsert_delivery_queue_item(
                         item_id = int(cursor.lastrowid)
                 await db.execute("COMMIT")
                 return item_id
+            except sqlite3.IntegrityError:
+                try: await db.execute("ROLLBACK")
+                except: pass
+                return None
             except sqlite3.OperationalError as e:
                 try: await db.execute("ROLLBACK")
                 except: pass
