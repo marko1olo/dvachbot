@@ -16432,16 +16432,29 @@ async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: in
 @dp.callback_query(F.data.startswith("admin_action:"))
 async def on_admin_action(callback: types.CallbackQuery):
     parts = callback.data.split(":")
+    if len(parts) < 2:
+        await callback.answer("Ошибка данных")
+        return
     action = parts[1]
     
     if action == "cancel":
-        await callback.message.delete()
+        try: await callback.message.delete()
+        except Exception: pass
         try: await callback.answer("Отменено")
         except Exception: pass
         return
         
-    target_id = int(parts[2])
-    board_id = parts[3]
+    if len(parts) < 4:
+        await callback.answer("Ошибка формата данных")
+        return
+
+    try:
+        target_id = int(parts[2])
+        board_id = parts[3]
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка параметров")
+        return
+
     admin_id = callback.from_user.id
     
     if not is_admin(admin_id, board_id):
@@ -16452,6 +16465,9 @@ async def on_admin_action(callback: types.CallbackQuery):
         await callback.answer("Баним...")
         await execute_ban(callback.bot, callback.message, target_id, board_id, admin_id)
     elif action == "wipe":
+        if len(parts) < 5 or not parts[4].isdigit():
+            await callback.answer("Ошибка: не указано время вайпа")
+            return
         minutes = int(parts[4])
         await callback.answer("Вайпаем...")
         await execute_wipe(callback.bot, callback.message, target_id, board_id, admin_id, minutes)
@@ -19090,12 +19106,19 @@ async def on_report_toggle_option(callback: types.CallbackQuery, board_id: str |
     Format: rep_t:<new_mask>:<author_id>:<post_num>:<board_id>:<chat_id>:<msg_id>
     """
     parts = callback.data.split(":")
-    new_mask = int(parts[1])
-    author_id = int(parts[2])
-    post_num = int(parts[3])
-    b_id = parts[4]
-    chat_id = int(parts[5])
-    msg_id = int(parts[6])
+    if len(parts) < 7:
+        await callback.answer("Ошибка формата данных")
+        return
+    try:
+        new_mask = int(parts[1])
+        author_id = int(parts[2])
+        post_num = int(parts[3])
+        b_id = parts[4]
+        chat_id = int(parts[5])
+        msg_id = int(parts[6])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка параметров")
+        return
 
     if not is_admin(callback.from_user.id, b_id):
         await callback.answer("У вас нет прав администратора.", show_alert=True)
@@ -19123,12 +19146,19 @@ async def on_report_apply_actions(callback: types.CallbackQuery, board_id: str |
     Format: rep_x:<mask>:<author_id>:<post_num>:<board_id>:<chat_id>:<msg_id>
     """
     parts = callback.data.split(":")
-    mask = int(parts[1])
-    author_id = int(parts[2])
-    post_num = int(parts[3])
-    b_id = parts[4]
-    chat_id = int(parts[5])
-    msg_id = int(parts[6])
+    if len(parts) < 7:
+        await callback.answer("Ошибка формата данных")
+        return
+    try:
+        mask = int(parts[1])
+        author_id = int(parts[2])
+        post_num = int(parts[3])
+        b_id = parts[4]
+        chat_id = int(parts[5])
+        msg_id = int(parts[6])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка параметров")
+        return
 
     if not is_admin(callback.from_user.id, b_id):
         await callback.answer("У вас нет прав администратора.", show_alert=True)
