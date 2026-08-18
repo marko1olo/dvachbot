@@ -334,8 +334,12 @@ async def _process_single_task(task):
                     elif mirror_type == 'freeimage':
                         success_link = await upload_file_to_freeimage(lpath)
                 else:
-                    logger.warning(f"⛔ All download methods failed for {file_id[:10]}. Rescheduling.")
-                    await reschedule_mirror_task(task_id, attempt)
+                    if attempt >= 3:
+                        logger.warning(f"⛔ All download methods failed {attempt} times for {file_id[:10]}. Removing unrecoverable task.")
+                        await remove_mirror_task(task_id)
+                    else:
+                        logger.warning(f"⛔ All download methods failed for {file_id[:10]} (attempt {attempt}/3). Rescheduling.")
+                        await reschedule_mirror_task(task_id, attempt)
                     return 
 
         finally:

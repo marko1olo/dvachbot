@@ -240,6 +240,28 @@ async def send_banner_message(
         return msg
     except Exception as e:
         err_text = str(e).lower()
+        if ("wrong file identifier" in err_text or "wrong file_id" in err_text or "file is temporarily unavailable" in err_text) and fname:
+            # Cached file_id was rejected (e.g. from different bot token or expired CDN cache). Invalidate and retry from local disk.
+            if fname in _BANNER_CACHE:
+                _BANNER_CACHE.pop(fname, None)
+                save_cache()
+            local_path = BANNERS_DIR / fname
+            if local_path.exists():
+                try:
+                    msg = await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=FSInputFile(str(local_path)),
+                        caption=caption,
+                        reply_markup=reply_markup,
+                        parse_mode=parse_mode
+                    )
+                    if msg.photo:
+                        _BANNER_CACHE[fname] = msg.photo[-1].file_id
+                        save_cache()
+                    return msg
+                except Exception as retry_e:
+                    logger.warning(f"[banner_manager] Local file retry also failed for {fname}: {retry_e}")
+
         if "caption is too long" in err_text or "caption_too_long" in err_text:
             logger.info(f"[banner_manager] Caption exceeds 1024 chars for {fname}, sending as text message.")
         else:

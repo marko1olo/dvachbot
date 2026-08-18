@@ -1646,6 +1646,8 @@ async def _handle_telegram_bad_request(exception: Exception, update) -> None:
         or "message is not modified" in err_msg
         or "message to delete not found" in err_msg
         or "message can't be deleted" in err_msg
+        or "there is no text in the message to edit" in err_msg
+        or "message to edit not found" in err_msg
     ):
         return
 
@@ -12443,11 +12445,13 @@ async def thread_activity_monitor(bots: dict[str, Bot]):
         try:
             await asyncio.sleep(600)  # Проверка каждые 10 минут
             thread_posts_by_board = defaultdict(lambda: defaultdict(list))
+            threshold_ts = time.time() - 3600.0
             async with storage_lock:
-                one_hour_ago_for_check = datetime.now(UTC) - timedelta(hours=1)
                 for post_data in messages_storage.values():
-                    timestamp = post_data.get('timestamp')
-                    if timestamp and timestamp > one_hour_ago_for_check:
+                    if not isinstance(post_data, dict):
+                        continue
+                    ts = normalize_storage_timestamp(post_data.get('timestamp'))
+                    if ts > threshold_ts:
                         board_id = post_data.get('board_id')
                         thread_id = post_data.get('thread_id')
                         if board_id in THREAD_BOARDS and thread_id:

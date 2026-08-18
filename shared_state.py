@@ -19,6 +19,29 @@ RE_MULTI_REPLY_LOCAL = re.compile(r'>>(\d+)')
 from common.board_config import BOARD_CONFIG
 import time
 import logging
+from datetime import datetime, timezone
+
+def normalize_storage_timestamp(val) -> float:
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, datetime):
+        if val.tzinfo is None:
+            val = val.replace(tzinfo=timezone.utc)
+        return val.timestamp()
+    if isinstance(val, str):
+        try:
+            return float(val)
+        except ValueError:
+            try:
+                dt = datetime.fromisoformat(val)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
+            except Exception:
+                return 0.0
+    return 0.0
 
 BOARDS = list(BOARD_CONFIG.keys())
 message_queues = {board: asyncio.Queue(maxsize=0) for board in BOARDS}
@@ -83,6 +106,7 @@ __all__ = [
     'RE_MULTI_REPLY',
     'RE_MULTI_REPLY_LOCAL',
     'BOARDS',
+    'normalize_storage_timestamp',
     'message_queues',
     'runtime_logger',
     'POSITIVE_REACTIONS',

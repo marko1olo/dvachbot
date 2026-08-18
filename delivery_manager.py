@@ -86,26 +86,7 @@ def _board_queue_oldest_age_sec(board_id: str | None) -> float:
 
 
 def _normalize_storage_timestamp(val) -> float:
-    if val is None:
-        return 0.0
-    if isinstance(val, (int, float)):
-        return float(val)
-    if isinstance(val, datetime):
-        if val.tzinfo is None:
-            val = val.replace(tzinfo=timezone.utc)
-        return val.timestamp()
-    if isinstance(val, str):
-        try:
-            return float(val)
-        except ValueError:
-            try:
-                dt = datetime.fromisoformat(val)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt.timestamp()
-            except Exception:
-                return 0.0
-    return 0.0
+    return normalize_storage_timestamp(val)
 
 
 async def get_board_activity_last_hours(board_id: str, hours: int = 2) -> float:
