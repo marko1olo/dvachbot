@@ -7430,16 +7430,38 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
 @dp.message(Command("menu", "меню"))
 async def cmd_menu(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
-    Открывает быстрое меню по команде /menu с баннером.
+    Открывает быстрое меню по команде /menu с баннером из 51 арта и балансом.
     """
     if not board_id: return
+    user_id = message.from_user.id
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    
+    # Получаем актуальный баланс пользователя для отображения в шапке меню
+    db = await get_pool()
+    async with db_lock:
+        balance = await get_user_global_balance(db, user_id)
+        
     if lang == 'en':
-        text = "👇 <b>Quick Menu:</b>\n<i>Choose a section:</i>"
+        text = (
+            f"🏮 <b>TGACH MAIN MENU</b> [/{board_id}/]\n\n"
+            f"👤 <b>Anon:</b> <code>{user_id}</code>\n"
+            f"💳 <b>Balance:</b> <code>{int(balance)} ₪</code>\n\n"
+            f"👇 <i>Choose a section below to access games, shop, threads & settings:</i>"
+        )
     elif lang == 'jp':
-        text = "👇 <b>クイックメニュー:</b>\n<i>項目を選択してください:</i>"
+        text = (
+            f"🏮 <b>TGACH メインメニュー</b> [/{board_id}/]\n\n"
+            f"👤 <b>アノン:</b> <code>{user_id}</code>\n"
+            f"💳 <b>残高:</b> <code>{int(balance)} ₪</code>\n\n"
+            f"👇 <i>以下の項目から選択してください:</i>"
+        )
     else:
-        text = "👇 <b>Быстрое меню ТГАЧ:</b>\n<i>Выбери нужный раздел:</i>"
+        text = (
+            f"🏮 <b>ГЛАВНОЕ МЕНЮ ТГАЧА</b> [/{board_id}/]\n\n"
+            f"👤 <b>Аноним:</b> <code>{user_id}</code>\n"
+            f"💳 <b>Баланс:</b> <code>{int(balance)} ₪</code>\n\n"
+            f"👇 <i>Выбери нужный раздел:</i>"
+        )
     from banner_manager import send_banner_message
     await send_banner_message(
         bot=message.bot,
@@ -11466,14 +11488,53 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         except TelegramBadRequest:
             await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     elif action == "main":
-        menu_text = "👇 <b>Quick Menu / Быстрое меню:</b>"
+        db = await get_pool()
+        async with db_lock:
+            balance = await get_user_global_balance(db, user_id)
+        if lang == 'en':
+            menu_text = (
+                f"🏮 <b>TGACH MAIN MENU</b> [/{board_id}/]\n\n"
+                f"👤 <b>Anon:</b> <code>{user_id}</code>\n"
+                f"💳 <b>Balance:</b> <code>{int(balance)} ₪</code>\n\n"
+                f"👇 <i>Choose a section below:</i>"
+            )
+        elif lang == 'jp':
+            menu_text = (
+                f"🏮 <b>TGACH メインメニュー</b> [/{board_id}/]\n\n"
+                f"👤 <b>アノン:</b> <code>{user_id}</code>\n"
+                f"💳 <b>残高:</b> <code>{int(balance)} ₪</code>\n\n"
+                f"👇 <i>以下の項目から選択してください:</i>"
+            )
+        else:
+            menu_text = (
+                f"🏮 <b>ГЛАВНОЕ МЕНЮ ТГАЧА</b> [/{board_id}/]\n\n"
+                f"👤 <b>Аноним:</b> <code>{user_id}</code>\n"
+                f"💳 <b>Баланс:</b> <code>{int(balance)} ₪</code>\n\n"
+                f"👇 <i>Выбери нужный раздел:</i>"
+            )
+        kb = get_quick_menu_keyboard(board_id, stream=stream)
         try:
-            await callback.message.edit_text(menu_text, reply_markup=get_quick_menu_keyboard(board_id, stream=stream), parse_mode="HTML")
+            if callback.message.caption is not None:
+                await callback.message.edit_caption(caption=menu_text, reply_markup=kb, parse_mode="HTML")
+            else:
+                await callback.message.edit_text(menu_text, reply_markup=kb, parse_mode="HTML")
         except TelegramBadRequest:
             pass
     elif action == "profile":
         fake_msg = SafeMessageProxy(callback.message, callback.from_user)
         await cmd_passport(fake_msg, board_id)
+    elif action == "shop":
+        fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+        await cmd_shop(fake_msg, board_id, stream=stream)
+    elif action == "inv":
+        fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+        await cmd_inventory(fake_msg, board_id, stream=stream)
+    elif action == "threads":
+        fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+        await cmd_threads(fake_msg, board_id, stream=stream)
+    elif action == "rates":
+        fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+        await cmd_rates(fake_msg, board_id, stream=stream)
     elif action == "stats":
         fake_msg = SafeMessageProxy(callback.message, callback.from_user)
         await cmd_stats(fake_msg, board_id)
@@ -11998,60 +12059,72 @@ async def generate_threads_page(board_id: str, user_id: int, page: int = 0, stre
     return text, InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
 def get_quick_menu_keyboard(board_id: str, stream: str = 'ru') -> InlineKeyboardMarkup:
     """
-    Генерирует главное меню для /start и /help с учетом потока (языка).
+    Генерирует главное интерактивное меню ТГАЧА со всеми разделами (RU/EN/JP).
     """
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     if lang == 'en': 
         btn_wallet = "💰 Wallet"
-        btn_casino = "🎰 Casino"
+        btn_casino = "🎰 Casino Hub"
+        btn_shop = "🛒 Shop"
+        btn_inv = "🎒 Inventory"
+        btn_profile = "🪪 Passport"
+        btn_threads = "🧵 Threads"
         btn_drop = "💸 Drop"
-        btn_profile = "🪪 Profile"
-        btn_personal = "⚙️ Settings"
-        btn_token = "🔑 Token"
         btn_roll = "🎲 Roll 0-100"
-        btn_help = "ℹ️ Help"
-        btn_stats = "📊 Stats"
-        btn_invite = "📨 Invite"
-        btn_admin = "🆘 Admin"
         btn_hent = "🔞 Hentai"
         btn_loli = "🍭 Loli"
+        btn_rates = "📈 Rates"
+        btn_stats = "📊 Stats"
+        btn_personal = "⚙️ Settings"
+        btn_token = "🔑 Web Token"
+        btn_invite = "📨 Invite"
+        btn_help = "ℹ️ Help"
+        btn_admin = "🆘 Admin"
     elif lang == 'jp': 
         btn_wallet = "💰 財布"
         btn_casino = "🎰 カジノ"
+        btn_shop = "🛒 ショップ"
+        btn_inv = "🎒 持ち物"
+        btn_profile = "🪪 パスポート"
+        btn_threads = "🧵 スレ一覧"
         btn_drop = "💸 ドロップ"
-        btn_profile = "🪪 プロフ"
-        btn_personal = "⚙️ 設定"
-        btn_token = "🔑 トークン"
         btn_roll = "🎲 ロール"
-        btn_help = "ℹ️ ヘルプ"
-        btn_stats = "📊 統計"
-        btn_invite = "📨 招待"
-        btn_admin = "🆘 管理人"
         btn_hent = "🔞 ヘンタイ"
         btn_loli = "🍭 ロリ"
+        btn_rates = "📈 相場"
+        btn_stats = "📊 統計"
+        btn_personal = "⚙️ 設定"
+        btn_token = "🔑 トークン"
+        btn_invite = "📨 招待"
+        btn_help = "ℹ️ ヘルプ"
+        btn_admin = "🆘 管理人"
     else: # ru
         btn_wallet = "💰 Кошелек"
         btn_casino = "🎰 Казино Тгача"
+        btn_shop = "🛒 Магазин"
+        btn_inv = "🎒 Рюкзак"
+        btn_profile = "🪪 Паспорт анона"
+        btn_threads = "🧵 Список тредов"
         btn_drop = "💸 Дроп шекелей"
-        btn_profile = "🪪 Профиль"
-        btn_personal = "⚙️ Настройки"
-        btn_token = "🔑 Токен"
         btn_roll = "🎲 Ролл 0-100"
-        btn_help = "ℹ️ Помощь"
-        btn_stats = "📊 Статистика"
-        btn_invite = "📨 Пригласить"
-        btn_admin = "🆘 Админ"
         btn_hent = "🔞 Хентай"
         btn_loli = "🍭 Лоли"
+        btn_rates = "📈 Курсы валют"
+        btn_stats = "📊 Статистика"
+        btn_personal = "⚙️ Настройки"
+        btn_token = "🔑 Токен сайта"
+        btn_invite = "📨 Пригласить"
+        btn_help = "ℹ️ Помощь"
+        btn_admin = "🆘 Админ-связь"
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=btn_wallet, callback_data="menu_wallet"), InlineKeyboardButton(text=btn_casino, callback_data="cas:hub")],
+        [InlineKeyboardButton(text=btn_shop, callback_data="menu_shop"), InlineKeyboardButton(text=btn_inv, callback_data="menu_inv")],
+        [InlineKeyboardButton(text=btn_profile, callback_data="menu_profile"), InlineKeyboardButton(text=btn_threads, callback_data="menu_threads")],
         [InlineKeyboardButton(text=btn_drop, callback_data="cas:menu:drop"), InlineKeyboardButton(text=btn_roll, callback_data="menu_roll")],
-        [InlineKeyboardButton(text=btn_profile, callback_data="menu_profile"), InlineKeyboardButton(text=btn_personal, callback_data="menu_personal")],
-        [InlineKeyboardButton(text=btn_stats, callback_data="menu_stats"), InlineKeyboardButton(text=btn_token, callback_data="menu_token")],
-        [
-            InlineKeyboardButton(text=btn_hent, callback_data="menu_hent"),
-            InlineKeyboardButton(text=btn_loli, callback_data="menu_loli")
-        ],
+        [InlineKeyboardButton(text=btn_hent, callback_data="menu_hent"), InlineKeyboardButton(text=btn_loli, callback_data="menu_loli")],
+        [InlineKeyboardButton(text=btn_rates, callback_data="menu_rates"), InlineKeyboardButton(text=btn_stats, callback_data="menu_stats")],
+        [InlineKeyboardButton(text=btn_token, callback_data="menu_token"), InlineKeyboardButton(text=btn_personal, callback_data="menu_personal")],
         [InlineKeyboardButton(text=btn_invite, callback_data="menu_invite"), InlineKeyboardButton(text=btn_help, callback_data="menu_help")],
         [InlineKeyboardButton(text=btn_admin, callback_data="menu_admin")]
     ])
