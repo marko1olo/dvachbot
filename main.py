@@ -7427,41 +7427,77 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
     elif lang == 'jp': final = f"✅ ユーザー <code>{target_id}</code> を {count} 個の板でBAN/ミュート解除しました。"
     else: final = f"✅ Пользователь <code>{target_id}</code> разбанен/размучен на {count} досках."
     await status_msg.edit_text(final, parse_mode="HTML")
-@dp.message(Command("menu", "меню"))
-async def cmd_menu(message: types.Message, board_id: str | None, stream: str = 'ru'):
+async def build_menu_header_text(user_id: int, board_id: str, stream: str = 'ru') -> str:
     """
-    Открывает быстрое меню по команде /menu с баннером из 51 арта и балансом.
+    Генерирует информативную, аутентичную анонимную шапку главного меню.
+    Никогда не раскрывает Telegram ID — использует криптографический Anon Hash ID.
     """
-    if not board_id: return
-    user_id = message.from_user.id
+    from common.anon_identity import get_anon_id
+    from common.database import get_unread_replies_count
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    anon_code = get_anon_id(user_id, stream=lang)
     
-    # Получаем актуальный баланс пользователя для отображения в шапке меню
     db = await get_pool()
     async with db_lock:
         balance = await get_user_global_balance(db, user_id)
-        
+        try:
+            async with db.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (user_id,)) as cursor:
+                row = await cursor.fetchone()
+                post_count = row[0] if row else 0
+        except Exception:
+            post_count = 0
+            
+        try:
+            unread_replies = await get_unread_replies_count(user_id)
+        except Exception:
+            unread_replies = 0
+
+    b_data = board_data.get(board_id, {})
+    active_users_count = len(b_data.get('users', {}).get('active', set()))
+    
+    active_modes = [m for m in MODE_FLAGS if b_data.get(m)]
+    modes_status = f" | ⚡ {', '.join(active_modes[:2])}" if active_modes else ""
+    replies_badge = f" (🔔 <b>+{unread_replies}</b>)" if unread_replies > 0 else ""
+
     if lang == 'en':
-        text = (
-            f"🏮 <b>TGACH MAIN MENU</b> [/{board_id}/]\n\n"
-            f"👤 <b>Anon:</b> <code>{user_id}</code>\n"
-            f"💳 <b>Balance:</b> <code>{int(balance)} ₪</code>\n\n"
-            f"👇 <i>Choose a section below to access games, shop, threads & settings:</i>"
+        return (
+            f"🏮 <b>TGACH MAIN HUB</b> [/{board_id}/]\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🥷 <b>Identity:</b> <code>Anon [{anon_code}]</code>\n"
+            f"💳 <b>Wallet:</b> <code>{int(balance):,} ₪</code>{replies_badge}\n"
+            f"📝 <b>Activity:</b> <code>{post_count}</code> posts | 🟢 <code>{active_users_count}</code> online{modes_status}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👇 <i>Quick navigation & systems:</i>"
         )
     elif lang == 'jp':
-        text = (
-            f"🏮 <b>TGACH メインメニュー</b> [/{board_id}/]\n\n"
-            f"👤 <b>アノン:</b> <code>{user_id}</code>\n"
-            f"💳 <b>残高:</b> <code>{int(balance)} ₪</code>\n\n"
-            f"👇 <i>以下の項目から選択してください:</i>"
+        return (
+            f"🏮 <b>TGACH メインハブ</b> [/{board_id}/]\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🥷 <b>匿名ID:</b> <code>Anon [{anon_code}]</code>\n"
+            f"💳 <b>残高:</b> <code>{int(balance):,} ₪</code>{replies_badge}\n"
+            f"📝 <b>投稿数:</b> <code>{post_count}</code> 件 | 🟢 <code>{active_users_count}</code> オンライン{modes_status}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👇 <i>機能を選択してください:</i>"
         )
     else:
-        text = (
-            f"🏮 <b>ГЛАВНОЕ МЕНЮ ТГАЧА</b> [/{board_id}/]\n\n"
-            f"👤 <b>Аноним:</b> <code>{user_id}</code>\n"
-            f"💳 <b>Баланс:</b> <code>{int(balance)} ₪</code>\n\n"
-            f"👇 <i>Выбери нужный раздел:</i>"
+        return (
+            f"🏮 <b>ГЛАВНЫЙ ХАБ ТГАЧА</b> [/{board_id}/]\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🥷 <b>Твой Анон:</b> <code>Анон [{anon_code}]</code>\n"
+            f"💳 <b>Баланс:</b> <code>{int(balance):,} ₪</code>{replies_badge}\n"
+            f"📝 <b>Постов:</b> <code>{post_count}</code> | 🟢 <code>{active_users_count}</code> онлайн{modes_status}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👇 <i>Быстрый доступ ко всем системам борды:</i>"
         )
+
+@dp.message(Command("menu", "меню"))
+async def cmd_menu(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Открывает быстрое меню по команде /menu с баннером из 51 арта и анонимной шапкой.
+    """
+    if not board_id: return
+    user_id = message.from_user.id
+    text = await build_menu_header_text(user_id, board_id, stream=stream)
     from banner_manager import send_banner_message
     await send_banner_message(
         bot=message.bot,
@@ -11488,30 +11524,7 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         except TelegramBadRequest:
             await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     elif action == "main":
-        db = await get_pool()
-        async with db_lock:
-            balance = await get_user_global_balance(db, user_id)
-        if lang == 'en':
-            menu_text = (
-                f"🏮 <b>TGACH MAIN MENU</b> [/{board_id}/]\n\n"
-                f"👤 <b>Anon:</b> <code>{user_id}</code>\n"
-                f"💳 <b>Balance:</b> <code>{int(balance)} ₪</code>\n\n"
-                f"👇 <i>Choose a section below:</i>"
-            )
-        elif lang == 'jp':
-            menu_text = (
-                f"🏮 <b>TGACH メインメニュー</b> [/{board_id}/]\n\n"
-                f"👤 <b>アノン:</b> <code>{user_id}</code>\n"
-                f"💳 <b>残高:</b> <code>{int(balance)} ₪</code>\n\n"
-                f"👇 <i>以下の項目から選択してください:</i>"
-            )
-        else:
-            menu_text = (
-                f"🏮 <b>ГЛАВНОЕ МЕНЮ ТГАЧА</b> [/{board_id}/]\n\n"
-                f"👤 <b>Аноним:</b> <code>{user_id}</code>\n"
-                f"💳 <b>Баланс:</b> <code>{int(balance)} ₪</code>\n\n"
-                f"👇 <i>Выбери нужный раздел:</i>"
-            )
+        menu_text = await build_menu_header_text(user_id, board_id, stream=stream)
         kb = get_quick_menu_keyboard(board_id, stream=stream)
         try:
             if callback.message.caption is not None:
