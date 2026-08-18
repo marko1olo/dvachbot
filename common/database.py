@@ -3062,7 +3062,13 @@ async def get_posts_from_broadcast_queue(last_timestamp: float) -> tuple[list[di
         # ORDER BY перенесён из SQL в Python: сортировать надо весь результат,
         # а не каждую пачку по отдельности. Контракт (посты по возрастанию
         # timestamp) сохранён.
-        processed_posts.sort(key=lambda p: (p.get('timestamp') or 0, p.get('post_num') or 0))
+        def _get_sort_ts(p):
+            t = p.get('timestamp')
+            if isinstance(t, (int, float)): return float(t)
+            if isinstance(t, datetime): return t.timestamp()
+            try: return float(t or 0)
+            except Exception: return 0.0
+        processed_posts.sort(key=lambda p: (_get_sort_ts(p), p.get('post_num') or 0))
         return processed_posts, max_created_at
     except Exception as e:
         print(f"⛔ ОШИБКА в get_posts_from_broadcast_queue: {e}")

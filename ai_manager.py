@@ -655,9 +655,8 @@ def _tg_safe_truncate(text: str, max_utf16: int = 4000) -> str:
     return text
 
 async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None = None, lang: str | None = None) -> str:
-
-    now = datetime.now(UTC)
-    time_threshold = now - timedelta(hours=hours)
+    now_ts = time.time()
+    time_threshold_ts = now_ts - (hours * 3600)
     lines = []
     
     async with storage_lock:
@@ -668,14 +667,14 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
                 return ""
             thread_post_nums = set(thread_info.get('posts', []))
             post_iterator = [p for p_num, p in messages_storage.items() if p_num in thread_post_nums]
-            time_threshold = datetime.min.replace(tzinfo=UTC)
+            time_threshold_ts = 0.0
             # Сортируем сообщения треда по времени
-            post_iterator.sort(key=lambda x: x.get('timestamp').timestamp() if hasattr(x.get('timestamp'), 'timestamp') else x.get('timestamp', 0))
+            post_iterator.sort(key=lambda x: normalize_storage_timestamp(x.get('timestamp')))
         else:
             board_posts = [p for p in messages_storage.values() if p.get('board_id') == board_id and p.get('author_id') != 0]
-            board_posts.sort(key=lambda x: x.get('timestamp').timestamp() if hasattr(x.get('timestamp'), 'timestamp') else x.get('timestamp', 0))
+            board_posts.sort(key=lambda x: normalize_storage_timestamp(x.get('timestamp')))
             
-            posts_in_last_6h = [p for p in board_posts if p.get('timestamp', now) >= time_threshold]
+            posts_in_last_6h = [p for p in board_posts if normalize_storage_timestamp(p.get('timestamp')) >= time_threshold_ts]
             count_6h = len(posts_in_last_6h)
             
             # 150-200 последних сообщений либо 6 часов (выбираем оптимальный диапазон)
@@ -686,12 +685,12 @@ async def get_board_chunk(board_id: str, hours: int = 6, thread_id: str | None =
             else:
                 target_posts = posts_in_last_6h
             post_iterator = target_posts
-            time_threshold = datetime.min.replace(tzinfo=UTC)
+            time_threshold_ts = 0.0
     for post in post_iterator:
         try:
             if post.get('board_id') != board_id:
                 continue
-            if post.get('timestamp', now) < time_threshold:
+            if normalize_storage_timestamp(post.get('timestamp')) < time_threshold_ts:
                 continue
             if post.get('author_id') == 0: # Игнорируем системные сообщения
                 continue
