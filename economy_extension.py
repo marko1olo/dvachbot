@@ -230,15 +230,23 @@ async def cmd_heist(message: types.Message, board_id: str | None = None):
         }
         
         result = None
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data)
-            if resp.status_code == 200:
-                raw_json = resp.json()["choices"][0]["message"]["content"].strip()
-                if raw_json.startswith("```"):
-                    raw_json = raw_json.split("\n", 1)[-1]
-                if raw_json.endswith("```"):
-                    raw_json = raw_json.rsplit("\n", 1)[0]
-                result = json.loads(raw_json)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data)
+                if resp.status_code == 200:
+                    raw_json = resp.json()["choices"][0]["message"]["content"].strip()
+                    if "<think>" in raw_json:
+                        raw_json = re.sub(r'<think>.*?</think>', '', raw_json, flags=re.DOTALL).strip()
+                    if "```" in raw_json:
+                        match = re.search(r"```(?:json)?(.*?)```", raw_json, re.DOTALL)
+                        if match:
+                            raw_json = match.group(1).strip()
+                    json_match = re.search(r"\{.*\}", raw_json, re.DOTALL)
+                    if json_match:
+                        raw_json = json_match.group(0).strip()
+                    result = json.loads(raw_json)
+        except Exception as e:
+            logger.warning(f"⚠️ [Economy] Groq rob judge request failed: {e}")
                 
         if not result:
             result = {"score": random.uniform(0.1, 0.9), "narrative": "ИИ-Судья отвалился, так что кидаю кубик. Ограбление как ограбление."}
