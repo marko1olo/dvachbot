@@ -7429,13 +7429,24 @@ async def cmd_gunban(message: types.Message, board_id: str | None, stream: str =
     await status_msg.edit_text(final, parse_mode="HTML")
 async def build_menu_header_text(user_id: int, board_id: str, stream: str = 'ru') -> str:
     """
-    Генерирует информативную, аутентичную анонимную шапку главного меню.
-    Никогда не раскрывает Telegram ID — использует криптографический Anon Hash ID.
+    Генерирует глубоко информативную, стильную и аутентичную шапку главного меню ТГАЧА.
+    Делает сильный акцент на доске (культура, онлайн, посты, режимы, тип доски) и анонимной идентичности.
+    Никогда не раскрывает сырой Telegram ID — использует криптографический Anon Hash ID.
     """
     from common.anon_identity import get_anon_id
     from common.database import get_unread_replies_count
+    from common.board_config import BOARD_CONFIG
+    
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     anon_code = get_anon_id(user_id, stream=lang)
+    
+    b_conf = BOARD_CONFIG.get(board_id, {})
+    desc_val = b_conf.get("description", {})
+    if isinstance(desc_val, dict):
+        b_desc = desc_val.get(lang, desc_val.get("ru", "Свободное общение"))
+    else:
+        b_desc = str(desc_val or "Свободное общение")
+    b_cat = b_conf.get("category", "board")
     
     db = await get_pool()
     async with db_lock:
@@ -7443,9 +7454,16 @@ async def build_menu_header_text(user_id: int, board_id: str, stream: str = 'ru'
         try:
             async with db.execute("SELECT COUNT(*) FROM Posts WHERE author_id = ?", (user_id,)) as cursor:
                 row = await cursor.fetchone()
-                post_count = row[0] if row else 0
+                user_post_count = row[0] if row else 0
         except Exception:
-            post_count = 0
+            user_post_count = 0
+            
+        try:
+            async with db.execute("SELECT COUNT(*) FROM Posts WHERE board_id = ?", (board_id,)) as cursor:
+                row = await cursor.fetchone()
+                board_total_posts = row[0] if row else 0
+        except Exception:
+            board_total_posts = 0
             
         try:
             unread_replies = await get_unread_replies_count(user_id)
@@ -7453,41 +7471,64 @@ async def build_menu_header_text(user_id: int, board_id: str, stream: str = 'ru'
             unread_replies = 0
 
     b_data = board_data.get(board_id, {})
-    active_users_count = len(b_data.get('users', {}).get('active', set()))
+    active_users = len(b_data.get('users', {}).get('active', set()))
     
+    is_threads = board_id in THREAD_BOARDS
     active_modes = [m for m in MODE_FLAGS if b_data.get(m)]
-    modes_status = f" | ⚡ {', '.join(active_modes[:2])}" if active_modes else ""
-    replies_badge = f" (🔔 <b>+{unread_replies}</b>)" if unread_replies > 0 else ""
-
+    
     if lang == 'en':
+        type_str = "🧵 Thread-Board" if is_threads else "⚡ Live Stream (Overboard)"
+        modes_str = "⚡ " + ", ".join(active_modes) if active_modes else "Standard Mode"
+        replies_str = f"🔔 <b>+{unread_replies} new</b>" if unread_replies > 0 else "None"
         return (
-            f"🏮 <b>TGACH MAIN HUB</b> [/{board_id}/]\n"
+            f"🏴‍☠️ <b>TGACH — ANONYMOUS IMAGEBOARD</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🥷 <b>Identity:</b> <code>Anon [{anon_code}]</code>\n"
-            f"💳 <b>Wallet:</b> <code>{int(balance):,} ₪</code>{replies_badge}\n"
-            f"📝 <b>Activity:</b> <code>{post_count}</code> posts | 🟢 <code>{active_users_count}</code> online{modes_status}\n"
+            f"📌 <b>Board:</b> <code>/{board_id}/</code> — <b>{b_desc}</b> (<i>{b_cat}</i>)\n"
+            f"📡 <b>Type:</b> {type_str}\n"
+            f"🟢 <b>Online:</b> <code>{active_users}</code> anons | 💬 <b>Board Posts:</b> <code>{board_total_posts:,}</code>\n"
+            f"🎭 <b>Modes:</b> <code>{modes_str}</code>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"👇 <i>Quick navigation & systems:</i>"
+            f"🥷 <b>Anon Identity:</b> <code>Anon [{anon_code}]</code>\n"
+            f"💳 <b>Global Wallet:</b> <code>{int(balance):,} ₪</code>\n"
+            f"📝 <b>Your Posts:</b> <code>{user_post_count}</code> | 📬 <b>Replies:</b> {replies_str}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👇 <i>Select a system below to navigate, trade, play or configure:</i>"
         )
     elif lang == 'jp':
+        type_str = "🧵 スレッド掲示板" if is_threads else "⚡ ライブフィード掲示板"
+        modes_str = "⚡ " + ", ".join(active_modes) if active_modes else "標準モード"
+        replies_str = f"🔔 <b>+{unread_replies} 件</b>" if unread_replies > 0 else "なし"
         return (
-            f"🏮 <b>TGACH メインハブ</b> [/{board_id}/]\n"
+            f"🏴‍☠️ <b>TGACH — 匿名画像掲示板</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 <b>板:</b> <code>/{board_id}/</code> — <b>{b_desc}</b> (<i>{b_cat}</i>)\n"
+            f"📡 <b>形式:</b> {type_str}\n"
+            f"🟢 <b>オンライン:</b> <code>{active_users}</code> 人 | 💬 <b>総投稿数:</b> <code>{board_total_posts:,}</code>\n"
+            f"🎭 <b>モード:</b> <code>{modes_str}</code>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🥷 <b>匿名ID:</b> <code>Anon [{anon_code}]</code>\n"
-            f"💳 <b>残高:</b> <code>{int(balance):,} ₪</code>{replies_badge}\n"
-            f"📝 <b>投稿数:</b> <code>{post_count}</code> 件 | 🟢 <code>{active_users_count}</code> オンライン{modes_status}\n"
+            f"💳 <b>残高:</b> <code>{int(balance):,} ₪</code>\n"
+            f"📝 <b>あなたの投稿:</b> <code>{user_post_count}</code> 件 | 📬 <b>返信:</b> {replies_str}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"👇 <i>機能を選択してください:</i>"
+            f"👇 <i>項目を選択してください:</i>"
         )
     else:
+        type_str = "🧵 Тредборда" if is_threads else "⚡ Потоковая доска (Live Feed)"
+        modes_str = "⚡ " + ", ".join(active_modes) if active_modes else "Базовый режим"
+        replies_str = f"🔔 <b>+{unread_replies} новых</b>" if unread_replies > 0 else "Нет новых"
         return (
-            f"🏮 <b>ГЛАВНЫЙ ХАБ ТГАЧА</b> [/{board_id}/]\n"
+            f"🏴‍☠️ <b>ТГАЧ — АНОНИМНАЯ ИМИДЖБОРДА</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 <b>Доска:</b> <code>/{board_id}/</code> — <b>{b_desc}</b> (<i>{b_cat}</i>)\n"
+            f"📡 <b>Тип:</b> {type_str}\n"
+            f"🟢 <b>Онлайн:</b> <code>{active_users}</code> анонов | 💬 <b>Постов на доске:</b> <code>{board_total_posts:,}</code>\n"
+            f"🎭 <b>Режимы:</b> <code>{modes_str}</code>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"🥷 <b>Твой Анон:</b> <code>Анон [{anon_code}]</code>\n"
-            f"💳 <b>Баланс:</b> <code>{int(balance):,} ₪</code>{replies_badge}\n"
-            f"📝 <b>Постов:</b> <code>{post_count}</code> | 🟢 <code>{active_users_count}</code> онлайн{modes_status}\n"
+            f"💳 <b>Кошелек:</b> <code>{int(balance):,} ₪</code>\n"
+            f"📝 <b>Твоих постов:</b> <code>{user_post_count}</code> | 📬 <b>Ответы:</b> {replies_str}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"👇 <i>Быстрый доступ ко всем системам борды:</i>"
+            f"👇 <i>Выбери модуль ниже для управления, игр или торговли:</i>"
         )
 
 @dp.message(Command("menu", "меню"))
