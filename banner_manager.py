@@ -23,48 +23,51 @@ CACHE_FILE = PROJECT_ROOT / "data" / "banners_cache.json"
 
 # Detailed categorization ensuring every single banner is actively utilized across multiple features
 CATEGORY_PATTERNS = {
-    "start": [], # All 51 banners
+    "start": [], # All 264 banners
     "night": [
-        "vampiric", "cathedral", "graveyard", "tokyo_alleyway", "moon", "rain", "cyberpunk", "fantasy_field"
+        "vampiric", "cathedral", "graveyard", "tokyo_alleyway", "moon", "rain", "cyberpunk", "fantasy_field",
+        "twilight", "dark", "rooftop", "crimson", "witch"
     ],
     "maid": [
-        "maid", "retro_desktop", "purple_hair", "pop-art", "sunflowers", "anime_style_scene"
+        "maid", "retro_desktop", "purple_hair", "pop-art", "sunflowers", "anime_style_scene",
+        "heart", "peace", "pajamas", "soap", "smiling"
     ],
     "schizo": [
         "scissor", "floating_tools", "study", "classroom", "empty_classroom", "vaporwave",
-        "digital", "surreal_space"
+        "digital", "surreal_space", "tongue", "code", "fire_vortex", "vortex", "cyber"
     ],
     "calm": [
         "clubroom_with_tea", "cozy", "library", "coffee_shop", "ocean", "zen_garden",
-        "concert", "grassy_hill", "snowy", "sunflower", "mountain_lands", "sunny_park"
+        "concert", "grassy_hill", "snowy", "sunflower", "mountain_lands", "sunny_park",
+        "garden", "curled", "rug", "floor", "sitting", "looking_over_shoulder"
     ],
     "shop": [
         "vampiric", "graveyard", "floating_tools", "scissor", "cyberpunk_room",
-        "tokyo_alleyway", "digital", "alien_sky"
+        "tokyo_alleyway", "digital", "alien_sky", "arcade", "record_store", "print", "graphic"
     ],
     "newspaper": [
         "library", "sketch_studio", "cozy", "study", "illustration", "vinyl_record_store",
-        "colorful_paint", "snowy", "fashion_runway"
+        "colorful_paint", "snowy", "fashion_runway", "editorial", "poster", "layout", "album_cover", "text"
     ],
     "digest": [
         "shinjuku", "sunset", "vaporwave", "ocean", "alien_sky", "fashion_runway",
-        "fantasy_field", "surreal_space", "concert"
+        "fantasy_field", "surreal_space", "concert", "school_hallway", "tokyo", "arcade"
     ],
     "summary": [
         "retro_desktop", "maid", "rain", "empty_classroom", "sketch_studio",
-        "colorful_paint", "cathedral", "study"
+        "colorful_paint", "cathedral", "study", "classroom", "framing", "turning_head"
     ],
     "stats": [
         "sunset", "ocean", "shinjuku", "concert", "grassy_hill", "sunny_park",
-        "vortex", "mountain_lands", "digital"
+        "vortex", "mountain_lands", "digital", "glasses", "adjusting", "winking"
     ],
     "wallet": [
         "vortex", "sunflower", "coffee_shop", "vinyl_record_store", "sunny_park",
-        "cyberpunk_room", "cozy", "zen_garden"
+        "cyberpunk_room", "cozy", "zen_garden", "gold", "heart_shape", "witch_hat", "arcade"
     ],
     "roulette": [
         "vortex", "cyberpunk", "anime_style_scene", "pop-art", "fantasy_field",
-        "scissor", "floating_tools"
+        "scissor", "floating_tools", "fire_vortex", "witch", "tongue", "crimson"
     ]
 }
 
