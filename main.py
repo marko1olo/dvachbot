@@ -7433,6 +7433,7 @@ async def build_menu_header_text(user_id: int, board_id: str, stream: str = 'ru'
     Делает сильный акцент на доске (культура, онлайн, посты, режимы, тип доски) и анонимной идентичности.
     Никогда не раскрывает сырой Telegram ID — использует криптографический Anon Hash ID.
     """
+    import json
     from common.anon_identity import get_anon_id
     from common.database import get_unread_replies_count
     from common.board_config import BOARD_CONFIG
@@ -7470,6 +7471,17 @@ async def build_menu_header_text(user_id: int, board_id: str, stream: str = 'ru'
         except Exception:
             unread_replies = 0
 
+        # Активные предметы из рюкзака
+        items_count = 0
+        try:
+            async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    items_dict = json.loads(row[0])
+                    items_count = len(items_dict)
+        except Exception:
+            items_count = 0
+
     b_data = board_data.get(board_id, {})
     active_users = len(b_data.get('users', {}).get('active', set()))
     
@@ -7478,56 +7490,59 @@ async def build_menu_header_text(user_id: int, board_id: str, stream: str = 'ru'
     
     if lang == 'en':
         type_str = "🧵 Thread-Board" if is_threads else "⚡ Live Stream (Overboard)"
-        modes_str = "⚡ " + ", ".join(active_modes) if active_modes else "Standard Mode"
+        modes_str = "⚡ " + ", ".join(active_modes) if active_modes else "Standard"
         replies_str = f"🔔 <b>+{unread_replies} new</b>" if unread_replies > 0 else "None"
         return (
-            f"🏴‍☠️ <b>TGACH — ANONYMOUS IMAGEBOARD</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📌 <b>Board:</b> <code>/{board_id}/</code> — <b>{b_desc}</b> (<i>{b_cat}</i>)\n"
-            f"📡 <b>Type:</b> {type_str}\n"
-            f"🟢 <b>Online:</b> <code>{active_users}</code> anons | 💬 <b>Board Posts:</b> <code>{board_total_posts:,}</code>\n"
-            f"🎭 <b>Modes:</b> <code>{modes_str}</code>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🥷 <b>Anon Identity:</b> <code>Anon [{anon_code}]</code>\n"
-            f"💳 <b>Global Wallet:</b> <code>{int(balance):,} ₪</code>\n"
+            f"🏴‍☠️ <b>TGACH — DECENTRALIZED TELEGRAM IMAGEBOARD</b>\n"
+            f"<i>Free anonymous broadcast stream without registration or censorship</i>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 <b>BOARD:</b> <code>/{board_id}/</code> — <b>{b_desc}</b> (<i>section: {b_cat}</i>)\n"
+            f"📡 <b>Engine:</b> {type_str} | 🟢 Online: <code>{active_users}</code> anons\n"
+            f"💬 <b>Board Stream:</b> <code>{board_total_posts:,}</code> posts | 🎭 <b>Modes:</b> <code>{modes_str}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🥷 <b>Anon Identity:</b> <code>Anon [{anon_code}]</code> <i>(crypto-hash ID)</i>\n"
+            f"💳 <b>Wallet:</b> <code>{int(balance):,} ₪</code> | 🎒 <b>Inventory:</b> <code>{items_count}</code> items\n"
             f"📝 <b>Your Posts:</b> <code>{user_post_count}</code> | 📬 <b>Replies:</b> {replies_str}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🌐 <b>TGACH Ecosystem:</b> 13 Boards • Casino 777 • Black Market • Mini App\n"
             f"👇 <i>Select a system below to navigate, trade, play or configure:</i>"
         )
     elif lang == 'jp':
         type_str = "🧵 スレッド掲示板" if is_threads else "⚡ ライブフィード掲示板"
-        modes_str = "⚡ " + ", ".join(active_modes) if active_modes else "標準モード"
+        modes_str = "⚡ " + ", ".join(active_modes) if active_modes else "標準"
         replies_str = f"🔔 <b>+{unread_replies} 件</b>" if unread_replies > 0 else "なし"
         return (
-            f"🏴‍☠️ <b>TGACH — 匿名画像掲示板</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📌 <b>板:</b> <code>/{board_id}/</code> — <b>{b_desc}</b> (<i>{b_cat}</i>)\n"
-            f"📡 <b>形式:</b> {type_str}\n"
-            f"🟢 <b>オンライン:</b> <code>{active_users}</code> 人 | 💬 <b>総投稿数:</b> <code>{board_total_posts:,}</code>\n"
-            f"🎭 <b>モード:</b> <code>{modes_str}</code>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🥷 <b>匿名ID:</b> <code>Anon [{anon_code}]</code>\n"
-            f"💳 <b>残高:</b> <code>{int(balance):,} ₪</code>\n"
-            f"📝 <b>あなたの投稿:</b> <code>{user_post_count}</code> 件 | 📬 <b>返信:</b> {replies_str}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"👇 <i>項目を選択してください:</i>"
+            f"🏴‍☠️ <b>TGACH — 分散型Telegram画像掲示板</b>\n"
+            f"<i>登録不要・検閲なしの完全匿名P2Pボード</i>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 <b>板:</b> <code>/{board_id}/</code> — <b>{b_desc}</b> (<i>ジャンル: {b_cat}</i>)\n"
+            f"📡 <b>形式:</b> {type_str} | 🟢 オンライン: <code>{active_users}</code> 人\n"
+            f"💬 <b>総投稿数:</b> <code>{board_total_posts:,}</code> 件 | 🎭 <b>モード:</b> <code>{modes_str}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🥷 <b>匿名ID:</b> <code>Anon [{anon_code}]</code> <i>(暗号化ハッシュ)</i>\n"
+            f"💳 <b>残高:</b> <code>{int(balance):,} ₪</code> | 🎒 <b>アイテム:</b> <code>{items_count}</code> 個\n"
+            f"📝 <b>投稿数:</b> <code>{user_post_count}</code> 件 | 📬 <b>返信:</b> {replies_str}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🌐 <b>TGACHエコシステム:</b> 13個の板 • カジノ777 • 闇市 • Mini App\n"
+            f"👇 <i>機能を選択してください:</i>"
         )
     else:
-        type_str = "🧵 Тредборда" if is_threads else "⚡ Потоковая доска (Live Feed)"
-        modes_str = "⚡ " + ", ".join(active_modes) if active_modes else "Базовый режим"
+        type_str = "🧵 Тредборда" if is_threads else "⚡ Потоковый оверборд (Live Feed)"
+        modes_str = "⚡ " + ", ".join(active_modes) if active_modes else "Базовый"
         replies_str = f"🔔 <b>+{unread_replies} новых</b>" if unread_replies > 0 else "Нет новых"
         return (
-            f"🏴‍☠️ <b>ТГАЧ — АНОНИМНАЯ ИМИДЖБОРДА</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📌 <b>Доска:</b> <code>/{board_id}/</code> — <b>{b_desc}</b> (<i>{b_cat}</i>)\n"
-            f"📡 <b>Тип:</b> {type_str}\n"
-            f"🟢 <b>Онлайн:</b> <code>{active_users}</code> анонов | 💬 <b>Постов на доске:</b> <code>{board_total_posts:,}</code>\n"
-            f"🎭 <b>Режимы:</b> <code>{modes_str}</code>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🥷 <b>Твой Анон:</b> <code>Анон [{anon_code}]</code>\n"
-            f"💳 <b>Кошелек:</b> <code>{int(balance):,} ₪</code>\n"
-            f"📝 <b>Твоих постов:</b> <code>{user_post_count}</code> | 📬 <b>Ответы:</b> {replies_str}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🏴‍☠️ <b>ТГАЧ — АНОНИМНАЯ TELEGRAM-ИМИДЖБОРДА</b>\n"
+            f"<i>Свободный децентрализованный бордопоток без цензуры и регистрации</i>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📌 <b>ДОСКА:</b> <code>/{board_id}/</code> — <b>{b_desc}</b> (<i>секция: {b_cat}</i>)\n"
+            f"📡 <b>Движок:</b> {type_str} | 🟢 Онлайн: <code>{active_users}</code> анонов\n"
+            f"💬 <b>Лента доски:</b> <code>{board_total_posts:,}</code> постов | 🎭 <b>Режим:</b> <code>{modes_str}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🥷 <b>Твой Анон:</b> <code>Анон [{anon_code}]</code> <i>(крипто-хэш ID)</i>\n"
+            f"💳 <b>Шекели:</b> <code>{int(balance):,} ₪</code> | 🎒 <b>Рюкзак:</b> <code>{items_count}</code> предм.\n"
+            f"📝 <b>Твой след:</b> <code>{user_post_count}</code> постов | 📬 <b>Ответы:</b> {replies_str}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🌐 <b>Экосистема ТГАЧ:</b> 13 досок • Казино 777 • Теневой Рынок • Mini App\n"
             f"👇 <i>Выбери модуль ниже для управления, игр или торговли:</i>"
         )
 
