@@ -54,6 +54,20 @@ class TestCasinoAndDrop(unittest.IsolatedAsyncioTestCase):
                     PRIMARY KEY(user_id, board_id)
                 )"""
             )
+            await db.execute(
+                """CREATE TABLE IF NOT EXISTS MoneyDrops (
+                    drop_id TEXT PRIMARY KEY,
+                    donor_id INTEGER,
+                    board_id TEXT,
+                    amount REAL,
+                    status TEXT,
+                    created_at REAL,
+                    claimed_by INTEGER,
+                    claimed_board_id TEXT,
+                    claimed_at REAL,
+                    refunded_at REAL
+                )"""
+            )
             donor_id = 999999
             await db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (?, 'b', 5000)", (donor_id,))
             for i in range(1, 101):
