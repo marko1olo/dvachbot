@@ -139,6 +139,7 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
     converted_cap = convert_site_tags_to_telegram(raw_cap)
     full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
     if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
+    full_caption = clean_html_for_tg(full_caption)
 
     async def _build_group(force_download=False):
         builder = MediaGroupBuilder()
@@ -217,8 +218,9 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
         return None, []
     raw_cap = content.get('caption', '')
     converted_cap = convert_site_tags_to_telegram(raw_cap)
-    caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
-    if len(caption) > 1024: caption = caption[:1021] + "..."
+    full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
+    if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
+    caption = clean_html_for_tg(full_caption)
     ct_str = str(content_type).split('.')[-1].lower()
     common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
     
@@ -243,18 +245,35 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
     try:
         sent_message = await _do_send(media_source)
     except TelegramBadRequest as e:
-        logger.warning(f"⚠️ TelegramBadRequest sending {ct_str} ({e}). Downloading file buffer fallback...")
-        file_bytes, filename = await _download_media_bytes(orig_fid)
-        if file_bytes:
+        err_str = str(e).lower()
+        if "can't parse entities" in err_str or "find end tag" in err_str:
+            common_args["parse_mode"] = None
+            common_args["caption"] = clean_html_tags(caption)
             try:
-                sent_message = await _do_send(BufferedInputFile(file_bytes, filename=filename))
-            except TelegramRetryAfter:
-                raise
-            except Exception as ex:
-                logger.error(f"❌ Single media fallback failed for {orig_fid}: {ex}")
+                sent_message = await _do_send(media_source)
+            except Exception:
+                pass
+        if not sent_message:
+            logger.warning(f"⚠️ TelegramBadRequest sending {ct_str} ({e}). Downloading file buffer fallback...")
+            file_bytes, filename = await _download_media_bytes(orig_fid)
+            if file_bytes:
+                try:
+                    sent_message = await _do_send(BufferedInputFile(file_bytes, filename=filename))
+                except TelegramBadRequest as be:
+                    b_err_str = str(be).lower()
+                    if "can't parse entities" in b_err_str or "find end tag" in b_err_str:
+                        common_args["parse_mode"] = None
+                        common_args["caption"] = clean_html_tags(caption)
+                        sent_message = await _do_send(BufferedInputFile(file_bytes, filename=filename))
+                    else:
+                        raise
+                except TelegramRetryAfter:
+                    raise
+                except Exception as ex:
+                    logger.error(f"❌ Single media fallback failed for {orig_fid}: {ex}")
+                    return None, []
+            else:
                 return None, []
-        else:
-            return None, []
     except TelegramRetryAfter:
         raise
     except Exception as e:

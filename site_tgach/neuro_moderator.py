@@ -110,6 +110,10 @@ async def _safe_groq_json(messages, max_tokens=300):
                         if resp.status_code == 200:
                             raw_content = resp.json()["choices"][0]["message"]["content"].strip()
                             content = raw_content
+                            if "<think>" in content:
+                                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                                if "<think>" in content:
+                                    content = re.sub(r'<think>.*', '', content, flags=re.DOTALL).strip()
                             if "```" in content:
                                 match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
                                 if match:

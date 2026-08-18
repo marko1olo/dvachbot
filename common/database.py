@@ -2598,7 +2598,7 @@ async def get_user_posts_from_list(user_id: int, post_nums: List[int]) -> List[i
         return []
 async def delete_post_by_num(post_num: int) -> bool:
     """
-    Атомарно удаляет пост или весь тред.
+    Атомарно удаляет пост или весь тред с гарантированной очисткой всех зависимых таблиц.
     """
     from common.db_pool import get_pool, db_lock
     
@@ -2609,7 +2609,6 @@ async def delete_post_by_num(post_num: int) -> bool:
         for attempt in range(10):
             try:
                 db = await get_pool()
-                # Сначала BEGIN IMMEDIATE, потом чтение
                 await db.execute("BEGIN IMMEDIATE")
                 
                 # Проверяем, тред ли это
@@ -2618,17 +2617,49 @@ async def delete_post_by_num(post_num: int) -> bool:
                 
                 if is_thread:
                     print(f"🗑️ [DB] Удаление ТРЕДА #{post_num}...")
+                    # Собираем все номера постов треда для очистки связанных таблиц
+                    async with db.execute("SELECT post_num FROM Posts WHERE thread_id = ?", (post_id_str,)) as cursor:
+                        thread_post_nums = [row[0] for row in await cursor.fetchall()]
+                    if post_id_int not in thread_post_nums:
+                        thread_post_nums.append(post_id_int)
+                    
+                    if thread_post_nums:
+                        placeholders = ",".join("?" for _ in thread_post_nums)
+                        await db.execute(f"DELETE FROM PostFiles WHERE post_num IN ({placeholders})", thread_post_nums)
+                        await db.execute(f"DELETE FROM BroadcastQueue WHERE post_num IN ({placeholders})", thread_post_nums)
+                        await db.execute(f"DELETE FROM NotificationQueue WHERE source_post_num IN ({placeholders}) OR reply_post_num IN ({placeholders})", thread_post_nums + thread_post_nums)
+                        await db.execute(f"DELETE FROM PostCopies WHERE post_num IN ({placeholders})", thread_post_nums)
+                        await db.execute(f"DELETE FROM ChannelCopies WHERE post_num IN ({placeholders})", thread_post_nums)
+                        await db.execute(f"DELETE FROM DeliveryQueue WHERE post_num IN ({placeholders})", thread_post_nums)
+                        await db.execute(f"DELETE FROM ModQueue WHERE post_num IN ({placeholders})", thread_post_nums)
+                        await db.execute(f"DELETE FROM PollVotes WHERE post_num IN ({placeholders})", thread_post_nums)
+                        await db.execute(f"DELETE FROM Reports WHERE post_num IN ({placeholders})", thread_post_nums)
+                        await db.execute(f"DELETE FROM Backlinks WHERE target_post_num IN ({placeholders}) OR source_post_num IN ({placeholders})", thread_post_nums + thread_post_nums)
+                        await db.execute(f"DELETE FROM UserReplies WHERE post_num IN ({placeholders}) OR parent_num IN ({placeholders}) OR thread_id = ?", thread_post_nums + thread_post_nums + [post_id_str])
+                        await db.execute(f"UPDATE Posts SET reply_to_post_num = NULL WHERE reply_to_post_num IN ({placeholders})", thread_post_nums)
+                    
                     await db.execute("DELETE FROM Threads WHERE thread_id = ?", (post_id_str,))
                     await db.execute("DELETE FROM Posts WHERE thread_id = ?", (post_id_str,))
-                    await db.execute("DELETE FROM UserReplies WHERE thread_id = ?", (post_id_str,))
+                    
                     # Мгновенная очистка кэша тредов
                     for cache_list in _THREAD_CACHE.values():
                         if post_id_str in cache_list:
                             cache_list.remove(post_id_str)
                 else:
                     print(f"🗑️ [DB] Удаление ПОСТА #{post_num}...")
-                    await db.execute("DELETE FROM Posts WHERE post_num = ?", (post_id_int,))
+                    await db.execute("DELETE FROM PostFiles WHERE post_num = ?", (post_id_int,))
+                    await db.execute("DELETE FROM BroadcastQueue WHERE post_num = ?", (post_id_int,))
+                    await db.execute("DELETE FROM NotificationQueue WHERE source_post_num = ? OR reply_post_num = ?", (post_id_int, post_id_int))
+                    await db.execute("DELETE FROM PostCopies WHERE post_num = ?", (post_id_int,))
+                    await db.execute("DELETE FROM ChannelCopies WHERE post_num = ?", (post_id_int,))
+                    await db.execute("DELETE FROM DeliveryQueue WHERE post_num = ?", (post_id_int,))
+                    await db.execute("DELETE FROM ModQueue WHERE post_num = ?", (post_id_int,))
+                    await db.execute("DELETE FROM PollVotes WHERE post_num = ?", (post_id_int,))
+                    await db.execute("DELETE FROM Reports WHERE post_num = ?", (post_id_int,))
+                    await db.execute("DELETE FROM Backlinks WHERE target_post_num = ? OR source_post_num = ?", (post_id_int, post_id_int))
                     await db.execute("DELETE FROM UserReplies WHERE post_num = ? OR parent_num = ?", (post_id_int, post_id_int))
+                    await db.execute("UPDATE Posts SET reply_to_post_num = NULL WHERE reply_to_post_num = ?", (post_id_int,))
+                    await db.execute("DELETE FROM Posts WHERE post_num = ?", (post_id_int,))
                 
                 # Мгновенная очистка медиа-кэша (удаляем все вхождения этого поста)
                 for cache_list in _VIDEO_CACHE.values():

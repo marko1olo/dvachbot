@@ -820,7 +820,10 @@ async def analyze_telegram_photo(bot, photo_file_id: str, caption: str = None) -
         from site_tgach.vision import describe_image
         import tempfile, os
         file_info = await bot.get_file(photo_file_id)
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+        ext = os.path.splitext(file_info.file_path or "")[1].lower()
+        if ext in ['.tgs', '.webm']:
+            return None
+        with tempfile.NamedTemporaryFile(suffix=ext or ".jpg", delete=False) as tmp:
             tmp_path = tmp.name
         await bot.download_file(file_info.file_path, tmp_path)
         
@@ -830,11 +833,12 @@ async def analyze_telegram_photo(bot, photo_file_id: str, caption: str = None) -
             os.remove(tmp_path)
         except Exception:
             pass
-        if description:
+        if description and not description.startswith("error_"):
             logger.info(f"✅ [TG_BOT] Photo analysis complete (desc='{description[:60]}...')")
+            return description
         else:
-            logger.warning(f"⚠️ [TG_BOT] Photo analysis produced no description.")
-        return description
+            logger.warning(f"⚠️ [TG_BOT] Photo analysis produced no valid description ({description}).")
+            return None
     except Exception as e:
         logger.error(f"⚠️ [TG_BOT] Telegram Vision Error: {e}", exc_info=True)
         return None
