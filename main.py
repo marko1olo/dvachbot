@@ -4150,6 +4150,62 @@ async def _handle_shoot_success(ctx: ShootContext):
         pass
 
 
+async def is_target_neutralized(target_id: int, board_id: str, db=None) -> tuple[bool, str]:
+    """
+    Проверяет, нейтрализован ли уже целевой анон активным дебаффом (мут, КПЗ/пативэн, проклятие поноса).
+    Правило: Защита от спама дебаффами — на аноне может быть только 1 активный дебафф одновременно!
+    Исключение: бросок куска говна (/shit) разрешен всегда.
+    """
+    from datetime import datetime, UTC
+    now_ts = time.time()
+    now_dt = datetime.now(UTC)
+
+    # 1. Проверка активного мута в памяти
+    if board_id in board_data:
+        m_end = board_data[board_id].get('mutes', {}).get(target_id)
+        if m_end and m_end > now_dt:
+            return True, "уже находится в муте"
+        sm_end = board_data[board_id].get('shadow_mutes', {}).get(target_id)
+        if sm_end and sm_end > now_dt:
+            return True, "уже находится в теневом муте"
+
+    # 2. Проверка активного мута и проклятия в базе данных
+    if db is None:
+        db = await get_pool()
+        
+    try:
+        # Проверка таблицы Mutes
+        async with db.execute(
+            "SELECT expires_at, mute_type FROM Mutes WHERE user_id = ? AND board_id = ? AND expires_at > ?",
+            (target_id, board_id, now_ts)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                m_type = "в КПЗ / муте" if row[1] == "mute" else "в теневом муте"
+                return True, m_type
+
+        # Проверка Users (cursed_until и active_items)
+        async with db.execute(
+            "SELECT cursed_until, active_items FROM Users WHERE user_id = ? AND board_id = ?",
+            (target_id, board_id)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                cursed_until = row[0] or 0
+                if cursed_until > now_ts:
+                    return True, "под действием слабительного (/curse)"
+                if row[1]:
+                    try:
+                        items = json.loads(row[1])
+                        if items.get("cursed_until", 0) > now_ts:
+                            return True, "под действием слабительного (/curse)"
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.warning(f"Error in is_target_neutralized: {e}")
+
+    return False, ""
+
 @dp.message(Command("shoot"))
 async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -4170,40 +4226,45 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         await message.answer("Ты пытаешься выстрелить в самого себя? Идиот.")
         return
 
-    from datetime import datetime, UTC
-    async with storage_lock:
-        current_mute = board_data[board_id]['mutes'].get(target_id)
-        
-    if current_mute and current_mute > datetime.now(UTC):
-        await message.answer("⚠️ Эта цель УЖЕ находится в муте! Выбери кого-то другого. Мут-Ган остался у тебя.")
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("mute_gun"):
+        await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
         return
 
-    has_item = False
+    # Защита от спама мут-ганами и дебаффами (максимум 1 активный дебафф)
+    is_neut, reason = await is_target_neutralized(target_id, board_id, db)
+    if is_neut:
+        await message.answer(
+            f"⚠️ <b>Защита от спама:</b> Эта цель УЖЕ {reason}!\n"
+            f"На аноне может быть только 1 активный дебафф (кроме броска говна).\n"
+            f"Мут-Ган остался в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
+        return
+
+    t_items = await _get_user_active_items(db, target_id, board_id)
     is_bounced = False
 
     async with db_lock:
         active_items = await _get_user_active_items(db, user_id, board_id)
-        if active_items.get("mute_gun"):
-            has_item = True
-            t_items = await _get_user_active_items(db, target_id, board_id)
-            if t_items.get("reflect_shield_until", 0) > current_time:
-                is_bounced = True
-                t_items["reflect_shield_until"] = 0
-                active_items["mute_gun"] = False
-                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                                 (json.dumps(t_items), target_id, board_id))
-                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                                 (json.dumps(active_items), user_id, board_id))
-                await db.commit()
-            else:
-                active_items["mute_gun"] = False
-                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                                 (json.dumps(active_items), user_id, board_id))
-                await db.commit()
-
-    if not has_item:
-        await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
-        return
+        if not active_items.get("mute_gun"):
+            await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
+            return
+            
+        if t_items.get("reflect_shield_until", 0) > current_time:
+            is_bounced = True
+            t_items["reflect_shield_until"] = 0
+            active_items["mute_gun"] = False
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(t_items), target_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        else:
+            active_items["mute_gun"] = False
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
 
     if is_bounced:
         await _handle_shoot_bounce(ShootContext(message, db, db_lock, board_id, user_id, target_id, active_items, t_items))
@@ -4240,6 +4301,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         await message.delete()
     except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
         pass
+
 @dp.message(Command("rob"))
 async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -4360,13 +4422,8 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         return
     
     t_items = await _get_user_active_items(db, target_id, board_id)
-    current_time = int(time.time())
     
-    # Идемпотентность: цель уже в говне
-    if t_items.get("shit_until", 0) > current_time:
-        await message.answer("💩 Эта цель УЖЕ обмазана говном! Выбери кого-нибудь чистого. Кусок говна остался у тебя.")
-        return
-
+    # КУСОК ГОВНА РАЗРЕШЕН ВСЕГДА! (Не блокируется ограничениями других дебаффов)
     active_items["shit_gun"] = False
     
     if t_items.get("tinfoil_hat", 0) > current_time:
@@ -4409,6 +4466,8 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
         return
     import time, json
     db = await get_pool()
+    current_time = int(time.time())
+
     active_items = await _get_user_active_items(db, user_id, board_id)
     if not active_items.get("laxative_gun"):
         await message.answer("🚽 У тебя нет Слабительного! Купи его в магазине: /shop")
@@ -4418,27 +4477,40 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
         await message.answer("⚠️ Не удалось найти цель или ты пытаешься проклясть сам себя.")
         return
     
-    current_time = int(time.time())
-    t_items = await _get_user_active_items(db, target_id, board_id)
-    
-    # Идемпотентность: цель уже проклята
-    if t_items.get("cursed_until", 0) > current_time:
-        await message.answer("🚽 У этого анона И ТАК словесный понос! Выбери другую жертву. Слабительное осталось у тебя.")
+    # Защита от спама: 1 активный дебафф (кроме говна)
+    is_neut, reason = await is_target_neutralized(target_id, board_id, db)
+    if is_neut:
+        await message.answer(
+            f"🚽 <b>Защита от спама:</b> У этой цели УЖЕ активен дебафф ({reason})!\n"
+            f"На аноне может быть только 1 активный дебафф (кроме броска говна).\n"
+            f"Слабительное осталось в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
         return
         
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    if t_items.get("tinfoil_hat", 0) > current_time:
+        active_items["laxative_gun"] = False
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        await message.answer("👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Слабительное нейтрализовано фольгой.", parse_mode="HTML")
+        return
+
     active_items["laxative_gun"] = False
     t_items["cursed_until"] = current_time + 3600
 
     async with db_lock:
         await db.execute(
-            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-            (user_id, board_id, json.dumps(active_items))
+            "INSERT INTO Users (user_id, board_id, active_items, cursed_until) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items, cursed_until = excluded.cursed_until",
+            (user_id, board_id, json.dumps(active_items), 0)
         )
         await db.execute(
-            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
-            (target_id, board_id, json.dumps(t_items))
+            "INSERT INTO Users (user_id, board_id, active_items, cursed_until) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items, cursed_until = excluded.cursed_until",
+            (target_id, board_id, json.dumps(t_items), current_time + 3600)
         )
         await db.commit()
     await message.answer("🚽 <b>ПРОКЛЯТИЕ СРАБОТАЛО!</b>\nТы подлил слабительное в чай этому анону. У него начался словесный понос: он целый час не сможет писать посты длиннее 50 символов!", parse_mode="HTML")
@@ -4450,23 +4522,38 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     if not message.reply_to_message:
         await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на донос-пост жертвы, чтобы вызвать Пативэн!", parse_mode="HTML")
         return
-    import json
+    import json, time
     from datetime import datetime, timedelta, UTC
     db = await get_pool()
+    current_time = int(time.time())
+
     active_items = await _get_user_active_items(db, user_id, board_id)
     if not active_items.get("partyvan_gun"):
         await message.answer("🚔 У тебя нет рации для вызова Пативэна! Купи её в /shop")
         return
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0 or target_id == user_id: 
-        await message.answer("⚠️ Не удалось определить цель доноса.")
+        await message.answer("⚠️ Не удалось определить цель доноса или ты пытаешься посадить сам себя.")
         return
         
-    # Идемпотентность: цель уже в КПЗ
-    async with storage_lock:
-        mute_end = board_data[board_id]['mutes'].get(target_id)
-    if mute_end and mute_end > datetime.now(UTC) + timedelta(hours=11):
-        await message.answer("🚔 Этот анон УЖЕ откисает в КПЗ надолго! Не трать вызов зря, рация осталась у тебя.")
+    # Защита от спама: 1 активный дебафф (кроме говна)
+    is_neut, reason = await is_target_neutralized(target_id, board_id, db)
+    if is_neut:
+        await message.answer(
+            f"🚔 <b>Вызов отменен:</b> Эта цель УЖЕ {reason}!\n"
+            f"ОМОН не выезжает по лежачим анонам (макс. 1 активный дебафф).\n"
+            f"Рация осталась в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
+        return
+
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    if t_items.get("tinfoil_hat", 0) > current_time:
+        active_items["partyvan_gun"] = False
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        await message.answer("👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! ОМОН не смог запеленговать сигнал из-за фольги.", parse_mode="HTML")
         return
     
     active_items["partyvan_gun"] = False

@@ -301,6 +301,23 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
     if not active_items.get("partyvan_gun"):
         await message.reply("У тебя нет доступа к вызову Пативэна! Купи его в /shop.")
         return
+
+    # Защита от спама дебаффами: на аноне может быть только 1 активный дебафф (кроме говна)
+    try:
+        import main
+        is_neut_fn = getattr(main, 'is_target_neutralized', None)
+        if is_neut_fn:
+            is_neut, reason = await is_neut_fn(target_id, board_id, db)
+            if is_neut:
+                await message.reply(
+                    f"🚔 <b>Вызов отменен:</b> Эта цель УЖЕ {reason}!\n"
+                    f"ОМОН не выезжает по лежачим анонам (макс. 1 активный дебафф).\n"
+                    f"Рация осталась в твоем рюкзаке.",
+                    parse_mode="HTML"
+                )
+                return
+    except Exception:
+        pass
         
     now = int(time.time())
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
@@ -565,6 +582,23 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
     if not active_items.get("laxative_gun"):
         await message.reply("У тебя нет слабительного! Купи его в /shop.")
         return
+
+    # Защита от спама дебаффами: на аноне может быть только 1 активный дебафф (кроме говна)
+    try:
+        import main
+        is_neut_fn = getattr(main, 'is_target_neutralized', None)
+        if is_neut_fn:
+            is_neut, reason = await is_neut_fn(target_id, board_id, db)
+            if is_neut:
+                await message.reply(
+                    f"🚽 <b>Защита от спама:</b> У этой цели УЖЕ активен дебафф ({reason})!\n"
+                    f"На аноне может быть только 1 активный дебафф (кроме броска говна).\n"
+                    f"Слабительное осталось в твоем рюкзаке.",
+                    parse_mode="HTML"
+                )
+                return
+    except Exception:
+        pass
         
     active_items["laxative_gun"] = False
     now = int(time.time())
