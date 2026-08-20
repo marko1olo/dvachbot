@@ -4899,8 +4899,10 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
 
         elif item == "pills":
             active_items.pop("shit_until", None)
+            active_items.pop("peppersprayed_until", None)
+            active_items.pop("schizopill_active", None)
             await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-            msg = "💊 Ты выпил Аминазин! Все дебаффы (говно, понос, шиза) моментально сняты."
+            msg = "💊 Ты выпил Аминазин! Все дебаффы (говно, перец, понос, шиза) моментально сняты."
 
         elif item == "knife":
             if active_items.get("knife_gun"):
@@ -5167,7 +5169,7 @@ async def is_target_neutralized(target_id: int, board_id: str, db=None) -> tuple
 
     return False, ""
 
-@dp.message(Command("shoot"))
+@dp.message(Command("shoot", "shot", "mutegun", "мутган", "стрелять", "пиу"))
 async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -5189,6 +5191,17 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         return
 
     active_items = await _get_user_active_items(db, user_id, board_id)
+
+    if active_items.get("peppersprayed_until", 0) > current_time:
+        rem_min = (active_items["peppersprayed_until"] - current_time) // 60 + 1
+        await message.answer(
+            f"😵 <b>ГЛАЗА ЗАЛИТЫ ПЕРЦЕМ!</b>\n"
+            f"Тебе недавно брызнули в лицо перцовым баллончиком!\n"
+            f"Ты ничего не видишь и не можешь прицелиться. Глаза пройдут через <b>{rem_min} мин</b>.",
+            parse_mode="HTML"
+        )
+        return
+
     cd_rem = get_combat_cooldown_remaining(user_id)
     if cd_rem > 0:
         cd_min = cd_rem // 60
@@ -5334,7 +5347,125 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception):
         pass
 
-@dp.message(Command("rob"))
+@dp.message(Command("pepperspray", "pepper", "перцовка", "баллончик", "пшик"))
+async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ Сделай Reply на пост жертвы с командой <code>/pepperspray</code>!", parse_mode="HTML")
+        return
+
+    import time, json
+    from shared_state import get_combat_cooldown_remaining, set_combat_cooldown
+    db = await get_pool()
+    current_time = int(time.time())
+
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0:
+        await message.answer("🚫 Не удалось найти автора поста...")
+        return
+    if target_id == user_id:
+        await message.answer("Пшикнуть перцовкой себе в лицо? Ты нормальный вообще?")
+        return
+
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    cd_rem = get_combat_cooldown_remaining(user_id)
+    if cd_rem > 0:
+        cd_min = cd_rem // 60
+        cd_sec = cd_rem % 60
+        time_str = f"{cd_min}м {cd_sec}с" if cd_min > 0 else f"{cd_sec}с"
+        await message.answer(
+            f"⏳ <b>Перезарядка оружия!</b>\n"
+            f"Ты недавно совершил нападение. Следующая атака доступна через <b>{time_str}</b>.\n"
+            f"<i>(Глобальный кулдаун на оружие: 3 мин)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    if not active_items.get("pepperspray_gun"):
+        await message.answer("🧯 У тебя нет Перцового баллончика! Купи его в магазине: /shop")
+        return
+
+    t_items = await _get_user_active_items(db, target_id, board_id)
+
+    async with db_lock:
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        if not active_items.get("pepperspray_gun"):
+            await message.answer("🧯 У тебя нет Перцового баллончика! Купи его в магазине: /shop")
+            return
+
+        # 1. Check Mirror Shield reflection
+        if t_items.get("reflect_shield_until", 0) > current_time:
+            t_items["reflect_shield_until"] = 0
+            active_items["pepperspray_gun"] = False
+            active_items["peppersprayed_until"] = current_time + 1800
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(t_items), target_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+            set_combat_cooldown(user_id, 180)
+            await message.bot.send_message(
+                message.chat.id,
+                f"🛡️ <b>РИКОШЕТ ЗЕРКАЛЬНОГО ЩИТА!</b>\n"
+                f"Струя перца отразилась от Зеркального Щита жертвы прямо тебе в глаза!\n"
+                f"Ты ослеплен на 30 минут! <i>(Баллончик израсходован)</i>",
+                reply_to_message_id=message.reply_to_message.message_id,
+                parse_mode="HTML"
+            )
+            return
+
+        # 2. Check Helmet protection
+        if t_items.get("equipped_head") == "hat_helmet":
+            active_items["pepperspray_gun"] = False
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+            set_combat_cooldown(user_id, 180)
+            await message.bot.send_message(
+                message.chat.id,
+                f"🪖 <b>ЗАБРАЛО ОПУЩЕНО!</b>\n"
+                f"Шлем ОМОНа жертвы полностью защитил лицо от струи перца!\n"
+                f"<i>(Перцовка израсходована впустую)</i>",
+                reply_to_message_id=message.reply_to_message.message_id,
+                parse_mode="HTML"
+            )
+            return
+
+        # 3. Successful Pepper Spray Blindness
+        active_items["pepperspray_gun"] = False
+        t_items["peppersprayed_until"] = current_time + 3600
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(t_items), target_id, board_id))
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(active_items), user_id, board_id))
+        await db.commit()
+        set_combat_cooldown(user_id, 180)
+
+    from achievements_engine import check_and_unlock_achievement
+    unlocked, _ = check_and_unlock_achievement(active_items, "ach_pepperspray")
+    if unlocked:
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+
+    anon_target = generate_anon_name(target_id)
+    await message.bot.send_message(
+        message.chat.id,
+        f"🧯 <b>СТРУЯ В ЕБАЛО!</b>\n\n"
+        f"Анон выпустил струю жгучего перца в лицо <b>{anon_target}</b>!\n"
+        f"Жертва ослеплена слезами и соплями на 1 час (запрещено нападать и грабить).\n"
+        f"<i>(Перцовый баллончик израсходован)</i>",
+        reply_to_message_id=message.reply_to_message.message_id,
+        parse_mode="HTML"
+    )
+    await log_global_event('bot', f"🧯 PEPPER: Юзер {user_id} залил перцем {target_id} на /{board_id}/ на 1ч")
+    try: await message.delete()
+    except Exception: pass
+
+
+@dp.message(Command("rob", "knife", "заточка", "гопстоп", "ограбить", "отжать"))
 async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -5344,8 +5475,21 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
     import time
     import random
     import json
+    from shared_state import get_combat_cooldown_remaining, set_combat_cooldown
     db = await get_pool()
     active_items = await _get_user_active_items(db, user_id, board_id)
+    current_time = int(time.time())
+
+    if active_items.get("peppersprayed_until", 0) > current_time:
+        rem_min = (active_items["peppersprayed_until"] - current_time) // 60 + 1
+        await message.answer(
+            f"😵 <b>ГЛАЗА ЗАЛИТЫ ПЕРЦЕМ!</b>\n"
+            f"Тебе недавно брызнули в лицо перцовым баллончиком!\n"
+            f"Ты ослеплен и не можешь совершать грабежи. Действие перцовки пройдет через <b>{rem_min} мин</b>.",
+            parse_mode="HTML"
+        )
+        return
+
     if not active_items.get("knife_gun"):
         await message.answer("🔪 У тебя нет Заточки! Купи её в теневом магазине: /shop")
         return
@@ -6738,7 +6882,7 @@ async def cmd_duel(message: types.Message, board_id: str | None, stream: str = '
     else:
         await _handle_duel_create(message, board_id, args, stream)
 
-@dp.message(Command("wallet", "balance", "money"))
+@dp.message(Command("wallet", "balance", "money", "кошелек", "баланс", "шекели", "деньги", "cash"))
 async def cmd_wallet(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -7837,7 +7981,7 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
 
 # --- КАЗИНО: ХАБ, СЛОТЫ, МОНЕТКА, БЛЭКДЖЕК, РУЛЕТКА ---
 
-@dp.message(Command("casino", "казино", "игры", "games"))
+@dp.message(Command("casino", "казино", "игры", "games", "казик", "рулетка", "слоты", "777"))
 async def cmd_casino_hub(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
