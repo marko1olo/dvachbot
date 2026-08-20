@@ -15250,6 +15250,14 @@ async def cq_enter_thread(callback: types.CallbackQuery, board_id: str | None, s
         message_to_delete=message_to_delete,
         stream=stream
     )
+@dp.callback_query(F.data == "thread_like_placeholder")
+async def cb_thread_like_placeholder(callback: types.CallbackQuery, board_id: str | None):
+    try:
+        await callback.answer("👍 Тред получил твой лайк и бамп!", show_alert=False)
+    except Exception:
+        pass
+
+
 @dp.callback_query(F.data == "leave_thread")
 async def cb_leave_thread(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     """

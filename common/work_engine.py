@@ -386,14 +386,17 @@ def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str
     try:
         from achievements_engine import check_and_unlock_achievement
         if total_shifts >= 10:
-            unlocked, ach_cash, ach_name = check_and_unlock_achievement(current_items, "ach_work_10")
-            if unlocked: ach_note = f" | 🏆 Ачивка: {ach_name} (+{ach_cash} ₪)!"
+            unlocked, ach_info = check_and_unlock_achievement(current_items, "ach_work_10")
+            if unlocked and ach_info:
+                ach_note = f" | 🏆 Ачивка: {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
         if total_shifts >= 50:
-            unlocked, ach_cash, ach_name = check_and_unlock_achievement(current_items, "ach_work_50")
-            if unlocked: ach_note = f" | 🏆 Ачивка: {ach_name} (+{ach_cash} ₪)!"
+            unlocked, ach_info = check_and_unlock_achievement(current_items, "ach_work_50")
+            if unlocked and ach_info:
+                ach_note = f" | 🏆 Ачивка: {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
         if total_shifts >= 100:
-            unlocked, ach_cash, ach_name = check_and_unlock_achievement(current_items, "ach_work_100")
-            if unlocked: ach_note = f" | 🏆 Ачивка: {ach_name} (+{ach_cash} ₪)!"
+            unlocked, ach_info = check_and_unlock_achievement(current_items, "ach_work_100")
+            if unlocked and ach_info:
+                ach_note = f" | 🏆 Ачивка: {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
     except Exception:
         pass
 
