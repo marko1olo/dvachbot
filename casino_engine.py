@@ -182,6 +182,14 @@ def get_casino_hub_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="💸 Дроп шекелей в тред", callback_data="cas:menu:drop"),
             InlineKeyboardButton(text="📊 Баланс & Статы", callback_data="cas:menu:balance"),
+        ],
+        [
+            InlineKeyboardButton(text="🛒 В Магазин (/shop)", callback_data="shop_main_hub"),
+            InlineKeyboardButton(text="💼 На Работу (/work)", callback_data="work_main_hub"),
+        ],
+        [
+            InlineKeyboardButton(text="💳 Мой Кошелек (/wallet)", callback_data="prof_wallet"),
+            InlineKeyboardButton(text="🎭 Персонаж RPG (/avatar)", callback_data="avatar_view"),
         ]
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

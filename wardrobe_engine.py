@@ -17,6 +17,7 @@ from typing import Dict, Any, List, Optional, Tuple
 # Apparel & Wardrobe Catalog
 # -----------------------------------------------------------------------------
 CLOTHING_CATALOG = {
+
     # === ГОЛОВНЫЕ УБОРЫ (HATS) ===
     "hat_tinfoil": {
         "id": "hat_tinfoil",
@@ -259,6 +260,8 @@ CLOTHING_CATALOG = {
         "desc": "Подкрадули на 30 дней. 30% шанс успешно сбежать при облаве пативэна /partyvan."
     }
 }
+
+WARDROBE_CATALOG = CLOTHING_CATALOG
 
 # -----------------------------------------------------------------------------
 # SET BONUSES

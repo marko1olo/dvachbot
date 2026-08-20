@@ -297,3 +297,109 @@ def build_character_card(
     img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
     return buf
+
+
+def build_character_html_card(
+    user_id: int,
+    anon_id: str,
+    balance: float,
+    posts_count: int,
+    active_items: dict,
+    custom_prefix: Optional[str] = None,
+    badge_color: Optional[str] = None,
+    cursed_until: int = 0
+) -> str:
+    """
+    Generates a lightning-fast formatted HTML text character sheet with zero PIL image rendering overhead.
+    """
+    from wardrobe_engine import get_active_set_bonuses, CLOTHING_CATALOG
+    active_sets = get_active_set_bonuses(active_items)
+
+    equipped_head = active_items.get("equipped_head")
+    equipped_torso = active_items.get("equipped_torso")
+    equipped_face = active_items.get("equipped_face")
+    equipped_feet = active_items.get("equipped_feet")
+
+    has_tinfoil = active_items.get("tinfoil_hat", 0) > time.time()
+    has_shield = active_items.get("shield_active", 0) > time.time()
+    has_curse = cursed_until > time.time()
+    has_shit = active_items.get("shit_covered_until", 0) > time.time()
+
+    head_name = CLOTHING_CATALOG.get(equipped_head, {}).get("name") if equipped_head in CLOTHING_CATALOG else ("👽 Шапочка из фольги" if has_tinfoil else ("👑 VIP Корона" if custom_prefix else "<i>(Пусто)</i>"))
+    torso_name = CLOTHING_CATALOG.get(equipped_torso, {}).get("name", "<i>(Пусто)</i>")
+    face_name = CLOTHING_CATALOG.get(equipped_face, {}).get("name", "<i>(Пусто)</i>")
+    feet_name = CLOTHING_CATALOG.get(equipped_feet, {}).get("name", "<i>(Пусто)</i>")
+
+    weapon_name = "👊 Кулак (Без оружия)"
+    if active_items.get("partyvan_gun"): weapon_name = "🚔 Пативэн-Ган"
+    elif active_items.get("knife_gun"): weapon_name = "🔪 Заточка"
+    elif active_items.get("pepperspray_gun"): weapon_name = "🧯 Перцовый баллончик"
+    elif active_items.get("mute_gun"): weapon_name = "🔇 Мут-Ган"
+    elif active_items.get("shit_gun"): weapon_name = "💩 Кусок говна"
+
+    # RPG Stats calculation
+    toxicity = min(100, max(5, int(posts_count * 1.5) % 100))
+    defense = 10
+    if has_shield: defense += 40
+    if equipped_head == "hat_helmet": defense += 30
+    for s in active_sets:
+        if s.get("id") == "set_riot_police": defense += 20
+    defense = min(100, defense)
+
+    sanity = 100
+    if has_curse: sanity = 15
+    elif active_items.get("schizopill_active", 0) > time.time(): sanity = 40
+    elif equipped_torso == "body_straitjacket": sanity = 25
+
+    wealth = min(100, int(balance / 50))
+
+    def make_bar(val: int) -> str:
+        filled = int(val / 10)
+        return "█" * filled + "░" * (10 - filled)
+
+    # Trophies
+    from achievements_engine import ACHIEVEMENTS_CATALOG
+    unlocked = active_items.get("unlocked_achievements", [])
+    ach_cnt = len(unlocked)
+    total_ach = len(ACHIEVEMENTS_CATALOG)
+
+    is_masked = (equipped_face == "face_anon_mask")
+    bal_str = "🎭 [ЗАСЕКРЕЧЕНО]" if is_masked else f"{int(balance):,} ₪"
+
+    color_info = COLOR_PALETTE.get(badge_color, {"name": "Стандартный", "emoji": "⚪️"})
+
+    lines = [
+        f"🎭 <b>ДОСЬЕ И КАРТОЧКА ПЕРСОНАЖА [#{anon_id}]</b>",
+        f"<code>{'—'*28}</code>",
+        f"👤 <b>Статус:</b> {custom_prefix if custom_prefix else 'Битард'} | <b>Аура:</b> {color_info['emoji']} {color_info['name']}",
+        f"💰 <b>Капитал:</b> <code>{bal_str}</code> | <b>Постов:</b> <code>{posts_count}</code>",
+        f"🏆 <b>Трофеи:</b> <code>{ach_cnt}/{total_ach}</code> ({int(ach_cnt/total_ach*100)}%)",
+        "",
+        "📊 <b>RPG ХАРАКТЕРИСТИКИ:</b>",
+        f"⚔️ Токсичность: <code>[{make_bar(toxicity)}]</code> {toxicity}%",
+        f"🛡️ Защита:      <code>[{make_bar(defense)}]</code> {defense}%",
+        f"🧠 Рассудок:    <code>[{make_bar(sanity)}]</code> {sanity}%",
+        f"💎 Богатство:   <code>[{make_bar(wealth)}]</code> {wealth}%",
+        "",
+        "🥋 <b>ЭКИПИРОВКА И СЛОТЫ:</b>",
+        f"🎩 <b>Голова:</b>  {head_name}",
+        f"🧥 <b>Торс:</b>    {torso_name}",
+        f"👓 <b>Лицо:</b>    {face_name}",
+        f"👟 <b>Обувь:</b>   {feet_name}",
+        f"⚔️ <b>Оружие:</b>  {weapon_name}",
+        f"🛡️ <b>Щит:</b>     {'🛡️ Зеркальный Щит' if has_shield else '<i>(Пусто)</i>'}",
+    ]
+
+    if has_curse or has_shit:
+        debuff = "🚽 Проклятие поноса" if has_curse else "💩 Обмазан говном"
+        lines.append(f"⚠️ <b>Дебафф:</b> {debuff}")
+
+    if active_sets:
+        lines.append("")
+        for s in active_sets:
+            lines.append(f"✨ <b>СЕТ-БОНУС:</b> {s['name']}\n<i>{s['bonus_desc']}</i>")
+
+    lines.append(f"<code>{'—'*28}</code>")
+    lines.append("💡 <i>Одевайся в /wardrobe, вооружайся в /shop и выполняй /ach!</i>")
+
+    return "\n".join(lines)
