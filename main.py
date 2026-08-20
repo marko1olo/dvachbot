@@ -1755,9 +1755,11 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
         await _handle_unhandled_exception(exception, update)
         return True
 def is_admin(uid: int, board_id: str) -> bool:
-
     if not board_id:
         return False
+    from site_tgach.admin_config import ADMIN_IDS
+    if uid in ADMIN_IDS:
+        return True
     return uid in BOARD_CONFIG.get(board_id, {}).get('admins', set())
 async def load_state():
     """
@@ -2697,12 +2699,12 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
             except Exception:
                 pass
     if not messages_to_delete_info:
-        return 0 if deleted_from_db else 0
-        
+        return 1 if deleted_from_db else 0
+    
     tasks = [_delete_message_with_retries(bot_instance, uid, mid, board_id) for uid, mid in messages_to_delete_info]
     results = await asyncio.gather(*tasks)
     deleted_count = sum(1 for res in results if res is True)
-    return deleted_count
+    return max(1 if deleted_from_db else 0, deleted_count)
 async def send_moderation_notice(user_id: int, action: str, board_id: str, duration: str = None, deleted_posts: int = 0, stream: str = 'ru'):
 
     b_data = board_data[board_id]
@@ -16501,6 +16503,7 @@ async def check_anime_cmd_cooldown(message: types.Message, board_id: str) -> boo
                 pass
             return False
         return True
+
 def detect_media_type(data: bytes, url: str) -> str:
     """
     Определяет тип медиа (photo/video/animation) по заголовку файла или URL.
@@ -16982,15 +16985,21 @@ async def _process_stacked_anime_command(
             try: await working_msg.delete()
             except TelegramBadRequest: pass
 
-@dp.message(Command("del"))
+@dp.message(Command("del", "delete", "rm", "удалить"))
 async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
     target_msg = message.reply_to_message
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
 
     if not target_msg:
-        try: await message.delete()
-        except: pass
+        msg = "Reply to a message to delete: <code>/del</code>" if lang == 'en' else "⚠️ Ответьте на сообщение, которое хотите удалить: <code>/del</code>"
+        try:
+            sent = await message.answer(msg, parse_mode="HTML")
+            spawn_task(delete_message_after_delay(sent, 5))
+            await message.delete()
+        except Exception:
+            pass
         return
 
     admin_status = is_admin(user_id, board_id)
@@ -17025,13 +17034,13 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
 
     if not admin_status and not is_janitor:
         try: await message.delete()
-        except: pass
+        except Exception: pass
         return
 
-    key = (message.chat.id, target_msg.message_id)
+    key = (target_msg.chat.id, target_msg.message_id)
     post_num = message_to_post.get(key)
     if not post_num:
-        info = await get_post_info_by_copy(message.chat.id, target_msg.message_id)
+        info = await get_post_info_by_copy(target_msg.chat.id, target_msg.message_id)
         if info: post_num = info[0]
 
     # 2. Проверка возраста поста и защиты фольгой (только для обычных дворников)
@@ -17098,6 +17107,35 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
                 (json.dumps(active_items), user_id, board_id)
             )
             await db.commit()
+
+    # 3. Выполнение удаления
+    deleted_count = 0
+    if post_num:
+        deleted_count = await delete_single_post(post_num, message.bot)
+        role_str = "Админ" if admin_status else "Дворник"
+        await log_global_event('bot', f"🗑️ DEL: {role_str} {user_id} удалил пост #{post_num} на /{board_id}/ (и {deleted_count} копий)")
+        if lang == 'en':
+            resp = f"🗑 Post #{post_num} deleted ({deleted_count} copies)."
+            if is_janitor:
+                resp += f" 🧹 Janitor: {janitor_deletes_left} deletes remaining."
+        elif lang == 'jp':
+            resp = f"🗑 投稿 #{post_num} とコピー ({deleted_count}件) を削除しました。"
+            if is_janitor:
+                resp += f" 🧹 掃除員チケット: 残り {janitor_deletes_left} 回。"
+        else:
+            resp = f"🗑 Пост №{post_num} и копии ({deleted_count}) удалены."
+            if is_janitor:
+                resp += f" 🧹 Удалено как Дворник (по Билету). Осталось: {janitor_deletes_left} удалений."
+        await message.answer(resp)
+    else:
+        try:
+            await target_msg.delete()
+            await message.answer("🗑 Сообщение удалено.")
+        except Exception:
+            await message.answer("⚠️ Не удалось найти пост в базе (возможно, он уже удален).")
+
+    try: await message.delete()
+    except Exception: pass
 
 async def _safe_delete_user_message(message: types.Message):
     try:
@@ -18292,12 +18330,15 @@ async def execute_ban(bot, message, target_id: int, board_id: str, admin_id: int
     await message.edit_text(response_text, parse_mode="HTML")
     await send_moderation_notice(target_id, "ban", board_id, deleted_posts=deleted_posts)
 
-@dp.message(Command("wipe"))
+@dp.message(Command("wipe", "вайп", "сжечь", "потереть"))
 async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id or not is_admin(message.from_user.id, board_id): return
+    if not board_id or not is_admin(message.from_user.id, board_id):
+        try: await message.delete()
+        except Exception: pass
+        return
     command_args = (message.text or message.caption or "").split()[1:]
     target_id = None
-    duration_str = "1h" 
+    duration_str = "1h"
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
         if command_args: duration_str = command_args[0]
@@ -18310,28 +18351,39 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
                 duration_str = command_args[0]
                 target_id = await get_author_id_by_reply(message)
             else:
-                await message.answer("❌ Invalid User ID.")
+                await message.answer("❌ Invalid User ID. Укажите числовой ID или ответьте на пост.")
                 return
     if not target_id:
-        await message.answer("Usage: <code>/wipe &lt;id&gt; [time]</code>", parse_mode="HTML")
+        lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+        if lang == 'en':
+            msg = "Usage: <code>/wipe [time]</code> (reply to post) or <code>/wipe &lt;user_id&gt; [time]</code>\nExamples: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>"
+        else:
+            msg = "Использование: <code>/wipe [время]</code> (в ответ на пост) или <code>/wipe &lt;user_id&gt; [время]</code>\nПримеры: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>"
+        await message.answer(msg, parse_mode="HTML")
         return
-        
+
     duration_str = duration_str.lower().replace(" ", "")
-    if duration_str.endswith("m"): minutes = int(duration_str[:-1])
-    elif duration_str.endswith("h"): minutes = int(duration_str[:-1]) * 60
-    elif duration_str.endswith("d"): minutes = int(duration_str[:-1]) * 60 * 24
+    if duration_str in ["all", "все", "всё", "весь"]:
+        minutes = 525600  # 1 year
+    elif duration_str.endswith("m") and duration_str[:-1].isdigit():
+        minutes = int(duration_str[:-1])
+    elif duration_str.endswith("h") and duration_str[:-1].isdigit():
+        minutes = int(duration_str[:-1]) * 60
+    elif duration_str.endswith("d") and duration_str[:-1].isdigit():
+        minutes = int(duration_str[:-1]) * 60 * 24
     else:
         try: minutes = int(duration_str)
         except Exception: minutes = 60
 
     anon_name = generate_anon_name(target_id)
+    time_label = f"{minutes} минут" if minutes < 60 else (f"{minutes//60}ч" if minutes < 1440 else (f"{minutes//1440}д" if minutes < 500000 else "за ВСЁ время"))
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🔥 Да, сжечь!", callback_data=f"admin_action:wipe:{target_id}:{board_id}:{minutes}"),
+            InlineKeyboardButton(text="🔥 Да, сжечь посты!", callback_data=f"admin_action:wipe:{target_id}:{board_id}:{minutes}"),
             InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
         ]
     ])
-    await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) за последние {minutes} минут?", parse_mode="HTML", reply_markup=kb)
+    await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) на /{board_id}/ {time_label}?", parse_mode="HTML", reply_markup=kb)
     try: await message.delete()
     except Exception: pass
 
@@ -18342,11 +18394,16 @@ async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: in
     await log_global_event('bot', f"🧹 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на /{board_id}/ (глубина {minutes}м)")
     anon_name = generate_anon_name(target_id)
     lang = 'en' if board_id == 'int' else 'ru'
+    time_label = f"{minutes}m" if minutes < 60 else (f"{minutes//60}h" if minutes < 1440 else (f"{minutes//1440}d" if minutes < 500000 else "ALL"))
     if lang == 'en':
-        text = f"🧹 Posts by <b>{anon_name}</b> in the last {minutes}m were wiped.\nTotal deleted: {deleted_count}"
+        text = f"🧹 Posts by <b>{anon_name}</b> ({time_label}) were wiped.\nTotal deleted: <b>{deleted_count}</b>"
     else:
-        text = f"🧹 Посты от <b>{anon_name}</b> за {minutes}м удалены.\nСнесено: {deleted_count}"
-    await message.edit_text(text, parse_mode="HTML")
+        text = f"🧹 Посты от <b>{anon_name}</b> ({time_label}) удалены.\nСнесено постов и копий: <b>{deleted_count}</b>"
+    try:
+        await message.edit_text(text, parse_mode="HTML")
+    except Exception:
+        try: await message.answer(text, parse_mode="HTML")
+        except Exception: pass
 
 @dp.callback_query(F.data.startswith("admin_action:"))
 async def on_admin_action(callback: types.CallbackQuery):
