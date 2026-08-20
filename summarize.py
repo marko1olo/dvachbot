@@ -106,18 +106,18 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     elif model_preference == "qwen":
         models_cascade = [
             ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.7-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-2.5-flash", "gemini"),
+            ("gemini-3.7-flash", "gemini"),
         ]
     elif model_preference == "llama":
         models_cascade = [
             ("llama-3.3-70b-versatile", "groq"),
-            ("gemini-3.7-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("gemini-2.5-flash", "gemini"),
+            ("gemini-3.7-flash", "gemini"),
         ]
     else:
         # Default summarization cascade: Gemini 3.7 Flash first, then Smart Flash, then Lite models

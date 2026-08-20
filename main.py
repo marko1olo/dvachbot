@@ -28,7 +28,7 @@ This module is designed to be extensible and maintainable, allowing for future e
 """
 import asyncio
 from common.thread_manager import get_threads_data, get_thread_info, set_thread_info, delete_thread_data, acquire_thread_lock, get_thread_locks_count, get_active_threads, trim_thread_posts, save_threads_data, initialize_board_threads
-from common.spam_filter import analyze_message_for_spam, SpamResult, check_image_spam_limit, update_image_spam_tracker, acquire_spam_lock, get_spam_violation_level, is_spam_filtered, user_spam_locks, image_spam_tracker
+from common.spam_filter import analyze_message_for_spam, SpamResult, check_image_spam_limit, update_image_spam_tracker, acquire_spam_lock, get_spam_violation_level, is_spam_filtered, user_spam_locks, image_spam_tracker, IMAGE_SPAM_LIMIT, IMAGE_SPAM_WINDOW
 from archive_manager import archive_thread, _forward_post_to_realtime_archive, _site_file_send_type
 from delivery_manager import message_broadcaster, send_missed_messages, execute_delayed_edit, edit_post_for_all_recipients, _get_thread_entry_keyboard, validate_message_format, board_help_worker, _remove_already_delivered_recipients, _delete_durable_delivery_item
 from post_processor import NewPostProcessor, NewPostContext
@@ -727,7 +727,7 @@ GITHUB_REPO = "https://github.com/shlomapetia/dvachbot-backup.git"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Проверь, что переменная есть в Railway!
 last_gc_time = time.time()
 dp = Dispatcher()
-from economy_extension import economy_router
+from economy_extension import economy_router, apply_tinfoil_damage
 dp.include_router(economy_router)
 dp.message.middleware(DeduplicationMiddleware())
 dp.message.middleware(BoardMiddleware())
@@ -1969,11 +1969,13 @@ def format_board_statistics(stream: str, posts_per_hour: dict, board_data: dict,
 
     return full_stats_text, header_title
 
-def _sync_collect_board_statistics(hour_ago, posts_meta_list):
+def _sync_collect_board_statistics(hour_ago_ts, posts_meta_list):
     from collections import defaultdict
     posts_per_hour = defaultdict(int)
     for post_time, b_id in posts_meta_list:
-        if post_time >= hour_ago and b_id:
+        if hasattr(post_time, 'timestamp'):
+            post_time = post_time.timestamp()
+        if post_time and post_time >= hour_ago_ts and b_id:
             posts_per_hour[b_id] += 1
     return posts_per_hour
 
@@ -1987,12 +1989,14 @@ async def board_statistics_broadcaster():
         try:
             await asyncio.sleep(14400) # 4 часа
             now = datetime.now(UTC)
-            hour_ago = now - timedelta(hours=1)
+            hour_ago_ts = (now - timedelta(hours=1)).timestamp()
             posts_meta_for_analysis = []
             async with storage_lock:
                 for post_data in reversed(messages_storage.values()):
                     post_time = post_data.get('timestamp')
-                    if not post_time or post_time < hour_ago:
+                    if hasattr(post_time, 'timestamp'):
+                        post_time = post_time.timestamp()
+                    if not post_time or post_time < hour_ago_ts:
                         break 
                     posts_meta_for_analysis.append(
                         (post_time, post_data.get('board_id'))
@@ -2001,7 +2005,7 @@ async def board_statistics_broadcaster():
             posts_per_hour = await loop.run_in_executor(
                 save_executor,
                 _sync_collect_board_statistics,
-                hour_ago,
+                hour_ago_ts,
                 posts_meta_for_analysis
             )
             for board_id in BOARDS:
@@ -3613,70 +3617,376 @@ async def cmd_global_pin(message: types.Message, board_id: str | None, stream: s
     else:
         final = f"✅ Пост #{post_num} закреплен (Успешно: {count_success}).\nНовые пользователи тоже увидят его."
     await status_msg.edit_text(final)
-@dp.message(Command("shop", "store", "market"))
+# =============================================================================
+# 🏬 ТОРГОВЫЙ ХАБ «ДВАЧ-ПЛАЗА», БУТИК ОДЕЖДЫ, ЛУТБОКСЫ И RPG АВАТАРИЯ
+# =============================================================================
+
+from wardrobe_engine import CLOTHING_CATALOG, get_equipped_gear, equip_item
+import avatar_generator
+import lootbox_engine
+
+BASE_SHOP_PRICES = {
+    # ⚔️ Оружие и токсичность
+    'shit': 80,
+    'knife': 300,
+    'pepperspray': 300,
+    'mute': 500,
+    'laxative': 500,
+    'schizopill': 650,
+    'janitor': 850,
+    'partyvan': 1500,
+    # 💊 Аптека и защита
+    'pills': 60,
+    'shield': 500,
+    'bribe': 450,
+    'tinfoil': 450,
+    # 👗 Гардероб и шмот
+    'prefix': 350,
+    'badge_color': 500,
+    'hat_tinfoil': 450,
+    'hat_crown': 350,
+    'hat_cat_ears': 250,
+    'hat_bag': 120,
+    'hat_helmet': 600,
+    'hat_tophat': 500,
+    'body_wasserman': 400,
+    'body_tracksuit': 180,
+    'body_hoodie': 350,
+    'body_cloak': 550,
+    'body_straitjacket': 220,
+    'face_thug_glasses': 200,
+    'face_wasserman_glasses': 250,
+    'face_anon_mask': 300,
+    'face_clown_nose': 150,
+    'feet_slippers': 150,
+    'feet_boots': 350,
+    'feet_sneakers': 400,
+    # 📦 Кейсы
+    'lootbox_trash': 150,
+    'lootbox_gold': 500,
+}
+
+def get_current_item_price(item_key: str) -> int:
+    from shared_state import market_state
+    base = BASE_SHOP_PRICES.get(item_key, 100)
+    mult = market_state.get('multipliers', {}).get(item_key, 1.0)
+    return max(10, int(base * mult))
+
+def _build_main_shop_hub(user_id: int, balance: float):
+    from shared_state import market_state
+    market_event = market_state.get('event_text', 'Цены стабильны. Биржа работает в штатном режиме.')
+    text = (
+        f"🏬 <b>ТОРГОВЫЙ ХАБ «ДВАЧ-ПЛАЗА»</b>\n"
+        f"Твой баланс: <code>{int(balance):,} ₪</code> (Шекелей)\n\n"
+        f"<b>📰 Сводка биржи:</b> <i>{market_event}</i>\n\n"
+        f"Выбирай торговый сектор:\n"
+        f"⚔️ <b>Черный Рынок</b> — Заточки, перцовки, яды и пативэн\n"
+        f"👗 <b>Бутик «Аватария»</b> — Одежда, шапочки, плащи и ушки\n"
+        f"💊 <b>Аптека и Защита</b> — Аминазин, зеркальные щиты и взятки\n"
+        f"📦 <b>Кейсы и Лутбоксы</b> — Мусорный пакет (150 ₪) и Золотой сейф (500 ₪)\n"
+        f"🎨 <b>Цвет ника и Аура</b> — Кастомный неоновый бейдж (/color)\n"
+        f"🎒 <b>Гардероб и Аватар</b> — Карточка персонажа RPG (/avatar)"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⚔️ Черный рынок оружия", callback_data="shop_cat_weapons"),
+            InlineKeyboardButton(text="👗 Бутик одежды", callback_data="shop_cat_clothes")
+        ],
+        [
+            InlineKeyboardButton(text="💊 Аптека и Защита", callback_data="shop_cat_pharma"),
+            InlineKeyboardButton(text="📦 Кейсы и Гача", callback_data="shop_cat_lootbox")
+        ],
+        [
+            InlineKeyboardButton(text="🎨 Цвет ника (/color)", callback_data="shop_cat_color"),
+            InlineKeyboardButton(text="🎒 Мой Аватар (/avatar)", callback_data="avatar_view")
+        ],
+        [
+            InlineKeyboardButton(text="🏆 Достижения (/ach)", callback_data="achievements_view"),
+            InlineKeyboardButton(text="📖 Энциклопедия (/wiki)", callback_data="wiki_main_hub")
+        ],
+        [
+            InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet"),
+            InlineKeyboardButton(text="📊 Прайс-лист биржи", callback_data="scam_rates")
+        ]
+    ])
+    return text, kb
+
+
+def _build_weapons_shop_content(user_id: int, balance: float):
+    p_shit = get_current_item_price('shit')
+    p_knife = get_current_item_price('knife')
+    p_spray = get_current_item_price('pepperspray')
+    p_mute = get_current_item_price('mute')
+    p_lax = get_current_item_price('laxative')
+    p_schizo = get_current_item_price('schizopill')
+    p_jan = get_current_item_price('janitor')
+    p_van = get_current_item_price('partyvan')
+
+    text = (
+        f"⚔️ <b>ЧЕРНЫЙ РЫНОК ОРУЖИЯ И ТОКСИЧНОСТИ</b>\n"
+        f"Твой баланс: <code>{int(balance):,} ₪</code>\n\n"
+        f"1. 🐒 <b>Кусок говна</b> — <i>{p_shit} ₪</i> (Бросок /shit, дебафф на час)\n"
+        f"2. 🔪 <b>Заточка</b> — <i>{p_knife} ₪</i> (Ограбить анона на 10-30% через /rob)\n"
+        f"3. 🧯 <b>Перцовый баллончик</b> — <i>{p_spray} ₪</i> (Авто-защита: ослепляет грабителя!)\n"
+        f"4. 🔇 <b>Мут-Ган (1ч)</b> — <i>{p_mute} ₪</i> (Кикнуть реплаем через /shoot)\n"
+        f"5. 🚽 <b>Слабительное</b> — <i>{p_lax} ₪</i> (Проклятие поноса: /curse)\n"
+        f"6. 💊 <b>Шизо-Таблетка</b> — <i>{p_schizo} ₪</i> (Проклятие шизы: /schizopill)\n"
+        f"7. 🧹 <b>Билет Дворника (6ч)</b> — <i>{p_jan} ₪</i> (Права удаления /del)\n"
+        f"8. 🚔 <b>Пативэн-Ган</b> — <i>{p_van} ₪</i> (Вызов ОМОНа на 12ч через /partyvan)"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"🐒 Говно ({p_shit}₪)", callback_data="shop_buy_shit"),
+            InlineKeyboardButton(text=f"🔪 Заточка ({p_knife}₪)", callback_data="shop_buy_knife")
+        ],
+        [
+            InlineKeyboardButton(text=f"🧯 Перцовка ({p_spray}₪)", callback_data="shop_buy_pepperspray"),
+            InlineKeyboardButton(text=f"🔇 Мут-Ган ({p_mute}₪)", callback_data="shop_buy_mute")
+        ],
+        [
+            InlineKeyboardButton(text=f"🚽 Слабительное ({p_lax}₪)", callback_data="shop_buy_laxative"),
+            InlineKeyboardButton(text=f"💊 Шизопил ({p_schizo}₪)", callback_data="shop_buy_schizopill")
+        ],
+        [
+            InlineKeyboardButton(text=f"🧹 Дворник ({p_jan}₪)", callback_data="shop_buy_janitor"),
+            InlineKeyboardButton(text=f"🚔 Пативэн ({p_van}₪)", callback_data="shop_buy_partyvan")
+        ],
+        [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
+    ])
+    return text, kb
+
+
+def _build_clothes_shop_content(user_id: int, balance: float):
+    p_foil = get_current_item_price('hat_tinfoil')
+    p_crown = get_current_item_price('hat_crown')
+    p_ears = get_current_item_price('hat_cat_ears')
+    p_bag = get_current_item_price('hat_bag')
+    p_helm = get_current_item_price('hat_helmet')
+    p_tophat = get_current_item_price('hat_tophat')
+    p_wass = get_current_item_price('body_wasserman')
+    p_track = get_current_item_price('body_tracksuit')
+    p_hoodie = get_current_item_price('body_hoodie')
+    p_cloak = get_current_item_price('body_cloak')
+    p_strait = get_current_item_price('body_straitjacket')
+    p_thug = get_current_item_price('face_thug_glasses')
+    p_wg = get_current_item_price('face_wasserman_glasses')
+    p_mask = get_current_item_price('face_anon_mask')
+    p_clown = get_current_item_price('face_clown_nose')
+    p_slip = get_current_item_price('feet_slippers')
+    p_boot = get_current_item_price('feet_boots')
+    p_snk = get_current_item_price('feet_sneakers')
+
+    text = (
+        f"👗 <b>БУТИК ОДЕЖДЫ И ЭКИПИРОВКИ «АВАТАРИЯ»</b>\n"
+        f"Твой баланс: <code>{int(balance):,} ₪</code>\n"
+        f"<i>(Сроки действия суммируются при покупке и продлении!)</i>\n\n"
+        f"🥉 <b>Tier 1: Базовый шмот (7 Дней / 1 Неделя):</b>\n"
+        f"• 🩲 <b>Обоссанные треники</b> — <i>{p_track} ₪</i> (x2 шанс дропа лута, 25% испуг грабителя)\n"
+        f"• 📦 <b>Пакет Пятерочки</b> — <i>{p_bag} ₪</i> (8% шанс дропа кейсов на работе)\n"
+        f"• 🩴 <b>Сланцы с носками</b> — <i>{p_slip} ₪</i> (-20% к кулдауну смен /work)\n"
+        f"• 🤡 <b>Клоунский Нос</b> — <i>{p_clown} ₪</i> (+35 к Токсичности и троллингу)\n"
+        f"• 🕶️ <b>Очки Thug Life (2ch)</b> — <i>{p_thug} ₪</i> (+5% к выигрышу в казино)\n\n"
+        f"🥈 <b>Tier 2: Элитный шмот (14 Дней / 2 Недели):</b>\n"
+        f"• 🦺 <b>Жилетка Вассермана</b> — <i>{p_wass} ₪</i> (+25% к зарплате во всех сменах)\n"
+        f"• 👑 <b>Корона VIP-Скуфа</b> — <i>{p_crown} ₪</i> (+20% к чаевым на работе и VIP-статус)\n"
+        f"• 🐱 <b>Неко-Ушки (Аниме)</b> — <i>{p_ears} ₪</i> (+30 к Рассудку персонажа)\n"
+        f"• 👘 <b>Худи с Аской</b> — <i>{p_hoodie} ₪</i> (+25 к Рассудку и олдфаг вайб)\n"
+        f"• 🥽 <b>Очки Онотоле</b> — <i>{p_wg} ₪</i> (+15% к зарплате в /work)\n"
+        f"• 🥾 <b>Берцы ОМОНа</b> — <i>{p_boot} ₪</i> (Полная защита от бросков говна /shit)\n"
+        f"• 🥼 <b>Смирительная рубашка</b> — <i>{p_strait} ₪</i> (+40 к Токсичности постов)\n\n"
+        f"🥇 <b>Tier 3: Легендарный шмот (30 Дней / 1 Месяц):</b>\n"
+        f"• 🪖 <b>Шлем ОМОНа</b> — <i>{p_helm} ₪</i> (0 штрафов на работе, -50% времени мута)\n"
+        f"• 🧥 <b>Плащ Нео / Хакер</b> — <i>{p_cloak} ₪</i> (+30 к Защите и скрытности)\n"
+        f"• 🎩 <b>Цилиндр Джентльмена</b> — <i>{p_tophat} ₪</i> (+25 к Рассудку и стилю)\n"
+        f"• 🎭 <b>Маска Анонимуса</b> — <i>{p_mask} ₪</i> (Скрывает баланс в карточке)\n"
+        f"• 👟 <b>Тяги бархатные</b> — <i>{p_snk} ₪</i> (30% шанс сбежать от облавы пативэна)\n\n"
+        f"🛡️ <b>Расходная броня:</b>\n"
+        f"• 👽 <b>Шапочка из фольги (6ч)</b> — <i>{p_foil} ₪</i> (Защита от /rob и /shit)"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"👽 Фольга ({p_foil}₪)", callback_data="shop_buy_hat_tinfoil"),
+            InlineKeyboardButton(text=f"👑 Корона ({p_crown}₪)", callback_data="shop_buy_hat_crown")
+        ],
+        [
+            InlineKeyboardButton(text=f"🐱 Неко-Ушки ({p_ears}₪)", callback_data="shop_buy_hat_cat_ears"),
+            InlineKeyboardButton(text=f"📦 Пакет ({p_bag}₪)", callback_data="shop_buy_hat_bag")
+        ],
+        [
+            InlineKeyboardButton(text=f"🪖 Шлем ОМОНа ({p_helm}₪)", callback_data="shop_buy_hat_helmet"),
+            InlineKeyboardButton(text=f"🎩 Цилиндр ({p_tophat}₪)", callback_data="shop_buy_hat_tophat")
+        ],
+        [
+            InlineKeyboardButton(text=f"🦺 Вассерман ({p_wass}₪)", callback_data="shop_buy_body_wasserman"),
+            InlineKeyboardButton(text=f"🩲 Треники ({p_track}₪)", callback_data="shop_buy_body_tracksuit")
+        ],
+        [
+            InlineKeyboardButton(text=f"👘 Худи Аски ({p_hoodie}₪)", callback_data="shop_buy_body_hoodie"),
+            InlineKeyboardButton(text=f"🧥 Плащ Нео ({p_cloak}₪)", callback_data="shop_buy_body_cloak")
+        ],
+        [
+            InlineKeyboardButton(text=f"🥼 Рубашка ({p_strait}₪)", callback_data="shop_buy_body_straitjacket"),
+            InlineKeyboardButton(text=f"🕶️ Thug Life ({p_thug}₪)", callback_data="shop_buy_face_thug_glasses")
+        ],
+        [
+            InlineKeyboardButton(text=f"🥽 Очки Онотоле ({p_wg}₪)", callback_data="shop_buy_face_wasserman_glasses"),
+            InlineKeyboardButton(text=f"🎭 Маска Гая ({p_mask}₪)", callback_data="shop_buy_face_anon_mask")
+        ],
+        [
+            InlineKeyboardButton(text=f"🤡 Клоун ({p_clown}₪)", callback_data="shop_buy_face_clown_nose"),
+            InlineKeyboardButton(text=f"🩴 Сланцы ({p_slip}₪)", callback_data="shop_buy_feet_slippers")
+        ],
+        [
+            InlineKeyboardButton(text=f"🥾 Берцы ОМОНа ({p_boot}₪)", callback_data="shop_buy_feet_boots"),
+            InlineKeyboardButton(text=f"👟 Подкрадули ({p_snk}₪)", callback_data="shop_buy_feet_sneakers")
+        ],
+        [InlineKeyboardButton(text="🎽 Примерочная (Мой Гардероб)", callback_data="wardrobe_dressing_room")],
+        [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
+    ])
+    return text, kb
+
+
+def _build_dressing_room_content(user_id: int, balance: float, active_items: dict):
+    from wardrobe_engine import get_equipped_gear, get_owned_wardrobe_items, get_active_set_bonuses, CLOTHING_CATALOG
+    equipped = get_equipped_gear(active_items)
+    owned = get_owned_wardrobe_items(active_items)
+    active_sets = get_active_set_bonuses(active_items)
+
+    head_txt = equipped["head"]["name"] if equipped["head"] else "<i>(Голова без убора)</i>"
+    torso_txt = equipped["torso"]["name"] if equipped["torso"] else "<i>(Обычная футболка)</i>"
+    face_txt = equipped["face"]["name"] if equipped["face"] else "<i>(Чистое лицо)</i>"
+    feet_txt = equipped["feet"]["name"] if equipped["feet"] else "<i>(Босиком)</i>"
+
+    lines = [
+        f"🎽 <b>ПРИМЕРОЧНАЯ И ГАРДЕРОБ АНОНА [{get_anon_id(user_id)}]</b>",
+        f"Твой баланс: <code>{int(balance):,} ₪</code>\n",
+        f"<b>Текущая экипировка по слотам:</b>",
+        f"• 🎩 <b>Голова:</b> {head_txt}",
+        f"• 🧥 <b>Торс:</b> {torso_txt}",
+        f"• 👓 <b>Лицо / Очки:</b> {face_txt}",
+        f"• 👟 <b>Обувь / Педали:</b> {feet_txt}\n"
+    ]
+
+    if active_sets:
+        for s in active_sets:
+            lines.append(f"✨ <b>АКТИВЕН СЕТ-БОНУС:</b> {s['name']}\n<i>{s['bonus_desc']}</i>\n")
+
+    lines.append(f"<b>Твоя коллекция вещей ({len(owned)} шт.):</b>")
+
+    kb_rows = []
+    if owned:
+        for itm in owned:
+            st = "✅ Снять" if itm["is_equipped"] else "🔘 Надеть"
+            exp = " (Навсегда)" if itm.get('is_permanent') else f" (осталось {itm.get('expires_in_hours', 0)}ч)"
+            lines.append(f"• {itm['name']}{exp} — <i>{itm['desc']}</i>")
+            cb_data = f"wardrobe_unequip_{itm['slot']}" if itm["is_equipped"] else f"wardrobe_equip_{itm['id']}"
+            kb_rows.append([InlineKeyboardButton(text=f"{st} {itm['name']}", callback_data=cb_data)])
+    else:
+        lines.append("<i>Твой гардероб пуст! Приобретай вещи в Бутике или выбивай из Лутбоксов.</i>")
+
+    kb_rows.append([
+        InlineKeyboardButton(text="👗 Бутик одежды", callback_data="shop_cat_clothes"),
+        InlineKeyboardButton(text="🎭 Мой Персонаж RPG", callback_data="avatar_view")
+    ])
+    kb_rows.append([InlineKeyboardButton(text="⬅️ В Торговый Хаб", callback_data="shop_main_hub")])
+
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+
+def _build_pharma_shop_content(user_id: int, balance: float):
+    p_pills = get_current_item_price('pills')
+    p_shield = get_current_item_price('shield')
+    p_bribe = get_current_item_price('bribe')
+    p_foil = get_current_item_price('tinfoil')
+
+    text = (
+        f"💊 <b>АПТЕКА, МЕДИЦИНА И ЗАЩИТА</b>\n"
+        f"Твой баланс: <code>{int(balance):,} ₪</code>\n\n"
+        f"1. 💊 <b>Аминазин</b> — <i>{p_pills} ₪</i> (Моментально смывает говно, понос и шизу)\n"
+        f"2. 🛡️ <b>Зеркальный Щит (6ч)</b> — <i>{p_shield} ₪</i> (Отражает выстрел Мут-Гана в стрелка!)\n"
+        f"3. 📜 <b>Взятка (Индульгенция)</b> — <i>{p_bribe} ₪</i> (Моментально снимает мут)\n"
+        f"4. 👽 <b>Шапочка из фольги (6ч)</b> — <i>{p_foil} ₪</i> (Защита от грабежа и говна)"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"💊 Аминазин ({p_pills}₪)", callback_data="shop_buy_pills"),
+            InlineKeyboardButton(text=f"🛡️ Щит ({p_shield}₪)", callback_data="shop_buy_shield")
+        ],
+        [
+            InlineKeyboardButton(text=f"📜 Взятка ({p_bribe}₪)", callback_data="shop_buy_bribe"),
+            InlineKeyboardButton(text=f"👽 Фольга ({p_foil}₪)", callback_data="shop_buy_tinfoil")
+        ],
+        [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
+    ])
+    return text, kb
+
+
+def _build_lootbox_shop_content(user_id: int, balance: float):
+    p_trash = get_current_item_price('lootbox_trash')
+    p_gold = get_current_item_price('lootbox_gold')
+
+    text = (
+        f"📦 <b>ДВАЧЕВСКИЕ ЛУТБОКСЫ И КЕЙСЫ</b>\n"
+        f"Твой баланс: <code>{int(balance):,} ₪</code>\n\n"
+        f"🗑️ <b>1. Мусорный Пакет ({p_trash} ₪):</b>\n"
+        f"• 40% — Мусор и заначки (15-100 ₪ кешбэк)\n"
+        f"• 35% — Расходники (Говно, Аминазин, Заточка, Перцовка)\n"
+        f"• 20% — Редкие предметы (Шапочка из фольги, Щит, Мут-Ган, Цвет ника)\n"
+        f"• 5% — 🔥 <b>ДЖЕКПОТ (Пативэн-Ган или 1 000 ₪ наличными!)</b>\n\n"
+        f"👑 <b>2. Золотой Сейф Китов ({p_gold} ₪):</b>\n"
+        f"• 40% — Эксклюзивный шмот (Плащ Нео, Шлем ОМОНа, Жилетка Вассермана, Ушки)\n"
+        f"• 30% — Боевой набор (Щит + Перцовка + Заточка)\n"
+        f"• 20% — Ценные артефакты (150-300 ₪ кешбэк)\n"
+        f"• 10% — 🌟 <b>УЛЬТРА ДЖЕКПОТ (2 500 ₪ или Пативэн + Фольга на 24ч!)</b>"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"🗑️ Открыть Пакет ({p_trash}₪)", callback_data="shop_buy_lootbox_trash"),
+            InlineKeyboardButton(text=f"👑 Открыть Сейф ({p_gold}₪)", callback_data="shop_buy_lootbox_gold")
+        ],
+        [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
+    ])
+    return text, kb
+
+
+def _build_color_picker_content(user_id: int, balance: float, active_items: dict):
+    now = int(time.time())
+    has_color_pass = active_items.get("badge_color_active") or active_items.get("badge_color_expires", 0) > now
+    cur_color = active_items.get("badge_color", "gold")
+
+    p_color = get_current_item_price('badge_color')
+
+    text = (
+        f"🎨 <b>ПАЛИТРА ЦВЕТА НИКА И АУРЫ АНОНА</b>\n"
+        f"Твой баланс: <code>{int(balance):,} ₪</code>\n"
+        f"Текущий цвет: <b>{avatar_generator.COLOR_PALETTE.get(cur_color, {}).get('emoji', '⚪')} {avatar_generator.COLOR_PALETTE.get(cur_color, {}).get('name', 'Обычный')}</b>\n\n"
+    )
+    if has_color_pass:
+        exp_h = (active_items.get("badge_color_expires", 0) - now) // 3600
+        text += f"✅ <b>Цветной пропуск активен</b> (осталось {max(0, exp_h)}ч). Выбирай любой цвет бесплатно:"
+    else:
+        text += f"Купи доступ к палитре на 3 дня за <b>{p_color} ₪</b> или выбери цвет (с баланса спишется {p_color} ₪):"
+
+    kb_rows = []
+    colors_list = list(avatar_generator.COLOR_PALETTE.items())
+    for i in range(0, len(colors_list), 3):
+        row = []
+        for c_key, c_val in colors_list[i:i+3]:
+            row.append(InlineKeyboardButton(text=f"{c_val['emoji']} {c_val['name'].split()[0]}", callback_data=f"color_set_{c_key}"))
+        kb_rows.append(row)
+
+    kb_rows.append([InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")])
+    return text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+
+@dp.message(Command("shop", "store", "market", "магазин", "рынок"))
 async def cmd_shop(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
     db = await get_pool()
-    async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
-        row = await c.fetchone()
-        balance = row[0] if row and row[0] is not None else 0
-    from shared_state import market_state
-    
-    base_prices = {
-        'janitor': 1000,
-        'mute': 600,
-        'shield': 800,
-        'prefix': 400,
-        'partyvan': 2000,
-        'shit': 100,
-        'pills': 100,
-        'knife': 400,
-        'tinfoil': 800,
-        'bribe': 1200,
-        'laxative': 800,
-        'megaphone': 2000,
-        'schizopill': 1000
-    }
-    
-    current_prices = {}
-    multipliers = market_state.get('multipliers', {})
-    for item, base in base_prices.items():
-        mult = multipliers.get(item, 1.0)
-        current_prices[item] = int(base * mult)
-        
-    market_event = market_state.get('event_text', 'Цены стабильны. Никаких событий.')
-    
-    text = (
-        f"🛒 <b>Теневой Магазин (Black Market)</b>\n"
-        f"Твой баланс: <code>{int(balance)}.00 Шекелей</code>\n\n"
-        f"<b>📰 Биржа:</b> {market_event}\n\n"
-        f"Трать свои шекели на грязь и власть:\n"
-        f"1. 🧹 <b>Билет Дворника (6ч)</b> — <i>{current_prices['janitor']} Шек</i> (Права /del)\n"
-        f"2. 🔇 <b>Мут-Ган (1ч)</b> — <i>{current_prices['mute']} Шек</i> (Кикнуть реплаем /shoot)\n"
-        f"3. 🛡️ <b>Зеркальный Щит (6ч)</b> — <i>{current_prices['shield']} Шек</i> (Рикошет Мут-Гана)\n"
-        f"4. 👑 <b>VIP Префикс (24ч)</b> — <i>{current_prices['prefix']} Шек</i> (Кастомный префикс)\n"
-        f"5. 🚔 <b>Пативэн-Ган</b> — <i>{current_prices['partyvan']} Шек</i> (Вызов ОМОНа через /partyvan)\n"
-        f"6. 🐒 <b>Кусок говна</b> — <i>{current_prices['shit']} Шек</i> (Кинуть /shit, дебафф на час)\n"
-        f"7. 💊 <b>Аминазин</b> — <i>{current_prices['pills']} Шек</i> (Снять дебаффы)\n"
-        f"8. 🔪 <b>Заточка</b> — <i>{current_prices['knife']} Шек</i> (Ограбить анона на 10-30% через /rob)\n"
-        f"9. 👽 <b>Шапочка из фольги (6ч)</b> — <i>{current_prices['tinfoil']} Шек</i> (Защита от /shit и /rob)\n"
-        f"10. 📜 <b>Взятка (Индульгенция)</b> — <i>{current_prices['bribe']} Шек</i> (Снимает мут)\n"
-        f"11. 🚽 <b>Слабительное</b> — <i>{current_prices['laxative']} Шек</i> (Проклятие поноса: /curse)\n"
-        f"12. 📣 <b>Мегафон</b> — <i>{current_prices['megaphone']} Шек</i> (Закрепить свой пост через /mega)\n"
-        f"13. 💊 <b>Шизо-Таблетка</b> — <i>{current_prices['schizopill']} Шек</i> (Проклятие шизы: /schizopill)\n"
-    )
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"🧹 Дворник ({current_prices['janitor']})", callback_data="shop_buy_janitor"), InlineKeyboardButton(text=f"🔇 Мут-Ган ({current_prices['mute']})", callback_data="shop_buy_mute")],
-        [InlineKeyboardButton(text=f"🛡️ Щит ({current_prices['shield']})", callback_data="shop_buy_shield"), InlineKeyboardButton(text=f"👑 Префикс ({current_prices['prefix']})", callback_data="shop_buy_prefix")],
-        [InlineKeyboardButton(text=f"🚔 Пативэн ({current_prices['partyvan']})", callback_data="shop_buy_partyvan"), InlineKeyboardButton(text=f"🐒 Говно ({current_prices['shit']})", callback_data="shop_buy_shit")],
-        [InlineKeyboardButton(text=f"💊 Аминазин ({current_prices['pills']})", callback_data="shop_buy_pills"), InlineKeyboardButton(text=f"🔪 Заточка ({current_prices['knife']})", callback_data="shop_buy_knife")],
-        [InlineKeyboardButton(text=f"👽 Фольга ({current_prices['tinfoil']})", callback_data="shop_buy_tinfoil"), InlineKeyboardButton(text=f"📜 Взятка ({current_prices['bribe']})", callback_data="shop_buy_bribe")],
-        [InlineKeyboardButton(text=f"🚽 Слабительное ({current_prices['laxative']})", callback_data="shop_buy_laxative"), InlineKeyboardButton(text=f"📣 Мегафон ({current_prices['megaphone']})", callback_data="shop_buy_megaphone")],
-        [InlineKeyboardButton(text=f"💊 Шизо-Таблетка ({current_prices['schizopill']})", callback_data="shop_buy_schizopill")],
-        [InlineKeyboardButton(text="🎒 Мой рюкзак", callback_data="prof_inventory"), InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet")],
-        [InlineKeyboardButton(text="📊 Курсы валют и Прайс-лист", callback_data="scam_rates")]
-    ])
+    balance = await get_user_global_balance(db, user_id)
+    text, kb = _build_main_shop_hub(user_id, balance)
+
     from banner_manager import send_banner_message
     await send_banner_message(
         bot=message.bot,
@@ -3688,6 +3998,626 @@ async def cmd_shop(message: types.Message, board_id: str | None, stream: str = '
     )
     try: await message.delete()
     except Exception: pass
+
+
+@dp.message(Command("wardrobe", "boutique", "clothes", "гардероб", "бутик", "шмот"))
+async def cmd_wardrobe(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    text, kb = _build_clothes_shop_content(user_id, balance)
+
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=text,
+        reply_markup=kb,
+        category="shop",
+        parse_mode="HTML"
+    )
+    try: await message.delete()
+    except Exception: pass
+
+
+@dp.message(Command("lootbox", "case", "box", "cases", "кейс", "кейсы", "лутбокс"))
+async def cmd_lootbox(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    text, kb = _build_lootbox_shop_content(user_id, balance)
+
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=text,
+        reply_markup=kb,
+        category="shop",
+        parse_mode="HTML"
+    )
+    try: await message.delete()
+    except Exception: pass
+
+
+@dp.message(Command("color", "badge", "badgecolor", "цвет", "бейдж"))
+async def cmd_color(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    text, kb = _build_color_picker_content(user_id, balance, active_items)
+
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=text,
+        reply_markup=kb,
+        category="shop",
+        parse_mode="HTML"
+    )
+    try: await message.delete()
+    except Exception: pass
+
+
+@dp.message(Command("avatar", "look", "char", "аватар", "аватарка", "персонаж"))
+async def cmd_avatar(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    active_items = await _get_user_active_items(db, user_id, board_id)
+
+    async with db.execute("SELECT custom_prefix, prefix_expires_at, cursed_until, posts_count FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+        row = await c.fetchone()
+
+    prefix = row[0] if row and row[0] and row[1] and row[1] > time.time() else None
+    cursed_until = row[2] if row and row[2] else 0
+    posts_count = row[3] if row and row[3] else 0
+    badge_color = active_items.get("badge_color")
+
+    from aiogram.types import BufferedInputFile
+    card_buf = avatar_generator.build_character_card(
+        user_id=user_id,
+        anon_id=get_anon_id(user_id),
+        balance=balance,
+        posts_count=posts_count,
+        active_items=active_items,
+        custom_prefix=prefix,
+        badge_color=badge_color,
+        cursed_until=cursed_until
+    )
+    photo_file = BufferedInputFile(card_buf.getvalue(), filename=f"avatar_{user_id}.png")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎽 Примерочная", callback_data="wardrobe_dressing_room"),
+            InlineKeyboardButton(text="👗 Бутик одежды", callback_data="shop_cat_clothes")
+        ],
+        [
+            InlineKeyboardButton(text="🏆 Достижения (/ach)", callback_data="achievements_view"),
+            InlineKeyboardButton(text="🎨 Цвет ника (/color)", callback_data="shop_cat_color")
+        ],
+        [
+            InlineKeyboardButton(text="🎒 Мой рюкзак", callback_data="prof_inventory"),
+            InlineKeyboardButton(text="🛒 В магазин (/shop)", callback_data="shop_main_hub")
+        ],
+        [
+            InlineKeyboardButton(text="🔄 Обновить карточку", callback_data="avatar_refresh")
+        ]
+    ])
+
+    caption = (
+        f"🎭 <b>КАРТОЧКА ПЕРСОНАЖА АНОНИМА [{get_anon_id(user_id)}]</b>\n"
+        f"Твой статус в двачевском RPG-мире.\n"
+        f"Одевайся в /wardrobe, вооружайся в /shop и открывай /lootbox!"
+    )
+    await message.answer_photo(photo=photo_file, caption=caption, reply_markup=kb, parse_mode="HTML")
+    try: await message.delete()
+    except Exception: pass
+
+
+@dp.callback_query(F.data == "avatar_view")
+async def cb_avatar_view(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    active_items = await _get_user_active_items(db, user_id, board_id)
+
+    async with db.execute("SELECT custom_prefix, prefix_expires_at, cursed_until, posts_count FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+        row = await c.fetchone()
+
+    prefix = row[0] if row and row[0] and row[1] and row[1] > time.time() else None
+    cursed_until = row[2] if row and row[2] else 0
+    posts_count = row[3] if row and row[3] else 0
+    badge_color = active_items.get("badge_color")
+
+    from aiogram.types import BufferedInputFile
+    card_buf = avatar_generator.build_character_card(
+        user_id=user_id,
+        anon_id=get_anon_id(user_id),
+        balance=balance,
+        posts_count=posts_count,
+        active_items=active_items,
+        custom_prefix=prefix,
+        badge_color=badge_color,
+        cursed_until=cursed_until
+    )
+    photo_file = BufferedInputFile(card_buf.getvalue(), filename=f"avatar_{user_id}.png")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎽 Примерочная", callback_data="wardrobe_dressing_room"),
+            InlineKeyboardButton(text="👗 Бутик одежды", callback_data="shop_cat_clothes")
+        ],
+        [
+            InlineKeyboardButton(text="🏆 Достижения (/ach)", callback_data="achievements_view"),
+            InlineKeyboardButton(text="🎨 Цвет ника (/color)", callback_data="shop_cat_color")
+        ],
+        [
+            InlineKeyboardButton(text="🎒 Мой рюкзак", callback_data="prof_inventory"),
+            InlineKeyboardButton(text="🛒 В магазин (/shop)", callback_data="shop_main_hub")
+        ],
+        [
+            InlineKeyboardButton(text="🔄 Обновить карточку", callback_data="avatar_refresh")
+        ]
+    ])
+    await callback.message.delete()
+    await callback.message.answer_photo(
+        photo=photo_file,
+        caption=f"🎭 <b>КАРТОЧКА ПЕРСОНАЖА [{get_anon_id(user_id)}]</b>",
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "avatar_refresh")
+async def cb_avatar_refresh(callback: types.CallbackQuery, board_id: str | None):
+    await cb_avatar_view(callback, board_id)
+
+
+# --- Category Navigation Callbacks ---
+@dp.callback_query(F.data == "shop_main_hub")
+async def cb_shop_main_hub(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    text, kb = _build_main_shop_hub(user_id, balance)
+    try:
+        if callback.message.photo:
+            await callback.message.delete()
+            from banner_manager import send_banner_message
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text, reply_markup=kb, category="shop", parse_mode="HTML")
+        else:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "shop_cat_weapons")
+async def cb_shop_cat_weapons(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    text, kb = _build_weapons_shop_content(user_id, balance)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "shop_cat_clothes")
+async def cb_shop_cat_clothes(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    text, kb = _build_clothes_shop_content(user_id, balance)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "shop_cat_pharma")
+async def cb_shop_cat_pharma(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    text, kb = _build_pharma_shop_content(user_id, balance)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "shop_cat_lootbox")
+async def cb_shop_cat_lootbox(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    text, kb = _build_lootbox_shop_content(user_id, balance)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "shop_cat_color")
+async def cb_shop_cat_color(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    text, kb = _build_color_picker_content(user_id, balance, active_items)
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("color_set_"))
+async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    color_key = callback.data.replace("color_set_", "")
+    if color_key not in avatar_generator.COLOR_PALETTE:
+        await callback.answer("Неверный цвет.", show_alert=True)
+        return
+
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    now = int(time.time())
+
+    has_color_pass = active_items.get("badge_color_active") or active_items.get("badge_color_expires", 0) > now
+    price = get_current_item_price('badge_color')
+
+    if not has_color_pass:
+        if balance < price:
+            await callback.answer(f"Недостаточно шекелей! Нужно {price} ₪, у тебя {int(balance)} ₪.", show_alert=True)
+            return
+        ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, price)
+        if not ok:
+            await callback.answer("Ошибка списания баланса.", show_alert=True)
+            return
+        active_items["badge_color_active"] = True
+        active_items["badge_color_expires"] = now + 3 * 86400
+
+    active_items["badge_color"] = color_key
+    async with db_lock:
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+        await db.commit()
+
+    col_info = avatar_generator.COLOR_PALETTE[color_key]
+    await callback.answer(f"Цвет изменен на {col_info['emoji']} {col_info['name']}! Виден в шапках твоих постов и на аватарке.", show_alert=True)
+    
+    # Re-render color picker view
+    new_bal = await get_user_global_balance(db, user_id)
+    text, kb = _build_color_picker_content(user_id, new_bal, active_items)
+    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception: pass
+
+
+
+@dp.callback_query(F.data == "wardrobe_dressing_room")
+async def cb_wardrobe_dressing_room(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
+    try:
+        if callback.message.photo:
+            await callback.message.delete()
+            from banner_manager import send_banner_message
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text_dr, reply_markup=kb_dr, category="shop", parse_mode="HTML")
+        else:
+            await callback.message.edit_text(text_dr, reply_markup=kb_dr, parse_mode="HTML")
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("wardrobe_equip_"))
+async def cb_wardrobe_equip(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    item_id = callback.data.replace("wardrobe_equip_", "")
+    db = await get_pool()
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    
+    from wardrobe_engine import equip_item
+    ok, msg = equip_item(active_items, item_id)
+    if ok:
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+    await callback.answer(msg, show_alert=True)
+    
+    balance = await get_user_global_balance(db, user_id)
+    text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
+    try: await callback.message.edit_text(text_dr, reply_markup=kb_dr, parse_mode="HTML")
+    except Exception: pass
+
+
+@dp.callback_query(F.data.startswith("wardrobe_unequip_"))
+async def cb_wardrobe_unequip(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    slot = callback.data.replace("wardrobe_unequip_", "")
+    db = await get_pool()
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    
+    from wardrobe_engine import unequip_slot
+    ok, msg = unequip_slot(active_items, slot)
+    if ok:
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+    await callback.answer(msg, show_alert=True)
+    
+    balance = await get_user_global_balance(db, user_id)
+    text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
+    try: await callback.message.edit_text(text_dr, reply_markup=kb_dr, parse_mode="HTML")
+    except Exception: pass
+
+
+
+# -----------------------------------------------------------------------------
+# ИНТЕРАКТИВНАЯ ЭНЦИКЛОПЕДИЯ ПРЕДМЕТОВ И СЕТ-БОНУСОВ (/items, /wiki, /энциклопедия)
+# -----------------------------------------------------------------------------
+def _build_wiki_hub_content():
+    text = (
+        "📖 <b>ЭНЦИКЛОПЕДИЯ ПРЕДМЕТОВ И СЕТОВ ТГАЧА</b>\n\n"
+        "Выбирай категорию, чтобы узнать полные характеристики, шансы дропа и свойства:\n"
+        "• ⚔️ <b>Оружие и Токсичность</b> — Заточка, Мут-Ган, Говно, Слабительное, Пативэн\n"
+        "• 👗 <b>Бутик и Гардероб</b> — Шляпы, Торс, Очки, Маски, Обувь и пассивные баффы\n"
+        "• 🌟 <b>Комплектные Сет-Бонусы</b> — Супер-способности от комбинаций одежды\n"
+        "• 💊 <b>Аптека и Медицина</b> — Аминазин, Зеркальный Щит, Взятка, Фольга\n"
+        "• 📦 <b>Кейсы и Лутбоксы</b> — Мусорные пакеты, Золотые сейфы и переработка"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⚔️ Оружие", callback_data="wiki_cat_weapons"),
+            InlineKeyboardButton(text="👗 Одежда и Шмот", callback_data="wiki_cat_clothes")
+        ],
+        [
+            InlineKeyboardButton(text="🌟 Сет-Бонусы", callback_data="wiki_cat_sets"),
+            InlineKeyboardButton(text="💊 Медицина", callback_data="wiki_cat_pharma")
+        ],
+        [
+            InlineKeyboardButton(text="📦 Лутбоксы и Гача", callback_data="wiki_cat_lootbox"),
+            InlineKeyboardButton(text="🛒 В магазин (/shop)", callback_data="shop_main_hub")
+        ]
+    ])
+    return text, kb
+
+
+@dp.message(Command("items", "item", "wiki", "вещи", "предметы", "справка_вещи", "сеты", "энциклопедия"))
+async def cmd_wiki_items(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    text, kb = _build_wiki_hub_content()
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=text,
+        reply_markup=kb,
+        category="shop",
+        parse_mode="HTML"
+    )
+    try: await message.delete()
+    except Exception: pass
+
+
+@dp.callback_query(F.data == "wiki_main_hub")
+async def cb_wiki_main_hub(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    text, kb = _build_wiki_hub_content()
+    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception: pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "wiki_cat_weapons")
+async def cb_wiki_cat_weapons(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    text = (
+        "⚔️ <b>СПРАВОЧНИК: ОРУЖИЕ И БОЕВЫЕ РАСХОДНИКИ</b>\n\n"
+        "1. 🔪 <b>Заточка (/rob):</b>\n"
+        "• <i>Применение:</i> Реплей на жертву с командой <code>/rob</code>.\n"
+        "• <i>Эффект:</i> Отжимает от 10% до 30% шекелей у цели (до 1 500 ₪ за раз).\n\n"
+        "2. 🧯 <b>Перцовый баллончик:</b>\n"
+        "• <i>Применение:</i> Пассивно лежит в кармане.\n"
+        "• <i>Эффект:</i> При попытке ограбить тебя ослепляет грабителя, ломает его заточку и отбирает до 500 ₪ штрафа в твою пользу!\n\n"
+        "3. 🔇 <b>Мут-Ган (/shoot):</b>\n"
+        "• <i>Применение:</i> Реплей на пост с <code>/shoot</code>.\n"
+        "• <i>Эффект:</i> Отправляет жертву в мут на 1 час на текущей доске.\n\n"
+        "4. 🐒 <b>Кусок говна (/shit):</b>\n"
+        "• <i>Применение:</i> Реплей с <code>/shit</code>.\n"
+        "• <i>Эффект:</i> Обмазывает жертву говном на 1 час (все её сообщения публикуются коричневым шрифтом с эмодзи говна).\n\n"
+        "5. 🚽 <b>Слабительное (/curse):</b>\n"
+        "• <i>Применение:</i> Реплей с <code>/curse</code>.\n"
+        "• <i>Эффект:</i> Насылает проклятие словесного поноса на 1 час.\n\n"
+        "6. 🚔 <b>Пативэн-Ган (/partyvan):</b>\n"
+        "• <i>Применение:</i> Реплей с <code>/partyvan</code>.\n"
+        "• <i>Эффект:</i> Вызывает ОМОН, сажает цель в КПЗ на 12 часов с запретом постить."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚔️ Купить на Черном рынке", callback_data="shop_cat_weapons")],
+        [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
+    ])
+    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception: pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "wiki_cat_clothes")
+async def cb_wiki_cat_clothes(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    text = (
+        "👗 <b>СПРАВОЧНИК: БУТИК И ГАРДЕРОБ</b>\n\n"
+        "<i>Все вещи покупаются НАВСЕГДА и дают пассивные бонусы:</i>\n\n"
+        "• 🦺 <b>Жилетка Вассермана:</b> +25% к зарплате во всех сменах <code>/work</code>.\n"
+        "• 👑 <b>Корона VIP-Скуфа:</b> +20% к чаевым на работе и VIP-статус.\n"
+        "• 🪖 <b>Шлем ОМОНа:</b> 0 потерь от штрафов на работе, -50% времени мута от выстрела.\n"
+        "• 🩲 <b>Обоссанные треники:</b> x2 шанс дропа предметов на работе, 25% шанс отпугнуть грабителя.\n"
+        "• 📦 <b>Пакет Пятерочки:</b> 8% шанс выбить бесплатный кейс во время смены на работе.\n"
+        "• 🕶️ <b>Очки Thug Life:</b> +5% к выплатам в Слотах 777 и Монетке.\n"
+        "• 🥽 <b>Очки Онотоле:</b> +15% к зарплате в интеллектуальных сменах.\n"
+        "• 🎭 <b>Маска Анонимуса:</b> Скрывает баланс шекелей в карточке персонажа от налётчиков.\n"
+        "• 🩴 <b>Сланцы с носками:</b> -20% к кулдауну между сменами <code>/work</code>.\n"
+        "• 🥾 <b>Берцы ОМОНа:</b> Полная неуязвимость к броскам говна <code>/shit</code>.\n"
+        "• 👟 <b>Тяги бархатные:</b> 30% шанс успешно сбежать при облаве пативэна."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👗 В Бутик одежды", callback_data="shop_cat_clothes")],
+        [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
+    ])
+    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception: pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "wiki_cat_sets")
+async def cb_wiki_cat_sets(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    text = (
+        "🌟 <b>СПРАВОЧНИК: КОМПЛЕКТНЫЕ СЕТ-БОНУСЫ</b>\n\n"
+        "<i>Надев 2 вещи из одного комплекта, активируется супер-бонус:</i>\n\n"
+        "1. 🦺 <b>Сет «Анатолий Вассерман / Онотоле»:</b>\n"
+        "• <i>Комплект:</i> Жилетка Вассермана + Очки Онотоле\n"
+        "• <i>Бонус:</i> <b>+40% к зарплате</b> на всех сменах <code>/work</code> и полный иммунитет к Шизо-таблеткам!\n\n"
+        "2. 🪖 <b>Сет «Силовик ОМОНа»:</b>\n"
+        "• <i>Комплект:</i> Шлем ОМОНа + Берцы ОМОНа\n"
+        "• <i>Бонус:</i> <b>-70% ко времени мута</b>, 0 штрафов на работе и полный иммунитет к говну <code>/shit</code>!\n\n"
+        "3. 👘 <b>Сет «Труъ-Хикка Анимешник»:</b>\n"
+        "• <i>Комплект:</i> Неко-Ушки + Худи с Аской\n"
+        "• <i>Бонус:</i> <b>+50 к Рассудку</b> персонажа и <b>x2 шанс дропа лутбоксов</b> на работе!\n\n"
+        "4. 🩲 <b>Сет «Подъездный Скуф»:</b>\n"
+        "• <i>Комплект:</i> Корона VIP + Обоссанные треники\n"
+        "• <i>Бонус:</i> <b>40% шанс отпугнуть грабителя</b> в <code>/rob</code> и +35% к чаевым в пивнухе!\n\n"
+        "5. 🥼 <b>Сет «Палата №6 / Шизофреник»:</b>\n"
+        "• <i>Комплект:</i> Смирительная рубашка + Шапочка из фольги\n"
+        "• <i>Бонус:</i> Абсолютная невосприимчивость к Слабительному и Шизо-таблеткам."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎽 В Примерочную", callback_data="wardrobe_dressing_room")],
+        [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
+    ])
+    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception: pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "wiki_cat_pharma")
+async def cb_wiki_cat_pharma(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    text = (
+        "💊 <b>СПРАВОЧНИК: АПТЕКА И ЗАЩИТА</b>\n\n"
+        "1. 💊 <b>Аминазин:</b>\n"
+        "• Моментально смывает дебаффы (говно, понос, шизофрению).\n\n"
+        "2. 🛡️ <b>Зеркальный Щит:</b>\n"
+        "• Действует 6 часов. Отражает выстрел Мут-Гана обратно в стрелка!\n\n"
+        "3. 📜 <b>Взятка (Индульгенция):</b>\n"
+        "• Моментально снимает мут на текущей доске.\n\n"
+        "4. 👽 <b>Шапочка из фольги:</b>\n"
+        "• Защищает голову от 5G-излучения, говна и грабежа на 6 часов."
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💊 В Аптеку", callback_data="shop_cat_pharma")],
+        [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
+    ])
+    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception: pass
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "wiki_cat_lootbox")
+async def cb_wiki_cat_lootbox(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    text = (
+        "📦 <b>СПРАВОЧНИК: КЕЙСЫ И ЛУТБОКСЫ</b>\n\n"
+        "• 🗑️ <b>Мусорный Пакет (150 ₪):</b>\n"
+        "  - 40% Мусор с кешбэком до 75 ₪\n"
+        "  - 35% Боевые расходники (Заточка, Перцовка, Говно, Аминазин)\n"
+        "  - 20% Редкие предметы (Щит, Фольга, Пакет Пятерочки)\n"
+        "  - 5% 🔥 Легендарный Джекпот (Пативэн или +1 000 ₪)\n\n"
+        "• 👑 <b>Золотой Сейф Китов (500 ₪):</b>\n"
+        "  - 40% Постоянная одежда и экипировка (Плащи, Шлемы, Очки, Обувь)\n"
+        "  - 30% Тяжелый боевой комплект (Щит + Перцовка + Заточка)\n"
+        "  - 20% Ценные находки и кешбэк до 350 ₪\n"
+        "  - 10% 🌟 Мифический Джекпот (Пативэн+Фольга или +2 500 ₪)\n\n"
+        "♻️ <b>Переработка дубликатов:</b>\n"
+        "Если из кейса выпадает вещь, которая уже есть в твоем гардеробе, она автоматически перерабатывается в <b>75% её стоимости шекелями</b>!"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📦 Открыть Кейсы", callback_data="shop_cat_lootbox")],
+        [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
+    ])
+    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception: pass
+    await callback.answer()
+
+
+# -----------------------------------------------------------------------------
+# ДОСТИЖЕНИЯ И ТРОФЕИ (/achievements, /ach, /ачивки, /достижения)
+# -----------------------------------------------------------------------------
+@dp.message(Command("achievements", "ach", "ачивки", "достижения", "трофеи"))
+async def cmd_achievements(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    db = await get_pool()
+    active_items = await _get_user_active_items(db, user_id, board_id)
+
+    import achievements_engine
+    text, kb = achievements_engine.build_achievements_content(user_id, active_items)
+
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=text,
+        reply_markup=kb,
+        category="shop",
+        parse_mode="HTML"
+    )
+    try: await message.delete()
+    except Exception: pass
+
+
+@dp.callback_query(F.data == "achievements_view")
+async def cb_achievements_view(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    db = await get_pool()
+    active_items = await _get_user_active_items(db, user_id, board_id)
+
+    import achievements_engine
+    text, kb = achievements_engine.build_achievements_content(user_id, active_items)
+    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception: pass
+    await callback.answer()
+
 
 async def _build_inventory_content(user_id: int, board_id: str):
     db = await get_pool()
@@ -3704,14 +4634,12 @@ async def _build_inventory_content(user_id: int, board_id: str):
     cursed_until = row[3] if row and len(row) > 3 and row[3] else 0
 
     try:
-        import json
         items = json.loads(active_items_str)
     except Exception:
         items = {}
 
-    import time
     now = int(time.time())
-    
+
     # Active Buffs & Timers
     buffs = []
     if prefix and prefix_exp > now:
@@ -3731,6 +4659,11 @@ async def _build_inventory_content(user_id: int, board_id: str):
         left_m = ((tinfoil_until - now) % 3600) // 60
         buffs.append(f"👽 <b>Шапочка из фольги:</b> Активна (осталось {left_h}ч {left_m}мин)")
 
+    if items.get("badge_color_expires", 0) > now or items.get("badge_color_active"):
+        c_name = avatar_generator.COLOR_PALETTE.get(items.get("badge_color", "gold"), {}).get("name", "Аура")
+        c_emo = avatar_generator.COLOR_PALETTE.get(items.get("badge_color", "gold"), {}).get("emoji", "🟣")
+        buffs.append(f"{c_emo} <b>Цвет ника:</b> {c_name}")
+
     janitor_until = items.get("janitor_until", 0)
     deletes_left = items.get("janitor_deletes_left", 0)
     if janitor_until > now and deletes_left > 0:
@@ -3747,53 +4680,55 @@ async def _build_inventory_content(user_id: int, board_id: str):
         left_m = (cursed_until - now) // 60
         buffs.append(f"🚽 <b>Проклятие поноса:</b> Активно ({left_m} мин)")
 
-    # Weapons & Inventory Items
+    # Weapons & Combat items
     weapons = []
     if items.get("mute_gun"):
-        weapons.append("🔫 <b>Мут-Ган:</b> 1 шт. <i>(Реплай + /shoot)</i>")
+        weapons.append("🔇 <b>Мут-Ган:</b> 1 шт. <i>(Реплай + /shoot)</i>")
     if items.get("partyvan_gun"):
         weapons.append("🚔 <b>Пативэн-Ган:</b> 1 шт. <i>(Реплай + /partyvan)</i>")
     if items.get("knife_gun"):
         weapons.append("🔪 <b>Заточка:</b> 1 шт. <i>(Реплай + /rob)</i>")
+    if items.get("pepperspray_gun"):
+        weapons.append("🧯 <b>Перцовый баллончик:</b> 1 шт. <i>(Авто-защита от /rob)</i>")
     if items.get("shit_gun"):
         weapons.append("🐒 <b>Кусок говна:</b> 1 шт. <i>(Реплай + /shit)</i>")
+    if items.get("pills_gun"):
+        weapons.append("💊 <b>Аминазин:</b> 1 шт. <i>(Снять дебаффы)</i>")
     if items.get("laxative_gun"):
         weapons.append("🚽 <b>Слабительное:</b> 1 шт. <i>(Реплай + /curse)</i>")
-    if items.get("megaphone_gun"):
-        weapons.append("📣 <b>Мегафон:</b> 1 шт. <i>(Реплай + /mega)</i>")
     if items.get("schizopill_gun"):
         weapons.append("💊 <b>Шизо-Таблетка:</b> 1 шт. <i>(Реплай + /schizopill)</i>")
 
     lines = [
-        f"🎒 <b>РЮКЗАК АНОНА [{get_anon_id(user_id)}]</b>",
-        f"<code>{'—'*26}</code>",
-        f"💵 <b>Баланс:</b> <code>{int(balance):,} RUB</code>\n"
+        f"🎒 <b>РЮКЗАК И ГАРДЕРОБ АНОНА [{get_anon_id(user_id)}]</b>",
+        f"<code>{'—'*28}</code>",
+        f"💵 <b>Глобальный баланс:</b> <code>{int(balance):,} ₪</code>\n"
     ]
 
     if buffs:
-        lines.append("🛡️ <b>АКТИВНЫЕ ЭФФЕКТЫ:</b>")
+        lines.append("🛡️ <b>АКТИВНЫЕ ЭФФЕКТЫ И БАФФЫ:</b>")
         lines.extend([f" • {b}" for b in buffs])
         lines.append("")
     else:
         lines.append("🛡️ <b>АКТИВНЫЕ ЭФФЕКТЫ:</b> <i>Нет активных баффов</i>\n")
 
     if weapons:
-        lines.append("⚔️ <b>СНАРЯЖЕНИЕ И ОРУЖИЕ:</b>")
+        lines.append("⚔️ <b>СНАРЯЖЕНИЕ И ОРУЖИЕ В КАРМАНАХ:</b>")
         lines.extend([f" • {w}" for w in weapons])
     else:
-        lines.append("⚔️ <b>СНАРЯЖЕНИЕ:</b> <i>Рюкзак пуст. Загляни на Черный рынок!</i>")
+        lines.append("⚔️ <b>СНАРЯЖЕНИЕ:</b> <i>Карманы пусты. Загляни на Черный рынок!</i>")
 
-    lines.append(f"<code>{'—'*26}</code>")
-    lines.append("💡 <i>Трать шекели в /shop, чтобы вооружаться и кошмарить тред.</i>")
+    lines.append(f"<code>{'—'*28}</code>")
+    lines.append("💡 <i>Используй /avatar для визуальной карточки персонажа!</i>")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🛒 Черный рынок", callback_data="prof_shop"),
-            InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet")
+            InlineKeyboardButton(text="🎭 Мой Персонаж RPG", callback_data="avatar_view"),
+            InlineKeyboardButton(text="🛒 В магазин", callback_data="shop_main_hub")
         ],
         [
-            InlineKeyboardButton(text="🪪 Мой паспорт", callback_data="prof_card"),
-            InlineKeyboardButton(text="🔄 Обновить", callback_data="prof_inventory")
+            InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet"),
+            InlineKeyboardButton(text="🔄 Обновить рюкзак", callback_data="prof_inventory")
         ]
     ])
 
@@ -3827,226 +4762,231 @@ async def cb_prof_inventory(callback: types.CallbackQuery, board_id: str | None)
 
     from banner_manager import send_banner_message
     await callback.answer()
-    await send_banner_message(
-        bot=callback.bot,
-        chat_id=callback.message.chat.id,
-        caption=text,
-        reply_markup=kb,
-        category="wallet",
-        parse_mode="HTML"
-    )
+    try:
+        if callback.message.photo:
+            await callback.message.delete()
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text, reply_markup=kb, category="wallet", parse_mode="HTML")
+        else:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+
 
 @dp.callback_query(F.data.startswith("shop_buy_"))
 async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     user_id = callback.from_user.id
-    parts = callback.data.split("_")
-    if len(parts) < 3:
-        await callback.answer("Ошибка в callback данных", show_alert=True)
-        return
-    item = parts[2]  # janitor, mute, shield, prefix
-    from shared_state import market_state
-    base_prices = {"janitor": 1000, "mute": 600, "shield": 800, "prefix": 400, "partyvan": 2000, "shit": 100, "pills": 100, "knife": 400, "tinfoil": 800, "bribe": 1200, "laxative": 800, "megaphone": 2000, "schizopill": 1000}
-    costs = {}
-    multipliers = market_state.get('multipliers', {})
-    for k, v in base_prices.items():
-        costs[k] = int(v * multipliers.get(k, 1.0))
-    price = costs.get(item, 999999)
-    import json
-    import time
-    import random
+    item = callback.data.replace("shop_buy_", "")
     db = await get_pool()
-    err_msg = None
+
+    price = get_current_item_price(item)
+    balance = await get_user_global_balance(db, user_id)
+
+    if balance < price:
+        await callback.answer(f"Недостаточно шекелей! Нужно {price} ₪, у тебя {int(balance)} ₪.", show_alert=True)
+        return
+
     msg = ""
+    err_msg = ""
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    now = int(time.time())
+
+    # --- 1. LOOTBOX OPENINGS ---
+    if item == "lootbox_trash":
+        tier, title, desc, payload, base_cash = lootbox_engine.roll_trash_lootbox()
+        ok, _ = await deduct_user_global_balance(db, user_id, board_id, price)
+        if not ok:
+            await callback.answer("Ошибка списания баланса.", show_alert=True)
+            return
+
+        active_items, final_cash, recycle_note = lootbox_engine.apply_lootbox_reward(active_items, payload, base_cash)
+        if final_cash > 0:
+            await add_user_global_balance(db, user_id, board_id, final_cash)
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+
+        rec_str = f"\n\n{recycle_note}" if recycle_note else ""
+        reveal_text = (
+            f"📦 <b>МУСОРНЫЙ ПАКЕТ РАСПАКОВАН!</b>\n\n"
+            f"🏅 <b>Тир:</b> {tier}\n"
+            f"🎁 <b>Награда:</b> <b>{title}</b>\n"
+            f"📝 <i>{desc}</i>{rec_str}\n\n"
+            f"Твой новый баланс: <code>{int(balance - price + final_cash):,} ₪</code>"
+        )
+        await callback.answer(f"🎉 Выпало: {title}!", show_alert=True)
+        new_b = await get_user_global_balance(db, user_id)
+        text, kb = _build_lootbox_shop_content(user_id, new_b)
+        try: await callback.message.edit_text(f"{reveal_text}\n\n{text}", reply_markup=kb, parse_mode="HTML")
+        except Exception: pass
+        return
+
+    elif item == "lootbox_gold":
+        tier, title, desc, payload, base_cash = lootbox_engine.roll_gold_safe()
+        ok, _ = await deduct_user_global_balance(db, user_id, board_id, price)
+        if not ok:
+            await callback.answer("Ошибка списания баланса.", show_alert=True)
+            return
+
+        active_items, final_cash, recycle_note = lootbox_engine.apply_lootbox_reward(active_items, payload, base_cash)
+        if final_cash > 0:
+            await add_user_global_balance(db, user_id, board_id, final_cash)
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+
+        rec_str = f"\n\n{recycle_note}" if recycle_note else ""
+        reveal_text = (
+            f"👑 <b>ЗОЛОТОЙ СЕЙФ ВЗЛОМАН!</b>\n\n"
+            f"🌟 <b>Тир:</b> {tier}\n"
+            f"🎁 <b>Награда:</b> <b>{title}</b>\n"
+            f"📝 <i>{desc}</i>{rec_str}\n\n"
+            f"Твой новый баланс: <code>{int(balance - price + final_cash):,} ₪</code>"
+        )
+        await callback.answer(f"🌟 ДЖЕКПОТ: {title}!", show_alert=True)
+        new_b = await get_user_global_balance(db, user_id)
+        text, kb = _build_lootbox_shop_content(user_id, new_b)
+        try: await callback.message.edit_text(f"{reveal_text}\n\n{text}", reply_markup=kb, parse_mode="HTML")
+        except Exception: pass
+        return
+
+    # --- 2. WEAPONS & COMBAT ---
     async with db_lock:
-        balance = await get_user_global_balance(db, user_id)
-        async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-        active_items_str = row[0] if row and len(row) > 0 and row[0] else "{}"
-        
-        if balance < price:
-            err_msg = f"❌ Не хватает бабок! Нужно {price} Шекелей, у тебя {int(balance)} Шекелей."
-        else:
-            try:
-                active_items = json.loads(active_items_str)
-            except Exception:
-                active_items = {}
-                
-            # 0. Janitor Ticket
-            if item == "janitor":
-                current_time = int(time.time())
-                base_time = max(current_time, active_items.get("janitor_until", 0))
-                active_items["janitor_until"] = base_time + 6 * 3600
-                active_items["janitor_deletes_left"] = active_items.get("janitor_deletes_left", 0) + 10
-                left = active_items["janitor_deletes_left"]
-                msg = (
-                    f"🧹 Ты купил Билет Дворника на 6 часов!\n"
-                    f"Как использовать: найди спам в чате, нажми Reply и отправь /del.\n"
-                    f"Лимит удалений: {left}. Каждый успешный /del уменьшает счётчик на 1."
-                )
-            # 1. Mute-Gun
-            elif item == "mute":
-                if active_items.get("mute_gun"):
-                    err_msg = "У тебя уже есть Мут-Ган! Сделай Reply на пост с командой /shoot"
-                else:
-                    active_items["mute_gun"] = True
-                    msg = (
-                        f"🔫 Ты купил Мут-Ган!\n"
-                        f"Как использовать: найди пост жертвы, нажми Reply и отправь /shoot.\n"
-                        f"Эффект: жертва получает мут на 1 час.\n"
-                        f"⚠️ Осторожно: если у цели активен Зеркальный Щит, выстрел отразится обратно в тебя!"
-                    )
-            # 2. Reflect Shield
-            elif item == "shield":
-                current_time = int(time.time())
-                base_time = max(current_time, active_items.get("reflect_shield_until", 0))
-                active_items["reflect_shield_until"] = base_time + 24 * 3600
-                msg = (
-                    f"🛡️ Ты купил Зеркальный Щит на 24 часа!\n"
-                    f"Щит работает пассивно: при первой попытке выстрелить в тебя из Мут-Гана\n"
-                    f"выстрел автоматически отразится в стрелка (мут 1 час), а щит израсходуется."
-                )
-            # 3. Prefix
-            elif item == "prefix":
-                prefixes = [
-                    "[Скуф]", "[Опущенный]",
-                    "[Калоед]", "[Подпивас]",
-                    "[Шитпостер]", "[Гой]",
-                    "[Мамкин Трейдер]",
-                    "[Инцел]", "[Анимешник]",
-                    "[Чмо]", "[Вумен ☕️]",
-                    "[Гигачад]", "[Бог Борды]",
-                    "[VIP Анон]", "[Владелец]"
-                ]
-                chosen = random.choice(prefixes[:10]) if random.random() < 0.9 else random.choice(prefixes[10:])
-                expires = int(time.time()) + 86400
-                await db.execute("UPDATE Users SET custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ?", (chosen, expires, user_id))
-                msg = (
-                    f"👑 Рулетка крутится...\n"
-                    f"Тебе выпал префикс: {chosen}\n"
-                    f"Виден в /passport и заголовках постов 24 часа."
-                )
+        if item == "janitor":
+            active_items["janitor_until"] = now + 6 * 3600
+            active_items["janitor_deletes_left"] = 5
+            msg = "🧹 Ты получил Билет Дворника на 6 часов (5 удалений через /del)!"
 
-            # 4. Partyvan
-            elif item == "partyvan":
-                if active_items.get("partyvan_gun"):
-                    err_msg = "Ты уже купил вызов Пативэна! Сделай Reply на пост с командой /partyvan"
-                else:
-                    active_items["partyvan_gun"] = True
-                    msg = (
-                        f"🚔 Ты оплатил вызов Пативэна!\n"
-                        f"Сделай Reply на пост жертвы с командой /partyvan.\n"
-                        f"Нарушитель отлетит в мут на 12 часов с анимацией бобика."
-                    )
-            # 5. Shit
-            elif item == "shit":
-                if active_items.get("shit_gun"):
-                    err_msg = "Полные карманы говна! Сделай Reply на пост с командой /shit"
-                else:
-                    active_items["shit_gun"] = True
-                    msg = (
-                        f"🐒 Ты подобрал кусок говна!\n"
-                        f"Сделай Reply на пост жертвы с командой /shit.\n"
-                        f"Жертва будет обмазана говном на 1 час. Осторожно, ветер может сдуть обратно (20% шанс)."
-                    )
-            # 6. Pills
-            elif item == "pills":
-                active_items.pop("shit_until", None)
-                await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-                msg = "💊 Ты выпил Аминазин. Шизофрения, говно и проклятия сняты. Разум ясен."
-                
-            # 7. Knife
-            elif item == "knife":
-                if active_items.get("knife_gun"):
-                    err_msg = "У тебя уже есть заточка! Сделай Reply на пост с командой /rob"
-                else:
-                    active_items["knife_gun"] = True
-                    msg = (
-                        f"🔪 Ты купил заточку!\n"
-                        f"Сделай Reply на пост жертвы с командой /rob.\n"
-                        f"Ты сможешь ограбить анона на 10-30% его шекелей (до 1000).\n"
-                        f"Осторожно: если у жертвы шапочка из фольги, ты порежешься сам."
-                    )
-            # 8. Tinfoil
-            elif item == "tinfoil":
-                current_time = int(time.time())
-                base_time = max(current_time, active_items.get("tinfoil_hat", 0))
-                active_items["tinfoil_hat"] = base_time + 24 * 3600
-                msg = (
-                    f"👽 Ты надел Шапочку из фольги на 24 часа!\n"
-                    f"Защищает от говна (/shit) и ограблений (/rob).\n"
-                    f"Нападающие обмажутся говном сами или порежутся своей заточкой!"
-                )
-            # 9. Bribe
-            elif item == "bribe":
-                # Just clear mute, handled externally mostly
-                pass
-                
-            # 10. Laxative
-            elif item == "laxative":
-                if active_items.get("laxative_gun"):
-                    err_msg = "У тебя уже есть слабительное! Сделай Reply на пост с командой /curse"
-                else:
-                    active_items["laxative_gun"] = True
-                    msg = (
-                        f"🚽 Ты купил слабительное!\n"
-                        f"Сделай Reply на пост жертвы с командой /curse.\n"
-                        f"Цель проклинается на 1 час: она не сможет писать посты длиннее 50 символов."
-                    )
-            # 11. Megaphone
-            elif item == "megaphone":
-                if active_items.get("megaphone_gun"):
-                    err_msg = "У тебя уже есть мегафон! Сделай Reply на свой пост с командой /mega"
-                else:
-                    active_items["megaphone_gun"] = True
-                    msg = (
-                        f"📣 Ты арендовал Мегафон!\n"
-                        f"Сделай Reply на СВОЙ пост с командой /mega.\n"
-                        f"Твой пост будет закреплен на 24 часа для всех на борде."
-                    )
-            # 12. Schizopill
-            elif item == "schizopill":
-                if active_items.get("schizopill_gun"):
-                    err_msg = "У тебя уже есть Шизо-Таблетка! Сделай Reply на пост с командой /schizopill"
-                else:
-                    active_items["schizopill_gun"] = True
-                    msg = (
-                        f"💊 Ты купил Шизо-Таблетку!\n"
-                        f"Сделай Reply на пост жертвы с командой /schizopill.\n"
-                        f"Цель проклинается на 1 час: её посты будут переписываться нейросетью в стиле конспиролога-шизофреника."
-                    )
+        elif item == "mute":
+            if active_items.get("mute_gun"):
+                err_msg = "У тебя уже есть заряженный Мут-Ган! Сделай Reply + /shoot"
+            else:
+                active_items["mute_gun"] = True
+                msg = "🔇 Ты купил Мут-Ган! Сделай Reply на пост с командой /shoot, чтобы кикнуть анона на 1 час."
 
-            if not err_msg:
-                # Списываем глобальный баланс
-                ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, price)
-                await db.execute(
-                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                    (json.dumps(active_items), user_id, board_id)
-                )
-                await db.commit()
+        elif item == "shield":
+            active_items["reflect_shield_until"] = now + 6 * 3600
+            active_items["shield_until"] = now + 6 * 3600
+            msg = "🛡️ Зеркальный Щит активирован на 6 часов! Выстрелы Мут-Гана отрикошетят в стрелка."
+
+        elif item == "partyvan":
+            if active_items.get("partyvan_gun"):
+                err_msg = "У тебя уже есть вызов Пативэна! Сделай Reply + /partyvan"
+            else:
+                active_items["partyvan_gun"] = True
+                msg = "🚔 Ты оплатил вызов Пативэна! Сделай Reply на пост с командой /partyvan (мут на 12 часов)."
+
+        elif item == "shit":
+            if active_items.get("shit_gun"):
+                err_msg = "Карманы уже полны говна! Сделай Reply + /shit"
+            else:
+                active_items["shit_gun"] = True
+                msg = "🐒 Ты подобрал кусок говна! Сделай Reply на пост с командой /shit (дебафф на 1 час)."
+
+        elif item == "pills":
+            active_items.pop("shit_until", None)
+            await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            msg = "💊 Ты выпил Аминазин! Все дебаффы (говно, понос, шиза) моментально сняты."
+
+        elif item == "knife":
+            if active_items.get("knife_gun"):
+                err_msg = "У тебя уже есть заточка! Сделай Reply + /rob"
+            else:
+                active_items["knife_gun"] = True
+                msg = "🔪 Ты купил заточку! Сделай Reply на пост с командой /rob, чтобы ограбить анона на 10-30%."
+
+        elif item == "pepperspray":
+            if active_items.get("pepperspray_gun"):
+                err_msg = "У тебя уже есть Перцовый баллончик в кармане!"
+            else:
+                active_items["pepperspray_gun"] = True
+                msg = "🧯 Ты вооружился Перцовым баллончиком! Если на тебя нападут с заточкой (/rob), баллончик ослепит нападающего и выбьет из него деньги!"
+
+        elif item == "tinfoil" or item == "hat_tinfoil":
+            active_items["tinfoil_hat"] = now + 6 * 3600
+            active_items["tinfoil_until"] = now + 6 * 3600
+            active_items["equipped_head"] = "hat_tinfoil"
+            active_items["owned_hat_tinfoil"] = True
+            msg = "👽 Ты надел Шапочку из фольги на 6 часов! Защищает от говна (/shit) и грабежей (/rob)."
+
+        elif item == "bribe":
+            await remove_regular_mute(user_id, board_id)
+            if board_id in board_data and 'mutes' in board_data[board_id]:
+                board_data[board_id]['mutes'].pop(user_id, None)
+            msg = "📜 Ты дал взятку модератору! Твой мут снят, ты снова можешь писать."
+
+        elif item == "laxative":
+            if active_items.get("laxative_gun"):
+                err_msg = "У тебя уже есть слабительное! Сделай Reply + /curse"
+            else:
+                active_items["laxative_gun"] = True
+                msg = "🚽 Ты купил слабительное! Сделай Reply на пост с командой /curse (проклятие поноса)."
+
+        elif item == "schizopill":
+            if active_items.get("schizopill_gun"):
+                err_msg = "У тебя уже есть Шизо-Таблетка! Сделай Reply + /schizopill"
+            else:
+                active_items["schizopill_gun"] = True
+                msg = "💊 Ты купил Шизо-Таблетку! Сделай Reply на пост с командой /schizopill (нейро-бред на 1 час)."
+
+        # --- 3. CLOTHING & APPAREL ---
+        elif item.startswith("hat_") or item.startswith("body_") or item.startswith("face_") or item.startswith("feet_"):
+            c_item = CLOTHING_CATALOG.get(item)
+            if c_item:
+                dur_days = c_item.get("duration_days", 0)
+                dur_hours = c_item.get("duration_hours", 168)
+                is_perm = c_item.get("is_permanent", False) or (dur_hours == 0)
+
+                from wardrobe_engine import add_item_duration
+                add_item_duration(active_items, item, dur_hours, is_permanent=is_perm)
+                slot = c_item.get("slot", "torso")
+                active_items[f"equipped_{slot}"] = item
+
+                dur_txt = f"на {dur_days} дней" if dur_days > 0 else (f"на {dur_hours} часов" if dur_hours > 0 else "НАВСЕГДА в гардероб")
+                msg = f"👗 Ты приобрел и надел <b>{c_item['name']}</b> ({dur_txt})! Твой Персонаж: /avatar"
+            else:
+                err_msg = "Товар не найден."
+
+        # --- 4. PREFIX ---
+        elif item == "prefix" or item == "hat_crown":
+            prefixes = [
+                "[Скуф]", "[Опущенный]", "[Калоед]", "[Подпивас]",
+                "[Шитпостер]", "[Гой]", "[Мамкин Трейдер]",
+                "[Инцел]", "[Анимешник]", "[Чмо]", "[Вумен ☕️]",
+                "[Гигачад]", "[Бог Борды]", "[VIP Анон]", "[Владелец]"
+            ]
+            chosen = random.choice(prefixes[:10]) if random.random() < 0.85 else random.choice(prefixes[10:])
+            expires = now + 86400
+            active_items["equipped_head"] = "hat_crown"
+            active_items["owned_hat_crown"] = True
+            await db.execute("UPDATE Users SET custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ?", (chosen, expires, user_id))
+            msg = f"👑 Тебе выпал VIP Префикс: {chosen} на 24 часа! Он отображается в заголовках твоих постов и на аватарке."
+
+        if not err_msg:
+            ok, _ = await deduct_user_global_balance(db, user_id, board_id, price)
+            if not ok:
+                await callback.answer("Ошибка списания баланса.", show_alert=True)
+                return
+            await db.execute(
+                "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                (json.dumps(active_items), user_id, board_id)
+            )
+            await db.commit()
 
     if err_msg:
         await callback.answer(err_msg, show_alert=True)
         return
-        
-    if item == "bribe":
-        await remove_regular_mute(user_id, board_id)
-        if board_id in board_data and 'mutes' in board_data[board_id]:
-            board_data[board_id]['mutes'].pop(user_id, None)
-        msg = "📜 Ты дал взятку модератору! Твой мут снят, ты снова можешь шитпостить."
-        
+
     await callback.answer(msg, show_alert=True)
-    new_bal = balance - price
+    new_bal = await get_user_global_balance(db, user_id)
     try:
-        if callback.message.photo:
-            cap = callback.message.caption or ""
-            text = cap.replace(f"{int(balance)}.00", f"{int(new_bal)}.00")
-            await callback.message.edit_caption(caption=text, reply_markup=callback.message.reply_markup, parse_mode="HTML")
-        elif callback.message.text:
-            text = callback.message.text.replace(f"{int(balance)}.00", f"{int(new_bal)}.00")
-            await callback.message.edit_text(text=text, reply_markup=callback.message.reply_markup, parse_mode="HTML")
+        # Update text if message is active
+        if callback.message.text:
+            text, kb = _build_main_shop_hub(user_id, new_bal)
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         pass
+
 @dataclass
 class ShootContext:
     message: types.Message
@@ -4111,18 +5051,24 @@ async def _handle_shoot_success(ctx: ShootContext):
     # Распаковка ctx в локальные имена удалена: тело функции целиком обращается
     # к ctx.<поле>, ни одно из семи имён не читалось. Остаток того же
     # незавершённого рефакторинга, что ломал _handle_shoot_bounce выше.
+    has_helmet = (ctx.t_items.get("equipped_head") == "hat_helmet")
+    mute_sec = 1800 if has_helmet else 3600
+    mute_min = 30 if has_helmet else 60
+
     async with storage_lock:
-        board_data[ctx.board_id]['mutes'][ctx.target_id] = datetime.now(UTC) + timedelta(seconds=3600)
-    await apply_regular_mute(ctx.target_id, ctx.board_id, 3600)
+        board_data[ctx.board_id]['mutes'][ctx.target_id] = datetime.now(UTC) + timedelta(seconds=mute_sec)
+    await apply_regular_mute(ctx.target_id, ctx.board_id, mute_sec)
     ctx.active_items["mute_gun"] = False
     async with ctx.db_lock:
         await ctx.db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                          (json.dumps(ctx.active_items), ctx.user_id, ctx.board_id))
         await ctx.db.commit()
+
+    helmet_note = "\n🪖 <i>Шлем ОМОНа поглотил 50% урона! Мут сокращен до 30 минут.</i>" if has_helmet else ""
     alert = (
         f"💥 <b>ВЫСТРЕЛ ИЗ МУТ-ГАНА!</b>\n\n"
-        f"Богатенький анон купил Мут-Ган за 500 RUB и пристрелил автора этого поста!\n"
-        f"Жертва отправляется в мут на 1 час.\n"
+        f"Анон применил Мут-Ган и пристрелил автора этого поста!\n"
+        f"Жертва отправляется в мут на {mute_min} минут.{helmet_note}\n"
         f"<i>(Защита от Мут-Гана — Зеркальный Щит в /shop.)</i>"
     )
     await ctx.message.bot.send_message(
@@ -4132,9 +5078,9 @@ async def _handle_shoot_success(ctx: ShootContext):
     try:
         await ctx.message.bot.send_message(
             ctx.target_id,
-            "💥 <b>В тебя выстрелили из Мут-Гана!</b>\n"
-            "Тебя отправили в мут на 1 час — ты временно не можешь писать на этой доске.\n"
-            "Защититься от будущих выстрелов можно купив Зеркальный Щит в /shop.",
+            f"💥 <b>В тебя выстрелили из Мут-Гана!</b>\n"
+            f"Тебя отправили в мут на {mute_min} минут — ты временно не можешь писать на этой доске.{helmet_note}\n"
+            f"Защититься от будущих выстрелов можно купив Зеркальный Щит в /shop или дав взятку модератору.",
             parse_mode="HTML"
         )
     except TelegramForbiddenError:
@@ -4198,6 +5144,8 @@ async def is_target_neutralized(target_id: int, board_id: str, db=None) -> tuple
                         items = json.loads(row[1])
                         if items.get("cursed_until", 0) > now_ts:
                             return True, "под действием слабительного (/curse)"
+                        if items.get("schizo_pill_until", 0) > now_ts:
+                            return True, "под действием шизо-таблетки (/schizopill)"
                     except Exception:
                         pass
     except Exception as e:
@@ -4214,7 +5162,7 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         return
 
     import time
-    from shared_state import count_active_attacker_effects, register_attacker_effect
+    from shared_state import count_active_attacker_effects, register_attacker_effect, get_combat_cooldown_remaining, set_combat_cooldown
     db = await get_pool()
     current_time = int(time.time())
 
@@ -4227,6 +5175,19 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         return
 
     active_items = await _get_user_active_items(db, user_id, board_id)
+    cd_rem = get_combat_cooldown_remaining(user_id)
+    if cd_rem > 0:
+        cd_min = cd_rem // 60
+        cd_sec = cd_rem % 60
+        time_str = f"{cd_min}м {cd_sec}с" if cd_min > 0 else f"{cd_sec}с"
+        await message.answer(
+            f"⏳ <b>Перезарядка оружия!</b>\n"
+            f"Ты недавно совершил нападение. Следующая атака доступна через <b>{time_str}</b>.\n"
+            f"<i>(Глобальный кулдаун на оружие: 3 мин)</i>",
+            parse_mode="HTML"
+        )
+        return
+
     if not active_items.get("mute_gun"):
         await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
         return
@@ -4271,6 +5232,50 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
             await db.commit()
+        elif t_items.get("tinfoil_hat", 0) > current_time:
+            # Шапочка из фольги поглощает выстрел Мут-Гана!
+            active_items["mute_gun"] = False
+            destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=6.0, burn_chance=0.30)
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(t_items), target_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+            
+            if destroyed:
+                shoot_msg = (
+                    f"💥 <b>ВЫСТРЕЛ ПОГЛОЩЕН!</b>\n\n"
+                    f"Выстрел из Мут-Гана попал в Шапочку из фольги жертвы!\n"
+                    f"Мут заблокирован, но от электрического разряда Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!\n"
+                    f"<i>(Оружие израсходовано)</i>"
+                )
+                target_msg = (
+                    f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b>\n"
+                    f"В тебя выстрелили из Мут-Гана! Шапочка поглотила выстрел и спасла тебя от мута, но <b>сгорела дотла</b> от разряда! Ты остался без защиты."
+                )
+            else:
+                shoot_msg = (
+                    f"💥 <b>ВЫСТРЕЛ ОТБИТ!</b>\n\n"
+                    f"Выстрел из Мут-Гана отскочил от Шапочки из фольги жертвы!\n"
+                    f"Фольга жертвы помялась (-6ч прочности, осталось {left_h}ч {left_m}мин).\n"
+                    f"<i>(Оружие израсходовано)</i>"
+                )
+                target_msg = (
+                    f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\n"
+                    f"В тебя выстрелили из Мут-Гана! Шапочка из фольги спасла тебя от мута, но потеряла 6ч прочности (осталось {left_h}ч {left_m}мин)."
+                )
+            await message.bot.send_message(message.chat.id, shoot_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+            try:
+                await message.bot.send_message(target_id, target_msg, parse_mode="HTML")
+            except TelegramForbiddenError:
+                await purge_users_from_board_ram(board_id, [target_id])
+            except Exception:
+                pass
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
         else:
             active_items["mute_gun"] = False
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
@@ -4353,9 +5358,66 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
 
     # Забираем предмет
     active_items["knife_gun"] = False
-    
+
+    if t_items.get("equipped_torso") == "body_tracksuit" and random.random() < 0.25:
+        stench_text = (
+            "🤮 <b>ФЕЙЛ ОГРАБЛЕНИЯ!</b>\n"
+            "Жертва одета в <b>Обоссанные треники</b> и воняет так невыносимо, что ты побрезговал лезть к ней в карманы!\n"
+            "Заточка сломалась от отвращения."
+        )
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        await message.answer(stench_text, parse_mode="HTML")
+        return
+
+    if t_items.get("pepperspray_gun"):
+        # Перцовый баллончик срабатывает!
+        t_items["pepperspray_gun"] = False
+        penalty = min(int(u_balance * 0.3), 500) if u_balance > 0 else 0
+        async with db_lock:
+            if penalty > 0:
+                ok_pen, _ = await deduct_user_global_balance(db, user_id, board_id, penalty)
+                if ok_pen:
+                    await add_user_global_balance(db, target_id, board_id, penalty)
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                (user_id, board_id, json.dumps(active_items))
+            )
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                (target_id, board_id, json.dumps(t_items))
+            )
+            await db.commit()
+
+        spray_text = (
+            f"🧯 <b>ПЕРЦОВЫЙ БАЛЛОНЧИК!</b>\n"
+            f"Жертва резко достала перцовку и залила тебе глаза струей жгучего перца!\n"
+            f"Ты ослеп, выронил заточку и в панике обронил <code>{penalty}</code> шекелей в руки жертве!"
+        )
+        target_text = (
+            f"🧯 <b>ПЕРЦОВКА СРАБОТАЛА!</b>\n"
+            f"Анон попытался напасть на тебя с заточкой! Твой Перцовый Баллончик сработал автоматически, "
+            f"ослепил нападающего и выбил из него <b>+{penalty} ₪</b> в твой кошелек!"
+        )
+        try: await message.bot.send_message(target_id, target_text, parse_mode="HTML")
+        except Exception: pass
+        
+        try:
+            from combat_visuals import draw_rob_poster
+            from aiogram.types import BufferedInputFile
+            buf = draw_rob_poster(user_id, target_id, penalty, outcome="pepperspray", board_id=board_id)
+            photo_file = BufferedInputFile(buf.getvalue(), filename="rob_spray.png")
+            await message.answer_photo(photo=photo_file, caption=spray_text, parse_mode="HTML")
+        except Exception:
+            await message.answer(spray_text, parse_mode="HTML")
+        return
+
     if t_items.get("tinfoil_hat", 0) > current_time:
         # Фольга защищает
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=4.0, burn_chance=0.15)
         loss = min(int(u_balance * pct), 1000)
         async with db_lock:
             if loss > 0:
@@ -4365,8 +5427,25 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
                 "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
                 (user_id, board_id, json.dumps(active_items))
             )
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                (target_id, board_id, json.dumps(t_items))
+            )
             await db.commit()
-        tinfoil_text = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss}</code> шекелей!"
+            
+        if destroyed:
+            tinfoil_text = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss}</code> шекелей!\nОт твоего удара Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            target_text = f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b>\nАнон попытался ограбить тебя с заточкой! Твоя Шапочка спасла шекели (грабитель порезался сам), но <b>была уничтожена</b> от удара!"
+        else:
+            tinfoil_text = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Ты в панике порезался своей же заточкой и обронил <code>{loss}</code> шекелей!\nФольга жертвы помялась (-4ч, осталось {left_h}ч {left_m}мин)."
+            target_text = f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\nАнон попытался ограбить тебя! Твоя Шапочка спасла твои шекели, но потеряла 4ч прочности (осталось {left_h}ч {left_m}мин)."
+            
+        try:
+            await message.bot.send_message(target_id, target_text, parse_mode="HTML")
+        except Exception:
+            pass
+            
         try:
             from combat_visuals import draw_rob_poster
             from aiogram.types import BufferedInputFile
@@ -4404,7 +5483,19 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         await message.answer(rob_success_text, parse_mode="HTML")
 
     try:
-        await message.bot.send_message(target_id, f"🔪 <b>Тебя ограбили в /{board_id}/!</b>\nКакой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей. Защититься можно, купив Шапочку из фольги в /shop.", parse_mode="HTML")
+        set_combat_cooldown(user_id, 180)
+        kb_rescue = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👽 Купить Шапочку из фольги (800 ₪)", callback_data="fast_rescue:buy_tinfoil")],
+            [InlineKeyboardButton(text="🔪 Купить Заточку для мести (400 ₪)", callback_data="fast_rescue:buy_knife")]
+        ])
+        await message.bot.send_message(
+            target_id,
+            f"🔪 <b>ТЕБЯ ОГРАБИЛИ В /{board_id}/!</b>\n"
+            f"Какой-то анон с заточкой украл у тебя <code>{stolen}</code> шекелей.\n\n"
+            f"⚡ <b>Самооборона:</b> нажми кнопку ниже, чтобы защитить кошелек или отомстить:",
+            reply_markup=kb_rescue,
+            parse_mode="HTML"
+        )
     except TelegramForbiddenError:
         await purge_users_from_board_ram(board_id, [target_id])
     except TelegramRetryAfter as e:
@@ -4421,9 +5512,22 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
         return
 
     import time
-    from shared_state import count_active_attacker_effects, register_attacker_effect
+    from shared_state import count_active_attacker_effects, register_attacker_effect, get_combat_cooldown_remaining, set_combat_cooldown
     db = await get_pool()
     current_time = int(time.time())
+
+    cd_rem = get_combat_cooldown_remaining(user_id)
+    if cd_rem > 0:
+        cd_min = cd_rem // 60
+        cd_sec = cd_rem % 60
+        time_str = f"{cd_min}м {cd_sec}с" if cd_min > 0 else f"{cd_sec}с"
+        await message.answer(
+            f"⏳ <b>Перезарядка оружия!</b>\n"
+            f"Ты недавно совершил нападение. Следующая атака доступна через <b>{time_str}</b>.\n"
+            f"<i>(Глобальный кулдаун на оружие: 3 мин)</i>",
+            parse_mode="HTML"
+        )
+        return
 
     active_items = await _get_user_active_items(db, user_id, board_id)
     if not active_items.get("shit_gun"):
@@ -4453,10 +5557,24 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     
     if t_items.get("tinfoil_hat", 0) > current_time:
         active_items["shit_until"] = current_time + 3600
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=2.0, burn_chance=0.05)
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
             await db.commit()
-        await message.answer("👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Говно отскочило от фольги прямо тебе в лицо. Теперь ТЫ обмазан говном на 1 час!", parse_mode="HTML")
+            
+        if destroyed:
+            reply_txt = "👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Говно отскочило от фольги прямо тебе в лицо. Теперь ТЫ обмазан говном на 1 час!\nОт едкой субстанции Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            target_txt = "🔥 <b>ШАПОЧКА ИСПОРЧЕНА!</b>\nКакой-то анон кинул в тебя говно! Твоя Шапочка отбила его обратно в метателя, но от едкого кала <b>сгорела дотла</b>!"
+        else:
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Говно отскочило от фольги прямо тебе в лицо. Теперь ТЫ обмазан говном на 1 час!\nФольга жертвы испачкалась (-2ч, осталось {left_h}ч {left_m}мин)."
+            target_txt = f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\nКакой-то анон кинул в тебя говно! Твоя Шапочка отбила его обратно в метателя, но потеряла 2ч прочности (осталось {left_h}ч {left_m}мин)."
+            
+        await message.answer(reply_txt, parse_mode="HTML")
+        try:
+            await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
+        except Exception:
+            pass
         return
 
     t_items["shit_until"] = current_time + 3600
@@ -4475,7 +5593,19 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     register_attacker_effect("shit_gun", user_id, target_id, 3600)
     await message.answer("🐒 <b>ПОПАДАНИЕ!</b>\nТы метко кинул кусок говна! Жертва обмазана на 1 час и получит иконку 💩 во всех своих постах.", parse_mode="HTML")
     try:
-        await message.bot.send_message(target_id, "🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\nКакой-то анон обмазал тебя. У тебя статус 💩 на 1 час.\nЛекарство от статуса: Аминазин в /shop.", parse_mode="HTML")
+        set_combat_cooldown(user_id, 180)
+        kb_rescue = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💊 Смыть говно Аминазином (100 ₪)", callback_data="fast_rescue:clean_pills")],
+            [InlineKeyboardButton(text="👽 Надеть Шапочку из фольги (800 ₪)", callback_data="fast_rescue:buy_tinfoil")]
+        ])
+        await message.bot.send_message(
+            target_id,
+            "🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\n"
+            "Какой-то анон обмазал тебя. У тебя статус 💩 на 1 час.\n\n"
+            "⚡ <b>Быстрое спасение:</b> нажми кнопку ниже, чтобы мгновенно отмыться:",
+            reply_markup=kb_rescue,
+            parse_mode="HTML"
+        )
     except TelegramForbiddenError:
         await purge_users_from_board_ram(board_id, [target_id])
     except TelegramRetryAfter as e:
@@ -4491,9 +5621,22 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
         await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, чтобы подлить слабительное!", parse_mode="HTML")
         return
     import time, json
-    from shared_state import count_active_attacker_effects, register_attacker_effect
+    from shared_state import count_active_attacker_effects, register_attacker_effect, get_combat_cooldown_remaining, set_combat_cooldown
     db = await get_pool()
     current_time = int(time.time())
+
+    cd_rem = get_combat_cooldown_remaining(user_id)
+    if cd_rem > 0:
+        cd_min = cd_rem // 60
+        cd_sec = cd_rem % 60
+        time_str = f"{cd_min}м {cd_sec}с" if cd_min > 0 else f"{cd_sec}с"
+        await message.answer(
+            f"⏳ <b>Перезарядка оружия!</b>\n"
+            f"Ты недавно совершил нападение. Следующая атака доступна через <b>{time_str}</b>.\n"
+            f"<i>(Глобальный кулдаун на оружие: 3 мин)</i>",
+            parse_mode="HTML"
+        )
+        return
 
     active_items = await _get_user_active_items(db, user_id, board_id)
     if not active_items.get("laxative_gun"):
@@ -4527,13 +5670,38 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
         return
         
     t_items = await _get_user_active_items(db, target_id, board_id)
+
+    has_ward6 = (t_items.get("equipped_torso") == "body_straitjacket" and t_items.get("equipped_head") == "hat_tinfoil")
+    if has_ward6:
+        active_items["laxative_gun"] = False
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        await message.answer("🥼 <b>СЕТ «ПАЛАТА №6» СПАС!</b>\nПациент в смирительной рубашке и фольге обладает полным иммунитетом к слабительному (0 дебаффов)!", parse_mode="HTML")
+        return
+
     if t_items.get("tinfoil_hat", 0) > current_time:
         active_items["laxative_gun"] = False
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=4.0, burn_chance=0.10)
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(t_items), target_id, board_id))
             await db.commit()
-        await message.answer("👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Слабительное нейтрализовано фольгой.", parse_mode="HTML")
+            
+        if destroyed:
+            reply_txt = "👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Слабительное нейтрализовано фольгой, но от едкой химии Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            target_txt = "🔥 <b>ШАПОЧКА СГОРЕЛА!</b>\nКакой-то анон пытался подсыпать тебе слабительное! Шапочка спасла твои штаны, но <b>расплавилась дотла</b>!"
+        else:
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Слабительное нейтрализовано фольгой (-4ч, осталось {left_h}ч {left_m}мин)."
+            target_txt = f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\nКакой-то анон пытался подсыпать тебе слабительное! Шапочка спасла твои штаны, но потеряла 4ч прочности (осталось {left_h}ч {left_m}мин)."
+            
+        await message.answer(reply_txt, parse_mode="HTML")
+        try:
+            await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
+        except Exception:
+            pass
         return
 
     active_items["laxative_gun"] = False
@@ -4554,6 +5722,129 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
     register_attacker_effect("laxative_gun", user_id, target_id, 3600)
     await message.answer("🚽 <b>ПРОКЛЯТИЕ СРАБОТАЛО!</b>\nТы подлил слабительное в чай этому анону. У него начался словесный понос: он целый час не сможет писать посты длиннее 50 символов!", parse_mode="HTML")
 
+@dp.message(Command("schizopill", "schizo_pill", "шизотаблетка", "шизопил"))
+async def cmd_schizopill(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост жертвы, чтобы скормить Шизо-Таблетку!", parse_mode="HTML")
+        return
+    import time, json
+    from shared_state import count_active_attacker_effects, register_attacker_effect, get_combat_cooldown_remaining, set_combat_cooldown
+    db = await get_pool()
+    current_time = int(time.time())
+
+    cd_rem = get_combat_cooldown_remaining(user_id)
+    if cd_rem > 0:
+        cd_min = cd_rem // 60
+        cd_sec = cd_rem % 60
+        time_str = f"{cd_min}м {cd_sec}с" if cd_min > 0 else f"{cd_sec}с"
+        await message.answer(
+            f"⏳ <b>Перезарядка оружия!</b>\n"
+            f"Ты недавно совершил нападение. Следующая атака доступна через <b>{time_str}</b>.\n"
+            f"<i>(Глобальный кулдаун на оружие: 3 мин)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("schizopill_gun"):
+        await message.answer("💊 У тебя нет Шизо-Таблетки! Купи её в магазине: /shop")
+        return
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0 or target_id == user_id:
+        await message.answer("⚠️ Не удалось найти цель или ты пытаешься накормить таблетками сам себя.")
+        return
+
+    # Защита от спама: максимум 2 активных проклятия от одного автора
+    if count_active_attacker_effects("schizopill_gun", user_id) >= 2:
+        await message.answer(
+            "💊 <b>Лимит активных шизо-проклятий!</b>\n"
+            "Ты уже накачал таблетками 2 анонов одновременно.\n"
+            "Подожди окончания действия эффекта у жертв, прежде чем скармливать новую.\n"
+            "Шизо-Таблетка осталась в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
+        return
+
+    # Защита от спама: 1 активный дебафф (кроме говна)
+    is_neut, reason = await is_target_neutralized(target_id, board_id, db)
+    if is_neut:
+        await message.answer(
+            f"💊 <b>Защита от спама:</b> У этой цели УЖЕ активен дебафф ({reason})!\n"
+            f"На аноне может быть только 1 активный дебафф (кроме броска говна).\n"
+            f"Шизо-Таблетка осталась в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
+        return
+
+    t_items = await _get_user_active_items(db, target_id, board_id)
+
+    has_wasserman = (t_items.get("equipped_torso") == "body_wasserman" and t_items.get("equipped_face") == "face_wasserman_glasses")
+    has_ward6 = (t_items.get("equipped_torso") == "body_straitjacket" and t_items.get("equipped_head") == "hat_tinfoil")
+    if has_wasserman or has_ward6:
+        active_items["schizopill_gun"] = False
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        await message.answer("🧠 <b>МЕНТАЛЬНЫЙ ИММУНИТЕТ!</b>\nЭрудиция Онотоле / Пациента Палаты №6 нейтрализовала действие Шизо-Таблетки!", parse_mode="HTML")
+        return
+
+    if t_items.get("tinfoil_hat", 0) > current_time:
+        active_items["schizopill_gun"] = False
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=4.0, burn_chance=0.10)
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+
+        if destroyed:
+            reply_txt = "👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Психотропное вещество отражено фольгой, но от перегрузки Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            target_txt = "🔥 <b>ШАПОЧКА СГОРЕЛА!</b>\nКакой-то анон пытался скормить тебе Шизо-Таблетку! Шапочка спасла твой разум, но <b>расплавилась дотла</b>!"
+        else:
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Психотропный эффект отражен фольгой (-4ч, осталось {left_h}ч {left_m}мин)."
+            target_txt = f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\nКакой-то анон пытался скормить тебе Шизо-Таблетку! Шапочка спасла твой разум, но потеряла 4ч прочности (осталось {left_h}ч {left_m}мин)."
+
+        await message.answer(reply_txt, parse_mode="HTML")
+        try:
+            await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
+        except Exception:
+            pass
+        return
+
+    active_items["schizopill_gun"] = False
+    t_items["schizo_pill_until"] = current_time + 3600
+
+    async with db_lock:
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (user_id, board_id, json.dumps(active_items))
+        )
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (target_id, board_id, json.dumps(t_items))
+        )
+        await db.commit()
+    register_attacker_effect("schizopill_gun", user_id, target_id, 3600)
+    await message.answer(
+        "💊 <b>ШИЗО-ТАБЛЕТКА СРАБОТАЛА!</b>\n"
+        "Ты насильно скормил Шизо-Таблетку этому анону. В течение 1 часа все его посты будут переписываться нейросетью в стиле безумного параноика-конспиролога!",
+        parse_mode="HTML"
+    )
+    try:
+        await message.bot.send_message(
+            target_id,
+            "💊 <b>ТЕБЯ НАКАЧАЛИ ШИЗО-ТАБЛЕТКАМИ!</b>\n"
+            "Какой-то анон подмешал тебе мощный психоделик. В течение 1 часа нейросеть будет переписывать все твои посты в бред шизофреника!",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
 @dp.message(Command("partyvan"))
 async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -4563,9 +5854,22 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         return
     import json, time
     from datetime import datetime, timedelta, UTC
-    from shared_state import count_active_attacker_effects, register_attacker_effect
+    from shared_state import count_active_attacker_effects, register_attacker_effect, get_combat_cooldown_remaining, set_combat_cooldown
     db = await get_pool()
     current_time = int(time.time())
+
+    cd_rem = get_combat_cooldown_remaining(user_id)
+    if cd_rem > 0:
+        cd_min = cd_rem // 60
+        cd_sec = cd_rem % 60
+        time_str = f"{cd_min}м {cd_sec}с" if cd_min > 0 else f"{cd_sec}с"
+        await message.answer(
+            f"⏳ <b>Перезарядка оружия!</b>\n"
+            f"Ты недавно совершил нападение. Следующая атака доступна через <b>{time_str}</b>.\n"
+            f"<i>(Глобальный кулдаун на оружие: 3 мин)</i>",
+            parse_mode="HTML"
+        )
+        return
 
     active_items = await _get_user_active_items(db, user_id, board_id)
     if not active_items.get("partyvan_gun"):
@@ -4599,12 +5903,36 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         return
 
     t_items = await _get_user_active_items(db, target_id, board_id)
-    if t_items.get("tinfoil_hat", 0) > current_time:
+
+    has_sneakers = (t_items.get("equipped_feet") == "feet_sneakers")
+    if has_sneakers and random.random() < 0.30:
         active_items["partyvan_gun"] = False
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
             await db.commit()
-        await message.answer("👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! ОМОН не смог запеленговать сигнал из-за фольги.", parse_mode="HTML")
+        await message.answer("👟 <b>ТЯГИ БАРХАТНЫЕ СПАСЛИ!</b>\nЖертва на бархатных подкрадулях ловко ускользнула от наряда ОМОНа через дворы (0 арестов)!", parse_mode="HTML")
+        return
+
+    if t_items.get("tinfoil_hat", 0) > current_time:
+        active_items["partyvan_gun"] = False
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=12.0, burn_chance=0.50)
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+            
+        if destroyed:
+            reply_txt = "👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nОМОН не смог запеленговать сигнал, но от штурма Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>! Защиты больше нет!"
+            target_txt = f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b>\nНа тебя вызвали ОМОН! Шапочка спасла тебя от КПЗ, но <b>расплавилась дотла</b> от штурма спецназа. Ты остался <b>БЕЗ ЗАЩИТЫ</b>!"
+        else:
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! ОМОН не смог запеленговать сигнал. Фольга помялась (-12ч, осталось {left_h}ч {left_m}мин)."
+            target_txt = f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\nНа тебя вызвали ОМОН! Шапочка спасла тебя от КПЗ, но потеряла 12ч прочности (осталось {left_h}ч {left_m}мин)."
+            
+        await message.answer(reply_txt, parse_mode="HTML")
+        try:
+            await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
+        except Exception:
+            pass
         return
     
     active_items["partyvan_gun"] = False
@@ -4617,43 +5945,6 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     await apply_regular_mute(target_id, board_id, 12 * 3600)
     register_attacker_effect("partyvan_gun", user_id, target_id, 12 * 3600)
     await message.bot.send_message(message.chat.id, f"🚔 <b>ВНИМАНИЕ! РАБОТАЕТ ОМОН!</b> 🚔\nПо доносу анона за автором этого поста выехал пативэн! Жертва отправлена в КПЗ (жесткий мут) на 12 часов!\n<i>Выйти раньше можно только дав взятку в /shop.</i>", reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
-
-@dp.message(Command("mega"))
-async def cmd_mega(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
-    user_id = message.from_user.id
-    if not message.reply_to_message:
-        await message.answer("⚠️ <b>Ошибка:</b> Сделай Reply на пост, который хочешь объявить в Мегафон!", parse_mode="HTML")
-        return
-    import json
-    db = await get_pool()
-    active_items = await _get_user_active_items(db, user_id, board_id)
-    if not active_items.get("megaphone_gun"):
-        await message.answer("📣 У тебя нет Мегафона! Купи его в /shop")
-        return
-
-    async with storage_lock:
-        key = (message.chat.id, message.reply_to_message.message_id)
-        pnum = message_to_post.get(key)
-        
-    if not pnum:
-        await message.answer("⚠️ Не удалось найти этот пост в памяти доски.")
-        return
-        
-    # Идемпотентность: пост уже закреплен
-    if board_data[board_id].get('active_pin') == pnum:
-        await message.answer("📣 Этот пост И ТАК уже висит в закрепе! Мегафон остался у тебя.")
-        return
-        
-    active_items["megaphone_gun"] = False
-    async with db_lock:
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
-        await db.commit()
-        
-    board_data[board_id]['active_pin'] = pnum
-    await update_board_settings(board_id, {'active_pin': pnum})
-    
-    await message.bot.send_message(message.chat.id, f"📣 <b>Внимание на всю палату!</b>\nАнон использовал Мегафон! Пост #{pnum} глобально закреплен для всех читателей борды!", parse_mode="HTML")
 
 
 @dataclass
@@ -5195,6 +6486,97 @@ async def cb_top_switch(callback: types.CallbackQuery, board_id: str | None):
         await callback.answer("⚠️ Ошибка переключения топа.")
 
 
+async def _build_work_card(user_id: int, board_id: str):
+    db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
+    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+        row = await c.fetchone()
+    ai_str = row[0] if row and len(row) > 0 and row[0] else "{}"
+    try:
+        items = json.loads(ai_str)
+    except Exception:
+        items = {}
+
+    work_timers = items.get("work_cooldowns", {})
+    shifts = items.get("work_shifts", 0)
+    now = int(time.time())
+
+    if shifts >= 100:
+        rank_name = "👑 Хозяин Жизни"
+    elif shifts >= 75:
+        rank_name = "💳 Опытный Темщик"
+    elif shifts >= 50:
+        rank_name = "💻 Мидл-Сыч на Галере"
+    elif shifts >= 30:
+        rank_name = "🏭 Рабочий Класс"
+    elif shifts >= 15:
+        rank_name = "🕵️ Теневой Агент"
+    elif shifts >= 7:
+        rank_name = "🚴 Быстрый Бегун"
+    elif shifts >= 3:
+        rank_name = "⌨️ Оператор Капчи"
+    else:
+        rank_name = "🍾 Вольный Сборщик (Новичок)"
+
+    next_unlock_job = None
+    for j_id, j_data in WORK_VACANCIES.items():
+        if j_data.get("required_shifts", 0) > shifts:
+            next_unlock_job = j_data
+            break
+
+    lines = [
+        f"💼 <b>БИРЖА ТРУДА /{board_id}/ • КАРЬЕРА АНОНА</b>",
+        f"<code>{'—'*28}</code>",
+        f"💵 <b>Баланс:</b> <code>{int(balance):,} ₪</code>",
+        f"📈 <b>Твой стаж:</b> <code>{shifts} смен</code> | <b>Ранг:</b> <b>{rank_name}</b>",
+    ]
+
+    if next_unlock_job:
+        shifts_needed = next_unlock_job["required_shifts"] - shifts
+        lines.append(f"🎯 <b>След. цель:</b> {next_unlock_job['title']} <i>(нужно ещё {shifts_needed} смен)</i>")
+    else:
+        lines.append("🏆 <b>Все вершины карьеры покорены! Ты Хозяин Жизни.</b>")
+
+    lines.append(f"<code>{'—'*28}</code>")
+    lines.append("ℹ️ <i>Каждая смена даёт +1 к стажу. Выполняй доступные работы (бутылки, листовки, дворник), чтобы открыть жирные вакансии!</i>\n")
+
+    kb_rows = []
+    for job_id, job in WORK_VACANCIES.items():
+        req_shifts = job.get("required_shifts", 0)
+        last_time = work_timers.get(job_id, 0)
+        passed = now - last_time
+        cd = job["cooldown_sec"]
+
+        if shifts < req_shifts:
+            status = f"🔒 Закрыто (со стажа {req_shifts} смен)"
+            btn_text = f"🔒 {job['title']} (с {req_shifts} смен)"
+        elif passed < cd:
+            left_min = ((cd - passed) // 60) + 1
+            status = f"⏳ {left_min} мин"
+            btn_text = f"⏳ {job['title']} ({left_min} мин)"
+        else:
+            status = "🟢 Доступно"
+            btn_text = f"🟢 {job['title']} (+{job['reward_range'][0]}–{job['reward_range'][1]} ₪)"
+
+        tier_lbl = job.get("tier", "")
+        lines.append(f"<b>{job['title']}</b> <i>({tier_lbl})</i> — {status}")
+        lines.append(f"└ <i>{job['desc']}</i>")
+        kb_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"work_do_{job_id}")])
+
+    lines.append(f"\n<code>{'—'*28}</code>")
+    lines.append("💡 <i>Шанс сорвать ДЖЕКПОТ (x3) и выбить боевые артефакты инвентаря!</i>")
+
+    kb_rows.append([
+        InlineKeyboardButton(text="🛒 Черный рынок", callback_data="prof_shop"),
+        InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet")
+    ])
+    kb_rows.append([
+        InlineKeyboardButton(text="📊 Прайс-лист & Курсы", callback_data="scam_rates"),
+        InlineKeyboardButton(text="🔄 Обновить биржу", callback_data="work_refresh")
+    ])
+
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # /duel — вызов на дуэль (PvP ставка)
 # active_duels: {challenger_id: {board_id, amount, ts, target_id or None}}
@@ -5707,64 +7089,133 @@ async def cb_support_prank(callback: types.CallbackQuery):
         await callback.message.answer(SUPPORT_RESPONSES['text'], parse_mode="HTML")
     await callback.answer()
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 🚨 FAST RESCUE: Мгновенное спасение и самооборона из уведомлений
+# ══════════════════════════════════════════════════════════════════════════════
+@dp.callback_query(F.data.startswith("fast_rescue:"))
+async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    user_id = callback.from_user.id
+    action = callback.data.split(":")[1]
+    db = await get_pool()
+    now = int(time.time())
+
+    async with db_lock:
+        balance = await get_user_global_balance(db, user_id)
+        user_items = await _get_user_active_items(db, user_id, board_id)
+
+        if action == "clean_pills":
+            cost = get_current_item_price('pills')
+            if balance < cost:
+                await callback.answer(f"❌ Недостаточно шекелей! Нужно {cost} ₪, у тебя {int(balance)} ₪. Напиши /work.", show_alert=True)
+                return
+            await deduct_user_global_balance(db, user_id, board_id, cost)
+            user_items["shit_until"] = 0
+            user_items["cursed_until"] = 0
+            user_items["schizo_pill_until"] = 0
+            await db.execute("UPDATE Users SET cursed_until = 0, active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(user_items), user_id, board_id))
+            await db.commit()
+            await callback.answer("💊 Аминазин принят! Все дебаффы (говно, понос, шиза) мгновенно смыты.", show_alert=True)
+            try:
+                await callback.message.edit_text(
+                    f"✨ <b>ТЫ ПОЛНОСТЬЮ ОЧИЩЕН!</b>\n\n"
+                    f"💊 Ты принял Аминазин за {cost} ₪. Все дебаффы и проклятия мгновенно сняты.\n"
+                    f"Для защиты от будущих атак надень Шапочку из фольги в <b>/shop</b>.",
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
+            except Exception: pass
+
+        elif action == "buy_bribe":
+            cost = get_current_item_price('bribe')
+            if balance < cost:
+                await callback.answer(f"❌ Недостаточно шекелей на взятку! Нужно {cost} ₪, у тебя {int(balance)} ₪. Напиши /work.", show_alert=True)
+                return
+            await deduct_user_global_balance(db, user_id, board_id, cost)
+            await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            await db.commit()
+            b_data = board_data.get(board_id, {})
+            b_data.get('mutes', {}).pop(user_id, None)
+            b_data.get('shadow_mutes', {}).pop(user_id, None)
+            await callback.answer("📜 Взятка передана! Ты досрочно освобожден из мута/КПЗ.", show_alert=True)
+            try:
+                await callback.message.edit_text(
+                    f"🕊️ <b>ТЫ НА СВОБОДЕ!</b>\n\n"
+                    f"📜 Взятка в {cost} ₪ передана модератору. Мут и арест сняты досрочно. Ты снова можешь писать на доску!",
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
+            except Exception: pass
+
+        elif action == "buy_tinfoil":
+            cost = get_current_item_price('tinfoil')
+            if balance < cost:
+                await callback.answer(f"❌ Недостаточно шекелей на Шапочку! Нужно {cost} ₪, у тебя {int(balance)} ₪.", show_alert=True)
+                return
+            await deduct_user_global_balance(db, user_id, board_id, cost)
+            user_items["tinfoil_hat"] = now + 6 * 3600
+            user_items["tinfoil_until"] = now + 6 * 3600
+            user_items["equipped_head"] = "hat_tinfoil"
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(user_items), user_id, board_id))
+            await db.commit()
+            await callback.answer("👽 Шапочка из фольги надета на 6 часов!", show_alert=True)
+            try:
+                await callback.message.edit_text(
+                    f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ АКТИВИРОВАНА!</b>\n\n"
+                    f"Ты в безопасности на 6 часов за {cost} ₪. Будущие боевые атаки будут отражаться обратно в нападавших!",
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
+            except Exception: pass
+
+        elif action == "buy_shield":
+            cost = get_current_item_price('shield')
+            if balance < cost:
+                await callback.answer(f"❌ Недостаточно шекелей на Зеркальный Щит! Нужно {cost} ₪, у тебя {int(balance)} ₪.", show_alert=True)
+                return
+            await deduct_user_global_balance(db, user_id, board_id, cost)
+            user_items["reflect_shield_until"] = now + 6 * 3600
+            user_items["shield_until"] = now + 6 * 3600
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(user_items), user_id, board_id))
+            await db.commit()
+            await callback.answer("🛡️ Зеркальный Щит активирован на 6 часов!", show_alert=True)
+            try:
+                await callback.message.edit_text(
+                    f"🛡️ <b>ЗЕРКАЛЬНЫЙ ЩИТ АКТИВИРОВАН!</b>\n\n"
+                    f"Следующий выстрел из Мут-Гана полетит обратно в стрелка! Куплен за {cost} ₪.",
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
+            except Exception: pass
+
+        elif action == "buy_knife":
+            cost = get_current_item_price('knife')
+            if balance < cost:
+                await callback.answer(f"❌ Недостаточно шекелей на Заточку! Нужно {cost} ₪, у тебя {int(balance)} ₪.", show_alert=True)
+                return
+            await deduct_user_global_balance(db, user_id, board_id, cost)
+            user_items["knife_gun"] = True
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(user_items), user_id, board_id))
+            await db.commit()
+            await callback.answer("🔪 Заточка в кармане! Сделай Reply на обидчика с /rob.", show_alert=True)
+            try:
+                await callback.message.edit_text(
+                    f"🔪 <b>ЗАТОЧКА ПРИОБРЕТЕНА!</b>\n\n"
+                    f"Заточка приобретена за {cost} ₪. Сделай Reply на пост обидчика и напиши <code>/rob</code> для мести!",
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
+            except Exception: pass
+
 # ══════════════════════════════════════════════════════════════════════════════
 # /work — Биржа труда и заработок шекелей (common.work_engine)
 # ══════════════════════════════════════════════════════════════════════════════
 from common.work_engine import WORK_VACANCIES, execute_job_action
-
-async def _build_work_card(user_id: int, board_id: str):
-    db = await get_pool()
-    balance = await get_user_global_balance(db, user_id)
-    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-        row = await c.fetchone()
-    ai_str = row[0] if row and len(row) > 0 and row[0] else "{}"
-    try:
-        items = json.loads(ai_str)
-    except Exception:
-        items = {}
-
-    work_timers = items.get("work_cooldowns", {})
-    now = int(time.time())
-
-    lines = [
-        f"💼 <b>БИРЖА ТРУДА /{board_id}/ • КАРЬЕРНАЯ ЛЕСТНИЦА</b>",
-        f"<code>{'—'*28}</code>",
-        f"💵 <b>Твой баланс:</b> <code>{int(balance):,} ₪</code>",
-        "📍 <i>Выбирай профессию, поднимай шекели и лутай редкие предметы:</i>\n"
-    ]
-
-    kb_rows = []
-    for job_id, job in WORK_VACANCIES.items():
-        last_time = work_timers.get(job_id, 0)
-        passed = now - last_time
-        cd = job["cooldown_sec"]
-        
-        if passed < cd:
-            left_min = ((cd - passed) // 60) + 1
-            status = f"⏳ {left_min} мин"
-            btn_text = f"{job['title']} ({status})"
-        else:
-            status = "🟢 Доступно"
-            btn_text = f"{job['title']} (+{job['reward_range'][0]}–{job['reward_range'][1]} ₪)"
-
-        tier_lbl = job.get("tier", "")
-        lines.append(f"<b>{job['title']}</b> <i>({tier_lbl})</i> — {status}")
-        lines.append(f"└ <i>{job['desc']}</i>")
-        kb_rows.append([InlineKeyboardButton(text=btn_text, callback_data=f"work_do_{job_id}")])
-
-    lines.append(f"\n<code>{'—'*28}</code>")
-    lines.append("💡 <i>Шанс сорвать ДЖЕКПОТ (x3) и выбить предметы инвентаря в /shop.</i>")
-
-    kb_rows.append([
-        InlineKeyboardButton(text="🛒 Черный рынок", callback_data="prof_shop"),
-        InlineKeyboardButton(text="💰 Кошелек", callback_data="prof_wallet")
-    ])
-    kb_rows.append([
-        InlineKeyboardButton(text="📊 Прайс-лист & Курсы", callback_data="scam_rates"),
-        InlineKeyboardButton(text="🔄 Обновить биржу", callback_data="work_refresh")
-    ])
-
-    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
 @dp.message(Command("work", "биржа", "работа", "job", "заработок", "earn", "bomj", "economy"))
 async def cmd_work(message: types.Message, board_id: str | None, stream: str = 'ru'):
@@ -5816,25 +7267,40 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
                     "shit": "🐒 Кусок говна",
                     "pills": "💊 Аминазин",
                     "knife": "🔪 Заточка",
+                    "pepperspray": "🧯 Перцовый баллончик",
                     "schizopill": "💊 Шизо-Таблетка",
                     "tinfoil": "👽 Шапочка из фольги",
                     "shield": "🛡️ Зеркальный Щит",
                     "bribe": "📜 Взятка",
-                    "partyvan": "🚔 Пативэн",
-                    "megaphone": "📣 Мегафон"
+                    "partyvan": "🚔 Пативэн-Ган",
+                    "lootbox_trash": "🗑️ Мусорный Лутбокс",
+                    "lootbox_gold": "👑 Золотой Сейф",
                 }
+                d_name = item_names.get(dropped_item, dropped_item)
                 if dropped_item in ["tinfoil", "shield"]:
                     items[f"{dropped_item}_until"] = int(time.time()) + 21600
+                    if dropped_item == "tinfoil": items["tinfoil_hat"] = int(time.time()) + 21600
+                elif dropped_item.startswith("lootbox_"):
+                    # Give instant surprise drop
+                    if dropped_item == "lootbox_trash":
+                        _, lb_title, _, lb_payload, lb_cash = lootbox_engine.roll_trash_lootbox()
+                    else:
+                        _, lb_title, _, lb_payload, lb_cash = lootbox_engine.roll_gold_safe()
+                    if lb_cash > 0: await add_user_global_balance(db, user_id, board_id, lb_cash)
+                    if lb_payload: items.update(lb_payload)
+                    drop_note = f"\n📦 НАЙДЕН КЕЙС ({d_name})! Открыт: {lb_title} (+{lb_cash} ₪)"
                 else:
                     items[f"{dropped_item}_gun"] = True
-                drop_note = f"\n🎁 <b>БОНУС-ДРОП:</b> В карман упал артефакт <b>{item_names.get(dropped_item, dropped_item)}</b>!"
+                
+                if not drop_note:
+                    drop_note = f"\n🎁 НАХОДКА В СМЕНУ: {d_name} упал в карман!"
 
             await db.execute(
                 "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                 (json.dumps(items), user_id, board_id)
             )
             await db.commit()
-            ans_text = outcome_msg + (f" (Дроп: {dropped_item})" if dropped_item else "")
+            ans_text = outcome_msg + (drop_note if dropped_item else "")
         else:
             # Failure with penalty
             await deduct_user_global_balance(db, user_id, board_id, amount_change)
@@ -6041,30 +7507,19 @@ import casino_engine
 import drop_engine
 
 @dp.message(Command("drop", "выбросить", "дроп", "чек", "throw", "giveaway"))
-async def cmd_money_drop(message: types.Message, board_id: str | None, stream: str = 'ru'):
+async def cmd_drop(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """Команда /drop <сумма> — выбрасывает шекели в тред для быстрейшего клика."""
     if not board_id: return
     user_id = message.from_user.id
-    parts = (message.text or "").strip().split()
     db = await get_pool()
+    balance = await get_user_global_balance(db, user_id)
 
-    async with db_lock:
-        balance = await get_user_global_balance(db, user_id)
-
-    if len(parts) > 1:
-        raw_arg = parts[1].lower()
-        if raw_arg in ["all", "всё", "все", "вабанк"]:
-            amount = int(balance)
-        elif raw_arg in ["half", "половина", "пол"]:
-            amount = int(balance // 2)
-        elif raw_arg in ["third", "треть"]:
-            amount = int(balance // 3)
-        elif raw_arg.isdigit():
-            amount = int(raw_arg)
-        else:
-            amount = 0
-
+    # Check if amount was passed directly in command arguments
+    parts = message.text.split()
+    if len(parts) > 1 and parts[1].isdigit():
+        amount = int(parts[1])
         if amount < 10:
-            await message.reply("❌ Минимальная сумма для дропа — 10 ₪. Укажи корректную сумму: <code>/drop 500</code>.", parse_mode="HTML")
+            await message.reply("❌ Минимальная сумма для дропа — 10 ₪.")
             return
 
         donor_name = f"Анон [{get_anon_id(user_id)}]"
@@ -6088,7 +7543,7 @@ async def cmd_money_drop(message: types.Message, board_id: str | None, stream: s
             f"⏳ <i>Дроп сгорит и вернется анону через 10 минут, если никто не заберет.</i>"
         )
         from banner_manager import send_banner_message
-        await send_banner_message(
+        donor_msg = await send_banner_message(
             bot=message.bot,
             chat_id=message.chat.id,
             caption=caption,
@@ -6096,7 +7551,12 @@ async def cmd_money_drop(message: types.Message, board_id: str | None, stream: s
             category="economy",
             parse_mode="HTML"
         )
-        spawn_task(_broadcast_money_drop(message.bot, board_id, message.chat.id, caption, kb))
+        photo_payload = None
+        if donor_msg and getattr(donor_msg, 'photo', None):
+            photo_payload = donor_msg.photo[-1].file_id
+            drop_engine.register_drop_message(drop_rec.drop_id, message.chat.id, donor_msg.message_id)
+
+        spawn_task(_broadcast_money_drop(message.bot, board_id, drop_rec.drop_id, message.chat.id, photo_payload, caption, kb))
         return
 
     # Interactive selector if no argument given
@@ -6117,20 +7577,68 @@ async def cmd_money_drop(message: types.Message, board_id: str | None, stream: s
         parse_mode="HTML"
     )
 
-async def _broadcast_money_drop(bot, board_id: str, exclude_chat_id: int, caption: str, kb):
-    """Рассылает сообщение о дропе шекелей всем активным анонам на доске."""
+async def _broadcast_money_drop(bot, board_id: str, drop_id: str, exclude_chat_id: int, photo_payload, caption: str, kb):
+    """Рассылает сообщение о дропе шекелей всем активным анонам на доске с аниме-баннером."""
     active_users = list(board_data.get(board_id, {}).get('users', {}).get('active', []))
     for target_uid in active_users:
         if target_uid != exclude_chat_id:
             try:
-                await bot.send_message(
-                    chat_id=target_uid,
-                    text=caption,
-                    reply_markup=kb,
-                    parse_mode="HTML"
-                )
+                if photo_payload:
+                    sent = await bot.send_photo(
+                        chat_id=target_uid,
+                        photo=photo_payload,
+                        caption=caption,
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
+                else:
+                    sent = await bot.send_message(
+                        chat_id=target_uid,
+                        text=caption,
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
+                if sent:
+                    drop_engine.register_drop_message(drop_id, target_uid, sent.message_id)
+            except Exception:
+                try:
+                    sent = await bot.send_message(
+                        chat_id=target_uid,
+                        text=caption,
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
+                    if sent:
+                        drop_engine.register_drop_message(drop_id, target_uid, sent.message_id)
+                except Exception:
+                    pass
+            await asyncio.sleep(0.04)
+
+async def _update_all_drop_messages(bot, drop_id: str, new_text: str, exclude_chat_id: int):
+    """Обновляет все копии сообщения о дропе у всех анонов, убирая кнопку и показывая победителя."""
+    msg_copies = drop_engine.get_drop_messages(drop_id)
+    for chat_id, message_id in msg_copies:
+        if chat_id != exclude_chat_id:
+            try:
+                try:
+                    await bot.edit_message_caption(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        caption=new_text,
+                        parse_mode="HTML",
+                        reply_markup=None
+                    )
+                except Exception:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=new_text,
+                        parse_mode="HTML",
+                        reply_markup=None
+                    )
             except Exception:
                 pass
+            await asyncio.sleep(0.04)
 
 @dp.callback_query(F.data.startswith("drop:"))
 async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
@@ -6155,13 +7663,14 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
             await callback.answer(msg, show_alert=True)
             return
 
-        await callback.answer(f"🎉 Ты успел забрать {drop_rec.amount} ₪!", show_alert=True)
+        await callback.answer(f"🎉 Ты успел забрать {int(drop_rec.amount)} ₪!", show_alert=True)
         new_text = (
             f"💸 <b>ДРОП ШЕКЕЛЕЙ ПЕРЕХВАЧЕН!</b>\n\n"
-            f"👤 Создатель: <b>{drop_rec.donor_name}</b> (Сумма: <b>{drop_rec.amount} ₪</b>)\n"
-            f"🏆 Победитель: <b>{claimer_name}</b> оказался самым быстрым и забрал всё!\n\n"
+            f"👤 Создатель: <b>{drop_rec.donor_name}</b> (Сумма: <b>{int(drop_rec.amount)} ₪</b>)\n"
+            f"🏆 Победитель: <b>{claimer_name}</b> оказался самым быстрым и забрал весь куш!\n\n"
             f"⚡ <i>Дроп закрыт.</i>"
         )
+        # 1. Мгновенно обновляем у победителя
         try:
             if callback.message.caption:
                 await callback.message.edit_caption(caption=new_text, parse_mode="HTML", reply_markup=None)
@@ -6169,6 +7678,20 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
                 await callback.message.edit_text(text=new_text, parse_mode="HTML", reply_markup=None)
         except Exception:
             pass
+
+        # 2. Оповещаем автора в личку
+        if drop_rec.donor_id and drop_rec.donor_id != user_id:
+            try:
+                await callback.bot.send_message(
+                    chat_id=drop_rec.donor_id,
+                    text=f"💸 <b>ТВОЙ ДРОП ЗАБРАЛИ!</b>\n\nАнон <b>{claimer_name}</b> только что перехватил твой дроп на <b>{int(drop_rec.amount)} ₪</b>!",
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+        # 3. Фоново обновляем ВСЕ отправленные копии у автора и остальных анонов
+        spawn_task(_update_all_drop_messages(callback.bot, drop_id, new_text, exclude_chat_id=user_id))
         return
 
     elif action == "create":
@@ -6199,8 +7722,13 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
             f"⚡ Кто первый нажмет на кнопку ниже — забирает весь куш себе!\n\n"
             f"⏳ <i>Дроп сгорит и вернется анону через 10 минут, если никто не заберет.</i>"
         )
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+
         from banner_manager import send_banner_message
-        await send_banner_message(
+        donor_msg = await send_banner_message(
             bot=callback.bot,
             chat_id=callback.message.chat.id,
             caption=caption,
@@ -6208,7 +7736,12 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
             category="economy",
             parse_mode="HTML"
         )
-        spawn_task(_broadcast_money_drop(callback.bot, board_id, callback.message.chat.id, caption, kb))
+        photo_payload = None
+        if donor_msg and getattr(donor_msg, 'photo', None):
+            photo_payload = donor_msg.photo[-1].file_id
+            drop_engine.register_drop_message(drop_rec.drop_id, callback.message.chat.id, donor_msg.message_id)
+
+        spawn_task(_broadcast_money_drop(callback.bot, board_id, drop_rec.drop_id, callback.message.chat.id, photo_payload, caption, kb))
         return
 
     elif action == "cancel_menu":
@@ -6261,8 +7794,45 @@ async def cmd_slots(message: types.Message, board_id: str | None, stream: str = 
     parts = (message.text or "").strip().split()
     bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
     bet = max(10, min(1000000, bet))
+    await _show_slots_lobby(message.bot, message.chat.id, user_id, board_id, bet)
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
-    await _execute_slots_spin(message.bot, message.chat.id, user_id, board_id, bet)
+
+async def _show_slots_lobby(bot, chat_id: int, user_id: int, board_id: str, bet: int = 100, message_to_edit=None):
+    db = await get_pool()
+    async with db_lock:
+        balance = await get_user_global_balance(db, user_id)
+
+    kb = casino_engine.get_slots_lobby_keyboard(bet)
+    caption = (
+        f"🎰 <b>СЛОТЫ 777: ИГРОВОЙ АВТОМАТ</b>\n\n"
+        f"💳 Твой баланс: <code>{int(balance)} ₪</code>\n"
+        f"💰 Выбранная ставка: <code>{bet} ₪</code>\n\n"
+        f"📊 <b>Таблица выплат:</b>\n"
+        f"• 👑👑👑 <b>Три Короны</b> — x50.0 (🔥 ДЖЕКПОТ!)\n"
+        f"• 💎💎💎 <b>Три Бриллианта</b> — x15.0\n"
+        f"• 🍒🍒🍒 <b>Три Вишенки</b> — x5.0\n"
+        f"• 🍋🍋🍋 <b>Три Лимона</b> — x3.0\n"
+        f"• 🍀🍀🍀 <b>Три Клевера</b> — x2.0\n"
+        f"• ⭐ <b>Любая пара</b> — x1.5\n"
+        f"• 💀💀💀 <b>Три Черепа</b> — Сгорание ставки\n\n"
+        f"👇 Выбери размер ставки и нажми «Крутить барабан»:"
+    )
+    if message_to_edit:
+        try:
+            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+            return
+        except Exception:
+            try:
+                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                pass
+    from banner_manager import send_banner_message
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
 
 
 async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, bet: int):
@@ -6285,6 +7855,22 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
         win_amt = int(bet * mult)
         net_change = win_amt - bet
 
+        lootbox_bonus_note = ""
+        if mult >= 50.0:
+            tier, lb_title, _, lb_payload, lb_cash = lootbox_engine.roll_gold_safe()
+            user_items = await _get_user_active_items(db, user_id, board_id)
+            if lb_payload: user_items.update(lb_payload)
+            if lb_cash > 0: await add_user_global_balance(db, user_id, board_id, lb_cash)
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(user_items), user_id, board_id))
+            lootbox_bonus_note = f"\n👑 <b>БОНУС СЛОТОВ:</b> Открыт Золотой Сейф: <b>{lb_title}</b> (+{lb_cash} ₪)!"
+        elif mult >= 15.0:
+            tier, lb_title, _, lb_payload, lb_cash = lootbox_engine.roll_trash_lootbox()
+            user_items = await _get_user_active_items(db, user_id, board_id)
+            if lb_payload: user_items.update(lb_payload)
+            if lb_cash > 0: await add_user_global_balance(db, user_id, board_id, lb_cash)
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(user_items), user_id, board_id))
+            lootbox_bonus_note = f"\n📦 <b>БОНУС СЛОТОВ:</b> Открыт Мусорный Лутбокс: <b>{lb_title}</b> (+{lb_cash} ₪)!"
+
         if net_change >= 0:
             new_balance = await add_user_global_balance(db, user_id, board_id, net_change)
         else:
@@ -6293,7 +7879,7 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
 
     kb = casino_engine.get_slots_keyboard(bet)
     reel_display = f"║  {reels[0]}  │  {reels[1]}  │  {reels[2]}  ║"
-    
+
     caption = (
         f"🎰 <b>СЛОТЫ 777: КАЗИНО ТГАЧА</b>\n\n"
         f"╔═════════════╗\n"
@@ -6302,6 +7888,7 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
         f"<b>{title}</b>\n"
         f"• Ставка: <code>{bet} ₪</code> | Выплата: <b>+{win_amt} ₪</b>\n"
         f"💳 Баланс: <code>{int(new_balance)} ₪</code>"
+        f"{lootbox_bonus_note}"
     )
     from banner_manager import send_banner_message
     await send_banner_message(
@@ -6319,21 +7906,43 @@ async def cmd_coinflip(message: types.Message, board_id: str | None, stream: str
     if not board_id: return
     user_id = message.from_user.id
     parts = (message.text or "").strip().split()
-    bet = 100
-    chosen_side = "heads"
-    
-    if len(parts) > 1:
-        if parts[1].isdigit():
-            bet = int(parts[1])
-            if len(parts) > 2:
-                chosen_side = parts[2].lower()
-        else:
-            chosen_side = parts[1].lower()
-            if len(parts) > 2 and parts[2].isdigit():
-                bet = int(parts[2])
-
+    bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
     bet = max(10, min(1000000, bet))
-    await _execute_coinflip(message.bot, message.chat.id, user_id, board_id, bet, chosen_side)
+    await _show_coinflip_lobby(message.bot, message.chat.id, user_id, board_id, bet)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+async def _show_coinflip_lobby(bot, chat_id: int, user_id: int, board_id: str, bet: int = 100, message_to_edit=None):
+    db = await get_pool()
+    async with db_lock:
+        balance = await get_user_global_balance(db, user_id)
+
+    kb = casino_engine.get_coinflip_lobby_keyboard(bet)
+    caption = (
+        f"🪙 <b>МОНЕТКА 50/50: ОРЕЛ ИЛИ РЕШКА</b>\n\n"
+        f"💳 Твой баланс: <code>{int(balance)} ₪</code>\n"
+        f"💰 Выбранная ставка: <code>{bet} ₪</code>\n\n"
+        f"🎯 <b>Правила:</b>\n"
+        f"• Шанс победы: <b>50%</b>\n"
+        f"• Коэффициент выигрыша: <b>x1.95</b>\n"
+        f"• Угадай, какой стороной выпадет шекель — 🦅 Орёл или 👑 Решка!\n\n"
+        f"👇 Выбери ставку и сторону для броска:"
+    )
+    if message_to_edit:
+        try:
+            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+            return
+        except Exception:
+            try:
+                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                pass
+    from banner_manager import send_banner_message
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
 
 
 async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str):
@@ -6346,7 +7955,7 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
             await send_banner_message(
                 bot=bot,
                 chat_id=chat_id,
-                caption=f"❌ <b>Недостаточно шекелей для броска монетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.",
+                caption=f"❌ <b>Недостаточно средств для броска монетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.",
                 category="roulette",
                 parse_mode="HTML"
             )
@@ -6363,12 +7972,12 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
         await db.commit()
 
     kb = casino_engine.get_coinflip_keyboard(bet)
-    chosen_label = "🦅 ОРЕЛ" if chosen_side in ["heads", "орел", "орёл", "eagle", "h"] else "👑 РЕШКА"
-    
+    chosen_label = "🦅 ОРЕЛ" if chosen_side in ["heads", "орел", "орёл"] else "👑 РЕШКА"
+
     caption = (
-        f"🪙 <b>БРОСОК МОНЕТКИ: 50 / 50</b>\n\n"
-        f"Твой выбор: <b>{chosen_label}</b>\n"
-        f"Результат броска: <b>{side_ru}</b>\n\n"
+        f"🪙 <b>МОНЕТКА: КАЗИНО ТГАЧА</b>\n\n"
+        f"• Твой выбор: <b>{chosen_label}</b>\n"
+        f"• Результат: <b>{side_ru}</b>\n\n"
         f"<b>{title}</b>\n"
         f"• Ставка: <code>{bet} ₪</code> | Выплата: <b>+{win_amt} ₪</b>\n"
         f"💳 Баланс: <code>{int(new_balance)} ₪</code>"
@@ -6391,8 +8000,43 @@ async def cmd_blackjack(message: types.Message, board_id: str | None, stream: st
     parts = (message.text or "").strip().split()
     bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
     bet = max(10, min(1000000, bet))
+    await _show_blackjack_lobby(message.bot, message.chat.id, user_id, board_id, bet)
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
-    await _start_blackjack_game(message.bot, message.chat.id, user_id, board_id, bet)
+
+async def _show_blackjack_lobby(bot, chat_id: int, user_id: int, board_id: str, bet: int = 100, message_to_edit=None):
+    db = await get_pool()
+    async with db_lock:
+        balance = await get_user_global_balance(db, user_id)
+
+    kb = casino_engine.get_blackjack_lobby_keyboard(bet)
+    caption = (
+        f"🃏 <b>БЛЭКДЖЕК 21: СТОЛ КАРТОЧНОГО КЛУБА</b>\n\n"
+        f"💳 Твой баланс: <code>{int(balance)} ₪</code>\n"
+        f"💰 Выбранная ставка: <code>{bet} ₪</code>\n\n"
+        f"🎯 <b>Правила:</b>\n"
+        f"• Цель: набрать больше очков, чем дилер, не превысив 21.\n"
+        f"• Карты 2–10 = по номиналу, J/Q/K = 10, Туз = 11 или 1.\n"
+        f"• Натуральный Блэкджек (21 с первых 2 карт) платит <b>x2.5 (3:2)</b>!\n"
+        f"• Обычная победа платит <b>x2.0</b>. Дилер добирает до 17.\n"
+        f"• Доступно удвоение (Дабл x2) на первом ходе.\n\n"
+        f"👇 Выбери ставку и нажми «Раздать карты»:"
+    )
+    if message_to_edit:
+        try:
+            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+            return
+        except Exception:
+            try:
+                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                pass
+    from banner_manager import send_banner_message
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
 
 
 async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, bet: int):
@@ -6417,12 +8061,12 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
     dealer_hand = [deck.pop(), deck.pop()]
 
     player_score = casino_engine.calculate_hand(player_hand)
-    
+
     # Check natural 21
     if player_score == 21:
         dealer_score = casino_engine.calculate_hand(dealer_hand)
         payout = int(bet * 2.5) if dealer_score != 21 else bet
-        
+
         async with db_lock:
             new_bal = await add_user_global_balance(db, user_id, board_id, payout)
             await db.commit()
@@ -6469,8 +8113,43 @@ async def cmd_russian_roulette(message: types.Message, board_id: str | None, str
     parts = (message.text or "").strip().split()
     bet = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 100
     bet = max(10, min(1000000, bet))
+    await _show_roulette_lobby(message.bot, message.chat.id, user_id, board_id, bet)
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
-    await _execute_russian_roulette_shot(message.bot, message.chat.id, user_id, board_id, bet)
+
+async def _show_roulette_lobby(bot, chat_id: int, user_id: int, board_id: str, bet: int = 100, message_to_edit=None):
+    db = await get_pool()
+    async with db_lock:
+        balance = await get_user_global_balance(db, user_id)
+
+    kb = casino_engine.get_roulette_lobby_keyboard(bet)
+    caption = (
+        f"💀 <b>РУССКАЯ РУЛЕТКА: РЕВОЛЬВЕРНЫЙ СТОЛ</b>\n\n"
+        f"💳 Твой баланс: <code>{int(balance)} ₪</code>\n"
+        f"💰 Начальная ставка: <code>{bet} ₪</code>\n\n"
+        f"🎯 <b>Правила:</b>\n"
+        f"• Барабан на 6 камор, 1 боевой патрон (16.67% летальность).\n"
+        f"• Каждый успешный спуск увеличивает твой куш:\n"
+        f"  1 выстрел: <b>x1.25</b> | 2 выстрела: <b>x1.50</b>\n"
+        f"  3 выстрела: <b>x2.00</b> | 4 выстрела: <b>x3.00</b> | 5 выстрелов: <b>x5.00+</b>\n"
+        f"• В любой момент после выстрела можно нажать <b>Забрать куш</b>.\n\n"
+        f"👇 Выбери ставку и нажми «Взвести курок»:"
+    )
+    if message_to_edit:
+        try:
+            await message_to_edit.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+            return
+        except Exception:
+            try:
+                await message_to_edit.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
+                return
+            except Exception:
+                pass
+    from banner_manager import send_banner_message
+    await send_banner_message(bot=bot, chat_id=chat_id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
 
 
 async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: str, bet: int):
@@ -6545,13 +8224,13 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
     elif section == "menu":
         game = parts[2] if len(parts) > 2 else ""
         if game == "slots":
-            await _execute_slots_spin(callback.bot, callback.message.chat.id, user_id, board_id, 100)
+            await _show_slots_lobby(callback.bot, callback.message.chat.id, user_id, board_id, 100, message_to_edit=callback.message)
         elif game == "coin":
-            await _execute_coinflip(callback.bot, callback.message.chat.id, user_id, board_id, 100, "heads")
+            await _show_coinflip_lobby(callback.bot, callback.message.chat.id, user_id, board_id, 100, message_to_edit=callback.message)
         elif game == "bj":
-            await _start_blackjack_game(callback.bot, callback.message.chat.id, user_id, board_id, 100)
+            await _show_blackjack_lobby(callback.bot, callback.message.chat.id, user_id, board_id, 100, message_to_edit=callback.message)
         elif game == "roulette":
-            await _execute_russian_roulette_shot(callback.bot, callback.message.chat.id, user_id, board_id, 100)
+            await _show_roulette_lobby(callback.bot, callback.message.chat.id, user_id, board_id, 100, message_to_edit=callback.message)
         elif game == "drop":
             await cmd_money_drop(callback.message, board_id)
         elif game == "balance":
@@ -6563,14 +8242,22 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
 
     elif section == "slots":
         action = parts[2] if len(parts) > 2 else ""
-        if action == "spin":
+        if action == "lobby":
+            bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
+            await _show_slots_lobby(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message)
+            await callback.answer(f"Ставка: {bet} ₪")
+        elif action == "spin":
             bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
             await _execute_slots_spin(callback.bot, callback.message.chat.id, user_id, board_id, bet)
             await callback.answer()
 
     elif section == "coin":
         side_or_action = parts[2] if len(parts) > 2 else "heads"
-        if side_or_action in ["heads", "tails"]:
+        if side_or_action == "lobby":
+            bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
+            await _show_coinflip_lobby(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message)
+            await callback.answer(f"Ставка: {bet} ₪")
+        elif side_or_action in ["heads", "tails"]:
             bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
             await _execute_coinflip(callback.bot, callback.message.chat.id, user_id, board_id, bet, side_or_action)
             await callback.answer()
@@ -6585,6 +8272,17 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
 
     elif section == "bj":
         action = parts[2] if len(parts) > 2 else ""
+        if action == "lobby":
+            bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
+            await _show_blackjack_lobby(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message)
+            await callback.answer(f"Ставка: {bet} ₪")
+            return
+        elif action == "start":
+            bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
+            await _start_blackjack_game(callback.bot, callback.message.chat.id, user_id, board_id, bet)
+            await callback.answer()
+            return
+
         session = casino_engine.active_bj_sessions.get(user_id)
         if not session:
             await callback.answer("❌ Сессия блэкджека завершена или не найдена. Начни новую игру!", show_alert=True)
@@ -6598,7 +8296,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
         if action == "hit":
             p_hand.append(deck.pop())
             p_score = casino_engine.calculate_hand(p_hand)
-            
+
             if p_score > 21:
                 # Bust
                 casino_engine.active_bj_sessions.pop(user_id, None)
@@ -6649,7 +8347,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
 
             casino_engine.active_bj_sessions.pop(user_id, None)
             p_score = casino_engine.calculate_hand(p_hand)
-            
+
             if p_score > 21:
                 # Double bust
                 async with db_lock:
@@ -6672,7 +8370,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 d_hand.append(deck.pop())
 
             d_score = casino_engine.calculate_hand(d_hand)
-            
+
             # Determine winner
             if d_score > 21:
                 result_title = "🎉 ДИЛЕР ПЕРЕБРАЛ! ПОБЕДА!"
@@ -6725,8 +8423,14 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
 
     elif section == "roulette":
         action = parts[2] if len(parts) > 2 else ""
+        if action == "lobby":
+            bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
+            await _show_roulette_lobby(callback.bot, callback.message.chat.id, user_id, board_id, bet, message_to_edit=callback.message)
+            await callback.answer(f"Ставка: {bet} ₪")
+            return
+
         bet = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 100
-        
+
         if action == "shoot":
             await _execute_russian_roulette_shot(callback.bot, callback.message.chat.id, user_id, board_id, bet)
             await callback.answer()
@@ -6737,7 +8441,7 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
                 return
             mult = session.get("current_mult", 1.25)
             payout = int(bet * mult)
-            
+
             async with db_lock:
                 new_bal = await add_user_global_balance(db, user_id, board_id, payout)
                 await db.commit()
@@ -6953,12 +8657,16 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
+            InlineKeyboardButton(text="🎭 Мой Персонаж RPG", callback_data="avatar_view"),
+            InlineKeyboardButton(text="🎽 Гардероб", callback_data="wardrobe_dressing_room"),
+        ],
+        [
             InlineKeyboardButton(text="📂 Личное дело", callback_data="prof_dossier"),
             InlineKeyboardButton(text="💰 Кошелёк", callback_data="prof_wallet"),
         ],
         [
             InlineKeyboardButton(text="🎒 Рюкзак", callback_data="prof_inventory"),
-            InlineKeyboardButton(text="🛒 Чёрный рынок", callback_data="prof_shop"),
+            InlineKeyboardButton(text="🛒 В магазин", callback_data="shop_main_hub"),
         ],
         [
             InlineKeyboardButton(text="🔄 Обновить", callback_data="prof_card"),
@@ -6983,7 +8691,6 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
     except (TelegramBadRequest, TelegramForbiddenError): pass
 
 
-
 @dp.callback_query(F.data == "prof_card")
 async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -6997,12 +8704,16 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
+            InlineKeyboardButton(text="🎭 Мой Персонаж RPG", callback_data="avatar_view"),
+            InlineKeyboardButton(text="🎽 Гардероб", callback_data="wardrobe_dressing_room"),
+        ],
+        [
             InlineKeyboardButton(text="📂 Личное дело", callback_data="prof_dossier"),
             InlineKeyboardButton(text="💰 Кошелёк", callback_data="prof_wallet"),
         ],
         [
             InlineKeyboardButton(text="🎒 Рюкзак", callback_data="prof_inventory"),
-            InlineKeyboardButton(text="🛒 Чёрный рынок", callback_data="prof_shop"),
+            InlineKeyboardButton(text="🛒 В магазин", callback_data="shop_main_hub"),
         ],
         [
             InlineKeyboardButton(text="🔄 Обновить", callback_data="prof_card"),
@@ -7020,13 +8731,9 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
                     reply_markup=kb
                 )
             except Exception:
-                await callback.message.answer_photo(photo, caption=text_report, reply_markup=kb, parse_mode="HTML")
-        else:
-            await callback.message.answer(text_report, reply_markup=kb, parse_mode="HTML")
+                pass
     except Exception as e:
-        runtime_logger.warning("cb_prof_card: failed generating stats card: %s", e)
-        await callback.message.answer("⚠️ Ошибка обновления паспорта.")
-
+        runtime_logger.warning("cb_prof_card: failed regenerating stats card: %s", e)
 
 
 @dp.callback_query(F.data == "prof_dossier")
@@ -8516,15 +10223,19 @@ async def graph_data_collector():
             await asyncio.sleep(wait_seconds)
             end_time = datetime.now(UTC)
             start_time = end_time - timedelta(hours=1)
+            end_ts = end_time.timestamp()
+            start_ts = start_time.timestamp()
             posts_per_hour = defaultdict(int)
             async with storage_lock:
                 for post_data in reversed(messages_storage.values()):
                     timestamp = post_data.get('timestamp')
+                    if hasattr(timestamp, 'timestamp'):
+                        timestamp = timestamp.timestamp()
                     if not timestamp:
                         continue
-                    if timestamp < start_time:
+                    if timestamp < start_ts:
                         break
-                    if start_time <= timestamp < end_time:
+                    if start_ts <= timestamp < end_ts:
                         board_id = post_data.get('board_id')
                         if board_id:
                             posts_per_hour[board_id] += 1
@@ -11609,7 +13320,7 @@ async def _handle_quick_menu_anime(callback, board_id: str, action: str, lang: s
             t for t in image_spam_tracker['b']
             if isinstance(t, (int, float)) and current_time - float(t) < IMAGE_SPAM_WINDOW
         ]
-        if len(common.spam_filter.image_spam_tracker['b']) + count > IMAGE_SPAM_LIMIT:
+        if len(image_spam_tracker['b']) + count > IMAGE_SPAM_LIMIT:
             msg = "🚫 Limit reached. Wait." if lang == 'en' else "🚫 Лимит превышен. Ждите."
             await callback.message.answer(msg)
             return
@@ -15180,6 +16891,108 @@ async def _process_stacked_anime_command(
         if working_msg:
             try: await working_msg.delete()
             except TelegramBadRequest: pass
+
+@dp.message(Command("del"))
+async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    target_msg = message.reply_to_message
+
+    if not target_msg:
+        try: await message.delete()
+        except: pass
+        return
+
+    admin_status = is_admin(user_id, board_id)
+
+    # 1. Запрет дворников на /sex/
+    if board_id == "sex" and not admin_status:
+        await message.answer("🧹 <b>В этом разделе дворники не работают!</b>\nЗдесь постят контент, а не мусор. Иди подметай в /b/ или /trash/.", parse_mode="HTML")
+        try: await message.delete()
+        except Exception: pass
+        return
+
+    db = await get_pool()
+    is_janitor = False
+    janitor_deletes_left = 0
+    active_items = {}
+
+    if not admin_status:
+        async with db_lock:
+            async with db.execute(
+                "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)
+            ) as c:
+                row = await c.fetchone()
+                ai_str = row[0] if row and row[0] else "{}"
+            try:
+                active_items = json.loads(ai_str)
+            except Exception:
+                active_items = {}
+            janitor_until = active_items.get("janitor_until", 0)
+            janitor_deletes_left = active_items.get("janitor_deletes_left", 0)
+            if janitor_until > time.time() and janitor_deletes_left > 0:
+                is_janitor = True
+
+    if not admin_status and not is_janitor:
+        try: await message.delete()
+        except: pass
+        return
+
+    key = (message.chat.id, target_msg.message_id)
+    post_num = message_to_post.get(key)
+    if not post_num:
+        info = await get_post_info_by_copy(message.chat.id, target_msg.message_id)
+        if info: post_num = info[0]
+
+    # 2. Проверка возраста поста и защиты фольгой (только для обычных дворников)
+    if is_janitor and not admin_status:
+        post_author_id = 0
+        post_ts = 0
+        if post_num:
+            async with storage_lock:
+                if post_num in messages_storage:
+                    p_data = messages_storage[post_num]
+                    post_author_id = p_data.get('author_id', 0)
+                    post_ts = p_data.get('timestamp', 0)
+            if not post_ts or not post_author_id:
+                async with db.execute("SELECT author_id, timestamp FROM Posts WHERE post_num = ?", (post_num,)) as cur:
+                    p_row = await cur.fetchone()
+                    if p_row:
+                        post_author_id = p_row[0]
+                        post_ts = p_row[1]
+
+        now = time.time()
+        # Ограничение возраста: максимум 15 минут (900 сек)
+        if post_ts and (now - post_ts > 900):
+            await message.answer("⏱️ <b>Слишком старый пост!</b>\nДворники могут убирать только свежий мусор (не старше 15 минут). Старые посты трогать запрещено!\n<i>(Счётчик удалений сохранён)</i>", parse_mode="HTML")
+            try: await message.delete()
+            except Exception: pass
+            return
+
+        # Защита фольгой
+        if post_author_id:
+            target_items = await _get_user_active_items(db, post_author_id, board_id)
+            if target_items.get("tinfoil_hat", 0) > now:
+                destroyed, left_h, left_m, _ = apply_tinfoil_damage(target_items, int(now), hours_damage=4.0, burn_chance=0.15)
+                async with db_lock:
+                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                     (json.dumps(target_items), post_author_id, board_id))
+                    await db.commit()
+                await message.answer("👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nУ автора поста надета Шапочка из фольги! Метла дворника соскользнула, пост защищён от удаления.", parse_mode="HTML")
+                try: await message.delete()
+                except Exception: pass
+                return
+
+        # Списываем 1 попытку только при успешном удалении
+        async with db_lock:
+            janitor_deletes_left -= 1
+            active_items["janitor_deletes_left"] = janitor_deletes_left
+            await db.execute(
+                "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                (json.dumps(active_items), user_id, board_id)
+            )
+            await db.commit()
+
 async def _safe_delete_user_message(message: types.Message):
     try:
         if (datetime.now(UTC) - message.date).total_seconds() < 48 * 3600:
@@ -16754,98 +18567,6 @@ async def cmd_unban(message: types.Message, board_id: str | None, stream: str = 
         await message.answer(msg)
     try: await message.delete()
     except Exception: pass
-@dp.message(Command("del"))
-async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'ru'):
-    if not board_id: return
-    user_id = message.from_user.id
-    target_msg = message.reply_to_message
-
-    if not target_msg:
-        try: await message.delete()
-        except: pass
-        return
-
-    admin_status = is_admin(user_id, board_id)
-    is_janitor = False
-    janitor_deletes_left = 0
-    active_items = {}
-    
-    if not admin_status:
-        db = await get_pool()
-        async with db_lock:
-            async with db.execute(
-                "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)
-            ) as c:
-                row = await c.fetchone()
-                ai_str = row[0] if row and row[0] else "{}"
-            try:
-                active_items = json.loads(ai_str)
-            except Exception:
-                active_items = {}
-            janitor_until = active_items.get("janitor_until", 0)
-            janitor_deletes_left = active_items.get("janitor_deletes_left", 0)
-            if janitor_until > time.time() and janitor_deletes_left > 0:
-                is_janitor = True
-                janitor_deletes_left -= 1
-                active_items["janitor_deletes_left"] = janitor_deletes_left
-                await db.execute(
-                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                    (json.dumps(active_items), user_id, board_id)
-                )
-                await db.commit()
-
-    if not admin_status and not is_janitor:
-        try: await message.delete()
-        except: pass
-        return
-
-    key = (message.chat.id, target_msg.message_id)
-    post_num = message_to_post.get(key)
-    if not post_num:
-        info = await get_post_info_by_copy(message.chat.id, target_msg.message_id)
-        if info: post_num = info[0]
-
-    wipe_tag = "<b>[ПОСТ УДАЛЁН МОДЕРАТОРОМ]</b>" if admin_status else "<b>[ПОСТ УДАЛЁН ДВОРНИКОМ]</b>"
-
-    if post_num:
-        async with storage_lock:
-            if post_num in messages_storage:
-                messages_storage[post_num]['is_deleted'] = True
-                if isinstance(messages_storage[post_num].get('content'), dict):
-                    messages_storage[post_num]['content']['text'] = wipe_tag
-
-        db = await get_pool()
-        try:
-            await db.execute("UPDATE Posts SET content = ? WHERE post_num = ?", (json.dumps({'type': 'text', 'text': wipe_tag}), post_num))
-            await db.commit()
-        except Exception:
-            pass
-
-        db_copies = await get_post_copies(post_num)
-        target_bot = GLOBAL_BOTS.get(board_id) or message.bot
-        for rec_id, msg_id in db_copies:
-            try:
-                try:
-                    await target_bot.edit_message_text(chat_id=rec_id, message_id=msg_id, text=wipe_tag, parse_mode="HTML")
-                except TelegramBadRequest as e:
-                    err_str = str(e).lower()
-                    if "there is no text in the message" in err_str or "caption" in err_str:
-                        try:
-                            await target_bot.edit_message_caption(chat_id=rec_id, message_id=msg_id, caption=wipe_tag, parse_mode="HTML")
-                        except Exception: pass
-            except Exception:
-                pass
-            await asyncio.sleep(0.03)
-
-    try:
-        await target_msg.delete()
-    except Exception:
-        pass
-
-    try:
-        await message.delete()
-    except:
-        pass
 @dp.message(Command("token"))
 async def cmd_token(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
@@ -17719,13 +19440,13 @@ async def periodic_board_summary():
                 
             # Автосаммари: 5-7 абзацев для полноценного прогона
             auto_paragraph_count = random.randint(5, 7)
-            prompt, info_text, chunk, is_blat = await _get_summarize_prompt_and_chunk(board_id, None, {}, 'ru', auto_paragraph_count)
+            prompt, info_text, chunk, is_blat, is_warhammer = await _get_summarize_prompt_and_chunk(board_id, None, {}, 'ru', auto_paragraph_count)
             
             if not chunk or len(chunk) < 100:
                 logger.debug("❌ [PERIODIC SUMMARY] Слишком мало сообщений.")
                 continue
 
-            logger.debug(f"📝 [PERIODIC SUMMARY] paragraphs={auto_paragraph_count} blat={is_blat} chunk_len={len(chunk)} chars")
+            logger.debug(f"📝 [PERIODIC SUMMARY] paragraphs={auto_paragraph_count} blat={is_blat} warhammer={is_warhammer} chunk_len={len(chunk)} chars")
             hf_token = os.getenv("HF_TOKEN")
             summary = await summarize_text_with_hf(prompt, chunk)
             raw_len = len(summary) if summary else 0
@@ -17738,7 +19459,10 @@ async def periodic_board_summary():
                 
             date_str = datetime.now().strftime('%d.%m %H:%M')
             
-            if is_blat:
+            if is_warhammer:
+                title = f"Священный Вокс-Отчет доски /b/ - {date_str}"
+                author_name = "Техножрец Омниссии"
+            elif is_blat:
                 title = f"Воровской прогон из Кибер-Хаты - {date_str}"
                 author_name = "Кибер-Смотрящий"
             else:
@@ -17748,12 +19472,18 @@ async def periodic_board_summary():
             telegraph_url = await create_telegraph_page_async(title, summary, author=author_name)
             
             if telegraph_url:
-                if is_blat:
+                if is_warhammer:
+                    final_text = f"⚙️ <b>Вокс-депеша Механикус</b> ⚙️\n\nСвященный сервитор обработал инфо-потоки:\n🔗 <a href='{telegraph_url}'>Читать дата-свиток</a>"
+                elif is_blat:
                     final_text = f"♠️ <b>Свежий расклад по палате</b> ♠️\n\nКибер-Смотрящий раскидал по понятиям, что произошло за последние часы:\n🔗 <a href='{telegraph_url}'>Вскрыть маляву</a>"
                 else:
                     final_text = f"☕️ <b>Авто-саммари палаты</b> ☕️\n\nПока вы спали, тут произошло следующее:\n🔗 <a href='{telegraph_url}'>Читать выжимку</a>"
             else:
-                if is_blat:
+                if is_warhammer:
+                    signet = "\n\n<i><b>⚙️ Запись заверена сервитором Адептус Механикус.</b>\nХвала Омниссии!</i>"
+                    summary_truncated = _tg_safe_truncate(summary, max_utf16=3000)
+                    final_text = f"⚙️ <b>Вокс-депеша /b/</b> ⚙️\n\n{summary_truncated}{signet}"
+                elif is_blat:
                     signet = (
                         "\n\n<i><b>♠️ Малява составлена Смотрящим.</b>\n"
                         "Жизнь ворам, хуй мусорам! АУЕ!</i>"

@@ -14,7 +14,7 @@ from shared_state import *
 from common.config import DATA_DIR
 from common.board_config import BOARD_CONFIG
 from common.html_utils import escape_html, convert_site_tags_to_telegram
-from common.text_utils import sanitize_html, clean_html_tags, generate_poll_text_display
+from common.text_utils import sanitize_html, clean_html_tags, generate_poll_text_display, clean_html_for_tg
 from common.database import add_channel_copy
 
 logger = logging.getLogger(__name__)
@@ -171,13 +171,21 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
         except TelegramRetryAfter:
             raise
         except Exception as ex:
-            logger.error(f"❌ Media group fallback failed: {ex}")
-            return None, []
+            logger.error(f"❌ Media group fallback failed: {ex}. Sending as text...")
+            try:
+                msg = await sender_bot.send_message(channel_id, full_caption, parse_mode="HTML")
+                return msg, []
+            except Exception:
+                return None, []
     except TelegramRetryAfter:
         raise
     except Exception as e:
         logger.error(f"⚠️ Failed to send archive media group to channel {channel_id}: {e}", exc_info=True)
-        return None, []
+        try:
+            msg = await sender_bot.send_message(channel_id, full_caption, parse_mode="HTML")
+            return msg, []
+        except Exception:
+            return None, []
 
     sent_message = None
     new_files_data = []
@@ -278,7 +286,11 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
         raise
     except Exception as e:
         logger.error(f"⚠️ Failed to send single archive media ({ct_str}) to channel {channel_id}: {e}")
-        return None, []
+        try:
+            msg = await sender_bot.send_message(channel_id, caption, parse_mode="HTML")
+            return msg, []
+        except Exception:
+            return None, []
 
     new_files_data = []
     if sent_message:
@@ -324,7 +336,8 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
             if attempt < 2: await asyncio.sleep(2)
         except TelegramRetryAfter as e:
             await asyncio.sleep(e.retry_after + 1)
-        except Exception:
+        except Exception as e:
+            logger.error(f"Archive media sending error on attempt {attempt}: {e}", exc_info=True)
             break
     return None, []
 
@@ -646,8 +659,8 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
     check_post = await get_post_by_num(post_num)
     if not check_post:
         return
-    archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-    sender_bot = bot_instance if board_id in AUTHORIZED_ARCHIVE_BOTS else archive_bot
+    archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID) or GLOBAL_BOTS.get('b')
+    sender_bot = bot_instance if (board_id in AUTHORIZED_ARCHIVE_BOTS and bot_instance) else (GLOBAL_BOTS.get('b') or archive_bot)
     if not sender_bot:
         return
     sender_bot_id = getattr(sender_bot, 'id', 0)

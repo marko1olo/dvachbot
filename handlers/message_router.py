@@ -473,6 +473,36 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             try:
                 await message.delete()
             except TelegramBadRequest: pass
+
+            last_warn = b_data.get('last_mute_warn', {}).get(user_id, 0)
+            now_ts = time.time()
+            if now_ts - last_warn > 15:
+                b_data.setdefault('last_mute_warn', {})[user_id] = now_ts
+                rem = mute_until - datetime.now(UTC)
+                rem_seconds = max(0, int(rem.total_seconds()))
+                rem_h, rem_m = divmod(rem_seconds // 60, 60)
+                if rem_h > 0:
+                    time_str = f"{rem_h}ч {rem_m}мин"
+                elif rem_m > 0:
+                    time_str = f"{rem_m} мин"
+                else:
+                    time_str = f"{rem_seconds} сек"
+
+                warn_text = (
+                    f"🔇 <b>ТЕБЯ ЕБНУЛИ В МУТ!</b>\n\n"
+                    f"Осталось сидеть: <b>{time_str}</b>.\n"
+                    f"Пока ты в муте, твои посты на доску не проходят.\n\n"
+                    f"💡 <b>Что можно сделать:</b>\n"
+                    f"• 📜 <b>Снять мут досрочно:</b> купи Взятку в <b>/shop</b>\n"
+                    f"• 💰 <b>Заработать шекели:</b> пиши <b>/work</b> (сбор бутылок, скам, биржа)\n"
+                    f"• 🔫 <b>Отомстить обидчику:</b> купи Мут-Ган или ОМОН в <b>/shop</b>\n"
+                    f"• 🛡️ <b>Защититься от атак:</b> купи Шапочку из фольги в <b>/shop</b>"
+                )
+                try:
+                    sent = await message.answer(warn_text, parse_mode="HTML")
+                    spawn_task(delete_message_after_delay(sent, 10))
+                except Exception:
+                    pass
             return
         elif mute_until:
             b_data['mutes'].pop(user_id, None)
@@ -486,7 +516,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 original_text = message.text or message.caption or ""
                 prompt = "Перепиши этот текст от лица человека, у которого прямо во время речи начался взрывной понос. Прерывай предложения многоточиями, вставляй крики боли (ААА, БЛЯЯ, УУУФ), звуки бульканья в животе (БУРЛК-БУРЛК) и панику. Обязательно сохрани изначальный смысл текста, но пропусти его через призму невыносимой боли в животе и попыток сдержать кал. Пиши грязно, сыро, без ИИ-шаблонов. Текст жертвы:"
                 try:
-                    rewritten = await summarize_text_with_hf(prompt, original_text, model_preference="llama")
+                    rewritten = await asyncio.wait_for(summarize_text_with_hf(prompt, original_text, model_preference="llama"), timeout=3.0)
                     if len(rewritten) > 1000:
                         rewritten = rewritten[:1000]
                 except Exception:
@@ -502,7 +532,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 original_text = message.text or message.caption or ""
                 prompt = "Перепиши этот текст от лица абсолютно поехавшего шизофреника, конспиролога и параноика. Везде заговоры, рептилоиды, ЦРУ, излучение от вышек 5G и массоны. Перескакивай с мысли на мысль, пиши капсом случайные СЛОВА, используй много восклицательных знаков и вопросов. Сохрани изначальный смысл текста, но пропусти его через шизофазию и паранойю. Текст пациента:"
                 try:
-                    rewritten = await summarize_text_with_hf(prompt, original_text, model_preference="llama")
+                    rewritten = await asyncio.wait_for(summarize_text_with_hf(prompt, original_text, model_preference="llama"), timeout=3.0)
                     if len(rewritten) > 1000:
                         rewritten = rewritten[:1000]
                 except Exception:

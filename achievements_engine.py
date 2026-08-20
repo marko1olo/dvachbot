@@ -1,0 +1,171 @@
+# -*- coding: utf-8 -*-
+"""
+achievements_engine.py — Dvach Achievements, Quests & Trophy System
+Tracks board milestones, gear sets, work progress, PvP victories, and awards cash & titles.
+"""
+
+from typing import Dict, Any, List, Optional, Tuple
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+ACHIEVEMENTS_CATALOG = {
+    "ach_work_10": {
+        "id": "ach_work_10",
+        "name": "💼 Первая получка",
+        "desc": "Закрыть 10 смен на бирже труда (/work).",
+        "reward_cash": 100,
+        "icon": "💼",
+        "category": "work"
+    },
+    "ach_work_50": {
+        "id": "ach_work_50",
+        "name": "⚙️ Ударник Пятилетки",
+        "desc": "Закрыть 50 смен на бирже труда.",
+        "reward_cash": 500,
+        "icon": "⚙️",
+        "category": "work"
+    },
+    "ach_work_100": {
+        "id": "ach_work_100",
+        "name": "🏆 Герой Капитализма",
+        "desc": "Закрыть 100 смен на бирже труда.",
+        "reward_cash": 1500,
+        "icon": "🏆",
+        "category": "work"
+    },
+    "ach_set_wasserman": {
+        "id": "ach_set_wasserman",
+        "name": "🦺 Истинный Онотоле",
+        "desc": "Собрать и надеть Сет Вассермана (Жилетка + Очки).",
+        "reward_cash": 400,
+        "icon": "🦺",
+        "category": "wardrobe"
+    },
+    "ach_set_riot": {
+        "id": "ach_set_riot",
+        "name": "🪖 Силовик Борды",
+        "desc": "Собрать и надеть Сет ОМОНа (Шлем + Берцы).",
+        "reward_cash": 600,
+        "icon": "🪖",
+        "category": "wardrobe"
+    },
+    "ach_set_anime": {
+        "id": "ach_set_anime",
+        "name": "👘 Главный Вайфувед",
+        "desc": "Собрать и надеть Сет Анимешника (Ушки + Худи).",
+        "reward_cash": 350,
+        "icon": "👘",
+        "category": "wardrobe"
+    },
+    "ach_set_skuf": {
+        "id": "ach_set_skuf",
+        "name": "🩲 Повелитель Пивнухи",
+        "desc": "Собрать и надеть Сет Подъездного Скуфа (Корона + Треники).",
+        "reward_cash": 300,
+        "icon": "🩲",
+        "category": "wardrobe"
+    },
+    "ach_set_ward6": {
+        "id": "ach_set_ward6",
+        "name": "🥼 Пациент №1",
+        "desc": "Собрать и надеть Сет Палаты №6 (Смирительная рубашка + Фольга).",
+        "reward_cash": 450,
+        "icon": "🥼",
+        "category": "wardrobe"
+    },
+    "ach_slots_jackpot": {
+        "id": "ach_slots_jackpot",
+        "name": "🎰 Король Азарта 777",
+        "desc": "Сорвать Джекпот x50 в Слотах 777.",
+        "reward_cash": 1000,
+        "icon": "🎰",
+        "category": "casino"
+    },
+    "ach_robber": {
+        "id": "ach_robber",
+        "name": "🔪 Джентльмен Удачи",
+        "desc": "Успешно ограбить другого анона с заточкой (/rob).",
+        "reward_cash": 500,
+        "icon": "🔪",
+        "category": "pvp"
+    },
+    "ach_pepperspray": {
+        "id": "ach_pepperspray",
+        "name": "🧯 Глаз за Глаз",
+        "desc": "Ослепить нападающего грабителя Перцовым баллончиком.",
+        "reward_cash": 300,
+        "icon": "🧯",
+        "category": "pvp"
+    },
+    "ach_cases_10": {
+        "id": "ach_cases_10",
+        "name": "📦 Кейсовый Олигарх",
+        "desc": "Открыть 10 лутбоксов или сейфов.",
+        "reward_cash": 750,
+        "icon": "📦",
+        "category": "lootbox"
+    }
+}
+
+
+def check_and_unlock_achievement(
+    active_items: Dict[str, Any],
+    ach_id: str
+) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """
+    Unlocks an achievement if not already unlocked.
+    Returns: (was_unlocked_now, achievement_info)
+    """
+    if ach_id not in ACHIEVEMENTS_CATALOG:
+        return False, None
+
+    unlocked_list = active_items.setdefault("unlocked_achievements", [])
+    if ach_id in unlocked_list:
+        return False, None  # Already unlocked
+
+    unlocked_list.append(ach_id)
+    return True, ACHIEVEMENTS_CATALOG[ach_id]
+
+
+def get_user_achievements(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Returns list of all achievements with their unlocked status.
+    """
+    unlocked_list = active_items.get("unlocked_achievements", [])
+    result = []
+    for ach_id, ach_info in ACHIEVEMENTS_CATALOG.items():
+        info = dict(ach_info)
+        info["is_unlocked"] = (ach_id in unlocked_list)
+        result.append(info)
+    return result
+
+
+def build_achievements_content(user_id: int, active_items: Dict[str, Any]) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Renders achievements view text and keyboard.
+    """
+    all_ach = get_user_achievements(active_items)
+    unlocked_count = sum(1 for a in all_ach if a["is_unlocked"])
+    total_count = len(all_ach)
+    pct = int((unlocked_count / total_count) * 100)
+
+    lines = [
+        f"🏆 <b>ДОСТИЖЕНИЯ И ТРОФЕИ АНОНА</b>",
+        f"📊 Прогресс: <b>{unlocked_count}/{total_count} ({pct}%)</b>\n",
+    ]
+
+    for a in all_ach:
+        st = "✅" if a["is_unlocked"] else "🔒"
+        rew = f" (+{a['reward_cash']} ₪)" if not a["is_unlocked"] else " [ПОЛУЧЕНО]"
+        lines.append(f"{st} <b>{a['name']}</b>{rew}\n   <i>{a['desc']}</i>")
+
+    lines.append("\n💡 <i>Выполняй задания на борде, чтобы забирать награды шекелями!</i>")
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎭 Мой Персонаж RPG", callback_data="avatar_view"),
+            InlineKeyboardButton(text="🎽 Гардероб", callback_data="wardrobe_dressing_room")
+        ],
+        [InlineKeyboardButton(text="⬅️ В Торговый Хаб", callback_data="shop_main_hub")]
+    ])
+
+    return "\n".join(lines), kb

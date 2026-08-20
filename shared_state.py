@@ -99,6 +99,23 @@ posts_pending_deletion = set()
 
 # Трекинг активных атак для ограничения спама (макс. 2 активных эффекта каждого типа на автора)
 _ACTIVE_AUTHOR_ATTACKS: dict[str, dict[int, dict[int, float]]] = defaultdict(lambda: defaultdict(dict))
+_GLOBAL_COMBAT_COOLDOWNS: dict[int, float] = {}
+
+def get_combat_cooldown_remaining(user_id: int) -> int:
+    """
+    Возвращает количество секунд оставшегося глобального боевого кулдауна.
+    """
+    now = time.time()
+    last = _GLOBAL_COMBAT_COOLDOWNS.get(user_id, 0)
+    if now < last:
+        return int(last - now)
+    return 0
+
+def set_combat_cooldown(user_id: int, cooldown_seconds: int = 180):
+    """
+    Устанавливает глобальный боевой кулдаун (по умолчанию 3 минуты = 180 сек).
+    """
+    _GLOBAL_COMBAT_COOLDOWNS[user_id] = time.time() + cooldown_seconds
 
 def count_active_attacker_effects(item_type: str, attacker_id: int) -> int:
     """
@@ -123,6 +140,8 @@ def register_attacker_effect(item_type: str, attacker_id: int, target_id: int, d
 # broadcaster.py, delivery_manager.py, post_processor.py, archive_manager.py
 # picks them up. Without __all__, Python excludes names starting with '_'.
 __all__ = [
+    'get_combat_cooldown_remaining',
+    'set_combat_cooldown',
     'count_active_attacker_effects',
     'register_attacker_effect',
     'RE_REPLY_QUOTE',

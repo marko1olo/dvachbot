@@ -6,6 +6,7 @@ Drop Engine for DvachBot: Public Money Drop ("Чек / Дроп шекелей �
 import asyncio
 import secrets
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -33,6 +34,16 @@ class DropRecord:
 # In-memory registry of active and recent drops
 active_drops: Dict[str, DropRecord] = {}
 drop_lock = asyncio.Lock()
+# Track all sent messages for each drop_id: {drop_id: [(chat_id, message_id), ...]}
+_drop_messages: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
+
+def register_drop_message(drop_id: str, chat_id: int, message_id: int):
+    """Регистрирует отправленное сообщение о дропе для последующего обновления при перехвате."""
+    _drop_messages[drop_id].append((chat_id, message_id))
+
+def get_drop_messages(drop_id: str) -> List[Tuple[int, int]]:
+    """Возвращает список всех (chat_id, message_id) для данного drop_id."""
+    return list(_drop_messages.get(drop_id, []))
 
 
 # -----------------------------------------------------------------------------

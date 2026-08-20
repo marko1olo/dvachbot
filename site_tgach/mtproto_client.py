@@ -161,13 +161,13 @@ async def get_active_client(bot_token: str):
         os.makedirs(sess_dir, exist_ok=True)
         
         client = Client(
-            name=f"bot_{short_token}",
+            name=f"bot_{short_token}_{os.getpid()}_{int(time.time()*1000)}",
             api_id=int(API_ID),
             api_hash=API_HASH,
             bot_token=bot_token,
             workdir=sess_dir,
             no_updates=True, 
-            in_memory=False,
+            in_memory=True,
             ipv6=False
         )
 

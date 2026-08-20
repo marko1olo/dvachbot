@@ -1,343 +1,182 @@
+# -*- coding: utf-8 -*-
 """
-Work Engine for DvachBot / Tgach.
-Comprehensive Job Market with 10 Job Tiers, 300+ Authentic Phrases,
-Jackpots, Critical Failures, and Random Item Drops.
+common/work_engine.py — Dvach Work, Labor Exchange & Career System
+Includes tier-based job vacancies, shift cooldowns, failure risks,
+interconnected RPG Wardrobe Gear buffs, set bonuses, and item drops.
 """
 
-import json
+import time
 import random
 import re
-import time
-from typing import Tuple, Dict, Any, Optional
+from typing import Dict, Any, Tuple, Optional
 
-WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
-    "bottles": {
-        "title": "🍾 Сдать стеклотару",
-        "desc": "Сбор пустых бутылок после пьянки скуфов за гаражами",
-        "tier": "Уровень 1 • Бомж",
-        "reward_range": (15, 35),
-        "cooldown_sec": 300,  # 5 min
-        "risk_pct": 0.0,
-        "item_drop": "shit",
-        "item_drop_chance": 0.04,
-        "phrases": [
-            "Собрал ящик жигулёвского за гаражами и сдал в приёмку: <code>+{reward} ₪</code>!",
-            "Нашёл 2 метра медного кабеля на заброшенной стройке: выручил <code>+{reward} ₪</code>!",
-            "Отобрал мешок алюминиевых банок у спящего бомжа: <code>+{reward} ₪</code> на кармане!",
-            "Сдал 15 полторашек из-под Охоты Крепкой: <code>+{reward} ₪</code> чистой прибыли.",
-            "Порылся в мусорных баках элитного ЖК и нашёл 10 бутылок из-под вискаря: <code>+{reward} ₪</code>!",
-            "Местный дед отдал старый чугунный радиатор за чекушку: на металлобазе дали <code>+{reward} ₪</code>!",
-            "Нашёл в кустах аккумулятор от Жигулей: сдал скупщику за <code>+{reward} ₪</code>!",
-            "Собрал банки из-под Балтики 9 после концерта в ДК: профит <code>+{reward} ₪</code>!",
-            "Выловил со дна фонтана горсть меди и пустых банок: заработано <code>+{reward} ₪</code>!",
-            "Приёмщик дядя Толя сегодня в хорошем настроении и накинул сверху: <code>+{reward} ₪</code>!",
-            "Выковырял 5 килограмм свинца из старых кабелей: в кассе отсчитали <code>+{reward} ₪</code>!",
-            "Нашёл возле рюмочной целую гору небитого чебурашки: поднял <code>+{reward} ₪</code>!",
-            "Уговорил сторожа со стройки отдать обрезки арматуры: карман пополнился на <code>+{reward} ₪</code>!",
-            "Собрал жестяные банки у стадиона после дерби: заработал <code>+{reward} ₪</code>!",
-            "Очистил подвал хрущёвки от залежей стеклотары времён СССР: выручка <code>+{reward} ₪</code>!",
-            "Вытащил из канавы медную трубку от холодильника: мастер насыпал <code>+{reward} ₪</code>!",
-            "Нашёл за мусоропроводом 3 мешка пивных бутылок: чистая прибыль <code>+{reward} ₪</code>!",
-            "Залутал склад пустой тары за заброшенным магазином 'Продукты 24': <code>+{reward} ₪</code>!",
-            "Сдал килограмм латунных кранов сантехника: заработано <code>+{reward} ₪</code>!",
-            "Раскопал на пустыре клад из банок Dr. Pepper: в пункте дали <code>+{reward} ₪</code>!"
-        ],
-        "jackpot_phrases": [
-            "💎 <b>ДЖЕКПОТ БОМЖА!</b> На дне мусорного бака нашёл золотую цепочку скуфа! Сдал в ломбард: <code>+{reward} ₪</code>!",
-            "💎 <b>ЦВЕТМЕТ-ДЖЕКПОТ!</b> На заброшенном заводе откопал цельную медную шину на 20 кг! Выручено: <code>+{reward} ₪</code>!"
-        ]
-    },
-    "sweeper": {
-        "title": "🧹 Дворник /b/",
-        "desc": "Уборка спама, вайпов и унылых тредов из нулевой",
-        "tier": "Уровень 2 • Ньюфаг",
-        "reward_range": (35, 70),
-        "cooldown_sec": 900,  # 15 min
-        "risk_pct": 0.05,
-        "penalty": 20,
-        "item_drop": "pills",
-        "item_drop_chance": 0.05,
-        "phrases": [
-            "Подмёл нулевую от засохших баянов и нашёл в мусоре <code>+{reward} ₪</code>!",
-            "Снёс 15 тредов с унылыми вебмками: Абу лично выписал премию <code>+{reward} ₪</code>!",
-            "Забанил рейд школьников с Пикабу и залутал <code>+{reward} ₪</code>!",
-            "Удалил пасту про сырную фею и школьниц: благодарные аноны скинули <code>+{reward} ₪</code>!",
-            "Расчистил бамп-лимит в треде веб-разработки: получено <code>+{reward} ₪</code>!",
-            "Вычистил ЦП-спам за 0.2 секунды до приезда РКН: за спасение борды дали <code>+{reward} ₪</code>!",
-            "Вайпнул 5 тредов шизофреника с радиоприёмником: начислено <code>+{reward} ₪</code>!",
-            "Утилизировал 300 постов с рекламой скам-крипты: заработано <code>+{reward} ₪</code>!",
-            "Поймал автокликер в капче и конфисковал шекели: <code>+{reward} ₪</code> в карман!",
-            "Спас тред ламповых воспоминаний от толстого тролля: заработал <code>+{reward} ₪</code>!",
-            "Забанил генератор нейропаст за флуд в тематических досках: начислено <code>+{reward} ₪</code>!",
-            "Вычистил 50 тредов про перекаты и крипту: модератор расщедрился на <code>+{reward} ₪</code>!",
-            "Удалил спойлеры к свежему аниме в нулевой: аноны скинулись на <code>+{reward} ₪</code>!",
-            "Почистил тред знакомств от анкет ботов с Мамбы: заработано <code>+{reward} ₪</code>!",
-            "Снёс тред с координатами секретной сходки двачеров: Абу выдал премию <code>+{reward} ₪</code>!",
-            "Устранил вайп скриптом на Node.js за 5 секунд: зарплата дворника <code>+{reward} ₪</code>!",
-            "Поймал спамера с реферальными ссылками казино: отобрал у него <code>+{reward} ₪</code>!",
-            "Расчистил архив от 10 000 мёртвых тредов: сервер вздохнул, тебе капнуло <code>+{reward} ₪</code>!"
-        ],
-        "fail_phrases": [
-            "Случайно снёс закреплённый тред админа! Получил банхаммером по лбу: штраф <code>-{penalty} ₪</code>!",
-            "Забанил элитного донатера с пасскодом: Абу удержал из зарплаты <code>-{penalty} ₪</code>!",
-            "По ошибке стёр свой собственный тред! С горя пропил <code>-{penalty} ₪</code>!",
-            "Залил скрипт автовайпа не в ту борду: штраф от техподдержки <code>-{penalty} ₪</code>!",
-            "Тролль забайтил тебя на удаление правил: лишение премии <code>-{penalty} ₪</code>!",
-            "Капча заглючила и снесла тебе половину кармы: урон балансу <code>-{penalty} ₪</code>!",
-            "Пролил пиво на сервер модерации: удержание за клининг <code>-{penalty} ₪</code>!",
-            "Случайно разбанил 100 спамеров в /b/: выговор с занесением и штраф <code>-{penalty} ₪</code>!"
-        ],
-        "jackpot_phrases": [
-            "💎 <b>ДЖЕКПОТ МОДЕРАТОРА!</b> Поймал автора глобального ботнета и отжал его кошелек с откупом: <code>+{reward} ₪</code>!"
-        ]
-    },
+WORK_VACANCIES = {
     "courier": {
-        "title": "📦 Курьер Самоката",
-        "desc": "Доставка дошираков и соевого молока хикканам на 5 этаж без лифта",
-        "tier": "Уровень 3 • Куколд",
-        "reward_range": (60, 120),
-        "cooldown_sec": 1800,  # 30 min
-        "risk_pct": 0.12,
-        "penalty": 30,
-        "item_drop": "knife",
-        "item_drop_chance": 0.04,
+        "required_shifts": 0,
+        "title": "🚴 Доставщик Яндекс.Еды",
+        "desc": "Развозить шаурму и бургеры на дырявом велике по лужам и сугробам",
+        "tier": "Уровень 1 • Педальный раб",
+        "reward_range": (30, 60),
+        "cooldown_sec": 600,  # 10 minutes
+        "risk_pct": 0.05,
+        "penalty": 15,
+        "item_drop": "shit",
+        "item_drop_chance": 0.08,
         "phrases": [
-            "Доставил коробку пиццы и 2 литра колы альтушке: щедрые чаевые <code>+{reward} ₪</code>!",
-            "Взлетел на 9 этаж пешком за 2 минуты (лифт обоссан): клиент накинул <code>+{reward} ₪</code>!",
-            "Привёз пачку дошираков сычу-программисту в 3 часа ночи: заработано <code>+{reward} ₪</code>!",
-            "Успел объехать пробку по тротуару и не сбил ни одной бабки: премия <code>+{reward} ₪</code>!",
-            "Доставил соевый латте скуфу в автосервис, тот оценил скорость: <code>+{reward} ₪</code>!",
-            "Клиентка открыла дверь в одном полотенце и смущенно дала чаевые: <code>+{reward} ₪</code>!",
-            "Перепрыгнул через сугроб на электробайке: заказ закрыт вовремя, <code>+{reward} ₪</code>!",
-            "Доставил энергетики киберспортсменам на буткемп: поднял <code>+{reward} ₪</code>!",
-            "Поймал промокод на смену и выполнил комбо из 3 заказов: <code>+{reward} ₪</code>!",
-            "Клиент перепутал купюры и дал чаевых больше стоимости заказа: <code>+{reward} ₪</code>!",
-            "Доставил 10 пачек чипсов в компьютерный клуб: админ отсыпал <code>+{reward} ₪</code>!",
-            "Привёз ящик пива на вписку двачеров: налили стакан и дали на чай <code>+{reward} ₪</code>!",
-            "Добрался сквозь метель в закрытый коттеджный посёлок: мажор отвалил <code>+{reward} ₪</code>!",
-            "Доставил протеин гигачаду прямо в качалку: уважение и <code>+{reward} ₪</code>!",
-            "Закрыл сложный заказ с 5 пакетами продуктов: супер-бонус сервиса <code>+{reward} ₪</code>!"
+            "Доставил 3 двойные шаурмы в общагу без происшествий: заработано <code>+{reward} ₪</code>!",
+            "Успешно сбежал от стаи бродячих собак во дворе и вручил заказ клиенту: получка <code>+{reward} ₪</code>!",
+            "Поднялся на 16 этаж без лифта и получил щедрые чаевые: на кармане <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
-            "🐕 На тебя напала свора бродячих собак у теплотрассы и разорвала рюкзак: штраф <code>-{penalty} ₪</code>!",
-            "🛴 Электросамокат сел в километре от клиента, суп разлился в рюкзаке: компенсация <code>-{penalty} ₪</code>!",
-            "Пьяный батя в трусах отобрал заказ в подъезде и не заплатил: убыток <code>-{penalty} ₪</code>!",
-            "ГИБДД оштрафовали за езду по встречке на тротуаре: протокол на <code>-{penalty} ₪</code>!",
-            "Уронил коробку с суши прямо перед дверью клиента: списание из баланса <code>-{penalty} ₪</code>!",
-            "Застрял в грузовом лифте с обоссанным полом на 2 часа: заказ отменен, штраф <code>-{penalty} ₪</code>!",
-            "Вор скрутил переднее колесо твоего электровелосипеда пока ты поднимался: ремонт <code>-{penalty} ₪</code>!",
-            "Клиент указал не тот город в заказе, пришлось возвращаться на склад за свой счёт: <code>-{penalty} ₪</code>!"
+            "💥 <b>ДТП НА САМОКАТЕ!</b> Влетел в бордюр и расплескал суп Том-Ям: штраф от сервиса <code>-{penalty} ₪</code>!",
+            "Злой питбуль прокусил желтый короб: компенсация ущерба <code>-{penalty} ₪</code>!"
         ],
         "jackpot_phrases": [
-            "💎 <b>ЗОЛОТОЙ КУРЬЕР!</b> Доставил праздничный торт олигарху на Рублёвку — тот подарил чаевые в валюте: <code>+{reward} ₪</code>!"
-        ]
-    },
-    "captcha": {
-        "title": "👁️ Разметка капчи и NSFW",
-        "desc": "Обучение нейросети отличать трапов от 2D-тян и чистить капчу",
-        "tier": "Уровень 4 • Сыч-Фрилансер",
-        "reward_range": (85, 170),
-        "cooldown_sec": 2700,  # 45 min
-        "risk_pct": 0.08,
-        "penalty": 40,
-        "item_drop": "schizopill",
-        "item_drop_chance": 0.04,
-        "phrases": [
-            "Разметил 200 картинок с трапами и фембоями: грант от исследователей <code>+{reward} ₪</code>!",
-            "Обучил нейросеть мгновенно детектировать вайпы на доске: премия <code>+{reward} ₪</code>!",
-            "Ввёл 100 нечитаемых кривых капчей за ленивых юзеров: получено <code>+{reward} ₪</code>!",
-            "Натренировал классификатор отличать сарказм от реальной шизофрении: <code>+{reward} ₪</code>!",
-            "Сгенерировал 500 синтетических постов для прогрева тредов: заработано <code>+{reward} ₪</code>!",
-            "Успешно верифицировал 50 баз с аниме-пикчами: капнуло <code>+{reward} ₪</code>!",
-            "Нашёл баг в распознавании текста и получил Bug Bounty от Абу: <code>+{reward} ₪</code>!",
-            "Разметил датасет с токсичными гринтекстами для модерации: начислено <code>+{reward} ₪</code>!",
-            "Обучил LLM материться в стиле двачера 2012 года: куратор накинул <code>+{reward} ₪</code>!",
-            "Провёл 2 часа за монотонным кликаньем светофоров и пешеходных переходов: заработал <code>+{reward} ₪</code>!",
-            "Отфильтровал 10 000 дубликатов картинок на сервере: оптимизация принесла <code>+{reward} ₪</code>!",
-            "Обучил нейросеть определять скуфов по фотографии пивного живота: премия <code>+{reward} ₪</code>!",
-            "Скормил модели архив тредов /po/ за 10 лет: ИИ заплакал, но грант выплатил <code>+{reward} ₪</code>!"
-        ],
-        "fail_phrases": [
-            "🤯 Словил зрительный передоз шизофренией от разметки NSFW и потратил на таблетки <code>-{penalty} ₪</code>!",
-            "Перепутал кота с буханкой хлеба в 50 капчах: алгоритм оштрафовал за халтуру на <code>-{penalty} ₪</code>!",
-            "Нейросеть обучилась генерировать бред и взбунтовалась: удержание <code>-{penalty} ₪</code>!",
-            "Залил обучающий датасет с вирусами на продакшн: штраф от тимлида <code>-{penalty} ₪</code>!",
-            "Бот-проверяльщик посчитал тебя спамером и списал залог <code>-{penalty} ₪</code>!",
-            "Выгорел от кликания картинок с гидрами и разбил мышку: покупка новой <code>-{penalty} ₪</code>!",
-            "Случайно обучил нейросеть отвечать цитатами Пахома: заказчик аннулировал оплату <code>-{penalty} ₪</code>!"
-        ],
-        "jackpot_phrases": [
-            "💎 <b>AI-ПРОРЫВ!</b> Твоя модель случайно прошла тест Тьюринга в споре на Дваче! Получен грант от Сколково: <code>+{reward} ₪</code>!"
-        ]
-    },
-    "spy": {
-        "title": "🕵️ Шпионаж на чужой борде",
-        "desc": "Скрытный рейд в /po/ или /int/ за инсайдами и скриншотами",
-        "tier": "Уровень 5 • Шизоид",
-        "reward_range": (130, 280),
-        "cooldown_sec": 4500,  # 75 min
-        "risk_pct": 0.20,
-        "penalty": 65,
-        "item_drop": "tinfoil",
-        "item_drop_chance": 0.05,
-        "phrases": [
-            "Проник в закрытый тред на /po/ и утащил секретные инсайды: награда <code>+{reward} ₪</code>!",
-            "Завайпал тред конкурентов на /int/ и вернулся с трофеями: залутал <code>+{reward} ₪</code>!",
-            "Слил компромат на модератора чужой доски местным хейтерам: выручил <code>+{reward} ₪</code>!",
-            "Отыскал контакты скрытого админа борды и продал инфу троллям: <code>+{reward} ₪</code>!",
-            "Устроил психологическую спецоперацию в /sex/ и посеял хаос: профит <code>+{reward} ₪</code>!",
-            "Успешно замаскировался под олдфага и украл уникальный контент: заработано <code>+{reward} ₪</code>!",
-            "Перехватил базу переписки модераторов через открытый WebSocket: прибыль <code>+{reward} ₪</code>!",
-            "Запустил вирусный щитпост на 500 ответов на вражеской борде: куш <code>+{reward} ₪</code>!",
-            "Подменил аватарки в треде на клоунов и ушёл незамеченным: гонорар <code>+{reward} ₪</code>!",
-            "Заставил весь тред спорить 6 часов о политике: заказчик перевёл <code>+{reward} ₪</code>!",
-            "Взломал приватный канал кураторов конкурирующего треда: продал дампы за <code>+{reward} ₪</code>!",
-            "Увёл 50 активных постеров с умирающей имиджборды: Абу начислил рекрут-бонус <code>+{reward} ₪</code>!"
-        ],
-        "fail_phrases": [
-            "🚨 <b>ТЕБЯ СПАЛИЛА МОДЕРАЦИЯ!</b> Админы связали твой IP и влепили штраф <code>-{penalty} ₪</code>!",
-            "Случайно запостил скриншот с открытой вкладкой своего аккаунта: деанон обошёлся в <code>-{penalty} ₪</code>!",
-            "Вражеский бот-антиспам перехватил твой прокси: потеря залога <code>-{penalty} ₪</code>!",
-            "Попался в ловушку вахтёров и отдал взятку за разбан: <code>-{penalty} ₪</code>!",
-            "Местные тролли затравили тебя так, что пришлось менять личность: расход <code>-{penalty} ₪</code>!",
-            "Сервер закрылся на техобслуживание прямо во время кражи логов: провал на <code>-{penalty} ₪</code>!",
-            "Повёлся на фейковый инсайд и запостил кринж: опозорился и заплатил неустойку <code>-{penalty} ₪</code>!"
-        ],
-        "jackpot_phrases": [
-            "💎 <b>МЕГА-ДЕАНОН!</b> Слил базу паролей администрации конкурирующего ресурса! Тёмный рынок заплатил: <code>+{reward} ₪</code>!"
+            "💎 <b>ЩЕДРЫЙ МАЖОР!</b> Пьяный айтишник перевел 500% чаевых за ночную доставку пиццы: куш <code>+{reward} ₪</code>!"
         ]
     },
     "factory": {
-        "title": "🏭 Ночная смена на Заводе",
-        "desc": "Тяжелая мужская работа у станка с перекурами и матом",
-        "tier": "Уровень 6 • Скуф-Стахановец",
-        "reward_range": (260, 520),
-        "cooldown_sec": 7200,  # 2 hours
+        "required_shifts": 10,
+        "title": "⚙️ Токарь на Днепрогэсе",
+        "desc": "Точить гайки, дышать мазутом и слушать байки старого мастера Михалыча",
+        "tier": "Уровень 2 • Пролетарий года",
+        "reward_range": (60, 110),
+        "cooldown_sec": 1200,  # 20 minutes
+        "risk_pct": 0.08,
+        "penalty": 25,
+        "item_drop": "knife",
+        "item_drop_chance": 0.06,
+        "phrases": [
+            "Выточил партию из 50 титановых болтов по ГОСТу: получка <code>+{reward} ₪</code>!",
+            "Отработал ночную смену у станка 16К20 без травм: мастер выдал <code>+{reward} ₪</code>!",
+            "Выполнил двойную норму до обеда и ушел курить в каптерку: заработано <code>+{reward} ₪</code>!"
+        ],
+        "fail_phrases": [
+            "📉 <b>БРАК НА ПРОИЗВОДСТВЕ!</b> Запорол деталь из легированной стали: вычет из зарплаты <code>-{penalty} ₪</code>!",
+            "Уронил разводной ключ в чан с маслом: мастер лишил премии <code>-{penalty} ₪</code>!"
+        ],
+        "jackpot_phrases": [
+            "💎 <b>ГОСПЛАН ПЕРЕВЫПОЛНЕН!</b> Завод получил оборонный заказ, всем начислена премия: <code>+{reward} ₪</code>!"
+        ]
+    },
+    "shawarma": {
+        "required_shifts": 25,
+        "title": "🌯 Шаурмист у вокзала",
+        "desc": "Крутить сочные свитки богов, сыпать секретный соус и шутить с таксистами",
+        "tier": "Уровень 3 • Повелитель Лаваша",
+        "reward_range": (90, 160),
+        "cooldown_sec": 1800,  # 30 minutes
+        "risk_pct": 0.12,
+        "penalty": 40,
+        "item_drop": "pills",
+        "item_drop_chance": 0.07,
+        "phrases": [
+            "Скрутил 40 сырных шавух в час пик у метро: чистый навар <code>+{reward} ₪</code>!",
+            "Секретный чесночный соус свёл с ума местных студентов: касса пополнилась на <code>+{reward} ₪</code>!",
+            "Продал шаурму «Богатырскую» с тремя видами мяса: щедрый навар <code>+{reward} ₪</code>!"
+        ],
+        "fail_phrases": [
+            "🚨 <b>ВИЗИТ РОСПОТРЕБНАДЗОРА!</b> На кухне нашли кота без санитарной книжки: штраф <code>-{penalty} ₪</code>!",
+            "Перепутал острый соус с экстрактом Хабанеро, клиент вызвал полицию: откуп <code>-{penalty} ₪</code>!"
+        ],
+        "jackpot_phrases": [
+            "💎 <b>ОПТОВЫЙ ЗАКАЗ!</b> Свадебный кортеж скупил всё мясо на вертеле: рекордная выручка <code>+{reward} ₪</code>!"
+        ]
+    },
+    "cashier": {
+        "required_shifts": 35,
+        "title": "🍷 Кассир в Красном и Белом",
+        "desc": "Пробивать чеки, продавать чипсы по акции и успокаивать местных алконавтов",
+        "tier": "Уровень 4 • Страж Алко-Маркета",
+        "reward_range": (120, 210),
+        "cooldown_sec": 2400,  # 40 minutes
         "risk_pct": 0.15,
-        "penalty": 100,
-        "item_drop": "shield",
+        "penalty": 50,
+        "item_drop": "pepperspray",
+        "item_drop_chance": 0.06,
+        "phrases": [
+            "Успешно закрыл смену в КБ без недостачи по водке: зарплата <code>+{reward} ₪</code>!",
+            "Впарил 20 банок просроченных шпрот по акции 'Товар дня': премия <code>+{reward} ₪</code>!",
+            "Обезвредил пьяного дебошира шваброй, директор выписал бонус <code>+{reward} ₪</code>!"
+        ],
+        "fail_phrases": [
+            "📉 <b>НЕДОСТАЧА НА РЕВИЗИИ!</b> Местные школьники утащили элитный вискарь: штраф из ЗП <code>-{penalty} ₪</code>!",
+            "Уронил пирамиду из Балтики 9 при разгрузке паллета: бой посуды <code>-{penalty} ₪</code>!"
+        ],
+        "jackpot_phrases": [
+            "💎 <b>ПРЕМИЯ ОТ СЕТИ!</b> Лучший кассир месяца по продажам портвейна «Три Топора»: премия <code>+{reward} ₪</code>!"
+        ]
+    },
+    "construction": {
+        "required_shifts": 50,
+        "title": "🧱 Разнорабочий на стройке",
+        "desc": "Таскать мешки с цементом, месить раствор и слушать мат прораба",
+        "tier": "Уровень 5 • Бетонный гладиатор",
+        "reward_range": (160, 280),
+        "cooldown_sec": 3600,  # 1 hour
+        "risk_pct": 0.18,
+        "penalty": 60,
+        "item_drop": "tinfoil",
         "item_drop_chance": 0.05,
         "phrases": [
-            "Отработал ночную смену на станке с ЧПУ без единого косяка: честная получка <code>+{reward} ₪</code>!",
-            "Выточил партию шестерней для комбайнов. Бригадир выписал премию: <code>+{reward} ₪</code>!",
-            "Подменил пьяного Михалыча на погрузчике и спас план цеха: заработано <code>+{reward} ₪</code>!",
-            "Отремонтировал главный паровой котел при помощи изоленты и мата: премия <code>+{reward} ₪</code>!",
-            "Сдал смену вовремя, бригадир пожал руку и насыпал премиальных: <code>+{reward} ₪</code>!",
-            "Выполнил двойную норму по отливке чугунных болванок: за стахановский труд <code>+{reward} ₪</code>!",
-            "Забрал ночную надбавку за работу во вредном цеху: получено <code>+{reward} ₪</code>!",
-            "Нашёл в цеху неучтённый моток медной проволоки и легально сдал: <code>+{reward} ₪</code>!",
-            "Завод закрыл квартальный план! Всему цеху выплатили 13-ю зарплату: <code>+{reward} ₪</code>!",
-            "Победил в соцсоревновании цеха по сборке подшипников: приз <code>+{reward} ₪</code>!",
-            "Собрал дизель-генератор за рекордные 4 часа: начальник цеха выдал <code>+{reward} ₪</code>!",
-            "Предотвратил аварию на гидравлическом прессе: директор лично наградил <code>+{reward} ₪</code>!"
+            "Залил 5 кубов бетона под залихватский мат прораба Петровича: получка <code>+{reward} ₪</code>!",
+            "Разгрузил фуру со шлакоблоками за 2 часа, спина в труху: на кармане <code>+{reward} ₪</code>!",
+            "Спас стройку от затопления, забив чопик в трубу: премия <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
-            "🥴 Напился с мужиками в каптёрке и уронил деталь на ногу! Штраф от начальника цеха <code>-{penalty} ₪</code>!",
-            "Сломал алмазный резец на токарном станке по неосторожности: вычет из зарплаты <code>-{penalty} ₪</code>!",
-            "Проспал начало смены в раздевалке, мастер лишил премии: штраф <code>-{penalty} ₪</code>!",
-            "Забыл надеть каску и попался инженеру по ТБ: взыскание <code>-{penalty} ₪</code>!",
-            "Брак в партии деталей на 50 000 рублей: удержали с зарплаты <code>-{penalty} ₪</code>!",
-            "Охрана на проходной поймала с пачкой электродов в кармане: штраф <code>-{penalty} ₪</code>!",
-            "Замкнул щиток высокого напряжения, обесточив половину завода: ремонт за твой счёт <code>-{penalty} ₪</code>!"
+            "🧱 <b>КИРПИЧ НА ГОЛОВУ!</b> Уронил ведро с раствором на ногу бригадиру: штраф <code>-{penalty} ₪</code>!",
+            "Прораб кинул на половину зарплаты за перекур: удержано <code>-{penalty} ₪</code>!"
         ],
         "jackpot_phrases": [
-            "💎 <b>СТАХАНОВСКИЙ КУШ!</b> Нашёл в запасниках завода нетронутый токарный станок 1968 года в масле и выгодно реализовал: <code>+{reward} ₪</code>!"
+            "💎 <b>ХАЛЯВНЫЙ МЕТАЛЛОЛОМ!</b> Нашёл в котловане 300 кг медного кабеля и сдал тайком за <code>+{reward} ₪</code>!"
         ]
     },
-    "it_freelance": {
-        "title": "💻 IT-Фриланс / Вкатывание",
-        "desc": "Правка CSS по ночам, написание ботов и костылей для индусов",
-        "tier": "Уровень 7 • Сеньор-Помидор",
-        "reward_range": (380, 750),
-        "cooldown_sec": 10800,  # 3 hours
-        "risk_pct": 0.18,
-        "penalty": 140,
-        "item_drop": "bribe",
-        "item_drop_chance": 0.04,
+    "moderator": {
+        "required_shifts": 75,
+        "title": "🛡️ Модератор Двача (/b/)",
+        "desc": "Чистка тредов от цп, вайпов, говна и бана неугодных анонов",
+        "tier": "Уровень 6 • Санитар Палаты",
+        "reward_range": (250, 420),
+        "cooldown_sec": 7200,  # 2 hours
+        "risk_pct": 0.22,
+        "penalty": 100,
+        "item_drop": "lootbox_trash",
+        "item_drop_chance": 0.06,
         "phrases": [
-            "Закрыл заказ на доработку интернет-магазина на WordPress: клиент перевёл <code>+{reward} ₪</code>!",
-            "Написал парсер цен конкурентов для перекупа: гонорар <code>+{reward} ₪</code>!",
-            "Сверстал лендинг для продажи курсов успешного успеха: заказчик насыпал <code>+{reward} ₪</code>!",
-            "Пофиксил утечку памяти в бэкенде стартапа за 15 минут: премия <code>+{reward} ₪</code>!",
-            "Написал Телеграм-бота для приёма донатов стримерше: оплата <code>+{reward} ₪</code>!",
-            "Оптимизировал SQL-запросы в старой базе данных: тимлид перевёл <code>+{reward} ₪</code>!",
-            "Сделал скрипт автопостинга в соцсети для криптопроекта: получено <code>+{reward} ₪</code>!",
-            "Прошёл собеседование на позицию мидла с фейковым резюме и получил аванс: <code>+{reward} ₪</code>!"
+            "Успешно отбил ночной вайп пастами про говно: админ отсыпал <code>+{reward} ₪</code>!",
+            "Забанил 50 школьников за однотипные треды про тянок: профит <code>+{reward} ₪</code>!",
+            "Удалил шок-контент до того, как его увидел РКН: премия за спасение борды <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
-            "💥 Случайно дропнул продакшн базу данных без бэкапа! Неустойка заказчику <code>-{penalty} ₪</code>!",
-            "Заказчик с биржи оказался скамером и кинул на оплату после сдачи проекта: убыток <code>-{penalty} ₪</code>!",
-            "Залил приватные API-ключи клиента в публичный репозиторий на GitHub: штраф <code>-{penalty} ₪</code>!",
-            "Выгорел дотла после 18 часов дебага чужого кода: расходы на психотерапевта <code>-{penalty} ₪</code>!"
+            "🔥 <b>ВЫГОРАНИЕ И ШИЗА!</b> Начитался тредов в /sn/ и /b/, поехала крыша: донаты психотерапевту <code>-{penalty} ₪</code>!",
+            "Случайно забанил трейлера и ОПа главного треда: штраф от админа <code>-{penalty} ₪</code>!"
         ],
         "jackpot_phrases": [
-            "💎 <b>ВЫХОД НА IPO!</b> Твой pet-проект выкупил крупный американский венчурный фонд! Выплата: <code>+{reward} ₪</code>!"
+            "💎 <b>ДОНАТ ОТ КИТА!</b> Благодарный анон закрепил донат за удаление треда с его деаноном: куш <code>+{reward} ₪</code>!"
         ]
     },
-    "scam": {
-        "title": "🧪 Опасная темка / Скам мамонтов",
-        "desc": "Высокорисковая спекуляция, крипта и развод лохов на Авито",
-        "tier": "Уровень 8 • Криминальный барон",
-        "reward_range": (550, 1100),
+    "hacker": {
+        "required_shifts": 100,
+        "title": "💻 Теневой Кардер & Скаммер",
+        "desc": "Прогрев мамонтов, арбитраж крипты и слив дампов баз данных",
+        "tier": "Уровень 7 • Кибер-Мафиози",
+        "reward_range": (400, 750),
         "cooldown_sec": 14400,  # 4 hours
         "risk_pct": 0.28,
-        "penalty": 220,
+        "penalty": 200,
         "item_drop": "partyvan",
-        "item_drop_chance": 0.04,
-        "phrases": [
-            "Продал мамонту воздух в красивой обёртке под видом нового мемкоина: сорвал куш <code>+{reward} ₪</code>!",
-            "Успешно провернул арбитраж крипты через P2P-обменник: чистый профит <code>+{reward} ₪</code>!",
-            "Развёл перекупа на Авито на предоплату за фальшивую RTX 4090: наварил <code>+{reward} ₪</code>!",
-            "Запустил скам-бота в Телеграме и залутал депозиты доверчивых школьников: <code>+{reward} ₪</code>!",
-            "Продал инфоцыганский курс 'Как стать криптомиллионером за 3 дня': заработал <code>+{reward} ₪</code>!",
-            "Пампанул шиткоин в закрытом чате хомяков и вовремя вышел на пике: куш <code>+{reward} ₪</code>!",
-            "Оформил возврат на маркетплейсе по поддельному чеку: чистая прибыль <code>+{reward} ₪</code>!",
-            "Продал китайскую копию AirPods под видом оригинала в метро: профит <code>+{reward} ₪</code>!",
-            "Сдал в аренду несуществующую квартиру на Патриарших троим приезжим: залутал <code>+{reward} ₪</code>!",
-            "Перехватил дроп редких NFT и перепродал на OpenSea американцам: профит <code>+{reward} ₪</code>!"
-        ],
-        "fail_phrases": [
-            "🚔 <b>ОБЛАВА ОБЭП!</b> Следователь вышел на твой след, пришлось откупиться: взятка <code>-{penalty} ₪</code>!",
-            "Мамонт оказался оперуполномоченным под прикрытием: еле унёс ноги, потеряв <code>-{penalty} ₪</code>!",
-            "Криптобиржа заблокировала аккаунт по 115-ФЗ вместе с депозитом: убыток <code>-{penalty} ₪</code>!",
-            "Обманутый перекуп подкараулил у подъезда с битой: оплата больничного <code>-{penalty} ₪</code>!",
-            "Скам-смартконтракт взломали хакеры и увели всю кассу: потеряно <code>-{penalty} ₪</code>!",
-            "Дроп сбежал со всеми деньгами в Грузию: чистый убыток на <code>-{penalty} ₪</code>!"
-        ],
-        "jackpot_phrases": [
-            "💎 <b>СКАМ ВЕКА!</b> Запустил фейковую биржу и залутал миллион долларов у криптофонда! Куш: <code>+{reward} ₪</code>!"
-        ]
-    },
-    "deputy": {
-        "title": "🏛️ Помощник депутата / Распил",
-        "desc": "Освоение грантов на патриотизм, импортозамещение и укладка плитки",
-        "tier": "Уровень 9 • Хозяин Жизни",
-        "reward_range": (900, 1800),
-        "cooldown_sec": 28800,  # 8 hours
-        "risk_pct": 0.33,
-        "penalty": 400,
-        "item_drop": "megaphone",
         "item_drop_chance": 0.05,
         "phrases": [
-            "Успешно освоил грант на создание 'Отечественной ОС на базе Linux': чистый распил <code>+{reward} ₪</code>!",
-            "Переложил плитку на центральной площади в третий раз за месяц: подрядчик отстегнул <code>+{reward} ₪</code>!",
-            "Выиграл тендер на поставку золотых ершиков в мэрию: откат составил <code>+{reward} ₪</code>!",
-            "Запустил патриотический фестиваль с бюджетом в 50 млн (потратил 500 рублей на флажки): профит <code>+{reward} ₪</code>!",
-            "Провёл экспертизу школьного питания и закрыл глаза на просрочку: благодарность от поставщика <code>+{reward} ₪</code>!",
-            "Пролоббировал запрет самокатов в пользу каршеринга своего племянника: солидный бонус <code>+{reward} ₪</code>!",
-            "Одобрил строительство элитного ТЦ на месте исторического сквера: застройщик занёс чемодан на <code>+{reward} ₪</code>!",
-            "Списал 10 миллионов на разработку патриотической видеоигры: нарисовали 2 скриншота, остаток в карман: <code>+{reward} ₪</code>!",
-            "Продал служебную Камри по остаточной стоимости своей тёще и перепродал на рынке: <code>+{reward} ₪</code>!",
-            "Оформил 50 родственников на фиктивные должности консультантов в думу: собрал получки на <code>+{reward} ₪</code>!"
+            "Прогрел мамонта на покупку скам-сигналов для крипты: залутал <code>+{reward} ₪</code>!",
+            "Сделал Rugpull скам-токена $DVACH, состриг хомяков: профит <code>+{reward} ₪</code>!",
+            "Прокрутил P2P-связку с профитом 12%: чистый навар <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
-            "⚖️ <b>СЧЁТНАЯ ПАЛАТА!</b> Приехала проверка из Москвы, пришлось экстренно делиться: откат <code>-{penalty} ₪</code>!",
-            "ФСБ заинтересовалась поставками песка по цене золота: замятие дела обошлось в <code>-{penalty} ₪</code>!",
-            "Конкуренты из другой фракции слили компромат на твои офшоры в Дубае: тушение скандала <code>-{penalty} ₪</code>!",
-            "Депутат свалил всю вину за недострой больницы на тебя: крупный штраф <code>-{penalty} ₪</code>!"
+            "🚔 <b>ОБЛАВА ОБЭП!</b> Следователь вышел на криптокошелек, пришлось откупаться: взятка <code>-{penalty} ₪</code>!",
+            "Мамонт оказался майором ФСБ: еле унёс ноги, потеряв <code>-{penalty} ₪</code>!"
         ],
         "jackpot_phrases": [
-            "💎 <b>ГОСЗАКАЗ ГОДА!</b> Выиграл генеральный подряд на постройку космодрома в степи! Освоено: <code>+{reward} ₪</code>!"
+            "💎 <b>СКАМ ВЕКА!</b> Взломал смарт-контракт дефи-биржи и вывел куш в <code>+{reward} ₪</code>!"
         ]
     }
 }
@@ -349,53 +188,145 @@ def get_vacancies() -> Dict[str, Dict[str, Any]]:
 
 def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str, Optional[str]]:
     """
-    Executes job outcome.
-    Returns: (is_success, amount_change, text_message, item_dropped_key_or_none)
+    Executes job action with interconnected RPG Wardrobe Gear buffs & Set Bonuses.
     """
     if job_id not in WORK_VACANCIES:
         return False, 0, "❌ Неизвестная вакансия.", None
 
     job = WORK_VACANCIES[job_id]
+    req_shifts = job.get("required_shifts", 0)
+    current_shifts = current_items.get("work_shifts", 0)
+    if current_shifts < req_shifts:
+        return False, 0, f"🔒 Закрыто! Требуется стаж: {req_shifts} смен (у тебя {current_shifts}). Начни с доступных вакансий!", None
+
     now = int(time.time())
     work_timers = current_items.setdefault("work_cooldowns", {})
     last_time = work_timers.get(job_id, 0)
     passed = now - last_time
 
-    if passed < job["cooldown_sec"]:
-        left_min = ((job["cooldown_sec"] - passed) // 60) + 1
+    # --- RPG WARDROBE BUFFS & SET BONUSES ---
+    from wardrobe_engine import get_active_set_bonuses
+    eq_torso = current_items.get("equipped_torso")
+    eq_head = current_items.get("equipped_head")
+    eq_face = current_items.get("equipped_face")
+    eq_feet = current_items.get("equipped_feet")
+    active_sets = get_active_set_bonuses(current_items)
+
+    gear_buffs = []
+    salary_multiplier = 1.0
+
+    # 🩴 Slippers: -20% cooldown reduction
+    cooldown_sec = job["cooldown_sec"]
+    if eq_feet == "feet_slippers":
+        cooldown_sec = int(cooldown_sec * 0.80)
+        gear_buffs.append("🩴 Сланцы: -20% кулдаун")
+
+    if passed < cooldown_sec:
+        left_min = ((cooldown_sec - passed) // 60) + 1
         return False, 0, f"⏳ Кулдаун! Эта работа будет доступна через {left_min} мин.", None
+
+    # Set Bonus: Wasserman
+    has_wasserman_set = any(s["id"] == "set_wasserman" for s in active_sets)
+    has_riot_set = any(s["id"] == "set_riot_police" for s in active_sets)
+    has_anime_set = any(s["id"] == "set_anime_hikka" for s in active_sets)
+    has_skuf_set = any(s["id"] == "set_gop_skuf" for s in active_sets)
+
+    if has_wasserman_set:
+        salary_multiplier += 0.40
+        gear_buffs.append("🦺 Сет Онотоле: +40% ЗП")
+    else:
+        if eq_torso == "body_wasserman":
+            salary_multiplier += 0.25
+            gear_buffs.append("🦺 Вассерман +25%")
+        if eq_face == "face_wasserman_glasses":
+            salary_multiplier += 0.15
+            gear_buffs.append("🥽 Очки Онотоле +15%")
+
+    if has_skuf_set:
+        salary_multiplier += 0.35
+        gear_buffs.append("🩲 Сет Скуфа: +35% чаевые")
+    elif eq_head == "hat_crown":
+        salary_multiplier += 0.20
+        gear_buffs.append("👑 VIP Корона +20%")
+
+    # 🪖 Helmet or Riot Set: fine immunity
+    has_fine_immunity = (eq_head == "hat_helmet" or has_riot_set)
+
+    # 🩲 Tracksuit / Anime Set: loot drop multiplier
+    drop_rate_mult = 2.0 if (eq_torso == "body_tracksuit" or has_anime_set) else 1.0
+    if has_anime_set:
+        gear_buffs.append("👘 Сет Аниме: x2 дроп кейсов")
+    elif eq_torso == "body_tracksuit":
+        gear_buffs.append("🩲 Треники: x2 дроп")
 
     # Check for Failure
     is_fail = (job.get("risk_pct", 0) > 0 and random.random() < job["risk_pct"])
     if is_fail:
         penalty = job.get("penalty", 30)
         work_timers[job_id] = now
+
+        if has_fine_immunity:
+            return False, 0, "🪖 <b>БРОНЯ ОМОНА СПАСЛА!</b> Тебя пытались оштрафовать, но броня защитила от штрафа (0 ₪ потерь)!", None
+
         fail_list = job.get("fail_phrases", ["🚨 Штраф: -{penalty} ₪!"])
         raw_fail = random.choice(fail_list).format(penalty=penalty, reward=0)
         clean_fail = re.sub(r'<[^>]+>', '', raw_fail)
         return False, penalty, clean_fail, None
 
-    # Check for Jackpot (4% chance on success)
-    is_jackpot = random.random() < 0.04 and bool(job.get("jackpot_phrases"))
+    # Check for Jackpot (5% chance)
+    is_jackpot = random.random() < 0.05 and bool(job.get("jackpot_phrases"))
     if is_jackpot:
         mult = random.randint(2, 3)
         base_reward = random.randint(job["reward_range"][0], job["reward_range"][1])
-        reward = base_reward * mult
+        reward = int(base_reward * mult * salary_multiplier)
         work_timers[job_id] = now
+        current_items["work_shifts"] = current_items.get("work_shifts", 0) + 1
         jp_tmpl = random.choice(job["jackpot_phrases"]).format(reward=reward, penalty=0)
         clean_jp = re.sub(r'<[^>]+>', '', jp_tmpl)
+        if gear_buffs:
+            clean_jp += f" (Бонусы: {', '.join(gear_buffs)})"
         return True, reward, clean_jp, None
 
     # Standard Success
-    reward = random.randint(job["reward_range"][0], job["reward_range"][1])
+    base_reward = random.randint(job["reward_range"][0], job["reward_range"][1])
+    reward = int(base_reward * salary_multiplier)
     work_timers[job_id] = now
+    current_items["work_shifts"] = current_items.get("work_shifts", 0) + 1
+    total_shifts = current_items["work_shifts"]
     succ_list = job.get("phrases", ["✅ Успешно! +{reward} ₪"])
     raw_succ = random.choice(succ_list).format(reward=reward, penalty=0)
     clean_succ = re.sub(r'<[^>]+>', '', raw_succ)
 
-    # Check for Random Item Drop
+    # Check work milestones achievements
+    import achievements_engine
+    if total_shifts >= 10:
+        unl, a_info = achievements_engine.check_and_unlock_achievement(current_items, "ach_work_10")
+        if unl and a_info:
+            reward += a_info["reward_cash"]
+            clean_succ += f" | 🏆 Ачивка: {a_info['name']} (+{a_info['reward_cash']} ₪)!"
+    if total_shifts >= 50:
+        unl, a_info = achievements_engine.check_and_unlock_achievement(current_items, "ach_work_50")
+        if unl and a_info:
+            reward += a_info["reward_cash"]
+            clean_succ += f" | 🏆 Ачивка: {a_info['name']} (+{a_info['reward_cash']} ₪)!"
+    if total_shifts >= 100:
+        unl, a_info = achievements_engine.check_and_unlock_achievement(current_items, "ach_work_100")
+        if unl and a_info:
+            reward += a_info["reward_cash"]
+            clean_succ += f" | 🏆 Ачивка: {a_info['name']} (+{a_info['reward_cash']} ₪)!"
+
+    # Item Drop calculation
     dropped_item = None
-    if job.get("item_drop") and random.random() < job.get("item_drop_chance", 0.0):
-        dropped_item = job["item_drop"]
+    if job.get("item_drop"):
+        chance = job.get("item_drop_chance", 0.05) * drop_rate_mult
+        if random.random() < chance:
+            dropped_item = job["item_drop"]
+
+    # 8% chance to find a Trash Lootbox if wearing Grocery Bag
+    if eq_head == "hat_bag" and random.random() < 0.08:
+        dropped_item = "lootbox_trash"
+
+    if gear_buffs:
+        clean_succ += f" (Шмот: {', '.join(gear_buffs)})"
 
     return True, reward, f"✅ {clean_succ}", dropped_item

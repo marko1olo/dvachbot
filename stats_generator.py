@@ -2741,19 +2741,16 @@ def fetch_user_stats_data(user_id: int, board_id: str) -> dict:
     with contextlib.closing(connect_stats_db()) as conn:
         with contextlib.closing(conn.cursor()) as c:
 
-            # 1. Fetch user profile & active items
-            c.execute("SELECT balance, role, created_at, custom_prefix, active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+            # 1. Fetch user profile & global balance across all boards
+            c.execute("SELECT SUM(balance), MAX(role), MIN(created_at), MAX(custom_prefix), MAX(active_items) FROM Users WHERE user_id = ?", (user_id,))
             profile = c.fetchone()
-            if not profile:
-                c.execute("SELECT balance, role, created_at, custom_prefix, active_items FROM Users WHERE user_id = ?", (user_id,))
-                profile = c.fetchone()
 
-            if profile:
-                balance = profile[0] if len(profile) > 0 and profile[0] is not None else 0.0
-                role = profile[1] if len(profile) > 1 and profile[1] is not None else 'user'
-                created_at = profile[2] if len(profile) > 2 and profile[2] is not None else time.time()
-                custom_prefix = profile[3] if len(profile) > 3 else None
-                active_items_str = profile[4] if len(profile) > 4 and profile[4] else '{}'
+            if profile and profile[0] is not None:
+                balance = float(profile[0])
+                role = profile[1] or 'user'
+                created_at = profile[2] or time.time()
+                custom_prefix = profile[3]
+                active_items_str = profile[4] or '{}'
             else:
                 balance, role, created_at, custom_prefix, active_items_str = 0.0, 'user', time.time(), None, '{}'
 
@@ -2966,11 +2963,12 @@ def _format_text_report(data: UserStatsCardData) -> str:
         f"📝 <b>Написано постов:</b> {data.posts_count:,}\n"
         f"🎭 <b>Получено реакций:</b> +{data.rx_received:,} (Одобрение: {data.approval_pct}%)\n"
         f"⚡ <b>Поставлено реакций:</b> {data.rx_given:,}\n"
-        f"💰 <b>Баланс:</b> {int(data.balance):,} RUB\n"
+        f"💰 <b>Баланс:</b> <code>{int(data.balance):,} ₪</code>\n"
         f"🔇 <b>Схвачено мутов:</b> {data.mutes_count}\n"
         f"🌀 <b>Кринж-фактор:</b> {data.cringe_factor}%\n"
         f"🌙 <b>Хронотип:</b> {data.chronotype}\n\n"
-        f"💬 <i>\"{data.slang_comment}\"</i>"
+        f"💬 <i>\"{data.slang_comment}\"</i>\n"
+        f"💡 <i>Карточка персонажа RPG и гардероб: /avatar</i>"
     )
 
 CARD_THEMES = {

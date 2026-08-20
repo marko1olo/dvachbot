@@ -45,16 +45,21 @@ cmd_rob и cmd_curse ИМЕННО ОТСЮДА. Они проходят, нич�
 import json
 import time
 import random
+import re
 import asyncio
 import httpx
 import os
+import logging
+
+logger = logging.getLogger(__name__)
+
 from datetime import datetime, timedelta, UTC
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, TelegramAPIError
 from common.anon_identity import get_anon_id
-from common.database import add_user_global_balance, get_user_global_balance
+from common.database import add_user_global_balance, get_user_global_balance, deduct_user_global_balance
 
 from common.db_pool import get_pool, db_lock
 
@@ -69,6 +74,44 @@ async def _purge_blocked_user(user_id: int, board_id: str | None = None):
             await main.purge_users_from_board_ram(board_id, [user_id])
     except Exception:
         pass
+
+
+def apply_tinfoil_damage(
+    target_items: dict,
+    now: int,
+    hours_damage: float = 6.0,
+    burn_chance: float = 0.0
+) -> tuple[bool, int, int, int]:
+    """
+    Применяет урон по прочности Шапочки из фольги (tinfoil_hat).
+    - target_items: dict активных предметов цели (мутируется на месте).
+    - now: текущее unix-время (int).
+    - hours_damage: сколько часов прочности срезается за удар.
+    - burn_chance: вероятность (0.0..1.0) мгновенного сгорания/разрушения шапочки.
+    
+    Возвращает кортеж: (destroyed: bool, left_hours: int, left_mins: int, remaining_seconds: int)
+    """
+    hat_until = target_items.get("tinfoil_hat", 0)
+    if hat_until <= now:
+        target_items.pop("tinfoil_hat", None)
+        return True, 0, 0, 0
+
+    current_remaining = hat_until - now
+    damage_sec = int(hours_damage * 3600)
+    
+    is_burned = False
+    if burn_chance > 0.0 and random.random() < burn_chance:
+        is_burned = True
+        
+    new_remaining = current_remaining - damage_sec
+    if is_burned or new_remaining <= 0:
+        target_items.pop("tinfoil_hat", None)
+        return True, 0, 0, 0
+    else:
+        target_items["tinfoil_hat"] = now + new_remaining
+        left_h = new_remaining // 3600
+        left_m = (new_remaining % 3600) // 60
+        return False, left_h, left_m, new_remaining
 
 
 # ====================
@@ -259,16 +302,16 @@ async def cmd_heist(message: types.Message, board_id: str | None = None):
         if score > 0.7:
             stolen = 0
             async with db_lock:
-                async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
-                    row = await c.fetchone()
-                    t_balance = row[0] if row and row[0] else 0
-                
+                t_balance = await get_user_global_balance(db, target_id)
                 if t_balance > 0:
                     stolen = min(int(t_balance * 0.4), 1500)
                     if stolen > 0:
-                        await db.execute("UPDATE Users SET balance = MAX(0, balance - ?) WHERE user_id = ? AND board_id = ?", (stolen, target_id, board_id))
-                        await db.execute("UPDATE Users SET balance = balance + ? WHERE user_id = ? AND board_id = ?", (stolen, user_id, board_id))
-                        await db.commit()
+                        ok, _ = await deduct_user_global_balance(db, target_id, board_id, stolen)
+                        if ok:
+                            await add_user_global_balance(db, user_id, board_id, stolen)
+                            await db.commit()
+                        else:
+                            stolen = 0
             
             if stolen > 0:
                 await message.reply(f"✅ **УСПЕХ! (Оценка ИИ: {int(score*100)}/100)**\n_{narrative}_\n\n💸 Ты виртуозно украл **{stolen}** шекелей!", parse_mode="Markdown")
@@ -350,13 +393,24 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
 
     if target_items.get("tinfoil_hat", 0) > now:
         active_items["partyvan_gun"] = False
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(target_items, now, hours_damage=12.0, burn_chance=0.50)
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(target_items), target_id, board_id))
             await db.commit()
-        try: await message.bot.send_message(user_id, "🚔 Твой вызов ОМОНа отменили! У жертвы была надета Шапочка из фольги, они не смогли её запеленговать.", parse_mode="HTML")
+        
+        if destroyed:
+            attacker_msg = "🚔 Твой вызов ОМОНа отбит, но Шапочка из фольги жертвы <b>СГОРЕЛА ДОТЛА</b> от штурма спецназа! Защиты больше нет — цель открыта для повторной атаки!"
+            target_msg = f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b> Анон <b>[{get_anon_id(user_id)}]</b> попытался вызвать на тебя Пативэн, но Шапочка спасла тебя от КПЗ и <b>расплавилась дотла</b>! Ты остался <b>БЕЗ ЗАЩИТЫ</b>!"
+        else:
+            attacker_msg = f"🚔 Твой вызов ОМОНа отбит Шапочкой из фольги! Но от мощного штурма её прочность упала на 12ч (осталось {left_h}ч {left_m}мин)."
+            target_msg = f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался вызвать на тебя Пативэн, но Шапочка из фольги скрыла твои координаты! Она потеряла 12ч защиты (осталось {left_h}ч {left_m}мин)."
+
+        try: await message.bot.send_message(user_id, attacker_msg, parse_mode="HTML")
         except Exception: pass
-        try: await message.bot.send_message(target_id, f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался вызвать на тебя Пативэн, но Шапочка из фольги скрыла твои координаты!", parse_mode="HTML")
+        try: await message.bot.send_message(target_id, target_msg, parse_mode="HTML")
         except Exception: pass
         try: await message.delete()
         except Exception: pass
@@ -545,20 +599,33 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
     now = int(time.time())
     if target_items.get("tinfoil_hat", 0) > now:
         # Tinfoil blocks the attack
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(target_items, now, hours_damage=4.0, burn_chance=0.15)
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(target_items), target_id, board_id))
             await db.commit()
-        try: await message.bot.send_message(user_id, "🔪 Твоя заточка сломалась о Шапочку из фольги жертвы! Ограбление не удалось.", parse_mode="HTML")
+            
+        if destroyed:
+            attacker_msg = "🔪 Твоя заточка сломалась о Шапочку из фольги жертвы! Ограбление не удалось, но от твоего удара Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            target_msg = f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b> Анон <b>[{get_anon_id(user_id)}]</b> попытался ограбить тебя, но твоя Шапочка из фольги спасла твои шекели! От удара она <b>была уничтожена</b>."
+        else:
+            attacker_msg = f"🔪 Твоя заточка сломалась о Шапочку из фольги жертвы! Ограбление не удалось. Фольга жертвы помялась (-4ч, осталось {left_h}ч {left_m}мин)."
+            target_msg = f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался ограбить тебя, но твоя Шапочка из фольги спасла твои шекели! Она потеряла 4ч прочности (осталось {left_h}ч {left_m}мин)."
+
+        try: await message.bot.send_message(user_id, attacker_msg, parse_mode="HTML")
         except Exception: pass
-        try: await message.bot.send_message(target_id, f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался ограбить тебя, но твоя Шапочка из фольги спасла твои шекели!", parse_mode="HTML")
+        try: await message.bot.send_message(target_id, target_msg, parse_mode="HTML")
         except Exception: pass
         try: await message.delete()
         except Exception: pass
         return
 
-    stolen = min(target_balance, random.randint(50, 300))
-    if stolen <= 0:
+    pct = random.uniform(0.1, 0.3)
+    max_cap = 3000 if target_balance >= 10000 else (2000 if target_balance >= 5000 else 1000)
+    stolen = min(target_balance, max(1, min(int(target_balance * pct), max_cap)))
+    if target_balance <= 0:
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
@@ -655,13 +722,24 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
     except Exception: target_items = {}
 
     if target_items.get("tinfoil_hat", 0) > now:
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(target_items, now, hours_damage=4.0, burn_chance=0.10)
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(target_items), target_id, board_id))
             await db.commit()
-        try: await message.bot.send_message(user_id, "🚽 Твоё проклятие отскочило от Шапочки из фольги жертвы! Своё слабительное ты потратил впустую.", parse_mode="HTML")
+            
+        if destroyed:
+            attacker_msg = "🚽 Твоё проклятие отскочило от Шапочки из фольги жертвы! Своё слабительное ты потратил впустую, но от едкой магии Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            target_msg = f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b> Анон <b>[{get_anon_id(user_id)}]</b> попытался подсыпать тебе слабительное, но твоя Шапочка из фольги спасла твои штаны! От едкой химии она <b>расплавилась</b>!"
+        else:
+            attacker_msg = f"🚽 Твоё проклятие отскочило от Шапочки из фольги жертвы! Своё слабительное ты потратил впустую. Фольга жертвы потеряла 4ч (осталось {left_h}ч {left_m}мин)."
+            target_msg = f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался подсыпать тебе слабительное, но твоя Шапочка из фольги спасла твои штаны! Она потеряла 4ч прочности (осталось {left_h}ч {left_m}мин)."
+
+        try: await message.bot.send_message(user_id, attacker_msg, parse_mode="HTML")
         except Exception: pass
-        try: await message.bot.send_message(target_id, f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался подсыпать тебе слабительное, но твоя Шапочка из фольги спасла твои штаны!", parse_mode="HTML")
+        try: await message.bot.send_message(target_id, target_msg, parse_mode="HTML")
         except Exception: pass
         try: await message.delete()
         except Exception: pass
@@ -687,57 +765,103 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
     try: await message.delete()
     except Exception: pass
 
-@economy_router.message(Command("mega"))
-async def cmd_mega(message: types.Message, board_id: str | None = None):
+@economy_router.message(Command("schizopill", "schizo_pill", "шизотаблетка", "шизопил"))
+async def cmd_schizopill(message: types.Message, board_id: str | None = None):
     if not board_id: return
     user_id = message.from_user.id
     target_id = await get_reply_target(message)
     if not target_id:
-        await message.reply("Сделай Reply на СВОЙ пост, который хочешь закрепить!")
+        await message.reply("Сделай Reply на пост жертвы, чтобы скормить Шизо-Таблетку!")
         return
-    if target_id != user_id:
-        await message.reply("Мегафон работает только на свои собственные посты!")
+    if target_id == user_id:
+        await message.reply("Ты пытаешься скормить таблетку самому себе.")
         return
-        
+
     db = await get_pool()
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
         row = await c.fetchone()
         active_items_str = row[0] if row and row[0] else "{}"
     try: active_items = json.loads(active_items_str)
     except Exception: active_items = {}
-        
-    if not active_items.get("megaphone_gun"):
-        await message.reply("У тебя нет рупора! Купи его в /shop.")
+
+    if not active_items.get("schizopill_gun"):
+        await message.reply("У тебя нет Шизо-Таблетки! Купи её в /shop.")
         return
-        
-    active_items["megaphone_gun"] = False
-    
-    # Try to pin the message
+
+    from shared_state import count_active_attacker_effects, register_attacker_effect
+    if count_active_attacker_effects("schizopill_gun", user_id) >= 2:
+        await message.reply(
+            "💊 <b>Лимит активных шизо-проклятий!</b>\n"
+            "Ты уже накачал таблетками 2 анонов одновременно.\n"
+            "Подожди окончания действия эффекта у жертв, прежде чем скармливать новую.\n"
+            "Шизо-Таблетка осталась в твоем рюкзаке.",
+            parse_mode="HTML"
+        )
+        return
+
     try:
-        await message.bot.pin_chat_message(message.chat.id, message.reply_to_message.message_id)
-        alert = "📣 Твой пост успешно закреплен с помощью Мегафона!"
-    except Exception as e:
-        alert = f"❌ Ошибка закрепления: {e}"
-        active_items["megaphone_gun"] = True # Refund
-    
+        import main
+        is_neut_fn = getattr(main, 'is_target_neutralized', None)
+        if is_neut_fn:
+            is_neut, reason = await is_neut_fn(target_id, board_id, db)
+            if is_neut:
+                await message.reply(
+                    f"💊 <b>Защита от спама:</b> У этой цели УЖЕ активен дебафф ({reason})!\n"
+                    f"На аноне может быть только 1 активный дебафф (кроме броска говна).\n"
+                    f"Шизо-Таблетка осталась в твоем рюкзаке.",
+                    parse_mode="HTML"
+                )
+                return
+    except Exception:
+        pass
+
+    active_items["schizopill_gun"] = False
+    now = int(time.time())
+
+    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
+        row = await c.fetchone()
+        target_items_str = row[0] if row and row[0] else "{}"
+    try: target_items = json.loads(target_items_str)
+    except Exception: target_items = {}
+
+    if target_items.get("tinfoil_hat", 0) > now:
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(target_items, now, hours_damage=4.0, burn_chance=0.10)
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(target_items), target_id, board_id))
+            await db.commit()
+
+        if destroyed:
+            attacker_msg = "👽 Психотропное вещество отражено Шапочкой из фольги жертвы! Но от перегрузки Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            target_msg = f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b> Анон <b>[{get_anon_id(user_id)}]</b> пытался скормить тебе Шизо-Таблетку! Шапочка спасла твой разум, но <b>расплавилась</b>!"
+        else:
+            attacker_msg = f"👽 Психотропное вещество отражено Шапочкой из фольги жертвы! Фольга потеряла 4ч (осталось {left_h}ч {left_m}мин)."
+            target_msg = f"👽 Анон <b>[{get_anon_id(user_id)}]</b> пытался скормить тебе Шизо-Таблетку! Шапочка спасла твой разум, но потеряла 4ч прочности (осталось {left_h}ч {left_m}мин)."
+
+        try: await message.bot.send_message(user_id, attacker_msg, parse_mode="HTML")
+        except Exception: pass
+        try: await message.bot.send_message(target_id, target_msg, parse_mode="HTML")
+        except Exception: pass
+        try: await message.delete()
+        except Exception: pass
+        return
+
+    target_items["schizo_pill_until"] = now + 3600
+
     async with db_lock:
         await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                          (json.dumps(active_items), user_id, board_id))
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(target_items), target_id, board_id))
         await db.commit()
-        
-    try: await message.bot.send_message(user_id, alert, parse_mode="HTML")
+    register_attacker_effect("schizopill_gun", user_id, target_id, 3600)
+
+    try: await message.bot.send_message(target_id, "💊 Тебе подмешали Шизо-Таблетку! В течение 1 часа нейросеть будет переписывать все твои посты в бред шизофреника!", parse_mode="HTML")
     except Exception: pass
-    
-    if "успешно" in alert:
-        try:
-            await message.bot.send_message(
-                message.chat.id, 
-                "📣 <b>ВНИМАНИЕ!</b> Кто-то из анонов проплатил закрепление поста через Мегафон!", 
-                reply_to_message_id=message.reply_to_message.message_id, 
-                parse_mode="HTML"
-            )
-        except Exception: pass
-        
+    try: await message.bot.send_message(user_id, f"💊 Ты успешно накормил Шизо-Таблеткой Анона <b>[{get_anon_id(target_id)}]</b>!", parse_mode="HTML")
+    except Exception: pass
     try: await message.delete()
     except Exception: pass
 

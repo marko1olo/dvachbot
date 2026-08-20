@@ -19,18 +19,21 @@ async def market_event_generator():
                 
             # 2. Рандомизируем цены (множители от 0.5 до 2.5)
             new_multipliers = {
-                'janitor': round(random.uniform(0.5, 2.5), 2),
-                'mute': round(random.uniform(0.5, 2.5), 2),
-                'shield': round(random.uniform(0.5, 2.5), 2),
-                'prefix': round(random.uniform(0.5, 2.5), 2),
-                'partyvan': round(random.uniform(0.5, 2.5), 2),
-                'shit': round(random.uniform(0.5, 2.5), 2),
-                'pills': round(random.uniform(0.5, 2.5), 2),
-                'knife': round(random.uniform(0.5, 2.5), 2),
-                'tinfoil': round(random.uniform(0.5, 2.5), 2),
-                'bribe': round(random.uniform(0.5, 2.5), 2),
-                'laxative': round(random.uniform(0.5, 2.5), 2),
-                'megaphone': round(random.uniform(0.5, 2.5), 2),
+                'janitor': round(random.uniform(0.7, 1.6), 2),
+                'mute': round(random.uniform(0.7, 1.6), 2),
+                'shield': round(random.uniform(0.7, 1.6), 2),
+                'prefix': round(random.uniform(0.7, 1.6), 2),
+                'partyvan': round(random.uniform(0.8, 1.3), 2),
+                'shit': round(random.uniform(0.7, 1.5), 2),
+                'pills': round(random.uniform(0.7, 1.5), 2),
+                'knife': round(random.uniform(0.7, 1.5), 2),
+                'pepperspray': round(random.uniform(0.7, 1.5), 2),
+                'tinfoil': round(random.uniform(0.7, 1.5), 2),
+                'bribe': round(random.uniform(0.7, 1.5), 2),
+                'laxative': round(random.uniform(0.7, 1.5), 2),
+                'badge_color': round(random.uniform(0.7, 1.5), 2),
+                'schizopill': round(random.uniform(0.7, 1.5), 2),
+                'lootbox': round(random.uniform(0.8, 1.2), 2),
             }
             
             market_state['event_text'] = event_text

@@ -1,5 +1,6 @@
 from common.anon_identity import get_anon_id
 import asyncio
+import time
 from aiogram import Bot
 from shared_state import *
 try:
@@ -147,21 +148,28 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
         db = await get_pool()
         has_poop = False
         prefix_str = ""
+        badge_emoji = ""
+        COLOR_EMOJIS = {
+            "red": "🔴", "green": "🟢", "blue": "🔵", "purple": "🟣",
+            "gold": "🟡", "orange": "🟠", "white": "⚪", "black": "🏴", "rainbow": "🌈"
+        }
+        now_ts = int(time.time())
         async with db.execute("SELECT active_items, custom_prefix, prefix_expires_at FROM Users WHERE user_id = ?", (author_id,)) as c:
             async for row in c:
                 if row[0]:
                     try:
                         items = json.loads(row[0])
-                        if items.get("shit_until", 0) > int(time.time()):
+                        if items.get("shit_until", 0) > now_ts:
                             has_poop = True
+                        if items.get("badge_color_expires", 0) > now_ts or items.get("badge_color_active"):
+                            b_col = items.get("badge_color", "gold")
+                            badge_emoji = f"{COLOR_EMOJIS.get(b_col, '🟣')} "
                     except Exception:
-                        import traceback; traceback.print_exc()
-                if row[1] and row[2] and int(time.time()) < row[2]:
+                        pass
+                if row[1] and row[2] and now_ts < row[2]:
                     prefix_str = f"{row[1]} "
-        if has_poop:
-            custom_prefix = "💩 " + prefix_str
-        else:
-            custom_prefix = prefix_str
+        
+        custom_prefix = badge_emoji + ("💩 " if has_poop else "") + prefix_str
                     
     res = await _format_header_inner(board_id, post_num, stream)
     return custom_prefix + res

@@ -401,7 +401,7 @@ class NewPostProcessor:
                 'recipients': self.recipients, 'content': self.final_content, 'post_num': self.current_post_num,
                 'board_id': self.board_id, 'thread_id': self.thread_id
             })
-        if not self.final_content.get('is_system_message') or self.final_content.get('archive_allowed'):
+        if not self.final_content.get('archive_skip') and not self.is_shadow_muted:
             spawn_task(_forward_post_to_realtime_archive(
                 bot_instance=self.bot_instance, board_id=self.board_id, post_num=self.current_post_num, content=self.final_content, is_shadow_muted=self.is_shadow_muted
             ))
