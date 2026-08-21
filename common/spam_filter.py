@@ -25,9 +25,9 @@ _reaction_banned_users: Dict[str, set] = defaultdict(set)
 
 # --- Configuration ---
 SPAM_RULES = {
-    'text': {'max_repeats': 3, 'min_length': 2, 'window_sec': 15, 'max_per_window': 7},
-    'sticker': {'max_repeats': 2, 'max_per_window': 5, 'window_sec': 18},
-    'animation': {'max_repeats': 2, 'max_per_window': 6, 'window_sec': 20}
+    'text': {'max_repeats': 5, 'min_length': 4, 'window_sec': 15, 'max_per_window': 10},
+    'sticker': {'max_repeats': 4, 'max_per_window': 8, 'window_sec': 18},
+    'animation': {'max_repeats': 4, 'max_per_window': 8, 'window_sec': 20}
 }
 SPAM_LIMIT = 14
 SPAM_WINDOW = 15
@@ -82,9 +82,10 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
             contents = [item[1] for item in last_items_deque]
             
             if len(set(contents)) == 1:
-                violations['level'] += 1
-                last_items_deque.clear()
-                return False
+                if msg_type != 'text' or len(contents[0].strip()) >= rules.get('min_length', 4):
+                    violations['level'] += 1
+                    last_items_deque.clear()
+                    return False
             elif msg_type == 'text':
                 from difflib import SequenceMatcher
                 def _fast_similar(s1: str, s2: str) -> bool:

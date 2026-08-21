@@ -414,24 +414,25 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             b_data['persona_favorites'] = {}
         b_data['persona_favorites'][user_id] = b_data['persona_favorites'].get(user_id, 0) + 1
 
-    if message.content_type in ['photo', 'video', 'document']:
-        b_data['single_photo_counter'][user_id]
-        if not message.media_group_id:
-            b_data['single_photo_counter'][user_id] += 1
-            current_count = b_data['single_photo_counter'][user_id]
-            if current_count > 5:
+    if not is_admin(user_id, board_id):
+        if message.content_type in ['photo', 'video', 'document']:
+            b_data['single_photo_counter'][user_id]
+            if not message.media_group_id:
+                b_data['single_photo_counter'][user_id] += 1
+                current_count = b_data['single_photo_counter'][user_id]
+                if current_count > 5:
+                    b_data['single_photo_counter'][user_id] = 0
+                    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+                    phrases = ALBUM_EDUCATION_PHRASES.get(lang, ALBUM_EDUCATION_PHRASES['ru'])
+                    edu_text = random.choice(phrases)
+                    try:
+                        sent = await message.answer(edu_text)
+                        spawn_task(delete_message_after_delay(sent, 20))
+                    except Exception: pass
+            else:
                 b_data['single_photo_counter'][user_id] = 0
-                lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
-                phrases = ALBUM_EDUCATION_PHRASES.get(lang, ALBUM_EDUCATION_PHRASES['ru'])
-                edu_text = random.choice(phrases)
-                try:
-                    sent = await message.answer(edu_text)
-                    spawn_task(delete_message_after_delay(sent, 20))
-                except Exception: pass
-        else:
+        elif message.content_type == 'text':
             b_data['single_photo_counter'][user_id] = 0
-    elif message.content_type == 'text':
-        b_data['single_photo_counter'][user_id] = 0
     try:
         if message.content_type == 'dice':
             try:
@@ -463,49 +464,50 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         if message.content_type == 'text' and not (message.text and message.text.strip()):
             await message.delete()
             return
-        if user_id in b_data['users']['banned']:
-            try:
-                await message.delete()
-            except TelegramBadRequest: pass
-            return
-        mute_until = b_data['mutes'].get(user_id)
-        if mute_until and mute_until > datetime.now(UTC):
-            try:
-                await message.delete()
-            except TelegramBadRequest: pass
-
-            last_warn = b_data.get('last_mute_warn', {}).get(user_id, 0)
-            now_ts = time.time()
-            if now_ts - last_warn > 15:
-                b_data.setdefault('last_mute_warn', {})[user_id] = now_ts
-                rem = mute_until - datetime.now(UTC)
-                rem_seconds = max(0, int(rem.total_seconds()))
-                rem_h, rem_m = divmod(rem_seconds // 60, 60)
-                if rem_h > 0:
-                    time_str = f"{rem_h}ч {rem_m}мин"
-                elif rem_m > 0:
-                    time_str = f"{rem_m} мин"
-                else:
-                    time_str = f"{rem_seconds} сек"
-
-                warn_text = (
-                    f"🔇 <b>ТЕБЯ ЕБНУЛИ В МУТ!</b>\n\n"
-                    f"Осталось сидеть: <b>{time_str}</b>.\n"
-                    f"Пока ты в муте, твои посты на доску не проходят.\n\n"
-                    f"💡 <b>Что можно сделать:</b>\n"
-                    f"• 📜 <b>Снять мут досрочно:</b> купи Взятку в <b>/shop</b>\n"
-                    f"• 💰 <b>Заработать шекели:</b> пиши <b>/work</b> (сбор бутылок, скам, биржа)\n"
-                    f"• 🔫 <b>Отомстить обидчику:</b> купи Мут-Ган или ОМОН в <b>/shop</b>\n"
-                    f"• 🛡️ <b>Защититься от атак:</b> купи Шапочку из фольги в <b>/shop</b>"
-                )
+        if not is_admin(user_id, board_id):
+            if user_id in b_data['users']['banned']:
                 try:
-                    sent = await message.answer(warn_text, parse_mode="HTML")
-                    spawn_task(delete_message_after_delay(sent, 10))
-                except Exception:
-                    pass
-            return
-        elif mute_until:
-            b_data['mutes'].pop(user_id, None)
+                    await message.delete()
+                except TelegramBadRequest: pass
+                return
+            mute_until = b_data['mutes'].get(user_id)
+            if mute_until and mute_until > datetime.now(UTC):
+                try:
+                    await message.delete()
+                except TelegramBadRequest: pass
+
+                last_warn = b_data.get('last_mute_warn', {}).get(user_id, 0)
+                now_ts = time.time()
+                if now_ts - last_warn > 15:
+                    b_data.setdefault('last_mute_warn', {})[user_id] = now_ts
+                    rem = mute_until - datetime.now(UTC)
+                    rem_seconds = max(0, int(rem.total_seconds()))
+                    rem_h, rem_m = divmod(rem_seconds // 60, 60)
+                    if rem_h > 0:
+                        time_str = f"{rem_h}ч {rem_m}мин"
+                    elif rem_m > 0:
+                        time_str = f"{rem_m} мин"
+                    else:
+                        time_str = f"{rem_seconds} сек"
+
+                    warn_text = (
+                        f"🔇 <b>ТЕБЯ ЕБНУЛИ В МУТ!</b>\n\n"
+                        f"Осталось сидеть: <b>{time_str}</b>.\n"
+                        f"Пока ты в муте, твои посты на доску не проходят.\n\n"
+                        f"💡 <b>Что можно сделать:</b>\n"
+                        f"• 📜 <b>Снять мут досрочно:</b> купи Взятку в <b>/shop</b>\n"
+                        f"• 💰 <b>Заработать шекели:</b> пиши <b>/work</b> (сбор бутылок, скам, биржа)\n"
+                        f"• 🔫 <b>Отомстить обидчику:</b> купи Мут-Ган или ОМОН в <b>/shop</b>\n"
+                        f"• 🛡️ <b>Защититься от атак:</b> купи Шапочку из фольги в <b>/shop</b>"
+                    )
+                    try:
+                        sent = await message.answer(warn_text, parse_mode="HTML")
+                        spawn_task(delete_message_after_delay(sent, 10))
+                    except Exception:
+                        pass
+                return
+            elif mute_until:
+                b_data['mutes'].pop(user_id, None)
             
         cursed_text_override = None
         if message.content_type == 'text' or (message.caption and message.content_type in ['photo', 'video', 'document', 'animation', 'audio', 'voice']):
@@ -590,7 +592,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     input_text = cursed_text_override if cursed_text_override else (message.text or message.caption or "")
     multi_reply_blocks, limit_hit = _parse_and_split_multi_replies(input_text)
     
-    is_shadow_muted = (user_id in b_data['shadow_mutes'] and 
+    is_shadow_muted = (not is_admin(user_id, board_id) and 
+                       user_id in b_data['shadow_mutes'] and 
                        b_data['shadow_mutes'][user_id] > datetime.now(UTC))
                        
     if multi_reply_blocks:
@@ -637,11 +640,13 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 
             if is_sage: content['is_sage'] = True
             
-            if not is_shadow_muted and text_chunk:
+            if not is_shadow_muted and text_chunk and not is_admin(user_id, board_id):
                 if is_spam_filtered(text_chunk, board_id, user_id):
                     is_shadow_muted = True 
                 else:
                     spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_chunk, board_id, stream=stream))
+            elif not is_shadow_muted and text_chunk:
+                spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_chunk, board_id, stream=stream))
             
             if is_shadow_muted:
                 await process_shadow_reject(shared_state.ShadowRejectContext(
@@ -799,15 +804,16 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     elif message.content_type in ('voice', 'video_note'):
         if board_id != 'trash':
             spawn_task(transcribe_and_roast_voice_note(message.bot, message, board_id, stream=stream))
-    if not is_shadow_muted and text_for_corpus:
+    if not is_shadow_muted and text_for_corpus and not is_admin(user_id, board_id):
         if is_spam_filtered(text_for_corpus, board_id, user_id):
             is_shadow_muted = True
-    user_settings = b_data.get('user_settings', {}).get(user_id, {})
-    if (message.content_type == 'animation' and user_settings.get('shadow_gif')) or \
-       (message.content_type == 'sticker' and user_settings.get('shadow_sticker')):
-        is_shadow_muted = True
-    if user_settings.get('shadow_media') and message.content_type != 'text':
-        is_shadow_muted = True
+    if not is_admin(user_id, board_id):
+        user_settings = b_data.get('user_settings', {}).get(user_id, {})
+        if (message.content_type == 'animation' and user_settings.get('shadow_gif')) or \
+           (message.content_type == 'sticker' and user_settings.get('shadow_sticker')):
+            is_shadow_muted = True
+        if user_settings.get('shadow_media') and message.content_type != 'text':
+            is_shadow_muted = True
     if is_sage: content['is_sage'] = True
 
     # --- НАЧАЛО ИЗМЕНЕНИЙ (Логика "Быстрой цитаты") ---
@@ -928,6 +934,8 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
     return True
 
 async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id: str, stream: str='ru'):
+    if is_admin(user_id, board_id):
+        return
     async with acquire_spam_lock(user_id):
         b_data = board_data[board_id]
         level = get_spam_violation_level(board_id, user_id)
