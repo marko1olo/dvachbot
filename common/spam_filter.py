@@ -87,8 +87,12 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
                 return False
             elif msg_type == 'text':
                 from difflib import SequenceMatcher
-                similarities = [SequenceMatcher(None, contents[0], c).ratio() for c in contents[1:]]
-                if all(sim > 0.85 for sim in similarities):
+                def _fast_similar(s1: str, s2: str) -> bool:
+                    if s1 == s2: return True
+                    l1, l2 = len(s1), len(s2)
+                    if abs(l1 - l2) / max(l1, l2, 1) > 0.25: return False
+                    return SequenceMatcher(None, s1[:400], s2[:400]).ratio() > 0.85
+                if all(_fast_similar(contents[0], c) for c in contents[1:]):
                     violations['level'] += 1
                     last_items_deque.clear()
                     return False
@@ -107,9 +111,12 @@ def _check_cross_board_spam(user_id: int, board_id: str, content: str, msg_type:
                 is_duplicate = False
                 if raw_content_type == 'text' or (raw_content_type in ['photo', 'video', 'document'] and msg_type == 'text'):
                     import difflib
-                    r1 = difflib.SequenceMatcher(None, contents[0], contents[1]).ratio()
-                    r2 = difflib.SequenceMatcher(None, contents[1], contents[2]).ratio()
-                    if r1 > 0.85 and r2 > 0.85:
+                    def _fast_sim(s1, s2):
+                        if s1 == s2: return True
+                        l1, l2 = len(s1), len(s2)
+                        if abs(l1 - l2) / max(l1, l2, 1) > 0.25: return False
+                        return difflib.SequenceMatcher(None, s1[:400], s2[:400]).ratio() > 0.85
+                    if _fast_sim(contents[0], contents[1]) and _fast_sim(contents[1], contents[2]):
                         is_duplicate = True
                 elif contents[0] == contents[1] == contents[2]:
                     is_duplicate = True

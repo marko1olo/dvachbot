@@ -312,26 +312,30 @@ def _drop_post_copy_maps_unlocked(post_num: int) -> int:
     return removed
 
 def _trim_post_copy_maps_unlocked(max_posts: int) -> tuple[int, int]:
-    if max_posts < 0 or len(post_to_messages) <= max_posts:
+    if max_posts < 0:
+        return 0, 0
+    excess = len(post_to_messages) - max_posts
+    if excess <= 0:
         return 0, 0
     if max_posts == 0:
         stale_posts = list(post_to_messages)
     else:
-        keep_posts = set(sorted(post_to_messages.keys(), reverse=True)[:max_posts])
-        stale_posts = [post_num for post_num in post_to_messages if post_num not in keep_posts]
+        stale_posts = [k for k, _ in zip(post_to_messages, range(excess))]
     removed_reverse = 0
     for post_num in stale_posts:
         removed_reverse += _drop_post_copy_maps_unlocked(post_num)
     return len(stale_posts), removed_reverse
 
 def _trim_messages_storage_unlocked(max_posts: int) -> int:
-    if max_posts < 0 or len(messages_storage) <= max_posts:
+    if max_posts < 0:
+        return 0
+    excess = len(messages_storage) - max_posts
+    if excess <= 0:
         return 0
     if max_posts == 0:
         stale_posts = list(messages_storage)
     else:
-        keep_posts = set(sorted(messages_storage.keys(), reverse=True)[:max_posts])
-        stale_posts = [post_num for post_num in messages_storage if post_num not in keep_posts]
+        stale_posts = [k for k, _ in zip(messages_storage, range(excess))]
     removed = 0
     for post_num in stale_posts:
         if messages_storage.pop(post_num, None) is not None:
