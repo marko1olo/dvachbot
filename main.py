@@ -21994,12 +21994,26 @@ async def main():
             if old_pid is None:
                 print("⚠️ Lock-файл нечитаемый после повторов. Удаляю как stale и продолжаю.")
                 os.remove(lock_file)
-            elif old_pid != current_pid and psutil.pid_exists(old_pid):
-                print(f"⛔ Бот с PID {old_pid} уже запущен! Завершение работы...")
-                sys.exit(1)
+            elif old_pid != current_pid:
+                is_real_bot = False
+                try:
+                    p = psutil.Process(old_pid)
+                    cmd = " ".join(p.cmdline()).lower()
+                    if "python" in p.name().lower() and "main.py" in cmd:
+                        is_real_bot = True
+                except Exception:
+                    is_real_bot = False
+
+                if is_real_bot:
+                    print(f"⛔ Бот с PID {old_pid} уже запущен! Завершение работы...")
+                    sys.exit(1)
+                else:
+                    print(f"⚠️ Lock-файл содержал старый/переиспользованный PID {old_pid}. Очищаю lock.")
+                    os.remove(lock_file)
         except (IOError, ValueError):
             print("⚠️ Lock-файл поврежден. Удаляю и продолжаю.")
-            os.remove(lock_file)
+            try: os.remove(lock_file)
+            except Exception: pass
     tmp_lock_file = f"{lock_file}.{current_pid}.tmp"
     await asyncio.to_thread(_write_text_file_atomic, lock_file, str(current_pid), tmp_lock_file)
     session = None

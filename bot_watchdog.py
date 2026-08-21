@@ -94,41 +94,24 @@ def _read_lock_pid() -> int | None:
     return None
 
 
-def _pid_exists(pid: int) -> bool:
+def _is_bot_process(pid: int) -> bool:
     if pid <= 0:
         return False
-    if os.name == "nt":
-        try:
-            import ctypes
-
-            process_query_limited_information = 0x1000
-            handle = ctypes.windll.kernel32.OpenProcess(
-                process_query_limited_information,
-                False,
-                int(pid),
-            )
-            if handle:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                return True
-            return False
-        except Exception:
-            return False
     try:
-        os.kill(pid, 0)
-        return True
-    except PermissionError:
-        return True
-    except OSError:
+        import psutil
+        if not psutil.pid_exists(pid):
+            return False
+        p = psutil.Process(pid)
+        cmd = " ".join(p.cmdline()).lower()
+        return "python" in p.name().lower() and "main.py" in cmd
+    except Exception:
         return False
 
 
 def _locked_live_bot_pid() -> int | None:
     lock_pid = _read_lock_pid()
-    if lock_pid is None or not _pid_exists(lock_pid):
+    if lock_pid is None or not _is_bot_process(lock_pid):
         return None
-    heartbeat = _read_heartbeat()
-    if heartbeat and int(heartbeat.get("pid") or 0) == lock_pid:
-        return lock_pid
     return lock_pid
 
 
