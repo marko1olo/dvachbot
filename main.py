@@ -4996,10 +4996,11 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     await callback.answer(msg, show_alert=True)
     new_bal = await get_user_global_balance(db, user_id)
     try:
-        # Update text if message is active
-        if callback.message.text:
-            text, kb = _build_main_shop_hub(user_id, new_bal)
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        text, kb = _build_main_shop_hub(user_id, new_bal)
+        if callback.message.caption:
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+        elif callback.message.text:
+            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         pass
 
@@ -13785,7 +13786,9 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
             await callback.message.answer("Error generating token.")
     elif action == "ruletka" or action == "roll":
         await _handle_quick_menu_ruletka(callback, board_id, user_id, lang)
-    elif action == "wallet": await cmd_wallet(callback.message, board_id, stream=stream)
+    elif action == "wallet":
+        fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+        await cmd_wallet(fake_msg, board_id, stream=stream)
     elif action == "help":
         from help_text import get_help_hub_page
         start_text = get_help_hub_page("main", lang=lang)
