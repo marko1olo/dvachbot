@@ -205,24 +205,37 @@ def get_user_achievements(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def build_achievements_content(user_id: int, active_items: Dict[str, Any]) -> Tuple[str, InlineKeyboardMarkup]:
     """
-    Renders achievements view text and keyboard.
+    Renders achievements view text and keyboard within Telegram photo caption limits.
     """
     all_ach = get_user_achievements(active_items)
-    unlocked_count = sum(1 for a in all_ach if a["is_unlocked"])
+    unlocked = [a for a in all_ach if a["is_unlocked"]]
+    locked = [a for a in all_ach if not a["is_unlocked"]]
+    unlocked_count = len(unlocked)
     total_count = len(all_ach)
     pct = int((unlocked_count / total_count) * 100)
+    total_reward = sum(a["reward_cash"] for a in unlocked)
 
     lines = [
         f"🏆 <b>ДОСТИЖЕНИЯ И ТРОФЕИ АНОНА</b>",
-        f"📊 Прогресс: <b>{unlocked_count}/{total_count} ({pct}%)</b>\n",
+        f"📊 Прогресс: <b>{unlocked_count}/{total_count} ({pct}%)</b> | Заработано: <b>+{total_reward:,} ₪</b>\n",
     ]
 
-    for a in all_ach:
-        st = "✅" if a["is_unlocked"] else "🔒"
-        rew = f" (+{a['reward_cash']} ₪)" if not a["is_unlocked"] else " [ПОЛУЧЕНО]"
-        lines.append(f"{st} <b>{a['name']}</b>{rew}\n   <i>{a['desc']}</i>")
+    if unlocked:
+        lines.append("🎖️ <b>Полученные трофеи:</b>")
+        for a in unlocked[:6]:
+            lines.append(f"  ✅ <b>{a['name']}</b>")
+        if len(unlocked) > 6:
+            lines.append(f"  <i>...и еще {len(unlocked) - 6} ачивок</i>")
+        lines.append("")
 
-    lines.append("\n💡 <i>Выполняй задания на борде, чтобы забирать награды шекелями!</i>")
+    if locked:
+        lines.append("🎯 <b>Ближайшие цели для выполнения:</b>")
+        for a in locked[:6]:
+            lines.append(f"  🔒 <b>{a['name']}</b> <i>(+{a['reward_cash']} ₪)</i>\n     └ {a['desc']}")
+        if len(locked) > 6:
+            lines.append(f"\n<i>Всего закрыто {unlocked_count} из {total_count} ачивок.</i>")
+
+    lines.append("\n💡 <i>Выполняй задания на борде для получения наград!</i>")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [

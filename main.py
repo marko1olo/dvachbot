@@ -4127,6 +4127,28 @@ async def cmd_avatar(message: types.Message, board_id: str | None, stream: str =
     except Exception: pass
 
 
+async def _render_shop_subview(callback: types.CallbackQuery, text: str, kb: InlineKeyboardMarkup, category: str = "shop"):
+    """
+    Universally renders or edits shop/wardrobe/wiki subviews whether the source message
+    is a text message or a photo banner with caption.
+    """
+    try:
+        if callback.message.caption is not None or callback.message.photo:
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+        elif callback.message.text:
+            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+        else:
+            from banner_manager import send_banner_message
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+    except Exception:
+        try:
+            from banner_manager import send_banner_message
+            await callback.message.delete()
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+        except Exception:
+            pass
+
+
 @dp.callback_query(F.data == "avatar_view")
 async def cb_avatar_view(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
@@ -4172,25 +4194,7 @@ async def cb_avatar_view(callback: types.CallbackQuery, board_id: str | None):
         ]
     ])
 
-    try:
-        if callback.message.photo:
-            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-        else:
-            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        try:
-            from banner_manager import send_banner_message
-            await callback.message.delete()
-            await send_banner_message(
-                bot=callback.message.bot,
-                chat_id=callback.message.chat.id,
-                caption=text,
-                reply_markup=kb,
-                category="avatar",
-                parse_mode="HTML"
-            )
-        except Exception:
-            pass
+    await _render_shop_subview(callback, text, kb, category="avatar")
     await callback.answer()
 
 
@@ -4200,26 +4204,7 @@ async def cb_avatar_refresh(callback: types.CallbackQuery, board_id: str | None)
 
 
 # --- Category Navigation Callbacks ---
-async def _render_shop_subview(callback: types.CallbackQuery, text: str, kb: InlineKeyboardMarkup, category: str = "shop"):
-    """
-    Universally renders or edits shop/wardrobe/wiki subviews whether the source message
-    is a text message or a photo banner with caption.
-    """
-    try:
-        if callback.message.caption is not None or callback.message.photo:
-            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-        elif callback.message.text:
-            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
-        else:
-            from banner_manager import send_banner_message
-            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
-    except Exception:
-        try:
-            from banner_manager import send_banner_message
-            await callback.message.delete()
-            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
-        except Exception:
-            pass
+
 
 
 @dp.callback_query(F.data == "shop_main_hub")
@@ -4610,8 +4595,7 @@ async def cb_achievements_view(callback: types.CallbackQuery, board_id: str | No
 
     import achievements_engine
     text, kb = achievements_engine.build_achievements_content(user_id, active_items)
-    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception: pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4755,17 +4739,8 @@ async def cb_prof_inventory(callback: types.CallbackQuery, board_id: str | None)
     if not board_id: return
     user_id = callback.from_user.id
     text, kb = await _build_inventory_content(user_id, board_id)
-
-    from banner_manager import send_banner_message
+    await _render_shop_subview(callback, text, kb, category="wallet")
     await callback.answer()
-    try:
-        if callback.message.photo:
-            await callback.message.delete()
-            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text, reply_markup=kb, category="wallet", parse_mode="HTML")
-        else:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        pass
 
 
 @dp.callback_query(F.data.startswith("shop_buy_"))
@@ -7095,30 +7070,14 @@ async def cb_select_method(callback: types.CallbackQuery, state: FSMContext):
     )
     await state.set_state(WithdrawalStates.entering_data)
 def _get_tgach_rates_content():
-    res = ["📈 <b>АКТУАЛЬНЫЙ ПРАЙС-ЛИСТ И КУРСЫ TGACH PAY / EXCHANGE</b>\n"]
-    res.append("💰 <b>Источники доходов (Шекели):</b>")
-    res.append("🔸 🤝 Приглашение друга: <b>+1488.00 ₪</b> <i>(Реферал-бонус)</i>")
-    res.append("🔸 📝 Создание треда на борде: <b>+150.00 ₪</b>")
-    res.append("🔸 🪙 Ежедневный бонус (/daily): <b>+75–145.00 ₪</b> <i>(стрик)</i>")
-    res.append("🔸 🔨 Смена на бирже (/work): <b>+15–160.00 ₪</b>")
-    res.append("🔸 🔪 Грабеж заточкой (/rob): <b>до +30% баланса жертвы</b>")
-    res.append("🔸 🎲 Игра в кости (/dice): <b>x2 (≥55) / x4 джекпот (100)</b>")
-    res.append("🔸 🟢 Реакция на пост: <b>+8.50 ₪</b>\n")
-    res.append("🛒 <b>Прайс-лист Теневого Магазина (/shop):</b>")
-    res.append("🔹 🐒 Кусок говна / 💊 Аминазин: <b>100 ₪</b>")
-    res.append("🔹 🔪 Заточка / 👑 VIP Префикс: <b>400 ₪</b>")
-    res.append("🔹 🔇 Мут-Ган / 🛡️ Зеркальный Щит: <b>600–800 ₪</b>")
-    res.append("🔹 👽 Шапочка из фольги / 🚽 Слабительное: <b>800 ₪</b>")
-    res.append("🔹 🧹 Билет Дворника / 💊 Шизо-Таблетка: <b>1000 ₪</b>")
-    res.append("🔹 📜 Взятка (Индульгенция): <b>1200 ₪</b>")
-    res.append("🔹 🎟️ Пасскод Абу: <b>1488 ₪</b>")
-    res.append("🔹 🚔 Пативэн / 📣 Мегафон: <b>2000 ₪</b>\n")
-    res.append("💎 <b>Конвертация в крипту (за 100 ₪):</b>")
-    for code, rate in FAKE_CRYPTO_RATES.items():
+    res = ["📈 <b>ПРАЙС-ЛИСТ И КУРСЫ TGACH PAY / EXCHANGE</b>\n"]
+    res.append("💰 <b>Доходы:</b> Реферал <code>+1488₪</code> | Тред <code>+150₪</code> | Смена <code>+15–160₪</code> | Daily <code>+75–145₪</code> | Реакция <code>+8.5₪</code>\n")
+    res.append("🛒 <b>Магазин:</b> Говно/Аминазин <code>100₪</code> | Заточка/VIP <code>400₪</code> | Мут-Ган/Щит <code>600–800₪</code> | Фольга/Понос <code>800₪</code> | Дворник/Шиза <code>1000₪</code> | Пасскод <code>1488₪</code> | Пативэн <code>2000₪</code>\n")
+    res.append("💎 <b>Курс крипты (за 100 ₪):</b>")
+    for code, rate in list(FAKE_CRYPTO_RATES.items())[:4]:
         crypto_val = 100 / rate
-        res.append(f"• <b>{code.upper()}</b>: <code>{crypto_val:.8f}</code>")
-    res.append("\n<i>* 1 Шекель (₪) = 1 RUB во внутренней экономике Тгача.</i>")
-    res.append("<i>* Данные синхронизированы с Одесским Привозом & Binance.</i>")
+        res.append(f"• <b>{code.upper()}</b>: <code>{crypto_val:.6f}</code>")
+    res.append("\n<i>* 1 Шекель (₪) = 1 RUB. Синхронизировано с Привозом и Binance.</i>")
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -7154,15 +7113,7 @@ async def cmd_rates(message: types.Message, board_id: str | None = None, stream:
 @dp.callback_query(F.data == "scam_rates")
 async def cb_scam_rates(callback: types.CallbackQuery):
     text, kb = _get_tgach_rates_content()
-    from banner_manager import send_banner_message
-    await send_banner_message(
-        bot=callback.bot,
-        chat_id=callback.message.chat.id,
-        caption=text,
-        reply_markup=kb,
-        category="wallet",
-        parse_mode="HTML"
-    )
+    await _render_shop_subview(callback, text, kb, category="wallet")
     await callback.answer()
 
 @dp.callback_query(F.data == "scam_history")
@@ -7590,7 +7541,8 @@ async def cb_work_main_hub(callback: types.CallbackQuery, board_id: str | None):
 async def cb_casino_main_hub(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     await callback.answer()
-    await cmd_casino_hub(callback.message, board_id)
+    fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+    await cmd_casino_hub(fake_msg, board_id)
 
 @dp.callback_query(F.data == "economy_daily")
 async def cb_economy_daily(callback: types.CallbackQuery, board_id: str | None):
@@ -9117,14 +9069,16 @@ async def cb_prof_dossier(callback: types.CallbackQuery, board_id: str | None):
 async def cb_prof_wallet(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     await callback.answer()
-    await cmd_wallet(callback.message, board_id=board_id, stream=stream)
+    fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+    await cmd_wallet(fake_msg, board_id=board_id, stream=stream)
 
 
 @dp.callback_query(F.data == "prof_shop")
 async def cb_prof_shop(callback: types.CallbackQuery, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     await callback.answer()
-    await cmd_shop(callback.message, board_id=board_id, stream=stream)
+    fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+    await cmd_shop(fake_msg, board_id=board_id, stream=stream)
 
 
 @dp.message(Command("dossier", "досье", "дело", "case", "личноедело"))
