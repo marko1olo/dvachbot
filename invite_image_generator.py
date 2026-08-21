@@ -491,7 +491,7 @@ async def fetch_random_post_image(db_path: Optional[str] = None, bot: Optional[A
             return None
 
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(timeout=timeout, connector=aiohttp.TCPConnector(ssl=False), connector_owner=True) as session:
                 tasks = [_fetch_one(session, u) for u in candidates[:5]]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 for r in results:

@@ -10133,7 +10133,7 @@ async def motivation_broadcaster():
 async def fetch_dvach_thread(board: str, only_new: bool = False) -> dict | None:
     try:
         timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with aiohttp.ClientSession(timeout=timeout, connector=aiohttp.TCPConnector(ssl=False), connector_owner=True) as session:
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
             async with session.get(f'https://2ch.hk/{board}/catalog.json', headers=headers) as response:
                 if response.status != 200:
