@@ -2957,7 +2957,7 @@ class UserStatsCardData:
 
 def _format_text_report(data: UserStatsCardData) -> str:
     return (
-        f"☘️ <b>Статистика пользователя {data.schizo_name}</b> (/${data.board_id}/)\n\n"
+        f"☘️ <b>Статистика пользователя {data.schizo_name}</b> (/{data.board_id}/)\n\n"
         f"👤 <b>Статус:</b> {data.role_name} {f'({data.custom_prefix})' if data.custom_prefix else ''}\n"
         f"🏅 <b>Ранг борды:</b> #{data.rank} из {data.total_users}\n"
         f"📝 <b>Написано постов:</b> {data.posts_count:,}\n"

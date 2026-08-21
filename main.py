@@ -8950,7 +8950,7 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🎭 Мой Персонаж RPG", callback_data="avatar_view"),
+            InlineKeyboardButton(text="🎭 Персонаж RPG", callback_data="avatar_view"),
             InlineKeyboardButton(text="🎽 Гардероб", callback_data="wardrobe_dressing_room"),
         ],
         [
@@ -8959,9 +8959,10 @@ async def cmd_passport(message: types.Message, board_id: str | None, stream: str
         ],
         [
             InlineKeyboardButton(text="🎒 Рюкзак", callback_data="prof_inventory"),
-            InlineKeyboardButton(text="🛒 В магазин", callback_data="shop_main_hub"),
+            InlineKeyboardButton(text="🏆 Достижения", callback_data="achievements_view"),
         ],
         [
+            InlineKeyboardButton(text="🛒 В магазин", callback_data="shop_main_hub"),
             InlineKeyboardButton(text="🔄 Обновить", callback_data="prof_card"),
         ],
     ])
@@ -8997,7 +8998,7 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🎭 Мой Персонаж RPG", callback_data="avatar_view"),
+            InlineKeyboardButton(text="🎭 Персонаж RPG", callback_data="avatar_view"),
             InlineKeyboardButton(text="🎽 Гардероб", callback_data="wardrobe_dressing_room"),
         ],
         [
@@ -9006,9 +9007,10 @@ async def cb_prof_card(callback: types.CallbackQuery, board_id: str | None, stre
         ],
         [
             InlineKeyboardButton(text="🎒 Рюкзак", callback_data="prof_inventory"),
-            InlineKeyboardButton(text="🛒 В магазин", callback_data="shop_main_hub"),
+            InlineKeyboardButton(text="🏆 Достижения", callback_data="achievements_view"),
         ],
         [
+            InlineKeyboardButton(text="🛒 В магазин", callback_data="shop_main_hub"),
             InlineKeyboardButton(text="🔄 Обновить", callback_data="prof_card"),
         ],
     ])
