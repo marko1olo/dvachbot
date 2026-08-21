@@ -15,6 +15,12 @@ import json
 import time
 import hashlib
 
+# Pre-built SSL context: avoids blocking ssl.create_default_context() →
+# _load_windows_store_certs() inside the asyncio event loop on every request.
+_NO_VERIFY_SSL = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+_NO_VERIFY_SSL.check_hostname = False
+_NO_VERIFY_SSL.verify_mode = ssl.CERT_NONE
+
 def classify_media_url(url: Optional[str]) -> str:
     """Classify Booru media URLs for Telegram dispatch.
     Returns: 'photo', 'video', 'animation', or 'unsupported'.
@@ -1942,9 +1948,7 @@ async def _fetch_image_from_apis(api_definitions: List[Dict], fail_message: str,
     # 1. Определяем прокси вручную (принудительно None для прямой работы через WireGuard, как в summarize)
     current_proxy = None
     f"✅ HIDDIFY ({current_proxy})" if current_proxy else "⚠️ DIRECT/OPENVPN (System)"
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
+    ssl_context = _NO_VERIFY_SSL
     connector = aiohttp.TCPConnector(ssl=ssl_context, force_close=True, enable_cleanup_closed=True)
 
     headers = {
@@ -2577,7 +2581,7 @@ async def get_event_anime_images(is_nsfw: bool, is_loli: bool = False, count: in
 
     raw_urls = []
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=_NO_VERIFY_SSL), connector_owner=True) as session:
             async with session.get(
                 "https://gelbooru.com/index.php", params=params,
                 timeout=aiohttp.ClientTimeout(total=10)
@@ -2600,7 +2604,7 @@ async def get_event_anime_images(is_nsfw: bool, is_loli: bool = False, count: in
                 'tags': f"{base_tags} rating:{db_rating} order:random",
                 'limit': str(count * 2)
             }
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=_NO_VERIFY_SSL), connector_owner=True) as session:
                 async with session.get(
                     "https://danbooru.donmai.us/posts.json", params=db_params,
                     timeout=aiohttp.ClientTimeout(total=10)
@@ -2618,7 +2622,7 @@ async def get_event_anime_images(is_nsfw: bool, is_loli: bool = False, count: in
     if len(raw_urls) < count:
         try:
             safe_tag = base_tags.split()[0] if base_tags else "1girl"
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=_NO_VERIFY_SSL), connector_owner=True) as session:
                 async with session.get(
                     f"https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&limit={count * 2}&tags={safe_tag}",
                     timeout=aiohttp.ClientTimeout(total=8)
@@ -2637,7 +2641,7 @@ async def get_event_anime_images(is_nsfw: bool, is_loli: bool = False, count: in
     if len(raw_urls) < count:
         try:
             r_tag = "rating:e" if is_nsfw else "rating:s"
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=_NO_VERIFY_SSL), connector_owner=True) as session:
                 async with session.get(
                     f"https://yande.re/post.json?limit={count * 2}&tags={r_tag}",
                     timeout=aiohttp.ClientTimeout(total=8)

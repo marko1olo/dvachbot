@@ -11,6 +11,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMedia
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramNetworkError, TelegramBadRequest
 import aiohttp
 import re
+import ssl
 from datetime import datetime
 from common.text_utils import clean_html_tags, RE_YOU_PATTERN
 from common.database import get_post_by_num, get_post_copies, add_post_copies
@@ -1210,7 +1211,7 @@ class MessageBroadcaster:
                     if current_content.get('type') == 'media_group' and current_content.get('media'):
                         print(f"⚠️[Anti-Fat] Пост #{self.post_num}: Обнаружен жирный файл. Запуск фильтрации...")
                         clean_media_list = []
-                        async with aiohttp.ClientSession() as head_session:
+                        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), connector_owner=True) as head_session:
                             for item in current_content['media']:
                                 media_obj = item.get('media') or item.get('file_id')
                                 should_skip = False
