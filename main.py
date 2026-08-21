@@ -5630,7 +5630,17 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
             parse_mode="HTML")
         return
 
-    rob_success_text = f"🔪 <b>ОГРАБЛЕНИЕ УДАЛОСЬ!</b>\nТы подкрался и спиздил <code>{stolen}</code> шекелей у жертвы."
+    from achievements_engine import check_and_unlock_achievement
+    unlocked, ach_info = check_and_unlock_achievement(active_items, "ach_robber")
+    ach_rob_note = ""
+    if unlocked and ach_info:
+        await add_user_global_balance(db, user_id, board_id, ach_info["reward_cash"])
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        ach_rob_note = f"\n\n🏆 <b>ДОСТИЖЕНИЕ:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
+
+    rob_success_text = f"🔪 <b>ОГРАБЛЕНИЕ УДАЛОСЬ!</b>\nТы подкрался и спиздил <code>{stolen}</code> шекелей у жертвы.{ach_rob_note}"
     try:
         from combat_visuals import draw_rob_poster
         from aiogram.types import BufferedInputFile
@@ -8119,17 +8129,22 @@ async def _execute_slots_spin(bot, chat_id: int, user_id: int, board_id: str, be
         if mult >= 50.0:
             tier, lb_title, _, lb_payload, lb_cash = lootbox_engine.roll_gold_safe()
             user_items = await _get_user_active_items(db, user_id, board_id)
-            if lb_payload: user_items.update(lb_payload)
-            if lb_cash > 0: await add_user_global_balance(db, user_id, board_id, lb_cash)
+            user_items, final_cash, recycle_note = lootbox_engine.apply_lootbox_reward(user_items, lb_payload, lb_cash)
+            if final_cash > 0: await add_user_global_balance(db, user_id, board_id, final_cash)
+            from achievements_engine import check_and_unlock_achievement
+            unlocked, ach_info = check_and_unlock_achievement(user_items, "ach_slots_jackpot")
+            if unlocked and ach_info:
+                await add_user_global_balance(db, user_id, board_id, ach_info["reward_cash"])
+                lootbox_bonus_note += f"\n🏆 <b>ДОСТИЖЕНИЕ:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(user_items), user_id, board_id))
-            lootbox_bonus_note = f"\n👑 <b>БОНУС СЛОТОВ:</b> Открыт Золотой Сейф: <b>{lb_title}</b> (+{lb_cash} ₪)!"
+            lootbox_bonus_note += f"\n👑 <b>БОНУС СЛОТОВ:</b> Открыт Золотой Сейф: <b>{lb_title}</b>!"
         elif mult >= 15.0:
             tier, lb_title, _, lb_payload, lb_cash = lootbox_engine.roll_trash_lootbox()
             user_items = await _get_user_active_items(db, user_id, board_id)
-            if lb_payload: user_items.update(lb_payload)
-            if lb_cash > 0: await add_user_global_balance(db, user_id, board_id, lb_cash)
+            user_items, final_cash, recycle_note = lootbox_engine.apply_lootbox_reward(user_items, lb_payload, lb_cash)
+            if final_cash > 0: await add_user_global_balance(db, user_id, board_id, final_cash)
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(user_items), user_id, board_id))
-            lootbox_bonus_note = f"\n📦 <b>БОНУС СЛОТОВ:</b> Открыт Мусорный Лутбокс: <b>{lb_title}</b> (+{lb_cash} ₪)!"
+            lootbox_bonus_note = f"\n📦 <b>БОНУС СЛОТОВ:</b> Открыт Мусорный Лутбокс: <b>{lb_title}</b> (+{final_cash} ₪)!"
 
         if net_change >= 0:
             new_balance = await add_user_global_balance(db, user_id, board_id, net_change)
@@ -8207,6 +8222,7 @@ async def _show_coinflip_lobby(bot, chat_id: int, user_id: int, board_id: str, b
 
 async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet: int, chosen_side: str):
     db = await get_pool()
+    ach_note = ""
     async with db_lock:
         balance = await get_user_global_balance(db, user_id)
 
@@ -8227,6 +8243,13 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
 
         if net_change >= 0:
             new_balance = await add_user_global_balance(db, user_id, board_id, net_change)
+            user_items = await _get_user_active_items(db, user_id, board_id)
+            from achievements_engine import check_and_unlock_achievement
+            unlocked, ach_info = check_and_unlock_achievement(user_items, "ach_coin_streak")
+            if unlocked and ach_info:
+                new_balance = await add_user_global_balance(db, user_id, board_id, ach_info["reward_cash"])
+                ach_note = f"\n\n🏆 <b>ДОСТИЖЕНИЕ:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(user_items), user_id, board_id))
         else:
             ok, new_balance = await deduct_user_global_balance(db, user_id, board_id, abs(net_change))
         await db.commit()
@@ -8241,6 +8264,7 @@ async def _execute_coinflip(bot, chat_id: int, user_id: int, board_id: str, bet:
         f"<b>{title}</b>\n"
         f"• Ставка: <code>{bet} ₪</code> | Выплата: <b>+{win_amt} ₪</b>\n"
         f"💳 Баланс: <code>{int(new_balance)} ₪</code>"
+        f"{ach_note}"
     )
     from banner_manager import send_banner_message
     await send_banner_message(
@@ -8327,8 +8351,16 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
         dealer_score = casino_engine.calculate_hand(dealer_hand)
         payout = int(bet * 2.5) if dealer_score != 21 else bet
 
+        ach_note = ""
         async with db_lock:
             new_bal = await add_user_global_balance(db, user_id, board_id, payout)
+            user_items = await _get_user_active_items(db, user_id, board_id)
+            from achievements_engine import check_and_unlock_achievement
+            unlocked, ach_info = check_and_unlock_achievement(user_items, "ach_blackjack_21")
+            if unlocked and ach_info:
+                new_bal = await add_user_global_balance(db, user_id, board_id, ach_info["reward_cash"])
+                ach_note = f"\n\n🏆 <b>ДОСТИЖЕНИЕ:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(user_items), user_id, board_id))
             await db.commit()
 
         caption = (
@@ -8337,6 +8369,7 @@ async def _start_blackjack_game(bot, chat_id: int, user_id: int, board_id: str, 
             f"🎩 Дилер: {casino_engine.format_hand(dealer_hand)} (<b>{dealer_score}</b>)\n\n"
             f"🎉 <b>БЛЭКДЖЕК! Выплата 3:2 (+{payout} ₪)!</b>\n"
             f"💳 Баланс: <code>{int(new_bal)} ₪</code>"
+            f"{ach_note}"
         )
         kb = casino_engine.get_casino_hub_keyboard()
         from banner_manager import send_banner_message
@@ -15542,7 +15575,122 @@ async def cmd_leave(message: types.Message, board_id: str | None, stream: str = 
     response_text = random.choice(response_phrases) if response_phrases else default_response_text
     leave_keyboard = _get_leave_thread_keyboard(board_id, stream=stream)
     await message.answer(response_text, reply_markup=leave_keyboard)
-@dp.message(Command("mute"))
+
+@dp.message(Command("warn", "варн", "пред", "предупреждение"))
+async def cmd_warn(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not is_admin(user_id, board_id):
+        try: await message.delete()
+        except Exception: pass
+        return
+
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    args = (message.text or message.caption or "").split()[1:]
+    target_id = None
+    reason = "Нарушение правил борды"
+
+    if message.reply_to_message:
+        target_id = await get_author_id_by_reply(message)
+        if args: reason = " ".join(args)
+    elif args:
+        try:
+            target_id = int(args[0])
+            if len(args) > 1: reason = " ".join(args[1:])
+        except ValueError:
+            pass
+
+    if not target_id:
+        msg = "Usage: <code>/warn [reason]</code> (reply) or <code>/warn &lt;id&gt; [reason]</code>" if lang == 'en' else "Использование: <code>/warn [причина]</code> (в ответ на пост) или <code>/warn &lt;id&gt; [причина]</code>"
+        await message.answer(msg, parse_mode="HTML")
+        return
+
+    db = await get_pool()
+    anon_name = generate_anon_name(target_id)
+
+    async with db_lock:
+        active_items = await _get_user_active_items(db, target_id, board_id)
+        warns = active_items.get("warn_count", 0) + 1
+        active_items["warn_count"] = warns
+
+        if warns >= 3:
+            active_items["warn_count"] = 0
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), target_id, board_id))
+            await db.commit()
+
+            # 24h auto-mute
+            await apply_regular_mute(target_id, board_id, duration_seconds=86400)
+            await log_global_event('bot', f"🚨 3/3 WARNS AUTO-MUTE: Мод {user_id} заварнил {target_id} на /{board_id}/ (3/3 -> мут на 24ч)")
+
+            resp_text = (
+                f"🚨 <b>3/3 ПРЕДУПРЕЖДЕНИЙ! АВТО-МУТ 24 ЧАСА!</b>\n\n"
+                f"Нарушитель: <b>{anon_name}</b> (ID: <code>{target_id}</code>)\n"
+                f"Причина: <i>{reason}</i>\n"
+                f"Лимит предупреждений исчерпан. Выдан мут на 24 часа."
+            )
+            await message.answer(resp_text, parse_mode="HTML")
+            await send_moderation_notice(target_id, "mute", board_id, duration="24h")
+        else:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), target_id, board_id))
+            await db.commit()
+
+            await log_global_event('bot', f"⚠️ WARN: Мод {user_id} вынес пред #{warns}/3 юзеру {target_id} на /{board_id}/: {reason}")
+            resp_text = (
+                f"⚠️ <b>ПРЕДУПРЕЖДЕНИЕ [{warns}/3]</b>\n\n"
+                f"Анон <b>{anon_name}</b> (ID: <code>{target_id}</code>) получил официальное предупреждение.\n"
+                f"Причина: <i>{reason}</i>\n"
+                f"<i>(При 3/3 нарушитель будет автоматически отправлен в мут на 24 часа)</i>"
+            )
+            await message.answer(resp_text, parse_mode="HTML")
+
+    try: await message.delete()
+    except Exception: pass
+
+
+@dp.message(Command("unwarn", "снять_варн", "снятьпред", "снять_пред"))
+async def cmd_unwarn(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not is_admin(user_id, board_id):
+        try: await message.delete()
+        except Exception: pass
+        return
+
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    args = (message.text or message.caption or "").split()[1:]
+    target_id = None
+
+    if message.reply_to_message:
+        target_id = await get_author_id_by_reply(message)
+    elif args:
+        try: target_id = int(args[0])
+        except ValueError: pass
+
+    if not target_id:
+        msg = "Usage: <code>/unwarn</code> (reply) or <code>/unwarn &lt;id&gt;</code>" if lang == 'en' else "Использование: <code>/unwarn</code> (в ответ на пост) или <code>/unwarn &lt;id&gt;</code>"
+        await message.answer(msg, parse_mode="HTML")
+        return
+
+    db = await get_pool()
+    anon_name = generate_anon_name(target_id)
+
+    async with db_lock:
+        active_items = await _get_user_active_items(db, target_id, board_id)
+        current_warns = active_items.get("warn_count", 0)
+        new_warns = max(0, current_warns - 1)
+        active_items["warn_count"] = new_warns
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(active_items), target_id, board_id))
+        await db.commit()
+
+    await log_global_event('bot', f"✅ UNWARN: Мод {user_id} снял варн с {target_id} на /{board_id}/ (осталось {new_warns}/3)")
+    await message.answer(f"✅ Предупреждение снято с <b>{anon_name}</b> (ID: <code>{target_id}</code>). Текущий счет: <b>{new_warns}/3</b>.", parse_mode="HTML")
+    try: await message.delete()
+    except Exception: pass
+
+@dp.message(Command("mute", "мут", "замутить"))
 async def cmd_mute(message: Message, board_id: str | None, stream: str = 'ru'):
 
     if not board_id: return
@@ -17290,6 +17438,18 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
         deleted_count = await delete_single_post(post_num, message.bot)
         role_str = "Админ" if admin_status else "Дворник"
         await log_global_event('bot', f"🗑️ DEL: {role_str} {user_id} удалил пост #{post_num} на /{board_id}/ (и {deleted_count} копий)")
+        
+        ach_janitor_note = ""
+        if is_janitor and deleted_count > 0:
+            from achievements_engine import check_and_unlock_achievement
+            unlocked, ach_info = check_and_unlock_achievement(active_items, "ach_janitor_clean")
+            if unlocked and ach_info:
+                await add_user_global_balance(db, user_id, board_id, ach_info["reward_cash"])
+                async with db_lock:
+                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+                    await db.commit()
+                ach_janitor_note = f"\n\n🏆 <b>ДОСТИЖЕНИЕ:</b> {ach_info['name']} (+{ach_info['reward_cash']} ₪)!"
+
         if lang == 'en':
             resp = f"🗑 Post #{post_num} deleted ({deleted_count} copies)."
             if is_janitor:
@@ -17302,6 +17462,7 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
             resp = f"🗑 Пост №{post_num} и копии ({deleted_count}) удалены."
             if is_janitor:
                 resp += f" 🧹 Удалено как Дворник (по Билету). Осталось: {janitor_deletes_left} удалений."
+        resp += ach_janitor_note
         await message.answer(resp)
     else:
         try:

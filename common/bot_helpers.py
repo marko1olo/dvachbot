@@ -60,6 +60,13 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
                 ok, _ = await deduct_user_global_balance(db, loser_id, board_id, amount)
                 if ok:
                     await add_user_global_balance(db, winner_id, board_id, amount)
+                    w_items = await _get_user_active_items(db, winner_id, board_id)
+                    from achievements_engine import check_and_unlock_achievement
+                    unlocked, ach_info = check_and_unlock_achievement(w_items, "ach_duel_win")
+                    if unlocked and ach_info:
+                        await add_user_global_balance(db, winner_id, board_id, ach_info["reward_cash"])
+                        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                         (json.dumps(w_items), winner_id, board_id))
                     await db.commit()
                 else:
                     reject_msg = "❌ У одного из участников изменился баланс во время принятия дуэли."
@@ -75,8 +82,8 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
     duel_text = (
         f"⚔️ <b>ДУЭЛЬ ЗАВЕРШЕНА!</b>\n\n"
         f"🎲 Монета решила исход битвы:\n"
-        f"🏆 Победитель: <b>{w_tag}</b>{you_w} <code>+{amount:,} RUB</code>\n"
-        f"💀 Проигравший: <b>{l_tag}</b>{you_l} <code>-{amount:,} RUB</code>"
+        f"🏆 Победитель: <b>{w_tag}</b>{you_w} <code>+{amount:,} ₪</code>\n"
+        f"💀 Проигравший: <b>{l_tag}</b>{you_l} <code>-{amount:,} ₪</code>"
     )
     try:
         from combat_visuals import draw_duel_poster
