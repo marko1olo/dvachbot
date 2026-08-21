@@ -3800,30 +3800,13 @@ def _build_clothes_shop_content(user_id: int, balance: float):
 
     text = (
         f"👗 <b>БУТИК ОДЕЖДЫ И ЭКИПИРОВКИ «АВАТАРИЯ»</b>\n"
-        f"Твой баланс: <code>{int(balance):,} ₪</code>\n"
+        f"💳 Твой баланс: <code>{int(balance):,} ₪</code>\n"
         f"<i>(Сроки действия суммируются при покупке и продлении!)</i>\n\n"
-        f"🥉 <b>Tier 1: Базовый шмот (7 Дней / 1 Неделя):</b>\n"
-        f"• 🩲 <b>Обоссанные треники</b> — <i>{p_track} ₪</i> (x2 шанс дропа лута, 25% испуг грабителя)\n"
-        f"• 📦 <b>Пакет Пятерочки</b> — <i>{p_bag} ₪</i> (8% шанс дропа кейсов на работе)\n"
-        f"• 🩴 <b>Сланцы с носками</b> — <i>{p_slip} ₪</i> (-20% к кулдауну смен /work)\n"
-        f"• 🤡 <b>Клоунский Нос</b> — <i>{p_clown} ₪</i> (+35 к Токсичности и троллингу)\n"
-        f"• 🕶️ <b>Очки Thug Life (2ch)</b> — <i>{p_thug} ₪</i> (+5% к выигрышу в казино)\n\n"
-        f"🥈 <b>Tier 2: Элитный шмот (14 Дней / 2 Недели):</b>\n"
-        f"• 🦺 <b>Жилетка Вассермана</b> — <i>{p_wass} ₪</i> (+25% к зарплате во всех сменах)\n"
-        f"• 👑 <b>Корона VIP-Скуфа</b> — <i>{p_crown} ₪</i> (+20% к чаевым на работе и VIP-статус)\n"
-        f"• 🐱 <b>Неко-Ушки (Аниме)</b> — <i>{p_ears} ₪</i> (+30 к Рассудку персонажа)\n"
-        f"• 👘 <b>Худи с Аской</b> — <i>{p_hoodie} ₪</i> (+25 к Рассудку и олдфаг вайб)\n"
-        f"• 🥽 <b>Очки Онотоле</b> — <i>{p_wg} ₪</i> (+15% к зарплате в /work)\n"
-        f"• 🥾 <b>Берцы ОМОНа</b> — <i>{p_boot} ₪</i> (Полная защита от бросков говна /shit)\n"
-        f"• 🥼 <b>Смирительная рубашка</b> — <i>{p_strait} ₪</i> (+40 к Токсичности постов)\n\n"
-        f"🥇 <b>Tier 3: Легендарный шмот (30 Дней / 1 Месяц):</b>\n"
-        f"• 🪖 <b>Шлем ОМОНа</b> — <i>{p_helm} ₪</i> (0 штрафов на работе, -50% времени мута)\n"
-        f"• 🧥 <b>Плащ Нео / Хакер</b> — <i>{p_cloak} ₪</i> (+30 к Защите и скрытности)\n"
-        f"• 🎩 <b>Цилиндр Джентльмена</b> — <i>{p_tophat} ₪</i> (+25 к Рассудку и стилю)\n"
-        f"• 🎭 <b>Маска Анонимуса</b> — <i>{p_mask} ₪</i> (Скрывает баланс в карточке)\n"
-        f"• 👟 <b>Тяги бархатные</b> — <i>{p_snk} ₪</i> (30% шанс сбежать от облавы пативэна)\n\n"
-        f"🛡️ <b>Расходная броня:</b>\n"
-        f"• 👽 <b>Шапочка из фольги (6ч)</b> — <i>{p_foil} ₪</i> (Защита от /rob и /shit)"
+        f"🥉 <b>Tier 1 (7 дней):</b> Треники, Пакет, Сланцы, Клоун, Thug Life\n"
+        f"🥈 <b>Tier 2 (14 дней):</b> Жилетка Вассермана, Корона, Неко-Ушки, Худи Аски, Берцы, Рубашка\n"
+        f"🥇 <b>Tier 3 (30 дней):</b> Шлем ОМОНа, Плащ Нео, Цилиндр, Маска Анона, Подкрадули\n"
+        f"🛡️ <b>Броня (6ч):</b> Шапочка из фольги (защита от /rob и /shit)\n\n"
+        f"👇 <i>Выбери вещь для покупки или открой Примерочную:</i>"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -4217,6 +4200,28 @@ async def cb_avatar_refresh(callback: types.CallbackQuery, board_id: str | None)
 
 
 # --- Category Navigation Callbacks ---
+async def _render_shop_subview(callback: types.CallbackQuery, text: str, kb: InlineKeyboardMarkup, category: str = "shop"):
+    """
+    Universally renders or edits shop/wardrobe/wiki subviews whether the source message
+    is a text message or a photo banner with caption.
+    """
+    try:
+        if callback.message.caption is not None or callback.message.photo:
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+        elif callback.message.text:
+            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+        else:
+            from banner_manager import send_banner_message
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+    except Exception:
+        try:
+            from banner_manager import send_banner_message
+            await callback.message.delete()
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text, reply_markup=kb, category=category, parse_mode="HTML")
+        except Exception:
+            pass
+
+
 @dp.callback_query(F.data == "shop_main_hub")
 async def cb_shop_main_hub(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
@@ -4224,15 +4229,7 @@ async def cb_shop_main_hub(callback: types.CallbackQuery, board_id: str | None):
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_main_shop_hub(user_id, balance)
-    try:
-        if callback.message.photo:
-            await callback.message.delete()
-            from banner_manager import send_banner_message
-            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text, reply_markup=kb, category="shop", parse_mode="HTML")
-        else:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4243,10 +4240,7 @@ async def cb_shop_cat_weapons(callback: types.CallbackQuery, board_id: str | Non
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_weapons_shop_content(user_id, balance)
-    try:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4257,10 +4251,7 @@ async def cb_shop_cat_clothes(callback: types.CallbackQuery, board_id: str | Non
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_clothes_shop_content(user_id, balance)
-    try:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4271,10 +4262,7 @@ async def cb_shop_cat_pharma(callback: types.CallbackQuery, board_id: str | None
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_pharma_shop_content(user_id, balance)
-    try:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4285,10 +4273,7 @@ async def cb_shop_cat_lootbox(callback: types.CallbackQuery, board_id: str | Non
     db = await get_pool()
     balance = await get_user_global_balance(db, user_id)
     text, kb = _build_lootbox_shop_content(user_id, balance)
-    try:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4300,10 +4285,7 @@ async def cb_shop_cat_color(callback: types.CallbackQuery, board_id: str | None)
     balance = await get_user_global_balance(db, user_id)
     active_items = await _get_user_active_items(db, user_id, board_id)
     text, kb = _build_color_picker_content(user_id, balance, active_items)
-    try:
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4342,13 +4324,11 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
 
     col_info = avatar_generator.COLOR_PALETTE[color_key]
     await callback.answer(f"Цвет изменен на {col_info['emoji']} {col_info['name']}! Виден в шапках твоих постов и на аватарке.", show_alert=True)
-    
+
     # Re-render color picker view
     new_bal = await get_user_global_balance(db, user_id)
     text, kb = _build_color_picker_content(user_id, new_bal, active_items)
-    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception: pass
-
+    await _render_shop_subview(callback, text, kb, category="shop")
 
 
 @dp.callback_query(F.data == "wardrobe_dressing_room")
@@ -4359,15 +4339,7 @@ async def cb_wardrobe_dressing_room(callback: types.CallbackQuery, board_id: str
     balance = await get_user_global_balance(db, user_id)
     active_items = await _get_user_active_items(db, user_id, board_id)
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
-    try:
-        if callback.message.photo:
-            await callback.message.delete()
-            from banner_manager import send_banner_message
-            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=text_dr, reply_markup=kb_dr, category="shop", parse_mode="HTML")
-        else:
-            await callback.message.edit_text(text_dr, reply_markup=kb_dr, parse_mode="HTML")
-    except Exception:
-        pass
+    await _render_shop_subview(callback, text_dr, kb_dr, category="shop")
     await callback.answer()
 
 
@@ -4378,7 +4350,7 @@ async def cb_wardrobe_equip(callback: types.CallbackQuery, board_id: str | None)
     item_id = callback.data.replace("wardrobe_equip_", "")
     db = await get_pool()
     active_items = await _get_user_active_items(db, user_id, board_id)
-    
+
     from wardrobe_engine import equip_item
     ok, msg = equip_item(active_items, item_id)
     if ok:
@@ -4386,11 +4358,10 @@ async def cb_wardrobe_equip(callback: types.CallbackQuery, board_id: str | None)
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
             await db.commit()
     await callback.answer(msg, show_alert=True)
-    
+
     balance = await get_user_global_balance(db, user_id)
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
-    try: await callback.message.edit_text(text_dr, reply_markup=kb_dr, parse_mode="HTML")
-    except Exception: pass
+    await _render_shop_subview(callback, text_dr, kb_dr, category="shop")
 
 
 @dp.callback_query(F.data.startswith("wardrobe_unequip_"))
@@ -4400,7 +4371,7 @@ async def cb_wardrobe_unequip(callback: types.CallbackQuery, board_id: str | Non
     slot = callback.data.replace("wardrobe_unequip_", "")
     db = await get_pool()
     active_items = await _get_user_active_items(db, user_id, board_id)
-    
+
     from wardrobe_engine import unequip_slot
     ok, msg = unequip_slot(active_items, slot)
     if ok:
@@ -4408,11 +4379,10 @@ async def cb_wardrobe_unequip(callback: types.CallbackQuery, board_id: str | Non
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
             await db.commit()
     await callback.answer(msg, show_alert=True)
-    
+
     balance = await get_user_global_balance(db, user_id)
     text_dr, kb_dr = _build_dressing_room_content(user_id, balance, active_items)
-    try: await callback.message.edit_text(text_dr, reply_markup=kb_dr, parse_mode="HTML")
-    except Exception: pass
+    await _render_shop_subview(callback, text_dr, kb_dr, category="shop")
 
 
 
@@ -4467,8 +4437,7 @@ async def cmd_wiki_items(message: types.Message, board_id: str | None, stream: s
 async def cb_wiki_main_hub(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     text, kb = _build_wiki_hub_content()
-    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception: pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4476,15 +4445,15 @@ async def cb_wiki_main_hub(callback: types.CallbackQuery, board_id: str | None):
 async def cb_wiki_cat_weapons(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     text = (
-        "⚔️ <b>СПРАВОЧНИК: ОРУЖИЕ И БОЕВЫЕ РАСХОДНИКИ</b>\n\n"
+        "⚔️ <b>СПРАВОЧНИК: ОРУЖИЕ И ТОКСИЧНОСТЬ</b>\n\n"
         "1. 🔪 <b>Заточка (/rob):</b>\n"
-        "• <i>Применение:</i> Реплей на жертву с командой <code>/rob</code>.\n"
-        "• <i>Эффект:</i> Отжимает от 10% до 30% шекелей у цели (до 1 500 ₪ за раз).\n\n"
-        "2. 🧯 <b>Перцовый баллончик:</b>\n"
-        "• <i>Применение:</i> Пассивно лежит в кармане.\n"
-        "• <i>Эффект:</i> При попытке ограбить тебя ослепляет грабителя, ломает его заточку и отбирает до 500 ₪ штрафа в твою пользу!\n\n"
+        "• <i>Применение:</i> Реплей на пост жертвы с <code>/rob</code>.\n"
+        "• <i>Эффект:</i> Крадет 10-30% баланса шекелей (макс 1000 ₪). Если у жертвы есть перцовка — нападающий ослепнет и потеряет шекели!\n\n"
+        "2. 🧯 <b>Перцовый баллончик (Авто-защита):</b>\n"
+        "• <i>Применение:</i> Пассивная защита в рюкзаке.\n"
+        "• <i>Эффект:</i> Автоматически ослепляет грабителя при нападении с заточкой и выбивает из него 150-500 ₪.\n\n"
         "3. 🔇 <b>Мут-Ган (/shoot):</b>\n"
-        "• <i>Применение:</i> Реплей на пост с <code>/shoot</code>.\n"
+        "• <i>Применение:</i> Реплей с <code>/shoot</code>.\n"
         "• <i>Эффект:</i> Отправляет жертву в мут на 1 час на текущей доске.\n\n"
         "4. 🐒 <b>Кусок говна (/shit):</b>\n"
         "• <i>Применение:</i> Реплей с <code>/shit</code>.\n"
@@ -4500,8 +4469,7 @@ async def cb_wiki_cat_weapons(callback: types.CallbackQuery, board_id: str | Non
         [InlineKeyboardButton(text="⚔️ Купить на Черном рынке", callback_data="shop_cat_weapons")],
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
-    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception: pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4510,7 +4478,7 @@ async def cb_wiki_cat_clothes(callback: types.CallbackQuery, board_id: str | Non
     if not board_id: return
     text = (
         "👗 <b>СПРАВОЧНИК: БУТИК И ГАРДЕРОБ</b>\n\n"
-        "<i>Все вещи покупаются НАВСЕГДА и дают пассивные бонусы:</i>\n\n"
+        "<i>Все вещи дают активные пассивные бонусы:</i>\n\n"
         "• 🦺 <b>Жилетка Вассермана:</b> +25% к зарплате во всех сменах <code>/work</code>.\n"
         "• 👑 <b>Корона VIP-Скуфа:</b> +20% к чаевым на работе и VIP-статус.\n"
         "• 🪖 <b>Шлем ОМОНа:</b> 0 потерь от штрафов на работе, -50% времени мута от выстрела.\n"
@@ -4527,8 +4495,7 @@ async def cb_wiki_cat_clothes(callback: types.CallbackQuery, board_id: str | Non
         [InlineKeyboardButton(text="👗 В Бутик одежды", callback_data="shop_cat_clothes")],
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
-    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception: pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4558,8 +4525,7 @@ async def cb_wiki_cat_sets(callback: types.CallbackQuery, board_id: str | None):
         [InlineKeyboardButton(text="🎽 В Примерочную", callback_data="wardrobe_dressing_room")],
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
-    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception: pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4581,8 +4547,7 @@ async def cb_wiki_cat_pharma(callback: types.CallbackQuery, board_id: str | None
         [InlineKeyboardButton(text="💊 В Аптеку", callback_data="shop_cat_pharma")],
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
-    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception: pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
 
 
@@ -4608,11 +4573,8 @@ async def cb_wiki_cat_lootbox(callback: types.CallbackQuery, board_id: str | Non
         [InlineKeyboardButton(text="📦 Открыть Кейсы", callback_data="shop_cat_lootbox")],
         [InlineKeyboardButton(text="⬅️ Назад в Энциклопедию", callback_data="wiki_main_hub")]
     ])
-    try: await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except Exception: pass
+    await _render_shop_subview(callback, text, kb, category="shop")
     await callback.answer()
-
-
 # -----------------------------------------------------------------------------
 # ДОСТИЖЕНИЯ И ТРОФЕИ (/achievements, /ach, /ачивки, /достижения)
 # -----------------------------------------------------------------------------
