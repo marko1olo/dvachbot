@@ -5121,7 +5121,7 @@ async def is_target_neutralized(target_id: int, board_id: str, db=None) -> tuple
 
 async def handle_attack_abuse_check(message: types.Message, db, board_id: str, user_id: int, target_id: int) -> bool:
     """
-    Защита от спама мутами и доносами (максимум 2 уникальные жертвы за 3 часа).
+    Защита от спама мутами и платным оружием (максимум 2 уникальные жертвы за 3 часа).
     При 1-м превышении — предупреждение.
     При 2-м превышении — штурм спецназа, деанон, штраф 1,000₪ и мут на 1 час.
     """
@@ -5132,8 +5132,8 @@ async def handle_attack_abuse_check(message: types.Message, db, board_id: str, u
 
     if outcome == "warning":
         await message.answer(
-            "⚠️ <b>ВНИМАНИЕ! ПРЕВЫШЕН ЛИМИТ НАПАДЕНИЙ И ДОНОСОВ!</b>\n\n"
-            "Ты уже атаковал/зарепортил 2 человек за последние 3 часа.\n"
+            "⚠️ <b>ВНИМАНИЕ! ПРЕВЫШЕН ЛИМИТ НАПАДЕНИЙ!</b>\n\n"
+            "Ты уже атаковал оружием и мутами 2 человек за последние 3 часа.\n"
             "Остынь и не мешай общению! При повторной попытке к тебе выедет спецназ, тебя сдеанонят и оштрафуют на 1,000 ₪ как злостного нарушителя порядка!",
             parse_mode="HTML"
         )
@@ -5148,7 +5148,7 @@ async def handle_attack_abuse_check(message: types.Message, db, board_id: str, u
         city_fake = random.choice(["Мухосранск", "Челябинск", "Саратов", "Омск", "Нижний Тагил", "Воронеж", "Кемерово", "Сызрань", "Курган"])
         doxx_msg = (
             f"🚨 <b>ОПЕРАЦИЯ «ПЕРЕХВАТ»: СПЕЦНАЗ ВЗЛОМАЛ ДВЕРЬ ВРЕДИТЕЛЯ!</b> 🚨\n\n"
-            f"🦹‍♂️ <b>Нарушитель:</b> Анон <code>[ID:{user_id}]</code> пытался парализовать общение и спамить доносами/мутами!\n\n"
+            f"🦹‍♂️ <b>Нарушитель:</b> Анон <code>[ID:{user_id}]</code> пытался парализовать общение и спамить мутами!\n\n"
             f"📡 <b>РЕЗУЛЬТАТ ДЕАНОНИМИЗАЦИИ ФСБ:</b>\n"
             f"• <b>IP-адрес:</b> <code>{ip_fake}</code>\n"
             f"• <b>Провайдер:</b> {provider_fake}\n"
@@ -21336,11 +21336,6 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     if author_id == message.from_user.id:
         await message.answer("🤡 Репортишь сам себя, дебил?", parse_mode="HTML")
         return
-
-    if author_id:
-        db = await get_pool()
-        if await handle_attack_abuse_check(message, db, board_id, message.from_user.id, author_id):
-            return
 
     # Spawn asynchronous pipeline
     spawn_task(process_report_pipeline(message.bot, message, reported_msg, author_id, board_id, stream))
