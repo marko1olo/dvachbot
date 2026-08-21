@@ -2,12 +2,20 @@ import os
 import asyncio
 import io
 import logging
+import ssl
+import socket
 import aiohttp
 from PIL import Image
 from typing import Optional, Tuple
 from japanese_translator import get_dynamic_proxy_url
 
 logger = logging.getLogger(__name__)
+
+# Pre-built SSL context to avoid blocking ssl.create_default_context()
+# or repeated SSLContext() inside the async event loop.
+_NO_VERIFY_SSL = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+_NO_VERIFY_SSL.check_hostname = False
+_NO_VERIFY_SSL.verify_mode = ssl.CERT_NONE
 
 
 async def _download_image_with_proxy(url: str, timeout: int=15, depth: int=0) -> tuple[bytes, int] | None:
@@ -48,10 +56,7 @@ async def _download_image_with_proxy(url: str, timeout: int=15, depth: int=0) ->
     else:
         headers['Referer'] = f'{scheme}://{domain}/'
     for attempt in range(2):
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-        connector = aiohttp.TCPConnector(family=socket.AF_INET, ssl=ssl_context, force_close=True, enable_cleanup_closed=True)
+        connector = aiohttp.TCPConnector(family=socket.AF_INET, ssl=_NO_VERIFY_SSL, force_close=True, enable_cleanup_closed=True)
         try:
             async with aiohttp.ClientSession(timeout=timeout_config, headers=headers, connector=connector, trust_env=False) as session:
                 try:
