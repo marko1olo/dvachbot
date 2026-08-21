@@ -136,6 +136,39 @@ def register_attacker_effect(item_type: str, attacker_id: int, target_id: int, d
     now = time.time()
     _ACTIVE_AUTHOR_ATTACKS[item_type][attacker_id][target_id] = now + duration_seconds
 
+_ATTACK_WINDOW_SEC = 3 * 3600 # 3 hours
+_MAX_TARGETS_PER_WINDOW = 2
+_ATTACKER_TARGET_HISTORY: dict[int, list[tuple[float, int]]] = {}
+_ATTACKER_ABUSE_WARNINGS: dict[int, int] = {}
+
+def check_attack_abuse_limit(attacker_id: int, target_id: int) -> tuple[bool, str, int]:
+    """
+    Защита от массовых мутов и доносов (максимум 2 уникальные жертвы за 3 часа).
+    Возвращает: (is_blocked: bool, outcome: str, fine_amount: int)
+      - 'allowed': действие разрешено.
+      - 'warning': 1-я попытка превысить порог (предупреждение, действие заблокировано).
+      - 'spetsnaz_fine': 2-я+ попытка (штурм спецназа, деанон, штраф 1000₪, мут 1ч, действие заблокировано).
+    """
+    now = time.time()
+    history = _ATTACKER_TARGET_HISTORY.setdefault(attacker_id, [])
+    cutoff = now - _ATTACK_WINDOW_SEC
+    history = [entry for entry in history if entry[0] > cutoff]
+    _ATTACKER_TARGET_HISTORY[attacker_id] = history
+
+    unique_targets = {t_id for _, t_id in history}
+
+    if target_id in unique_targets or len(unique_targets) < _MAX_TARGETS_PER_WINDOW:
+        history.append((now, target_id))
+        return False, "allowed", 0
+
+    warn_count = _ATTACKER_ABUSE_WARNINGS.get(attacker_id, 0)
+    if warn_count == 0:
+        _ATTACKER_ABUSE_WARNINGS[attacker_id] = 1
+        return True, "warning", 0
+    else:
+        _ATTACKER_ABUSE_WARNINGS[attacker_id] = warn_count + 1
+        return True, "spetsnaz_fine", 1000
+
 # Explicitly export private helpers so 'from shared_state import *' in
 # broadcaster.py, delivery_manager.py, post_processor.py, archive_manager.py
 # picks them up. Without __all__, Python excludes names starting with '_'.
@@ -144,6 +177,7 @@ __all__ = [
     'set_combat_cooldown',
     'count_active_attacker_effects',
     'register_attacker_effect',
+    'check_attack_abuse_limit',
     'RE_REPLY_QUOTE',
     'RE_REPLY_QUOTE_FORMAT',
     'RE_MULTI_REPLY',

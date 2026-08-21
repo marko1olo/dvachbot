@@ -5119,6 +5119,49 @@ async def is_target_neutralized(target_id: int, board_id: str, db=None) -> tuple
 
     return False, ""
 
+async def handle_attack_abuse_check(message: types.Message, db, board_id: str, user_id: int, target_id: int) -> bool:
+    """
+    Защита от спама мутами и доносами (максимум 2 уникальные жертвы за 3 часа).
+    При 1-м превышении — предупреждение.
+    При 2-м превышении — штурм спецназа, деанон, штраф 1,000₪ и мут на 1 час.
+    """
+    from shared_state import check_attack_abuse_limit
+    is_blocked, outcome, fine = check_attack_abuse_limit(user_id, target_id)
+    if not is_blocked:
+        return False
+
+    if outcome == "warning":
+        await message.answer(
+            "⚠️ <b>ВНИМАНИЕ! ПРЕВЫШЕН ЛИМИТ НАПАДЕНИЙ И ДОНОСОВ!</b>\n\n"
+            "Ты уже атаковал/зарепортил 2 человек за последние 3 часа.\n"
+            "Остынь и не мешай общению! При повторной попытке к тебе выедет спецназ, тебя сдеанонят и оштрафуют на 1,000 ₪ как злостного нарушителя порядка!",
+            parse_mode="HTML"
+        )
+        return True
+
+    elif outcome == "spetsnaz_fine":
+        await deduct_user_global_balance(db, user_id, board_id, fine)
+        await apply_regular_mute(user_id, board_id, 3600)
+
+        ip_fake = f"{random.randint(46,195)}.{random.randint(10,250)}.{random.randint(1,250)}.{random.randint(1,250)}"
+        provider_fake = random.choice(["Ростелеком", "Дом.ру", "МТС Домашний", "МегаФон", "Билайн ШПД", "Уфанет", "ТТК"])
+        city_fake = random.choice(["Мухосранск", "Челябинск", "Саратов", "Омск", "Нижний Тагил", "Воронеж", "Кемерово", "Сызрань", "Курган"])
+        doxx_msg = (
+            f"🚨 <b>ОПЕРАЦИЯ «ПЕРЕХВАТ»: СПЕЦНАЗ ВЗЛОМАЛ ДВЕРЬ ВРЕДИТЕЛЯ!</b> 🚨\n\n"
+            f"🦹‍♂️ <b>Нарушитель:</b> Анон <code>[ID:{user_id}]</code> пытался парализовать общение и спамить доносами/мутами!\n\n"
+            f"📡 <b>РЕЗУЛЬТАТ ДЕАНОНИМИЗАЦИИ ФСБ:</b>\n"
+            f"• <b>IP-адрес:</b> <code>{ip_fake}</code>\n"
+            f"• <b>Провайдер:</b> {provider_fake}\n"
+            f"• <b>Геолокация:</b> г. {city_fake}, панелька на окраине\n"
+            f"• <b>Статус:</b> Лицом в пол, дверь выбита кувалдой 🚪💥\n\n"
+            f"💸 <b>Взыскан штраф:</b> <code>-1,000 ₪</code> в фонд очистки тредов.\n"
+            f"🤐 <b>Мера пресечения:</b> Мут на 1 час за злостное вредительство!"
+        )
+        await message.answer(doxx_msg, parse_mode="HTML")
+        return True
+
+    return False
+
 @dp.message(Command("shoot", "shot", "mutegun", "мутган", "стрелять", "пиу"))
 async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -5138,6 +5181,9 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         return
     if target_id == user_id:
         await message.answer("Ты пытаешься выстрелить в самого себя? Идиот.")
+        return
+
+    if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
         return
 
     active_items = await _get_user_active_items(db, user_id, board_id)
@@ -5449,6 +5495,9 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         return
     if target_id == user_id:
         await message.answer("🤦‍♂️ Ты попытался ограбить сам себя. Заточка осталась при тебе.")
+        return
+
+    if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
         return
     t_items = await _get_user_active_items(db, target_id, board_id)
     current_time = int(time.time())
@@ -21287,6 +21336,11 @@ async def cmd_report(message: types.Message, board_id: str | None, stream: str =
     if author_id == message.from_user.id:
         await message.answer("🤡 Репортишь сам себя, дебил?", parse_mode="HTML")
         return
+
+    if author_id:
+        db = await get_pool()
+        if await handle_attack_abuse_check(message, db, board_id, message.from_user.id, author_id):
+            return
 
     # Spawn asynchronous pipeline
     spawn_task(process_report_pipeline(message.bot, message, reported_msg, author_id, board_id, stream))
