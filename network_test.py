@@ -43,7 +43,7 @@ async def run_test() -> None:
         data.add_field("chat_id", str(CHANNEL_ID))
         data.add_field("document", b"this is a test file", filename="test.txt", content_type="text/plain")
 
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False), connector_owner=True) as session:
             print("Sending POST request to https://api.telegram.org/bot.../sendDocument")
             async with session.post(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
