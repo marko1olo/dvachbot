@@ -96,6 +96,70 @@ ACHIEVEMENTS_CATALOG = {
         "icon": "🧯",
         "category": "pvp"
     },
+    "ach_first_work": {
+        "id": "ach_first_work",
+        "name": "💼 Первый рабочий день",
+        "desc": "Выйти на первую смену на бирже труда (/work).",
+        "reward_cash": 50,
+        "icon": "💼",
+        "category": "work"
+    },
+    "ach_duel_win": {
+        "id": "ach_duel_win",
+        "name": "⚔️ Дуэлянт Борды",
+        "desc": "Одержать победу в дуэли со ставкой (/duel).",
+        "reward_cash": 200,
+        "icon": "⚔️",
+        "category": "pvp"
+    },
+    "ach_tinfoil_protect": {
+        "id": "ach_tinfoil_protect",
+        "name": "👽 Защита от Рептилоидов",
+        "desc": "Отразить нападение с помощью Шапочки из фольги.",
+        "reward_cash": 250,
+        "icon": "👽",
+        "category": "pvp"
+    },
+    "ach_mutegun_sniper": {
+        "id": "ach_mutegun_sniper",
+        "name": "🔇 Снайпер Двача",
+        "desc": "Успешно выстрелить из Мут-Гана (/shoot) и отправить рака в мут.",
+        "reward_cash": 300,
+        "icon": "🔇",
+        "category": "pvp"
+    },
+    "ach_partyvan_called": {
+        "id": "ach_partyvan_called",
+        "name": "🚔 Донос Года",
+        "desc": "Вызвать Пативэн с ОМОНом на тред (/partyvan).",
+        "reward_cash": 500,
+        "icon": "🚔",
+        "category": "pvp"
+    },
+    "ach_blackjack_21": {
+        "id": "ach_blackjack_21",
+        "name": "🃏 Настоящий Блэкджек",
+        "desc": "Собрать 21 очко с раздачи в Блэкджеке (/bj).",
+        "reward_cash": 400,
+        "icon": "🃏",
+        "category": "casino"
+    },
+    "ach_coin_streak": {
+        "id": "ach_coin_streak",
+        "name": "🪙 Мастер Монетки",
+        "desc": "Выиграть в Коинфлип со ставкой (/coinflip).",
+        "reward_cash": 200,
+        "icon": "🪙",
+        "category": "casino"
+    },
+    "ach_janitor_clean": {
+        "id": "ach_janitor_clean",
+        "name": "🧹 Чистильщик Борды",
+        "desc": "Удалить мусорный пост с помощью Билета Дворника (/del).",
+        "reward_cash": 200,
+        "icon": "🧹",
+        "category": "work"
+    },
     "ach_cases_10": {
         "id": "ach_cases_10",
         "name": "📦 Кейсовый Олигарх",

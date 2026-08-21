@@ -6851,16 +6851,24 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
     if user_id in _active_duels:
         _active_duels.pop(user_id)
 
+    kb_duel = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"⚔️ Принять вызов ({amount} ₪)", callback_data=f"duel_accept:{user_id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"duel_decline:{user_id}")
+        ]
+    ])
+
     # Отправляем сообщение-вызов
     sent_msg = await message.answer(
         f"⚔️ <b>Анон [{get_anon_id(user_id)}] вызывает на дуэль!</b>\n\n"
-        f"Ставка: <code>{amount} RUB</code>\n"
-        f"Победитель забирает всё, рандом 50/50.\n\n"
-        f"Чтобы принять — напиши <code>/duel accept</code> в ответ на это сообщение или просто в чат.\n"
-        f"<i>Вызов активен 2 минуты.</i>",
+        f"💰 Ставка: <code>{amount:,} ₪</code>\n"
+        f"🎲 Победитель забирает всё, шанс 50/50.\n\n"
+        f"Нажми кнопку ниже или напиши <code>/duel accept</code>.\n"
+        f"<i>(Вызов активен 2 минуты)</i>",
+        reply_markup=kb_duel,
         parse_mode="HTML"
     )
-    
+
     # Сохраняем вызов с ID сообщения
     _active_duels[user_id] = {
         "board_id": board_id,
@@ -6868,11 +6876,11 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
         "ts":       now,
         "msg_id":   sent_msg.message_id
     }
-    
+
     try: await message.delete()
     except Exception: pass
 
-@dp.message(Command("duel"))
+@dp.message(Command("duel", "дуэль", "pvp", "пвп"))
 async def cmd_duel(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     args = (message.text or message.caption or "").split()[1:]
@@ -6881,6 +6889,30 @@ async def cmd_duel(message: types.Message, board_id: str | None, stream: str = '
         await _handle_duel_accept(message, board_id)
     else:
         await _handle_duel_create(message, board_id, args, stream)
+
+@dp.callback_query(F.data.startswith("duel_accept:"))
+async def cb_duel_accept(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    parts = callback.data.split(":")
+    if len(parts) < 2 or not parts[1].isdigit():
+        await callback.answer("Ошибка данных", show_alert=True)
+        return
+    challenger_id = int(parts[1])
+    await accept_duel_logic(callback.message, challenger_id, board_id)
+    try: await callback.answer()
+    except Exception: pass
+
+@dp.callback_query(F.data.startswith("duel_decline:"))
+async def cb_duel_decline(callback: types.CallbackQuery, board_id: str | None):
+    if not board_id: return
+    parts = callback.data.split(":")
+    if len(parts) < 2 or not parts[1].isdigit():
+        await callback.answer("Ошибка данных", show_alert=True)
+        return
+    challenger_id = int(parts[1])
+    await decline_duel_logic(callback.message, challenger_id)
+    try: await callback.answer()
+    except Exception: pass
 
 @dp.message(Command("wallet", "balance", "money", "кошелек", "баланс", "шекели", "деньги", "cash"))
 async def cmd_wallet(message: types.Message, board_id: str | None, stream: str = 'ru'):

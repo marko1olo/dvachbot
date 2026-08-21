@@ -289,8 +289,43 @@ def apply_lootbox_reward(
                 recycle_msg = f"⏳ <b>Продление экипировки:</b> +{days_added} дней к «{item_name}»!"
 
     else:
-        # Standard combat / cash payload
+        now = int(time.time())
+        # Standard combat / duration / consumable payload
         for k, v in payload.items():
-            active_items[k] = v
+            if k in ("tinfoil_hat", "tinfoil_until"):
+                current_exp = active_items.get(k, 0)
+                base = current_exp if current_exp > now else now
+                active_items[k] = base + 6 * 3600
+                active_items["owned_hat_tinfoil"] = True
+                active_items["equipped_head"] = "hat_tinfoil"
+                recycle_msg = "👽 <b>Шапочка из фольги:</b> +6 часов к длительности защиты!"
+            elif k in ("reflect_shield_until", "shield_until"):
+                current_exp = active_items.get(k, 0)
+                base = current_exp if current_exp > now else now
+                active_items[k] = base + 6 * 3600
+                recycle_msg = "🛡️ <b>Зеркальный Щит:</b> +6 часов к длительности защиты!"
+            elif k == "janitor_until":
+                current_exp = active_items.get("janitor_until", 0)
+                base = current_exp if current_exp > now else now
+                active_items["janitor_until"] = base + 6 * 3600
+                active_items["janitor_deletes_left"] = active_items.get("janitor_deletes_left", 0) + 5
+                recycle_msg = "🧹 <b>Билет Дворника:</b> +6 часов и +5 удалений!"
+            elif k in ("knife_gun", "mute_gun", "partyvan_gun", "pepperspray_gun", "shit_gun", "laxative_gun", "schizopill_gun"):
+                if active_items.get(k):
+                    # Already possessed -> 75% cashback compensation
+                    combat_prices = {
+                        "knife": 400, "mute": 500, "partyvan": 1200,
+                        "pepperspray": 450, "shit": 100, "laxative": 300,
+                        "schizopill": 350,
+                    }
+                    item_key = k.replace("_gun", "")
+                    base_price = combat_prices.get(item_key, 200)
+                    cb = int(base_price * 0.75)
+                    final_cash += cb
+                    recycle_msg = f"♻️ <b>Оружие уже заряжено:</b> компенсация +{cb} ₪ в кошелек!"
+                else:
+                    active_items[k] = True
+            else:
+                active_items[k] = v
 
     return active_items, final_cash, recycle_msg
