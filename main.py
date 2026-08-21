@@ -20318,6 +20318,22 @@ async def periodic_economy_broadcast():
             for board_id in target_boards:
                 if board_id not in board_data:
                     continue
+
+                # Проверяем активность: только для досок с активом >= 60 постов в час
+                try:
+                    db_p = await get_pool()
+                    one_h_ago = int(time.time()) - 3600
+                    async with db_p.execute(
+                        "SELECT COUNT(*) FROM Posts WHERE board_id = ? AND timestamp > ? AND author_id != -1",
+                        (board_id, one_h_ago)
+                    ) as cur_act:
+                        row_act = await cur_act.fetchone()
+                        act_cnt = row_act[0] if row_act else 0
+                    if act_cnt < 60:
+                        continue
+                except Exception:
+                    pass
+
                 b_data = board_data[board_id]
                 recipients = b_data['users']['active'] - b_data['users']['banned']
                 if not recipients:

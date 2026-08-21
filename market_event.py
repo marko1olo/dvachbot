@@ -110,14 +110,33 @@ async def market_event_generator():
             market_state['multipliers'] = new_multipliers
             market_state['last_update'] = time.time()
 
-            # 3. Рассылаем новость в треды
+            # 3. Рассылаем новость в треды (ТОЛЬКО на доски с активностью >= 60 постов в час)
             bot_instance = None
             if GLOBAL_BOTS:
                 bot_instance = list(GLOBAL_BOTS.values())[0]
 
             if bot_instance:
                 from common.database import create_post
+                from common.db_pool import get_pool
+
+                db = await get_pool()
+                one_hour_ago = int(time.time()) - 3600
+
                 for board_id in BOARDS:
+                    # Проверяем активность на доске за последний час
+                    try:
+                        async with db.execute(
+                            "SELECT COUNT(*) FROM Posts WHERE board_id = ? AND timestamp > ? AND author_id != -1",
+                            (board_id, one_hour_ago)
+                        ) as cur_act:
+                            row_act = await cur_act.fetchone()
+                            activity = row_act[0] if row_act else 0
+                    except Exception:
+                        activity = 0
+
+                    if activity < 60:
+                        continue
+
                     msg_text = f"📉 <b>ТОРГОВАЯ СВОДКА ЧЕРНОГО РЫНКА (/shop)</b> 📈\n\n{event_text}\n\n<i>Цены на снаряжение и услуги обновлены.</i>"
                     content = {'type': 'text', 'text': msg_text}
                     try:
