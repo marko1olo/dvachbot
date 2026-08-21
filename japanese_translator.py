@@ -1942,7 +1942,7 @@ async def _fetch_image_from_apis(api_definitions: List[Dict], fail_message: str,
     # 1. Определяем прокси вручную (принудительно None для прямой работы через WireGuard, как в summarize)
     current_proxy = None
     f"✅ HIDDIFY ({current_proxy})" if current_proxy else "⚠️ DIRECT/OPENVPN (System)"
-    ssl_context = ssl.create_default_context()
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
     connector = aiohttp.TCPConnector(ssl=ssl_context, force_close=True, enable_cleanup_closed=True)

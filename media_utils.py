@@ -48,7 +48,7 @@ async def _download_image_with_proxy(url: str, timeout: int=90, depth: int=0) ->
     else:
         headers['Referer'] = f'{scheme}://{domain}/'
     for attempt in range(2):
-        ssl_context = ssl.create_default_context()
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ssl_context.check_hostname = False
         ssl_context.verify_mode = ssl.CERT_NONE
         connector = aiohttp.TCPConnector(family=socket.AF_INET, ssl=ssl_context, force_close=True, enable_cleanup_closed=True)
