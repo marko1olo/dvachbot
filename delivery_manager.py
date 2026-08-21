@@ -691,11 +691,14 @@ async def _supervise_message_worker(worker_name: str, board_id: str, bot_instanc
 
 
 async def message_broadcaster(bots: dict[str, Bot]):
-
-    tasks = [
-        spawn_task(_supervise_message_worker(f"Worker-{board_id}", board_id, bot_instance))
-        for board_id, bot_instance in bots.items()
-    ]
+    from common.board_config import BOARD_CONFIG
+    default_bot = bots.get('b') or next(iter(bots.values()), None)
+    all_boards = set(BOARD_CONFIG.keys()) | set(bots.keys())
+    tasks = []
+    for board_id in all_boards:
+        bot_inst = bots.get(board_id) or default_bot
+        if bot_inst:
+            tasks.append(spawn_task(_supervise_message_worker(f"Worker-{board_id}", board_id, bot_inst)))
     # return_exceptions: падение одного супервизора не должно ронять
     # message_broadcaster целиком (иначе _run_background_task поднимет ВТОРОЙ
     # комплект воркеров поверх ещё живых первых).

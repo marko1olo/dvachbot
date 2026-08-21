@@ -10,7 +10,7 @@ from japanese_translator import get_dynamic_proxy_url
 logger = logging.getLogger(__name__)
 
 
-async def _download_image_with_proxy(url: str, timeout: int=90, depth: int=0) -> tuple[bytes, int] | None:
+async def _download_image_with_proxy(url: str, timeout: int=15, depth: int=0) -> tuple[bytes, int] | None:
     if depth > 3:
         return None
     import socket
@@ -20,7 +20,7 @@ async def _download_image_with_proxy(url: str, timeout: int=90, depth: int=0) ->
     import hashlib
     from urllib.parse import urlparse
     current_proxy = get_dynamic_proxy_url()
-    timeout_config = aiohttp.ClientTimeout(total=timeout, connect=30, sock_connect=30, sock_read=timeout)
+    timeout_config = aiohttp.ClientTimeout(total=timeout, connect=5, sock_connect=5, sock_read=timeout)
     parsed_url = urlparse(url)
     domain = parsed_url.netloc
     scheme = parsed_url.scheme

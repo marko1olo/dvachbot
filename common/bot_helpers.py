@@ -12,12 +12,13 @@ from common.anon_identity import get_anon_id, generate_anon_name
 from post_processor import NewPostContext, NewPostProcessor, process_new_post
 
 async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
-    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-        row = await c.fetchone()
-        active_items_str = row[0] if row and row[0] else "{}"
     try:
-        return json.loads(active_items_str)
-    except:
+        async with asyncio.timeout(2.0):
+            async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                row = await c.fetchone()
+                active_items_str = row[0] if row and row[0] else "{}"
+            return json.loads(active_items_str)
+    except Exception:
         return {}
 
 async def accept_duel_logic(message: types.Message, challenger_id: int, board_id: str):

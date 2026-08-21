@@ -548,8 +548,11 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         if user_id not in b_data['users']['active']:
             b_data['users']['active'].add(user_id)
             b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set()}
-            await add_or_activate_user(user_id, board_id)
-            print(f"✅ [{board_id}] Добавлен новый пользователь: ID {user_id}")
+            try:
+                await asyncio.wait_for(add_or_activate_user(user_id, board_id), timeout=3.0)
+                print(f"✅ [{board_id}] Добавлен новый пользователь: ID {user_id}")
+            except Exception as e:
+                print(f"⚠️ [{board_id}] Ошибка добавления пользователя {user_id}: {e}")
         if board_id != 'trash' and not await check_spam(user_id, message, board_id):
             try:
                 await message.delete()

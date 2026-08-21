@@ -20835,7 +20835,8 @@ async def initialize_bots() -> tuple[dict[str, Bot], AiohttpSession]:
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
     connector = aiohttp.TCPConnector(
-        limit=100,  # Немного увеличиваем лимит одновременных подключений
+        limit=300,  # Увеличен до 300 для предотвращения socket starvation при параллельных рассылках и 13 поллингах
+        limit_per_host=100,
         ttl_dns_cache=300,
         enable_cleanup_closed=True, 
         force_close=False,  # ВЕРНУЛИ KEEP-ALIVE, ПЕРЕСТАНУТ ОТВАЛИВАТЬСЯ СОКЕТЫ
