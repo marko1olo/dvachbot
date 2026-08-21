@@ -3623,6 +3623,26 @@ async def cmd_global_pin(message: types.Message, board_id: str | None, stream: s
 # 🏬 ТОРГОВЫЙ ХАБ «ДВАЧ-ПЛАЗА», БУТИК ОДЕЖДЫ, ЛУТБОКСЫ И RPG АВАТАРИЯ
 # =============================================================================
 
+class SafeMessageProxy:
+    def __init__(self, original_msg, user):
+        self._msg = original_msg
+        self.from_user = user
+        self.bot = original_msg.bot
+        self.chat = original_msg.chat
+        self.date = original_msg.date
+        self.message_id = original_msg.message_id
+        self.text = "/command"
+    async def answer(self, *args, **kwargs):
+        return await self._msg.answer(*args, **kwargs)
+    async def reply(self, *args, **kwargs):
+        return await self._msg.answer(*args, **kwargs)
+    async def answer_photo(self, *args, **kwargs):
+        return await self._msg.answer_photo(*args, **kwargs)
+    async def delete(self):
+        pass
+    def __getattr__(self, name):
+        return getattr(self._msg, name)
+
 from wardrobe_engine import CLOTHING_CATALOG, get_equipped_gear, equip_item
 import avatar_generator
 import lootbox_engine
@@ -8511,7 +8531,30 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
     db = await get_pool()
 
     if section == "hub":
-        await cmd_casino_hub(callback.message, board_id)
+        async with db_lock:
+            balance = await get_user_global_balance(db, user_id)
+        kb = casino_engine.get_casino_hub_keyboard()
+        caption = (
+            f"🎰 <b>ПОДПОЛЬНОЕ КАЗИНО ТГАЧА</b>\n\n"
+            f"💳 Твой баланс: <code>{int(balance)} ₪</code>\n\n"
+            f"Выбирай стол и умножай шекели:\n"
+            f"• 🎰 <b>Слоты 777</b> — Джекпот x50, Бриллианты x15, Клубнички x5\n"
+            f"• 🪙 <b>Монетка 50/50</b> — Орел или Решка с множителем x1.95\n"
+            f"• 🃏 <b>Блэкджек 21</b> — Классическая карточная битва против дилера (x2 / x2.5)\n"
+            f"• 💀 <b>Русская Рулетка</b> — 1 патрон на 6 камор. Серия выживания до x5.0!\n"
+            f"• 💸 <b>Дроп денег</b> — Раздать шекели в тред на реакцию"
+        )
+        try:
+            if callback.message.caption:
+                await callback.message.edit_caption(caption=caption, reply_markup=kb, parse_mode="HTML")
+            elif callback.message.text:
+                await callback.message.edit_text(text=caption, reply_markup=kb, parse_mode="HTML")
+            else:
+                from banner_manager import send_banner_message
+                await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
+        except Exception:
+            from banner_manager import send_banner_message
+            await send_banner_message(bot=callback.bot, chat_id=callback.message.chat.id, caption=caption, reply_markup=kb, category="roulette", parse_mode="HTML")
         await callback.answer()
         return
 
@@ -8526,7 +8569,8 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
         elif game == "roulette":
             await _show_roulette_lobby(callback.bot, callback.message.chat.id, user_id, board_id, 100, message_to_edit=callback.message)
         elif game == "drop":
-            await cmd_money_drop(callback.message, board_id)
+            fake_msg = SafeMessageProxy(callback.message, callback.from_user)
+            await cmd_money_drop(fake_msg, board_id)
         elif game == "balance":
             async with db_lock:
                 bal = await get_user_global_balance(db, user_id)
