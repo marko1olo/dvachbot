@@ -4788,8 +4788,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         await callback.answer(f"🎉 Выпало: {title}!", show_alert=True)
         new_b = await get_user_global_balance(db, user_id)
         text, kb = _build_lootbox_shop_content(user_id, new_b)
-        try: await callback.message.edit_text(f"{reveal_text}\n\n{text}", reply_markup=kb, parse_mode="HTML")
-        except Exception: pass
+        await _render_shop_subview(callback, f"{reveal_text}\n\n{text}", kb, category="shop")
         return
 
     elif item == "lootbox_gold":
@@ -4817,8 +4816,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         await callback.answer(f"🌟 ДЖЕКПОТ: {title}!", show_alert=True)
         new_b = await get_user_global_balance(db, user_id)
         text, kb = _build_lootbox_shop_content(user_id, new_b)
-        try: await callback.message.edit_text(f"{reveal_text}\n\n{text}", reply_markup=kb, parse_mode="HTML")
-        except Exception: pass
+        await _render_shop_subview(callback, f"{reveal_text}\n\n{text}", kb, category="shop")
         return
 
     # --- 2. WEAPONS & COMBAT ---
@@ -4952,14 +4950,8 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
 
     await callback.answer(msg, show_alert=True)
     new_bal = await get_user_global_balance(db, user_id)
-    try:
-        text, kb = _build_main_shop_hub(user_id, new_bal)
-        if callback.message.caption:
-            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
-        elif callback.message.text:
-            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
-    except Exception:
-        pass
+    text, kb = _build_main_shop_hub(user_id, new_bal)
+    await _render_shop_subview(callback, text, kb, category="shop")
 
 @dataclass
 class ShootContext:
@@ -7032,11 +7024,8 @@ async def cb_start_withdrawal(callback: types.CallbackQuery, state: FSMContext, 
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🟢 Sberbank", callback_data="wd_method_sber"), InlineKeyboardButton(text="🟡 Tinkoff", callback_data="wd_method_tinkoff")],[InlineKeyboardButton(text="💠 СБП (По номеру)", callback_data="wd_method_sbp"), InlineKeyboardButton(text="🔵 ВТБ", callback_data="wd_method_vtb")],[InlineKeyboardButton(text="💵 USDT (TRC20)", callback_data="wd_method_usdt"), InlineKeyboardButton(text="🟠 Bitcoin (BTC)", callback_data="wd_method_btc")],[InlineKeyboardButton(text="🔷 Ethereum (ETH)", callback_data="wd_method_eth"), InlineKeyboardButton(text="🟣 Solana (SOL)", callback_data="wd_method_sol")],[InlineKeyboardButton(text="🕵️ Monero (XMR)", callback_data="wd_method_xmr")],[InlineKeyboardButton(text="🔙 Назад", callback_data="menu_main")]
     ])
     
-    await callback.message.edit_text(
-        f"💸 <b>Вывод средств</b>\nДоступно: {int(balance)} RUB\n\n👇 Выберите метод вывода:",
-        reply_markup=kb,
-        parse_mode="HTML"
-    )
+    wd_text = f"💸 <b>Вывод средств</b>\nДоступно: {int(balance)} RUB\n\n👇 Выберите метод вывода:"
+    await _render_shop_subview(callback, wd_text, kb, category="wallet")
     await state.set_state(WithdrawalStates.choosing_method)
 
 # --- 2. Запрос реквизитов ---
@@ -7063,12 +7052,12 @@ async def cb_select_method(callback: types.CallbackQuery, state: FSMContext):
     
     req_name = method_names.get(method, 'реквизиты')
     
-    await callback.message.edit_text(
-        f"✍️ Введите <b>{req_name}</b> для вывода:",
-        parse_mode="HTML",
-        reply_markup=None 
-    )
-    await state.set_state(WithdrawalStates.entering_data)
+    req_text = f"✍️ Введите <b>{req_name}</b> для вывода:"
+    await _render_shop_subview(callback, req_text, None, category="wallet")
+
+
+
+
 def _get_tgach_rates_content():
     res = ["📈 <b>ПРАЙС-ЛИСТ И КУРСЫ TGACH PAY / EXCHANGE</b>\n"]
     res.append("💰 <b>Доходы:</b> Реферал <code>+1488₪</code> | Тред <code>+150₪</code> | Смена <code>+15–160₪</code> | Daily <code>+75–145₪</code> | Реакция <code>+8.5₪</code>\n")
@@ -13703,7 +13692,10 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
     if action == "personal":
         text, kb = get_personal_menu_keyboard(board_id, user_id, stream=stream)
         try:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+            if callback.message.caption is not None or callback.message.photo:
+                await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+            else:
+                await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
         except TelegramBadRequest:
             await callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
     elif action == "main":
@@ -13794,9 +13786,12 @@ async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | No
         spawn_task(update_user_settings_db(user_id, board_id, nsfw=1 if new_status else 0))
         text, kb = get_personal_menu_keyboard(board_id, user_id, stream=stream)
         try:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-        except TelegramBadRequest: 
-            pass # Если меню устарело, не страшно, настройки применились
+            if callback.message.caption is not None or callback.message.photo:
+                await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+            else:
+                await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except TelegramBadRequest:
+            pass
         if lang == 'en': alert = "NSFW updated"
         elif lang == 'jp': alert = "NSFW更新"
         else: alert = "NSFW обновлен"
@@ -13830,7 +13825,10 @@ async def handle_personal_menu(callback: types.CallbackQuery, board_id: str | No
             [InlineKeyboardButton(text=btn_back_text, callback_data="menu_personal")]
         ])
         try:
-            await callback.message.edit_text(title, reply_markup=kb, parse_mode="HTML")
+            if callback.message.caption is not None or callback.message.photo:
+                await callback.message.edit_caption(caption=title, reply_markup=kb, parse_mode="HTML")
+            else:
+                await callback.message.edit_text(title, reply_markup=kb, parse_mode="HTML")
             await callback.answer()
         except TelegramBadRequest:
             pass
