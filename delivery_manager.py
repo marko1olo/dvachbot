@@ -1,4 +1,10 @@
-from common.config import BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE, BOT_PRIORITY_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_SLICE_AGE_SEC
+from common.config import (
+    BOT_PRIORITY_PASSIVE_MEDIA_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_MEDIA_SLICE_SIZE,
+    BOT_PRIORITY_PASSIVE_SLICE_SIZE, BOT_PRIORITY_PRESSURE_PASSIVE_SLICE_SIZE,
+    BOT_PRIORITY_PRESSURE_SLICE_AGE_SEC, BOT_DELIVERY_INITIAL_CHUNK_SIZE,
+    BOT_DELIVERY_MAX_CHUNK_SIZE, BOT_DELIVERY_MIN_CHUNK_SIZE,
+    BOT_PRIORITY_SPLIT_MIN_PASSIVE, BOT_PASSIVE_MAX_PREEMPTIONS
+)
 
 import shared_state
 from shared_state import *
@@ -35,9 +41,32 @@ def _durable_recipients_from_item(item: dict) -> list[int]:
         return []
 
 
-def _queue_item_can_be_durable(item: dict) -> bool:
+def _contains_volatile_payload(value, depth: int = 0) -> bool:
+    if depth > 8:
+        return True
+    from aiogram.types import BufferedInputFile, InputFile
+    from enum import Enum
+    if isinstance(value, (bytes, bytearray, BufferedInputFile, InputFile)):
+        return True
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key == "image_bytes" and nested:
+                return True
+            if _contains_volatile_payload(nested, depth + 1):
+                return True
+        return False
+    if isinstance(value, (list, tuple, set)):
+        return any(_contains_volatile_payload(item, depth + 1) for item in value)
+    if value is None or isinstance(value, (str, int, float, bool, Enum)):
+        return False
+    return False
 
-    if not main.DURABLE_DELIVERY_QUEUE_ENABLED:
+
+def _queue_item_can_be_durable(item: dict) -> bool:
+    durable_enabled = getattr(shared_state, "DURABLE_DELIVERY_QUEUE_ENABLED", None)
+    if durable_enabled is None:
+        durable_enabled = getattr(main, "DURABLE_DELIVERY_QUEUE_ENABLED", True)
+    if not durable_enabled:
         return False
     if not isinstance(item, dict):
         return False
@@ -50,7 +79,7 @@ def _queue_item_can_be_durable(item: dict) -> bool:
     content = item.get("content")
     if not isinstance(content, dict):
         return False
-    if main._contains_volatile_delivery_payload(content):
+    if _contains_volatile_payload(content):
         return False
     return bool(item.get("post_num")) and bool(_durable_recipients_from_item(item))
 
@@ -141,13 +170,13 @@ from broadcaster import (
 from moderation_config import _LIE_IMAGE_EXTS, _LIE_VIDEO_EXTS
 
 # Constants needed by delivery manager
-CHUNK_SIZE = 30
+CHUNK_SIZE = BOT_DELIVERY_INITIAL_CHUNK_SIZE
 DELAY_BETWEEN_CHUNKS = 1.0
 PRIORITY_SPLIT_FANOUT_ENABLED = True
-PRIORITY_SPLIT_MIN_PASSIVE = 200
+PRIORITY_SPLIT_MIN_PASSIVE = BOT_PRIORITY_SPLIT_MIN_PASSIVE
 WORKER_RESTART_DELAY_SEC = 5.0
 WORKER_RESTART_MAX_DELAY_SEC = 60.0
-PASSIVE_MAX_PREEMPTIONS = 5
+PASSIVE_MAX_PREEMPTIONS = BOT_PASSIVE_MAX_PREEMPTIONS
 # Cumulative delivery metrics across phases for consolidated post summary printing
 cumulative_post_metrics = defaultdict(lambda: {
     'success': 0, 'priority': 0, 'passive': 0, 'errors': 0, 'blocks': 0, 'start_time': 0, 'total': 0
@@ -226,7 +255,7 @@ async def _delete_durable_delivery_item(item_or_id, reason: str) -> None:
 
     durable_id = item_or_id
     if isinstance(item_or_id, dict):
-        durable_id = item_or_id.get("durable_delivery_id")
+        durable_id = item_or_id.get("durable_delivery_id") or item_or_id.get("id")
     if not durable_id:
         return
     if await delete_delivery_queue_item(int(durable_id)):
@@ -810,6 +839,25 @@ class MessageDeliveryTask:
 
         budget_deferred_count = 0
         delivered_now_count = 0
+        # Initialize cumulative delivery metrics before send to accurately account for durable restore prior deliveries
+        post_key = (self.board_id, self.post_num)
+        cum = cumulative_post_metrics[post_key]
+        if not cum['start_time']:
+            cum['start_time'] = self.started_at or time.time()
+            cum['total'] = original_recipients_for_post or len(recipients_to_send)
+            if (self.msg_data.get("durable_delivery_id") or self.msg_data.get("original_recipients")) and self.post_num:
+                try:
+                    prior_copies = await get_post_copies(self.post_num)
+                    if prior_copies:
+                        priority_set = weekly_active_users.get(self.board_id, set())
+                        prior_prio = sum(1 for rec_id, _ in prior_copies if rec_id in priority_set)
+                        prior_pass = len(prior_copies) - prior_prio
+                        cum['success'] = len(prior_copies)
+                        cum['priority'] = prior_prio
+                        cum['passive'] = prior_pass
+                        cum['restored_prior'] = len(prior_copies)
+                except Exception as e:
+                    runtime_logger.warning("Error fetching prior copies for durable restore post %s: %s", self.post_num, e)
         try:
             delivery_results = await send_message_to_users(BroadcastConfig(
                 bot_instance=self.bot_instance,
@@ -835,11 +883,6 @@ class MessageDeliveryTask:
 
             # Track cumulative delivery metrics for single consolidated summary
             d_stats = getattr(delivery_results, "stats", {})
-            post_key = (self.board_id, self.post_num)
-            cum = cumulative_post_metrics[post_key]
-            if not cum['start_time']:
-                cum['start_time'] = self.started_at or time.time()
-                cum['total'] = original_recipients_for_post or len(recipients_to_send)
             cum['success'] += d_stats.get('success', len(delivery_results))
             cum['priority'] += d_stats.get('priority_recipients', 0)
             cum['passive'] += d_stats.get('passive_recipients', 0)

@@ -2348,40 +2348,42 @@ async def get_post_by_num(post_num: int) -> Optional[Dict[str, Any]]:
     """
     Получает пост по номеру.
     """
-    from common.db_pool import get_pool
+    from common.db_pool import get_pool, db_lock
     try:
         async with asyncio.timeout(2.0):
-            db = await get_pool()
-            async with db.execute("SELECT * FROM Posts WHERE post_num = ? LIMIT 1", (post_num,)) as cursor:
-                row = await cursor.fetchone()
-                if row is None:
-                    return None
+            async with db_lock:
+                db = await get_pool()
+                async with db.execute("SELECT * FROM Posts WHERE post_num = ? LIMIT 1", (post_num,)) as cursor:
+                    row = await cursor.fetchone()
+                    if row is None:
+                        return None
+                    
+                    cols = [d[0] for d in cursor.description]
+                    row_data = dict(zip(cols, row))
                 
-                cols = [d[0] for d in cursor.description]
-                row_data = dict(zip(cols, row))
-            
-            post_data = _process_site_db_row(row_data)
-            if post_data and 'post_num' in post_data:
-                post_data['id'] = post_data['post_num']
-            return post_data
+                post_data = _process_site_db_row(row_data)
+                if post_data and 'post_num' in post_data:
+                    post_data['id'] = post_data['post_num']
+                return post_data
     except Exception:
         return None
 
 async def get_thread_op_by_post_num(post_num: int) -> Optional[int]:
-    from common.db_pool import get_pool
+    from common.db_pool import get_pool, db_lock
     try:
         async with asyncio.timeout(2.0):
-            db = await get_pool()
-            query = "SELECT thread_id, reply_to_post_num FROM Posts WHERE post_num = ? LIMIT 1"
-            async with db.execute(query, (post_num,)) as cursor:
-                row = await cursor.fetchone()
-                if row:
-                    thread_id, reply_to = row
-                    if thread_id:
-                        return thread_id
-                    if reply_to is None:
-                        return post_num
-                return None
+            async with db_lock:
+                db = await get_pool()
+                query = "SELECT thread_id, reply_to_post_num FROM Posts WHERE post_num = ? LIMIT 1"
+                async with db.execute(query, (post_num,)) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        thread_id, reply_to = row
+                        if thread_id:
+                            return thread_id
+                        if reply_to is None:
+                            return post_num
+                    return None
     except Exception:
         return None
 async def get_post_count_in_thread(thread_op_num: int) -> int:
@@ -2816,26 +2818,27 @@ async def get_post_copies(post_num: int | list[int]) -> list[tuple[int, int]] | 
     Возвращает список всех копий для указанного поста,
     либо словарь со списками копий для нескольких постов.
     """
-    from common.db_pool import get_pool
+    from common.db_pool import get_pool, db_lock
     try:
         async with asyncio.timeout(3.0):
-            db = await get_pool()
-            if isinstance(post_num, list):
-                if not post_num:
-                    return {}
-                placeholders = ','.join('?' for _ in post_num)
-                query = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
+            async with db_lock:
+                db = await get_pool()
+                if isinstance(post_num, list):
+                    if not post_num:
+                        return {}
+                    placeholders = ','.join('?' for _ in post_num)
+                    query = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
 
-                result = {num: [] for num in post_num}
-                async with db.execute(query, post_num) as cursor:
-                    rows = await cursor.fetchall()
-                    for p_num, recipient_id, message_id in rows:
-                        result[p_num].append((recipient_id, message_id))
-                return result
+                    result = {num: [] for num in post_num}
+                    async with db.execute(query, post_num) as cursor:
+                        rows = await cursor.fetchall()
+                        for p_num, recipient_id, message_id in rows:
+                            result[p_num].append((recipient_id, message_id))
+                    return result
 
-            query = "SELECT recipient_id, message_id FROM PostCopies WHERE post_num = ?"
-            async with db.execute(query, (post_num,)) as cursor:
-                return await cursor.fetchall()
+                query = "SELECT recipient_id, message_id FROM PostCopies WHERE post_num = ?"
+                async with db.execute(query, (post_num,)) as cursor:
+                    return await cursor.fetchall()
     except Exception:
         if isinstance(post_num, list):
             return {num: [] for num in post_num}

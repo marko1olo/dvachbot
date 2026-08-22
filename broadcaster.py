@@ -15,11 +15,18 @@ import ssl
 from datetime import datetime
 from common.text_utils import clean_html_tags, RE_YOU_PATTERN
 from common.database import get_post_by_num, get_post_copies, add_post_copies
+from common.config import (
+    BOT_DELIVERY_INITIAL_CHUNK_SIZE,
+    BOT_DELIVERY_MAX_CHUNK_SIZE,
+    BOT_DELIVERY_MIN_CHUNK_SIZE,
+)
 from shared_state import *
 from shared_state import _drop_post_copy_maps_unlocked, _trim_post_copy_maps_unlocked, _trim_messages_storage_unlocked
 from utils import split_text
 import html
 import __main__ as main
+
+DELIVERY_MAX_CHUNK_SIZE = BOT_DELIVERY_MAX_CHUNK_SIZE
 
 
 def add_you_to_my_posts_fast(text: str, user_id: int, post_authors: dict[int, int]) -> str:
@@ -454,7 +461,6 @@ class MessageBroadcaster:
         queue = deque(ordered_recipients)
         recipient_retry_counts = defaultdict(int)
         CHUNK_SIZE = DELIVERY_INITIAL_CHUNK_SIZE
-        current_delay = 0.1
         phase_budget_sec = _phase_time_budget_sec(self.delivery_phase)
         phase_deadline = start_time + phase_budget_sec if phase_budget_sec else None
         remaining_recipients_for_later = set()
@@ -482,9 +488,12 @@ class MessageBroadcaster:
             for _ in range(min(len(queue), CHUNK_SIZE)):
                 chunk.append(queue.popleft())
 
+            chunk_start = time.time()
             tasks = [self._send_one_guarded(uid, send_timeout_sec) for uid in chunk]
             results = await asyncio.gather(*tasks, return_exceptions=True)
+            chunk_elapsed = time.time() - chunk_start
             flood_wait_seconds = 0
+            has_429 = False
 
             for uid, res in zip(chunk, results):
                 if res == "FATAL_ERROR_STOP":
@@ -493,6 +502,7 @@ class MessageBroadcaster:
                     break
                 if isinstance(res, Exception):
                     if isinstance(res, TelegramRetryAfter):
+                        has_429 = True
                         wait = res.retry_after
                         recipient_retry_counts[uid] += 1
                         if recipient_retry_counts[uid] <= DELIVERY_MAX_RECIPIENT_RETRIES:
@@ -501,7 +511,7 @@ class MessageBroadcaster:
                             self.stats['retries'] += 1
                         else:
                             self.stats['errors'] += 1
-                            main.runtime_logger.warning(
+                            runtime_logger.warning(
                                 "delivery_recipient_retry_exhausted %s",
                                 json.dumps(
                                     {
@@ -528,7 +538,7 @@ class MessageBroadcaster:
                             self.stats['retries'] += 1
                         else:
                             self.stats['errors'] += 1
-                            main.runtime_logger.warning(
+                            runtime_logger.warning(
                                 "delivery_recipient_retry_exhausted %s",
                                 json.dumps(
                                     {
@@ -549,7 +559,7 @@ class MessageBroadcaster:
                     self.all_results.append((uid, res))
 
             if flood_wait_seconds > 0:
-                wait_real = flood_wait_seconds + 1
+                wait_real = flood_wait_seconds + 0.5
                 if phase_deadline is not None and time.time() + wait_real + DELIVERY_PHASE_GUARD_SEC >= phase_deadline:
                     remaining_recipients_for_later.update(queue)
                     queue.clear()
@@ -557,11 +567,17 @@ class MessageBroadcaster:
                     await asyncio.sleep(wait_real)
                     break
                 await asyncio.sleep(wait_real)
-                CHUNK_SIZE = max(DELIVERY_MIN_CHUNK_SIZE, CHUNK_SIZE - 5)
+                CHUNK_SIZE = max(DELIVERY_MIN_CHUNK_SIZE, CHUNK_SIZE - 2)
             else:
-                await asyncio.sleep(current_delay)
-                if CHUNK_SIZE < DELIVERY_INITIAL_CHUNK_SIZE:
-                    CHUNK_SIZE += 1
+                # Calibrated pacing targeting 28.0 msg/sec safe ceiling per bot token
+                target_duration = len(chunk) / 28.0
+                remaining_pace_sleep = max(0.0, target_duration - chunk_elapsed)
+                if remaining_pace_sleep > 0.001:
+                    await asyncio.sleep(remaining_pace_sleep)
+                else:
+                    await asyncio.sleep(0)
+                if not has_429 and CHUNK_SIZE < DELIVERY_MAX_CHUNK_SIZE:
+                    CHUNK_SIZE = min(DELIVERY_MAX_CHUNK_SIZE, CHUNK_SIZE + 1)
 
         return remaining_recipients_for_later, interrupted_reason, phase_budget_sec
 
@@ -614,18 +630,20 @@ class MessageBroadcaster:
             "queue_wait_sec": round(self.queue_wait_sec, 3) if self.queue_wait_sec is not None else None,
             "queue_total_sec": round(queue_total_sec, 3) if queue_total_sec is not None else None,
         }
-        main.delivery_metrics[self.board_id].append(delivery_record)
-        main.runtime_logger.debug(
+        metrics_dict = getattr(main, "delivery_metrics", None)
+        if metrics_dict is not None and self.board_id in metrics_dict:
+            metrics_dict[self.board_id].append(delivery_record)
+        runtime_logger.debug(
             "delivery_result %s",
             json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
         )
         if time_taken >= DELIVERY_SLOW_PHASE_SEC or (queue_total_sec is not None and queue_total_sec >= DELIVERY_SLOW_PHASE_SEC):
-            main.runtime_logger.debug(
+            runtime_logger.debug(
                 "delivery_slow %s",
                 json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
             )
         if remaining_recipients_for_later:
-            main.runtime_logger.debug(
+            runtime_logger.debug(
                 "delivery_phase_budget_deferred %s",
                 json.dumps(delivery_record, ensure_ascii=False, separators=(",", ":")),
             )
@@ -653,7 +671,7 @@ class MessageBroadcaster:
                     trimmed_copy_posts, trimmed_copy_refs = _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
                     trimmed_msg_storage = _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
             if trimmed_copy_posts or trimmed_msg_storage:
-                main.runtime_logger.debug(
+                runtime_logger.debug(
                     "ram_trim %s",
                     json.dumps(
                         {
@@ -685,14 +703,15 @@ class MessageBroadcaster:
                     self.b_data['users']['active'].discard(uid)
                     users_to_remove_db.append(uid)
 
-            freed = await main.purge_users_from_board_ram(self.board_id, users_to_remove_db)
+            purge_fn = getattr(main, "purge_users_from_board_ram", None)
+            freed = await purge_fn(self.board_id, users_to_remove_db) if purge_fn else 0
 
             if users_to_remove_db:
                 from common.database import remove_users_from_board_batch
                 await remove_users_from_board_batch(users_to_remove_db, self.board_id)
 
             if freed > 0:
-                main.runtime_logger.debug(
+                runtime_logger.debug(
                     f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} заблокировавших пользователей. Освобождено RAM: {freed}."
                 )
 
