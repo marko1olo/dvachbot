@@ -276,6 +276,8 @@ async def download_file_mtproto(bot_token: str, file_id: str, output_path: str, 
         _save_flood_state(_GLOBAL_MTPROTO_FLOOD_UNTIL)
         _CONNECTION_COOLDOWN[bot_token] = flood_until
         logger.warning(f"⚠️ [MTProto] FloodWait ({wait_s}s) on bot {secret_fingerprint(bot_token)}. Global MTProto cooldown set until +{wait_s}s.")
+    except (ValueError, KeyError) as e:
+        logger.warning(f"⚠️ [MTProto] Invalid file_id format for {file_id[:15]}... ({e})")
         return False
     except Exception as e:
         err_str = str(e).upper()
