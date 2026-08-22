@@ -1,3 +1,6 @@
+# Global zero-latency cache for /summary
+_SUMMARY_CACHE: dict[str, tuple[float, str]] = {}
+_SUMMARY_CACHE_TTL = 10800  # 3 hours
 import sys
 if __name__ in sys.modules:
     sys.modules['main'] = sys.modules[__name__]
@@ -6573,8 +6576,18 @@ async def cmd_stats(message: types.Message, board_id: str | None, stream: str = 
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# /daily — ежедневный бонус
+# /daily — Ежедневный стрик наград (7-дневная лестница с предметами)
 # ══════════════════════════════════════════════════════════════════════════════
+DAILY_STREAK_REWARDS = {
+    1: {"cash": 100, "item": None, "desc": "+100 ₪"},
+    2: {"cash": 200, "item": None, "desc": "+200 ₪"},
+    3: {"cash": 350, "item": "janitor", "desc": "+350 ₪ и Билет Дворника (3 удаления на 3ч)"},
+    4: {"cash": 500, "item": None, "desc": "+500 ₪"},
+    5: {"cash": 750, "item": "mute", "desc": "+750 ₪ и Заряженный Мут-Ган"},
+    6: {"cash": 1000, "item": None, "desc": "+1 000 ₪"},
+    7: {"cash": 2000, "item": "lootbox", "desc": "+2 000 ₪ и Мусорный Лутбокс 📦 (ДЖЕКПОТ СТРИКА!)"},
+}
+
 @dp.message(Command("daily", "bonus", "ежедневно", "бонус"))
 async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
@@ -6582,65 +6595,88 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
     import time, json
 
     db = await get_pool()
-
-    # active_items хранит daily_last_claim (unix timestamp)
-    balance = await get_user_global_balance(db, user_id)
-    async with db.execute(
-        "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?",
-        (user_id, board_id)
-    ) as c:
-        row = await c.fetchone()
-    ai_str = (row[0] if row and row[0] else "{}") if row else "{}"
-    try:
-        ai = json.loads(ai_str)
-    except Exception:
-        ai = {}
-
-    now   = int(time.time())
-    last  = ai.get("daily_last_claim", 0)
-    cd    = 86400  # 24 hours
-    since = now - last
-
-    if since < cd:
-        hours_left = (cd - since) // 3600
-        mins_left  = ((cd - since) % 3600) // 60
-        await message.answer(
-            f"⏳ Ежедневный бонус уже получен.\n"
-            f"Следующий доступен через: <b>{hours_left}ч {mins_left}мин</b>",
-            parse_mode="HTML"
-        )
-        return
-
-    # Бонус: базовые 75 RUB + streak множитель
-    streak = ai.get("daily_streak", 0)
-    if since < cd * 2:  # не пропустил вчера
-        streak += 1
-    else:
-        streak = 1  # сброс серии
-    ai["daily_streak"]      = streak
-    ai["daily_last_claim"]  = now
-
-    bonus = 75
-    streak_bonus = min(streak - 1, 7) * 10  # +10 RUB за каждый день серии, макс +70
-    total_bonus  = bonus + streak_bonus
+    now = int(time.time())
+    cd = 86400  # 24 hours
 
     async with db_lock:
-        await add_user_global_balance(db, user_id, board_id, total_bonus)
-        await db.execute(
-            "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-            (json.dumps(ai), user_id, board_id)
-        )
-        await db.commit()
+        balance = await get_user_global_balance(db, user_id)
+        ai = await _get_user_active_items(db, user_id, board_id)
+        last = ai.get("daily_last_claim", 0)
+        since = now - last
 
-    streak_msg = ""
-    if streak > 1:
-        streak_msg = f"\n🔥 Серия: <b>{streak} дней</b> → бонус +{streak_bonus} RUB"
+        if since < cd:
+            hours_left = (cd - since) // 3600
+            mins_left = ((cd - since) % 3600) // 60
+            streak = ai.get("daily_streak", 1)
+            progress_bar = "".join(["🟩" if i <= streak else "⬜" for i in range(1, 8)])
+            await message.answer(
+                f"⏳ <b>Ежедневный бонус уже получен!</b>\n\n"
+                f"🔥 Твоя серия: <b>{streak}/7 дней</b>\n"
+                f"Прогресс: <code>[{progress_bar}]</code>\n\n"
+                f"Следующий бонус доступен через: <b>{hours_left}ч {mins_left}мин</b>",
+                parse_mode="HTML"
+            )
+            return
+
+        # Серия наград
+        prev_streak = ai.get("daily_streak", 0)
+        if since < cd * 2 and prev_streak > 0:
+            streak = (prev_streak % 7) + 1
+        else:
+            streak = 1  # Сброс серии при пропуске
+
+        reward_info = DAILY_STREAK_REWARDS.get(streak, {"cash": 100, "item": None, "desc": "+100 ₪"})
+        cash_bonus = reward_info["cash"]
+        item_drop = reward_info["item"]
+        item_note = ""
+
+        if item_drop == "janitor":
+            ai["janitor_until"] = max(ai.get("janitor_until", 0), now) + 3 * 3600
+            ai["janitor_deletes_left"] = ai.get("janitor_deletes_left", 0) + 3
+            item_note = "\n🧹 <b>Бонус стрика:</b> Получен Билет Дворника на 3 часа (3 удаления /del)!"
+        elif item_drop == "mute":
+            ai["mute_gun"] = True
+            item_note = "\n🔇 <b>Бонус стрика:</b> Получен заряженный Мут-Ган (/shoot)!"
+        elif item_drop == "lootbox":
+            try:
+                import lootbox_engine
+                tier, title, desc, payload, base_cash = lootbox_engine.roll_trash_lootbox()
+                ai, loot_cash, recycle_note = lootbox_engine.apply_lootbox_reward(ai, payload, base_cash)
+                cash_bonus += loot_cash
+                rec_str = f" ({recycle_note})" if recycle_note else ""
+                item_note = f"\n📦 <b>ДЖЕКПОТ 7 ДНЯ:</b> Распакован лутбокс: <b>{title}</b>{rec_str}!"
+            except Exception:
+                pass
+
+        ai["daily_streak"] = streak
+        ai["daily_last_claim"] = now
+
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await add_user_global_balance(db, user_id, board_id, cash_bonus)
+            await db.execute(
+                "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                (json.dumps(ai), user_id, board_id)
+            )
+            await db.execute("COMMIT")
+        except Exception:
+            try: await db.execute("ROLLBACK")
+            except Exception: pass
+            raise
+
+        new_balance = await get_user_global_balance(db, user_id)
+
+    progress_bar = "".join(["🟩" if i <= streak else "⬜" for i in range(1, 8)])
+    next_day = (streak % 7) + 1
+    next_reward = DAILY_STREAK_REWARDS.get(next_day, {}).get("desc", "бонус")
 
     daily_text = (
-        f"✅ <b>Ежедневный бонус получен!</b>\n"
-        f"Начислено: <code>+{total_bonus} RUB</code>{streak_msg}\n"
-        f"Новый баланс: <code>{int(balance + total_bonus)} RUB</code>\n\n"
-        f"<i>Приходи завтра — серия даёт до +70 RUB сверху.</i>"
+        f"🎁 <b>ЕЖЕДНЕВНЫЙ БОНУС ПОЛУЧЕН!</b>\n\n"
+        f"🔥 <b>Серия активности:</b> День <b>{streak}/7</b>\n"
+        f"Прогресс: <code>[{progress_bar}]</code>\n\n"
+        f"💰 Начислено: <code>+{cash_bonus} ₪</code>{item_note}\n"
+        f"💳 Твой новый баланс: <code>{int(new_balance):,} ₪</code>\n\n"
+        f"<i>Приходи завтра за наградой {next_day}-го дня: {next_reward}!</i>"
     )
     from banner_manager import send_banner_message
     await send_banner_message(
@@ -6652,6 +6688,97 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
     )
     try: await message.delete()
     except Exception: pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# /pay — Перевод шекелей другому анону (через Reply или /pay <anon_id> <amount>)
+# ══════════════════════════════════════════════════════════════════════════════
+@dp.message(Command("pay", "give", "tip", "перевод", "скинуть", "донат"))
+async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    sender_id = message.from_user.id
+    db = await get_pool()
+    parts = (message.text or message.caption or "").strip().split()
+
+    target_user_id = None
+    amount = None
+
+    # Вариант 1: Через Reply на пост
+    if message.reply_to_message:
+        target_user_id = await get_reply_target(message)
+        if len(parts) > 1 and parts[1].isdigit():
+            amount = int(parts[1])
+    # Вариант 2: /pay <anon_id> <amount>
+    elif len(parts) >= 3:
+        anon_target = parts[1].strip("[]")
+        if parts[2].isdigit():
+            amount = int(parts[2])
+        for uid in list(user_to_anon.keys()):
+            if get_anon_id(uid) == anon_target:
+                target_user_id = uid
+                break
+
+    if not amount or amount <= 0:
+        await message.reply(
+            "💸 <b>Как перевести шекели:</b>\n\n"
+            "1. Сделай <b>Reply</b> на пост анона с командой: <code>/pay 500</code>\n"
+            "2. Или отправь команду с Анон-ID: <code>/pay [a1b2] 500</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    if amount < 10:
+        await message.reply("❌ Минимальная сумма перевода: 10 ₪.", parse_mode="HTML")
+        return
+    if amount > 1_000_000:
+        await message.reply("❌ Максимальная сумма перевода за раз: 1 000 000 ₪.", parse_mode="HTML")
+        return
+
+    if not target_user_id:
+        await message.reply("❌ Не удалось определить получателя. Сделай Reply на пост нужного анона.", parse_mode="HTML")
+        return
+
+    if target_user_id == sender_id:
+        await message.reply("🤡 Нельзя переводить шекели самому себе, шиз.", parse_mode="HTML")
+        return
+
+    async with db_lock:
+        sender_bal = await get_user_global_balance(db, sender_id)
+        if sender_bal < amount:
+            await message.reply(f"❌ Недостаточно средств! Твой баланс: <code>{int(sender_bal)} ₪</code>, нужно: <code>{amount} ₪</code>.", parse_mode="HTML")
+            return
+
+        ok, new_sender_bal = await deduct_user_global_balance(db, sender_id, board_id, amount)
+        if not ok:
+            await message.reply("❌ Ошибка при списании шекелей.", parse_mode="HTML")
+            return
+
+        await add_user_global_balance(db, target_user_id, board_id, amount)
+        receiver_bal = await get_user_global_balance(db, target_user_id)
+
+    sender_anon = get_anon_id(sender_id)
+    target_anon = get_anon_id(target_user_id)
+
+    await message.reply(
+        f"💸 <b>ПЕРЕВОД ШЕКЕЛЕЙ УСПЕШЕН!</b>\n\n"
+        f"От: Анон [<code>{sender_anon}</code>]\n"
+        f"Кому: Анон [<code>{target_anon}</code>]\n"
+        f"Сумма: <b>{amount:,} ₪</b>\n\n"
+        f"💳 Твой остаток: <code>{int(new_sender_bal):,} ₪</code>",
+        parse_mode="HTML"
+    )
+
+    # Уведомление получателю в ЛС
+    try:
+        await message.bot.send_message(
+            target_user_id,
+            f"💰 <b>ТЕБЕ ПРИШЛИ ШЕКЕЛИ!</b>\n\n"
+            f"Анон [<code>{sender_anon}</code>] перевел тебе <b>+{amount:,} ₪</b>!\n"
+            f"💳 Твой новый баланс: <code>{int(receiver_bal):,} ₪</code>",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -8537,26 +8664,27 @@ async def _show_roulette_lobby(bot, chat_id: int, user_id: int, board_id: str, b
 
 async def _execute_russian_roulette_shot(bot, chat_id: int, user_id: int, board_id: str, bet: int):
     db = await get_pool()
-    session = casino_engine.active_roulette_sessions.get(user_id)
+    async with casino_engine.session_lock:
+        session = casino_engine.active_roulette_sessions.get(user_id)
 
-    if not session:
-        # First shot: deduct initial bet
-        async with db_lock:
-            ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, bet)
-            if not ok:
-                balance = await get_user_global_balance(db, user_id)
-                from banner_manager import send_banner_message
-                await send_banner_message(
-                    bot=bot,
-                    chat_id=chat_id,
-                    caption=f"❌ <b>Недостаточно средств для Русской Рулетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.",
-                    category="roulette",
-                    parse_mode="HTML"
-                )
-                return
-            await db.commit()
+        if not session:
+            # First shot: deduct initial bet
+            async with db_lock:
+                ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, bet)
+                if not ok:
+                    balance = await get_user_global_balance(db, user_id)
+                    from banner_manager import send_banner_message
+                    await send_banner_message(
+                        bot=bot,
+                        chat_id=chat_id,
+                        caption=f"❌ <b>Недостаточно средств для Русской Рулетки!</b>\nБаланс: <code>{int(balance)} ₪</code>, ставка: <code>{bet} ₪</code>.",
+                        category="roulette",
+                        parse_mode="HTML"
+                    )
+                    return
+                await db.commit()
 
-    survived, mult, streak, status = casino_engine.play_russian_roulette_shot(user_id, bet)
+        survived, mult, streak, status = casino_engine.play_russian_roulette_shot(user_id, bet)
 
     if not survived:
         async with db_lock:
@@ -8842,7 +8970,8 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             await _execute_russian_roulette_shot(callback.bot, callback.message.chat.id, user_id, board_id, bet)
             await callback.answer()
         elif action == "cashout":
-            session = casino_engine.active_roulette_sessions.pop(user_id, None)
+            async with casino_engine.session_lock:
+                session = casino_engine.active_roulette_sessions.pop(user_id, None)
             if not session:
                 await callback.answer("Сессия не найдена", show_alert=True)
                 return
@@ -11949,6 +12078,18 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         board_id, thread_id, thread_info, lang, paragraph_count, is_blat=is_blat, is_warhammer=is_warhammer
     )
 
+    import hashlib
+    chunk_hash = hashlib.sha256(chunk.encode('utf-8')).hexdigest()[:16] if chunk else ""
+    cache_key = f"{board_id}:{thread_id or 'main'}:{chunk_hash}:{paragraph_count}:{length_choice}:{is_blat}:{is_warhammer}"
+    now_summary_ts = time.time()
+
+    if cache_key in _SUMMARY_CACHE:
+        cached_ts, cached_summary = _SUMMARY_CACHE[cache_key]
+        if now_summary_ts - cached_ts < _SUMMARY_CACHE_TTL:
+            cached_text = f"{cached_summary}\n\n<i>⚡ [Мгновенный кэш — 0.01с]</i>"
+            await message.answer(cached_text, parse_mode="HTML", disable_web_page_preview=False)
+            return
+
     hf_token = os.getenv("HF_TOKEN")
     if not chunk or len(chunk) < 100:
         logger.info(f"[summarize] Мало сообщений для summarize (len={len(chunk) if chunk else 0})")
@@ -12052,9 +12193,10 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
                 summary = f"📝 <b>ЕБАНУТЫЙ ЛОНГРИД ({context_name})</b>\n\nНе осилил прочитать чат? Старый анон расписал всё по полочкам в этой статье:\n🔗 <a href=\"{telegraph_url}\">Читать на Telegraph</a>"
         else:
             print("[summarize] Telegraph creation failed, falling back to direct message")
-            # Telegram counts chars in UTF-16 code units: Cyrillic/CJK = 2 units each.
-            # Hard limit = 4096 UTF-16 units. Safe budget = 3500 (prefix takes ~100-200 more).
             summary = _tg_safe_truncate(summary, max_utf16=3500)
+    
+    if cache_key and summary:
+        _SUMMARY_CACHE[cache_key] = (time.time(), summary)
     else:
         if is_blat:
             signet = (
@@ -15152,6 +15294,27 @@ async def auto_memory_cleaner():
 
             # 3. Подрезка per-user трекеров, которые росли безгранично
             removed = _sweep_stale_runtime_maps()
+
+            # 4. Фоновый WAL checkpointing для сжатия базы
+            try:
+                db_clean = await get_pool()
+                async with db_lock:
+                    await db_clean.execute("PRAGMA wal_checkpoint(PASSIVE);")
+            except Exception:
+                pass
+
+            # 5. Очистка временных файлов диска старше 24 часов
+            try:
+                import glob
+                now_disk = time.time()
+                for p in glob.glob("temp_*.*") + glob.glob("data/temp/*.*"):
+                    try:
+                        if os.path.isfile(p) and now_disk - os.path.getmtime(p) > 86400:
+                            os.remove(p)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
             total_stale = sum(removed.values())
             if done_tasks or cache_size or total_stale:
