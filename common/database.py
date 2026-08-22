@@ -3257,13 +3257,19 @@ async def mark_broadcast_posts_sent(post_nums: list[int] | tuple[int, ...] | set
         for attempt in range(10):
             try:
                 db = await get_pool()
-                placeholders = ','.join('?' for _ in clean_post_nums)
-                async with db.execute(
-                    f"UPDATE BroadcastQueue SET is_sent_to_tg = 1 WHERE post_num IN ({placeholders})",
-                    clean_post_nums,
-                ) as cursor:
-                    await db.commit()
-                    return int(cursor.rowcount or 0)
+                await db.execute("BEGIN IMMEDIATE")
+                try:
+                    async with db.execute(
+                        f"UPDATE BroadcastQueue SET is_sent_to_tg = 1 WHERE post_num IN ({placeholders})",
+                        clean_post_nums,
+                    ) as cursor:
+                        rowcount = int(cursor.rowcount or 0)
+                    await db.execute("COMMIT")
+                    return rowcount
+                except Exception:
+                    try: await db.execute("ROLLBACK")
+                    except Exception: pass
+                    raise
             except sqlite3.OperationalError as e:
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
@@ -8351,9 +8357,15 @@ async def get_user_global_balance(db, user_id: int) -> float:
     """
     Возвращает единый глобальный баланс пользователя со всех досок.
     """
-    async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
-        row = await c.fetchone()
-        return float(row[0] or 0.0) if row and row[0] is not None else 0.0
+    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
+            row = await c.fetchone()
+            return float(row[0] or 0.0) if row and row[0] is not None else 0.0
+    else:
+        async with db_lock:
+            async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
+                row = await c.fetchone()
+                return float(row[0] or 0.0) if row and row[0] is not None else 0.0
 
 
 async def add_user_global_balance(db, user_id: int, board_id: str | None, amount: float) -> float:
@@ -8482,10 +8494,17 @@ async def get_user_id_by_referral_code(db, code: str) -> Optional[int]:
     if code_str.isdigit() and len(code_str) >= 7:
         return int(code_str)
 
-    async with db.execute("SELECT user_id FROM ReferralAliases WHERE code = ? COLLATE NOCASE LIMIT 1", (code_str,)) as cursor:
-        row = await cursor.fetchone()
-        if row and row[0] is not None:
-            return int(row[0])
+    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+        async with db.execute("SELECT user_id FROM ReferralAliases WHERE code = ? COLLATE NOCASE LIMIT 1", (code_str,)) as cursor:
+            row = await cursor.fetchone()
+            if row and row[0] is not None:
+                return int(row[0])
+    else:
+        async with db_lock:
+            async with db.execute("SELECT user_id FROM ReferralAliases WHERE code = ? COLLATE NOCASE LIMIT 1", (code_str,)) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0] is not None:
+                    return int(row[0])
     return None
 
 

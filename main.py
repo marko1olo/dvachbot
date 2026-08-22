@@ -5274,31 +5274,36 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         active_items = await _get_user_active_items(db, user_id, board_id)
         if not active_items.get("mute_gun"):
             action_type = "no_gun"
-        elif t_items.get("reflect_shield_until", 0) > current_time:
-            is_bounced = True
-            action_type = "bounced"
-            t_items["reflect_shield_until"] = 0
-            active_items["mute_gun"] = False
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(t_items), target_id, board_id))
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(active_items), user_id, board_id))
-            await db.commit()
-        elif t_items.get("tinfoil_hat", 0) > current_time:
-            action_type = "tinfoil"
-            active_items["mute_gun"] = False
-            tinfoil_destroyed, tinfoil_left_h, tinfoil_left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=6.0, burn_chance=0.30)
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(t_items), target_id, board_id))
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(active_items), user_id, board_id))
-            await db.commit()
         else:
-            action_type = "regular"
-            active_items["mute_gun"] = False
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(active_items), user_id, board_id))
-            await db.commit()
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                if t_items.get("reflect_shield_until", 0) > current_time:
+                    is_bounced = True
+                    action_type = "bounced"
+                    t_items["reflect_shield_until"] = 0
+                    active_items["mute_gun"] = False
+                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                     (json.dumps(t_items), target_id, board_id))
+                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                     (json.dumps(active_items), user_id, board_id))
+                elif t_items.get("tinfoil_hat", 0) > current_time:
+                    action_type = "tinfoil"
+                    active_items["mute_gun"] = False
+                    tinfoil_destroyed, tinfoil_left_h, tinfoil_left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=6.0, burn_chance=0.30)
+                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                     (json.dumps(t_items), target_id, board_id))
+                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                     (json.dumps(active_items), user_id, board_id))
+                else:
+                    action_type = "regular"
+                    active_items["mute_gun"] = False
+                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                     (json.dumps(active_items), user_id, board_id))
+                await db.execute("COMMIT")
+            except Exception:
+                try: await db.execute("ROLLBACK")
+                except Exception: pass
+                raise
 
     if action_type == "no_gun":
         await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
@@ -7383,9 +7388,15 @@ async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
                 user_items["shit_until"] = 0
                 user_items["cursed_until"] = 0
                 user_items["schizo_pill_until"] = 0
-                await db.execute("UPDATE Users SET cursed_until = 0, active_items = ? WHERE user_id = ? AND board_id = ?",
-                                 (json.dumps(user_items), user_id, board_id))
-                await db.commit()
+                await db.execute("BEGIN IMMEDIATE")
+                try:
+                    await db.execute("UPDATE Users SET cursed_until = 0, active_items = ? WHERE user_id = ? AND board_id = ?",
+                                     (json.dumps(user_items), user_id, board_id))
+                    await db.execute("COMMIT")
+                except Exception:
+                    try: await db.execute("ROLLBACK")
+                    except Exception: pass
+                    raise
                 answer_text = "💊 Аминазин принят! Все дебаффы (говно, понос, шиза) мгновенно смыты."
                 edit_html = (
                     f"✨ <b>ТЫ ПОЛНОСТЬЮ ОЧИЩЕН!</b>\n\n"
@@ -7399,8 +7410,14 @@ async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
                 answer_text = f"❌ Недостаточно шекелей на взятку! Нужно {cost} ₪, у тебя {int(balance)} ₪. Напиши /work."
             else:
                 await deduct_user_global_balance(db, user_id, board_id, cost)
-                await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-                await db.commit()
+                await db.execute("BEGIN IMMEDIATE")
+                try:
+                    await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+                    await db.execute("COMMIT")
+                except Exception:
+                    try: await db.execute("ROLLBACK")
+                    except Exception: pass
+                    raise
                 b_data = board_data.get(board_id, {})
                 b_data.get('mutes', {}).pop(user_id, None)
                 b_data.get('shadow_mutes', {}).pop(user_id, None)
@@ -7419,9 +7436,15 @@ async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
                 user_items["tinfoil_hat"] = now + 6 * 3600
                 user_items["tinfoil_until"] = now + 6 * 3600
                 user_items["equipped_head"] = "hat_tinfoil"
-                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                                 (json.dumps(user_items), user_id, board_id))
-                await db.commit()
+                await db.execute("BEGIN IMMEDIATE")
+                try:
+                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                     (json.dumps(user_items), user_id, board_id))
+                    await db.execute("COMMIT")
+                except Exception:
+                    try: await db.execute("ROLLBACK")
+                    except Exception: pass
+                    raise
                 answer_text = "👽 Шапочка из фольги надета на 6 часов!"
                 edit_html = (
                     f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ АКТИВИРОВАНА!</b>\n\n"
@@ -7436,9 +7459,15 @@ async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
                 await deduct_user_global_balance(db, user_id, board_id, cost)
                 user_items["reflect_shield_until"] = now + 6 * 3600
                 user_items["shield_until"] = now + 6 * 3600
-                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                                 (json.dumps(user_items), user_id, board_id))
-                await db.commit()
+                await db.execute("BEGIN IMMEDIATE")
+                try:
+                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                     (json.dumps(user_items), user_id, board_id))
+                    await db.execute("COMMIT")
+                except Exception:
+                    try: await db.execute("ROLLBACK")
+                    except Exception: pass
+                    raise
                 answer_text = "🛡️ Зеркальный Щит активирован на 6 часов!"
                 edit_html = (
                     f"🛡️ <b>ЗЕРКАЛЬНЫЙ ЩИТ АКТИВИРОВАН!</b>\n\n"
@@ -7452,9 +7481,15 @@ async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
             else:
                 await deduct_user_global_balance(db, user_id, board_id, cost)
                 user_items["knife_gun"] = True
-                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                                 (json.dumps(user_items), user_id, board_id))
-                await db.commit()
+                await db.execute("BEGIN IMMEDIATE")
+                try:
+                    await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                     (json.dumps(user_items), user_id, board_id))
+                    await db.execute("COMMIT")
+                except Exception:
+                    try: await db.execute("ROLLBACK")
+                    except Exception: pass
+                    raise
                 answer_text = "🔪 Заточка в кармане! Сделай Reply на обидчика с /rob."
                 edit_html = (
                     f"🔪 <b>ЗАТОЧКА ПРИОБРЕТЕНА!</b>\n\n"
@@ -7768,15 +7803,11 @@ async def cb_dice_bet_quick(callback: types.CallbackQuery, board_id: str | None)
                 delta = -bet
                 outcome_text = f"💀 <b>ПРОИГРЫШ!</b> Выпало {result} (&lt;55).\n📉 Ты слил: <code>-{bet} ₪</code>"
 
-            await db.execute(
-                "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-                "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = MAX(0, balance + ?)",
-                (user_id, board_id, max(0, delta), delta)
-            )
-            await db.commit()
-            async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_sum:
-                sum_row = await c_sum.fetchone()
-                new_bal = sum_row[0] if sum_row and sum_row[0] is not None else 0
+            if delta > 0:
+                await add_user_global_balance(db, user_id, board_id, delta)
+            elif delta < 0:
+                await deduct_user_global_balance(db, user_id, board_id, abs(delta))
+            new_bal = await get_user_global_balance(db, user_id)
 
     if err_text:
         try:
@@ -12545,15 +12576,11 @@ async def cmd_dice(message: types.Message, board_id: str | None, stream: str = '
                     delta = -bet
                     outcome_text = f"💀 <b>ПРОИГРЫШ!</b> Выпало {result} (&lt;55).\n📉 Ты слил ставку: <code>-{bet} ₪</code>"
 
-                await db.execute(
-                    "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-                    "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = MAX(0, balance + ?)",
-                    (user_id, board_id, max(0, delta), delta)
-                )
-                await db.commit()
-                async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_sum:
-                    sum_row = await c_sum.fetchone()
-                    new_bal = sum_row[0] if sum_row and sum_row[0] is not None else 0
+                if delta > 0:
+                    await add_user_global_balance(db, user_id, board_id, delta)
+                elif delta < 0:
+                    await deduct_user_global_balance(db, user_id, board_id, abs(delta))
+                new_bal = await get_user_global_balance(db, user_id)
 
         if err_text:
             await message.answer(err_text)
@@ -15694,16 +15721,21 @@ async def cmd_warn(message: types.Message, board_id: str | None, stream: str = '
         warns = active_items.get("warn_count", 0) + 1
         active_items["warn_count"] = warns
 
-        if warns >= 3:
-            is_auto_mute = True
-            active_items["warn_count"] = 0
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(active_items), target_id, board_id))
-            await db.commit()
-        else:
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(active_items), target_id, board_id))
-            await db.commit()
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            if warns >= 3:
+                is_auto_mute = True
+                active_items["warn_count"] = 0
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(active_items), target_id, board_id))
+            else:
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(active_items), target_id, board_id))
+            await db.execute("COMMIT")
+        except Exception:
+            try: await db.execute("ROLLBACK")
+            except Exception: pass
+            raise
 
     if is_auto_mute:
         # 24h auto-mute

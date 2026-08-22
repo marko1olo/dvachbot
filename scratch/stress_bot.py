@@ -4,7 +4,9 @@ import time
 import random
 import json
 
-DB_NAME = "dvach_bot.db"
+import os
+
+DB_NAME = os.getenv("STRESS_TEST_DB", "temp_stress_test.db")
 CONCURRENCY = 50
 TOTAL_POSTS = 5000
 

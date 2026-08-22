@@ -35,12 +35,20 @@ def is_admin(uid: int, board_id: Optional[str] = None) -> bool:
     return uid in admins
 
 async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
+    from common.db_pool import db_lock
     try:
         async with asyncio.timeout(2.0):
-            async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-                row = await c.fetchone()
-                active_items_str = row[0] if row and row[0] else "{}"
-            return json.loads(active_items_str)
+            if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+                async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                    row = await c.fetchone()
+                    active_items_str = row[0] if row and row[0] else "{}"
+                return json.loads(active_items_str)
+            else:
+                async with db_lock:
+                    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+                        row = await c.fetchone()
+                        active_items_str = row[0] if row and row[0] else "{}"
+                    return json.loads(active_items_str)
     except Exception:
         return {}
 

@@ -640,11 +640,13 @@ async def cmd_redact(message: types.Message, board_id: str | None, stream: str =
     if post_num in messages_storage:
         post_board = messages_storage[post_num].get('board_id')
     if not post_board:
+        from common.db_pool import db_lock
         db = await get_pool()
-        async with db.execute("SELECT board_id FROM Posts WHERE post_num = ?", (post_num,)) as c:
-            row = await c.fetchone()
-            if row:
-                post_board = row[0]
+        async with db_lock:
+            async with db.execute("SELECT board_id FROM Posts WHERE post_num = ?", (post_num,)) as c:
+                row = await c.fetchone()
+                if row:
+                    post_board = row[0]
     if not post_board:
         post_board = board_id
 
@@ -1877,16 +1879,18 @@ async def cmd_wordcloud(message: types.Message, board_id: str | None, stream: st
     status_message = await message.answer(wait_msg)
     
     try:
+        from common.db_pool import db_lock
         db = await get_pool()
         
         # 24 hours ago
         target_timestamp = time.time() - 86400
         
-        rows = await db.execute(
-            "SELECT content FROM Posts WHERE board_id = ? AND timestamp > ?",
-            (board_id, target_timestamp)
-        )
-        posts = await rows.fetchall()
+        async with db_lock:
+            rows = await db.execute(
+                "SELECT content FROM Posts WHERE board_id = ? AND timestamp > ?",
+                (board_id, target_timestamp)
+            )
+            posts = await rows.fetchall()
         
         def process_posts(posts_list):
             text_corpus = ""
