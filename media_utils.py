@@ -77,6 +77,9 @@ async def _download_image_with_proxy(url: str, timeout: int=15, depth: int=0) ->
                             if len(data) > 0:
                                 logger.debug(f'✅ [DEBUG_DL] Скачано {len(data)} байт.')
                                 return (data, len(data))
+                        elif response.status in (400, 403, 404, 410):
+                            logger.debug(f'⚠️ [DEBUG_DL] Перманентный статус ответа: {response.status} для {url_log}. Пропуск.')
+                            return None
                         else:
                             logger.debug(f'⚠️ [DEBUG_DL] Статус ответа: {response.status} для {url_log}')
                 except (aiohttp.ClientConnectorError, asyncio.TimeoutError, OSError) as e:

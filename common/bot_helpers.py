@@ -143,13 +143,16 @@ async def decline_duel_logic(message: types.Message, challenger_id: int):
     if challenger_id not in _active_duels:
         return False
         
-    # Отклонить дуэль может либо создатель (отмена), либо любой другой пользователь (отклонение)
+    duel = _active_duels.get(challenger_id, {})
+    target_id = duel.get("target_id")
+    if target_id and user_id != target_id and user_id != challenger_id:
+        return False
+
+    _active_duels.pop(challenger_id, None)
     if user_id == challenger_id:
-        _active_duels.pop(challenger_id, None)
         await message.answer("⚔️ Вызов на дуэль успешно отменен создателем.")
         return True
     else:
-        _active_duels.pop(challenger_id, None)
         await message.answer(f"⚔️ Вызов на дуэль отклонен Анон [{get_anon_id(user_id)}].")
         return True
 

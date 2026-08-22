@@ -4304,29 +4304,34 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
         await callback.answer("Неверный цвет.", show_alert=True)
         return
 
-    db = await get_pool()
-    balance = await get_user_global_balance(db, user_id)
-    active_items = await _get_user_active_items(db, user_id, board_id)
-    now = int(time.time())
-
-    has_color_pass = active_items.get("badge_color_active") or active_items.get("badge_color_expires", 0) > now
-    price = get_current_item_price('badge_color')
-
-    if not has_color_pass:
-        if balance < price:
-            await callback.answer(f"Недостаточно шекелей! Нужно {price} ₪, у тебя {int(balance)} ₪.", show_alert=True)
-            return
-        ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, price)
-        if not ok:
-            await callback.answer("Ошибка списания баланса.", show_alert=True)
-            return
-        active_items["badge_color_active"] = True
-        active_items["badge_color_expires"] = now + 3 * 86400
-
-    active_items["badge_color"] = color_key
     async with db_lock:
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
-        await db.commit()
+        balance = await get_user_global_balance(db, user_id)
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        now = int(time.time())
+
+        has_color_pass = active_items.get("badge_color_active") or active_items.get("badge_color_expires", 0) > now
+        price = get_current_item_price('badge_color')
+
+        if not has_color_pass:
+            if balance < price:
+                await callback.answer(f"Недостаточно шекелей! Нужно {price} ₪, у тебя {int(balance)} ₪.", show_alert=True)
+                return
+            ok, new_bal = await deduct_user_global_balance(db, user_id, board_id, price)
+            if not ok:
+                await callback.answer("Ошибка списания баланса.", show_alert=True)
+                return
+            active_items["badge_color_active"] = True
+            active_items["badge_color_expires"] = now + 3 * 86400
+
+        active_items["badge_color"] = color_key
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("COMMIT")
+        except Exception:
+            try: await db.execute("ROLLBACK")
+            except Exception: pass
+            raise
 
     col_info = avatar_generator.COLOR_PALETTE[color_key]
     await callback.answer(f"Цвет изменен на {col_info['emoji']} {col_info['name']}! Виден в шапках твоих постов и на аватарке.", show_alert=True)
@@ -4772,16 +4777,17 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     db = await get_pool()
 
     price = get_current_item_price(item)
-    balance = await get_user_global_balance(db, user_id)
-
-    if balance < price:
-        await callback.answer(f"Недостаточно шекелей! Нужно {price} ₪, у тебя {int(balance)} ₪.", show_alert=True)
-        return
-
+    now = int(time.time())
     msg = ""
     err_msg = ""
-    active_items = await _get_user_active_items(db, user_id, board_id)
-    now = int(time.time())
+
+    async with db_lock:
+        balance = await get_user_global_balance(db, user_id)
+        if balance < price:
+            await callback.answer(f"Недостаточно шекелей! Нужно {price} ₪, у тебя {int(balance)} ₪.", show_alert=True)
+            return
+
+        active_items = await _get_user_active_items(db, user_id, board_id)
 
     # --- 1. LOOTBOX OPENINGS ---
     if item == "lootbox_trash":
@@ -4794,9 +4800,14 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         active_items, final_cash, recycle_note = lootbox_engine.apply_lootbox_reward(active_items, payload, base_cash)
         if final_cash > 0:
             await add_user_global_balance(db, user_id, board_id, final_cash)
-        async with db_lock:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
-            await db.commit()
+            await db.execute("COMMIT")
+        except Exception:
+            try: await db.execute("ROLLBACK")
+            except Exception: pass
+            raise
 
         rec_str = f"\n\n{recycle_note}" if recycle_note else ""
         reveal_text = (
@@ -4822,9 +4833,14 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
         active_items, final_cash, recycle_note = lootbox_engine.apply_lootbox_reward(active_items, payload, base_cash)
         if final_cash > 0:
             await add_user_global_balance(db, user_id, board_id, final_cash)
-        async with db_lock:
+        await db.execute("BEGIN IMMEDIATE")
+        try:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
-            await db.commit()
+            await db.execute("COMMIT")
+        except Exception:
+            try: await db.execute("ROLLBACK")
+            except Exception: pass
+            raise
 
         rec_str = f"\n\n{recycle_note}" if recycle_note else ""
         reveal_text = (
@@ -4959,11 +4975,17 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
             if not ok:
                 await callback.answer("Ошибка списания баланса.", show_alert=True)
                 return
-            await db.execute(
-                "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                (json.dumps(active_items), user_id, board_id)
-            )
-            await db.commit()
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (json.dumps(active_items), user_id, board_id)
+                )
+                await db.execute("COMMIT")
+            except Exception:
+                try: await db.execute("ROLLBACK")
+                except Exception: pass
+                raise
 
     if err_msg:
         await callback.answer(err_msg, show_alert=True)
@@ -15048,6 +15070,64 @@ def _sweep_stale_runtime_maps() -> dict[str, int]:
 
     for name, locks in (("generate_locks", generate_locks), ("user_spam_locks", user_spam_locks)):
         _note(name, _prune_idle_locks(locks))
+
+    # Combat & duel cooldowns
+    combat_expired = [uid for uid, ts in list(_GLOBAL_COMBAT_COOLDOWNS.items()) if ts <= now]
+    for uid in combat_expired:
+        _GLOBAL_COMBAT_COOLDOWNS.pop(uid, None)
+    _note("_GLOBAL_COMBAT_COOLDOWNS", len(combat_expired))
+
+    duel_expired = [uid for uid, ts in list(_duel_cooldowns.items()) if now - ts > 3600]
+    for uid in duel_expired:
+        _duel_cooldowns.pop(uid, None)
+    _note("_duel_cooldowns", len(duel_expired))
+
+    history_expired = []
+    for uid, history in list(_ATTACKER_TARGET_HISTORY.items()):
+        valid = [(ts, tid) for ts, tid in history if now - ts <= _ATTACK_WINDOW_SEC]
+        if valid:
+            _ATTACKER_TARGET_HISTORY[uid] = valid
+        else:
+            history_expired.append(uid)
+    for uid in history_expired:
+        _ATTACKER_TARGET_HISTORY.pop(uid, None)
+    _note("_ATTACKER_TARGET_HISTORY", len(history_expired))
+
+    for item_type, attackers in list(_ACTIVE_AUTHOR_ATTACKS.items()):
+        empty_attackers = []
+        for attacker_id, victims in list(attackers.items()):
+            active_victims = {tgt: exp for tgt, exp in victims.items() if exp > now}
+            if active_victims:
+                attackers[attacker_id] = active_victims
+            else:
+                empty_attackers.append(attacker_id)
+        for aid in empty_attackers:
+            attackers.pop(aid, None)
+
+    # Per-board user tracking maps in board_data
+    board_cleanups = 0
+    for b_id, b_dict in board_data.items():
+        st = b_dict.get('spam_tracker')
+        if isinstance(st, dict):
+            empty_st = [u for u, ts_list in list(st.items()) if not ts_list or (isinstance(ts_list, list) and max(ts_list or [0]) < now - 3600)]
+            for u in empty_st:
+                st.pop(u, None)
+            board_cleanups += len(empty_st)
+
+        lrt = b_dict.get('last_roll_time')
+        if isinstance(lrt, dict):
+            expired_roll = [u for u, ts in list(lrt.items()) if now - ts > 86400]
+            for u in expired_roll:
+                lrt.pop(u, None)
+            board_cleanups += len(expired_roll)
+
+        lic = b_dict.get('last_info_command_time')
+        if isinstance(lic, dict):
+            expired_info = [u for u, ts in list(lic.items()) if now - ts > 3600]
+            for u in expired_info:
+                lic.pop(u, None)
+            board_cleanups += len(expired_info)
+    _note("board_data_stale_entries", board_cleanups)
 
     return removed
 

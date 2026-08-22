@@ -8,7 +8,7 @@ from urllib.parse import urlparse, urlunparse, quote, unquote
 import aiohttp
 import socket
 from dotenv import load_dotenv
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 from aiohttp import ClientTimeout
 import json
@@ -1586,6 +1586,8 @@ JAPANESE_WORD_REPLACEMENTS = {
     "расщепить": "割く",
 }
 
+
+
 # Множество местоимений для быстрой проверки
 PRONOUNS = {"я", "ты", "вы", "он", "она", "мы", "они", "это", "то"}
 
@@ -1963,11 +1965,14 @@ async def _fetch_image_from_apis(api_definitions: List[Dict], fail_message: str,
         ) as session:
             shuffled_apis = random.sample(api_definitions, len(api_definitions))
             
-            for i, api in enumerate(shuffled_apis):
-                source_name = api.get("source", "unknown")                
+            batch_size = min(4, len(shuffled_apis))
+            primary_batch = shuffled_apis[:batch_size]
+            remaining_batch = shuffled_apis[batch_size:]
+
+            async def _try_api(api):
+                src = api.get("source", "unknown")
                 try:
-                    # Передаем наш найденный (или пустой) прокси
-                    image_url = await asyncio.wait_for(
+                    raw_url = await asyncio.wait_for(
                         api["fetch_func"](
                             session=session,
                             headers=headers,
@@ -1976,26 +1981,37 @@ async def _fetch_image_from_apis(api_definitions: List[Dict], fail_message: str,
                         ),
                         timeout=per_api_timeout,
                     )
-                    
-                    if image_url and isinstance(image_url, str):
-                        # ... (очистка URL как была) ...
+                    if raw_url and isinstance(raw_url, str):
                         try:
-                            parsed = urlparse(image_url)
+                            parsed = urlparse(raw_url)
                             decoded_path = unquote(parsed.path)
                             sanitized_path = quote(decoded_path, safe='/')
                             clean_url = urlunparse(parsed._replace(path=sanitized_path))
-                        except: clean_url = image_url
-                        
-                        print(f"  ✅ [DEBUG_ANIME] Успех! source={source_name} {_describe_image_url_for_log(clean_url)}")
-                        return clean_url
-                        
-                except asyncio.TimeoutError:
-                    print(f"  ⚠️ [DEBUG_ANIME] Таймаут источника '{source_name}' ({per_api_timeout}s).")
-                    continue
+                        except Exception:
+                            clean_url = raw_url
+                        return clean_url, src
                 except Exception:
-                    # Раскомментируйте, если нужно видеть ошибки в консоли
-                    # print(f"  ❌ Ошибка '{source_name}': {e}")
-                    continue
+                    return None, src
+                return None, src
+
+            tasks = [asyncio.create_task(_try_api(api)) for api in primary_batch]
+            for fut in asyncio.as_completed(tasks):
+                url, src = await fut
+                if url:
+                    for t in tasks:
+                        if not t.done(): t.cancel()
+                    print(f"  ✅ [DEBUG_ANIME] Успех! source={src} {_describe_image_url_for_log(url)}")
+                    return url
+
+            if remaining_batch:
+                fallback_tasks = [asyncio.create_task(_try_api(api)) for api in remaining_batch]
+                for fut in asyncio.as_completed(fallback_tasks):
+                    url, src = await fut
+                    if url:
+                        for t in fallback_tasks:
+                            if not t.done(): t.cancel()
+                        print(f"  ✅ [DEBUG_ANIME] Успех! source={src} {_describe_image_url_for_log(url)}")
+                        return url
 
     except Exception as e:
         print(f"⛔ Глобальная ошибка сессии: {e}")
@@ -2524,34 +2540,27 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
         
     return None
 
-async def _process_fallback_api_response(api_source: str, response: aiohttp.ClientResponse) -> Optional[str]:
-    # Исправление синтаксической ошибки и улучшение логики парсинга ---
+async def _process_fallback_api_response(api_source: str, response: Any) -> Optional[str]:
     try:
-        data = await response.json()
+        if isinstance(response, dict):
+            data = response
+        elif hasattr(response, 'json'):
+            data = await response.json()
+        else:
+            return None
         if not isinstance(data, dict):
-             print(f"[{api_source}] API Info: Ответ не является JSON-объектом.")
-             return None
-    except (json.JSONDecodeError, aiohttp.ContentTypeError) as e:
-        print(f"⛔ [{api_source}] КРИТИЧЕСКАЯ ОШИБКА РАЗБОРА JSON: {type(e).__name__}: {e}")
+            return None
+    except Exception:
         return None
 
     url = None
-    # Явная и строгая проверка для конкретного источника API
     if api_source == "nekos.best":
         results = data.get('results')
-        # Дополнительные проверки на то, что results - это непустой список
         if results and isinstance(results, list) and len(results) > 0 and isinstance(results[0], dict):
             url = results[0].get('url')
     else:
-        # Логика по умолчанию для всех остальных API (например, waifu.pics)
         url = data.get('url')
-
-    # Финальная проверка, что URL был найден и является строкой
-    if not url or not isinstance(url, str):
-        print(f"[{api_source}] API Info: Ключ 'url' не найден в ответе JSON или имеет неверный тип.")
-        return None
-
-    return url
+    return url if (url and isinstance(url, str)) else None
 
 
 from anime_events_data import ANIME_EVENTS, LOLI_EVENTS

@@ -295,15 +295,15 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                     elif action == 'dislike':
                         # Штраф за дизлайк/сажу: в среднем ~5.5 рублей (4-7 RUB, меньше чем за лайк)
                         penalty_amount = random.randint(4, 7)
+                        await deduct_user_global_balance(db, author_id, board_id, penalty_amount)
                         await db.execute(
                             """
                             INSERT INTO Users (user_id, board_id, balance, reaction_penalty_counter) 
                             VALUES (?, ?, 0, 1) 
                             ON CONFLICT(user_id, board_id) DO UPDATE SET 
-                            balance = MAX(0.0, balance - ?), 
                             reaction_penalty_counter = COALESCE(reaction_penalty_counter, 0) + 1
                             """,
-                            (author_id, board_id, penalty_amount)
+                            (author_id, board_id)
                         )
                         
                         # Проверяем счетчик штрафов для отправки уведомления (каждые 5 дизлайков)

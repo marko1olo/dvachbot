@@ -667,8 +667,9 @@ class MessageBroadcaster:
                             post_to_messages.setdefault(self.post_num, {})[uid] = msg_ids[0] if len(msg_ids) == 1 else msg_ids
                             for m in msgs:
                                 message_to_post[(uid, m.message_id)] = self.post_num
-                if keep_copy_maps_in_ram:
+                if keep_copy_maps_in_ram and MAX_COPY_MAP_POSTS_IN_MEMORY > 0:
                     trimmed_copy_posts, trimmed_copy_refs = _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
+                if MAX_MESSAGES_IN_MEMORY > 0:
                     trimmed_msg_storage = _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
             if trimmed_copy_posts or trimmed_msg_storage:
                 runtime_logger.debug(

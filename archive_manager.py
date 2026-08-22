@@ -7,7 +7,8 @@ import logging
 from datetime import datetime, timezone
 import aiohttp
 from aiogram import Bot
-from aiogram.exceptions import TelegramRetryAfter, TelegramNetworkError, TelegramBadRequest
+from aiogram.exceptions import TelegramRetryAfter, TelegramNetworkError, TelegramBadRequest, TelegramForbiddenError
+import io
 from typing import *
 
 from shared_state import *
@@ -75,14 +76,19 @@ async def _download_media_bytes(file_id: str) -> tuple[bytes | None, str]:
             if b not in candidate_bots:
                 candidate_bots.append(b)
 
-    for bot_inst in candidate_bots:
+    if not file_id or str(file_id).startswith(("http://", "https://")):
+        return None, ""
+
+    for bot_inst in candidate_bots[:3]:
         try:
             buf = io.BytesIO()
-            await bot_inst.download(file_id, destination=buf)
+            await asyncio.wait_for(bot_inst.download(file_id, destination=buf), timeout=12.0)
             buf.seek(0)
             data = buf.read()
             if data:
                 return data, "media.dat"
+        except (asyncio.TimeoutError, TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError):
+            continue
         except Exception:
             continue
     return None, ""

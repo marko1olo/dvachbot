@@ -333,6 +333,10 @@ class NewPostProcessor:
                 'author_message_id': None, 'board_id': self.board_id, 'thread_id': self.thread_id,
                 'chain_depth': chain_depth
             }
+            if MAX_MESSAGES_IN_MEMORY > 0:
+                _trim_messages_storage_unlocked(MAX_MESSAGES_IN_MEMORY)
+            if MAX_COPY_MAP_POSTS_IN_MEMORY > 0:
+                _trim_post_copy_maps_unlocked(MAX_COPY_MAP_POSTS_IN_MEMORY)
             
             if chain_depth > 0 and chain_depth % 15 == 0:
                 try:

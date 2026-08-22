@@ -322,7 +322,7 @@ async def cmd_heist(message: types.Message, board_id: str | None = None):
             import __main__ as main_module
             await message.reply(f"❌ **ПРОВАЛ! (Оценка ИИ: {int(score*100)}/100)**\n_{narrative}_\n\n🚓 План оказался тупым. За тобой выехал Пативэн (мут на 3 часа)!", parse_mode="Markdown")
             if hasattr(main_module, 'apply_regular_mute'):
-                await main_module.apply_regular_mute(user_id, board_id, int(time.time()) + 3*3600)
+                await main_module.apply_regular_mute(user_id, board_id, 3 * 3600)
             
     except Exception as e:
         await message.reply(f"❌ Ошибка ИИ при ограблении: {e}")
