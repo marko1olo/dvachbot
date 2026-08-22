@@ -162,7 +162,8 @@ class NewPostProcessor:
             self.author_content = await apply_transform(self.content, self.board_id)
         else:
             self.author_content = self.content.copy()
-        if self.user_id > 0:
+        from common.bot_helpers import is_admin
+        if self.user_id > 0 and not is_admin(self.user_id, self.board_id):
             from common.db_pool import get_pool
             import time
             db = await get_pool()

@@ -510,7 +510,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 b_data['mutes'].pop(user_id, None)
             
         cursed_text_override = None
-        if message.content_type == 'text' or (message.caption and message.content_type in ['photo', 'video', 'document', 'animation', 'audio', 'voice']):
+        if not is_admin(user_id, board_id) and (message.content_type == 'text' or (message.caption and message.content_type in ['photo', 'video', 'document', 'animation', 'audio', 'voice'])):
             db_p = await get_pool()
             c_items = await _get_user_active_items(db_p, user_id, board_id)
             if c_items.get("cursed_until", 0) > time.time():

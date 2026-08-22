@@ -1093,10 +1093,9 @@ async def get_post_info_by_copy(recipient_id: int, message_id: int) -> tuple[int
     """
     Находит (post_num, author_id) оригинального поста по ID копии сообщения.
     """
-    from common.db_pool import get_pool, db_lock
-    
-    async with db_lock:
-        try:
+    from common.db_pool import get_pool
+    try:
+        async with asyncio.timeout(2.0):
             db = await get_pool()
             query = """
                 SELECT p.post_num, p.author_id
@@ -1107,8 +1106,8 @@ async def get_post_info_by_copy(recipient_id: int, message_id: int) -> tuple[int
             async with db.execute(query, (recipient_id, message_id)) as cursor:
                 result = await cursor.fetchone()
                 return (result[0], result[1]) if result else None
-        except Exception:
-            return None
+    except Exception:
+        return None
 async def load_state_from_db(thread_boards: set) -> dict:
     """
     Загружает полное состояние бота из базы данных SQLite.
@@ -2348,61 +2347,43 @@ async def get_chat_posts_for_board(board_id: str, offset: int = 0, stream: str =
 async def get_post_by_num(post_num: int) -> Optional[Dict[str, Any]]:
     """
     Получает пост по номеру.
-    Использует цикл попыток для обхода блокировок базы данных.
     """
-    from common.db_pool import get_pool, db_lock
-    
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                async with db.execute("SELECT * FROM Posts WHERE post_num = ? LIMIT 1", (post_num,)) as cursor:
-                    row = await cursor.fetchone()
-                    if row is None:
-                        return None
-                    
-                    # Безопасное извлечение данных без изменения db.row_factory
-                    cols = [d[0] for d in cursor.description]
-                    row_data = dict(zip(cols, row))
-                
-                post_data = _process_site_db_row(row_data)
-                if post_data and 'post_num' in post_data:
-                    post_data['id'] = post_data['post_num']
-                return post_data
-                
-            except sqlite3.OperationalError as e:
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                break
-            except Exception:
-                break
-    return None
-async def get_thread_op_by_post_num(post_num: int) -> Optional[int]:
-    from common.db_pool import get_pool, db_lock
-    
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                query = "SELECT thread_id, reply_to_post_num FROM Posts WHERE post_num = ? LIMIT 1"
-                async with db.execute(query, (post_num,)) as cursor:
-                    row = await cursor.fetchone()
-                    if row:
-                        thread_id, reply_to = row
-                        if thread_id:
-                            return thread_id
-                        if reply_to is None:
-                            return post_num
+    from common.db_pool import get_pool
+    try:
+        async with asyncio.timeout(2.0):
+            db = await get_pool()
+            async with db.execute("SELECT * FROM Posts WHERE post_num = ? LIMIT 1", (post_num,)) as cursor:
+                row = await cursor.fetchone()
+                if row is None:
                     return None
-            except sqlite3.OperationalError as e:
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                break
-            except Exception:
-                break
-    return None
+                
+                cols = [d[0] for d in cursor.description]
+                row_data = dict(zip(cols, row))
+            
+            post_data = _process_site_db_row(row_data)
+            if post_data and 'post_num' in post_data:
+                post_data['id'] = post_data['post_num']
+            return post_data
+    except Exception:
+        return None
+
+async def get_thread_op_by_post_num(post_num: int) -> Optional[int]:
+    from common.db_pool import get_pool
+    try:
+        async with asyncio.timeout(2.0):
+            db = await get_pool()
+            query = "SELECT thread_id, reply_to_post_num FROM Posts WHERE post_num = ? LIMIT 1"
+            async with db.execute(query, (post_num,)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    thread_id, reply_to = row
+                    if thread_id:
+                        return thread_id
+                    if reply_to is None:
+                        return post_num
+                return None
+    except Exception:
+        return None
 async def get_post_count_in_thread(thread_op_num: int) -> int:
     from common.db_pool import get_pool, db_lock
     
@@ -2808,10 +2789,9 @@ async def get_post_author_by_copy(recipient_id: int, message_id: int) -> int | N
     """
     Находит ID автора оригинального поста по ID копии сообщения.
     """
-    from common.db_pool import get_pool, db_lock
-    
-    async with db_lock:
-        try:
+    from common.db_pool import get_pool
+    try:
+        async with asyncio.timeout(2.0):
             db = await get_pool()
             query = """
                 SELECT p.author_id
@@ -2822,8 +2802,9 @@ async def get_post_author_by_copy(recipient_id: int, message_id: int) -> int | N
             async with db.execute(query, (recipient_id, message_id)) as cursor:
                 result = await cursor.fetchone()
                 return result[0] if result else None
-        except Exception:
-            return None
+    except Exception:
+        return None
+
 @overload
 async def get_post_copies(post_num: int) -> list[tuple[int, int]]: ...
 
@@ -2835,14 +2816,13 @@ async def get_post_copies(post_num: int | list[int]) -> list[tuple[int, int]] | 
     Возвращает список всех копий для указанного поста,
     либо словарь со списками копий для нескольких постов.
     """
-    from common.db_pool import get_pool, db_lock
-    
-    if isinstance(post_num, list):
-        if not post_num:
-            return {}
-        async with db_lock:
-            try:
-                db = await get_pool()
+    from common.db_pool import get_pool
+    try:
+        async with asyncio.timeout(3.0):
+            db = await get_pool()
+            if isinstance(post_num, list):
+                if not post_num:
+                    return {}
                 placeholders = ','.join('?' for _ in post_num)
                 query = f"SELECT post_num, recipient_id, message_id FROM PostCopies WHERE post_num IN ({placeholders})"
 
@@ -2852,17 +2832,14 @@ async def get_post_copies(post_num: int | list[int]) -> list[tuple[int, int]] | 
                     for p_num, recipient_id, message_id in rows:
                         result[p_num].append((recipient_id, message_id))
                 return result
-            except Exception:
-                return {num: [] for num in post_num}
 
-    async with db_lock:
-        try:
-            db = await get_pool()
             query = "SELECT recipient_id, message_id FROM PostCopies WHERE post_num = ?"
             async with db.execute(query, (post_num,)) as cursor:
                 return await cursor.fetchall()
-        except Exception:
-            return []
+    except Exception:
+        if isinstance(post_num, list):
+            return {num: [] for num in post_num}
+        return []
 async def upsert_delivery_queue_item(
     board_id: str,
     post_num: int,
@@ -4667,17 +4644,17 @@ async def get_max_post_num() -> int:
     if _CACHED_MAX_POST_NUM is not None:
         return _CACHED_MAX_POST_NUM
 
-    from common.db_pool import get_pool, db_lock
-    async with db_lock:
-        try:
+    from common.db_pool import get_pool
+    try:
+        async with asyncio.timeout(2.0):
             db = await get_pool()
             async with db.execute("SELECT MAX(post_num) FROM Posts") as cursor:
                 row = await cursor.fetchone()
                 val = row[0] if row and row[0] else 0
                 _CACHED_MAX_POST_NUM = val
                 return val
-        except:
-            return 0
+    except:
+        return 0
 async def get_random_active_thread() -> Optional[tuple[str, str]]:
     """
     Возвращает случайный живой тред (board_id, thread_id).
@@ -5884,7 +5861,7 @@ async def register_media_repost(board_id: str, file_unique_id: str, post_num: in
     """
     if not board_id or not file_unique_id:
         return 1
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool
 
     upsert = """
         INSERT INTO MediaReposts (board_id, file_unique_id, times, first_post_num, first_seen)
@@ -5894,17 +5871,14 @@ async def register_media_repost(board_id: str, file_unique_id: str, post_num: in
     """
     params = (board_id, file_unique_id, post_num, time.time())
     try:
-        async with db_lock:
+        async with asyncio.timeout(2.0):
             db = await get_pool()
-            # Один атомарный upsert с RETURNING: не нужны ни явная транзакция,
-            # ни отдельный SELECT (это давало 2.4 мс против 0.1 мс).
             try:
                 async with db.execute(upsert + " RETURNING times", params) as cursor:
                     row = await cursor.fetchone()
                 if row:
                     return int(row[0])
             except Exception:
-                # RETURNING появился в SQLite 3.35 — на старой сборке читаем следом.
                 await db.execute(upsert, params)
                 async with db.execute(
                     "SELECT times FROM MediaReposts WHERE board_id = ? AND file_unique_id = ?",
