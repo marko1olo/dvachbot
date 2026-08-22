@@ -10,6 +10,29 @@ from common.config import *
 from common.database import *
 from common.anon_identity import get_anon_id, generate_anon_name
 from post_processor import NewPostContext, NewPostProcessor, process_new_post
+from typing import Optional
+
+def is_admin(uid: int, board_id: Optional[str] = None) -> bool:
+    if not uid:
+        return False
+    try:
+        from site_tgach.admin_config import ADMIN_IDS
+        if uid in ADMIN_IDS:
+            return True
+    except Exception:
+        pass
+    try:
+        from common.config import ADMIN_IDS
+        if uid in ADMIN_IDS:
+            return True
+    except Exception:
+        pass
+    if not board_id:
+        return False
+    from common.board_config import BOARD_CONFIG
+    bconf = BOARD_CONFIG.get(board_id, {})
+    admins = bconf.get('admins', [])
+    return uid in admins
 
 async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
     try:
