@@ -70,6 +70,11 @@ import uuid
 import html
 import ipaddress
 import socket
+import ssl
+
+_NO_VERIFY_SSL = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+_NO_VERIFY_SSL.check_hostname = False
+_NO_VERIFY_SSL.verify_mode = ssl.CERT_NONE
 from fastapi import BackgroundTasks
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi import Form
@@ -1058,10 +1063,7 @@ async def _download_image_with_proxy(
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
     }
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-    connector = aiohttp.TCPConnector(family=socket.AF_INET, ssl=ssl_context)
+    connector = aiohttp.TCPConnector(family=socket.AF_INET, ssl=_NO_VERIFY_SSL)
     for attempt in range(2):
         try:
             async with aiohttp.ClientSession(
@@ -10015,7 +10017,7 @@ def _get_shared_aiohttp_session() -> aiohttp.ClientSession:
     if GLOBAL_PROXY_HTTP_SESSION is None or GLOBAL_PROXY_HTTP_SESSION.closed:
         timeout = aiohttp.ClientTimeout(total=180, sock_connect=10, sock_read=30)
         connector = aiohttp.TCPConnector(
-            limit=200, ttl_dns_cache=300, family=socket.AF_INET
+            limit=200, ttl_dns_cache=300, family=socket.AF_INET, ssl=_NO_VERIFY_SSL
         )
         GLOBAL_PROXY_HTTP_SESSION = aiohttp.ClientSession(
             connector=connector, timeout=timeout, trust_env=False
@@ -10029,7 +10031,7 @@ async def _fetch_telegram_path(file_id: str, bot_token: str):
     if GLOBAL_HTTP_SESSION is None or GLOBAL_HTTP_SESSION.closed:
         # family=socket.AF_INET ЗАСТАВЛЯЕТ ИСПОЛЬЗОВАТЬ IPv4 (Лечит проблемы с VPN)
         connector = aiohttp.TCPConnector(
-            limit=250, ttl_dns_cache=300, family=socket.AF_INET
+            limit=250, ttl_dns_cache=300, family=socket.AF_INET, ssl=_NO_VERIFY_SSL
         )
         GLOBAL_HTTP_SESSION = aiohttp.ClientSession(
             connector=connector, timeout=aiohttp.ClientTimeout(total=10)

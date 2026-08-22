@@ -1,4 +1,4 @@
-import __main__ as main
+import shared_state
 import asyncio
 import os
 import re
@@ -59,8 +59,8 @@ async def _download_media_bytes(file_id: str) -> tuple[bytes | None, str]:
     owner_bot = None
     try:
         owner_id = await get_file_owner_id(file_id)
-        if owner_id:
-            for b in main.GLOBAL_BOTS.values():
+        if owner_id and isinstance(shared_state.GLOBAL_BOTS, dict):
+            for b in shared_state.GLOBAL_BOTS.values():
                 if getattr(b, 'id', None) == owner_id:
                     owner_bot = b
                     break
@@ -70,8 +70,8 @@ async def _download_media_bytes(file_id: str) -> tuple[bytes | None, str]:
     candidate_bots = []
     if owner_bot:
         candidate_bots.append(owner_bot)
-    if hasattr(main, 'GLOBAL_BOTS') and isinstance(main.GLOBAL_BOTS, dict):
-        for b in main.GLOBAL_BOTS.values():
+    if isinstance(shared_state.GLOBAL_BOTS, dict):
+        for b in shared_state.GLOBAL_BOTS.values():
             if b not in candidate_bots:
                 candidate_bots.append(b)
 
@@ -370,9 +370,9 @@ async def _update_archive_post_content(post_num: int, content: dict, content_typ
 
 async def post_archive_to_channel(bots: dict[str, Bot], file_path: str, board_id: str, thread_info: dict) -> None:
 
-    bot_instance = bots.get(main.ARCHIVE_POSTING_BOT_ID)
+    bot_instance = bots.get(shared_state.ARCHIVE_POSTING_BOT_ID)
     if not bot_instance:
-        print(f"⛔ Ошибка: бот для постинга архивов ('{main.ARCHIVE_POSTING_BOT_ID}') не найден в списке активных ботов.")
+        print(f"⛔ Ошибка: бот для постинга архивов ('{shared_state.ARCHIVE_POSTING_BOT_ID}') не найден в списке активных ботов.")
         try:
             os.remove(file_path)
         except OSError: pass
@@ -484,10 +484,10 @@ def _sync_generate_thread_archive(board_id: str, thread_id: str, thread_info: di
 async def archive_thread(bots: dict[str, Bot], board_id: str, thread_id: str, thread_info: dict):
 
     posts_data_copy = []
-    async with main.storage_lock:
+    async with shared_state.storage_lock:
         post_nums = thread_info.get('posts', [])
         for post_num in post_nums:
-            post_data = main.messages_storage.get(post_num)
+            post_data = shared_state.messages_storage.get(post_num)
             if post_data:
                 data_copy = {
                     'content': post_data.get('content', {}).copy(),
@@ -496,7 +496,7 @@ async def archive_thread(bots: dict[str, Bot], board_id: str, thread_id: str, th
                 posts_data_copy.append(data_copy)
     loop = asyncio.get_running_loop()
     filepath = await loop.run_in_executor(
-        main.save_executor,
+        shared_state.save_executor,
         _sync_generate_thread_archive,
         board_id, thread_id, thread_info, posts_data_copy
     )

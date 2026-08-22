@@ -352,6 +352,17 @@ def generate_qr(target_url: str, box_size: int = 4, border: int = 1, fill_color:
     fdraw.text((size // 2 - 22, size // 2 - 6), "TGACH", fill=fill_color)
     return fallback
 
+def _decode_and_verify_image(data_bytes: bytes) -> Optional[Image.Image]:
+    try:
+        buf = io.BytesIO(data_bytes)
+        img = Image.open(buf)
+        img.verify()
+        buf.seek(0)
+        img_rgb = Image.open(buf).convert("RGB")
+        img_rgb.load()
+        return img_rgb
+    except Exception:
+        return None
 
 def wrap_text(text: str, font: ImageFont.ImageFont, max_width: int, draw: ImageDraw.ImageDraw) -> List[str]:
     """Wraps text within a given pixel width."""
@@ -376,83 +387,61 @@ def wrap_text(text: str, font: ImageFont.ImageFont, max_width: int, draw: ImageD
         lines.append(" ".join(current_line))
     return lines
 
-async def fetch_random_post_image(db_path: Optional[str] = None, bot: Optional[Any] = None) -> Optional[Image.Image]:
+async def fetch_random_post_image(board_id: str, bot: Optional[Any] = None) -> Optional[Image.Image]:
+    """Fetches a random photo from the database for the given board.
+    First tries to download via Telegram Bot API using file_id.
+    If that fails or no bot, falls back to direct URL fetch.
+    Returns a PIL Image object or None.
     """
-    Selects a random authentic background image strictly from user posts (111,000+ photos) and Booru URLs in DB.
-    """
-    if not db_path:
-        db_path = os.path.join(_BASE_DIR, "dvach_bot.db")
-        
+    db_path = os.fspath(DB_NAME)
+    if not os.path.exists(db_path):
+        return None
+
     candidates = []
     file_id_candidates = []
-    if os.path.exists(db_path):
-        try:
-            from common.db_pool import get_pool, db_lock
-            db = await get_pool()
-            if db and getattr(db, '_running', False):
-                async with db_lock:
-                    # 1. Sample from 111,594+ real user photos
-                    async with db.execute("""
-                        SELECT original_file_id, original_url FROM PostFiles 
-                        WHERE file_type = 'photo' AND original_file_id IS NOT NULL
-                        ORDER BY RANDOM() LIMIT 40
-                    """) as cursor:
-                        rows = await cursor.fetchall()
-                    for fid, url in rows:
-                        if url and url.startswith("http"):
-                            candidates.append(url)
-                        elif fid and fid.startswith("http"):
-                            candidates.append(fid)
-                        elif fid:
-                            file_id_candidates.append(fid)
-                    
-                    # 2. Check Posts content JSON for image_url
-                    if len(candidates) < 10:
-                        async with db.execute("""
-                            SELECT content FROM Posts 
-                            WHERE content LIKE '%http%' AND (content LIKE '%.jpg%' OR content LIKE '%.png%' OR content LIKE '%.jpeg%')
-                            ORDER BY RANDOM() LIMIT 40
-                        """) as cursor:
-                            p_rows = await cursor.fetchall()
-                        for (cnt_str,) in p_rows:
-                            try:
-                                cnt = json.loads(cnt_str)
-                                u = cnt.get('image_url') or cnt.get('url')
-                                if not u and cnt.get('type') == 'media_group' and 'media' in cnt:
-                                    for m in cnt['media']:
-                                        if m.get('type') == 'photo':
-                                            u = m.get('media') or m.get('file_id')
-                                            break
-                                if u and str(u).startswith('http'):
-                                    candidates.append(str(u))
-                            except Exception:
-                                pass
-            else:
-                raise RuntimeError("db not running")
-        except Exception:
-            def _get_sync():
-                res_urls = []
-                res_fids = []
-                try:
-                    conn = sqlite3.connect(db_path, timeout=5.0)
-                    c = conn.cursor()
-                    c.execute("""
-                        SELECT original_file_id, original_url FROM PostFiles 
-                        WHERE file_type = 'photo' AND original_file_id IS NOT NULL
-                        ORDER BY RANDOM() LIMIT 40
-                    """)
-                    for fid, url in c.fetchall():
-                        if url and url.startswith("http"):
-                            res_urls.append(url)
-                        elif fid and fid.startswith("http"):
-                            res_urls.append(fid)
-                        elif fid:
-                            res_fids.append(fid)
-                    conn.close()
-                except Exception:
-                    pass
-                return res_urls, res_fids
-            candidates, file_id_candidates = await asyncio.to_thread(_get_sync)
+
+    try:
+        from common.db_pool import get_pool
+        db = await get_pool()
+        if db and getattr(db, '_running', False):
+            async with db.execute("""
+                SELECT original_file_id, original_url FROM PostFiles 
+                WHERE file_type = 'photo' AND original_file_id IS NOT NULL
+                ORDER BY RANDOM() LIMIT 40
+            """) as cursor:
+                async for fid, url in cursor:
+                    if url and url.startswith("http"):
+                        candidates.append(url)
+                    elif fid and fid.startswith("http"):
+                        candidates.append(fid)
+                    elif fid:
+                        file_id_candidates.append(fid)
+        else:
+            raise RuntimeError("db not running")
+    except Exception:
+        def _get_sync():
+            res_urls = []
+            res_fids = []
+            try:
+                conn = sqlite3.connect(db_path, timeout=5.0)
+                c = conn.cursor()
+                c.execute("""
+                    SELECT original_file_id, original_url FROM PostFiles 
+                    WHERE file_type = 'photo' AND original_file_id IS NOT NULL
+                    ORDER BY RANDOM() LIMIT 40
+                """)
+                for fid, url in c.fetchall():
+                    if url and url.startswith("http"):
+                        res_urls.append(url)
+                    elif fid and fid.startswith("http"):
+                        res_urls.append(fid)
+                    elif fid:
+                        res_fids.append(fid)
+                conn.close()
+            except Exception:
+                pass
+            return res_urls, res_fids
+        candidates, file_id_candidates = await asyncio.to_thread(_get_sync)
 
     # 1. Try downloading real user photo via Bot API if bot instance is available
     if bot and file_id_candidates:
@@ -464,12 +453,11 @@ async def fetch_random_post_image(db_path: Optional[str] = None, bot: Optional[A
                 if not file_info or not file_info.file_path:
                     continue
                 await bot.download_file(file_info.file_path, destination=buf)
-                buf.seek(0)
-                if buf.getbuffer().nbytes > 4000:
-                    img = Image.open(buf)
-                    img.verify()
-                    buf.seek(0)
-                    return Image.open(buf).convert("RGB")
+                raw_bytes = buf.getvalue()
+                if len(raw_bytes) > 4000:
+                    decoded = await asyncio.to_thread(_decode_and_verify_image, raw_bytes)
+                    if decoded is not None:
+                        return decoded
             except Exception:
                 continue
 
@@ -483,9 +471,7 @@ async def fetch_random_post_image(db_path: Optional[str] = None, bot: Optional[A
                     if resp.status == 200:
                         data = await resp.read()
                         if len(data) > 4000:
-                            img = Image.open(io.BytesIO(data))
-                            img.verify()
-                            return Image.open(io.BytesIO(data)).convert("RGB")
+                            return await asyncio.to_thread(_decode_and_verify_image, data)
             except Exception:
                 pass
             return None

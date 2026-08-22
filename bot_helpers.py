@@ -1,4 +1,5 @@
 import asyncio
+from typing import Optional
 from shared_state import *
 from aiogram import types
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -35,6 +36,8 @@ async def check_cooldown(message: Message, board_id: str) -> bool:
 
     if board_id == 'trash':
         return True # Для доски-мусорки кулдауна нет, всегда разрешаем
+    if message.from_user and is_admin(message.from_user.id, board_id):
+        return True
     b_data = board_data[board_id]
     last_activation = b_data.get('last_mode_activation')
     if last_activation is None:
@@ -300,17 +303,28 @@ async def git_commit_and_push_db() -> bool:
     asyncio.get_running_loop()
     return False # await loop.run_in_executor(git_executor, sync_git_operations_db, GITHUB_TOKEN)
 
-def is_admin(uid: int, board_id: str) -> bool:
-
+def is_admin(uid: int, board_id: Optional[str] = None) -> bool:
+    if not uid:
+        return False
+    try:
+        from site_tgach.admin_config import ADMIN_IDS
+        if uid in ADMIN_IDS:
+            return True
+    except Exception:
+        pass
+    try:
+        from common.config import ADMIN_IDS
+        if uid in ADMIN_IDS:
+            return True
+    except Exception:
+        pass
     if not board_id:
         return False
-    from site_tgach.admin_config import ADMIN_IDS
-    if uid in ADMIN_IDS:
-        return True
     from common.board_config import BOARD_CONFIG
     bconf = BOARD_CONFIG.get(board_id, {})
     admins = bconf.get('admins', [])
     return uid in admins
+
 
 
 async def send_moderation_notice(user_id: int, action: str, board_id: str, duration: str = None, deleted_posts: int = 0, stream: str = 'ru'):

@@ -40,6 +40,12 @@ def set_spam_filter_words(board_id: str, words: set):
 
 def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
     """Checks if a message contains a banned spam filter word."""
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return False
+    except Exception:
+        pass
     banned_words = _spam_filter_words.get(board_id)
     if not banned_words:
         return False
@@ -50,6 +56,12 @@ def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
 
 def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules: dict, violations: dict) -> bool:
     """Check if the user is repeatedly sending the same or highly similar messages."""
+    try:
+        from site_tgach.admin_config import ADMIN_IDS
+        if user_id in ADMIN_IDS:
+            return True
+    except Exception:
+        pass
     content, msg_type = msg_info
     max_repeats = rules.get('max_repeats')
     if not max_repeats or not content:
@@ -101,6 +113,12 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
 
 def _check_cross_board_spam(user_id: int, board_id: str, content: str, msg_type: str, raw_content_type: str) -> bool:
     """Check for cross-board spam (echodown detection) returning False if detected."""
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return True
+    except Exception:
+        pass
     now_ts = time.time()
     user_cb = cross_board_spam_tracker[user_id]
     if not user_cb or user_cb[-1][1] != board_id:
@@ -130,6 +148,12 @@ def _check_cross_board_spam(user_id: int, board_id: str, content: str, msg_type:
 
 def check_rate_limit(board_id: str, user_id: int, rules: dict) -> bool:
     """Sliding window implementation for rate limits."""
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return True
+    except Exception:
+        pass
     now_ts = time.time()
     tracker = _spam_trackers[board_id][user_id]
     
@@ -148,6 +172,12 @@ async def analyze_message_for_spam(user_id: int, board_id: str, content: str, ms
     Decoupled engine for spam analysis.
     Returns a tuple: (SpamResult, current_violation_level).
     """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return SpamResult.CLEAN, 0
+    except Exception:
+        pass
     if msg_type == 'audio' or (content is None and msg_type is None):
         return SpamResult.CLEAN, 0
 

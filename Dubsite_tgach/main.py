@@ -31,6 +31,11 @@ import uuid
 import html
 import ipaddress
 import socket
+import ssl
+
+_NO_VERIFY_SSL = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+_NO_VERIFY_SSL.check_hostname = False
+_NO_VERIFY_SSL.verify_mode = ssl.CERT_NONE
 from fastapi import BackgroundTasks
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi import Form
@@ -481,10 +486,7 @@ async def _download_image_with_proxy(url: str, timeout: int = 90, depth: int = 0
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
     }
-    ssl_context = ssl.create_default_context()
-    ssl_context.check_hostname = False
-    ssl_context.verify_mode = ssl.CERT_NONE
-    connector = aiohttp.TCPConnector(family=socket.AF_INET, ssl=ssl_context)
+    connector = aiohttp.TCPConnector(family=socket.AF_INET, ssl=_NO_VERIFY_SSL)
     for attempt in range(2):
         try:
             async with aiohttp.ClientSession(timeout=timeout_config, headers=headers, connector=connector, trust_env=False) as session:

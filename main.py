@@ -390,7 +390,8 @@ class BoardMiddleware(BaseMiddleware):
                 uid = user.id
                 b_data = board_data.get(board_id)
                 if b_data:
-                    if uid in b_data['users']['banned']:
+                    is_user_admin = is_admin(uid, board_id)
+                    if uid in b_data['users']['banned'] and not is_user_admin:
                         try:
                             if isinstance(event, types.Message):
                                 await event.delete()
@@ -401,47 +402,48 @@ class BoardMiddleware(BaseMiddleware):
                         return 
                         
                     # Анти-рейд
-                    now = time.time()
-                    is_new_user = uid not in b_data['users']['active']
-                    is_recent_joiner = False
-                    
-                    if uid in RECENT_JOINERS_CACHE:
-                        if now - RECENT_JOINERS_CACHE[uid] <= 3600:
-                            is_recent_joiner = True
-                        else:
-                            del RECENT_JOINERS_CACHE[uid]
-
-                    if is_new_user or is_recent_joiner:
-                        # Проверяем как ручной локдаун (от админа), так и автоматический
-                        if b_data.get('lockdown', False) or now < RAID_LOCKDOWN_UNTIL:
-                            try:
-                                if isinstance(event, types.Message):
-                                    await event.delete()
-                            except Exception as e:
-                                logging.warning(f"Failed to delete event during raid lockdown: {e}")
-                            return
+                    if not is_user_admin:
+                        now = time.time()
+                        is_new_user = uid not in b_data['users']['active']
+                        is_recent_joiner = False
                         
-                        # Регистрируем первого захода нового юзера
-                        if is_new_user and uid not in RECENT_JOINERS_CACHE:
-                            # Очистка старых записей из кэша
-                            if len(RECENT_JOINERS_CACHE) > 2000:
-                                cutoff = now - 3600
-                                expired = [k for k, v in RECENT_JOINERS_CACHE.items() if v < cutoff]
-                                for k in expired:
-                                    del RECENT_JOINERS_CACHE[k]
+                        if uid in RECENT_JOINERS_CACHE:
+                            if now - RECENT_JOINERS_CACHE[uid] <= 3600:
+                                is_recent_joiner = True
+                            else:
+                                del RECENT_JOINERS_CACHE[uid]
 
-                            RECENT_JOINERS_CACHE[uid] = now
-                            NEW_USER_JOIN_HISTORY.append(now)
-                            recent_joins = sum(1 for t in NEW_USER_JOIN_HISTORY if now - t <= RAID_LOCKDOWN_WINDOW)
-                            if recent_joins > RAID_LOCKDOWN_THRESHOLD:
-                                RAID_LOCKDOWN_UNTIL = now + RAID_LOCKDOWN_DURATION
-                                print(f"🚨🚨🚨 РЕЙД ДЕТЕКТ! Активирован локдаун новых пользователей на {RAID_LOCKDOWN_DURATION} секунд! (зашло {recent_joins} за {RAID_LOCKDOWN_WINDOW}с) 🚨🚨🚨")
+                        if is_new_user or is_recent_joiner:
+                            # Проверяем как ручной локдаун (от админа), так и автоматический
+                            if b_data.get('lockdown', False) or now < RAID_LOCKDOWN_UNTIL:
                                 try:
                                     if isinstance(event, types.Message):
                                         await event.delete()
                                 except Exception as e:
                                     logging.warning(f"Failed to delete event during raid lockdown: {e}")
                                 return
+                            
+                            # Регистрируем первого захода нового юзера
+                            if is_new_user and uid not in RECENT_JOINERS_CACHE:
+                                # Очистка старых записей из кэша
+                                if len(RECENT_JOINERS_CACHE) > 2000:
+                                    cutoff = now - 3600
+                                    expired = [k for k, v in RECENT_JOINERS_CACHE.items() if v < cutoff]
+                                    for k in expired:
+                                        del RECENT_JOINERS_CACHE[k]
+
+                                RECENT_JOINERS_CACHE[uid] = now
+                                NEW_USER_JOIN_HISTORY.append(now)
+                                recent_joins = sum(1 for t in NEW_USER_JOIN_HISTORY if now - t <= RAID_LOCKDOWN_WINDOW)
+                                if recent_joins > RAID_LOCKDOWN_THRESHOLD:
+                                    RAID_LOCKDOWN_UNTIL = now + RAID_LOCKDOWN_DURATION
+                                    print(f"🚨🚨🚨 РЕЙД ДЕТЕКТ! Активирован локдаун новых пользователей на {RAID_LOCKDOWN_DURATION} секунд! (зашло {recent_joins} за {RAID_LOCKDOWN_WINDOW}с) 🚨🚨🚨")
+                                    try:
+                                        if isinstance(event, types.Message):
+                                            await event.delete()
+                                    except Exception as e:
+                                        logging.warning(f"Failed to delete event during raid lockdown: {e}")
+                                    return
 
         return await handler(event, data)
 from common.board_config import BOARD_CONFIG
@@ -1270,15 +1272,17 @@ def _get_process_memory_snapshot() -> dict:
             or getattr(full_info, "uss", None)
             or getattr(info, "rss", 0)
         )
-        # psutil.open_files() can block inside Windows kernel calls; an older
-        # fatal dump showed runtime telemetry stuck there. Keep health over trivia.
+        # psutil.open_files() triggers native access violations on Windows kernel handle enumeration.
+        # Use safe num_handles metric instead.
         open_file_count = -1
+        handle_count = getattr(process, "num_handles", lambda: -1)()
         return {
             "pid": os.getpid(),
             "rss_mb": round(getattr(info, "rss", 0) / 1024 / 1024, 2),
             "private_mb": round(private_bytes / 1024 / 1024, 2),
             "vms_mb": round(getattr(info, "vms", 0) / 1024 / 1024, 2),
             "threads": process.num_threads(),
+            "handles": handle_count,
             "open_files": open_file_count,
         }
     except Exception as exc:
@@ -1753,13 +1757,28 @@ async def global_error_handler(event: types.ErrorEvent) -> bool:
     else:
         await _handle_unhandled_exception(exception, update)
         return True
-def is_admin(uid: int, board_id: str) -> bool:
+
+def is_admin(uid: int, board_id: Optional[str] = None) -> bool:
+    if not uid:
+        return False
+    try:
+        from site_tgach.admin_config import ADMIN_IDS
+        if uid in ADMIN_IDS:
+            return True
+    except Exception:
+        pass
+    try:
+        from common.config import ADMIN_IDS
+        if uid in ADMIN_IDS:
+            return True
+    except Exception:
+        pass
     if not board_id:
         return False
-    from site_tgach.admin_config import ADMIN_IDS
-    if uid in ADMIN_IDS:
-        return True
-    return uid in BOARD_CONFIG.get(board_id, {}).get('admins', set())
+    bconf = BOARD_CONFIG.get(board_id, {})
+    admins = bconf.get('admins', set())
+    return uid in admins
+
 async def load_state():
     """
     Загружает состояние бота.
@@ -5124,6 +5143,8 @@ async def handle_attack_abuse_check(message: types.Message, db, board_id: str, u
     При 1-м превышении — предупреждение.
     При 2-м превышении — штурм спецназа, деанон, штраф 1,000₪ и мут на 1 час.
     """
+    if is_admin(user_id, board_id):
+        return False
     from shared_state import check_attack_abuse_limit
     is_blocked, outcome, fine = check_attack_abuse_limit(user_id, target_id)
     if not is_blocked:
@@ -5180,6 +5201,9 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         return
     if target_id == user_id:
         await message.answer("Ты пытаешься выстрелить в самого себя? Идиот.")
+        return
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer("🛡️ <b>У цели абсолютный иммунитет Администратора!</b> Нападение заблокировано.", parse_mode="HTML")
         return
 
     if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
@@ -5238,15 +5262,18 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
 
     t_items = await _get_user_active_items(db, target_id, board_id)
     is_bounced = False
+    action_type = None
+    tinfoil_destroyed = False
+    tinfoil_left_h = 0
+    tinfoil_left_m = 0
 
     async with db_lock:
         active_items = await _get_user_active_items(db, user_id, board_id)
         if not active_items.get("mute_gun"):
-            await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
-            return
-            
-        if t_items.get("reflect_shield_until", 0) > current_time:
+            action_type = "no_gun"
+        elif t_items.get("reflect_shield_until", 0) > current_time:
             is_bounced = True
+            action_type = "bounced"
             t_items["reflect_shield_until"] = 0
             active_items["mute_gun"] = False
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
@@ -5255,54 +5282,60 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
                              (json.dumps(active_items), user_id, board_id))
             await db.commit()
         elif t_items.get("tinfoil_hat", 0) > current_time:
-            # Шапочка из фольги поглощает выстрел Мут-Гана!
+            action_type = "tinfoil"
             active_items["mute_gun"] = False
-            destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=6.0, burn_chance=0.30)
+            tinfoil_destroyed, tinfoil_left_h, tinfoil_left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=6.0, burn_chance=0.30)
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(t_items), target_id, board_id))
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
             await db.commit()
-            
-            if destroyed:
-                shoot_msg = (
-                    f"💥 <b>ВЫСТРЕЛ ПОГЛОЩЕН!</b>\n\n"
-                    f"Выстрел из Мут-Гана попал в Шапочку из фольги жертвы!\n"
-                    f"Мут заблокирован, но от электрического разряда Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!\n"
-                    f"<i>(Оружие израсходовано)</i>"
-                )
-                target_msg = (
-                    f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b>\n"
-                    f"В тебя выстрелили из Мут-Гана! Шапочка поглотила выстрел и спасла тебя от мута, но <b>сгорела дотла</b> от разряда! Ты остался без защиты."
-                )
-            else:
-                shoot_msg = (
-                    f"💥 <b>ВЫСТРЕЛ ОТБИТ!</b>\n\n"
-                    f"Выстрел из Мут-Гана отскочил от Шапочки из фольги жертвы!\n"
-                    f"Фольга жертвы помялась (-6ч прочности, осталось {left_h}ч {left_m}мин).\n"
-                    f"<i>(Оружие израсходовано)</i>"
-                )
-                target_msg = (
-                    f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\n"
-                    f"В тебя выстрелили из Мут-Гана! Шапочка из фольги спасла тебя от мута, но потеряла 6ч прочности (осталось {left_h}ч {left_m}мин)."
-                )
-            await message.bot.send_message(message.chat.id, shoot_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
-            try:
-                await message.bot.send_message(target_id, target_msg, parse_mode="HTML")
-            except TelegramForbiddenError:
-                await purge_users_from_board_ram(board_id, [target_id])
-            except Exception:
-                pass
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            return
         else:
+            action_type = "regular"
             active_items["mute_gun"] = False
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
             await db.commit()
+
+    if action_type == "no_gun":
+        await message.answer("У тебя нет Мут-Гана! Купи его в магазине: /shop")
+        return
+
+    if action_type == "tinfoil":
+        if tinfoil_destroyed:
+            shoot_msg = (
+                f"💥 <b>ВЫСТРЕЛ ПОГЛОЩЕН!</b>\n\n"
+                f"Выстрел из Мут-Гана попал в Шапочку из фольги жертвы!\n"
+                f"Мут заблокирован, но от электрического разряда Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!\n"
+                f"<i>(Оружие израсходовано)</i>"
+            )
+            target_msg = (
+                f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b>\n"
+                f"В тебя выстрелили из Мут-Гана! Шапочка поглотила выстрел и спасла тебя от мута, но <b>сгорела дотла</b> от разряда! Ты остался без защиты."
+            )
+        else:
+            shoot_msg = (
+                f"💥 <b>ВЫСТРЕЛ ОТБИТ!</b>\n\n"
+                f"Выстрел из Мут-Гана отскочил от Шапочки из фольги жертвы!\n"
+                f"Фольга жертвы помялась (-6ч прочности, осталось {tinfoil_left_h}ч {tinfoil_left_m}мин).\n"
+                f"<i>(Оружие израсходовано)</i>"
+            )
+            target_msg = (
+                f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\n"
+                f"В тебя выстрелили из Мут-Гана! Шапочка из фольги спасла тебя от мута, но потеряла 6ч прочности (осталось {tinfoil_left_h}ч {tinfoil_left_m}мин)."
+            )
+        await message.bot.send_message(message.chat.id, shoot_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+        try:
+            await message.bot.send_message(target_id, target_msg, parse_mode="HTML")
+        except TelegramForbiddenError:
+            await purge_users_from_board_ram(board_id, [target_id])
+        except Exception:
+            pass
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
 
     if is_bounced:
         register_attacker_effect("mute_gun", target_id, user_id, 3600)
@@ -5362,6 +5395,9 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
     if target_id == user_id:
         await message.answer("Пшикнуть перцовкой себе в лицо? Ты нормальный вообще?")
         return
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer("🛡️ <b>У цели абсолютный иммунитет Администратора!</b> Нападение заблокировано.", parse_mode="HTML")
+        return
 
     active_items = await _get_user_active_items(db, user_id, board_id)
     cd_rem = get_combat_cooldown_remaining(user_id)
@@ -5382,15 +5418,14 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
         return
 
     t_items = await _get_user_active_items(db, target_id, board_id)
+    action_type = None
 
     async with db_lock:
         active_items = await _get_user_active_items(db, user_id, board_id)
         if not active_items.get("pepperspray_gun"):
-            await message.answer("🧯 У тебя нет Перцового баллончика! Купи его в магазине: /shop")
-            return
-
-        # 1. Check Mirror Shield reflection
-        if t_items.get("reflect_shield_until", 0) > current_time:
+            action_type = "no_gun"
+        elif t_items.get("reflect_shield_until", 0) > current_time:
+            action_type = "reflected"
             t_items["reflect_shield_until"] = 0
             active_items["pepperspray_gun"] = False
             active_items["peppersprayed_until"] = current_time + 1800
@@ -5400,42 +5435,47 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
                              (json.dumps(active_items), user_id, board_id))
             await db.commit()
             set_combat_cooldown(user_id, 180)
-            await message.bot.send_message(
-                message.chat.id,
-                f"🛡️ <b>РИКОШЕТ ЗЕРКАЛЬНОГО ЩИТА!</b>\n"
-                f"Струя перца отразилась от Зеркального Щита жертвы прямо тебе в глаза!\n"
-                f"Ты ослеплен на 30 минут! <i>(Баллончик израсходован)</i>",
-                reply_to_message_id=message.reply_to_message.message_id,
-                parse_mode="HTML"
-            )
-            return
-
-        # 2. Check Helmet protection
-        if t_items.get("equipped_head") == "hat_helmet":
+        elif t_items.get("equipped_head") == "hat_helmet":
+            action_type = "helmet"
             active_items["pepperspray_gun"] = False
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
             await db.commit()
             set_combat_cooldown(user_id, 180)
-            await message.bot.send_message(
-                message.chat.id,
-                f"🪖 <b>ЗАБРАЛО ОПУЩЕНО!</b>\n"
-                f"Шлем ОМОНа жертвы полностью защитил лицо от струи перца!\n"
-                f"<i>(Перцовка израсходована впустую)</i>",
-                reply_to_message_id=message.reply_to_message.message_id,
-                parse_mode="HTML"
-            )
-            return
+        else:
+            action_type = "success"
+            active_items["pepperspray_gun"] = False
+            t_items["peppersprayed_until"] = current_time + 3600
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(t_items), target_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+            set_combat_cooldown(user_id, 180)
 
-        # 3. Successful Pepper Spray Blindness
-        active_items["pepperspray_gun"] = False
-        t_items["peppersprayed_until"] = current_time + 3600
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (json.dumps(t_items), target_id, board_id))
-        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                         (json.dumps(active_items), user_id, board_id))
-        await db.commit()
-        set_combat_cooldown(user_id, 180)
+    if action_type == "no_gun":
+        await message.answer("🧯 У тебя нет Перцового баллончика! Купи его в магазине: /shop")
+        return
+    elif action_type == "reflected":
+        await message.bot.send_message(
+            message.chat.id,
+            f"🛡️ <b>РИКОШЕТ ЗЕРКАЛЬНОГО ЩИТА!</b>\n"
+            f"Струя перца отразилась от Зеркального Щита жертвы прямо тебе в глаза!\n"
+            f"Ты ослеплен на 30 минут! <i>(Баллончик израсходован)</i>",
+            reply_to_message_id=message.reply_to_message.message_id,
+            parse_mode="HTML"
+        )
+        return
+    elif action_type == "helmet":
+        await message.bot.send_message(
+            message.chat.id,
+            f"🪖 <b>ЗАБРАЛО ОПУЩЕНО!</b>\n"
+            f"Шлем ОМОНа жертвы полностью защитил лицо от струи перца!\n"
+            f"<i>(Перцовка израсходована впустую)</i>",
+            reply_to_message_id=message.reply_to_message.message_id,
+            parse_mode="HTML"
+        )
+        return
 
     from achievements_engine import check_and_unlock_achievement
     unlocked, _ = check_and_unlock_achievement(active_items, "ach_pepperspray")
@@ -5494,6 +5534,9 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         return
     if target_id == user_id:
         await message.answer("🤦‍♂️ Ты попытался ограбить сам себя. Заточка осталась при тебе.")
+        return
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer("🛡️ <b>У цели абсолютный иммунитет Администратора!</b> Нападение заблокировано.", parse_mode="HTML")
         return
 
     if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
@@ -5704,6 +5747,9 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     if not target_id or target_id == 0 or target_id == user_id: 
         await message.answer("⚠️ Не удалось прицелиться или ты пытаешься обмазать сам себя.")
         return
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer("🛡️ <b>У цели абсолютный иммунитет Администратора!</b> Нападение заблокировано.", parse_mode="HTML")
+        return
 
     # Защита от спама: максимум 2 активных обмазанных жертвы от одного автора
     if count_active_attacker_effects("shit_gun", user_id) >= 2:
@@ -5811,6 +5857,9 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0 or target_id == user_id: 
         await message.answer("⚠️ Не удалось найти цель или ты пытаешься проклясть сам себя.")
+        return
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer("🛡️ <b>У цели абсолютный иммунитет Администратора!</b> Нападение заблокировано.", parse_mode="HTML")
         return
 
     # Защита от спама: максимум 2 активных проклятия от одного автора
@@ -5920,6 +5969,9 @@ async def cmd_schizopill(message: types.Message, board_id: str | None, stream: s
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0 or target_id == user_id:
         await message.answer("⚠️ Не удалось найти цель или ты пытаешься накормить таблетками сам себя.")
+        return
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer("🛡️ <b>У цели абсолютный иммунитет Администратора!</b> Нападение заблокировано.", parse_mode="HTML")
         return
 
     # Защита от спама: максимум 2 активных проклятия от одного автора
@@ -6044,6 +6096,9 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0 or target_id == user_id: 
         await message.answer("⚠️ Не удалось определить цель доноса или ты пытаешься посадить сам себя.")
+        return
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer("🛡️ <b>У цели абсолютный иммунитет Администратора!</b> Нападение заблокировано.", parse_mode="HTML")
         return
 
     # Защита от спама: максимум 2 активных вызова ОМОНа от одного автора
@@ -7308,6 +7363,10 @@ async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
     db = await get_pool()
     now = int(time.time())
 
+    answer_text = None
+    edit_html = None
+    show_alert = True
+
     async with db_lock:
         balance = await get_user_global_balance(db, user_id)
         user_items = await _get_user_active_items(db, user_id, board_id)
@@ -7315,109 +7374,105 @@ async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
         if action == "clean_pills":
             cost = get_current_item_price('pills')
             if balance < cost:
-                await callback.answer(f"❌ Недостаточно шекелей! Нужно {cost} ₪, у тебя {int(balance)} ₪. Напиши /work.", show_alert=True)
-                return
-            await deduct_user_global_balance(db, user_id, board_id, cost)
-            user_items["shit_until"] = 0
-            user_items["cursed_until"] = 0
-            user_items["schizo_pill_until"] = 0
-            await db.execute("UPDATE Users SET cursed_until = 0, active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(user_items), user_id, board_id))
-            await db.commit()
-            await callback.answer("💊 Аминазин принят! Все дебаффы (говно, понос, шиза) мгновенно смыты.", show_alert=True)
-            try:
-                await callback.message.edit_text(
+                answer_text = f"❌ Недостаточно шекелей! Нужно {cost} ₪, у тебя {int(balance)} ₪. Напиши /work."
+            else:
+                await deduct_user_global_balance(db, user_id, board_id, cost)
+                user_items["shit_until"] = 0
+                user_items["cursed_until"] = 0
+                user_items["schizo_pill_until"] = 0
+                await db.execute("UPDATE Users SET cursed_until = 0, active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(user_items), user_id, board_id))
+                await db.commit()
+                answer_text = "💊 Аминазин принят! Все дебаффы (говно, понос, шиза) мгновенно смыты."
+                edit_html = (
                     f"✨ <b>ТЫ ПОЛНОСТЬЮ ОЧИЩЕН!</b>\n\n"
                     f"💊 Ты принял Аминазин за {cost} ₪. Все дебаффы и проклятия мгновенно сняты.\n"
-                    f"Для защиты от будущих атак надень Шапочку из фольги в <b>/shop</b>.",
-                    parse_mode="HTML",
-                    reply_markup=None
+                    f"Для защиты от будущих атак надень Шапочку из фольги в <b>/shop</b>."
                 )
-            except Exception: pass
 
         elif action == "buy_bribe":
             cost = get_current_item_price('bribe')
             if balance < cost:
-                await callback.answer(f"❌ Недостаточно шекелей на взятку! Нужно {cost} ₪, у тебя {int(balance)} ₪. Напиши /work.", show_alert=True)
-                return
-            await deduct_user_global_balance(db, user_id, board_id, cost)
-            await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-            await db.commit()
-            b_data = board_data.get(board_id, {})
-            b_data.get('mutes', {}).pop(user_id, None)
-            b_data.get('shadow_mutes', {}).pop(user_id, None)
-            await callback.answer("📜 Взятка передана! Ты досрочно освобожден из мута/КПЗ.", show_alert=True)
-            try:
-                await callback.message.edit_text(
+                answer_text = f"❌ Недостаточно шекелей на взятку! Нужно {cost} ₪, у тебя {int(balance)} ₪. Напиши /work."
+            else:
+                await deduct_user_global_balance(db, user_id, board_id, cost)
+                await db.execute("DELETE FROM Mutes WHERE user_id = ? AND board_id = ?", (user_id, board_id))
+                await db.commit()
+                b_data = board_data.get(board_id, {})
+                b_data.get('mutes', {}).pop(user_id, None)
+                b_data.get('shadow_mutes', {}).pop(user_id, None)
+                answer_text = "📜 Взятка передана! Ты досрочно освобожден из мута/КПЗ."
+                edit_html = (
                     f"🕊️ <b>ТЫ НА СВОБОДЕ!</b>\n\n"
-                    f"📜 Взятка в {cost} ₪ передана модератору. Мут и арест сняты досрочно. Ты снова можешь писать на доску!",
-                    parse_mode="HTML",
-                    reply_markup=None
+                    f"📜 Взятка в {cost} ₪ передана модератору. Мут и арест сняты досрочно. Ты снова можешь писать на доску!"
                 )
-            except Exception: pass
 
         elif action == "buy_tinfoil":
             cost = get_current_item_price('tinfoil')
             if balance < cost:
-                await callback.answer(f"❌ Недостаточно шекелей на Шапочку! Нужно {cost} ₪, у тебя {int(balance)} ₪.", show_alert=True)
-                return
-            await deduct_user_global_balance(db, user_id, board_id, cost)
-            user_items["tinfoil_hat"] = now + 6 * 3600
-            user_items["tinfoil_until"] = now + 6 * 3600
-            user_items["equipped_head"] = "hat_tinfoil"
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(user_items), user_id, board_id))
-            await db.commit()
-            await callback.answer("👽 Шапочка из фольги надета на 6 часов!", show_alert=True)
-            try:
-                await callback.message.edit_text(
+                answer_text = f"❌ Недостаточно шекелей на Шапочку! Нужно {cost} ₪, у тебя {int(balance)} ₪."
+            else:
+                await deduct_user_global_balance(db, user_id, board_id, cost)
+                user_items["tinfoil_hat"] = now + 6 * 3600
+                user_items["tinfoil_until"] = now + 6 * 3600
+                user_items["equipped_head"] = "hat_tinfoil"
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(user_items), user_id, board_id))
+                await db.commit()
+                answer_text = "👽 Шапочка из фольги надета на 6 часов!"
+                edit_html = (
                     f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ АКТИВИРОВАНА!</b>\n\n"
-                    f"Ты в безопасности на 6 часов за {cost} ₪. Будущие боевые атаки будут отражаться обратно в нападавших!",
-                    parse_mode="HTML",
-                    reply_markup=None
+                    f"Ты в безопасности на 6 часов за {cost} ₪. Будущие боевые атаки будут отражаться обратно в нападавших!"
                 )
-            except Exception: pass
 
         elif action == "buy_shield":
             cost = get_current_item_price('shield')
             if balance < cost:
-                await callback.answer(f"❌ Недостаточно шекелей на Зеркальный Щит! Нужно {cost} ₪, у тебя {int(balance)} ₪.", show_alert=True)
-                return
-            await deduct_user_global_balance(db, user_id, board_id, cost)
-            user_items["reflect_shield_until"] = now + 6 * 3600
-            user_items["shield_until"] = now + 6 * 3600
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(user_items), user_id, board_id))
-            await db.commit()
-            await callback.answer("🛡️ Зеркальный Щит активирован на 6 часов!", show_alert=True)
-            try:
-                await callback.message.edit_text(
+                answer_text = f"❌ Недостаточно шекелей на Зеркальный Щит! Нужно {cost} ₪, у тебя {int(balance)} ₪."
+            else:
+                await deduct_user_global_balance(db, user_id, board_id, cost)
+                user_items["reflect_shield_until"] = now + 6 * 3600
+                user_items["shield_until"] = now + 6 * 3600
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(user_items), user_id, board_id))
+                await db.commit()
+                answer_text = "🛡️ Зеркальный Щит активирован на 6 часов!"
+                edit_html = (
                     f"🛡️ <b>ЗЕРКАЛЬНЫЙ ЩИТ АКТИВИРОВАН!</b>\n\n"
-                    f"Следующий выстрел из Мут-Гана полетит обратно в стрелка! Куплен за {cost} ₪.",
-                    parse_mode="HTML",
-                    reply_markup=None
+                    f"Следующий выстрел из Мут-Гана полетит обратно в стрелка! Куплен за {cost} ₪."
                 )
-            except Exception: pass
 
         elif action == "buy_knife":
             cost = get_current_item_price('knife')
             if balance < cost:
-                await callback.answer(f"❌ Недостаточно шекелей на Заточку! Нужно {cost} ₪, у тебя {int(balance)} ₪.", show_alert=True)
-                return
-            await deduct_user_global_balance(db, user_id, board_id, cost)
-            user_items["knife_gun"] = True
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(user_items), user_id, board_id))
-            await db.commit()
-            await callback.answer("🔪 Заточка в кармане! Сделай Reply на обидчика с /rob.", show_alert=True)
-            try:
-                await callback.message.edit_text(
+                answer_text = f"❌ Недостаточно шекелей на Заточку! Нужно {cost} ₪, у тебя {int(balance)} ₪."
+            else:
+                await deduct_user_global_balance(db, user_id, board_id, cost)
+                user_items["knife_gun"] = True
+                await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                                 (json.dumps(user_items), user_id, board_id))
+                await db.commit()
+                answer_text = "🔪 Заточка в кармане! Сделай Reply на обидчика с /rob."
+                edit_html = (
                     f"🔪 <b>ЗАТОЧКА ПРИОБРЕТЕНА!</b>\n\n"
-                    f"Заточка приобретена за {cost} ₪. Сделай Reply на пост обидчика и напиши <code>/rob</code> для мести!",
-                    parse_mode="HTML",
-                    reply_markup=None
+                    f"Заточка приобретена за {cost} ₪. Сделай Reply на пост обидчика и напиши <code>/rob</code> для мести!"
                 )
-            except Exception: pass
+
+    if answer_text:
+        try:
+            await callback.answer(answer_text, show_alert=show_alert)
+        except Exception:
+            pass
+
+    if edit_html:
+        try:
+            await callback.message.edit_text(
+                edit_html,
+                parse_mode="HTML",
+                reply_markup=None
+            )
+        except Exception:
+            pass
 
 # ══════════════════════════════════════════════════════════════════════════════
 # /work — Биржа труда и заработок шекелей (common.work_engine)
@@ -7676,6 +7731,9 @@ async def cb_dice_bet_quick(callback: types.CallbackQuery, board_id: str | None)
     result = random.randint(1, 100)
     new_bal = 0
 
+    err_text = None
+    outcome_text = ""
+    bet = 0
     async with db_lock:
         async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
             row = await c.fetchone()
@@ -7689,36 +7747,40 @@ async def cb_dice_bet_quick(callback: types.CallbackQuery, board_id: str | None)
             bet = 0
 
         if bet < 10:
-            await callback.answer("❌ Минимальная ставка: 10 ₪ (Недостаточно средств)", show_alert=True)
-            return
-        if bet > balance:
-            await callback.answer(f"❌ Не хватает шекелей! Баланс: {int(balance)} ₪", show_alert=True)
-            return
-        if bet > 10000:
-            await callback.answer("❌ Максимальная ставка: 10 000 ₪", show_alert=True)
-            return
-
-        if result == 100:
-            win = bet * 3
-            delta = win
-            outcome_text = f"👑 <b>ДЖЕКПОТ 100/100!</b>\n🔥 Множитель x4! Чистый выигрыш: <code>+{win} ₪</code>"
-        elif result >= 55:
-            win = bet
-            delta = win
-            outcome_text = f"🎉 <b>ПОБЕДА!</b> Выпало {result} (≥55).\n💰 Ты поднял: <code>+{win} ₪</code>"
+            err_text = "❌ Минимальная ставка: 10 ₪ (Недостаточно средств)"
+        elif bet > balance:
+            err_text = f"❌ Не хватает шекелей! Баланс: {int(balance)} ₪"
+        elif bet > 10000:
+            err_text = "❌ Максимальная ставка: 10 000 ₪"
         else:
-            delta = -bet
-            outcome_text = f"💀 <b>ПРОИГРЫШ!</b> Выпало {result} (&lt;55).\n📉 Ты слил: <code>-{bet} ₪</code>"
+            if result == 100:
+                win = bet * 3
+                delta = win
+                outcome_text = f"👑 <b>ДЖЕКПОТ 100/100!</b>\n🔥 Множитель x4! Чистый выигрыш: <code>+{win} ₪</code>"
+            elif result >= 55:
+                win = bet
+                delta = win
+                outcome_text = f"🎉 <b>ПОБЕДА!</b> Выпало {result} (≥55).\n💰 Ты поднял: <code>+{win} ₪</code>"
+            else:
+                delta = -bet
+                outcome_text = f"💀 <b>ПРОИГРЫШ!</b> Выпало {result} (&lt;55).\n📉 Ты слил: <code>-{bet} ₪</code>"
 
-        await db.execute(
-            "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = MAX(0, balance + ?)",
-            (user_id, board_id, max(0, delta), delta)
-        )
-        await db.commit()
-        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_sum:
-            sum_row = await c_sum.fetchone()
-            new_bal = sum_row[0] if sum_row and sum_row[0] is not None else 0
+            await db.execute(
+                "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = MAX(0, balance + ?)",
+                (user_id, board_id, max(0, delta), delta)
+            )
+            await db.commit()
+            async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_sum:
+                sum_row = await c_sum.fetchone()
+                new_bal = sum_row[0] if sum_row and sum_row[0] is not None else 0
+
+    if err_text:
+        try:
+            await callback.answer(err_text, show_alert=True)
+        except Exception:
+            pass
+        return
 
     kb_again = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -10322,6 +10384,8 @@ async def check_cooldown(message: Message, board_id: str) -> bool:
 
     if board_id == 'trash':
         return True # Для доски-мусорки кулдауна нет, всегда разрешаем
+    if message.from_user and is_admin(message.from_user.id, board_id):
+        return True
     b_data = board_data[board_id]
     last_activation = b_data.get('last_mode_activation')
     if last_activation is None:
@@ -10356,8 +10420,8 @@ async def check_cooldown(message: Message, board_id: str) -> bool:
             logger.error(f"Error sending cooldown msg: {traceback.format_exc()}")
         try:
             await message.delete()
-        except TelegramBadRequest:
-            logger.error(f"Error deleting cooldown message: {traceback.format_exc()}")     
+        except Exception:
+            pass
         return False
     return True
 def get_board_id(telegram_object: types.Message | types.CallbackQuery) -> str | None:
@@ -11325,7 +11389,8 @@ async def cmd_roast(message: types.Message, board_id: str | None, stream: str = 
         
     now_ts = time.time()
     last_usage = b_data.get('last_roast_time', 0)
-    if now_ts - last_usage < ROAST_COOLDOWN:
+    is_user_admin = message.from_user and is_admin(message.from_user.id, board_id)
+    if not is_user_admin and now_ts - last_usage < ROAST_COOLDOWN:
         rem_m = int((ROAST_COOLDOWN - (now_ts - last_usage)) // 60)
         rem_s = int((ROAST_COOLDOWN - (now_ts - last_usage)) % 60)
         await message.reply(f"⏳ Команда остывает: {rem_m}м {rem_s}с" if lang == 'ru' else f"⏳ Cooldown: {rem_m}m {rem_s}s")
@@ -11761,6 +11826,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
         return
     b_data = board_data[board_id]
     user_id = message.from_user.id
+    is_user_admin = is_admin(user_id, board_id)
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     now_ts = time.time()
     # Выделенного лока у /summarize нет, поэтому storage_lock оставлен, но сжат
@@ -11768,7 +11834,7 @@ async def cmd_summarize(message: types.Message, board_id: str | None, stream: st
     remaining = 0
     async with storage_lock:
         last_usage = b_data.get('last_summarize_time', 0)
-        on_cooldown = now_ts - last_usage < SUMMARIZE_COOLDOWN
+        on_cooldown = (now_ts - last_usage < SUMMARIZE_COOLDOWN) and not is_user_admin
         if on_cooldown:
             remaining = SUMMARIZE_COOLDOWN - (now_ts - last_usage)
         else:
@@ -12436,7 +12502,7 @@ async def cmd_dice(message: types.Message, board_id: str | None, stream: str = '
 
     if len(args) > 1:
         arg_val = args[1].lower().strip().lstrip('+')
-        db = await get_pool()
+        err_text = None
         async with db_lock:
             async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
                 row = await c.fetchone()
@@ -12456,40 +12522,39 @@ async def cmd_dice(message: types.Message, board_id: str | None, stream: str = '
                     bet = None
 
             if bet is None or bet <= 0:
-                await message.answer("❌ Неверный формат ставки! Укажи число, например: <code>/dice 50</code> или <code>/dice all</code>.")
-                return
-
-            if bet < 10:
-                await message.answer("❌ Минимальная ставка для игры в кости: 10 ₪.")
-                return
-            if bet > balance:
-                await message.answer(f"❌ Недостаточно шекелей! Твой баланс: <code>{int(balance)} ₪</code>.")
-                return
-            if bet > 10000:
-                await message.answer("❌ Максимальная ставка за один бросок: 10 000 ₪.")
-                return
-
-            if result == 100:
-                win = bet * 3
-                delta = win
-                outcome_text = f"👑 <b>ДЖЕКПОТ 100/100!</b>\n🔥 Множитель x4! Чистый выигрыш: <code>+{win} ₪</code>"
-            elif result >= 55:
-                win = bet
-                delta = win
-                outcome_text = f"🎉 <b>ПОБЕДА!</b> Выпало {result} (≥55).\n💰 Ты поднял: <code>+{win} ₪</code>"
+                err_text = "❌ Неверный формат ставки! Укажи число, например: <code>/dice 50</code> или <code>/dice all</code>."
+            elif bet < 10:
+                err_text = "❌ Минимальная ставка для игры в кости: 10 ₪."
+            elif bet > balance:
+                err_text = f"❌ Недостаточно шекелей! Твой баланс: <code>{int(balance)} ₪</code>."
+            elif bet > 10000:
+                err_text = "❌ Максимальная ставка за один бросок: 10 000 ₪."
             else:
-                delta = -bet
-                outcome_text = f"💀 <b>ПРОИГРЫШ!</b> Выпало {result} (&lt;55).\n📉 Ты слил ставку: <code>-{bet} ₪</code>"
+                if result == 100:
+                    win = bet * 3
+                    delta = win
+                    outcome_text = f"👑 <b>ДЖЕКПОТ 100/100!</b>\n🔥 Множитель x4! Чистый выигрыш: <code>+{win} ₪</code>"
+                elif result >= 55:
+                    win = bet
+                    delta = win
+                    outcome_text = f"🎉 <b>ПОБЕДА!</b> Выпало {result} (≥55).\n💰 Ты поднял: <code>+{win} ₪</code>"
+                else:
+                    delta = -bet
+                    outcome_text = f"💀 <b>ПРОИГРЫШ!</b> Выпало {result} (&lt;55).\n📉 Ты слил ставку: <code>-{bet} ₪</code>"
 
-            await db.execute(
-                "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-                "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = MAX(0, balance + ?)",
-                (user_id, board_id, max(0, delta), delta)
-            )
-            await db.commit()
-            async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_sum:
-                sum_row = await c_sum.fetchone()
-                new_bal = sum_row[0] if sum_row and sum_row[0] is not None else 0
+                await db.execute(
+                    "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = MAX(0, balance + ?)",
+                    (user_id, board_id, max(0, delta), delta)
+                )
+                await db.commit()
+                async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_sum:
+                    sum_row = await c_sum.fetchone()
+                    new_bal = sum_row[0] if sum_row and sum_row[0] is not None else 0
+
+        if err_text:
+            await message.answer(err_text)
+            return
 
         caption = (
             f"🎲 <b>ПОДПОЛЬНЫЕ КОСТИ ТГАЧА</b>\n"
@@ -15618,6 +15683,8 @@ async def cmd_warn(message: types.Message, board_id: str | None, stream: str = '
 
     db = await get_pool()
     anon_name = generate_anon_name(target_id)
+    is_auto_mute = False
+    warns = 0
 
     async with db_lock:
         active_items = await _get_user_active_items(db, target_id, board_id)
@@ -15625,36 +15692,38 @@ async def cmd_warn(message: types.Message, board_id: str | None, stream: str = '
         active_items["warn_count"] = warns
 
         if warns >= 3:
+            is_auto_mute = True
             active_items["warn_count"] = 0
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), target_id, board_id))
             await db.commit()
-
-            # 24h auto-mute
-            await apply_regular_mute(target_id, board_id, duration_seconds=86400)
-            await log_global_event('bot', f"🚨 3/3 WARNS AUTO-MUTE: Мод {user_id} заварнил {target_id} на /{board_id}/ (3/3 -> мут на 24ч)")
-
-            resp_text = (
-                f"🚨 <b>3/3 ПРЕДУПРЕЖДЕНИЙ! АВТО-МУТ 24 ЧАСА!</b>\n\n"
-                f"Нарушитель: <b>{anon_name}</b> (ID: <code>{target_id}</code>)\n"
-                f"Причина: <i>{reason}</i>\n"
-                f"Лимит предупреждений исчерпан. Выдан мут на 24 часа."
-            )
-            await message.answer(resp_text, parse_mode="HTML")
-            await send_moderation_notice(target_id, "mute", board_id, duration="24h")
         else:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), target_id, board_id))
             await db.commit()
 
-            await log_global_event('bot', f"⚠️ WARN: Мод {user_id} вынес пред #{warns}/3 юзеру {target_id} на /{board_id}/: {reason}")
-            resp_text = (
-                f"⚠️ <b>ПРЕДУПРЕЖДЕНИЕ [{warns}/3]</b>\n\n"
-                f"Анон <b>{anon_name}</b> (ID: <code>{target_id}</code>) получил официальное предупреждение.\n"
-                f"Причина: <i>{reason}</i>\n"
-                f"<i>(При 3/3 нарушитель будет автоматически отправлен в мут на 24 часа)</i>"
-            )
-            await message.answer(resp_text, parse_mode="HTML")
+    if is_auto_mute:
+        # 24h auto-mute
+        await apply_regular_mute(target_id, board_id, duration_seconds=86400)
+        await log_global_event('bot', f"🚨 3/3 WARNS AUTO-MUTE: Мод {user_id} заварнил {target_id} на /{board_id}/ (3/3 -> мут на 24ч)")
+
+        resp_text = (
+            f"🚨 <b>3/3 ПРЕДУПРЕЖДЕНИЙ! АВТО-МУТ 24 ЧАСА!</b>\n\n"
+            f"Нарушитель: <b>{anon_name}</b> (ID: <code>{target_id}</code>)\n"
+            f"Причина: <i>{reason}</i>\n"
+            f"Лимит предупреждений исчерпан. Выдан мут на 24 часа."
+        )
+        await message.answer(resp_text, parse_mode="HTML")
+        await send_moderation_notice(target_id, "mute", board_id, duration="24h")
+    else:
+        await log_global_event('bot', f"⚠️ WARN: Мод {user_id} вынес пред #{warns}/3 юзеру {target_id} на /{board_id}/: {reason}")
+        resp_text = (
+            f"⚠️ <b>ПРЕДУПРЕЖДЕНИЕ [{warns}/3]</b>\n\n"
+            f"Анон <b>{anon_name}</b> (ID: <code>{target_id}</code>) получил официальное предупреждение.\n"
+            f"Причина: <i>{reason}</i>\n"
+            f"<i>(При 3/3 нарушитель будет автоматически отправлен в мут на 24 часа)</i>"
+        )
+        await message.answer(resp_text, parse_mode="HTML")
 
     try: await message.delete()
     except Exception: pass
@@ -16253,8 +16322,12 @@ async def cmd_demotivator(message: types.Message, board_id: str | None, stream: 
                 file_info = await message.bot.get_file(file_id)
                 file_bytes = io.BytesIO()
                 await message.bot.download_file(file_info.file_path, destination=file_bytes)
-                file_bytes.seek(0)
-                base_img = Image.open(file_bytes)
+                raw_bytes = file_bytes.getvalue()
+                def _decode_img(data):
+                    img = Image.open(io.BytesIO(data))
+                    img.load()
+                    return img
+                base_img = await asyncio.to_thread(_decode_img, raw_bytes)
         except Exception as e:
             runtime_logger.warning(f"cmd_demotivator image download failed: {e}")
             base_img = None

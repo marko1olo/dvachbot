@@ -8361,12 +8361,21 @@ async def add_user_global_balance(db, user_id: int, board_id: str | None, amount
     if not isinstance(amount, (int, float)) or math.isnan(amount) or math.isinf(amount) or amount <= 0:
         return await get_user_global_balance(db, user_id)
     b_id = board_id or "b"
-    await db.execute(
-        "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
-        "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
-        (user_id, b_id, amount, amount)
-    )
-    return await get_user_global_balance(db, user_id)
+
+    async def _do_add():
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, balance) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET balance = balance + ?",
+            (user_id, b_id, amount, amount)
+        )
+        return await get_user_global_balance(db, user_id)
+
+    if db_lock.is_owned_by_current_task():
+        return await _do_add()
+
+    async with db_lock:
+        return await _do_add()
+
 
 
 async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amount: float) -> tuple[bool, float]:
@@ -8381,44 +8390,80 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
         return True, await get_user_global_balance(db, user_id)
 
     b_id = board_id or "b"
-    total = await get_user_global_balance(db, user_id)
-    if total < amount:
-        return False, total
 
-    async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, b_id)) as c:
-        row = await c.fetchone()
-        curr_bal = float(row[0] or 0.0) if row and row[0] is not None else 0.0
+    async def _do_deduction() -> tuple[bool, float]:
+        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
+            row = await c.fetchone()
+            total = float(row[0] or 0.0) if row and row[0] is not None else 0.0
 
-    if curr_bal >= amount:
-        cursor = await db.execute(
-            "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ? AND balance >= ?",
-            (amount, user_id, b_id, amount)
-        )
-        rowcount = getattr(cursor, "rowcount", None)
-        if rowcount == 0:
-            total = await get_user_global_balance(db, user_id)
+        if total < amount:
             return False, total
-    else:
-        if curr_bal > 0:
-            await db.execute(
-                "UPDATE Users SET balance = 0.0 WHERE user_id = ? AND board_id = ?",
-                (user_id, b_id)
-            )
-        remaining = amount - curr_bal
-        async with db.execute(
-            "SELECT rowid, balance FROM Users WHERE user_id = ? AND board_id != ? AND balance > 0",
-            (user_id, b_id)
-        ) as c:
-            rows = await c.fetchall()
-        for rowid, bal in rows:
-            if remaining <= 0:
-                break
-            to_sub = min(float(bal or 0.0), remaining)
-            await db.execute("UPDATE Users SET balance = MAX(0.0, balance - ?) WHERE rowid = ? AND balance >= ?", (to_sub, rowid, to_sub))
-            remaining -= to_sub
 
-    new_total = await get_user_global_balance(db, user_id)
-    return True, new_total
+        async with db.execute("SELECT balance FROM Users WHERE user_id = ? AND board_id = ?", (user_id, b_id)) as c:
+            row = await c.fetchone()
+            curr_bal = float(row[0] or 0.0) if row and row[0] is not None else 0.0
+
+        if curr_bal >= amount:
+            cursor = await db.execute(
+                "UPDATE Users SET balance = balance - ? WHERE user_id = ? AND board_id = ? AND balance >= ?",
+                (amount, user_id, b_id, amount)
+            )
+            rowcount = getattr(cursor, "rowcount", None)
+            if rowcount == 0:
+                async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_tot:
+                    row_tot = await c_tot.fetchone()
+                    total = float(row_tot[0] or 0.0) if row_tot and row_tot[0] is not None else 0.0
+                return False, total
+        else:
+            if curr_bal > 0:
+                await db.execute(
+                    "UPDATE Users SET balance = 0.0 WHERE user_id = ? AND board_id = ?",
+                    (user_id, b_id)
+                )
+            remaining = amount - curr_bal
+            async with db.execute(
+                "SELECT rowid, balance FROM Users WHERE user_id = ? AND board_id != ? AND balance > 0",
+                (user_id, b_id)
+            ) as c:
+                rows = await c.fetchall()
+            for rowid, bal in rows:
+                if remaining <= 0:
+                    break
+                to_sub = min(float(bal or 0.0), remaining)
+                await db.execute("UPDATE Users SET balance = MAX(0.0, balance - ?) WHERE rowid = ? AND balance >= ?", (to_sub, rowid, to_sub))
+                remaining -= to_sub
+
+        async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c_new:
+            row_new = await c_new.fetchone()
+            new_total = float(row_new[0] or 0.0) if row_new and row_new[0] is not None else 0.0
+        return True, new_total
+
+    if db_lock.is_owned_by_current_task():
+        return await _do_deduction()
+
+    async with db_lock:
+        managed_tx = False
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            managed_tx = True
+        except Exception:
+            managed_tx = False
+
+        try:
+            ok, res_bal = await _do_deduction()
+            if managed_tx:
+                if ok:
+                    await db.execute("COMMIT")
+                else:
+                    await db.execute("ROLLBACK")
+            return ok, res_bal
+        except Exception:
+            if managed_tx:
+                try:
+                    await db.execute("ROLLBACK")
+                except Exception:
+                    pass
+            raise
 
 
 async def get_user_id_by_referral_code(db, code: str) -> Optional[int]:

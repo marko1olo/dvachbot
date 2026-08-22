@@ -81,18 +81,22 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
             return
         user_id = reaction.user.id
         now = time.time()
-        if now - reaction_ratelimit[user_id] < 0.5:
-            return
-        reaction_ratelimit[user_id] = now
+        if not is_admin(user_id, board_id):
+            if now - reaction_ratelimit[user_id] < 0.5:
+                return
+            reaction_ratelimit[user_id] = now
+        else:
+            reaction_ratelimit[user_id] = now
         chat_id = reaction.chat.id
         message_id = reaction.message_id
         if not board_id: return
         b_data = board_data[board_id]
         
-        is_shadow_muted = (user_id in b_data.get('shadow_mutes', {}) and 
-                           b_data['shadow_mutes'][user_id] > datetime.now(UTC))
-        if is_shadow_muted or user_id in b_data.get('reaction_banned_users', set()):
-            return
+        if not is_admin(user_id, board_id):
+            is_shadow_muted = (user_id in b_data.get('shadow_mutes', {}) and 
+                               b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+            if is_shadow_muted or user_id in b_data.get('reaction_banned_users', set()):
+                return
         post_num = None
         async with storage_lock:
             post_num = message_to_post.get((chat_id, message_id))
@@ -196,19 +200,20 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
         REACTION_LIMIT_PER_MINUTE = 5
         REACTION_WINDOW_SECONDS = 60
         should_trigger_edit = True
-        rate_tracker = b_data['reaction_rate_tracker'][user_id]
-        now = time.time()
-        while rate_tracker and now - rate_tracker[0] > REACTION_WINDOW_SECONDS:
-            if isinstance(rate_tracker, list):
-                rate_tracker.pop(0)
+        if not is_admin(user_id, board_id):
+            rate_tracker = b_data['reaction_rate_tracker'][user_id]
+            now = time.time()
+            while rate_tracker and now - rate_tracker[0] > REACTION_WINDOW_SECONDS:
+                if isinstance(rate_tracker, list):
+                    rate_tracker.pop(0)
+                else:
+                    rate_tracker.popleft()
+            if len(rate_tracker) >= REACTION_LIMIT_PER_MINUTE:
+                should_trigger_edit = False
+                if post_num not in b_data['reaction_queue'][user_id]:
+                    b_data['reaction_queue'][user_id].append(post_num)
             else:
-                rate_tracker.popleft()
-        if len(rate_tracker) >= REACTION_LIMIT_PER_MINUTE:
-            should_trigger_edit = False
-            if post_num not in b_data['reaction_queue'][user_id]:
-                b_data['reaction_queue'][user_id].append(post_num)
-        else:
-            rate_tracker.append(now)
+                rate_tracker.append(now)
         # === ENTERPRISE ЛОГИКА НАЧИСЛЕНИЯ/СПИСАНИЯ ШЕКЕЛЕЙ (SQLITE ATOMIC + ANTI-ABUSE) ===
         if author_id and author_id != user_id and author_id != 0:
             action = None
@@ -1107,9 +1112,10 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
     if media_group_key in sent_media_groups:
         return
     b_data = board_data[board_id]
-    if user_id in b_data['users']['banned'] or \
-       (b_data['mutes'].get(user_id) and b_data['mutes'][user_id] > datetime.now(UTC)):
-        return
+    if not is_admin(user_id, board_id):
+        if user_id in b_data['users']['banned'] or \
+           (b_data['mutes'].get(user_id) and b_data['mutes'][user_id] > datetime.now(UTC)):
+            return
     b_data['last_activity'][user_id] = datetime.now(UTC)
     
     is_leader = False
@@ -1134,12 +1140,13 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                 message_id=message.message_id, date=message.date, chat=message.chat,
                 from_user=message.from_user, content_type='text', text=f"media_group_{media_group_id}"
             )
-            if not await check_spam(user_id, fake_text_message, board_id):
-                current_media_groups.pop(media_group_key, None)
-                await apply_penalty(message.bot, user_id, 'text', board_id)
-                if 'init_event' in group:
-                    group['init_event'].set()
-                return
+            if not is_admin(user_id, board_id):
+                if not await check_spam(user_id, fake_text_message, board_id):
+                    current_media_groups.pop(media_group_key, None)
+                    await apply_penalty(message.bot, user_id, 'text', board_id)
+                    if 'init_event' in group:
+                        group['init_event'].set()
+                    return
             reply_to_post = None
             if message.reply_to_message:
                 async with storage_lock:
