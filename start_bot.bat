@@ -26,14 +26,8 @@ if exist bot.stop (
     exit /b 0
 )
 
-if "%WATCHDOG_EXIT%"=="0" (
-    echo.
-    echo [INFO] Supervisor exited normally. Window will stay open.
-    exit /b 0
-)
-
 echo.
-echo [WARNING] Supervisor stopped.
-echo [INFO] Restart in 5 seconds...
-timeout /t 5 >nul
+echo [WARNING] Bot Supervisor process exited with code %WATCHDOG_EXIT%.
+echo [INFO] Self-healing restart in 3 seconds...
+timeout /t 3 >nul
 goto loop

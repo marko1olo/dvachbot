@@ -395,18 +395,24 @@ def _monitor_child(child: subprocess.Popen) -> bool:
                         queue_total is None
                         or queue_total <= SAFE_RESTART_QUEUE_LIMIT
                     )
-                    force_restart = (
-                        health_failures >= FORCE_FAIL_LIMIT and queue_safe
-                    )
-                    if health_failures >= FORCE_FAIL_LIMIT and not queue_safe:
-                        log(
-                            "Health still failing, but restart deferred because "
-                            f"latest_queue_total={queue_total} > {SAFE_RESTART_QUEUE_LIMIT}"
-                        )
+                    deadlock_detected = not heartbeat_fresh
+                    deadlock_log_age = _file_age_sec(LOG_DIR / "bot_deadlock_watchdog.log")
+                    recent_deadlock_dump = deadlock_log_age is not None and deadlock_log_age <= 90.0
+
+                    # Force restart unconditionally if health fails for FORCE_FAIL_LIMIT cycles
+                    force_restart = health_failures >= FORCE_FAIL_LIMIT
+
                     if health_failures >= HEALTH_FAIL_LIMIT and (
-                        logs_stale or stale_status or force_restart
+                        deadlock_detected or recent_deadlock_dump or logs_stale or stale_status or force_restart
                     ):
-                        _kill_tree(child, details)
+                        restart_reason = (
+                            f"event_loop_deadlock (heartbeat_age={heartbeat_age}s, failures={health_failures})"
+                            if deadlock_detected
+                            else (f"deadlock_dump_detected (failures={health_failures})"
+                            if recent_deadlock_dump
+                            else details)
+                        )
+                        _kill_tree(child, restart_reason)
                         _close_child_log(child)
                         return False
 

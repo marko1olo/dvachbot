@@ -457,6 +457,7 @@ BOT_FATAL_CRASH_DUMP_PATH = os.path.join(LOG_DIR, "bot_fatal_crash.log")
 BOT_CONTROLLED_STOP_PATH = "bot.stop"
 EVENT_LOOP_DUMP_STALE_SEC = float(os.environ.get("BOT_EVENT_LOOP_DUMP_STALE_SEC", "45"))
 EVENT_LOOP_DUMP_COOLDOWN_SEC = float(os.environ.get("BOT_EVENT_LOOP_DUMP_COOLDOWN_SEC", "120"))
+EVENT_LOOP_AUTO_RESTART_SEC = float(os.environ.get("BOT_EVENT_LOOP_AUTO_RESTART_SEC", "60"))
 _fatal_crash_dump_file = None
 
 def _enable_fatal_crash_dump() -> None:
@@ -20757,6 +20758,31 @@ def _event_loop_stall_watchdog_loop():
                     print(f"⚠️ [WATCHDOG] Failed to write event-loop stall dump: {type(exc).__name__}: {exc}")
                 except Exception:
                     pass
+
+        # CRITICAL AUTO-RESTART: If event loop is deadlocked for >= EVENT_LOOP_AUTO_RESTART_SEC,
+        # forcefully terminate the process so the external watchdog/supervisor restarts it immediately!
+        if lag_sec >= EVENT_LOOP_AUTO_RESTART_SEC:
+            msg = (
+                f"\n🚨🚨🚨 [WATCHDOG CRITICAL] EVENT LOOP HARD DEADLOCK DETECTED! "
+                f"Lag={lag_sec:.1f}s >= threshold {EVENT_LOOP_AUTO_RESTART_SEC}s. "
+                f"Triggering emergency exit(42) for immediate supervisor restart!\n"
+            )
+            print(msg, flush=True)
+            try:
+                with open(BOT_DEADLOCK_DUMP_PATH, "a", encoding="utf-8") as dump_file:
+                    dump_file.write(f"\n=== EMERGENCY DEADLOCK AUTO-RESTART ts={now:.3f} lag={lag_sec:.3f}s ===\n")
+                    faulthandler.dump_traceback(file=dump_file, all_threads=True)
+                    dump_file.write("=== EMERGENCY RESTART TRIGGERED ===\n")
+                    dump_file.flush()
+            except Exception:
+                pass
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os._exit(42)
+
         shutdown_event.wait(5)
 
 def start_event_loop_stall_watchdog():
