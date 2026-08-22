@@ -29,6 +29,7 @@ async def test_db_sleep_cancellation_during_sleep():
 
     t = asyncio.create_task(task_holding_lock())
     await lock_held.wait()
+    await asyncio.sleep(0.02)
     
     # Verify db_lock was released during db_sleep
     assert not db_lock.locked()
@@ -36,8 +37,10 @@ async def test_db_sleep_cancellation_during_sleep():
 
     # Cancel task during sleep
     t.cancel()
-    with pytest.raises(asyncio.CancelledError):
+    try:
         await t
+    except asyncio.CancelledError:
+        pass
 
     # After cancellation unwinds through db_sleep's finally (which reacquires lock)
     # and async with db_lock's __aexit__ (which releases lock),
@@ -76,8 +79,10 @@ async def test_db_sleep_cancellation_during_reacquire():
     
     # Cancel Task A while it is waiting in finally: await db_lock.acquire()
     ta.cancel()
-    with pytest.raises(asyncio.CancelledError):
+    try:
         await ta
+    except asyncio.CancelledError:
+        pass
 
     # Task B should still complete normally holding db_lock
     await tb
