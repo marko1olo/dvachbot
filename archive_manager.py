@@ -336,6 +336,9 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
             if attempt < 2: await asyncio.sleep(2)
         except TelegramRetryAfter as e:
             await asyncio.sleep(e.retry_after + 1)
+        except (TelegramBadRequest, TelegramForbiddenError) as e:
+            logger.warning(f"Archive destination invalid or bot kicked ({channel_id}): {e}")
+            break
         except Exception as e:
             logger.error(f"Archive media sending error on attempt {attempt}: {e}", exc_info=True)
             break

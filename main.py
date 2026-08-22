@@ -2394,7 +2394,7 @@ async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, boa
                 posts_to_delete_set = set(user_posts)
                 threads_to_delete = []
 
-                import ujson as json
+                import json
                 if user_posts:
                     p_strs_json = json.dumps([str(p) for p in user_posts])
                     p_nums_json = json.dumps(user_posts)
