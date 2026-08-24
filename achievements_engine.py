@@ -72,6 +72,14 @@ ACHIEVEMENTS_CATALOG = {
         "icon": "🥼",
         "category": "wardrobe"
     },
+    "ach_set_neo": {
+        "id": "ach_set_neo",
+        "name": "🕶️ Избранный Матрицы",
+        "desc": "Собрать и надеть Сет Нео (Плащ Нео + Маска Анонимуса).",
+        "reward_cash": 700,
+        "icon": "🕶️",
+        "category": "wardrobe"
+    },
     "ach_slots_jackpot": {
         "id": "ach_slots_jackpot",
         "name": "🎰 Король Азарта 777",
@@ -193,7 +201,14 @@ def check_and_unlock_achievement(
 def get_user_achievements(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Returns list of all achievements with their unlocked status.
+    Auto-checks any equipped wardrobe sets to retroactively award trophies.
     """
+    try:
+        import wardrobe_engine
+        wardrobe_engine.check_wardrobe_set_achievements(active_items)
+    except Exception:
+        pass
+
     unlocked_list = active_items.get("unlocked_achievements", [])
     result = []
     for ach_id, ach_info in ACHIEVEMENTS_CATALOG.items():

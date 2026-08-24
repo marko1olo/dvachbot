@@ -22,7 +22,10 @@ from common.config import *
 from common.board_config import BOARD_CONFIG
 from common.html_utils import escape_html
 from common.text_utils import clean_html_tags, sanitize_html
-from common.database import get_post_by_num, update_post_content, get_pool, get_max_post_num, add_or_activate_user, update_shadow_mute
+from common.database import (
+    get_post_by_num, update_post_content, get_pool, get_max_post_num,
+    add_or_activate_user, update_shadow_mute, deduct_user_global_balance, add_user_global_balance
+)
 from common.db_pool import db_lock
 from common.spam_filter import _check_cross_board_spam, check_rate_limit as _check_rate_limit
 from post_helpers import _quote_info_from_content
@@ -170,32 +173,16 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
         # Сохраняем обновленный контент с реакциями в БД (вне lock для производительности)
         if content_to_save:
             await update_post_content(post_num, content_to_save)
-            if current_positive_count >= LIKES_THRESHOLD and not is_already_best:
-                post_data['forwarded_to_best'] = True
-        if current_positive_count >= LIKES_THRESHOLD and not is_already_best:
+
+        # Публикация в канал «Лучшее» при достижении порога лайков (5+)
+        if current_positive_count >= 5 and not is_already_best:
             final_bot = bot_instance if bot_instance else reaction.bot
             if final_bot:
                 try:
-                    board_name = BOARD_CONFIG[board_id]['name']
-                    bot_uname = BOARD_CONFIG.get(board_id, {}).get('username', 'dvach_chatbot').lstrip('@')
-                    caption = f"🔥 <b>Годнота с {board_name}</b> (Пост #{post_num})\n\n👉 <a href=\"https://t.me/{bot_uname}\">Зайти в бота</a>"
-                    await final_bot.copy_message(
-                        chat_id=BEST_CHANNEL_ID,
-                        from_chat_id=chat_id,
-                        message_id=message_id,
-                        caption=caption,
-                        parse_mode="HTML"
-                    )
-                    print(f"🌟 Пост #{post_num} отправлен в канал 'Лучшее' ({current_positive_count} лайков).")
-                except TelegramForbiddenError as e:
-                    logger.warning("TelegramForbiddenError reposting to Best channel: %s", e)
-                except TelegramBadRequest as e:
-                    logger.warning("TelegramBadRequest reposting to Best channel (original message missing): %s", e)
-                except TelegramRetryAfter as e:
-                    delay = float(getattr(e, "retry_after", 5) or 5) + 1.0
-                    await asyncio.sleep(delay)
+                    from news_channel_publisher import publish_to_best_channel
+                    spawn_task(publish_to_best_channel(final_bot, board_id, post_num, post_data, current_positive_count))
                 except Exception as e:
-                    logger.exception("Failed to repost to Best channel: %s", e)
+                    logger.warning(f"Error triggering publish_to_best_channel for #{post_num}: {e}")
         if author_id == user_id or author_id == 0: return
         REACTION_LIMIT_PER_MINUTE = 5
         REACTION_WINDOW_SECONDS = 60

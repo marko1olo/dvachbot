@@ -288,6 +288,14 @@ def apply_lootbox_reward(
                 days_added = dur_hours // 24
                 recycle_msg = f"⏳ <b>Продление экипировки:</b> +{days_added} дней к «{item_name}»!"
 
+            # Check wardrobe set achievements upon auto-equipping
+            from wardrobe_engine import check_wardrobe_set_achievements
+            new_achs = check_wardrobe_set_achievements(active_items)
+            if new_achs:
+                for ach in new_achs:
+                    final_cash += ach.get("reward_cash", 0)
+                    recycle_msg = (recycle_msg or "") + f"\n🏆 <b>ДОСТИЖЕНИЕ ЗА СЕТ:</b> {ach['name']} (+{ach['reward_cash']} ₪)!"
+
     else:
         now = int(time.time())
         # Standard combat / duration / consumable payload

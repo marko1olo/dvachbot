@@ -88,15 +88,24 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
                 winner_id = random.choice([challenger_id, user_id])
                 loser_id  = challenger_id if winner_id == user_id else user_id
                 
+                # 5% Rake to Abu's Fund and payout to winner
+                rake = max(1, int(amount * 0.05))
+                net_win = amount - rake
+
                 # Атомарное списание у проигравшего и начисление победителю
                 ok, _ = await deduct_user_global_balance(db, loser_id, board_id, amount)
                 if ok:
-                    await add_user_global_balance(db, winner_id, board_id, amount)
+                    await add_user_global_balance(db, winner_id, board_id, net_win)
+                    await add_to_abu_fund(db, rake)
+                    await record_user_transaction(db, winner_id, net_win, 'duel', f'Победа в дуэли против [{get_anon_id(loser_id)}]')
+                    await record_user_transaction(db, loser_id, -amount, 'duel', f'Поражение в дуэли против [{get_anon_id(winner_id)}]')
+                    
                     w_items = await _get_user_active_items(db, winner_id, board_id)
                     from achievements_engine import check_and_unlock_achievement
                     unlocked, ach_info = check_and_unlock_achievement(w_items, "ach_duel_win")
                     if unlocked and ach_info:
                         await add_user_global_balance(db, winner_id, board_id, ach_info["reward_cash"])
+                        await record_user_transaction(db, winner_id, ach_info["reward_cash"], 'drop', f'Достижение: {ach_info["name"]}')
                         await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                                          (json.dumps(w_items), winner_id, board_id))
                     await db.commit()

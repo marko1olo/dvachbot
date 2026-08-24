@@ -41,41 +41,45 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
     # в процессе. Поздравление о верификации отправляем уже после выхода из
     # лока, иначе сетевой вызов Telegram останавливал бы работу с БД во всём боте.
     should_notify = False
-    async with db_lock:
-        try:
-            await db.execute("BEGIN IMMEDIATE")
-            
-            await db.execute(
-                """
-                INSERT INTO Users (user_id, board_id, posts_count) 
-                VALUES (?, ?, 1) 
-                ON CONFLICT(user_id, board_id) DO UPDATE SET 
-                posts_count = Users.posts_count + 1
-                """,
-                (user_id, board_id)
-            )
-            
-            cursor = await db.execute(
-                """
-                UPDATE Users 
-                SET is_verified_b = 1 
-                WHERE user_id = ? AND board_id = ? 
-                AND posts_count >= 10 AND is_verified_b = 0
-                """,
-                (user_id, board_id)
-            )
-            
-            should_notify = cursor.rowcount > 0
+    try:
+        async with asyncio.timeout(3.0):
+            async with db_lock:
+                try:
+                    await db.execute("BEGIN IMMEDIATE")
+                    
+                    await db.execute(
+                        """
+                        INSERT INTO Users (user_id, board_id, posts_count) 
+                        VALUES (?, ?, 1) 
+                        ON CONFLICT(user_id, board_id) DO UPDATE SET 
+                        posts_count = Users.posts_count + 1
+                        """,
+                        (user_id, board_id)
+                    )
+                    
+                    cursor = await db.execute(
+                        """
+                        UPDATE Users 
+                        SET is_verified_b = 1 
+                        WHERE user_id = ? AND board_id = ? 
+                        AND posts_count >= 10 AND is_verified_b = 0
+                        """,
+                        (user_id, board_id)
+                    )
+                    
+                    should_notify = cursor.rowcount > 0
 
-            await db.execute("COMMIT")
+                    await db.execute("COMMIT")
 
-        except Exception as e:
-            should_notify = False
-            try:
-                await db.execute("ROLLBACK")
-            except Exception:
-                import traceback; traceback.print_exc()
-            print(f"⚠️ Ошибка верификации для {user_id}: {e}")
+                except Exception as e:
+                    should_notify = False
+                    try:
+                        await db.execute("ROLLBACK")
+                    except Exception:
+                        pass
+                    print(f"⚠️ Ошибка верификации для {user_id}: {e}")
+    except Exception:
+        should_notify = False
 
     if should_notify:
         lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -169,25 +173,52 @@ class NewPostProcessor:
         if self.user_id > 0 and not is_admin(self.user_id, self.board_id):
             from common.db_pool import get_pool, db_lock
             import time
-            db = await get_pool()
-            async with db_lock:
-                async with db.execute("SELECT cursed_until, active_items FROM Users WHERE user_id = ?", (self.user_id,)) as c:
-                    async for row in c:
-                        is_cursed = False
-                        if row[0] and int(time.time()) < row[0]:
-                            is_cursed = True
-                        if row[1]:
-                            try:
-                                itms = json.loads(row[1])
-                                if itms.get("cursed_until", 0) > int(time.time()):
+            try:
+                async with asyncio.timeout(2.0):
+                    db = await get_pool()
+                    async with db_lock:
+                        async with db.execute("SELECT cursed_until, active_items FROM Users WHERE user_id = ?", (self.user_id,)) as c:
+                            async for row in c:
+                                is_cursed = False
+                                is_schizo = False
+                                is_shat = False
+                                if row[0] and int(time.time()) < row[0]:
                                     is_cursed = True
-                            except Exception:
-                                import traceback; traceback.print_exc()
-                        if is_cursed:
-                            if 'text' in self.author_content and self.author_content['text']:
-                                if "[Я ХУЕСОС 🤮]" not in self.author_content['text']:
-                                    self.author_content['text'] += "\n\n<i>[Я ХУЕСОС 🤮]</i>"
-                            break
+                                if row[1]:
+                                    try:
+                                        itms = json.loads(row[1])
+                                        if itms.get("cursed_until", 0) > int(time.time()):
+                                            is_cursed = True
+                                        if itms.get("schizo_pill_until", 0) > int(time.time()):
+                                            is_schizo = True
+                                        if itms.get("shit_until", 0) > int(time.time()):
+                                            is_shat = True
+                                    except Exception:
+                                        pass
+                                if is_cursed:
+                                    if 'text' in self.author_content and self.author_content['text']:
+                                        if "[Я ХУЕСОС 🤮]" not in self.author_content['text']:
+                                            self.author_content['text'] += "\n\n<i>[Я ХУЕСОС 🤮]</i>"
+                                if is_shat:
+                                    if 'text' in self.author_content and self.author_content['text']:
+                                        if "[💩 ИЗМАЗАН ГОВНОМ 💩]" not in self.author_content['text']:
+                                            self.author_content['text'] += "\n\n<i>[💩 ИЗМАЗАН ГОВНОМ 💩]</i>"
+                                if is_schizo:
+                                    schizo_tags = [
+                                        "👁️ [СИГНАЛ ПЕРЕХВАЧЕН СИОНО-МАСОНАМИ]",
+                                        "📡 [ВЫШКА 5G ВЕДЕТ ЗАПИСЬ МЫСЛЕЙ]",
+                                        "💊 [ПРИНУДИТЕЛЬНАЯ ТЕРАПИЯ АМИНАЗИНОМ]",
+                                        "👽 [РЕПТИЛОИДЫ УПРАВЛЯЮТ ЭТИМ ТЕЛОМ]",
+                                        "🧠 [ПСИ-ИЗЛУЧАТЕЛЬ НА 100% МОЩНОСТИ]",
+                                        "📻 [ШИЗОФАЗИЯ 4-Й СТЕПЕНИ ЗАФИКСИРОВАНА]"
+                                    ]
+                                    tag = random.choice(schizo_tags)
+                                    if 'text' in self.author_content and self.author_content['text']:
+                                        if "ШИЗО-ТАБЛЕТКА" not in self.author_content['text']:
+                                            self.author_content['text'] = f"💊 <i>[ШИЗО-ТАБЛЕТКА]</i> {self.author_content['text']}\n\n<i>{tag}</i>"
+                                break
+            except Exception:
+                pass
                         
         self.final_content = apply_shadow_autoreplace(self.author_content)
         self.final_content['reply_to_post'] = self.reply_to_post
@@ -421,6 +452,19 @@ class NewPostProcessor:
                 bots=active_bots, board_id=self.board_id, post_num=self.current_post_num,
                 level=numeral_level, content=self.final_content, author_id=self.user_id
             ))
+            try:
+                from news_channel_publisher import publish_post_numeral_milestone
+                num_cfg = shared_state.SPECIAL_NUMERALS_CONFIG.get(numeral_level, {'label': 'Гет', 'emojis': ('🎯', '🚀')})
+                spawn_task(publish_post_numeral_milestone(
+                    bot=self.bot_instance,
+                    board_id=self.board_id,
+                    post_num=self.current_post_num,
+                    numeral_info=num_cfg,
+                    content=self.final_content,
+                    author_id=self.user_id
+                ))
+            except Exception as e:
+                logger.warning(f"Error triggering publish_post_numeral_milestone: {e}")
         if self.thread_id:
             thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
             if thread_info:

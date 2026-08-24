@@ -313,8 +313,33 @@ SET_BONUSES = {
         "laxative_immunity": True,
         "schizo_immunity": True,
         "bonus_toxicity": 40
+    },
+    "set_neo": {
+        "id": "set_neo",
+        "name": "🕶️ Сет «Избранный / Нео»",
+        "items": ["body_cloak", "face_anon_mask"],
+        "bonus_desc": "+50 к Защите, скрытность баланса от налётов и +20% к выигрышу в казино.",
+        "casino_bonus_pct": 20,
+        "stealth": True,
+        "bonus_defense": 50,
+        "bonus_sanity": 30
     }
 }
+
+SET_ACHIEVEMENT_MAP = {
+    "set_wasserman": "ach_set_wasserman",
+    "set_riot_police": "ach_set_riot",
+    "set_anime_hikka": "ach_set_anime",
+    "set_gop_skuf": "ach_set_skuf",
+    "set_ward6": "ach_set_ward6",
+    "set_neo": "ach_set_neo",
+}
+
+
+def get_active_set_bonus(active_items: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Returns the primary active set bonus or None."""
+    sets = get_active_set_bonuses(active_items)
+    return sets[0] if sets else None
 
 
 def add_item_duration(active_items: Dict[str, Any], item_id: str, dur_hours: int, is_permanent: bool = False):
@@ -466,3 +491,20 @@ def unequip_slot(active_items: Dict[str, Any], slot: str) -> Tuple[bool, str]:
     if current and current in CLOTHING_CATALOG:
         return True, f"Ты снял <b>{CLOTHING_CATALOG[current]['name']}</b>."
     return True, "Слот очищен."
+
+
+def check_wardrobe_set_achievements(active_items: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Checks all active set bonuses and unlocks corresponding wardrobe achievements.
+    Returns list of newly unlocked achievements.
+    """
+    sets = get_active_set_bonuses(active_items)
+    unlocked_achievements = []
+    import achievements_engine
+    for s in sets:
+        target_ach = SET_ACHIEVEMENT_MAP.get(s["id"])
+        if target_ach:
+            unlocked, ach_info = achievements_engine.check_and_unlock_achievement(active_items, target_ach)
+            if unlocked and ach_info:
+                unlocked_achievements.append(ach_info)
+    return unlocked_achievements

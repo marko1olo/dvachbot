@@ -83,55 +83,47 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, model_preference: 
 
 async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     if model_preference == "persona" or model_preference == "persona_gemini":
-        # Persona Bot priority: Gemini Lite -> Qwen 27B -> Llama 70B
+        # Persona Bot priority: Gemini Lite -> Qwen 27B -> Llama 70B / 8B
         models_cascade = [
             ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash", "gemini"),
+            ("gemini-2.0-flash-lite", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
             ("llama-3.3-70b-versatile", "groq"),
+            ("llama-3.1-8b-instant", "groq"),
         ]
-    elif model_preference == "summary" or model_preference == "gemini":
-        # Summarization priority: Gemini 3.7 Flash first, then Flash 3.6/3.5/2.5/Lite
+    elif model_preference == "gemini":
         models_cascade = [
-            ("gemini-3.7-flash", "gemini"),
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
-            ("gemini-2.5-flash", "gemini"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-2.0-flash", "gemini"),
+            ("gemini-2.0-flash-lite", "gemini"),
+            ("gemini-1.5-flash", "gemini"),
             ("llama-3.3-70b-versatile", "groq"),
+            ("qwen/qwen3.6-27b", "groq"),
         ]
     elif model_preference == "qwen":
         models_cascade = [
             ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash", "gemini"),
-            ("gemini-3.7-flash", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
+            ("gemini-2.0-flash-lite", "gemini"),
+            ("llama-3.3-70b-versatile", "groq"),
         ]
     elif model_preference == "llama":
         models_cascade = [
             ("llama-3.3-70b-versatile", "groq"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-2.5-flash", "gemini"),
-            ("gemini-3.7-flash", "gemini"),
+            ("llama-3.1-8b-instant", "groq"),
+            ("gemini-2.0-flash", "gemini"),
+            ("gemini-2.0-flash-lite", "gemini"),
         ]
     else:
-        # Default summarization cascade: Gemini 3.7 Flash first, then Smart Flash, then Lite models
+        # Default summarization cascade
         models_cascade = [
-            ("gemini-3.7-flash", "gemini"),
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
-            ("gemini-2.5-flash", "gemini"),
-            ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-2.0-flash", "gemini"),
+            ("gemini-2.0-flash-lite", "gemini"),
             ("llama-3.3-70b-versatile", "groq"),
+            ("gemini-1.5-flash", "gemini"),
+            ("qwen/qwen3.6-27b", "groq"),
+            ("llama-3.1-8b-instant", "groq"),
         ]
-
 
     
     system_instruction = prompt + (
@@ -199,6 +191,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         result = choice.message.content
                         if result:
                             import re
+                            # Удаляем преамбулы рассуждений LLM (Thinking process)
+                            result = re.sub(r"(?i)^(?:Here's a thinking process:?|Thinking Process:?|Here is a summary:?)\s*", "", result).strip()
                             if "<think" in result.lower():
                                 if "</think>" in result.lower():
                                     result = re.sub(r"<think\b[^>]*>.*?</think>", "", result, flags=re.DOTALL | re.IGNORECASE).strip()
@@ -209,6 +203,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                                     else:
                                         parts2 = re.split(r"<think\b[^>]*>", result, flags=re.IGNORECASE)
                                         result = (parts2[0].strip() or parts2[1].strip()) if len(parts2) > 1 else result.strip()
+                            result = re.sub(r"(?i)^(?:Here's a thinking process:?|Thinking Process:?)\s*", "", result).strip()
                             result = result.strip()
                             if result:
                                 return result

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>История просмотров - ТГАЧ</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=10.1">
     <link rel="icon" href="/static/favicon.ico">
 </head>
 <body {% if session.user %}data-user-id="{{ session.user.id }}"{% endif %} data-site-mode="{{ site_mode }}">
@@ -209,6 +209,6 @@
     
     <div id="image-viewer" class="image-viewer-overlay" style="display: none;"></div>
     <div id="loading-indicator" class="loading-indicator">Отправка...</div>
-    <script src="/static/js/main.js?v=9.8" defer></script>
+    <script src="/static/js/main.js?v=10.1" defer></script>
 </body>
 </html>

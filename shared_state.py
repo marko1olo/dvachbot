@@ -101,6 +101,45 @@ posts_pending_deletion = set()
 # Трекинг активных атак для ограничения спама (макс. 2 активных эффекта каждого типа на автора)
 _ACTIVE_AUTHOR_ATTACKS: dict[str, dict[int, dict[int, float]]] = defaultdict(lambda: defaultdict(dict))
 _GLOBAL_COMBAT_COOLDOWNS: dict[int, float] = {}
+_TARGET_LAST_ATTACKED_TS: dict[int, float] = {}
+_ATTACKER_SERIES_HISTORY: dict[int, list[float]] = defaultdict(list)
+
+def get_target_grief_protection_remaining(target_id: int) -> int:
+    """
+    Возвращает оставшееся время (сек) иммунитета цели от повторных атак (окно 5 мин / 300 сек).
+    """
+    now = time.time()
+    last_attack = _TARGET_LAST_ATTACKED_TS.get(target_id, 0.0)
+    if now < last_attack:
+        return int(last_attack - now)
+    return 0
+
+def register_target_attack(target_id: int, duration_seconds: int = 300):
+    """
+    Регистрирует атаку на цель, включая 5-минутное окно анти-гриферской защиты (diminishing returns).
+    """
+    _TARGET_LAST_ATTACKED_TS[target_id] = time.time() + duration_seconds
+
+def calculate_escalating_combat_cooldown(attacker_id: int, base_seconds: int = 180) -> int:
+    """
+    Рассчитывает прогрессивный кулдаун для атакующего при частых сериях атак (эскалация спама).
+    Если атакующий спамит чаще чем раз в 60 сек, кулдаун прогрессивно увеличивается: x1 -> x2 -> x4.
+    """
+    now = time.time()
+    history = _ATTACKER_SERIES_HISTORY[attacker_id]
+    # Очищаем атаки старше 10 минут
+    history = [ts for ts in history if now - ts < 600]
+    history.append(now)
+    _ATTACKER_SERIES_HISTORY[attacker_id] = history
+    
+    # Считаем атаки за последние 3 минуты
+    recent_fast_attacks = sum(1 for ts in history if now - ts < 180)
+    if recent_fast_attacks <= 1:
+        return base_seconds
+    elif recent_fast_attacks == 2:
+        return base_seconds * 2
+    else:
+        return min(base_seconds * 4, 1800) # Максимум 30 мин кулдауна
 
 def get_combat_cooldown_remaining(user_id: int) -> int:
     """
@@ -114,9 +153,10 @@ def get_combat_cooldown_remaining(user_id: int) -> int:
 
 def set_combat_cooldown(user_id: int, cooldown_seconds: int = 180):
     """
-    Устанавливает глобальный боевой кулдаун (по умолчанию 3 минуты = 180 сек).
+    Устанавливает глобальный боевой кулдаун (с учетом прогрессивной эскалации).
     """
-    _GLOBAL_COMBAT_COOLDOWNS[user_id] = time.time() + cooldown_seconds
+    actual_cooldown = calculate_escalating_combat_cooldown(user_id, cooldown_seconds)
+    _GLOBAL_COMBAT_COOLDOWNS[user_id] = time.time() + actual_cooldown
 
 def count_active_attacker_effects(item_type: str, attacker_id: int) -> int:
     """
@@ -136,6 +176,40 @@ def register_attacker_effect(item_type: str, attacker_id: int, target_id: int, d
     """
     now = time.time()
     _ACTIVE_AUTHOR_ATTACKS[item_type][attacker_id][target_id] = now + duration_seconds
+
+_DAILY_SHOP_PURCHASES: dict[tuple[int, str, str], int] = defaultdict(int)
+
+SHOP_DAILY_LIMITS = {
+    "mute": 3,
+    "partyvan": 2,
+    "knife": 5,
+    "shit": 5,
+    "laxative": 3,
+    "schizopill": 3
+}
+
+def get_user_daily_shop_buys(user_id: int, item: str) -> int:
+    """Возвращает число покупок данного товара пользователем за текущие сутки UTC."""
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return _DAILY_SHOP_PURCHASES[(user_id, item, today_str)]
+
+def check_shop_purchase_limit(user_id: int, item: str) -> tuple[bool, int, int]:
+    """
+    Проверяет, не превышен ли суточный лимит покупок.
+    Возвращает (is_allowed, current_count, max_limit).
+    """
+    limit = SHOP_DAILY_LIMITS.get(item)
+    if limit is None:
+        return True, 0, 0
+    current = get_user_daily_shop_buys(user_id, item)
+    if current >= limit:
+        return False, current, limit
+    return True, current, limit
+
+def record_shop_purchase(user_id: int, item: str):
+    """Фиксирует покупку товара в суточный счетчик."""
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    _DAILY_SHOP_PURCHASES[(user_id, item, today_str)] += 1
 
 _ATTACK_WINDOW_SEC = 3 * 3600 # 3 hours
 _MAX_TARGETS_PER_WINDOW = 2
@@ -174,6 +248,18 @@ def check_attack_abuse_limit(attacker_id: int, target_id: int) -> tuple[bool, st
 # broadcaster.py, delivery_manager.py, post_processor.py, archive_manager.py
 # picks them up. Without __all__, Python excludes names starting with '_'.
 __all__ = [
+    '_GLOBAL_COMBAT_COOLDOWNS',
+    '_ACTIVE_AUTHOR_ATTACKS',
+    '_TARGET_LAST_ATTACKED_TS',
+    '_ATTACKER_SERIES_HISTORY',
+    '_ATTACKER_TARGET_HISTORY',
+    '_ATTACK_WINDOW_SEC',
+    '_ATTACKER_ABUSE_WARNINGS',
+    '_PASSPORT_DATA',
+    '_stats_cooldown_tracker',
+    'get_target_grief_protection_remaining',
+    'register_target_attack',
+    'calculate_escalating_combat_cooldown',
     'get_combat_cooldown_remaining',
     'set_combat_cooldown',
     'count_active_attacker_effects',

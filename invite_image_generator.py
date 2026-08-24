@@ -21,6 +21,8 @@ try:
 except ImportError:
     qrcode = None
 
+from common.config import DB_NAME
+
 
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -387,7 +389,7 @@ def wrap_text(text: str, font: ImageFont.ImageFont, max_width: int, draw: ImageD
         lines.append(" ".join(current_line))
     return lines
 
-async def fetch_random_post_image(board_id: str, bot: Optional[Any] = None) -> Optional[Image.Image]:
+async def fetch_random_post_image(board_id: str = "b", bot: Optional[Any] = None) -> Optional[Image.Image]:
     """Fetches a random photo from the database for the given board.
     First tries to download via Telegram Bot API using file_id.
     If that fails or no bot, falls back to direct URL fetch.
@@ -400,48 +402,39 @@ async def fetch_random_post_image(board_id: str, bot: Optional[Any] = None) -> O
     candidates = []
     file_id_candidates = []
 
+    # 1. Try canonical get_random_image_post from common.database
+    try:
+        from common.database import get_random_image_post
+        target_boards = [board_id] if board_id else ['b', 'thread']
+        post = await get_random_image_post(allowed_boards=target_boards)
+        if post and isinstance(post, dict) and 'content' in post:
+            files = post['content'].get('files', [])
+            idx = post.get('_selected_file_index', 0)
+            if idx < len(files):
+                f = files[idx]
+                fid = f.get('original_file_id') or f.get('file_id') or f.get('thumbnail_file_id')
+                url = f.get('original_url') or f.get('thumbnail_url')
+                if fid: file_id_candidates.append(fid)
+                if url: candidates.append(url)
+    except Exception:
+        pass
+
+    # 2. Try FileRegistry
     try:
         from common.db_pool import get_pool
         db = await get_pool()
         if db and getattr(db, '_running', False):
             async with db.execute("""
-                SELECT original_file_id, original_url FROM PostFiles 
-                WHERE file_type = 'photo' AND original_file_id IS NOT NULL
-                ORDER BY RANDOM() LIMIT 40
+                SELECT file_id, thumbnail_id FROM FileRegistry 
+                WHERE file_type = 'photo' AND (file_id IS NOT NULL OR thumbnail_id IS NOT NULL)
+                ORDER BY RANDOM() LIMIT 20
             """) as cursor:
-                async for fid, url in cursor:
-                    if url and url.startswith("http"):
-                        candidates.append(url)
-                    elif fid and fid.startswith("http"):
-                        candidates.append(fid)
-                    elif fid:
-                        file_id_candidates.append(fid)
-        else:
-            raise RuntimeError("db not running")
+                async for fid, thumb_id in cursor:
+                    target_fid = fid or thumb_id
+                    if target_fid:
+                        file_id_candidates.append(target_fid)
     except Exception:
-        def _get_sync():
-            res_urls = []
-            res_fids = []
-            try:
-                conn = sqlite3.connect(db_path, timeout=5.0)
-                c = conn.cursor()
-                c.execute("""
-                    SELECT original_file_id, original_url FROM PostFiles 
-                    WHERE file_type = 'photo' AND original_file_id IS NOT NULL
-                    ORDER BY RANDOM() LIMIT 40
-                """)
-                for fid, url in c.fetchall():
-                    if url and url.startswith("http"):
-                        res_urls.append(url)
-                    elif fid and fid.startswith("http"):
-                        res_urls.append(fid)
-                    elif fid:
-                        res_fids.append(fid)
-                conn.close()
-            except Exception:
-                pass
-            return res_urls, res_fids
-        candidates, file_id_candidates = await asyncio.to_thread(_get_sync)
+        pass
 
     # 1. Try downloading real user photo via Bot API if bot instance is available
     if bot and file_id_candidates:
@@ -1069,7 +1062,7 @@ async def generate_invite_image_async(
     bot: Optional[Any] = None
 ) -> io.BytesIO:
     """High-level async helper to generate a complete invite image card."""
-    base_img = await fetch_random_post_image(bot=bot)
+    base_img = await fetch_random_post_image(board_id=board_id, bot=bot)
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,

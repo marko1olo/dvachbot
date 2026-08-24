@@ -47,9 +47,9 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         "tier": "Уровень 2 • Работяга",
         "required_shifts": 3,
         "reward_range": (40, 95),
-        "cooldown_sec": 600,  # 10 min
-        "risk_pct": 0.10,
-        "penalty": 20,
+        "cooldown_sec": 480,  # 8 min
+        "risk_pct": 0.08,
+        "penalty": 15,
         "item_drop": "janitor_broom",
         "item_drop_chance": 0.06,
         "phrases": [
@@ -59,7 +59,9 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "Помог деду дотащить сломанный телевизор до мусорки: получил щедрые чаевые <code>+{reward} ₪</code>!",
             "Подмёл листву под окнами дома и нашел потерянную сотку: получка <code>+{reward} ₪</code>!",
             "Починил сломанную качель во дворе — мамаши скинулись на чай: <code>+{reward} ₪</code>!",
-            "Успешно разогнал закладчиков метлой и навёл порядок у мусорных баков: премия <code>+{reward} ₪</code>!"
+            "Успешно разогнал закладчиков метлой и навёл порядок у мусорных баков: премия <code>+{reward} ₪</code>!",
+            "Покрасил облупленный забор детской площадки яркой краской: ЖЭК начислил <code>+{reward} ₪</code>!",
+            "Спас бездомного кота с козырька подъезда — жильцы отсыпали на карман <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
             "🐶 <b>ШТРАФ!</b> Наступил в собачье говно и размазал по подъезду: штраф от начальника ЖЭКа <code>-{penalty} ₪</code>!",
@@ -76,9 +78,9 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         "tier": "Уровень 3 • Доставщик",
         "required_shifts": 8,
         "reward_range": (80, 160),
-        "cooldown_sec": 1200,  # 20 min
-        "risk_pct": 0.15,
-        "penalty": 40,
+        "cooldown_sec": 900,  # 15 min
+        "risk_pct": 0.10,
+        "penalty": 25,
         "item_drop": "pepperspray",
         "item_drop_chance": 0.06,
         "phrases": [
@@ -87,7 +89,9 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "Поднялся на 25 этаж без лифта и спас голодного скуфа: чаевые составили <code>+{reward} ₪</code>!",
             "Успешно сбежал от стаи бродячих собак во дворе и вручил заказ клиенту: получка <code>+{reward} ₪</code>!",
             "Привез суши пьяной компании в сауну — клиенты не пожалели чаевых: <code>+{reward} ₪</code>!",
-            "Объехал пробку по встречке и успел за секунду до штрафного таймера: <code>+{reward} ₪</code>!"
+            "Объехал пробку по встречке и успел за секунду до штрафного таймера: <code>+{reward} ₪</code>!",
+            "Вручил праздничный торт имениннице без повреждений крема: щедрый чай <code>+{reward} ₪</code>!",
+            "Прорвался через метель на сломанном самокате и закрыл смену в топе курьеров: бонус <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
             "🐕 <b>АТАКА СОБАК!</b> Стая псов прокусила желтый рюкзак и сожрала клиентскую пиццу: компенсация за заказ <code>-{penalty} ₪</code>!",
@@ -104,9 +108,9 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         "tier": "Уровень 4 • Мамкин Фрилансер",
         "required_shifts": 15,
         "reward_range": (120, 240),
-        "cooldown_sec": 2400,  # 40 min
+        "cooldown_sec": 1500,  # 25 min
         "risk_pct": 0.12,
-        "penalty": 50,
+        "penalty": 40,
         "item_drop": "tinfoil_hat",
         "item_drop_chance": 0.05,
         "phrases": [
@@ -114,7 +118,10 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "Написал скрипт кликера на автохоткее и ушел пить чай: капнуло <code>+{reward} ₪</code>!",
             "Разгадал аудио-капчу на ломаном немецком: сервис накинул бонус за сложность <code>+{reward} ₪</code>!",
             "Просидел ночь за решением ReCaptcha v3 для спамеров: баланс пополнен на <code>+{reward} ₪</code>!",
-            "Обошел защиту Cloudflare вручную для китайских парсеров: заработано <code>+{reward} ₪</code>!"
+            "Обошел защиту Cloudflare вручную для китайских парсеров: заработано <code>+{reward} ₪</code>!",
+            "Разгадал 1000 искажённых математических примеров для азиатского бота: получка <code>+{reward} ₪</code>!",
+            "Прокликал 500 пазлов с вращением собачек под нужным углом: выплата <code>+{reward} ₪</code>!",
+            "Победил hCaptcha на 300 сайтах подряд со скоростью робота: премия за скорость <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
             "👁️ <b>АНТИФРОД!</b> Нейросеть заподозрила в тебе бота и забанила аккаунт с балансом: сгорело <code>-{penalty} ₪</code>!",
@@ -131,9 +138,9 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         "tier": "Уровень 5 • Тайный Осведомитель",
         "required_shifts": 25,
         "reward_range": (200, 420),
-        "cooldown_sec": 5400,  # 1.5 hours
-        "risk_pct": 0.22,
-        "penalty": 90,
+        "cooldown_sec": 3600,  # 1 hour
+        "risk_pct": 0.15,
+        "penalty": 60,
         "item_drop": "gold_safe",
         "item_drop_chance": 0.07,
         "phrases": [
@@ -141,7 +148,10 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "Вычислил по логам IP-адрес набегатора и сдал куратору: благодарность в конверте <code>+{reward} ₪</code>!",
             "Задеванонил админа сетки спам-ботов: гонорар за оперативные данные <code>+{reward} ₪</code>!",
             "Сдал товарищу майору схрон запрещенных стикеров: получено вознаграждение <code>+{reward} ₪</code>!",
-            "Составил подробный отчет о настроениях в /b/: аналитический отдел выплатил <code>+{reward} ₪</code>!"
+            "Составил подробный отчет о настроениях в /b/: аналитический отдел выплатил <code>+{reward} ₪</code>!",
+            "Зафиксировал деятельность подпольной конфы скамеров и передал флешку куратору: <code>+{reward} ₪</code>!",
+            "Нашел скрытую уязвимость в боте конкурентов и доложил в штаб: агентское вознаграждение <code>+{reward} ₪</code>!",
+            "Внедрился в закрытый чат трейдеров под видом мамкиного инвестора: аналитический гонорар <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
             "🦹 <b>ДЕАНОН!</b> Местные битарды выложили твои паспортные данные на борду: взятка за удаление треда <code>-{penalty} ₪</code>!",
@@ -158,9 +168,9 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         "tier": "Уровень 6 • Заводчанин",
         "required_shifts": 40,
         "reward_range": (320, 650),
-        "cooldown_sec": 10800,  # 3 hours
-        "risk_pct": 0.20,
-        "penalty": 140,
+        "cooldown_sec": 7200,  # 2 hours
+        "risk_pct": 0.15,
+        "penalty": 90,
         "item_drop": "knife_gun",
         "item_drop_chance": 0.05,
         "phrases": [
@@ -168,7 +178,10 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "Отработал двойную ночную смену за запившего Петровича: двойная ставка составила <code>+{reward} ₪</code>!",
             "Успешно вынес через проходную моток медного кабеля в трусах: сдал в цветмет за <code>+{reward} ₪</code>!",
             "Починил главный гидравлический пресс ударом кувалды: заводской профсоюз премировал на <code>+{reward} ₪</code>!",
-            "Сдал план на пятилетку за три дня: директор завода пожал руку и вручил конверт на <code>+{reward} ₪</code>!"
+            "Сдал план на пятилетку за три дня: директор завода пожал руку и вручил конверт на <code>+{reward} ₪</code>!",
+            "Отлил партию чугунных крышек люков без единой раковины: мастер цеха начислил <code>+{reward} ₪</code>!",
+            "Отрегулировал шестеренчатый вал на советском станке 1968 года: премия за рацпредложение <code>+{reward} ₪</code>!",
+            "Выгрузил вагон угля голыми руками под бодрящий мат бригадира: получка за смену <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
             "🦾 <b>БРАК!</b> Запорол партию титановых болтов для оборонки: лишение премии и вычет <code>-{penalty} ₪</code>!",
@@ -185,9 +198,9 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         "tier": "Уровень 7 • Сеньор Помидор",
         "required_shifts": 60,
         "reward_range": (450, 900),
-        "cooldown_sec": 14400,  # 4 hours
-        "risk_pct": 0.25,
-        "penalty": 200,
+        "cooldown_sec": 10800,  # 3 hours
+        "risk_pct": 0.18,
+        "penalty": 120,
         "item_drop": "mute_gun",
         "item_drop_chance": 0.05,
         "phrases": [
@@ -195,7 +208,10 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "Сверстал сайт-одностраничник для продажи курсов успешного успеха: гонорар составил <code>+{reward} ₪</code>!",
             "Настроил стрим азиатской модели на OnlyFans через OBS: процент с донатов составил <code>+{reward} ₪</code>!",
             "Внедрил ИИ-бота в поддержку банка, бот начал материть клиентов, но KPI выполнен: выплата <code>+{reward} ₪</code>!",
-            "Успешно продал заказчику бесплатный шаблон из интернета за 1000$: чистый профит <code>+{reward} ₪</code>!"
+            "Успешно продал заказчику бесплатный шаблон из интернета за 1000$: чистый профит <code>+{reward} ₪</code>!",
+            "Пофиксил баг пятилетней давности удалением одной строчки кода: заказчик в восторге отсыпал <code>+{reward} ₪</code>!",
+            "Сгенерировал через нейросеть логотип и брендбук за 5 минут: оплата за авторский дизайн <code>+{reward} ₪</code>!",
+            "Написал парсер отзывов на маркетплейсах для ушлого селлера: чистый гонорар <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
             "💥 <b>УРОНИЛ ПРОД!</b> Сделал `DROP DATABASE` на боевом сервере в пятницу вечером: неустойка <code>-{penalty} ₪</code>!",
@@ -212,9 +228,9 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         "tier": "Уровень 8 • Темщик",
         "required_shifts": 85,
         "reward_range": (650, 1300),
-        "cooldown_sec": 21600,  # 6 hours
-        "risk_pct": 0.30,
-        "penalty": 280,
+        "cooldown_sec": 14400,  # 4 hours
+        "risk_pct": 0.22,
+        "penalty": 200,
         "item_drop": "shield_gun",
         "item_drop_chance": 0.05,
         "phrases": [
@@ -223,7 +239,9 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "Оформил возврат на маркетплейсе по поддельному чеку: чистая прибыль <code>+{reward} ₪</code>!",
             "Продал китайскую копию AirPods под видом оригинала в метро: профит <code>+{reward} ₪</code>!",
             "Сдал в аренду несуществующую квартиру на Патриарших троим приезжим: залутал <code>+{reward} ₪</code>!",
-            "Перехватил дроп редких NFT и перепродал на OpenSea американцам: профит <code>+{reward} ₪</code>!"
+            "Перехватил дроп редких NFT и перепродал на OpenSea американцам: профит <code>+{reward} ₪</code>!",
+            "Запустил фишинговый лендинг с розыгрышем новенького айфона: мамонты занесли <code>+{reward} ₪</code>!",
+            "Слил базу 'горячих лидов' криптоэнтузиастов теневому брокеру: куш составил <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
             "🚔 <b>ОБЛАВА ОБЭП!</b> Следователь вышел на твой след, пришлось откупиться: взятка <code>-{penalty} ₪</code>!",
@@ -243,9 +261,9 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         "tier": "Уровень 9 • Хозяин Жизни",
         "required_shifts": 120,
         "reward_range": (900, 1800),
-        "cooldown_sec": 28800,  # 8 hours
-        "risk_pct": 0.33,
-        "penalty": 400,
+        "cooldown_sec": 18000,  # 5 hours
+        "risk_pct": 0.25,
+        "penalty": 300,
         "item_drop": "megaphone",
         "item_drop_chance": 0.05,
         "phrases": [
@@ -341,15 +359,18 @@ def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str
             if active_set["id"] == "set_wasserman":
                 salary_mult += 0.40
                 buff_notes.append("🦺 Сет Онотоле: +40% ЗП")
-            elif active_set["id"] == "set_skuf":
+            elif active_set["id"] in ["set_gop_skuf", "set_skuf"]:
                 salary_mult += 0.35
                 buff_notes.append("🍺 Сет Скуфа: +35% получки")
+            elif active_set["id"] == "set_neo":
+                salary_mult += 0.25
+                buff_notes.append("🕶️ Сет Нео: +25% ЗП")
     except Exception:
         active_set = None
 
     # Failure & Risk Calculation
     risk_pct = job.get("risk_pct", 0.0)
-    if active_set and active_set["id"] == "set_omon":
+    if active_set and active_set["id"] in ["set_riot_police", "set_omon"]:
         risk_pct = 0.0  # Riot police immunity to work fines
         buff_notes.append("🪖 Спецназ: 0% штрафов")
 

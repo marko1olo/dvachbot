@@ -85,6 +85,27 @@ def _json_serializer(obj):
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 async def _create_tables(db):
     async with db.cursor() as cursor:
+        await cursor.execute('''
+        CREATE TABLE IF NOT EXISTS GlobalStats (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        ''')
+        await cursor.execute('''
+        CREATE TABLE IF NOT EXISTS UserTransactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            category TEXT NOT NULL,
+            description TEXT NOT NULL,
+            timestamp INTEGER NOT NULL
+        );
+        ''')
+        await cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_usertransactions_uid_ts 
+        ON UserTransactions(user_id, timestamp DESC);
+        ''')
+        
         await cursor.execute("""
         CREATE TABLE IF NOT EXISTS Boards (
             board_id TEXT PRIMARY KEY,
@@ -1652,157 +1673,162 @@ async def create_post(
     content_json = fast_json_dumps(content, default=_json_serializer)
     
     # Глобальный Lock: защищает от состояния гонки между задачами внутри одного процесса бота
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                if not db or not db._running: 
-                    return None
-                
-                # BEGIN IMMEDIATE: Ключевой момент. 
-                # Сразу запрашиваем блокировку на запись (Reserved Lock).
-                # Если база занята сайтом, мы будем ждать здесь (busy_timeout), а не внутри SELECT.
-                # Это предотвращает Deadlock (ситуацию, когда оба процесса прочли и оба ждут записи).
-                await db.execute("BEGIN IMMEDIATE")
-                
-                # Проверка доски (чтение внутри транзакции безопасно)
-                async with db.execute("SELECT 1 FROM Boards WHERE board_id = ?", (board_id,)) as c:
-                    if not await c.fetchone():
-                        await db.execute("INSERT OR IGNORE INTO Boards (board_id, name) VALUES (?, ?)", (board_id, board_id))
-                
-                valid_reply_to = None
-                inherited_thread_id = None
-                if reply_to:
-                    async with db.execute("SELECT post_num, thread_id FROM Posts WHERE post_num = ?", (reply_to,)) as c:
-                        row = await c.fetchone()
-                        if row:
-                            valid_reply_to = row[0]
-                            inherited_thread_id = row[1]
-                
-                await db.execute(
-                    """INSERT OR IGNORE INTO Users 
-                       (user_id, board_id, status, location, stream, created_at) 
-                       VALUES (?, ?, 'active', 'main', ?, ?)""",
-                    (author_id, board_id, stream, time.time())
-                )
-                
-                final_thread_id = thread_id_from_bot
-                if is_from_site:
-                    if post_mode == 'new_thread':
-                        final_thread_id = None
-                    elif post_mode == 'reply' and not final_thread_id:
-                        final_thread_id = inherited_thread_id
-                else:
-                    if not final_thread_id and valid_reply_to:
-                        final_thread_id = inherited_thread_id
-                
-                post_query = """
-                    INSERT INTO Posts (board_id, author_id, content, timestamp, thread_id, reply_to_post_num, stream, is_shadow, ip)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                async with db.execute(
-                    post_query,
-                    (board_id, author_id, content_json, timestamp, final_thread_id, valid_reply_to, stream, 1 if is_shadow_muted else 0, ip)
-                ) as cursor:
-                    post_num = cursor.lastrowid
-
-                if file_owners:
-                    await db.executemany(
-                        "INSERT OR IGNORE INTO FileOwners (file_id, bot_id) VALUES (?, ?)",
-                        file_owners
-                    )
-
-                files_to_register = []
-                post_files_inserts = []
-                content_obj = content
-                if isinstance(content_obj, str):
+    try:
+        async with asyncio.timeout(10.0):
+            async with db_lock:
+                for attempt in range(10):
                     try:
-                        content_obj = json.loads(content_obj)
-                    except Exception:
-                        content_obj = {}
-
-                if isinstance(content_obj, dict):
-                    m_type = content_obj.get('type')
-                    f_id = content_obj.get('file_id')
-                    orig_url = content_obj.get('original_url')
-                    if (f_id or orig_url) and m_type in {'photo', 'image', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
-                        if f_id:
-                            sha_temp = hashlib.sha256(f_id.encode('utf-8')).hexdigest()
-                            files_to_register.append((sha_temp, f_id, None, m_type, timestamp))
-                        post_files_inserts.append((post_num, m_type or 'photo', f_id, content_obj.get('thumbnail_file_id'), orig_url, content_obj.get('thumbnail_url')))
-                    elif content_obj.get('media') and isinstance(content_obj['media'], list):
-                        for item in content_obj['media']:
-                            if isinstance(item, dict):
-                                fid = item.get('file_id') or item.get('original_file_id')
-                                i_url = item.get('original_url')
-                                i_type = item.get('type', 'photo')
-                                if fid or i_url:
-                                    if fid:
-                                        sha_temp = hashlib.sha256(fid.encode('utf-8')).hexdigest()
-                                        files_to_register.append((sha_temp, fid, None, i_type, timestamp))
-                                    post_files_inserts.append((post_num, i_type, fid, item.get('thumbnail_file_id'), i_url, item.get('thumbnail_url')))
-                    elif content_obj.get('files') and isinstance(content_obj['files'], list):
-                        for item in content_obj['files']:
-                            if isinstance(item, dict):
-                                fid = item.get('original_file_id')
-                                i_url = item.get('original_url')
-                                i_type = item.get('type', 'photo')
-                                if fid or i_url:
-                                    if fid:
-                                        sha_temp = hashlib.sha256(fid.encode('utf-8')).hexdigest()
-                                        files_to_register.append((sha_temp, fid, item.get('thumbnail_file_id'), i_type, timestamp))
-                                    post_files_inserts.append((post_num, i_type, fid, item.get('thumbnail_file_id'), i_url, item.get('thumbnail_url')))
-
-                if files_to_register:
-                    await db.executemany(
+                        db = await get_pool()
+                        if not db or not db._running: 
+                            return None
+                        
+                        # BEGIN IMMEDIATE: Ключевой момент. 
+                        # Сразу запрашиваем блокировку на запись (Reserved Lock).
+                        # Если база занята сайтом, мы будем ждать здесь (busy_timeout), а не внутри SELECT.
+                        # Это предотвращает Deadlock (ситуацию, когда оба процесса прочли и оба ждут записи).
+                        await db.execute("BEGIN IMMEDIATE")
+                        
+                        # Проверка доски (чтение внутри транзакции безопасно)
+                        async with db.execute("SELECT 1 FROM Boards WHERE board_id = ?", (board_id,)) as c:
+                            if not await c.fetchone():
+                                await db.execute("INSERT OR IGNORE INTO Boards (board_id, name) VALUES (?, ?)", (board_id, board_id))
+                        
+                        valid_reply_to = None
+                        inherited_thread_id = None
+                        if reply_to:
+                            async with db.execute("SELECT post_num, thread_id FROM Posts WHERE post_num = ?", (reply_to,)) as c:
+                                row = await c.fetchone()
+                                if row:
+                                    valid_reply_to = row[0]
+                                    inherited_thread_id = row[1]
+                        
+                        await db.execute(
+                            """INSERT OR IGNORE INTO Users 
+                               (user_id, board_id, status, location, stream, created_at) 
+                               VALUES (?, ?, 'active', 'main', ?, ?)""",
+                            (author_id, board_id, stream, time.time())
+                        )
+                        
+                        final_thread_id = thread_id_from_bot
+                        if is_from_site:
+                            if post_mode == 'new_thread':
+                                final_thread_id = None
+                            elif post_mode == 'reply' and not final_thread_id:
+                                final_thread_id = inherited_thread_id
+                        else:
+                            if not final_thread_id and valid_reply_to:
+                                final_thread_id = inherited_thread_id
+                        
+                        post_query = """
+                            INSERT INTO Posts (board_id, author_id, content, timestamp, thread_id, reply_to_post_num, stream, is_shadow, ip)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """
-                        INSERT OR IGNORE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, created_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        files_to_register
-                    )
+                        async with db.execute(
+                            post_query,
+                            (board_id, author_id, content_json, timestamp, final_thread_id, valid_reply_to, stream, 1 if is_shadow_muted else 0, ip)
+                        ) as cursor:
+                            post_num = cursor.lastrowid
 
-                if post_files_inserts:
-                    await db.executemany(
-                        """
-                        INSERT INTO PostFiles (post_num, file_type, original_file_id, thumbnail_file_id, original_url, thumbnail_url)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        post_files_inserts
-                    )
+                        if file_owners:
+                            await db.executemany(
+                                "INSERT OR IGNORE INTO FileOwners (file_id, bot_id) VALUES (?, ?)",
+                                file_owners
+                            )
 
-                if is_from_site and post_mode == 'new_thread':
-                    await db.execute("UPDATE Posts SET thread_id = ? WHERE post_num = ?", (post_num, post_num))
+                        files_to_register = []
+                        post_files_inserts = []
+                        content_obj = content
+                        if isinstance(content_obj, str):
+                            try:
+                                content_obj = json.loads(content_obj)
+                            except Exception:
+                                content_obj = {}
 
-                if not is_shadow_muted:
-                    await db.execute("INSERT INTO BroadcastQueue (post_num, created_at, is_sent_to_tg) VALUES (?, ?, 0)", (post_num, timestamp))
+                        if isinstance(content_obj, dict):
+                            m_type = content_obj.get('type')
+                            f_id = content_obj.get('file_id')
+                            orig_url = content_obj.get('original_url')
+                            if (f_id or orig_url) and m_type in {'photo', 'image', 'video', 'animation', 'gif', 'video_note', 'sticker', 'document'}:
+                                if f_id:
+                                    sha_temp = hashlib.sha256(f_id.encode('utf-8')).hexdigest()
+                                    files_to_register.append((sha_temp, f_id, None, m_type, timestamp))
+                                post_files_inserts.append((post_num, m_type or 'photo', f_id, content_obj.get('thumbnail_file_id'), orig_url, content_obj.get('thumbnail_url')))
+                            elif content_obj.get('media') and isinstance(content_obj['media'], list):
+                                for item in content_obj['media']:
+                                    if isinstance(item, dict):
+                                        fid = item.get('file_id') or item.get('original_file_id')
+                                        i_url = item.get('original_url')
+                                        i_type = item.get('type', 'photo')
+                                        if fid or i_url:
+                                            if fid:
+                                                sha_temp = hashlib.sha256(fid.encode('utf-8')).hexdigest()
+                                                files_to_register.append((sha_temp, fid, None, i_type, timestamp))
+                                            post_files_inserts.append((post_num, i_type, fid, item.get('thumbnail_file_id'), i_url, item.get('thumbnail_url')))
+                            elif content_obj.get('files') and isinstance(content_obj['files'], list):
+                                for item in content_obj['files']:
+                                    if isinstance(item, dict):
+                                        fid = item.get('original_file_id')
+                                        i_url = item.get('original_url')
+                                        i_type = item.get('type', 'photo')
+                                        if fid or i_url:
+                                            if fid:
+                                                sha_temp = hashlib.sha256(fid.encode('utf-8')).hexdigest()
+                                                files_to_register.append((sha_temp, fid, item.get('thumbnail_file_id'), i_type, timestamp))
+                                            post_files_inserts.append((post_num, i_type, fid, item.get('thumbnail_file_id'), i_url, item.get('thumbnail_url')))
 
-                # Явный коммит транзакции
-                await db.execute("COMMIT")
-                if _CACHED_MAX_POST_NUM is not None:
-                    _CACHED_MAX_POST_NUM = max(_CACHED_MAX_POST_NUM, post_num)
-                return post_num
-                
-            except sqlite3.OperationalError as e:
-                # Если транзакция была начата, откатываем её
-                try: await db.execute("ROLLBACK")
-                except: pass
-                
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    # Экспоненциальная задержка при занятой базе
-                    wait_time = min(0.1 * (2 ** attempt), 2.0)
-                    await db_sleep(wait_time)
-                    continue
-                return None
-            except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                # Логируем ошибку, но не крашим бота
-                if 'local_logger' in locals():
-                    local_logger.error(f"Error in create_post: {e}", exc_info=True)
-                else:
-                    print(f"Error in create_post: {e}")
-                return None
+                        if files_to_register:
+                            await db.executemany(
+                                """
+                                INSERT OR IGNORE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, created_at)
+                                VALUES (?, ?, ?, ?, ?)
+                                """,
+                                files_to_register
+                            )
+
+                        if post_files_inserts:
+                            await db.executemany(
+                                """
+                                INSERT INTO PostFiles (post_num, file_type, original_file_id, thumbnail_file_id, original_url, thumbnail_url)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                                """,
+                                post_files_inserts
+                            )
+
+                        if is_from_site and post_mode == 'new_thread':
+                            await db.execute("UPDATE Posts SET thread_id = ? WHERE post_num = ?", (post_num, post_num))
+
+                        if not is_shadow_muted:
+                            await db.execute("INSERT INTO BroadcastQueue (post_num, created_at, is_sent_to_tg) VALUES (?, ?, 0)", (post_num, timestamp))
+
+                        # Явный коммит транзакции
+                        await db.execute("COMMIT")
+                        if _CACHED_MAX_POST_NUM is not None:
+                            _CACHED_MAX_POST_NUM = max(_CACHED_MAX_POST_NUM, post_num)
+                        return post_num
+                        
+                    except sqlite3.OperationalError as e:
+                        # Если транзакция была начата, откатываем её
+                        try: await db.execute("ROLLBACK")
+                        except: pass
+                        
+                        if "locked" in str(e).lower() or "busy" in str(e).lower():
+                            # Экспоненциальная задержка при занятой базе
+                            wait_time = min(0.1 * (2 ** attempt), 2.0)
+                            await db_sleep(wait_time)
+                            continue
+                        return None
+                    except Exception as e:
+                        try: await db.execute("ROLLBACK")
+                        except: pass
+                        # Логируем ошибку, но не крашим бота
+                        if 'local_logger' in locals():
+                            local_logger.error(f"Error in create_post: {e}", exc_info=True)
+                        else:
+                            print(f"Error in create_post: {e}")
+                        return None
+    except Exception as exc:
+        print(f"⚠️ create_post timeout / lock error: {exc}")
+        return None
     return None
 async def get_user_status(user_id: int, board_id: str) -> Optional[str]:
     """
@@ -2755,38 +2781,42 @@ async def add_post_copies(post_num: int, copies_data: list[tuple[int, int]]):
     
     data_to_insert = [(post_num, recipient_id, msg_id) for recipient_id, msg_id in copies_data]
     
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-                
-                await db.executemany(
-                    "INSERT OR IGNORE INTO PostCopies (post_num, recipient_id, message_id) VALUES (?, ?, ?)",
-                    data_to_insert
-                )
-                
-                await db.execute("COMMIT")
-                return
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                if "foreign key constraint failed" in str(e).lower():
-                    # Post was deleted before delivery finished, ignore safely
-                    break
-                print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
-                break
-            except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                if "foreign key constraint failed" in str(e).lower():
-                    break
-                print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
-                break
+    try:
+        async with asyncio.timeout(3.0):
+            async with db_lock:
+                for attempt in range(10):
+                    try:
+                        db = await get_pool()
+                        await db.execute("BEGIN IMMEDIATE")
+                        
+                        await db.executemany(
+                            "INSERT OR IGNORE INTO PostCopies (post_num, recipient_id, message_id) VALUES (?, ?, ?)",
+                            data_to_insert
+                        )
+                        
+                        await db.execute("COMMIT")
+                        return
+                    except sqlite3.OperationalError as e:
+                        try: await db.execute("ROLLBACK")
+                        except: pass
+                        
+                        if "locked" in str(e).lower() or "busy" in str(e).lower():
+                            await db_sleep(0.1 * (attempt + 1))
+                            continue
+                        if "foreign key constraint failed" in str(e).lower():
+                            # Post was deleted before delivery finished, ignore safely
+                            break
+                        print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
+                        break
+                    except Exception as e:
+                        try: await db.execute("ROLLBACK")
+                        except: pass
+                        if "foreign key constraint failed" in str(e).lower():
+                            break
+                        print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
+                        break
+    except Exception as e:
+        print(f"⚠️ add_post_copies timeout / error for #{post_num}: {e}")
 async def get_post_author_by_copy(recipient_id: int, message_id: int) -> int | None:
     """
     Находит ID автора оригинального поста по ID копии сообщения.
@@ -2875,117 +2905,125 @@ async def upsert_delivery_queue_item(
     now = time.time()
     created_at = float(enqueued_at or now)
     phase = str(delivery_phase or "passive")
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-                query = """
-                    SELECT id
-                    FROM DeliveryQueue
-                    WHERE status = 'pending'
-                      AND board_id = ?
-                      AND post_num = ?
-                      AND delivery_phase = ?
-                    ORDER BY id
-                    LIMIT 1
-                """
-                async with db.execute(query, (board_id, post_num, phase)) as cursor:
-                    row = await cursor.fetchone()
-                if row:
-                    item_id = int(row[0])
-                    await db.execute(
+    try:
+        async with asyncio.timeout(3.0):
+            async with db_lock:
+                for attempt in range(10):
+                    try:
+                        db = await get_pool()
+                        await db.execute("BEGIN IMMEDIATE")
+                        query = """
+                            SELECT id
+                            FROM DeliveryQueue
+                            WHERE status = 'pending'
+                              AND board_id = ?
+                              AND post_num = ?
+                              AND delivery_phase = ?
+                            ORDER BY id
+                            LIMIT 1
                         """
-                        UPDATE DeliveryQueue
-                        SET recipients = ?,
-                            content = ?,
-                            original_recipients = ?,
-                            thread_id = ?,
-                            enqueued_at = ?,
-                            updated_at = ?,
-                            attempts = attempts + 1,
-                            status = 'pending'
-                        WHERE id = ?
-                        """,
-                        (
-                            recipients_json,
-                            content_json,
-                            int(original_recipients or len(clean_recipients)),
-                            str(thread_id) if thread_id is not None else None,
-                            created_at,
-                            now,
-                            item_id,
-                        ),
-                    )
-                else:
-                    async with db.execute(
-                        """
-                        INSERT INTO DeliveryQueue (
-                            board_id, post_num, recipients, content, delivery_phase,
-                            original_recipients, thread_id, enqueued_at, updated_at,
-                            attempts, status
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')
-                        """,
-                        (
-                            board_id,
-                            int(post_num),
-                            recipients_json,
-                            content_json,
-                            phase,
-                            int(original_recipients or len(clean_recipients)),
-                            str(thread_id) if thread_id is not None else None,
-                            created_at,
-                            now,
-                        ),
-                    ) as cursor:
-                        item_id = int(cursor.lastrowid)
-                await db.execute("COMMIT")
-                return item_id
-            except sqlite3.IntegrityError:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                return None
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                print(f"⚠️ DeliveryQueue upsert failed for #{post_num}: {e}")
-                break
-            except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                print(f"⚠️ DeliveryQueue upsert failed for #{post_num}: {type(e).__name__}: {e}")
-                break
+                        async with db.execute(query, (board_id, post_num, phase)) as cursor:
+                            row = await cursor.fetchone()
+                        if row:
+                            item_id = int(row[0])
+                            await db.execute(
+                                """
+                                UPDATE DeliveryQueue
+                                SET recipients = ?,
+                                    content = ?,
+                                    original_recipients = ?,
+                                    thread_id = ?,
+                                    enqueued_at = ?,
+                                    updated_at = ?,
+                                    attempts = attempts + 1,
+                                    status = 'pending'
+                                WHERE id = ?
+                                """,
+                                (
+                                    recipients_json,
+                                    content_json,
+                                    int(original_recipients or len(clean_recipients)),
+                                    str(thread_id) if thread_id is not None else None,
+                                    created_at,
+                                    now,
+                                    item_id,
+                                ),
+                            )
+                        else:
+                            async with db.execute(
+                                """
+                                INSERT INTO DeliveryQueue (
+                                    board_id, post_num, recipients, content, delivery_phase,
+                                    original_recipients, thread_id, enqueued_at, updated_at,
+                                    attempts, status
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')
+                                """,
+                                (
+                                    board_id,
+                                    int(post_num),
+                                    recipients_json,
+                                    content_json,
+                                    phase,
+                                    int(original_recipients or len(clean_recipients)),
+                                    str(thread_id) if thread_id is not None else None,
+                                    created_at,
+                                    now,
+                                ),
+                            ) as cursor:
+                                item_id = int(cursor.lastrowid)
+                        await db.execute("COMMIT")
+                        return item_id
+                    except sqlite3.IntegrityError:
+                        try: await db.execute("ROLLBACK")
+                        except: pass
+                        return None
+                    except sqlite3.OperationalError as e:
+                        try: await db.execute("ROLLBACK")
+                        except: pass
+                        if "locked" in str(e).lower() or "busy" in str(e).lower():
+                            await db_sleep(0.1 * (attempt + 1))
+                            continue
+                        print(f"⚠️ DeliveryQueue upsert failed for #{post_num}: {e}")
+                        break
+                    except Exception as e:
+                        try: await db.execute("ROLLBACK")
+                        except: pass
+                        print(f"⚠️ DeliveryQueue upsert failed for #{post_num}: {type(e).__name__}: {e}")
+                        break
+    except Exception as e:
+        print(f"⚠️ DeliveryQueue upsert timeout / error for #{post_num}: {e}")
     return None
 async def delete_delivery_queue_item(item_id: int) -> bool:
     from common.db_pool import get_pool, db_lock
 
     if not item_id:
         return False
-    async with db_lock:
-        for attempt in range(10):
-            try:
-                db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-                await db.execute("DELETE FROM DeliveryQueue WHERE id = ?", (int(item_id),))
-                await db.execute("COMMIT")
-                return True
-            except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    await db_sleep(0.1 * (attempt + 1))
-                    continue
-                print(f"⚠️ DeliveryQueue delete failed id={item_id}: {e}")
-                break
-            except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                print(f"⚠️ DeliveryQueue delete failed id={item_id}: {type(e).__name__}: {e}")
-                break
+    try:
+        async with asyncio.timeout(3.0):
+            async with db_lock:
+                for attempt in range(10):
+                    try:
+                        db = await get_pool()
+                        await db.execute("BEGIN IMMEDIATE")
+                        await db.execute("DELETE FROM DeliveryQueue WHERE id = ?", (int(item_id),))
+                        await db.execute("COMMIT")
+                        return True
+                    except sqlite3.OperationalError as e:
+                        try: await db.execute("ROLLBACK")
+                        except: pass
+                        if "locked" in str(e).lower() or "busy" in str(e).lower():
+                            await db_sleep(0.1 * (attempt + 1))
+                            continue
+                        print(f"⚠️ DeliveryQueue delete failed id={item_id}: {e}")
+                        break
+                    except Exception as e:
+                        try: await db.execute("ROLLBACK")
+                        except: pass
+                        print(f"⚠️ DeliveryQueue delete failed id={item_id}: {type(e).__name__}: {e}")
+                        break
+    except Exception as e:
+        print(f"⚠️ DeliveryQueue delete timeout / error for id={item_id}: {e}")
     return False
 async def get_pending_delivery_queue_items(limit: int = 500, after_id: int = 0) -> list[dict]:
     """
@@ -3253,6 +3291,7 @@ async def mark_broadcast_posts_sent(post_nums: list[int] | tuple[int, ...] | set
     if not clean_post_nums:
         return 0
 
+    placeholders = ','.join('?' for _ in clean_post_nums)
     async with db_lock:
         for attempt in range(10):
             try:
@@ -8508,3 +8547,339 @@ async def get_user_id_by_referral_code(db, code: str) -> Optional[int]:
     return None
 
 
+# =============================================================================
+# 🏛️ CAPITAL SINKS & WEALTH CONTAINMENT (АНТИИНФЛЯЦИОННЫЕ МЕХАНИЗМЫ)
+# =============================================================================
+
+def calculate_daily_wealth_tax(total_balance: float) -> float:
+    """
+    Ступенчатый прогрессивный налог на сверхнакопления (Demurrage / Дань на Яхту Абу):
+    - Tier 0: 0 - 5,000 ₪ -> 0% (иммунитет нищих сычей)
+    - Tier 1: 5,001 - 50,000 ₪ -> 0.3% в сутки (~8.6% в месяц)
+    - Tier 2: 50,001 - 500,000 ₪ -> 1.0% в сутки (~26.0% в месяц)
+    - Tier 3: 500,001 - 5,000,000 ₪ -> 2.5% в сутки (~53.2% в месяц)
+    - Tier 4: > 5,000,000 ₪ -> 5.0% в сутки (~78.5% в месяц)
+    """
+    if not isinstance(total_balance, (int, float)) or total_balance <= 5000:
+        return 0.0
+
+    tax = 0.0
+    if total_balance > 5000:
+        chunk = min(total_balance, 50000.0) - 5000.0
+        tax += chunk * 0.003
+    if total_balance > 50000:
+        chunk = min(total_balance, 500000.0) - 50000.0
+        tax += chunk * 0.010
+    if total_balance > 500000:
+        chunk = min(total_balance, 5000000.0) - 500000.0
+        tax += chunk * 0.025
+    if total_balance > 5000000:
+        chunk = total_balance - 5000000.0
+        tax += chunk * 0.050
+
+    return round(tax, 2)
+
+
+async def apply_daily_wealth_tax(db) -> tuple[int, float, list[dict]]:
+    """
+    Применяет суточный налог на богатство ко всем пользователям с балансом > 5000 ₪.
+    Пополняет Фонд Яхты Абу и фиксирует проводки в UserTransactions.
+    Возвращает (affected_users_count, total_burned_shekels, list_of_affected_details).
+    """
+    async def _do_tax() -> tuple[int, float, list[dict]]:
+        async with db.execute(
+            "SELECT user_id, SUM(balance) as total_bal FROM Users GROUP BY user_id HAVING total_bal > 5000"
+        ) as c:
+            rich_users = await c.fetchall()
+
+        affected = 0
+        total_confiscated = 0.0
+        details = []
+
+        for row in rich_users:
+            uid, total_bal = row[0], float(row[1] or 0.0)
+            tax = calculate_daily_wealth_tax(total_bal)
+            if tax > 0:
+                ok, new_bal = await deduct_user_global_balance(db, uid, "b", tax)
+                if ok:
+                    affected += 1
+                    total_confiscated += tax
+                    # 1. Запись в транзакционный леджер
+                    await record_user_transaction(
+                        db,
+                        user_id=uid,
+                        amount=-tax,
+                        category="tax",
+                        description=f"Суточный налог на богатство ({tax:,.0f} ₪ в Казну Абу)"
+                    )
+                    details.append({
+                        "user_id": uid,
+                        "tax_amount": tax,
+                        "old_balance": total_bal,
+                        "new_balance": new_bal
+                    })
+
+        # 2. Пополнение глобального фонда Яхты Абу
+        if total_confiscated > 0:
+            await add_to_abu_fund(db, total_confiscated)
+
+        return affected, total_confiscated, details
+
+    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+        return await _do_tax()
+    async with db_lock:
+        return await _do_tax()
+
+
+def calculate_win_tax(net_profit: float) -> tuple[float, float]:
+    """
+    Прогрессивный налог на крупные заносы в казино (Tax on Big Wins / Откат Майору Доигралесу):
+    - <= 50,000 ₪: 0%
+    - 50,001 - 500,000 ₪: 10%
+    - 500,001 - 5,000,000 ₪: 45,000 + 20%
+    - > 5,000,000 ₪: 945,000 + 35%
+    Возвращает (tax_amount, payout_after_tax).
+    """
+    if not isinstance(net_profit, (int, float)) or net_profit <= 50000:
+        return 0.0, float(net_profit)
+
+    if net_profit <= 500000:
+        tax = (net_profit - 50000.0) * 0.10
+    elif net_profit <= 5000000:
+        tax = 45000.0 + (net_profit - 500000.0) * 0.20
+    else:
+        tax = 945000.0 + (net_profit - 5000000.0) * 0.35
+
+    tax = round(tax, 2)
+    return tax, round(net_profit - tax, 2)
+
+
+def calculate_transfer_fee(amount: float) -> float:
+    """
+    Нелинейный налог Тобина на прямые переводы шекелей между пользователями:
+    Fee(T) = max(50, T * 0.10 + (T^2) / 50_000_000), capped at max 30% of amount.
+    """
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        return 0.0
+    fee = max(50.0, amount * 0.10 + (amount ** 2) / 50_000_000.0)
+    max_fee = amount * 0.30
+    return round(min(fee, max_fee) if amount >= 100 else 50.0, 2)
+
+
+
+
+
+# =============================================================================
+# 🧾 USER TRANSACTIONS & FINANCIAL LEDGER
+# =============================================================================
+
+CATEGORY_EMOJIS = {
+    'work': '🔨',
+    'casino': '🎰',
+    'tax': '🏛️',
+    'drop': '🎁',
+    'rob': '🔪',
+    'pay': '💳',
+    'shop': '🛒',
+    'duel': '⚔️',
+    'ref': '👥',
+    'admin': '👑'
+}
+
+CATEGORY_NAMES_RU = {
+    'work': 'Работа',
+    'casino': 'Казино',
+    'tax': 'Налог / Казна Абу',
+    'drop': 'Дроп шекелей',
+    'rob': 'Ограбление',
+    'pay': 'Перевод',
+    'shop': 'Покупка',
+    'duel': 'Дуэль',
+    'ref': 'Реферал',
+    'admin': 'Админ'
+}
+
+async def record_user_transaction(
+    db,
+    user_id: int,
+    amount: float,
+    category: str,
+    description: str,
+    timestamp: int | None = None
+) -> int | None:
+    """
+    Записывает операцию изменения баланса пользователя в транзакционный леджер.
+    """
+    import math
+    if not isinstance(amount, (int, float)) or math.isnan(amount) or math.isinf(amount) or amount == 0:
+        return None
+
+    if not category or not isinstance(category, str):
+        category = 'other'
+    category = category.lower().strip()
+    clean_desc = (description or '').strip()[:255]
+    ts = timestamp if timestamp is not None else int(time.time())
+
+    async def _do_insert():
+        try:
+            cursor = await db.execute(
+                """
+                INSERT INTO UserTransactions (user_id, amount, category, description, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, round(float(amount), 2), category, clean_desc, ts)
+            )
+            return cursor.lastrowid
+        except Exception as e:
+            # Table might not exist yet in tests
+            return None
+
+    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+        return await _do_insert()
+
+    async with db_lock:
+        tx_started = False
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            tx_started = True
+        except Exception:
+            tx_started = False
+
+        try:
+            last_id = await _do_insert()
+            if tx_started:
+                await db.execute("COMMIT")
+            return last_id
+        except Exception:
+            if tx_started:
+                try: await db.execute("ROLLBACK")
+                except Exception: pass
+            return None
+
+async def get_user_recent_transactions(
+    db, 
+    user_id: int, 
+    limit: int = 10,
+    offset: int = 0
+) -> list:
+    """
+    Возвращает список последних транзакций пользователя со всеми полями.
+    """
+    limit = max(1, min(limit, 50))
+    offset = max(0, offset)
+    query = """
+        SELECT id, user_id, amount, category, description, timestamp
+        FROM UserTransactions
+        WHERE user_id = ?
+        ORDER BY timestamp DESC, id DESC
+        LIMIT ? OFFSET ?
+    """
+    async def _do_fetch():
+        try:
+            async with db.execute(query, (user_id, limit, offset)) as cursor:
+                rows = await cursor.fetchall()
+                return [
+                    {
+                        "id": r[0],
+                        "user_id": r[1],
+                        "amount": float(r[2]),
+                        "category": r[3],
+                        "description": r[4],
+                        "timestamp": r[5]
+                    }
+                    for r in rows
+                ]
+        except Exception:
+            return []
+
+    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+        return await _do_fetch()
+
+    async with db_lock:
+        return await _do_fetch()
+
+async def get_user_transaction_summary(db, user_id: int) -> dict:
+    """
+    Возвращает статистику по доходам и расходам пользователя за все время.
+    """
+    query = """
+        SELECT 
+            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as total_earned,
+            COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) as total_spent,
+            COUNT(*) as total_ops
+        FROM UserTransactions
+        WHERE user_id = ?
+    """
+    async def _do_calc():
+        try:
+            async with db.execute(query, (user_id,)) as cursor:
+                row = await cursor.fetchone()
+                return {
+                    "total_earned": float(row[0] or 0.0),
+                    "total_spent": float(row[1] or 0.0),
+                    "total_ops": int(row[2] or 0)
+                }
+        except Exception:
+            return {"total_earned": 0.0, "total_spent": 0.0, "total_ops": 0}
+
+    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+        return await _do_calc()
+
+    async with db_lock:
+        return await _do_calc()
+
+async def add_to_abu_fund(db, amount: float, donor_id: int = 0, reason: str = "") -> float:
+    """Пополняет глобальный Фонд Яхты Абу и возвращает обновленный тотал."""
+    if amount <= 0:
+        return await get_abu_fund_total(db)
+    old_total = await get_abu_fund_total(db)
+    async def _do_add():
+        try:
+            await db.execute(
+                """
+                INSERT INTO GlobalStats (key, value) VALUES ('abu_yacht_fund', ?)
+                ON CONFLICT(key) DO UPDATE SET value = CAST(value AS REAL) + ?
+                """,
+                (str(amount), amount)
+            )
+            await db.commit()
+        except Exception:
+            pass
+    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+        await _do_add()
+    else:
+        async with db_lock:
+            await _do_add()
+    new_total = await get_abu_fund_total(db)
+
+    # Проверяем переход на новый уровень яхты Абу
+    try:
+        from abu_fund_lore import get_yacht_tier
+        old_tier = get_yacht_tier(int(old_total))
+        new_tier = get_yacht_tier(int(new_total))
+        if new_tier.tier_id > old_tier.tier_id:
+            from news_channel_publisher import publish_abu_fund_tier_upgrade
+            from shared_state import GLOBAL_BOTS
+            from common.task_manager import spawn_task
+            post_bot = GLOBAL_BOTS.get('b') or (list(GLOBAL_BOTS.values())[0] if GLOBAL_BOTS else None)
+            if post_bot:
+                spawn_task(publish_abu_fund_tier_upgrade(post_bot, old_tier.tier_id, new_tier.tier_id, int(new_total)))
+    except Exception:
+        pass
+
+    return new_total
+
+async def get_abu_fund_total(db) -> float:
+    """Возвращает текущую сумму в Фонде Яхты Абу."""
+    query = "SELECT value FROM GlobalStats WHERE key = 'abu_yacht_fund'"
+    async def _do_get():
+        try:
+            async with db.execute(query) as c:
+                row = await c.fetchone()
+                return float(row[0]) if row and row[0] else 0.0
+        except Exception:
+            return 0.0
+    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+        return await _do_get()
+    async with db_lock:
+        return await _do_get()

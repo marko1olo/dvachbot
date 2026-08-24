@@ -2377,6 +2377,7 @@ app.mount(
     name="static",
 )
 templates = Jinja2Templates(directory=os.path.join(site_root, "templates"))
+templates.env.globals["static_version"] = "10.1"
 
 
 @app.get("/robots.txt", response_class=Response)

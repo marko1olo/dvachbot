@@ -59,7 +59,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, TelegramAPIError
 from common.anon_identity import get_anon_id
-from common.database import add_user_global_balance, get_user_global_balance, deduct_user_global_balance
+from common.database import record_user_transaction, add_user_global_balance, get_user_global_balance, deduct_user_global_balance
 
 from common.db_pool import get_pool, db_lock
 
@@ -181,16 +181,14 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 ans_text = "❌ Ты уже продал мать. Второй раз не получится."
             else:
                 active_items["mother_sold"] = True
-                prefix = "[Продал мать]"
-                expires = 2147483647
-                
-                await add_user_global_balance(db, user_id, board_id, 10000)
+                await add_user_global_balance(db, user_id, board_id, 8000)
+                await record_user_transaction(db, user_id, 8000, 'work', 'Продал мать на органы')
                 await db.execute(
-                    "UPDATE Users SET active_items = ?, custom_prefix = ?, prefix_expires_at = ? WHERE user_id = ? AND board_id = ?",
-                    (json.dumps(active_items), prefix, expires, user_id, board_id)
+                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (json.dumps(active_items), user_id, board_id)
                 )
                 await db.commit()
-                ans_text = "💸 Сделка века! Ты продал мать и получил 10000 Шекелей. На тебя повешено клеймо."
+                ans_text = "💸 Сделка века! Ты продал мать и получил 8000 Шекелей! Клеймо занесено в твоё Личное Дело и Паспорт."
 
     if ans_text:
         await callback.answer(ans_text, show_alert=True)
@@ -575,6 +573,23 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
     if target_id == user_id:
         await message.reply("Нельзя ограбить самого себя.")
         return
+
+    from shared_state import (
+        get_target_grief_protection_remaining, register_target_attack, set_combat_cooldown
+    )
+    rem = get_target_grief_protection_remaining(target_id)
+    if rem > 0:
+        rem_min = rem // 60
+        rem_sec = rem % 60
+        time_str = f"{rem_min}м {rem_sec}с" if rem_min > 0 else f"{rem_sec}с"
+        await message.reply(
+            f"🛡️ <b>ИММУНИТЕТ ЦЕЛИ ОТ ГРИФЕРСТВА!</b>\n\n"
+            f"Анон еще отходит от предыдущей разборки и находится под защитой борды.\n"
+            f"Повторное нападение на этого анона возможно через <b>{time_str}</b>.\n"
+            f"<i>(Заточка сохранена)</i>",
+            parse_mode="HTML"
+        )
+        return
         
     db = await get_pool()
     async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
@@ -587,14 +602,25 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
         await message.reply("У тебя нет заточки! Купи её в /shop.")
         return
         
-    active_items["knife_gun"] = False
-    
     async with db.execute("SELECT balance, active_items FROM Users WHERE user_id = ? AND board_id = ?", (target_id, board_id)) as c:
         row = await c.fetchone()
         target_balance = row[0] if row and row[0] else 0
         target_items_str = row[1] if row and row[1] else "{}"
     try: target_items = json.loads(target_items_str)
     except Exception: target_items = {}
+
+    if target_balance < 500:
+        await message.reply(
+            f"🛡️ <b>ЗАЩИТА НИЩИХ СЫЧЕЙ!</b>\n\n"
+            f"У жертвы в карманах всего <code>{int(target_balance)} ₪</code> (меньше 500 ₪)!\n"
+            f"Грабить нищих и опущенных сычей на ТГАЧе западло. Ты побрезговал марать руки, заточка осталась при тебе.",
+            parse_mode="HTML"
+        )
+        return
+
+    active_items["knife_gun"] = False
+    register_target_attack(target_id)
+    set_combat_cooldown(user_id, 180)
     
     now = int(time.time())
     if target_items.get("tinfoil_hat", 0) > now:

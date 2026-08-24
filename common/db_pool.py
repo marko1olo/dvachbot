@@ -10,6 +10,7 @@ class LazyLock:
         self._lock = None
         self._loop = None
         self._owner = None
+        self._depth = 0
 
     def _get_lock(self):
         try:
@@ -20,21 +21,48 @@ class LazyLock:
             self._lock = asyncio.Lock()
             self._loop = loop
             self._owner = None
+            self._depth = 0
         return self._lock
 
     async def acquire(self):
         lock = self._get_lock()
-        res = await lock.acquire()
         try:
-            self._owner = asyncio.current_task()
+            current = asyncio.current_task()
         except RuntimeError:
-            self._owner = None
+            current = None
+
+        # Реентерабельный повторный захват из той же таски
+        if current is not None and self._owner is current:
+            self._depth += 1
+            return True
+
+        res = await lock.acquire()
+        self._owner = current
+        self._depth = 1
         return res
 
     def release(self):
         if self._lock:
-            self._owner = None
-            self._lock.release()
+            try:
+                current = asyncio.current_task()
+            except RuntimeError:
+                current = None
+
+            if current is not None and self._owner is current:
+                self._depth -= 1
+                if self._depth <= 0:
+                    self._depth = 0
+                    self._owner = None
+                    if self._lock.locked():
+                        self._lock.release()
+            else:
+                if self._depth > 1:
+                    self._depth -= 1
+                else:
+                    self._depth = 0
+                    self._owner = None
+                    if self._lock.locked():
+                        self._lock.release()
 
     def locked(self):
         return self._get_lock().locked()
@@ -155,16 +183,25 @@ async def close_pool():
 
 async def db_sleep(delay: float):
     """Безопасный sleep для отпускания db_lock во время ожидания."""
-    lock_released = False
+    saved_depth = 0
     is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
     if is_owned_fn and is_owned_fn():
         try:
-            db_lock.release()
-            lock_released = True
+            saved_depth = getattr(db_lock, "_depth", 1)
+            db_lock._depth = 0
+            db_lock._owner = None
+            if db_lock._lock and db_lock._lock.locked():
+                db_lock._lock.release()
         except RuntimeError:
-            pass
+            saved_depth = 0
     try:
         await asyncio.sleep(delay)
     finally:
-        if lock_released:
-            await db_lock.acquire()
+        if saved_depth > 0:
+            lock = db_lock._get_lock()
+            await lock.acquire()
+            try:
+                db_lock._owner = asyncio.current_task()
+            except RuntimeError:
+                db_lock._owner = None
+            db_lock._depth = saved_depth

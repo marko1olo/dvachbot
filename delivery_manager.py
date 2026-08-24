@@ -1818,7 +1818,8 @@ async def site_posts_broadcaster():
                             if thread_info:
                                 subs = thread_info.get('subscribers', set())
                                 recipients = subs.intersection(base_recipients)
-                        if recipients:
+                        has_worker = bool(main.GLOBAL_BOTS.get(board_id) or board_id in board_data)
+                        if recipients and has_worker:
                             enqueued = await enqueue_board_message(board_id, {
                                 'recipients': recipients,
                                 'content': content,

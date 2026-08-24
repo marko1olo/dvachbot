@@ -2285,7 +2285,7 @@ const HotkeyManager = {
             const offsetPosition = elementPosition + window.pageYOffset - headerOffset;
             window.scrollTo({
                 top: offsetPosition,
-                behavior: "smooth"
+                behavior: "auto"
             });
             target.style.transition = 'box-shadow 0.2s';
             const oldShadow = target.style.boxShadow;
@@ -4187,7 +4187,7 @@ const ThreadPlayer = {
         });
         this.ui.classList.add('active');
         this.updateCounter();
-        this.opPost.scrollIntoView({ behavior: 'smooth' });
+        this.opPost.scrollIntoView({ behavior: "auto" });
         this._scrollHandler = () => {
             if (this.isAutoScrolling) return;
             if (this.isPlaying) {
@@ -4215,7 +4215,7 @@ const ThreadPlayer = {
             this.isAutoScrolling = true;
             const rect = post.getBoundingClientRect();
             if (rect.bottom > window.innerHeight) {
-                post.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                post.scrollIntoView({ behavior: "auto", block: 'center' });
             }
             setTimeout(() => this.isAutoScrolling = false, 500);
             this.currentIndex++;
@@ -4476,10 +4476,14 @@ window.checkThreadVibe = async (btn) => {
     }
 };
 window.sendFeedback = async (form) => {
+    if (form._isSubmitting) return;
+    form._isSubmitting = true;
     const btn = form.querySelector('button[type="submit"]');
-    const oldText = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = t('feedback_sending'); 
+    const oldText = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = t('feedback_sending');
+    }
     try {
         const formData = Object.fromEntries(new FormData(form).entries());
         if (formData.email) return; 
@@ -4493,8 +4497,10 @@ window.sendFeedback = async (form) => {
         if (res.ok) {
             showToast(t('feedback_done')); 
             form.reset();
-            form.closest('.modal').style.display = 'none';
-            document.getElementById('modal-overlay').style.display = 'none';
+            const modal = form.closest('.modal');
+            if (modal) modal.style.display = 'none';
+            const overlay = document.getElementById('modal-overlay');
+            if (overlay) overlay.style.display = 'none';
         } else {
             const err = await res.json();
             showToast(t('error_prefix') + (err.detail || 'Error'));
@@ -4502,8 +4508,11 @@ window.sendFeedback = async (form) => {
     } catch (e) {
         showToast(t('network_error'));
     } finally {
-        btn.disabled = false;
-        btn.textContent = oldText;
+        form._isSubmitting = false;
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = oldText;
+        }
     }
 };
 window.MyPostsPage = { 
@@ -7789,7 +7798,7 @@ const FormManager = {
                      if (location.pathname.includes('/res/')) {
                          this.showFloating(null, '');
                      } else {
-                         this.mainForm.scrollIntoView({behavior: 'smooth', block: 'center'});
+                         this.mainForm.scrollIntoView({behavior: "auto", block: 'center'});
                          this.mainForm.classList.remove('is-hidden-by-toggle');
                          const container = this.mainForm.previousElementSibling;
                          if(container) container.classList.add('is-open');
@@ -8722,7 +8731,7 @@ const FormManager = {
                             if (!document.getElementById(`post-${resp.id}`)) {
                                 if (container.classList.contains('chat-list')) container.prepend(newPost);
                                 else container.appendChild(newPost);
-                                newPost.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                newPost.scrollIntoView({ behavior: "auto", block: 'center' });
                                 if (Math.random() < 0.025) {
                                     setTimeout(() => {
                                         const alertDiv = document.createElement('div');
@@ -8824,7 +8833,7 @@ const FormManager = {
             }
             const textarea = nearbyForm.querySelector('textarea');
             this.appendToTextarea(textarea, postNum);
-            nearbyForm.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            nearbyForm.scrollIntoView({ behavior: "auto", block: 'center' });
             this.hideFloating();
         } else {
             this.showFloating(event, postNum);
@@ -8980,7 +8989,7 @@ const FormManager = {
             bestForm.classList.remove('is-hidden-by-toggle');
         }
         this.appendToTextarea(bestForm.querySelector('textarea'), postNum, quoteText);
-        bestForm.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        bestForm.scrollIntoView({ behavior: "auto", block: 'center' });
     },
 };
 const VideoPopupManager = {
@@ -10208,9 +10217,9 @@ const WSManager = {
                 notifBtn.classList.remove('show');
                 
                 if (chatList) {
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    window.scrollTo({ top: 0, behavior: "auto" });
                 } else {
-                    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                    window.scrollTo({ top: document.body.scrollHeight, behavior: "auto" });
                 }
                 
                 document.title = document.body.dataset.siteName || 'ТГАЧ';
@@ -10574,7 +10583,7 @@ const WSManager = {
             e.preventDefault();
             const first = this.unseenPosts[0];
             if (first) {
-                first.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                first.scrollIntoView({ behavior: "auto", block: 'center' });
                 first.classList.add('target-highlight');
                 setTimeout(() => first.classList.remove('target-highlight'), 1500);
             }
@@ -10820,7 +10829,7 @@ const WSManager = {
                     }
                     if (typeof GalleryManager !== 'undefined') GalleryManager.addFromPost(el); 
                     if (isMine) {
-                        el.scrollIntoView({behavior:'smooth', block:'center'});
+                        el.scrollIntoView({behavior: "auto", block:'center'});
                     } else if (!isScrolledToBottom) {
                         if (this.notifBtn && chatList) {
                             this.buffer.push(el);
@@ -13187,8 +13196,8 @@ const SystemDock = {
 
                 <div class="dock-content" id="tab-tools">
                     <div class="dock-tools-grid">
-                        <button class="dock-tool-btn" onclick="window.scrollTo({top:0, behavior:'smooth'})">⬆ ${t('dock_up', 'Наверх')}</button>
-                        <button class="dock-tool-btn" onclick="window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'})">⬇ ${t('dock_down', 'Вниз')}</button>
+                        <button class="dock-tool-btn" onclick="window.scrollTo({top:0, behavior: "auto"})">⬆ ${t('dock_up', 'Наверх')}</button>
+                        <button class="dock-tool-btn" onclick="window.scrollTo({top:document.body.scrollHeight, behavior: "auto"})">⬇ ${t('dock_down', 'Вниз')}</button>
                         <button class="dock-tool-btn" onclick="document.getElementById('theme-toggle').click()">🌗 ${t('dock_theme', 'Тема')}</button>
                         <button class="dock-tool-btn" onclick="window.manualRefresh()">🔄 ${t('dock_refresh', 'Обновить')}</button>
                         <button class="dock-tool-btn" id="dock-clear-history" style="color:var(--action-danger)">🗑 ${t('dock_clear_hist', 'История')}</button>
@@ -13313,8 +13322,8 @@ const SystemDock = {
             }
         });
         if (btnUp && btnDown && scrollCtrl) {
-            btnUp.onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
-            btnDown.onclick = () => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+            btnUp.onclick = () => window.scrollTo({ top: 0, behavior: "auto" });
+            btnDown.onclick = () => window.scrollTo({ top: document.body.scrollHeight, behavior: "auto" });
 
             const handleScroll = () => {
                 if (!SettingsManager.current.showScrollButtons) {
@@ -13596,7 +13605,7 @@ const SystemDock = {
     },
     scrollToCurrent() {
         const el = document.getElementById(`dock-track-${this.currentIndex}`);
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (el) el.scrollIntoView({ behavior: "auto", block: 'center' });
     },
     playTrack(index) {
         if (index < 0 || index >= this.playlist.length) return;

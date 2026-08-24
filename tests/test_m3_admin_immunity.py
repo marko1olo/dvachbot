@@ -270,7 +270,7 @@ class TestCombatTargetImmunity(unittest.IsolatedAsyncioTestCase):
         common.config.ADMIN_IDS.discard(ADMIN_USER_ID)
 
     async def test_combat_target_immunity_shoot(self):
-        """Non-admin shooting an admin with /shoot must be blocked with immunity alert."""
+        """Non-admin shooting an admin with /shoot must be blocked with stealth miss (no admin leak)."""
         from main import cmd_shoot
 
         msg = MagicMock()
@@ -281,10 +281,11 @@ class TestCombatTargetImmunity(unittest.IsolatedAsyncioTestCase):
         with patch('main.get_author_id_by_reply', AsyncMock(return_value=ADMIN_USER_ID)):
             await cmd_shoot(msg, TEST_BOARD)
             msg.answer.assert_awaited()
-            self.assertIn("абсолютный иммунитет Администратора", msg.answer.call_args[0][0])
+            self.assertNotIn("Администратор", msg.answer.call_args[0][0])
+            self.assertNotIn("админ", msg.answer.call_args[0][0].lower())
 
     async def test_combat_target_immunity_pepperspray(self):
-        """Non-admin attacking an admin with /pepperspray must be blocked with immunity alert."""
+        """Non-admin attacking an admin with /pepperspray must be blocked with stealth miss."""
         from main import cmd_pepperspray
 
         msg = MagicMock()
@@ -295,10 +296,10 @@ class TestCombatTargetImmunity(unittest.IsolatedAsyncioTestCase):
         with patch('main.get_author_id_by_reply', AsyncMock(return_value=ADMIN_USER_ID)):
             await cmd_pepperspray(msg, TEST_BOARD)
             msg.answer.assert_awaited()
-            self.assertIn("абсолютный иммунитет Администратора", msg.answer.call_args[0][0])
+            self.assertNotIn("Администратор", msg.answer.call_args[0][0])
 
     async def test_combat_target_immunity_rob(self):
-        """Non-admin robbing an admin with /rob must be blocked with immunity alert."""
+        """Non-admin robbing an admin with /rob must be blocked with stealth miss."""
         from main import cmd_rob
 
         msg = MagicMock()
@@ -310,10 +311,10 @@ class TestCombatTargetImmunity(unittest.IsolatedAsyncioTestCase):
              patch('main.get_author_id_by_reply', AsyncMock(return_value=ADMIN_USER_ID)):
             await cmd_rob(msg, TEST_BOARD)
             msg.answer.assert_awaited()
-            self.assertIn("абсолютный иммунитет Администратора", msg.answer.call_args[0][0])
+            self.assertNotIn("Администратор", msg.answer.call_args[0][0])
 
     async def test_combat_target_immunity_curse(self):
-        """Non-admin cursing an admin with /curse must be blocked with immunity alert."""
+        """Non-admin cursing an admin with /curse must be blocked with stealth miss."""
         from main import cmd_curse
 
         msg = MagicMock()
@@ -325,10 +326,10 @@ class TestCombatTargetImmunity(unittest.IsolatedAsyncioTestCase):
              patch('main.get_author_id_by_reply', AsyncMock(return_value=ADMIN_USER_ID)):
             await cmd_curse(msg, TEST_BOARD)
             msg.answer.assert_awaited()
-            self.assertIn("абсолютный иммунитет Администратора", msg.answer.call_args[0][0])
+            self.assertNotIn("Администратор", msg.answer.call_args[0][0])
 
     async def test_combat_target_immunity_schizopill(self):
-        """Non-admin poisoning an admin with /schizopill must be blocked with immunity alert."""
+        """Non-admin poisoning an admin with /schizopill must be blocked with stealth miss."""
         from main import cmd_schizopill
 
         msg = MagicMock()
@@ -340,10 +341,10 @@ class TestCombatTargetImmunity(unittest.IsolatedAsyncioTestCase):
              patch('main.get_author_id_by_reply', AsyncMock(return_value=ADMIN_USER_ID)):
             await cmd_schizopill(msg, TEST_BOARD)
             msg.answer.assert_awaited()
-            self.assertIn("абсолютный иммунитет Администратора", msg.answer.call_args[0][0])
+            self.assertNotIn("Администратор", msg.answer.call_args[0][0])
 
     async def test_combat_target_immunity_partyvan(self):
-        """Non-admin targeting an admin with /partyvan must be blocked with immunity alert."""
+        """Non-admin targeting an admin with /partyvan must be blocked with stealth miss."""
         from main import cmd_partyvan
 
         msg = MagicMock()
@@ -355,4 +356,4 @@ class TestCombatTargetImmunity(unittest.IsolatedAsyncioTestCase):
              patch('main.get_author_id_by_reply', AsyncMock(return_value=ADMIN_USER_ID)):
             await cmd_partyvan(msg, TEST_BOARD)
             msg.answer.assert_awaited()
-            self.assertIn("абсолютный иммунитет Администратора", msg.answer.call_args[0][0])
+            self.assertNotIn("Администратор", msg.answer.call_args[0][0])

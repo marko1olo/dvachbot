@@ -20,13 +20,17 @@ active_roulette_sessions: Dict[int, Dict[str, Any]] = {}
 # Configuration & Payout Tables
 # -----------------------------------------------------------------------------
 
+MIN_CASINO_BET = 10
+MAX_CASINO_BET = 10_000
+MAX_ROULETTE_BET = 5_000
+
 SLOT_SYMBOLS = [
-    ("👑", 50.0, 1),    # 777 Jackpot: 1 weight
-    ("💎", 15.0, 3),    # Diamonds: 3 weight
-    ("🍒", 5.0, 6),     # Cherries: 6 weight
-    ("🍋", 3.0, 8),     # Lemons: 8 weight
-    ("🍀", 2.0, 10),    # Clovers: 10 weight
-    ("💀", 0.0, 12),    # Skulls: 12 weight (loss)
+    ("👑", 50.0, 4),    # 777 Jackpot: 4 weight (x50.0)
+    ("💎", 25.0, 6),    # Diamonds: 6 weight (x25.0)
+    ("🍒", 8.0, 8),     # Cherries: 8 weight (x8.0)
+    ("🍋", 4.0, 9),     # Lemons: 9 weight (x4.0)
+    ("🍀", 2.5, 10),    # Clovers: 10 weight (x2.5)
+    ("💀", 0.0, 11),    # Skulls: 11 weight (loss)
 ]
 
 CARD_RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
@@ -67,16 +71,71 @@ def format_hand(hand: List[Tuple[str, str]], hide_dealer_card: bool = False) -> 
     return " ".join(f"`[{r}{s}]`" for r, s in hand)
 
 
+# Anti-abuse and rate-limiting
+CASINO_COOLDOWN_SECONDS = 2.5
+user_casino_last_action: Dict[int, float] = {}
+user_win_streaks: Dict[int, int] = {}
+
+
+def check_casino_cooldown(user_id: int) -> Tuple[bool, float]:
+    """
+    Prevents script-bot hammering and rapid martingale bets.
+    Returns: (is_allowed, remaining_seconds)
+    """
+    now = time.time()
+    last = user_casino_last_action.get(user_id, 0.0)
+    elapsed = now - last
+    if elapsed < CASINO_COOLDOWN_SECONDS:
+        return False, round(CASINO_COOLDOWN_SECONDS - elapsed, 1)
+    user_casino_last_action[user_id] = now
+    return True, 0.0
+
+
+def calculate_vip_table_rake(bet: int) -> Tuple[int, int]:
+    """
+    Deducts a 2% VIP table fee for bets >= 2,000 ₪ sent straight to Abu's Fund.
+    Returns: (rake_amount, active_bet)
+    """
+    if bet >= 2000:
+        rake = max(10, int(bet * 0.02))
+        return rake, bet - rake
+    return 0, bet
+
+
+def record_win_streak(user_id: int, is_win: bool) -> int:
+    """
+    Tracks consecutive wins to apply anti-streak house edge tilt.
+    """
+    if is_win:
+        user_win_streaks[user_id] = user_win_streaks.get(user_id, 0) + 1
+    else:
+        user_win_streaks[user_id] = 0
+    return user_win_streaks.get(user_id, 0)
+
+
+def get_win_streak(user_id: int) -> int:
+    return user_win_streaks.get(user_id, 0)
+
+
 # -----------------------------------------------------------------------------
 # Slots Mechanics
 # -----------------------------------------------------------------------------
 
-def roll_slots() -> Tuple[List[str], float, str]:
+def roll_slots(user_id: int = 0, balance: int = 0) -> Tuple[List[str], float, str]:
     """
     Spins 3 reels based on weighted probability.
+    Applies Anti-Streak / High-Roller Tilt if user is on a win streak (>=3) or balance > 100,000 ₪.
     Returns: (symbols_list, multiplier, result_title)
     """
-    weights = [s[2] for s in SLOT_SYMBOLS]
+    streak = user_win_streaks.get(user_id, 0) if user_id else 0
+    is_tilted = streak >= 3 or balance > 100_000
+
+    # Adjust weights if player is on a hot streak or is an oligarch
+    if is_tilted:
+        weights = [2, 4, 6, 8, 9, 18]
+    else:
+        weights = [s[2] for s in SLOT_SYMBOLS]
+
     symbols = [s[0] for s in SLOT_SYMBOLS]
 
     reel1 = random.choices(symbols, weights=weights, k=1)[0]
@@ -90,17 +149,28 @@ def roll_slots() -> Tuple[List[str], float, str]:
         for sym, mult, _ in SLOT_SYMBOLS:
             if reel1 == sym:
                 if sym == "👑":
+                    if user_id: record_win_streak(user_id, True)
                     return reels, mult, "🔥 ДЖЕКПОТ! ТРИ КОРОНЫ 777! 🔥"
                 elif sym == "💀":
+                    if user_id: record_win_streak(user_id, False)
                     return reels, 0.0, "💀 ТРИ ЧЕРЕПА! Полный провал!"
+                if user_id: record_win_streak(user_id, True)
                 return reels, mult, f"✨ ВЫИГРЫШ: Три в ряд ({sym})! x{mult:.0f}!"
 
     # Check 2 matching (excluding skulls)
     if (reel1 == reel2 or reel2 == reel3 or reel1 == reel3) and ("💀" not in reels or reels.count("💀") < 2):
         matched_sym = reel1 if reel1 == reel2 or reel1 == reel3 else reel2
-        if matched_sym != "💀":
+        if matched_sym == "👑":
+            if user_id: record_win_streak(user_id, True)
+            return reels, 3.0, "👑 Пара Корон! Отличный занос x3.0!"
+        elif matched_sym == "💎":
+            if user_id: record_win_streak(user_id, True)
+            return reels, 2.0, "💎 Пара Бриллиантов! Выигрыш x2.0!"
+        elif matched_sym != "💀":
+            if user_id: record_win_streak(user_id, True)
             return reels, 1.5, f"🎉 Пара совпадений ({matched_sym})! x1.5"
 
+    if user_id: record_win_streak(user_id, False)
     return reels, 0.0, "💨 Мимо! Попробуй еще раз."
 
 
@@ -108,20 +178,38 @@ def roll_slots() -> Tuple[List[str], float, str]:
 # Coinflip Mechanics
 # -----------------------------------------------------------------------------
 
-def play_coinflip(chosen_side: str) -> Tuple[str, bool, float, str]:
+def play_coinflip(chosen_side: str, user_id: int = 0, balance: int = 0) -> Tuple[str, bool, float, str]:
     """
-    Plays 50/50 coinflip.
+    Plays 50/50 coinflip with Anti-Streak Tilt for hot streaks and oligarchs.
     chosen_side: 'heads' ('орел', 'eagle') or 'tails' ('решка')
     Returns: (result_side, is_win, multiplier, text_message)
     """
-    side = random.choice(["heads", "tails"])
-    side_ru = "🦅 ОРЕЛ" if side == "heads" else "👑 РЕШКА"
+    streak = user_win_streaks.get(user_id, 0) if user_id else 0
+    is_tilted = streak >= 3 or balance > 100_000
 
-    is_win = (chosen_side.lower() in ["heads", "орел", "орёл", "eagle", "h"] and side == "heads") or \
-             (chosen_side.lower() in ["tails", "решка", "t"] and side == "tails")
+    # Under tilt, house edge increases slightly (45% win chance)
+    if is_tilted:
+        win_prob = 0.45
+    else:
+        win_prob = 0.50
+
+    side_match = (random.random() < win_prob)
+
+    chosen_is_heads = chosen_side.lower() in ["heads", "орел", "орёл", "eagle", "h"]
+    if side_match:
+        side = "heads" if chosen_is_heads else "tails"
+    else:
+        side = "tails" if chosen_is_heads else "heads"
+
+    side_ru = "🦅 ОРЕЛ" if side == "heads" else "👑 РЕШКА"
+    is_win = side_match
+
+    if user_id:
+        record_win_streak(user_id, is_win)
 
     mult = 1.95 if is_win else 0.0
-    title = f"🎉 ПОБЕДА! Выпал {side_ru} (x1.95)!" if is_win else f"💀 ПРОИГРЫШ! Выпал {side_ru}."
+    tilt_note = " <i>(Абу подкрутил монетку)</i>" if is_tilted and not is_win else ""
+    title = f"🎉 ПОБЕДА! Выпал {side_ru} (x1.95)!" if is_win else f"💀 ПРОИГРЫШ! Выпал {side_ru}.{tilt_note}"
     return side_ru, is_win, mult, title
 
 
@@ -130,11 +218,11 @@ def play_coinflip(chosen_side: str) -> Tuple[str, bool, float, str]:
 # -----------------------------------------------------------------------------
 
 ROULETTE_STREAK_MULTS = {
-    1: 1.25,
-    2: 1.50,
-    3: 2.00,
-    4: 3.00,
-    5: 5.00,
+    1: 1.15,  # 83.33% chance * 1.15 = 95.83% RTP (Eliminates positive EV exploit)
+    2: 1.40,  # 69.44% chance * 1.40 = 97.22% RTP
+    3: 1.80,  # 57.87% chance * 1.80 = 104.1% on 3-streak (high risk)
+    4: 2.50,
+    5: 4.00,
 }
 
 def play_russian_roulette_shot(user_id: int, bet: int) -> Tuple[bool, float, int, str]:
@@ -153,7 +241,7 @@ def play_russian_roulette_shot(user_id: int, bet: int) -> Tuple[bool, float, int
         return False, 0.0, 0, "💥 БАХ! Пуля пробила череп! Ставка сгорела."
 
     new_streak = session.get("streak", 0) + 1
-    mult = ROULETTE_STREAK_MULTS.get(new_streak, 5.0 + (new_streak - 5) * 1.5)
+    mult = ROULETTE_STREAK_MULTS.get(new_streak, 4.0 + (new_streak - 5) * 1.0)
 
     active_roulette_sessions[user_id] = {
         "streak": new_streak,
@@ -217,10 +305,12 @@ def get_slots_lobby_keyboard(bet: int = 100) -> InlineKeyboardMarkup:
 
 
 def get_slots_keyboard(bet: int) -> InlineKeyboardMarkup:
+    bet = min(MAX_CASINO_BET, max(MIN_CASINO_BET, bet))
+    doubled = min(MAX_CASINO_BET, bet * 2)
     buttons = [
         [
             InlineKeyboardButton(text=f"🔄 Крутить снова ({bet} ₪)", callback_data=f"cas:slots:spin:{bet}"),
-            InlineKeyboardButton(text="2x Ставка", callback_data=f"cas:slots:spin:{bet*2}"),
+            InlineKeyboardButton(text=f"2x Ставка ({doubled} ₪)", callback_data=f"cas:slots:spin:{doubled}"),
         ],
         [
             InlineKeyboardButton(text="50 ₪", callback_data="cas:slots:spin:50"),
@@ -238,6 +328,7 @@ def get_slots_keyboard(bet: int) -> InlineKeyboardMarkup:
 # --- COINFLIP KEYBOARDS ---
 
 def get_coinflip_lobby_keyboard(bet: int = 100) -> InlineKeyboardMarkup:
+    bet = min(MAX_CASINO_BET, max(MIN_CASINO_BET, bet))
     buttons = [
         [
             InlineKeyboardButton(text=f"🦅 На Орла ({bet} ₪)", callback_data=f"cas:coin:heads:{bet}"),
@@ -258,13 +349,15 @@ def get_coinflip_lobby_keyboard(bet: int = 100) -> InlineKeyboardMarkup:
 
 
 def get_coinflip_keyboard(bet: int) -> InlineKeyboardMarkup:
+    bet = min(MAX_CASINO_BET, max(MIN_CASINO_BET, bet))
+    doubled = min(MAX_CASINO_BET, bet * 2)
     buttons = [
         [
             InlineKeyboardButton(text=f"🦅 Орел ({bet} ₪)", callback_data=f"cas:coin:heads:{bet}"),
             InlineKeyboardButton(text=f"👑 Решка ({bet} ₪)", callback_data=f"cas:coin:tails:{bet}"),
         ],
         [
-            InlineKeyboardButton(text="x2 Ставка", callback_data=f"cas:coin:preset:{bet*2}"),
+            InlineKeyboardButton(text=f"x2 Ставка ({doubled} ₪)", callback_data=f"cas:coin:preset:{doubled}"),
             InlineKeyboardButton(text="100 ₪", callback_data="cas:coin:preset:100"),
             InlineKeyboardButton(text="500 ₪", callback_data="cas:coin:preset:500"),
         ],

@@ -842,7 +842,7 @@ async def tagging_loop():
                                 raise
                         save_success = True
                         logger.info(
-                            f"🖼 [BG_TAGGER] ✅ {file_type.upper()} {file_id[:12]} | {tag_mark} | Tags: '{tags[:200] if tags else 'none'}...'"
+                            f"🖼 [BG_TAGGER] ✅ {(file_type or 'media').upper()} {file_id[:12]} | {tag_mark} | Tags: '{tags[:200] if tags else 'none'}...'"
                         )
                         break
                     except Exception as e:

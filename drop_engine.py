@@ -123,6 +123,8 @@ async def create_money_drop(
                 "INSERT INTO MoneyDrops (drop_id, donor_id, board_id, amount, status, created_at) VALUES (?, ?, ?, ?, 'active', ?)",
                 (drop_id, donor_id, board_id, float(amount), now),
             )
+            from common.database import record_user_transaction
+            await record_user_transaction(db_conn, donor_id, -amount, 'drop', f'Сброс чека в тред (#{drop_id})')
             await db_conn.commit()
         except Exception as e:
             return False, f"❌ Ошибка базы данных при создании дропа: {e}", None
@@ -181,10 +183,11 @@ async def claim_money_drop(
         record.claimed_at = time.time()
 
     # Atomically credit claimer in DB and update MoneyDrops record
-    from common.database import add_user_global_balance
+    from common.database import add_user_global_balance, record_user_transaction
     async with db_lock:
         try:
             await add_user_global_balance(db_conn, claimer_id, claimer_board_id, record.amount)
+            await record_user_transaction(db_conn, claimer_id, record.amount, 'drop', f'Активация чека из треда от {record.donor_name}')
             await db_conn.execute(
                 "UPDATE MoneyDrops SET status = 'claimed', claimed_by = ?, claimed_board_id = ?, claimed_at = ? WHERE drop_id = ?",
                 (claimer_id, claimer_board_id, record.claimed_at, drop_id),

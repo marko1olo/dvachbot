@@ -204,14 +204,25 @@ def apply_shadow_autoreplace(content: dict) -> dict:
 
 def check_post_numerals(post_num: int) -> int | None:
     """
-    Проверяет номер поста на наличие повторяющихся цифр в конце.
-    Использует оптимизированный посимвольный анализ с конца.
-    Возвращает "уровень редкости" (количество повторов) или None.
+    Проверяет номер поста на наличие повторяющихся цифр в конце (даблы/квадриплы)
+    или юбилейных круглых чисел (миллионники, полумиллионники, десятки тысяч).
+    Возвращает "уровень редкости" (4..8) или None.
     """
+    if post_num < 1000:
+        return None
+
+    # Проверка круглых юбилейных чисел
+    if post_num >= 1000000 and post_num % 1000000 == 0:
+        return 8 # Миллионник
+    if post_num >= 500000 and post_num % 500000 == 0:
+        return 7 # Полумиллионник
+    if post_num >= 100000 and post_num % 100000 == 0:
+        return 6 # Сотка тысяч
+    if post_num >= 10000 and post_num % 10000 == 0:
+        return 5 # Десятитысячник
+
     s = str(post_num)
     length = len(s)
-    if length < 4:
-        return None
     last_char = s[-1]
     count = 1
     for i in range(length - 2, -1, -1):
@@ -219,7 +230,9 @@ def check_post_numerals(post_num: int) -> int | None:
             count += 1
         else:
             break
-    if count in SPECIAL_NUMERALS_CONFIG:
+    if count >= 8:
+        return 8
+    elif count in SPECIAL_NUMERALS_CONFIG:
         return count
     return None
 
