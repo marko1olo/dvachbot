@@ -644,8 +644,8 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
             task = spawn_task(_edit_one(uid, target_mid))
             tasks_to_run.append(task)
 
-    CHUNK_SIZE = 30 
-    DELAY_BETWEEN_CHUNKS = 0.3
+    CHUNK_SIZE = 15
+    DELAY_BETWEEN_CHUNKS = 0.6
     for i in range(0, len(tasks_to_run), CHUNK_SIZE):
         chunk_tasks = tasks_to_run[i:i + CHUNK_SIZE]
         await asyncio.gather(*chunk_tasks, return_exceptions=True)

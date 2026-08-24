@@ -1281,10 +1281,9 @@ class MessageBroadcaster:
                     return None
             except TelegramForbiddenError:
                 raise 
-            except TelegramRetryAfter:
-                raise 
-            except (aiohttp.ClientConnectorError, TelegramNetworkError, asyncio.TimeoutError):
-                raise TelegramRetryAfter(method="network", message="Network Error", retry_after=5)
+            except (aiohttp.ClientConnectorError, TelegramNetworkError, asyncio.TimeoutError) as net_err:
+                self.stats['timeouts'] += 1
+                return None
             except (aiohttp.ServerDisconnectedError, aiohttp.ClientPayloadError) as e:
                 self.stats['ghosts'] += 1
                 return None
