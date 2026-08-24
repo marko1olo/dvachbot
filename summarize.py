@@ -85,44 +85,46 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     if model_preference == "persona" or model_preference == "persona_gemini":
         # Persona Bot priority: Gemini Lite -> Qwen 27B -> Llama 70B / 8B
         models_cascade = [
-            ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
             ("gemini-2.0-flash-lite", "gemini"),
             ("gemini-2.0-flash", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
             ("llama-3.3-70b-versatile", "groq"),
             ("llama-3.1-8b-instant", "groq"),
         ]
+    elif model_preference == "fast":
+        models_cascade = [
+            ("gemini-2.5-flash", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
+            ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-1.5-flash", "gemini"),
+        ]
     elif model_preference == "gemini":
         models_cascade = [
-            ("gemini-2.0-flash", "gemini"),
-            ("gemini-2.0-flash-lite", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
             ("gemini-1.5-flash", "gemini"),
-            ("llama-3.3-70b-versatile", "groq"),
             ("qwen/qwen3.6-27b", "groq"),
         ]
     elif model_preference == "qwen":
         models_cascade = [
             ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-2.0-flash", "gemini"),
-            ("gemini-2.0-flash-lite", "gemini"),
-            ("llama-3.3-70b-versatile", "groq"),
+            ("gemini-2.5-flash", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
         ]
     elif model_preference == "llama":
         models_cascade = [
-            ("llama-3.3-70b-versatile", "groq"),
-            ("llama-3.1-8b-instant", "groq"),
-            ("gemini-2.0-flash", "gemini"),
-            ("gemini-2.0-flash-lite", "gemini"),
+            ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-2.5-flash", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
         ]
     else:
         # Default summarization cascade
         models_cascade = [
-            ("gemini-2.0-flash", "gemini"),
-            ("gemini-2.0-flash-lite", "gemini"),
-            ("llama-3.3-70b-versatile", "groq"),
-            ("gemini-1.5-flash", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
+            ("gemini-2.5-flash-lite", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
-            ("llama-3.1-8b-instant", "groq"),
+            ("gemini-1.5-flash", "gemini"),
         ]
 
     
