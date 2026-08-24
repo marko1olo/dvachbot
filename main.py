@@ -5635,6 +5635,15 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
     from shared_state import (
         get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
     )
+    rem_cd = get_combat_cooldown_remaining(user_id)
+    if rem_cd > 0:
+        await message.answer(
+            f"⏳ <b>Кулдаун на нападение!</b>\n"
+            f"Руки ещё трясутся после прошлого налёта. Подожди <b>{int(rem_cd)} сек</b> перед следующим грабежом.",
+            parse_mode="HTML"
+        )
+        return
+
     db = await get_pool()
     active_items = await _get_user_active_items(db, user_id, board_id)
     current_time = int(time.time())
@@ -11460,7 +11469,7 @@ def _prepare_graph_data(board_id: str, days: int):
     df_filtered = df[df.index >= start_date_utc].copy()
     if df_filtered.empty:
         return None
-    resample_period = '1H' if days <= 1 else '3H'
+    resample_period = '1h' if days <= 1 else '3h'
     end_date_utc = df_filtered.index.max()
     if pd.isna(end_date_utc):
         return None

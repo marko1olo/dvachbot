@@ -73,7 +73,7 @@ DEEP_CHECK_PROMPT = (
 )
 
 
-async def _safe_groq_json(messages, max_tokens=300):
+async def _safe_groq_json(messages, max_tokens=1024):
     """
     Выполняет запрос к Groq и пытается вернуть JSON с автоматическим фолбэком по моделям.
     """
@@ -122,10 +122,13 @@ async def _safe_groq_json(messages, max_tokens=300):
                             json_match = re.search(r"\{.*\}", content, re.DOTALL)
                             if json_match:
                                 content = json_match.group(0).strip()
+                            if not content:
+                                logger.debug(f"DeepCheck response was pure reasoning without JSON payload from {current_model}")
+                                return None
                             try:
                                 return json.loads(content)
                             except json.JSONDecodeError as jde:
-                                logger.error(f"DeepCheck JSON Parse Error: {jde} | Raw AI Response: {raw_content[:200]}")
+                                logger.warning(f"DeepCheck JSON Parse Warning: {jde} | Raw AI Response: {raw_content[:150]}")
                                 return None
                         elif resp.status_code == 429:
                             logger.warning(f"⚠️ Groq 429 Rate Limit for {current_model}, switching model immediately.")

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Set, Any, Optional
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile, LinkPreviewOptions
-from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramNetworkError, TelegramBadRequest
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramNetworkError, TelegramBadRequest, TelegramServerError
 import aiohttp
 import re
 import ssl
@@ -1281,6 +1281,10 @@ class MessageBroadcaster:
                     return None
             except TelegramForbiddenError:
                 raise 
+            except TelegramServerError as srv_err:
+                self.stats['errors'] += 1
+                main.runtime_logger.warning(f"⚠️ Telegram server error in _send_one for user {uid}: {srv_err}")
+                return None
             except (aiohttp.ClientConnectorError, TelegramNetworkError, asyncio.TimeoutError) as net_err:
                 self.stats['timeouts'] += 1
                 return None

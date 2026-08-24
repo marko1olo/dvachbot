@@ -887,7 +887,7 @@ def _prepare_graph_data(board_id: str, days: int):
     df_filtered = df[df.index >= start_date_utc].copy()
     if df_filtered.empty:
         return None
-    resample_period = '1H' if days <= 1 else '3H'
+    resample_period = '1h' if days <= 1 else '3h'
     end_date_utc = df_filtered.index.max()
     if pd.isna(end_date_utc):
         return None
