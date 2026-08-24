@@ -132,7 +132,7 @@ def roll_slots(user_id: int = 0, balance: int = 0) -> Tuple[List[str], float, st
 
     # Adjust weights if player is on a hot streak or is an oligarch
     if is_tilted:
-        weights = [2, 4, 6, 8, 9, 18]
+        weights = [3, 5, 7, 8, 9, 14]
     else:
         weights = [s[2] for s in SLOT_SYMBOLS]
 
