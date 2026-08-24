@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Any, Optional
 from aiogram import Bot
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio, BufferedInputFile, LinkPreviewOptions
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramNetworkError, TelegramBadRequest
 import aiohttp
 import re
@@ -884,7 +884,7 @@ class MessageBroadcaster:
                     reply_to_message_id=reply_to_mid if i == 0 else None,
                     reply_markup=self.final_keyboard if i == len(parts) - 1 else None,
                     disable_notification=is_sage,
-                    disable_web_page_preview=False,
+                    link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True),
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
@@ -946,7 +946,7 @@ class MessageBroadcaster:
                     reply_to_message_id=target_reply_id if i == 0 else None,
                     reply_markup=self.final_keyboard if include_keyboard and i == len(parts) - 1 else None,
                     disable_notification=is_sage,
-                    disable_web_page_preview=False,
+                    link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True),
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
@@ -1070,7 +1070,7 @@ class MessageBroadcaster:
                             reply_to_message_id=reply_to_mid if i == 0 else None,
                             reply_markup=self.final_keyboard if i == len(parts)-1 else None,
                             disable_notification=is_sage,
-                            disable_web_page_preview=False,
+                            link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True),
                             request_timeout=request_timeout,
                         )
                         sent_msgs.append(m)
@@ -1108,7 +1108,7 @@ class MessageBroadcaster:
                                     chat_id=uid, text=part, parse_mode="HTML",
                                     reply_to_message_id=media_msg.message_id,
                                     disable_notification=is_sage,
-                                    disable_web_page_preview=False,
+                                    link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True),
                                     request_timeout=request_timeout,
                                 )
                         except TelegramBadRequest as e:
