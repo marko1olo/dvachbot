@@ -237,8 +237,8 @@ async def send_banner_message(
     fname, photo_payload = get_banner_file(category=category, banner_name=banner_name, user_id=chat_id)
     
     # Telegram photo captions are limited to 1024 characters.
-    # If the text exceeds 1024 chars, directly send as a standard text message (supports up to 4096 chars).
-    if not photo_payload or len(caption) > 1024:
+    # If no photo available, send as text.
+    if not photo_payload:
         return await bot.send_message(
             chat_id=chat_id,
             text=caption,
@@ -246,6 +246,37 @@ async def send_banner_message(
             parse_mode=parse_mode,
             disable_web_page_preview=True
         )
+
+    # If caption exceeds 1024 chars, send photo first (no caption), then reply with text.
+    if len(caption) > 1024:
+        try:
+            photo_msg = await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_payload
+            )
+            # Cache file_id from the photo message
+            if photo_msg.photo and fname and fname not in _BANNER_CACHE:
+                _BANNER_CACHE[fname] = photo_msg.photo[-1].file_id
+                save_cache()
+            # Reply to the photo with the full text
+            return await bot.send_message(
+                chat_id=chat_id,
+                text=caption,
+                reply_to_message_id=photo_msg.message_id,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                disable_web_page_preview=True
+            )
+        except Exception as e:
+            logger.warning(f"[banner_manager] Photo+reply failed for {fname}: {e}")
+            # Fallback: just send text
+            return await bot.send_message(
+                chat_id=chat_id,
+                text=caption,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                disable_web_page_preview=True
+            )
 
     try:
         msg = await bot.send_photo(
