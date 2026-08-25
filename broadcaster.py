@@ -467,23 +467,15 @@ class MessageBroadcaster:
         interrupted_reason = None
 
         while queue:
-            send_timeout_sec = DELIVERY_PER_RECIPIENT_TIMEOUT_SEC
             if phase_deadline is not None:
                 remaining_phase_sec = phase_deadline - time.time()
-                if remaining_phase_sec <= 0:
-                    remaining_recipients_for_later.update(queue)
-                    queue.clear()
-                    interrupted_reason = "phase_budget"
-                    break
-                if remaining_phase_sec <= DELIVERY_PHASE_GUARD_SEC + 3.0:
+                if remaining_phase_sec <= DELIVERY_PHASE_GUARD_SEC:
                     remaining_recipients_for_later.update(queue)
                     queue.clear()
                     interrupted_reason = "phase_budget_guard"
                     break
-                send_timeout_sec = min(
-                    DELIVERY_PER_RECIPIENT_TIMEOUT_SEC,
-                    max(3.0, remaining_phase_sec - DELIVERY_PHASE_GUARD_SEC),
-                )
+
+            send_timeout_sec = DELIVERY_PER_RECIPIENT_TIMEOUT_SEC
             chunk = []
             for _ in range(min(len(queue), CHUNK_SIZE)):
                 chunk.append(queue.popleft())
@@ -716,14 +708,11 @@ class MessageBroadcaster:
                     f"🚫 [{self.board_id}] Удалено {len(self.blocked_users)} заблокировавших пользователей. Освобождено RAM: {freed}."
                 )
 
-    async def _send_one_guarded(self, uid: int, timeout_sec: float):
-        request_timeout_sec = min(
-            DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC,
-            max(3.0, timeout_sec - 1.0),
-        )
+    async def _send_one_guarded(self, uid: int, timeout_sec: float = DELIVERY_PER_RECIPIENT_TIMEOUT_SEC):
+        request_timeout_sec = int(min(DELIVERY_TELEGRAM_REQUEST_TIMEOUT_SEC, timeout_sec))
         try:
             return await asyncio.wait_for(
-                self._send_one(uid, int(request_timeout_sec)),
+                self._send_one(uid, request_timeout_sec),
                 timeout=timeout_sec,
             )
         except asyncio.TimeoutError as exc:

@@ -915,8 +915,8 @@ async def tagging_loop():
                 else:
                     TEMP_FAILED_FILES[file_id] = {"until": time.time() + 300, "cnt": fail_cnt}
 
-            # Пауза между файлами (чтобы не спамить в Groq)
-            await asyncio.sleep(2)
+            # Пауза между файлами (строго >= 2.5 сек для защиты API-ключей от спама)
+            await asyncio.sleep(2.5)
 
         except asyncio.CancelledError:
             break
