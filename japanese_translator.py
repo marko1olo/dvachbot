@@ -2500,12 +2500,19 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
         elif api_type == 'aibooru':
             main_params.update({'tags': final_tags, 'random': 'true'})
         elif api_type == 'safebooru':
-            main_params.update({'tags': f'{base_tags}'.strip()})
+            # Safebooru: 0-indexed 'pid' for pagination, limit up to 100
+            rand_pid = random.randint(0, 75)
+            main_params.update({'tags': f'{base_tags}'.strip(), 'limit': 50, 'pid': rand_pid})
 
         # Чистим параметры
         main_params = {k: v for k, v in main_params.items() if v is not None}
 
         body = await safe_get(config['url'], main_params)
+        if not body and api_type == 'safebooru' and main_params.get('pid', 0) > 0:
+            # Fallback to page 0 if deep page is empty
+            main_params['pid'] = 0
+            body = await safe_get(config['url'], main_params)
+            
         if not body: return None
 
         data = json.loads(body)
@@ -2515,6 +2522,15 @@ async def _fetch_from_booru_api(session, headers, booru_params: BooruAPIParams, 
         if api_type == 'gelbooru': posts = data.get('post', [])
         elif isinstance(data, list): posts = data
         
+        if not posts and api_type == 'safebooru' and main_params.get('pid', 0) > 0:
+            # Fallback to page 0 if deep page list is empty
+            main_params['pid'] = 0
+            body_fallback = await safe_get(config['url'], main_params)
+            if body_fallback:
+                data_fallback = json.loads(body_fallback)
+                if isinstance(data_fallback, list):
+                    posts = data_fallback
+
         if not posts: return None
         
         valid_posts = [post for post in posts if not _post_has_blocked_tags(post)]
