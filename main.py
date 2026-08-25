@@ -8254,14 +8254,18 @@ async def _build_work_card(user_id: int, board_id: str) -> tuple[str, InlineKeyb
 
     buff_str = f" 🔥 <b>+{salary_buff_pct}%</b>" if salary_buff_pct > 0 else " <i>нет баффов</i>"
 
+    def _fmt_reward(n: int) -> str:
+        if n >= 1000:
+            return f"{n/1000:.1f}k".replace(".0k", "k")
+        return str(n)
+
     lines = [
-        "💼 <b>БИРЖА ТРУДА ТГАЧА (КАРЬЕРА И СМЕНЫ)</b>",
-        f"<code>{'—'*32}</code>",
-        f"👤 <b>Работяга:</b> <code>[{get_anon_id(user_id)}]</code>",
-        f"💳 <b>Баланс:</b> <code>{int(balance):,} ₪</code> | ⏱ <b>Стаж:</b> <code>{total_shifts} смен</code>",
-        f"🎽 <b>Бонус к получке:</b>{buff_str}",
-        f"<code>{'—'*32}</code>",
-        "📋 <b>ДОСТУПНЫЕ ВАКАНСИИ:</b>\n"
+        "💼 <b>БИРЖА ТРУДА ТГАЧА (КАРЬЕРА)</b>",
+        f"<code>{'—'*30}</code>",
+        f"👤 <b>Работяга:</b> <code>[{get_anon_id(user_id)}]</code> | ⏱ <b>Стаж:</b> <code>{total_shifts} смен</code>",
+        f"💳 <b>Баланс:</b> <code>{int(balance):,} ₪</code> | 🎽 <b>Бонус:</b>{buff_str}",
+        f"<code>{'—'*30}</code>",
+        "📋 <b>ВАКАНСИИ:</b>"
     ]
 
     kb_buttons = []
@@ -8280,22 +8284,23 @@ async def _build_work_card(user_id: int, board_id: str) -> tuple[str, InlineKeyb
 
         parts = job['title'].split()
         short_title = f"{parts[0]} {parts[1]}" if len(parts) > 1 else (parts[0] if parts else job_id)
+        display_title = job['title'].split('/')[0].strip()
 
         if total_shifts < req_shifts:
-            status_tag = f"🔒 (нужно {req_shifts} смен)"
+            status_tag = f"🔒 <i>(нужно {req_shifts})</i>"
             btn_text = f"🔒 {short_title}"
         elif passed < base_cd:
             left_sec = base_cd - passed
             if left_sec >= 3600: cd_fmt = f"{left_sec // 3600}ч {(left_sec % 3600) // 60}м"
             elif left_sec >= 60: cd_fmt = f"{left_sec // 60}м"
             else: cd_fmt = f"{left_sec}с"
-            status_tag = f"⏳ ({cd_fmt})"
+            status_tag = f"⏳ <i>({cd_fmt})</i>"
             btn_text = f"⏳ {parts[0]} ({cd_fmt})"
         else:
-            status_tag = f"✅ <b>+{eff_min}–{eff_max} ₪</b>"
-            btn_text = f"{short_title} (+{eff_min}₪)"
+            status_tag = f"✅ <b>+{_fmt_reward(eff_min)}–{_fmt_reward(eff_max)} ₪</b>"
+            btn_text = f"{short_title} (+{_fmt_reward(eff_min)}₪)"
 
-        lines.append(f"• <b>{job['title']}</b> — {status_tag}")
+        lines.append(f"• {display_title} — {status_tag}")
         row.append(InlineKeyboardButton(text=btn_text, callback_data=f"work_do_{job_id}"))
         if len(row) == 2:
             kb_buttons.append(row)
@@ -8313,7 +8318,7 @@ async def _build_work_card(user_id: int, board_id: str) -> tuple[str, InlineKeyb
         InlineKeyboardButton(text="🎭 Персонаж RPG", callback_data="avatar_view")
     ])
 
-    lines.append(f"\n<code>{'—'*32}</code>")
+    lines.append(f"<code>{'—'*30}</code>")
     lines.append("💡 <i>Одежда в гардеробе увеличивает получку и снижает кулдауны!</i>")
 
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_buttons)

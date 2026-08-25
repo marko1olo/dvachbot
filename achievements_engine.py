@@ -32,6 +32,38 @@ ACHIEVEMENTS_CATALOG = {
         "icon": "🏆",
         "category": "work"
     },
+    "ach_work_150": {
+        "id": "ach_work_150",
+        "name": "💄 Эскортный Магнат",
+        "desc": "Закрыть 150 смен на бирже труда.",
+        "reward_cash": 2500,
+        "icon": "💄",
+        "category": "work"
+    },
+    "ach_work_250": {
+        "id": "ach_work_250",
+        "name": "🪙 Король Пампа & Дампа",
+        "desc": "Закрыть 250 смен на бирже труда.",
+        "reward_cash": 4000,
+        "icon": "🪙",
+        "category": "work"
+    },
+    "ach_work_400": {
+        "id": "ach_work_400",
+        "name": "👑 Правая Рука Абу",
+        "desc": "Закрыть 400 смен на бирже труда.",
+        "reward_cash": 7500,
+        "icon": "👑",
+        "category": "work"
+    },
+    "ach_work_600": {
+        "id": "ach_work_600",
+        "name": "👁️ Архитектор Бытия",
+        "desc": "Закрыть 600 смен на бирже труда.",
+        "reward_cash": 15000,
+        "icon": "👁️",
+        "category": "work"
+    },
     "ach_set_wasserman": {
         "id": "ach_set_wasserman",
         "name": "🦺 Истинный Онотоле",

@@ -76,6 +76,8 @@ common.rar
 dvachbot.rar
 site_tgach.rar
 bot.lock
+supervisor.lock
+bot.stop
 AUTONOMOUS_PROGRESS.md
 security_reports/
 .venv/
