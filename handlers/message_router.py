@@ -43,6 +43,59 @@ from common.bot_helpers import delete_message_after_delay
 from common.database import get_post_info_by_copy
 from common.bot_helpers import process_new_post
 from common.bot_helpers import accept_duel_logic, decline_duel_logic
+
+RE_ARCHIVE_LINK = re.compile(
+    r'^(?:https?://)?(?:t(?:elegram)?\.me/(?:tgchan_archive|tgach_archive|c/\d+|[\w_]+)/|tgach\.top/[a-z0-9]+/res/\d+(?:\.html)?#(?:post-)?|tgach\.top/[a-z0-9]+/res/|(?:>>|&gt;&gt;|#|№|Post\s*#?))\s*(\d+)',
+    re.IGNORECASE
+)
+
+async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
+    """
+    Parses archive links (t.me/tgchan_archive/..., tgach.top/..., >>12345, #12345) from the first line
+    and resolves the corresponding post_num from the database.
+    Returns: (resolved_post_num, cleaned_text)
+    """
+    if not text or not isinstance(text, str):
+        return None, text
+    
+    lines = text.split('\n', 1)
+    first_line = lines[0].strip()
+    match = RE_ARCHIVE_LINK.match(first_line)
+    if not match:
+        return None, text
+    
+    raw_id = int(match.group(1))
+    resolved_post_num = None
+    
+    try:
+        # 1. Direct post_num check
+        post = await get_post_by_num(raw_id)
+        if post:
+            resolved_post_num = raw_id
+        else:
+            # 2. Check channel_message_id in Posts
+            db = await get_pool()
+            async with db.execute("SELECT post_num FROM Posts WHERE channel_message_id = ? LIMIT 1", (raw_id,)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    resolved_post_num = row[0]
+            
+            # 3. Check PostCopies
+            if not resolved_post_num:
+                async with db.execute("SELECT post_num FROM PostCopies WHERE message_id = ? LIMIT 1", (raw_id,)) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        resolved_post_num = row[0]
+    except Exception as e:
+        print(f"⚠️ Ошибка при разрешении archive link: {e}")
+        return None, text
+                    
+    if resolved_post_num:
+        rest_text = lines[1].strip() if len(lines) > 1 else ""
+        cleaned_text = rest_text if rest_text else f">>{resolved_post_num}"
+        return resolved_post_num, cleaned_text
+        
+    return None, text
 from bot_helpers import is_admin, _get_msg_content_and_type
 from common.spam_filter import analyze_message_for_spam, SpamResult, is_spam_filtered, acquire_spam_lock, get_spam_violation_level, SPAM_RULES, _check_repeats
 from text_assets import (
@@ -789,6 +842,18 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         _media_unique_id = getattr(file_id_obj, 'file_unique_id', None)
         if message.content_type == 'sticker' and message.sticker.emoji:
              text_for_corpus = message.sticker.emoji
+
+    if not reply_to_post and text_for_corpus:
+        resolved_pnum, cleaned_corpus_text = await resolve_archive_or_inline_reply(text_for_corpus)
+        if resolved_pnum:
+            reply_to_post = resolved_pnum
+            text_for_corpus = cleaned_corpus_text
+            if message.content_type == 'text':
+                content['text'] = sanitize_html(cleaned_corpus_text)
+            elif 'caption' in content:
+                content['caption'] = sanitize_html(cleaned_corpus_text)
+            print(f"🔗 ID #{reply_to_post} распознан из архивной ссылки/цитаты в тексте сообщения!")
+
     if text_for_corpus:
         async with storage_lock: last_messages.append(text_for_corpus)
         if board_id != 'trash':
@@ -1145,6 +1210,12 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                         reply_to_post = info[0]
             raw_caption_html = getattr(message, 'caption_html_text', message.caption or "")
             safe_caption_html = sanitize_html(raw_caption_html)
+            if not reply_to_post and raw_caption_html:
+                resolved_pnum, cleaned_cap = await resolve_archive_or_inline_reply(raw_caption_html)
+                if resolved_pnum:
+                    reply_to_post = resolved_pnum
+                    safe_caption_html = sanitize_html(cleaned_cap)
+                    print(f"🔗 ID #{reply_to_post} распознан из архивной ссылки в подписи медиагруппы!")
             group.update({
                 'board_id': board_id, 'author_id': user_id, 'stream': stream,
                 'timestamp': datetime.now(UTC), 'raw_messages':[], 'caption': safe_caption_html,
