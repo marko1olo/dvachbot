@@ -243,7 +243,7 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
     if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
     caption = clean_html_for_tg(full_caption)
     ct_str = str(content_type).split('.')[-1].lower()
-    common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML"}
+    common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML", "request_timeout": 60}
     
     media_source = await _resolve_media_source(sender_bot, orig_fid, content)
 
@@ -255,11 +255,11 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
         elif ct_str == 'audio': return await sender_bot.send_audio(audio=src, **common_args)
         elif ct_str == 'voice': return await sender_bot.send_voice(voice=src, **common_args)
         elif ct_str == 'sticker':
-            await sender_bot.send_sticker(channel_id, sticker=src)
-            return await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+            await sender_bot.send_sticker(channel_id, sticker=src, request_timeout=60)
+            return await sender_bot.send_message(channel_id, header_text, parse_mode="HTML", request_timeout=30)
         elif ct_str == 'video_note':
-            await sender_bot.send_video_note(channel_id, video_note=src)
-            return await sender_bot.send_message(channel_id, header_text, parse_mode="HTML")
+            await sender_bot.send_video_note(channel_id, video_note=src, request_timeout=60)
+            return await sender_bot.send_message(channel_id, header_text, parse_mode="HTML", request_timeout=30)
         return None
 
     sent_message = None
@@ -291,16 +291,23 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
                 except TelegramRetryAfter:
                     raise
                 except Exception as ex:
-                    logger.error(f"❌ Single media fallback failed for {orig_fid}: {ex}")
+                    logger.warning(f"Single media fallback failed for {orig_fid}: {ex}")
                     return None, []
             else:
                 return None, []
     except TelegramRetryAfter:
         raise
-    except Exception as e:
-        logger.error(f"⚠️ Failed to send single archive media ({ct_str}) to channel {channel_id}: {e}")
+    except (TelegramNetworkError, asyncio.TimeoutError) as net_err:
+        logger.warning(f"⚠️ Single archive media timeout to {channel_id}: {net_err}. Sending text fallback...")
         try:
-            msg = await sender_bot.send_message(channel_id, caption, parse_mode="HTML")
+            msg = await sender_bot.send_message(channel_id, caption, parse_mode="HTML", request_timeout=30)
+            return msg, []
+        except Exception:
+            return None, []
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to send single archive media ({ct_str}) to channel {channel_id}: {e}")
+        try:
+            msg = await sender_bot.send_message(channel_id, caption, parse_mode="HTML", request_timeout=30)
             return msg, []
         except Exception:
             return None, []
@@ -342,7 +349,8 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
                     chat_id=channel_id,
                     text=text_to_send,
                     parse_mode="HTML",
-                    disable_web_page_preview=True
+                    disable_web_page_preview=True,
+                    request_timeout=30
                 )
             return sent_message, new_files_data
         except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
@@ -353,7 +361,7 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
             logger.warning(f"Archive destination invalid or bot kicked ({channel_id}): {e}")
             break
         except Exception as e:
-            logger.error(f"Archive media sending error on attempt {attempt}: {e}", exc_info=True)
+            logger.warning(f"Archive media sending error on attempt {attempt}: {e}")
             break
     return None, []
 
