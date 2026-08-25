@@ -275,13 +275,14 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                         if sleep_time > 0:
                             await asyncio.sleep(sleep_time)
 
+                        req_timeout = 45.0 if provider == "gemini" else GROQ_HTTP_TIMEOUT_SECONDS
                         try:
                             client = AsyncOpenAI(
                                 api_key=selected_key,
                                 base_url=base_url,
                                 http_client=http_client,
                                 max_retries=0,
-                                timeout=GROQ_HTTP_TIMEOUT_SECONDS,
+                                timeout=req_timeout,
                             )
                             prompt_text = system_prompt + "\nDo NOT generate thinking tags or reasoning. Output only JSON immediately."
                             content_arr = [{"type": "text", "text": prompt_text}]
@@ -297,13 +298,31 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 kwargs["temperature"] = 0.2
                                 
                             resp = await client.chat.completions.create(**kwargs)
+                            
+                            # Update post-request cooldown to ensure strict >= 3.0s between requests
+                            async with _KEY_RATE_LOCK:
+                                fin_now = time.time()
+                                _LAST_VISION_CALL_TIME[selected_key] = fin_now + 3.0
+                                if provider == "gemini":
+                                    _GLOBAL_GEMINI_LAST_CALL = max(_GLOBAL_GEMINI_LAST_CALL, fin_now + 3.0)
+                                else:
+                                    _GLOBAL_GROQ_LAST_CALL = max(_GLOBAL_GROQ_LAST_CALL, fin_now + 2.5)
+
                             content = None
+                            finish_reason = None
                             if resp and getattr(resp, "choices", None) and len(resp.choices) > 0:
-                                msg_obj = getattr(resp.choices[0], "message", None)
+                                choice = resp.choices[0]
+                                finish_reason = getattr(choice, "finish_reason", None)
+                                msg_obj = getattr(choice, "message", None)
                                 if msg_obj:
                                     content = getattr(msg_obj, "content", None)
                                     if not content and hasattr(msg_obj, "reasoning_content"):
                                         content = getattr(msg_obj, "reasoning_content", None)
+
+                            if finish_reason in ("content_filter", "safety"):
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) blocked by safety filter. Switching to next model immediately.")
+                                permanent_model_failures += 1
+                                break
                             
                             if content:
                                 # Quick cleanup just in case
@@ -354,9 +373,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
 
                             else:
                                  # Empty response (Safety filter or empty candidates)
-                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) returned empty content. Trying next candidate...")
-                                 available_keys.remove(selected_key)
-                                 continue
+                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) returned empty content. Trying next model...")
+                                 break
                         except Exception as e:
                             err_str = str(e).lower()
                             if "413" in err_str: return "error_413"
