@@ -476,15 +476,15 @@
             <div class="headline-section">
                 <span class="lead-badge">Главная тема номера</span>
                 <h2 class="lead-title">
-                    <a href="/{{ lead_post.board_id }}/res/{{ lead_post.thread_id or (lead_post.id or lead_(post.id or post.post_num)) }}.html#post-{{ (lead_post.id or lead_(post.id or post.post_num)) }}" style="color:inherit; text-decoration:none;" target="_blank">
-                        Сенсация на /{{ lead_post.board_id }}/: Манифест анона #{{ (lead_post.id or lead_(post.id or post.post_num)) }}
+                    <a href="/{{ lead_post.board_id }}/res/{{ lead_post.thread_id or (lead_post.id or lead_post.post_num) }}.html#post-{{ (lead_post.id or lead_post.post_num) }}" style="color:inherit; text-decoration:none;" target="_blank">
+                        Сенсация на /{{ lead_post.board_id }}/: Манифест анона #{{ (lead_post.id or lead_post.post_num) }}
                     </a>
                 </h2>
                 <div class="lead-meta">
-                    Автор: Аноним #{{ (lead_post.id or lead_(post.id or post.post_num)) }} • Доска: /{{ lead_post.board_id }}/
+                    Автор: Аноним #{{ (lead_post.id or lead_post.post_num) }} • Доска: /{{ lead_post.board_id }}/
                 </div>
                 <div class="lead-content drop-cap">
-                    {{ lead_post.content.text }}
+                    {{ lead_post.content.text | e }}
                 </div>
             </div>
         {% endif %}
@@ -542,7 +542,7 @@
                                 Раздел: /{{ post.board_id }}/ • Номер поста: #{{ (post.id or post.post_num) }}
                             </div>
                             <div class="article-body">
-                                {{ post.content.text }}
+                                {{ post.content.text | e }}
                             </div>
                             {% if post.content.files and post.content.files | length > 0 %}
                                 <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;">

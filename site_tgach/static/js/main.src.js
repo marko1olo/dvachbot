@@ -2242,9 +2242,10 @@ const HotkeyManager = {
         if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             if (typeof FormManager !== 'undefined') {
-                if (document.getElementById('floating-reply-box').style.display !== 'none') {
-                    FormManager.floatingTextarea.focus();
-                } else {
+                const floatBox = document.getElementById('floating-reply-box');
+                if (floatBox && floatBox.style.display !== 'none') {
+                    FormManager.floatingTextarea?.focus?.();
+                } else if (typeof FormManager.focusMainForm === 'function') {
                     FormManager.focusMainForm('');
                 }
             }
@@ -2259,7 +2260,7 @@ const HotkeyManager = {
             const btn = floating.querySelector('button[type="submit"]');
             if (btn) btn.click();
         } else {
-            const main = document.getElementById('post-form');
+            const main = document.getElementById('post-form') || (typeof FormManager !== 'undefined' ? FormManager.mainForm : null);
             const btn = main ? main.querySelector('button[type="submit"]') : null;
             if (btn) btn.click();
         }
@@ -8887,22 +8888,36 @@ const FormManager = {
         this.floatingTextarea.focus({ preventScroll: true });
     },
     hideFloating(fromHistory = false) {
-        if (!this.floatingBox) return;
-        const stopBtn = this.floatingBox.querySelector('.stop-btn');
-        if (stopBtn && stopBtn.closest('.audio-stage-record')?.style.display !== 'none') {
-            stopBtn.click();
-            const delBtn = this.floatingBox.querySelector('.delete-btn');
-            if (delBtn) setTimeout(() => delBtn.click(), 50);
+        const box = this?.floatingBox || (typeof FormManager !== 'undefined' ? FormManager.floatingBox : null) || (typeof document !== 'undefined' ? document.getElementById('floating-reply-box') : null);
+        if (!box) return;
+
+        try {
+            const stopBtn = box.querySelector?.('.stop-btn');
+            if (stopBtn && stopBtn.closest?.('.audio-stage-record')?.style?.display !== 'none') {
+                stopBtn.click();
+                const delBtn = box.querySelector?.('.delete-btn');
+                if (delBtn) setTimeout(() => delBtn.click(), 50);
+            }
+        } catch (err) {
+            console.warn('FormManager.hideFloating audio cleanup error:', err);
         }
 
-        this.floatingBox.classList.remove('active');
-        this.floatingBox.style.display = 'none';
-        document.body.style.overflow = '';
-        document.body.style.position = '';
-        document.body.style.top = '';
-        if (!fromHistory && window.innerWidth <= 768) {
-            if (BackButtonManager.stack.length > 0 && BackButtonManager.stack[BackButtonManager.stack.length - 1] === 'form') {
-                history.back();
+        if (box.classList) {
+            box.classList.remove('active');
+        }
+        if (box.style) {
+            box.style.display = 'none';
+        }
+        if (typeof document !== 'undefined' && document?.body?.style) {
+            document.body.style.overflow = '';
+            document.body.style.position = '';
+            document.body.style.top = '';
+        }
+        if (!fromHistory && typeof window !== 'undefined' && window.innerWidth <= 768) {
+            if (typeof BackButtonManager !== 'undefined' && BackButtonManager?.stack?.length > 0) {
+                if (BackButtonManager.stack[BackButtonManager.stack.length - 1] === 'form') {
+                    history.back();
+                }
             }
         }
     },
@@ -8972,10 +8987,13 @@ const FormManager = {
         }
     },
     focusMainForm(postNum, quoteText = null) {
+        if (!this.forms || this.forms.length === 0) return;
         let bestForm = this.forms[0];
+        if (!bestForm) return;
         let minDist = Infinity;
         const center = window.scrollY + window.innerHeight / 2;
         this.forms.forEach(f => {
+            if (!f) return;
             const rect = f.getBoundingClientRect();
             const formCenter = rect.top + window.scrollY + rect.height / 2;
             const dist = Math.abs(center - formCenter);
@@ -8989,8 +9007,13 @@ const FormManager = {
             container.classList.add('is-open');
             bestForm.classList.remove('is-hidden-by-toggle');
         }
-        this.appendToTextarea(bestForm.querySelector('textarea'), postNum, quoteText);
-        bestForm.scrollIntoView({ behavior: "auto", block: 'center' });
+        const ta = bestForm.querySelector ? bestForm.querySelector('textarea') : null;
+        if (ta) {
+            this.appendToTextarea(ta, postNum, quoteText);
+        }
+        if (typeof bestForm.scrollIntoView === 'function') {
+            bestForm.scrollIntoView({ behavior: "auto", block: 'center' });
+        }
     },
 };
 const VideoPopupManager = {
@@ -12060,21 +12083,27 @@ document.body.addEventListener('click', (e) => {
     }
 });
 document.addEventListener('keydown', (e) => {
+    if (!e) return;
     if (e.altKey && e.key === 'Enter') {
-        const form = document.querySelector('#floating-reply-box:not([style*="none"]) form') || FormManager.mainForm;
-        form?.querySelector('button[type="submit"]').click();
+        const form = document.querySelector('#floating-reply-box:not([style*="none"]) form') || (typeof FormManager !== 'undefined' ? FormManager.mainForm : null);
+        const submitBtn = form?.querySelector?.('button[type="submit"]');
+        if (submitBtn) submitBtn.click();
     }
     if (e.key === 'Escape') {
-        FormManager.hideFloating();
-        closeModal();
+        if (typeof FormManager !== 'undefined' && typeof FormManager.hideFloating === 'function') {
+            FormManager.hideFloating();
+        }
+        if (typeof closeModal === 'function') closeModal();
     }
     if (e.code === 'KeyR' && !e.ctrlKey && !['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) {
         e.preventDefault();
-        FormManager.focusMainForm('');
+        if (typeof FormManager !== 'undefined' && typeof FormManager.focusMainForm === 'function') {
+            FormManager.focusMainForm('');
+        }
     }
-    if ((e.ctrlKey || e.metaKey) && ['KeyB', 'KeyI', 'KeyS'].includes(e.code)) {
+    if ((e.ctrlKey || e.metaKey) && e.code && ['KeyB', 'KeyI', 'KeyS'].includes(e.code)) {
         const activeEl = document.activeElement;
-        if (activeEl.tagName === 'TEXTAREA') {
+        if (activeEl?.tagName === 'TEXTAREA') {
             e.preventDefault();
             let tag = '';
             if (e.code === 'KeyB') tag = 'b';
@@ -15065,7 +15094,9 @@ if (typeof module !== 'undefined' && module.exports) {
         handleImageError,
         PostRenderer,
         SmartLoader,
-        MediaStreamManager
+        MediaStreamManager,
+        FormManager: typeof FormManager !== 'undefined' ? FormManager : undefined,
+        MascotManager: typeof MascotManager !== 'undefined' ? MascotManager : undefined
     };
 }
 

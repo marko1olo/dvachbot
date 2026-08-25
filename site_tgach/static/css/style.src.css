@@ -8290,7 +8290,7 @@ body.font-size-large .reply-preview .post-text { font-size: 18px !important; lin
 }
 @media (max-width: 768px) {
     #mascot-wrapper {
-        z-index: 0 !important;
+        z-index: var(--z-mascot) !important;
         pointer-events: none; 
     }
     .mascot-body {

@@ -170,6 +170,7 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
     Response,
+    FileResponse,
     HTMLResponse,
     JSONResponse,
 )
@@ -10210,13 +10211,12 @@ async def get_cached_file_path(
             allow_protected_tokens=allow_protected_tokens
         )
         random.shuffle(all_bot_tokens)
-        all_bot_tokens = all_bot_tokens[:2]
-        result = await try_bot_batch(all_bot_tokens, batch_size=2)
+        result = await try_bot_batch(all_bot_tokens, batch_size=4)
 
         if result:
             return result
         if all_bot_tokens:
-            await backend.set(dead_key, "1", expire=120)
+            await backend.set(dead_key, "1", expire=30)
 
     # No mirror or bot path is available right now. Positive hits are cached by
     # owner; full-pool misses are briefly negative-cached above to avoid hammering.
@@ -10532,6 +10532,10 @@ async def get_telegram_file(
     except Exception as e:
         logger.warning(f"Error checking is_file_permanently_failed for file {file_id}: {e}")
 
+    # Parse skip and fallback parameters early for fast bypass
+    skipped_types = [s.strip().lower() for s in skip.split(",") if s.strip()] if skip else []
+    in_fallback = bool(skipped_types) or request.query_params.get("fallback") == "1"
+
     # Динамическое определение страны по IP
     client_ip = get_real_ip(request)
     user_country = await get_country_by_ip(client_ip)
@@ -10549,14 +10553,95 @@ async def get_telegram_file(
         "Access-Control-Allow-Origin": "*",
     }
 
+    # Video thumbnail resolution & dynamic ffmpeg extraction for /thumb/ & /preview/ routes
+    req_path_lower = request.url.path.lower()
+    is_thumb_endpoint = any(seg in req_path_lower for seg in ["/thumb/", "/preview/"])
+    is_video_id = file_id.startswith(("BAAC", "CQAC", "BQAC", "CgAC")) or (
+        filename and any(filename.lower().endswith(ext) for ext in [".mp4", ".webm", ".mov", ".gif"])
+    ) or any(x in req_path_lower for x in ["mp4", "webm", "mov", "gif"])
+
+    if is_thumb_endpoint and is_video_id:
+        # 1. Check DB for registered thumbnail_id
+        thumb_fid = None
+        try:
+            async with get_db_connection() as conn:
+                async with conn.execute(
+                    "SELECT thumbnail_id FROM FileRegistry WHERE file_id = ? LIMIT 1",
+                    (file_id,),
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    if row and row[0]:
+                        thumb_fid = row[0]
+                if not thumb_fid:
+                    async with conn.execute(
+                        "SELECT thumbnail_file_id FROM PostFiles WHERE original_file_id = ? LIMIT 1",
+                        (file_id,),
+                    ) as cursor:
+                        row = await cursor.fetchone()
+                        if row and row[0]:
+                            thumb_fid = row[0]
+        except Exception as e:
+            logger.warning(f"Error querying thumbnail for video {file_id}: {e}")
+
+        if thumb_fid and thumb_fid != file_id:
+            logger.info(f"Resolved video {file_id[:10]} -> thumbnail {thumb_fid[:10]}")
+            return await get_telegram_file(thumb_fid, request, filename, skip)
+
+        # 2. Check disk cache for dynamic thumbnail
+        thumb_disk_path = os.path.join("data", "thumbnails", f"{file_id}.jpg")
+        if os.path.exists(thumb_disk_path) and os.path.getsize(thumb_disk_path) > 100:
+            return FileResponse(
+                thumb_disk_path,
+                media_type="image/jpeg",
+                headers={
+                    "Cache-Control": "public, max-age=86400",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        # 3. Dynamic 1-frame ffmpeg extraction from video stream
+        if request.method != "HEAD":
+            info = await get_cached_file_path(file_id, allow_protected_tokens=True)
+            if info:
+                v_path, v_token = info
+                v_url = f"https://api.telegram.org/file/bot{v_token}/{v_path}"
+                session = _get_shared_aiohttp_session()
+                try:
+                    v_bytes = None
+                    async with session.get(v_url, headers={"Range": "bytes=0-2097151"}, timeout=15) as v_resp:
+                        if v_resp.status in (200, 206):
+                            v_bytes = await v_resp.read()
+                    if not v_bytes:
+                        async with session.get(v_url, timeout=15) as v_resp:
+                            if v_resp.status == 200:
+                                v_bytes = await v_resp.read()
+                    if v_bytes:
+                        from site_tgach.tagging_worker import extract_video_frame_cpu
+                        jpeg_bytes = await asyncio.to_thread(extract_video_frame_cpu, v_bytes)
+                        if jpeg_bytes:
+                            try:
+                                os.makedirs(os.path.join("data", "thumbnails"), exist_ok=True)
+                                with open(thumb_disk_path, "wb") as f_out:
+                                    f_out.write(jpeg_bytes)
+                            except Exception as e:
+                                logger.warning(f"Failed to cache extracted thumbnail: {e}")
+                            return Response(
+                                content=jpeg_bytes,
+                                media_type="image/jpeg",
+                                headers={
+                                    "Cache-Control": "public, max-age=86400",
+                                    "Access-Control-Allow-Origin": "*",
+                                },
+                            )
+                except Exception as e:
+                    logger.warning(f"Dynamic video frame extraction failed for {file_id}: {e}")
+
     # --- SMART WAIT LOOP ---
     backend = FastAPICache.get_backend()
     mirrors = {}
 
-    is_video_ext = any(
-        x in request.url.path.lower() for x in ["mp4", "webm", "mov", "gif"]
-    )
-    max_attempts = 15 if is_video_ext else 8
+    is_video_ext = is_video_id
+    max_attempts = 1 if in_fallback else (15 if is_video_ext else 8)
 
     for attempt in range(max_attempts):
         # 1. Проверяем зеркала в кэше/БД
@@ -10578,26 +10663,28 @@ async def get_telegram_file(
             elif not isinstance(mirrors, dict):
                 mirrors = {}
 
-        # 1. Сначала проверяем зеркала
+        # Check mirrors respecting skipped_types
         catbox_link = mirrors.get("catbox")
         zeroxzero_link = mirrors.get("0x0")
         r2_link = mirrors.get("r2") or mirrors.get("r2_url")
         freeimage_link = mirrors.get("freeimage")
         imgbb_link = mirrors.get("imgbb")
         pixhost_link = mirrors.get("pixhost")
-        if r2_link or freeimage_link or imgbb_link or pixhost_link or (not is_ru and (catbox_link or zeroxzero_link)):
+        has_valid_mirror = (
+            (r2_link and "r2" not in skipped_types)
+            or (freeimage_link and "freeimage" not in skipped_types)
+            or (imgbb_link and "imgbb" not in skipped_types)
+            or (pixhost_link and "pixhost" not in skipped_types)
+            or (not is_ru and ((catbox_link and "catbox" not in skipped_types) or (zeroxzero_link and "0x0" not in skipped_types)))
+        )
+        if has_valid_mirror:
             break
 
-        # 2. Если файл новый (нет в кэше зеркал), пробуем Telegram СРАЗУ
-        cached_path_info = await get_cached_file_path(file_id)
-        if cached_path_info:
-            break
-
-        # Если это первая попытка, пробуем форсировать получение пути из Telegram
-        if attempt == 0 and file_id.startswith(("AgAC", "AAMC", "BAAC", "CQAC", "BQAC")):
-            cached_path_info = await get_cached_file_path(file_id)
+        # 2. Если файл новый (нет в кэше зеркал), пробуем Telegram СРАЗУ (если telegram не в skipped_types)
+        if "telegram" not in skipped_types:
+            cached_path_info = await get_cached_file_path(file_id, allow_protected_tokens=True)
             if cached_path_info:
-                break  # Путь есть, можно отдавать
+                break
 
         # Если файл пометили как мертвый, нет смысла ждать
         if backend and await backend.get(f"dead_file:public:{file_id}"):
@@ -10615,8 +10702,6 @@ async def get_telegram_file(
     freeimage_link = mirrors.get("freeimage")
     imgbb_link = mirrors.get("imgbb")
     pixhost_link = mirrors.get("pixhost")
-
-    skipped_types = [s.strip().lower() for s in skip.split(",") if s.strip()] if skip else []
 
     # 0. R2 CDN Mirror (Direct для всех)
     if r2_link and "r2" not in skipped_types:
@@ -10711,7 +10796,7 @@ async def get_telegram_file(
             logger.warning(f"0x0 proxy failed for {file_id[:10]}, continuing fallback")
 
 
-    # 9. Fallback для превью (миниатюр)
+    # 9. Fallback для превью (миниатюр) и видео
     if file_id.startswith(("AgAC", "AAMC")):
         orig_fid = None
         try:
@@ -10737,6 +10822,32 @@ async def get_telegram_file(
         if orig_fid and orig_fid != file_id:
             logger.info(f"Fallback thumbnail {file_id[:10]} -> original {orig_fid[:10]}")
             return await get_telegram_file(orig_fid, request, filename, skip)
+
+    elif file_id.startswith(("BAAC", "CQAC", "BQAC", "CgAC")):
+        thumb_fid = None
+        try:
+            async with get_db_connection() as conn:
+                async with conn.execute(
+                    "SELECT thumbnail_id FROM FileRegistry WHERE file_id = ? LIMIT 1",
+                    (file_id,),
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    if row and row[0]:
+                        thumb_fid = row[0]
+                if not thumb_fid:
+                    async with conn.execute(
+                        "SELECT thumbnail_file_id FROM PostFiles WHERE original_file_id = ? LIMIT 1",
+                        (file_id,),
+                    ) as cursor:
+                        row = await cursor.fetchone()
+                        if row and row[0]:
+                            thumb_fid = row[0]
+        except Exception as e:
+            logger.error(f"Error querying thumbnail file for video fallback: {e}", exc_info=True)
+
+        if thumb_fid and thumb_fid != file_id:
+            logger.info(f"Fallback video {file_id[:10]} -> thumbnail {thumb_fid[:10]}")
+            return await get_telegram_file(thumb_fid, request, filename, skip)
 
 
     # Если совсем всё плохо

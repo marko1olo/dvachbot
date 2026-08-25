@@ -296,11 +296,11 @@
                             {% for file in op_post.content.files %}
                                 {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
                                     {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
-                                    {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/files/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
+                                    {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or file.thumbnail_url or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.original_url %}
                                     {% if file.type == 'image' or file.type == 'photo' or file.type == 'sticker' %}
                                         <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
                                             {% if file.blurhash %}
-                                                <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
+                                                 <canvas class="blurhash-canvas" data-hash="{{ file.blurhash }}" width="32" height="32"></canvas>
                                             {% endif %}
                                             <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
                                                 data-src="{{ file_thumb_src }}" 
@@ -330,6 +330,7 @@
                                                 {% elif file.type == 'video_note' %}
                                                     <video class="post-video video-note lazy-load{% if op_post.content.is_censored %} blurred-media{% endif %}" 
                                                            data-src="{{ file_orig_src }}"
+                                                           data-file-id="{{ file.thumbnail_file_id or file.original_file_id }}"
                                                            {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
                                                            autoplay 
                                                            loop 
@@ -337,7 +338,8 @@
                                                            playsinline 
                                                            onclick="event.preventDefault(); event.stopPropagation(); this.paused ? this.play() : this.pause();"
                                                            style="border-radius: 50%; object-fit: cover;" 
-                                                           referrerpolicy="no-referrer">
+                                                           referrerpolicy="no-referrer"
+                                                           onerror="handleImageError(this)">
                                                     </video>
                                                 {% elif file.type == 'video' or file.type == 'gif' or file.type == 'animation' %}
                                                     <div class="file-thumb lazy-media-wrapper" 
@@ -353,7 +355,9 @@
                                                                playsinline
                                                                loop
                                                                data-src="{{ file_orig_src }}"
+                                                               data-file-id="{{ file.thumbnail_file_id or file.original_file_id }}"
                                                                {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
+                                                               onerror="handleImageError(this)"
                                                                style="object-fit: cover; width: 100%; height: 100%; background: #000;">
                                                         </video>
                                                         <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
@@ -546,7 +550,7 @@
                                     {% for file in reply.content.files %}
                                         {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
                                                 {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
-                                                {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/files/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
+                                                {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or file.thumbnail_url or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.original_url %}
                                                 {% if file.type == 'image' or file.type == 'photo' or file.type == 'sticker' %}
                                                     <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
                                                         {% if file.blurhash %}
@@ -580,6 +584,7 @@
                                                 {% elif file.type == 'video_note' %}
                                                     <video class="post-video video-note{% if reply.content.is_censored %} blurred-media{% endif %}" 
                                                            data-src="{{ file_orig_src }}" 
+                                                           data-file-id="{{ file.thumbnail_file_id or file.original_file_id }}"
                                                            {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
                                                            autoplay 
                                                            loop 
@@ -587,7 +592,8 @@
                                                            playsinline 
                                                            onclick="event.preventDefault(); event.stopPropagation(); this.paused ? this.play() : this.pause();"
                                                            style="border-radius: 50%; object-fit: cover;" 
-                                                           referrerpolicy="no-referrer">
+                                                           referrerpolicy="no-referrer"
+                                                           onerror="handleImageError(this)">
                                                     </video>
                                                 {% elif file.type == 'video' or file.type == 'gif' or file.type == 'animation' %}
                                                     <div class="file-thumb lazy-media-wrapper" 
@@ -602,13 +608,15 @@
                                                                muted 
                                                                playsinline
                                                                loop
-                                                               data-src="{{ file_orig_src }}"
+                                                               data-src="{{ file_orig_src }}" 
+                                                               data-file-id="{{ file.thumbnail_file_id or file.original_file_id }}"
                                                                {% if file_thumb_src %}poster="{{ file_thumb_src }}"{% endif %}
+                                                               onerror="handleImageError(this)"
                                                                style="object-fit: cover; width: 100%; height: 100%; background: #000;">
                                                         </video>
                                                         <span class="lazy-badge">{{ 'GIF' if file.type in ['gif', 'animation'] else 'VIDEO' }}</span>
                                                     </div>
-                                            {% endif %}
+                                                {% endif %}
                                         {% endif %}
                                     {% endfor %}
                                 </div>

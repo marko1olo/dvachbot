@@ -38,7 +38,7 @@
         }
     </style>
 </head>
-<body {% if session.user %}data-user-id="{{ request.state.user_hash }}"{% endif %} data-site-mode="{{ site_mode }}" data-is-admin="{{ 'true' if session.user and session.user.is_admin else 'false' }}" data-user-role="{{ session.user.role if session.user else 'user' }}">
+<body {% if session.user and not session.user.is_guest %}data-user-id="{{ request.state.user_hash }}"{% endif %} data-site-mode="{{ site_mode }}" data-is-admin="{{ 'true' if session.user and session.user.is_admin else 'false' }}" data-user-role="{{ session.user.role if session.user and not session.user.is_guest else 'user' }}">
     <div id="app-loader">
         <div class="loader-content">
             <img src="/static/logo.png" alt="TGACH" width="80" height="80">
@@ -122,10 +122,10 @@
                     <a href="#" id="favourites-btn" class="header-btn" title="{{ request.state.t('fav_title') }}">⭐</a>
                     <button id="settings-btn" class="header-btn" title="{{ request.state.t('settings_btn_title') }}">⚙️</button>
                     <button id="theme-toggle" class="theme-toggle-btn" title="{{ request.state.t('theme_btn_title') }}">🌙</button>
-                    {% if session.user %}
+                    {% if session.user and not session.user.is_guest %}
                         <a href="/auth/logout" class="logout-link">{{ request.state.t('logout_btn') }}</a>
                     {% else %}
-                        <a href="/login" class="header-btn">🔑</a>
+                        <a href="/login" class="header-btn" title="Войти">🔑</a>
                     {% endif %}
                 </div>
             </div>
@@ -148,60 +148,63 @@
     </header>
     <main>
         <h3>Написать в чат</h3>
-        {% if not session.user %}
+        {% if not session.user or session.user.is_guest %}
         <div class="guest-chat-notice" style="background: var(--bg-post); border: 1px solid var(--border-post); border-left: 4px solid var(--accent-primary); padding: 12px 16px; margin-bottom: 20px; border-radius: 6px; font-weight: bold; display: flex; align-items: center; justify-content: space-between;">
             <span>❌ Гости могут только читать чат. <a href="/login?redirect={{ request.url.path }}" style="color: var(--accent-link); text-decoration: underline;">Войдите для общения</a>.</span>
         </div>
         {% endif %}
-        <form id="post-form" {% if not session.user %}style="opacity: 0.5; pointer-events: none;" title="Войдите для общения"{% endif %}>
+        <form id="post-form" {% if not session.user or session.user.is_guest %}style="opacity: 0.5; pointer-events: none;" title="Войдите для общения"{% endif %}>
             <input type="text" name="email" class="hp-field" autocomplete="off" tabindex="-1">
             <input type="text" name="username" class="name-field" autocomplete="off" tabindex="-1">
             <div class="form-fields">
                  <div class="format-buttons">
-                    <button type="button" class="format-btn" data-tag="b" title="{{ request.state.t('form_btn_bold') }}"><b>B</b></button>
-                    <button type="button" class="format-btn" data-tag="i" title="{{ request.state.t('form_btn_italic') }}"><i>I</i></button>
-                    <button type="button" class="format-btn" data-tag="s" title="{{ request.state.t('form_btn_strike') }}"><s>S</s></button>
-                    <button type="button" class="format-btn" data-tag="spoiler" title="{{ request.state.t('form_btn_spoiler') }}">Spoiler</button>
+                    <button type="button" class="format-btn" data-tag="b" title="{{ request.state.t('form_btn_bold') }}" {% if not session.user or session.user.is_guest %}disabled{% endif %}><b>B</b></button>
+                    <button type="button" class="format-btn" data-tag="i" title="{{ request.state.t('form_btn_italic') }}" {% if not session.user or session.user.is_guest %}disabled{% endif %}><i>I</i></button>
+                    <button type="button" class="format-btn" data-tag="s" title="{{ request.state.t('form_btn_strike') }}" {% if not session.user or session.user.is_guest %}disabled{% endif %}><s>S</s></button>
+                    <button type="button" class="format-btn" data-tag="spoiler" title="{{ request.state.t('form_btn_spoiler') }}" {% if not session.user or session.user.is_guest %}disabled{% endif %}>Spoiler</button>
                     <span style="border-left: 1px solid var(--border-input); margin: 0 5px;"></span>
-                    <button type="button" class="format-btn" data-tag="shake" title="{{ request.state.t('form_btn_shake') }}">😵</button>
-                    <button type="button" class="format-btn" data-tag="rainbow" title="{{ request.state.t('form_btn_rainbow') }}">🌈</button>
-                    <button type="button" class="format-btn" data-tag="blur" title="{{ request.state.t('form_btn_blur') }}">🌫️</button>
-                    <button type="button" class="format-btn" data-tag="glitch" title="{{ request.state.t('form_btn_glitch') }}">👾</button>
-                    <button type="button" class="format-btn" id="help-tags-btn" title="{{ request.state.t('form_btn_help') }}" ...>❓</button>
+                    <button type="button" class="format-btn" data-tag="shake" title="{{ request.state.t('form_btn_shake') }}" {% if not session.user or session.user.is_guest %}disabled{% endif %}>😵</button>
+                    <button type="button" class="format-btn" data-tag="rainbow" title="{{ request.state.t('form_btn_rainbow') }}" {% if not session.user or session.user.is_guest %}disabled{% endif %}>🌈</button>
+                    <button type="button" class="format-btn" data-tag="blur" title="{{ request.state.t('form_btn_blur') }}" {% if not session.user or session.user.is_guest %}disabled{% endif %}>🌫️</button>
+                    <button type="button" class="format-btn" data-tag="glitch" title="{{ request.state.t('form_btn_glitch') }}" {% if not session.user or session.user.is_guest %}disabled{% endif %}>👾</button>
+                    <button type="button" class="format-btn" id="help-tags-btn" title="{{ request.state.t('form_btn_help') }}" {% if not session.user or session.user.is_guest %}disabled{% endif %}>❓</button>
                 </div>
-                <textarea id="post-text" name="text" placeholder="{{ request.state.t('form_text_placeholder') }}" rows="4" cols="50"></textarea>
+                <textarea id="post-text" name="text" 
+                          placeholder="{% if not session.user or session.user.is_guest %}❌ Гости могут только читать чат. Войдите для общения.{% else %}{{ request.state.t('form_text_placeholder') }}{% endif %}" 
+                          rows="4" cols="50" 
+                          {% if not session.user or session.user.is_guest %}disabled{% endif %}></textarea>
                 <div id="file-preview-container" class="file-preview-container"></div>
                 <div id="poll-creator-container" class="poll-creator">
-                    <input type="text" name="poll_question" placeholder="Вопрос опроса..." maxlength="255">
+                    <input type="text" name="poll_question" placeholder="Вопрос опроса..." maxlength="255" {% if not session.user or session.user.is_guest %}disabled{% endif %}>
                     <div id="poll-options-container" class="poll-options-container">
                         <div class="poll-option">
-                            <input type="text" name="poll_options" placeholder="Вариант 1" maxlength="100">
+                            <input type="text" name="poll_options" placeholder="Вариант 1" maxlength="100" {% if not session.user or session.user.is_guest %}disabled{% endif %}>
                         </div>
                         <div class="poll-option">
-                            <input type="text" name="poll_options" placeholder="Вариант 2" maxlength="100">
+                            <input type="text" name="poll_options" placeholder="Вариант 2" maxlength="100" {% if not session.user or session.user.is_guest %}disabled{% endif %}>
                         </div>
                     </div>
                     <div class="poll-controls">
-                        <button id="add-poll-option">+ Добавить вариант</button>
+                        <button id="add-poll-option" {% if not session.user or session.user.is_guest %}disabled{% endif %}>+ Добавить вариант</button>
                     </div>
                 </div>
             </div>
             <div class="form-controls">
-                <label for="file-input" class="file-input-label">
+                <label for="file-input" class="file-input-label" {% if not session.user or session.user.is_guest %}style="pointer-events: none; opacity: 0.5;"{% endif %}>
                     <span class="file-btn-text">{{ request.state.t('btn_attach') }}</span>
                     <span class="file-btn-icon">📎</span>
                 </label>
-                <label class="picrandom-container" title="Прикрепить случайную картинку из архива">
-                    <input type="checkbox" name="picrandom" value="true">
+                <label class="picrandom-container" title="Прикрепить случайную картинку из архива" {% if not session.user or session.user.is_guest %}style="pointer-events: none; opacity: 0.5;"{% endif %}>
+                    <input type="checkbox" name="picrandom" value="true" {% if not session.user or session.user.is_guest %}disabled{% endif %}>
                     <span class="picrandom-icon">🎲</span>
                     <span class="picrandom-label">Rand</span>
                 </label>
-                <input type="file" id="file-input" name="images" accept="image/*,video/mp4,video/webm" multiple style="display: none;">
+                <input type="file" id="file-input" name="images" accept="image/*,video/mp4,video/webm" multiple style="display: none;" {% if not session.user or session.user.is_guest %}disabled{% endif %}>
                 <input type="hidden" name="board_id" value="{{ board_id }}">
                 <input type="hidden" name="reply_to" value="">
-                <button type="button" id="toggle-poll-creator" class="btn btn-secondary" title="Создать опрос" style="margin-right: 5px;">📊</button>
+                <button type="button" id="toggle-poll-creator" class="btn btn-secondary" title="Создать опрос" style="margin-right: 5px;" {% if not session.user or session.user.is_guest %}disabled{% endif %}>📊</button>
                 <input type="hidden" name="post_mode" value="chat_post">
-                <button type="submit">Отправить</button>
+                <button type="submit" {% if not session.user or session.user.is_guest %}disabled{% endif %}>Отправить</button>
                 <div class="loading-indicator-inline">Отправка...</div>
             </div>
         </form>
@@ -239,7 +242,7 @@
                                 {% for file in post.content.files %}
                                     {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
                                         {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
-                                        {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/files/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
+                                        {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                                                 {% if file.type == 'image' or file.type == 'photo' %}
                                                     <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}">
                                                         <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 

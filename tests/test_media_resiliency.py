@@ -263,7 +263,9 @@ async def test_error_no_tags_file_resiliency():
             assert f.get("thumbnail_url") != "", "thumbnail_url must be non-empty for error_no_tags file"
 
         # 3. Verify /files/{file_id} returns HTTP 200/307 (with mocked cached file path)
-        with patch("site_tgach.main.get_cached_file_path", new_callable=AsyncMock) as mock_path:
+        with patch("site_tgach.main.get_cached_file_path", new_callable=AsyncMock) as mock_path, \
+             patch("site_tgach.main.get_country_by_ip", new_callable=AsyncMock) as mock_country:
+            mock_country.return_value = "US"
             mock_path.return_value = ("photos/fake.jpg", "fake_token")
 
             resp = client.get(f"/files/{no_tags_fid}", follow_redirects=False)
@@ -309,4 +311,53 @@ async def test_missing_thumbnail_file_id_fallback():
         assert f.get("original_url") == f"/files/{valid_fid}"
         assert f.get("thumbnail_url") != "", "thumbnail_url must be populated with fallback URL when thumbnail_file_id is missing"
         assert f.get("thumbnail_url") == f["original_url"], "thumbnail_url should fallback to original_url or /files/{file_id}"
+
+
+@pytest.mark.asyncio
+async def test_fast_fallback_bypass_retry_loop():
+    """Verify that ?fallback=1 or ?skip=... causes get_telegram_file to execute single-attempt fast path without sleeping."""
+    fid = "test_fast_fallback_fid_123"
+
+    with patch("site_tgach.main.get_cached_file_path", new_callable=AsyncMock) as mock_get_path:
+        mock_get_path.return_value = (None, None)
+
+        # Call with fallback=1
+        start_time = time.time()
+        resp = client.get(f"/files/{fid}?fallback=1")
+        elapsed = time.time() - start_time
+
+        # Should fast-fail in < 1.0 second (no 7.5s retry delay)
+        assert resp.status_code == 404
+        assert elapsed < 2.0, f"Expected fast fallback under 2.0s, took {elapsed}s"
+
+
+@pytest.mark.asyncio
+async def test_thumb_endpoint_video_resolution_and_fallback():
+    """Verify /thumb/{file_id} properly resolves thumbnails via FileRegistry / PostFiles or fallback."""
+    from common.db_pool import get_pool, db_lock
+
+    db = await get_pool()
+    video_fid = f"test_video_fid_{int(time.time())}"
+    thumb_fid = f"test_thumb_fid_{int(time.time())}"
+
+    # Insert FileRegistry mapping
+    async with db_lock:
+        await db.execute(
+            "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, thumbnail_id, file_type, created_at) VALUES (?, ?, ?, 'video', ?)",
+            (f"sha_{video_fid}", video_fid, thumb_fid, time.time()),
+        )
+
+    try:
+        with patch("site_tgach.main.get_cached_file_path", new_callable=AsyncMock) as mock_get_path, \
+             patch("site_tgach.main.get_country_by_ip", new_callable=AsyncMock) as mock_country:
+            mock_country.return_value = "US"
+            # When requesting thumb_fid, return a path
+            mock_get_path.side_effect = lambda fid, *args, **kwargs: ("thumbnails/sample.jpg", "token_1") if fid == thumb_fid else (None, None)
+
+            resp = client.get(f"/thumb/{video_fid}", follow_redirects=False)
+            assert resp.status_code in (200, 307), f"Expected 200 or 307 redirect to resolved thumbnail, got {resp.status_code}"
+    finally:
+        async with db_lock:
+            await db.execute("DELETE FROM FileRegistry WHERE file_id = ?", (video_fid,))
+
 
