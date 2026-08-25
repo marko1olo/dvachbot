@@ -1003,20 +1003,37 @@ async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id
         if current_smute and current_smute > datetime.now(UTC):
             return
             
-        base_mute_minutes = 5
-        multiplier = 2 ** max(0, level - 1)
-        mute_seconds = base_mute_minutes * 60 * multiplier
+        # Адекватная градация с жестким потолком (Hard Cap) в 15 минут:
+        # level 1 -> 2 мин, level 2 -> 5 мин, level 3 -> 10 мин, level >= 4 -> 15 мин
+        tier_minutes = {1: 2, 2: 5, 3: 10}
+        mute_minutes = tier_minutes.get(level, 15)
+        mute_seconds = mute_minutes * 60
         expires_dt = datetime.now(UTC) + timedelta(seconds=mute_seconds)
         
         b_data.setdefault('shadow_mutes', {})[user_id] = expires_dt
         from common.database import update_shadow_mute, log_global_event
         await update_shadow_mute(user_id, board_id, expires_dt.timestamp())
         
-        violation_type = {'text': 'текстовый спам', 'sticker': 'спам стикерами', 'animation': 'спам гифками', 'audio': 'спам аудио'}.get(msg_type, 'спам')
-        mute_duration = f"{mute_seconds // 60} мин"
-        log_msg = f"👻 [{board_id}] ТИХИЙ SHADOW Мут за спам: user {user_id}, тип: {violation_type}, уровень: {level}, длительность: {mute_duration}"
+        violation_type = {
+            'text': 'текстовый спам', 'sticker': 'спам стикерами', 'animation': 'спам гифками',
+            'audio': 'спам аудио', 'photo': 'спам фото', 'video': 'спам видео', 'media': 'спам медиа'
+        }.get(msg_type, 'частый постинг')
+        mute_duration = f"{mute_minutes} мин"
+        log_msg = f"⏳ [{board_id}] Авто-кулдаун за частый постинг: user {user_id}, тип: {violation_type}, уровень: {level}, длительность: {mute_duration}"
         print(log_msg)
         spawn_task(log_global_event('bot', log_msg))
+        
+        # Прозрачное предупреждение пользователю
+        try:
+            warn_text = (
+                f"⚠️ <b>Слишком частый постинг!</b>\n\n"
+                f"Ты отправляешь сообщения слишком быстро. Включён временный кулдаун на <b>{mute_duration}</b>.\n"
+                f"Подожди немного, и возможность постить автоматически восстановится."
+            )
+            sent = await bot_instance.send_message(user_id, warn_text, parse_mode="HTML")
+            spawn_task(delete_message_after_delay(sent, 10))
+        except Exception:
+            pass
 
 async def process_shadow_reject(ctx: shared_state.ShadowRejectContext):
 

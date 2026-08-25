@@ -26,13 +26,17 @@ _reaction_banned_users: Dict[str, set] = defaultdict(set)
 # --- Configuration ---
 SPAM_RULES = {
     'text': {'max_repeats': 5, 'min_length': 4, 'window_sec': 15, 'max_per_window': 10},
-    'sticker': {'max_repeats': 4, 'max_per_window': 8, 'window_sec': 18},
-    'animation': {'max_repeats': 4, 'max_per_window': 8, 'window_sec': 20}
+    'sticker': {'max_repeats': 5, 'max_per_window': 10, 'window_sec': 20},
+    'animation': {'max_repeats': 5, 'max_per_window': 10, 'window_sec': 20},
+    'photo': {'max_repeats': 8, 'max_per_window': 15, 'window_sec': 30},
+    'video': {'max_repeats': 8, 'max_per_window': 15, 'window_sec': 30},
+    'document': {'max_repeats': 8, 'max_per_window': 15, 'window_sec': 30},
+    'media': {'max_repeats': 10, 'max_per_window': 20, 'window_sec': 30}
 }
-SPAM_LIMIT = 14
+SPAM_LIMIT = 20
 SPAM_WINDOW = 15
 
-IMAGE_SPAM_LIMIT = 30
+IMAGE_SPAM_LIMIT = 40
 IMAGE_SPAM_WINDOW = 300
 
 def set_spam_filter_words(board_id: str, words: set):
@@ -185,14 +189,17 @@ async def analyze_message_for_spam(user_id: int, board_id: str, content: str, ms
         if not _check_cross_board_spam(user_id, board_id, content, msg_type, raw_content_type):
             return SpamResult.GLOBAL_BAN_REQUIRED, 0
 
-    rules = SPAM_RULES.get(msg_type)
+    rules = SPAM_RULES.get(msg_type) or SPAM_RULES.get(raw_content_type)
+    if not rules:
+        if raw_content_type in ['photo', 'video', 'document', 'audio', 'voice']:
+            rules = SPAM_RULES.get('media')
     if not rules:
         return SpamResult.CLEAN, 0
 
     now = datetime.now(UTC)
     violations = _spam_violations[board_id].setdefault(user_id, {'level': 0, 'last_reset': now})
     
-    if now - violations['last_reset'] > timedelta(hours=1):
+    if now - violations['last_reset'] > timedelta(minutes=5):
         violations['level'] = 0
         violations['last_reset'] = now
 
