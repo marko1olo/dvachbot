@@ -82,11 +82,45 @@ def _read_heartbeat() -> dict | None:
     return None
 
 
+SUPERVISOR_LOCK = ROOT / "supervisor.lock"
+
+
+def _acquire_supervisor_lock() -> bool:
+    if SUPERVISOR_LOCK.exists():
+        try:
+            old_pid_str = SUPERVISOR_LOCK.read_text(encoding="utf-8").strip()
+            if old_pid_str.isdecimal():
+                old_pid = int(old_pid_str)
+                if old_pid != os.getpid():
+                    import psutil
+                    if psutil.pid_exists(old_pid):
+                        p = psutil.Process(old_pid)
+                        cmd = " ".join(p.cmdline()).lower()
+                        if "bot_watchdog" in cmd:
+                            log(f"Another supervisor instance is already active (PID={old_pid}). Exiting immediately to prevent duplicates.")
+                            return False
+        except Exception:
+            pass
+    try:
+        SUPERVISOR_LOCK.write_text(str(os.getpid()), encoding="utf-8")
+        return True
+    except Exception:
+        return True
+
+
+def _release_supervisor_lock() -> None:
+    try:
+        if SUPERVISOR_LOCK.exists():
+            old_pid_str = SUPERVISOR_LOCK.read_text(encoding="utf-8").strip()
+            if old_pid_str == str(os.getpid()):
+                SUPERVISOR_LOCK.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _read_lock_pid() -> int | None:
     try:
         text = BOT_LOCK.read_text(encoding="utf-8").strip()
-        # isdecimal: except ниже ловит только OSError, а int() от
-        # надстрочной цифры дал бы ValueError мимо него
         if text.isdecimal():
             return int(text)
     except OSError:
@@ -110,9 +144,21 @@ def _is_bot_process(pid: int) -> bool:
 
 def _locked_live_bot_pid() -> int | None:
     lock_pid = _read_lock_pid()
-    if lock_pid is None or not _is_bot_process(lock_pid):
-        return None
-    return lock_pid
+    if lock_pid is not None and _is_bot_process(lock_pid):
+        return lock_pid
+    try:
+        import psutil
+        for p in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if p.info['pid'] == os.getpid(): continue
+                cmd = " ".join(p.info.get('cmdline') or []).lower()
+                if "python" in (p.info.get('name') or '').lower() and "main.py" in cmd and "dvachbot" in cmd:
+                    return p.info['pid']
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
 
 
 def _heartbeat_age_sec(payload: dict | None) -> float | None:
@@ -434,41 +480,46 @@ def _monitor_child(child: subprocess.Popen) -> bool:
 
 def main() -> int:
     LOG_DIR.mkdir(exist_ok=True)
-    log("Supervisor started")
-    while True:
-        if _stop_requested():
-            log("Stop request detected before child start; supervisor exits")
-            return 0
-        live_pid = _locked_live_bot_pid()
-        if live_pid:
-            log(
-                f"bot.lock points to live pid={live_pid}; another bot is already running; supervisor exits"
-            )
-            log(
-                "Existing live bot stdout is not attached to this window; "
-                f"delivery stdout log={STDOUT_LOG}"
-            )
-            log(
-                f"Runtime JSON/health log={LOG_DIR / 'bot_runtime.log'}; heartbeat={HEARTBEAT_LOG}"
-            )
-            log(
-                "Use stop_bot.bat for controlled stop, or stop_bot.bat /force only if queue loss is accepted"
-            )
-            return 0
-        child = _start_child()
-        should_exit = _monitor_child(child)
-        if should_exit:
-            return 0
+    if not _acquire_supervisor_lock():
+        return 0
+    try:
+        log("Supervisor started")
+        while True:
+            if _stop_requested():
+                log("Stop request detected before child start; supervisor exits")
+                return 0
+            live_pid = _locked_live_bot_pid()
+            if live_pid:
+                log(
+                    f"bot.lock/process table points to live pid={live_pid}; another bot is already running; supervisor exits"
+                )
+                log(
+                    "Existing live bot stdout is not attached to this window; "
+                    f"delivery stdout log={STDOUT_LOG}"
+                )
+                log(
+                    f"Runtime JSON/health log={LOG_DIR / 'bot_runtime.log'}; heartbeat={HEARTBEAT_LOG}"
+                )
+                log(
+                    "Use stop_bot.bat for controlled stop, or stop_bot.bat /force only if queue loss is accepted"
+                )
+                return 0
+            child = _start_child()
+            should_exit = _monitor_child(child)
+            if should_exit:
+                return 0
 
-        if _stop_requested():
-            log("Stop request detected before restart; supervisor exits")
-            return 0
-        log(f"Restarting after {RESTART_DELAY_SEC}s")
-        try:
-            time.sleep(RESTART_DELAY_SEC)
-        except KeyboardInterrupt:
-            log("Supervisor stopped by user during restart delay")
-            return 0
+            if _stop_requested():
+                log("Stop request detected before restart; supervisor exits")
+                return 0
+            log(f"Restarting after {RESTART_DELAY_SEC}s")
+            try:
+                time.sleep(RESTART_DELAY_SEC)
+            except KeyboardInterrupt:
+                log("Supervisor stopped by user during restart delay")
+                return 0
+    finally:
+        _release_supervisor_lock()
 
 
 if __name__ == "__main__":
@@ -476,4 +527,5 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except KeyboardInterrupt:
         log("Supervisor stopped by user (KeyboardInterrupt)")
+        _release_supervisor_lock()
         raise SystemExit(0)
