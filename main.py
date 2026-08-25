@@ -2525,12 +2525,32 @@ async def _delete_posts_from_channels(channel_messages_to_delete: list, bot_inst
     if not channel_messages_to_delete:
         return
     archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-    for chan_id, msg_id, b_id in channel_messages_to_delete:
-        deleter = archive_bot if archive_bot else (GLOBAL_BOTS.get(b_id) or bot_instance)
-        try:
-            await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
-        except Exception:
-            pass
+    for item in channel_messages_to_delete:
+        if len(item) == 3:
+            chan_id, msg_id, b_id = item
+        elif len(item) == 2:
+            chan_id, msg_id = item
+            b_id = None
+        else:
+            continue
+            
+        bot_candidates = []
+        if archive_bot:
+            bot_candidates.append(archive_bot)
+        if b_id and b_id in GLOBAL_BOTS and GLOBAL_BOTS[b_id] and GLOBAL_BOTS[b_id] not in bot_candidates:
+            bot_candidates.append(GLOBAL_BOTS[b_id])
+        if bot_instance and bot_instance not in bot_candidates:
+            bot_candidates.append(bot_instance)
+        for b in GLOBAL_BOTS.values():
+            if b and b not in bot_candidates:
+                bot_candidates.append(b)
+                
+        for b in bot_candidates:
+            try:
+                await b.delete_message(chat_id=chan_id, message_id=msg_id)
+                break
+            except Exception:
+                continue
 
 async def _delete_posts_from_pm_api(messages_to_delete_from_api: list, bot_instance) -> int:
     import asyncio
@@ -2724,13 +2744,7 @@ async def delete_single_post(post_num: int, bot_instance: Bot) -> int:
             else:
                 message_to_post.pop((uid, mid_or_list), None)
     if channel_copies:
-        archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
-        deleter = archive_bot if archive_bot else (GLOBAL_BOTS.get(board_id) or bot_instance)
-        for chan_id, msg_id in channel_copies:
-            try:
-                await deleter.delete_message(chat_id=chan_id, message_id=msg_id)
-            except Exception:
-                pass
+        await _delete_posts_from_channels([(chan_id, msg_id, board_id) for chan_id, msg_id in channel_copies], bot_instance)
     if not messages_to_delete_info:
         return 1 if deleted_from_db else 0
     
@@ -19963,7 +19977,37 @@ async def cmd_sdel(message: types.Message, board_id: str | None, stream: str = '
             tasks.append(task)
     results = await asyncio.gather(*tasks, return_exceptions=True)
     deleted_count = sum(1 for res in results if res is True)
-    await log_global_event('bot', f"👻 SDEL: Админ {message.from_user.id} скрытно удалил пост #{post_num} на /{board_id}/ (удалено {deleted_count} копий)")
+    
+    # Сносим пост из каналов архива и зеркал
+    channel_copies = await get_all_channel_copies(post_num)
+    if channel_copies:
+        await _delete_posts_from_channels([(chan_id, msg_id, board_id) for chan_id, msg_id in channel_copies], message.bot)
+
+    # Очищаем БД и помечаем как shadow
+    try:
+        db = await get_pool()
+        async with db_lock:
+            await db.execute("DELETE FROM ChannelCopies WHERE post_num = ?", (post_num,))
+            await db.execute("DELETE FROM PostCopies WHERE post_num = ? AND recipient_id != ?", (post_num, author_id))
+            await db.execute("UPDATE Posts SET is_shadow = 1 WHERE post_num = ?", (post_num,))
+            await db.commit()
+    except Exception as db_err:
+        runtime_logger.error(f"DB update error in cmd_sdel for #{post_num}: {db_err}")
+
+    # Очищаем RAM
+    async with storage_lock:
+        if post_num in messages_storage:
+            messages_storage[post_num]['is_shadow'] = 1
+        copies = post_to_messages.get(post_num, {})
+        for uid, mid in list(copies.items()):
+            if uid != author_id:
+                if isinstance(mid, list):
+                    for m in mid: message_to_post.pop((uid, m), None)
+                else:
+                    message_to_post.pop((uid, mid), None)
+                copies.pop(uid, None)
+
+    await log_global_event('bot', f"👻 SDEL: Админ {message.from_user.id} скрытно удалил пост #{post_num} на /{board_id}/ (удалено {deleted_count} копий и архив)")
     if lang == 'en':
         report = f"👻 Post #{post_num} shadow deleted.\nRemoved copies: {deleted_count} of {len(all_copies) - 1}."
     elif lang == 'jp':
