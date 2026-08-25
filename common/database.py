@@ -6662,6 +6662,8 @@ async def get_activity_history(days: int = 7) -> dict:
         return {}
 async def get_newspaper_data(date_str: str) -> dict:
     import datetime
+    import json
+    import re
     from common.db_pool import get_pool
     db = await get_pool()
     db.row_factory = aiosqlite.Row
@@ -6679,9 +6681,34 @@ async def get_newspaper_data(date_str: str) -> dict:
         "new_threads_count": 0,
         "top_threads": [],
         "longest_posts": [],
-        "recent_media": []
+        "recent_media": [],
+        "quotes": []
     }
     
+    def _parse_post_content(raw):
+        if not raw:
+            return "", []
+        text = ""
+        files = []
+        if isinstance(raw, str) and raw.startswith("{"):
+            try:
+                data = json.loads(raw)
+                text = data.get("text") or data.get("caption") or ""
+                if "files" in data and isinstance(data["files"], list):
+                    files = data["files"]
+                elif "file_id" in data:
+                    files.append({
+                        "original_file_id": data["file_id"],
+                        "type": data.get("type", "photo"),
+                        "filename": data.get("filename", "")
+                    })
+            except Exception:
+                text = raw
+        else:
+            text = str(raw)
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n").strip()
+        return text, files
+
     try:
         # 1. Total posts
         async with db.execute("SELECT COUNT(*) FROM Posts WHERE timestamp BETWEEN ? AND ? AND IFNULL(is_shadow, 0) = 0", (start_ts, end_ts)) as cursor:
@@ -6704,7 +6731,7 @@ async def get_newspaper_data(date_str: str) -> dict:
             FROM Posts p
             JOIN Threads t ON p.thread_id = t.thread_id
             WHERE p.timestamp BETWEEN ? AND ? AND p.thread_id IS NOT NULL AND IFNULL(p.is_shadow, 0) = 0
-            GROUP BY p.thread_id ORDER BY cnt DESC LIMIT 5
+            GROUP BY p.thread_id ORDER BY cnt DESC LIMIT 6
         """
         async with db.execute(query_threads, (start_ts, end_ts)) as cursor:
             rows = await cursor.fetchall()
@@ -6716,25 +6743,65 @@ async def get_newspaper_data(date_str: str) -> dict:
                     "posts_count": r["cnt"]
                 })
                 
-        # 5. Longest posts (slang columns)
+        # 5. Media Gallery (Photos, Videos, GIFs)
+        query_media = """
+            SELECT pf.post_num, pf.file_type, pf.original_file_id, pf.thumbnail_file_id, pf.original_url, pf.thumbnail_url,
+                   p.board_id, p.thread_id, p.content, p.timestamp
+            FROM PostFiles pf
+            JOIN Posts p ON pf.post_num = p.post_num
+            WHERE p.timestamp BETWEEN ? AND ? AND IFNULL(p.is_shadow, 0) = 0
+            ORDER BY p.post_num DESC LIMIT 16
+        """
+        async with db.execute(query_media, (start_ts, end_ts)) as cursor:
+            rows = await cursor.fetchall()
+            for r in rows:
+                c_text, _ = _parse_post_content(r["content"])
+                res["recent_media"].append({
+                    "post_num": r["post_num"],
+                    "board_id": r["board_id"],
+                    "thread_id": r["thread_id"],
+                    "file_type": r["file_type"] or "photo",
+                    "original_file_id": r["original_file_id"],
+                    "thumbnail_file_id": r["thumbnail_file_id"],
+                    "original_url": r["original_url"],
+                    "thumbnail_url": r["thumbnail_url"],
+                    "caption": c_text[:120]
+                })
+
+        # 6. Curated Stories & Longest Posts
         query_longest = """
             SELECT p.post_num, p.board_id, p.thread_id, p.content, p.author_id, p.timestamp
             FROM Posts p
-            WHERE p.timestamp BETWEEN ? AND ? AND IFNULL(p.is_shadow, 0) = 0 AND length(p.content) > 30
-            ORDER BY length(p.content) DESC LIMIT 8
+            WHERE p.timestamp BETWEEN ? AND ? AND IFNULL(p.is_shadow, 0) = 0 AND length(p.content) > 40
+            ORDER BY length(p.content) DESC LIMIT 35
         """
         async with db.execute(query_longest, (start_ts, end_ts)) as cursor:
             rows = await cursor.fetchall()
             for r in rows:
+                c_text, c_files = _parse_post_content(r["content"])
+                # Filter out bot spam, broadcast logs, character floods
+                if len(c_text) < 40:
+                    continue
+                if "Статистика досок" in c_text or "### NEWSPAPER" in c_text or "t.me/dvach_" in c_text:
+                    continue
+                if re.search(r"(.)\1{12,}", c_text):
+                    continue
+                
                 res["longest_posts"].append({
                     "post_num": r["post_num"],
+                    "id": r["post_num"],
                     "board_id": r["board_id"],
                     "thread_id": r["thread_id"],
-                    "content": r["content"],
+                    "content": {
+                        "text": c_text,
+                        "files": c_files
+                    },
                     "author_id": r["author_id"],
                     "timestamp": r["timestamp"]
                 })
-                
+                if len(res["longest_posts"]) >= 8:
+                    break
+
         return res
     except Exception as e:
         print(f"Newspaper data error: {e}")

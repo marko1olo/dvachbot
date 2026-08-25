@@ -5,72 +5,79 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Газета ТГАЧ Daily — Выпуск от {{ data.date }}</title>
     <link rel="icon" href="/static/favicon.ico">
-    <meta name="description" content="Читать свежий выпуск газеты «Вестник ТГАЧ» от {{ data.date }}. Все интересные посты, статистика активности борды и медиахроника за сутки.">
+    <meta name="description" content="Свежий выпуск газеты «Вестник ТГАЧ» от {{ data.date }}. Главные драмы, статистика борды, фотохроника и лучшие посты анонимов за сутки.">
     <meta property="og:title" content="Газета ТГАЧ Daily — Выпуск от {{ data.date }}">
-    <meta property="og:description" content="Читать свежий выпуск газеты «Вестник ТГАЧ» от {{ data.date }}. Все интересные посты, статистика активности борды и медиахроника за сутки.">
+    <meta property="og:description" content="Свежий выпуск газеты «Вестник ТГАЧ» от {{ data.date }}. Главные драмы, статистика борды, фотохроника и лучшие посты анонимов за сутки.">
     <meta property="og:type" content="article">
     <meta property="og:url" content="{{ request.url }}">
     <meta property="og:image" content="{{ request.base_url }}static/logo.png">
     
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "NewsArticle",
-      "headline": "Газета ТГАЧ Daily — Выпуск от {{ data.date }}",
-      "datePublished": "{{ data.date }}T00:00:00Z",
-      "author": {
-        "@type": "Organization",
-        "name": "ТГАЧ"
-      },
-      "publisher": {
-        "@type": "Organization",
-        "name": "ТГАЧ",
-        "logo": {
-          "@type": "ImageObject",
-          "url": "{{ request.base_url }}static/logo.png"
-        }
-      },
-      "description": "Сводка событий, популярные треды и самые обсуждаемые посты имиджборды ТГАЧ за {{ data.date }}."
-    }
-    </script>
     <style>
-        /* Базовые цвета и стили для создания эффекта винтажной газеты */
         :root {
-            --bg-paper: #f4ecd8;
-            --text-ink: #1c1c1c;
+            --bg-paper: #f7f1e3;
+            --bg-card: #fffdf9;
+            --text-ink: #1f1f1f;
+            --text-muted: #555555;
             --accent-red: #8b0000;
+            --accent-blue: #1b4d7e;
             --border-ink: #2b2b2b;
-            --shadow-paper: 0 10px 30px rgba(0,0,0,0.15);
+            --border-light: #dcd1be;
+            --shadow-paper: 0 12px 35px rgba(0,0,0,0.12);
         }
 
         body.theme-dark {
-            --bg-paper: #1c1e22;
+            --bg-paper: #16181c;
+            --bg-card: #1f2328;
             --text-ink: #e6edf3;
-            --accent-red: #ff4500;
+            --text-muted: #8b949e;
+            --accent-red: #ff5252;
+            --accent-blue: #58a6ff;
             --border-ink: #444c56;
-            --shadow-paper: 0 10px 30px rgba(0,0,0,0.5);
+            --border-light: #30363d;
+            --shadow-paper: 0 12px 35px rgba(0,0,0,0.6);
+        }
+
+        body.theme-cyber {
+            --bg-paper: #0b0e14;
+            --bg-card: #121824;
+            --text-ink: #00ffcc;
+            --text-muted: #6b829d;
+            --accent-red: #ff0055;
+            --accent-blue: #00d4ff;
+            --border-ink: #00ffcc;
+            --border-light: #1f364d;
+            --shadow-paper: 0 0 30px rgba(0,255,204,0.15);
         }
 
         body {
             background-color: var(--bg-paper);
             color: var(--text-ink);
-            font-family: 'Georgia', 'Playfair Display', serif;
+            font-family: 'Georgia', 'Playfair Display', 'Times New Roman', serif;
             margin: 0;
-            padding: 20px;
+            padding: 20px 10px;
             transition: background-color 0.3s, color 0.3s;
+            line-height: 1.55;
         }
 
         .newspaper-container {
-            max-width: 1000px;
+            max-width: 1100px;
             margin: 0 auto;
             background-color: var(--bg-paper);
-            padding: 40px;
+            padding: 30px 40px;
             box-shadow: var(--shadow-paper);
             border: 4px double var(--border-ink);
             position: relative;
+            box-sizing: border-box;
         }
 
-        /* Заголовок газеты */
+        @media (max-width: 768px) {
+            .newspaper-container {
+                padding: 15px;
+                border-width: 2px;
+            }
+        }
+
+        /* Шапка газеты */
         header {
             text-align: center;
             border-bottom: 5px double var(--border-ink);
@@ -78,326 +85,562 @@
             padding-bottom: 15px;
         }
 
-        .header-meta {
+        .header-topbar {
             display: flex;
             justify-content: space-between;
+            align-items: center;
             border-bottom: 2px solid var(--border-ink);
-            padding: 5px 10px;
-            font-size: 0.9em;
+            padding: 6px 10px;
+            font-size: 0.85em;
             text-transform: uppercase;
             font-weight: bold;
             letter-spacing: 1px;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+            gap: 8px;
         }
 
         .newspaper-title {
-            font-size: 4.5em;
+            font-size: 4.8em;
             font-weight: 900;
             text-transform: uppercase;
             margin: 0;
             letter-spacing: -2px;
             color: var(--text-ink);
             font-family: 'Times New Roman', Times, serif;
-        }
-
-        .newspaper-subtitle {
-            font-size: 1.2em;
-            font-style: italic;
-            margin: 5px 0 15px 0;
-            opacity: 0.8;
-        }
-
-        /* Сетка колонок */
-        .columns-grid {
-            display: grid;
-            grid-template-columns: 2fr 1fr;
-            gap: 30px;
+            line-height: 1;
         }
 
         @media (max-width: 768px) {
-            .columns-grid {
+            .newspaper-title {
+                font-size: 2.8em;
+                letter-spacing: -1px;
+            }
+        }
+
+        .newspaper-subtitle {
+            font-size: 1.15em;
+            font-style: italic;
+            margin: 8px 0 15px 0;
+            color: var(--text-muted);
+        }
+
+        .theme-toggles {
+            display: flex;
+            gap: 6px;
+            justify-content: center;
+            margin-top: 5px;
+        }
+
+        .theme-btn {
+            background: var(--bg-card);
+            border: 1px solid var(--border-ink);
+            color: var(--text-ink);
+            padding: 4px 10px;
+            font-size: 0.8em;
+            cursor: pointer;
+            border-radius: 3px;
+            font-family: inherit;
+            font-weight: bold;
+        }
+        .theme-btn:hover {
+            background: var(--accent-red);
+            color: #fff;
+        }
+
+        /* Главная статья номера */
+        .headline-section {
+            border-bottom: 3px double var(--border-ink);
+            padding-bottom: 25px;
+            margin-bottom: 30px;
+        }
+
+        .lead-badge {
+            display: inline-block;
+            background: var(--accent-red);
+            color: #ffffff;
+            font-size: 0.75em;
+            font-weight: bold;
+            text-transform: uppercase;
+            padding: 3px 8px;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        .lead-title {
+            font-size: 2.3em;
+            font-weight: 900;
+            line-height: 1.2;
+            margin: 0 0 12px 0;
+            color: var(--text-ink);
+        }
+
+        .lead-meta {
+            font-size: 0.85em;
+            color: var(--text-muted);
+            margin-bottom: 14px;
+            font-style: italic;
+        }
+
+        .lead-content {
+            font-size: 1.1em;
+            text-align: justify;
+            column-count: 2;
+            column-gap: 30px;
+            column-rule: 1px solid var(--border-light);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        @media (max-width: 768px) {
+            .lead-content {
+                column-count: 1;
+            }
+            .lead-title {
+                font-size: 1.6em;
+            }
+        }
+
+        .drop-cap::first-letter {
+            font-size: 3.8em;
+            float: left;
+            line-height: 0.8;
+            margin: 4px 8px 0 0;
+            font-weight: bold;
+            color: var(--accent-red);
+            font-family: 'Times New Roman', serif;
+        }
+
+        /* Фотохроника и медиа дня */
+        .photo-chronicle {
+            margin-bottom: 35px;
+            border-bottom: 2px solid var(--border-ink);
+            padding-bottom: 25px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 2px solid var(--border-ink);
+            padding-bottom: 6px;
+            margin-bottom: 18px;
+        }
+
+        .section-heading {
+            font-size: 1.4em;
+            font-weight: bold;
+            text-transform: uppercase;
+            margin: 0;
+            letter-spacing: 1px;
+            color: var(--accent-red);
+        }
+
+        .media-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 15px;
+        }
+
+        .media-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-ink);
+            padding: 8px;
+            box-shadow: 2px 2px 0px var(--border-ink);
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.2s;
+        }
+
+        .media-card:hover {
+            transform: translateY(-2px);
+        }
+
+        .media-thumb-box {
+            width: 100%;
+            height: 170px;
+            background: #000;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .media-thumb-box img, .media-thumb-box video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .media-badge {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background: rgba(0,0,0,0.75);
+            color: #fff;
+            font-size: 0.65em;
+            font-weight: bold;
+            padding: 2px 6px;
+            border-radius: 2px;
+            text-transform: uppercase;
+        }
+
+        .media-card-caption {
+            font-size: 0.8em;
+            margin-top: 8px;
+            color: var(--text-muted);
+            line-height: 1.35;
+            flex-grow: 1;
+        }
+
+        .media-card-link {
+            font-size: 0.75em;
+            font-weight: bold;
+            color: var(--accent-blue);
+            text-decoration: none;
+            margin-top: 6px;
+            display: inline-block;
+        }
+        .media-card-link:hover {
+            text-decoration: underline;
+        }
+
+        /* 2-колоночная сетка статей и сайдбара */
+        .main-columns {
+            display: grid;
+            grid-template-columns: 2.2fr 1fr;
+            gap: 30px;
+        }
+
+        @media (max-width: 850px) {
+            .main-columns {
                 grid-template-columns: 1fr;
             }
-            .newspaper-title {
-                font-size: 3em;
-            }
-            .newspaper-container {
-                padding: 15px;
-            }
         }
 
-        /* Стили статей */
-        .article {
-            margin-bottom: 30px;
-            border-bottom: 1px solid var(--border-ink);
-            padding-bottom: 20px;
+        .article-card {
+            border-bottom: 1px dashed var(--border-ink);
+            padding-bottom: 22px;
+            margin-bottom: 22px;
         }
 
-        .article:last-child {
+        .article-card:last-child {
             border-bottom: none;
-            padding-bottom: 0;
         }
 
-        .article-title {
-            font-size: 1.8em;
+        .article-headline {
+            font-size: 1.45em;
             font-weight: bold;
-            margin: 0 0 10px 0;
+            margin: 0 0 6px 0;
+            line-height: 1.25;
+        }
+
+        .article-headline a {
+            color: var(--text-ink);
+            text-decoration: none;
+        }
+        .article-headline a:hover {
             color: var(--accent-red);
-            line-height: 1.2;
+            text-decoration: underline;
         }
 
         .article-meta {
-            font-size: 0.85em;
-            font-style: italic;
-            color: var(--text-ink);
-            opacity: 0.7;
+            font-size: 0.8em;
+            color: var(--text-muted);
             margin-bottom: 10px;
-        }
-
-        .article-content {
-            font-size: 1.05em;
-            line-height: 1.6;
-            text-align: justify;
-            text-justify: inter-word;
-        }
-
-        /* Фотокарточки */
-        .photo-card {
-            background-color: var(--bg-paper);
-            border: 1px solid var(--border-ink);
-            padding: 10px;
-            margin: 15px 0;
-            text-align: center;
-        }
-
-        .photo-card img, .photo-card video {
-            max-width: 100%;
-            height: auto;
-            border: 1px solid var(--border-ink);
-            filter: grayscale(100%);
-            transition: filter 0.3s;
-        }
-
-        .photo-card img:hover, .photo-card video:hover {
-            filter: none;
-        }
-
-        .photo-caption {
-            font-size: 0.85em;
             font-style: italic;
-            margin-top: 8px;
-            color: var(--text-ink);
-            opacity: 0.8;
         }
 
-        /* Сводка дня (sidebar) */
+        .article-body {
+            font-size: 0.98em;
+            text-align: justify;
+            color: var(--text-ink);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* Сайдбар */
         .sidebar-section {
-            border: 2px solid var(--border-ink);
-            padding: 20px;
-            background-color: rgba(0,0,0,0.03);
-            margin-bottom: 25px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-ink);
+            padding: 15px;
+            margin-bottom: 20px;
+            box-shadow: 2px 2px 0px var(--border-ink);
         }
 
         .sidebar-title {
-            font-size: 1.4em;
+            font-size: 1.05em;
             font-weight: bold;
             text-transform: uppercase;
             border-bottom: 2px solid var(--border-ink);
             padding-bottom: 5px;
-            margin-top: 0;
-            margin-bottom: 15px;
-            color: var(--text-ink);
-            text-align: center;
+            margin: 0 0 12px 0;
+            color: var(--accent-red);
+            letter-spacing: 0.5px;
         }
 
-        .stats-list {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-        }
-
-        .stats-item {
+        .stats-row {
             display: flex;
             justify-content: space-between;
-            padding: 8px 0;
-            border-bottom: 1px dashed var(--border-ink);
-            font-size: 0.95em;
+            padding: 6px 0;
+            border-bottom: 1px dotted var(--border-light);
+            font-size: 0.9em;
         }
-
-        .stats-item:last-child {
+        .stats-row:last-child {
             border-bottom: none;
         }
 
         .stats-val {
             font-weight: bold;
-            color: var(--accent-red);
+            color: var(--accent-blue);
         }
 
-        /* Кнопка смены темы */
-        .theme-toggle-btn {
-            position: absolute;
-            top: 15px;
-            right: 15px;
-            background: none;
-            border: 1px solid var(--border-ink);
+        .hot-threads-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .hot-thread-item {
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-light);
+            font-size: 0.88em;
+        }
+        .hot-thread-item:last-child {
+            border-bottom: none;
+        }
+
+        .hot-thread-link {
+            font-weight: bold;
             color: var(--text-ink);
-            padding: 5px 10px;
-            cursor: pointer;
-            border-radius: 4px;
-            font-family: inherit;
+            text-decoration: none;
+            display: block;
+            margin-bottom: 3px;
+        }
+        .hot-thread-link:hover {
+            color: var(--accent-red);
+            text-decoration: underline;
         }
 
-        .nav-links {
+        .advert-box {
+            border: 2px dashed var(--accent-red);
+            background: transparent;
             text-align: center;
-            margin-top: 30px;
-            padding-top: 15px;
-            border-top: 2px solid var(--border-ink);
+            padding: 15px 10px;
         }
 
-        .nav-links a {
+        /* Футер */
+        footer {
+            text-align: center;
+            border-top: 3px double var(--border-ink);
+            margin-top: 35px;
+            padding-top: 15px;
+            font-size: 0.88em;
+            color: var(--text-muted);
+        }
+
+        footer a {
             color: var(--accent-red);
             text-decoration: none;
             font-weight: bold;
             margin: 0 10px;
         }
-
-        .nav-links a:hover {
-            text-decoration: underline;
-        }
-
-        .reply-link {
-            color: var(--accent-red);
-            text-decoration: none;
-        }
-        .reply-link:hover {
+        footer a:hover {
             text-decoration: underline;
         }
     </style>
 </head>
 <body class="theme-dark">
     <div class="newspaper-container">
-        <button onclick="toggleTheme()" class="theme-toggle-btn">🌓 Тема</button>
-
+        <!-- Верхняя служебная панель -->
         <header>
-            <h1 class="newspaper-title">ВЕСТНИК ТГАЧ</h1>
-            <div class="newspaper-subtitle">Ежедневный листок деградации, скуфства и базированных мыслей</div>
-            
-            <div class="header-meta">
-                <span>Выпуск №{{ data.date | replace('-', '') }}</span>
-                <span>{{ data.date }}</span>
-                <span>Цена: 1 Коин</span>
+            <div class="header-topbar">
+                <span>📍 Имиджборда ТГАЧ</span>
+                <span>📅 {{ data.date }} (Выпуск №{{ data.date | replace('-', '') }})</span>
+                <span>💰 Цена: 1 Коин ₪</span>
+                <div class="theme-toggles">
+                    <button type="button" onclick="setTheme('light')" class="theme-btn">📜 Бумага</button>
+                    <button type="button" onclick="setTheme('dark')" class="theme-btn">🌑 Ночь</button>
+                    <button type="button" onclick="setTheme('cyber')" class="theme-btn">⚡ Cyber</button>
+                </div>
             </div>
+
+            <h1 class="newspaper-title">ВЕСТНИК ТГАЧ</h1>
+            <div class="newspaper-subtitle">Ежедневная летопись драмы, философии, щитпостинга и творчества анонимов</div>
         </header>
 
-        <div class="columns-grid">
-            <!-- Левая колонка: Основные статьи дня -->
-            <div class="main-column">
-                <h2 style="border-bottom: 2px solid var(--border-ink); padding-bottom: 5px; margin-top: 0; text-transform: uppercase;">Литературный вестник дня</h2>
-                
-                {% if data.longest_posts %}
-                    {% for post in data.longest_posts %}
-                        <div class="article">
-                            <h3 class="article-title">
-                                <a href="/{{ post.board_id }}/res/{{ post.thread_id or post.id }}.html#post-{{ post.id }}" class="reply-link" target="_blank">
-                                    Анон #{{ post.id }} из /{{ post.board_id }}/
-                                </a>
-                            </h3>
-                            <div class="article-meta">Написано в {{ post.timestamp | format_timestamp }}</div>
-                            <div class="article-content">
-                                {{ post.content.text | format_post_text | safe }}
-                            </div>
+        <!-- Главная передовица номера -->
+        {% if data.longest_posts and data.longest_posts | length > 0 %}
+            {% set lead_post = data.longest_posts[0] %}
+            <div class="headline-section">
+                <span class="lead-badge">Главная тема номера</span>
+                <h2 class="lead-title">
+                    <a href="/{{ lead_post.board_id }}/res/{{ lead_post.thread_id or (lead_post.id or lead_(post.id or post.post_num)) }}.html#post-{{ (lead_post.id or lead_(post.id or post.post_num)) }}" style="color:inherit; text-decoration:none;" target="_blank">
+                        Сенсация на /{{ lead_post.board_id }}/: Манифест анона #{{ (lead_post.id or lead_(post.id or post.post_num)) }}
+                    </a>
+                </h2>
+                <div class="lead-meta">
+                    Автор: Аноним #{{ (lead_post.id or lead_(post.id or post.post_num)) }} • Доска: /{{ lead_post.board_id }}/
+                </div>
+                <div class="lead-content drop-cap">
+                    {{ lead_post.content.text }}
+                </div>
+            </div>
+        {% endif %}
 
-                            {% if post.content.files %}
-                                <div class="photo-card">
-                                    {% for file in post.content.files %}
-                                        {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
-                                        {% if file.type in ['image', 'photo'] %}
-                                            <img src="{{ file_orig_src }}" alt="Иллюстрация события" loading="lazy" referrerpolicy="no-referrer">
-                                        {% elif file.type in ['video', 'gif'] %}
-                                            <video src="{{ file_orig_src }}" controls muted playsinline></video>
-                                        {% endif %}
+        <!-- Фотохроника и визуал дня -->
+        {% if data.recent_media and data.recent_media | length > 0 %}
+            <div class="photo-chronicle">
+                <div class="section-header">
+                    <h3 class="section-heading">📸 Фотохроника &amp; Мемы анонов</h3>
+                    <span style="font-size:0.85em; opacity:0.7;">Медиаархив за сутки</span>
+                </div>
+                <div class="media-grid">
+                    {% for media in data.recent_media %}
+                        {% set media_url = (media.original_file_id and '/files/' ~ media.original_file_id) or media.original_url %}
+                        {% set thumb_url = (media.thumbnail_file_id and '/files/' ~ media.thumbnail_file_id) or media.thumbnail_url or media_url %}
+                        <div class="media-card">
+                            <div class="media-thumb-box">
+                                {% if media.file_type in ['video', 'animation'] %}
+                                    <video src="{{ media_url }}" preload="metadata" muted playsinline loop onmouseover="this.play()" onmouseout="this.pause()"></video>
+                                    <span class="media-badge">{{ 'GIF' if media.file_type == 'animation' else 'VIDEO' }}</span>
+                                {% else %}
+                                    <img src="{{ thumb_url }}" alt="Медиа #{{ media.post_num }}" loading="lazy" referrerpolicy="no-referrer">
+                                    <span class="media-badge">IMG</span>
+                                {% endif %}
+                            </div>
+                            <div class="media-card-caption">
+                                {{ media.caption or 'Кадр из обсуждения' }}
+                            </div>
+                            <a href="/{{ media.board_id }}/res/{{ media.thread_id or media.post_num }}.html#post-{{ media.post_num }}" class="media-card-link" target="_blank">
+                                &gt;&gt; /{{ media.board_id }}/ #{{ media.post_num }}
+                            </a>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+
+        <!-- Основная сетка: Статьи + Сайдбар -->
+        <div class="main-columns">
+            <!-- Колонка статей и паст -->
+            <div class="articles-column">
+                <div class="section-header">
+                    <h3 class="section-heading">📝 Хроника тредов &amp; Мысли анонов</h3>
+                </div>
+
+                {% if data.longest_posts and data.longest_posts | length > 1 %}
+                    {% for post in data.longest_posts[1:] %}
+                        <div class="article-card">
+                            <h4 class="article-headline">
+                                <a href="/{{ post.board_id }}/res/{{ post.thread_id or (post.id or post.post_num) }}.html#post-{{ (post.id or post.post_num) }}" target="_blank">
+                                    Заметки из /{{ post.board_id }}/ (Пост #{{ (post.id or post.post_num) }})
+                                </a>
+                            </h4>
+                            <div class="article-meta">
+                                Раздел: /{{ post.board_id }}/ • Номер поста: #{{ (post.id or post.post_num) }}
+                            </div>
+                            <div class="article-body">
+                                {{ post.content.text }}
+                            </div>
+                            {% if post.content.files and post.content.files | length > 0 %}
+                                <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap;">
+                                    {% for f in post.content.files %}
+                                        {% set f_src = (f.original_file_id and '/files/' ~ f.original_file_id) or f.original_url %}
+                                        <a href="{{ f_src }}" target="_blank" style="font-size: 0.8em; color: var(--accent-blue); font-weight: bold;">
+                                            📎 Прикрепленный файл {{ loop.index }}
+                                        </a>
                                     {% endfor %}
-                                    <div class="photo-caption">Рис. {{ loop.index }} — Медиа-материалы к посту #{{ post.id }}</div>
                                 </div>
                             {% endif %}
-
                         </div>
                     {% endfor %}
                 {% else %}
-                    <p style="font-style: italic; opacity: 0.7;">За эти сутки выдающихся литературных шедевров обнаружено не было.</p>
+                    <p style="font-style: italic; opacity: 0.7;">За прошедшие сутки паст не обнаружено.</p>
                 {% endif %}
             </div>
 
-            <!-- Правая колонка: Сводки, Реклама, Популярные темы -->
-            <div class="sidebar-column">
-                <!-- Сводка дня -->
+            <!-- Сайдбар: Статистика, Тренды, Реклама -->
+            <aside class="sidebar-column">
+                <!-- Сводка активности -->
                 <div class="sidebar-section">
-                    <h3 class="sidebar-title">Сводка событий</h3>
-                    <ul class="stats-list">
-                        <li class="stats-item">
-                            <span>Всего постов создано</span>
-                            <span class="stats-val">{{ data.total_posts }}</span>
-                        </li>
-                        <li class="stats-item">
-                            <span>Активных сычей</span>
-                            <span class="stats-val">{{ data.active_authors }}</span>
-                        </li>
-                        <li class="stats-item">
-                            <span>Новых тредов</span>
-                            <span class="stats-val">{{ data.new_threads_count }}</span>
-                        </li>
-                    </ul>
+                    <h4 class="sidebar-title">📊 Сводка борды</h4>
+                    <div class="stats-row">
+                        <span>Всего постов</span>
+                        <span class="stats-val">{{ data.total_posts }}</span>
+                    </div>
+                    <div class="stats-row">
+                        <span>Активных авторов</span>
+                        <span class="stats-val">{{ data.active_authors }}</span>
+                    </div>
+                    <div class="stats-row">
+                        <span>Новых тредов</span>
+                        <span class="stats-val">{{ data.new_threads_count }}</span>
+                    </div>
                 </div>
 
-                <!-- Сенсации (Топ тредов) -->
+                <!-- Топ обсуждаемых тредов -->
                 <div class="sidebar-section">
-                    <h3 class="sidebar-title">Самые обсуждаемые</h3>
-                    {% if data.top_threads %}
-                        <ol style="padding-left: 20px; margin: 0;">
-                            {% for thread in data.top_threads %}
-                                <li style="margin-bottom: 12px; font-size: 0.95em;">
-                                    <a href="/{{ thread.board_id }}/res/{% if thread.thread_id %}{{ thread.thread_id }}{% else %}{{ thread.id }}{% endif %}.html" class="reply-link" target="_blank" style="font-weight: bold;">
-                                        /{{ thread.board_id }}/ res/{{ thread.thread_id }}
+                    <h4 class="sidebar-title">🔥 Горячие треды</h4>
+                    {% if data.top_threads and data.top_threads | length > 0 %}
+                        <ul class="hot-threads-list">
+                            {% for th in data.top_threads %}
+                                <li class="hot-thread-item">
+                                    <a href="/{{ th.board_id }}/res/{{ th.thread_id }}.html" class="hot-thread-link" target="_blank">
+                                        /{{ th.board_id }}/: {{ th.title }}
                                     </a>
-                                    <div style="font-style: italic; opacity: 0.8; margin-top: 3px;">
-                                        {{ thread.title | clean_title | truncate(60) }} (💬 {{ thread.posts_count }})
-                                    </div>
+                                    <span style="font-size: 0.8em; color: var(--text-muted);">
+                                        💬 {{ th.posts_count }} ответов за сутки
+                                    </span>
                                 </li>
                             {% endfor %}
-                        </ol>
+                        </ul>
                     {% else %}
-                        <p style="font-style: italic; opacity: 0.7; font-size: 0.9em; text-align: center;">Тишина в эфире...</p>
+                        <p style="font-size: 0.85em; opacity: 0.7; margin: 0;">Тишина в эфире...</p>
                     {% endif %}
                 </div>
 
-                <!-- Рекламная вставка -->
-                <div class="sidebar-section" style="text-align: center; border-style: dashed; background: none;">
-                    <h4 style="margin: 0 0 5px 0; font-size: 0.8em; text-transform: uppercase; letter-spacing: 1px; opacity: 0.6;">Реклама</h4>
-                    <p style="font-size: 1.1em; font-weight: bold; margin: 5px 0;">💰 ХОЧЕШЬ ВДОХНУТЬ СВОБОДЫ?</p>
-                    <p style="font-size: 0.85em; margin: 5px 0; opacity: 0.8;">Крути рулетку <code>/roll</code> в нашем Telegram-боте! Выигрывай коины или отправляйся в дурку!</p>
+                <!-- Рекламная колонка -->
+                <div class="sidebar-section advert-box">
+                    <div style="font-size: 0.7em; text-transform: uppercase; letter-spacing: 1px; color: var(--accent-red); font-weight: bold; margin-bottom: 4px;">Объявление</div>
+                    <div style="font-size: 1.05em; font-weight: bold; margin-bottom: 6px;">🎰 КАЗИНО И ДУРКА</div>
+                    <div style="font-size: 0.82em; color: var(--text-muted); line-height: 1.4;">
+                        Крути <code>/slots</code>, выбивай топовый шмот в гардеробе и защищай кошелек от грабителей с <code>/rob</code>!
+                    </div>
                 </div>
-            </div>
+
+                <!-- Мудрость номера -->
+                <div class="sidebar-section" style="border-left: 3px solid var(--accent-blue);">
+                    <div style="font-size: 0.75em; text-transform: uppercase; font-weight: bold; color: var(--accent-blue); margin-bottom: 4px;">Мудрость дня</div>
+                    <div style="font-size: 0.88em; font-style: italic;">
+                        «Анонимность — это не маска, а свобода говорить то, о чем все молчат.»
+                    </div>
+                </div>
+            </aside>
         </div>
 
-        <div class="nav-links">
-            <a href="/">[Главная страница]</a>
-            <a href="/archive/">[Архив тредов]</a>
-        </div>
+        <footer>
+            <nav style="margin-bottom: 10px;">
+                <a href="/">[Главная]</a>
+                <a href="/b/chat/">[Чат /b/]</a>
+                <a href="/overboard/">[Все треды]</a>
+                <a href="/archive/">[Архив]</a>
+                <a href="/tags/">[Поиск по тегам]</a>
+            </nav>
+            <div>© {{ data.date[:4] }} Вестник ТГАЧ — Имиджборда нового поколения. Все права принадлежат Анониму.</div>
+        </footer>
     </div>
 
     <script>
-        // Инициализация темы из localStorage
-        (function() {
-            var theme = localStorage.getItem('newspaper_theme') || 'dark';
-            document.body.className = 'theme-' + theme;
-        })();
-
-        function toggleTheme() {
-            var current = document.body.className;
-            var next = current === 'theme-light' ? 'theme-dark' : 'theme-light';
-            document.body.className = next;
-            localStorage.setItem('newspaper_theme', next.replace('theme-', ''));
+        function setTheme(themeName) {
+            document.body.className = 'theme-' + themeName;
+            localStorage.setItem('newspaper_theme', themeName);
         }
+        (function() {
+            var saved = localStorage.getItem('newspaper_theme') || 'dark';
+            document.body.className = 'theme-' + saved;
+        })();
     </script>
 </body>
 </html>
