@@ -8887,6 +8887,7 @@ const FormManager = {
         this.floatingTextarea.focus({ preventScroll: true });
     },
     hideFloating(fromHistory = false) {
+        if (!this.floatingBox) return;
         const stopBtn = this.floatingBox.querySelector('.stop-btn');
         if (stopBtn && stopBtn.closest('.audio-stage-record')?.style.display !== 'none') {
             stopBtn.click();
@@ -11582,7 +11583,15 @@ function handleImageError(img) {
     delete img.dataset.finalError;
     try {
         const loc = (typeof window !== 'undefined' && window.location) ? window.location.href : 'http://localhost';
-        const targetUrl = originalUrl.includes('/files/') ? originalUrl : (img.dataset.src || currentSrc);
+        const fileId = img.dataset.fileId || (parent ? parent.dataset.fileId : null);
+        let targetUrl;
+        if (originalUrl && originalUrl.includes('/files/')) {
+            targetUrl = originalUrl;
+        } else if (fileId) {
+            targetUrl = `/files/${fileId}`;
+        } else {
+            targetUrl = img.dataset.src || currentSrc;
+        }
         const urlObj = new URL(targetUrl, loc);
         if (img.dataset.skippedHosts) {
             urlObj.searchParams.set("skip", img.dataset.skippedHosts);

@@ -101,7 +101,7 @@ html {
 }
 :root {
     --z-content: 1;
-    --z-mascot: 0;
+    --z-mascot: 100;
     --z-scroll-btn: 900;
     --z-nav: 900;
     --z-reply-box: 2030;

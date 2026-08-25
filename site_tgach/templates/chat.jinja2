@@ -148,7 +148,12 @@
     </header>
     <main>
         <h3>Написать в чат</h3>
-        <form id="post-form">
+        {% if not session.user %}
+        <div class="guest-chat-notice" style="background: var(--bg-post); border: 1px solid var(--border-post); border-left: 4px solid var(--accent-primary); padding: 12px 16px; margin-bottom: 20px; border-radius: 6px; font-weight: bold; display: flex; align-items: center; justify-content: space-between;">
+            <span>❌ Гости могут только читать чат. <a href="/login?redirect={{ request.url.path }}" style="color: var(--accent-link); text-decoration: underline;">Войдите для общения</a>.</span>
+        </div>
+        {% endif %}
+        <form id="post-form" {% if not session.user %}style="opacity: 0.5; pointer-events: none;" title="Войдите для общения"{% endif %}>
             <input type="text" name="email" class="hp-field" autocomplete="off" tabindex="-1">
             <input type="text" name="username" class="name-field" autocomplete="off" tabindex="-1">
             <div class="form-fields">
@@ -277,6 +282,7 @@
                                                 {% elif file.type in ['video', 'gif', 'animation'] %}
                                                     <div class="file-thumb lazy-media-wrapper" 
                                                         data-src="{{ file_orig_src }}" 
+                                                        data-file-id="{{ file.thumbnail_file_id or file.original_file_id }}"
                                                         data-filename="{{ file.filename }}"
                                                         data-type="{{ 'gif' if file.type in ['gif', 'animation'] else 'video' }}">
                                                         {% if file.blurhash %}
