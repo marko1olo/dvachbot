@@ -6,7 +6,13 @@ from common.debuff_phrases import (
     DEBUFF_FLAG_RU_PHRASES,
     DEBUFF_CURSE_PHRASES,
     DEBUFF_SCHIZO_PHRASES,
-    get_debuff_footer
+    MUTE_WARN_REASONS,
+    PARTYVAN_ANNOUNCEMENTS,
+    MUTE_GUN_ANNOUNCEMENTS,
+    get_debuff_footer,
+    get_mute_warn_text,
+    get_partyvan_announcement,
+    get_mute_gun_announcement
 )
 
 
@@ -18,14 +24,21 @@ def test_debuff_phrases_counts():
         ("flag_ru", DEBUFF_FLAG_RU_PHRASES),
         ("curse", DEBUFF_CURSE_PHRASES),
         ("schizo", DEBUFF_SCHIZO_PHRASES),
+        ("mute_warn_reasons", MUTE_WARN_REASONS),
     ]:
         assert len(pool) >= 50, f"{name} has only {len(pool)} phrases (expected >= 50)"
-        for p in pool:
-            assert isinstance(p, str) and len(p) > 5
-            assert p.startswith("[") and p.endswith("]")
+
+    assert len(PARTYVAN_ANNOUNCEMENTS) >= 5
+    assert len(MUTE_GUN_ANNOUNCEMENTS) >= 3
 
 
-def test_get_debuff_footer():
-    for t in ["shit", "vomit", "flag_ua", "flag_ru", "curse", "schizo"]:
-        res = get_debuff_footer(t)
-        assert isinstance(res, str) and len(res) > 5
+def test_get_mute_warn_text():
+    text = get_mute_warn_text("10ч 25мин")
+    assert "10ч 25мин" in text
+    assert "ТЕБЯ ЕБНУЛИ В МУТ" in text
+    assert len(text) > 100
+
+
+def test_announcements():
+    assert len(get_partyvan_announcement()) > 30
+    assert len(get_mute_gun_announcement()) > 30

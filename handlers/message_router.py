@@ -535,16 +535,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     else:
                         time_str = f"{rem_seconds} сек"
 
-                    warn_text = (
-                        f"🔇 <b>ТЕБЯ ЕБНУЛИ В МУТ!</b>\n\n"
-                        f"Осталось сидеть: <b>{time_str}</b>.\n"
-                        f"Пока ты в муте, твои посты на доску не проходят.\n\n"
-                        f"💡 <b>Что можно сделать:</b>\n"
-                        f"• 📜 <b>Снять мут досрочно:</b> купи Взятку в <b>/shop</b>\n"
-                        f"• 💰 <b>Заработать шекели:</b> пиши <b>/work</b> (сбор бутылок, скам, биржа)\n"
-                        f"• 🔫 <b>Отомстить обидчику:</b> купи Мут-Ган или ОМОН в <b>/shop</b>\n"
-                        f"• 🛡️ <b>Защититься от атак:</b> купи Шапочку из фольги в <b>/shop</b>"
-                    )
+                    from common.debuff_phrases import get_mute_warn_text
+                    warn_text = get_mute_warn_text(time_str)
                     try:
                         sent = await message.answer(warn_text, parse_mode="HTML")
                         spawn_task(delete_message_after_delay(sent, 10))

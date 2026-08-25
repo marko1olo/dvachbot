@@ -5537,12 +5537,8 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     await apply_regular_mute(target_id, board_id, 3600)
     register_attacker_effect("mute_gun", user_id, target_id, 3600)
     
-    shoot_msg = (
-        f"🔫 <b>ПИУ-ПИУ!</b>\n\n"
-        f"Анон выстрелил из Мут-Гана в автора этого поста!\n"
-        f"Жертва отправляется в мут на 1 час.\n"
-        f"<i>(Оружие израсходовано)</i>"
-    )
+    from common.debuff_phrases import get_mute_gun_announcement
+    shoot_msg = get_mute_gun_announcement()
     await message.bot.send_message(message.chat.id, shoot_msg, reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
 
     try:
@@ -6840,7 +6836,8 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         board_data[board_id]['mutes'][target_id] = datetime.now(UTC) + timedelta(hours=12)
     await apply_regular_mute(target_id, board_id, 12 * 3600)
     register_attacker_effect("partyvan_gun", user_id, target_id, 12 * 3600)
-    await message.bot.send_message(message.chat.id, f"🚔 <b>ВНИМАНИЕ! РАБОТАЕТ ОМОН!</b> 🚔\nПо доносу анона за автором этого поста выехал пативэн! Жертва отправлена в КПЗ (жесткий мут) на 12 часов!\n<i>Выйти раньше можно только дав взятку в /shop.</i>", reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
+    from common.debuff_phrases import get_partyvan_announcement
+    await message.bot.send_message(message.chat.id, get_partyvan_announcement(), reply_to_message_id=message.reply_to_message.message_id, parse_mode="HTML")
 
 
 @dataclass
