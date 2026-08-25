@@ -381,7 +381,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
 
                             else:
                                  # Empty response (Safety filter or empty candidates)
-                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} ({model_name}) returned empty content. Trying next model...")
+                                 logger.info(f"ℹ️ [VISION] [{source}] {provider} ({model_name}) safety filter or empty response. Falling back to next candidate...")
                                  break
                         except Exception as e:
                             err_str = str(e).lower()

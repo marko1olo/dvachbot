@@ -168,27 +168,34 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
 
     try:
         group = await _build_group(force_download=False)
-        sent_msgs = await sender_bot.send_media_group(channel_id, media=group)
+        sent_msgs = await sender_bot.send_media_group(channel_id, media=group, request_timeout=60)
     except TelegramBadRequest as e:
         logger.warning(f"⚠️ TelegramBadRequest on media group ({e}). Forcing download fallback...")
         try:
             group = await _build_group(force_download=True)
-            sent_msgs = await sender_bot.send_media_group(channel_id, media=group)
+            sent_msgs = await sender_bot.send_media_group(channel_id, media=group, request_timeout=60)
         except TelegramRetryAfter:
             raise
         except Exception as ex:
             logger.error(f"❌ Media group fallback failed: {ex}. Sending as text...")
             try:
-                msg = await sender_bot.send_message(channel_id, full_caption, parse_mode="HTML")
+                msg = await sender_bot.send_message(channel_id, full_caption, parse_mode="HTML", request_timeout=30)
                 return msg, []
             except Exception:
                 return None, []
     except TelegramRetryAfter:
         raise
-    except Exception as e:
-        logger.error(f"⚠️ Failed to send archive media group to channel {channel_id}: {e}", exc_info=True)
+    except (TelegramNetworkError, asyncio.TimeoutError) as net_err:
+        logger.warning(f"⚠️ Archive media group timeout to channel {channel_id}: {net_err}. Sending text fallback...")
         try:
-            msg = await sender_bot.send_message(channel_id, full_caption, parse_mode="HTML")
+            msg = await sender_bot.send_message(channel_id, full_caption, parse_mode="HTML", request_timeout=30)
+            return msg, []
+        except Exception:
+            return None, []
+    except Exception as e:
+        logger.error(f"⚠️ Failed to send archive media group to channel {channel_id}: {e}")
+        try:
+            msg = await sender_bot.send_message(channel_id, full_caption, parse_mode="HTML", request_timeout=30)
             return msg, []
         except Exception:
             return None, []
