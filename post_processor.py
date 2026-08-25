@@ -205,36 +205,29 @@ class NewPostProcessor:
                                             is_flag_ru = True
                                     except Exception:
                                         pass
+                                from common.debuff_phrases import get_debuff_footer
                                 if is_cursed:
                                     if 'text' in self.author_content and self.author_content['text']:
-                                        if "[Я ХУЕСОС 🤮]" not in self.author_content['text']:
-                                            self.author_content['text'] += "\n\n<i>[Я ХУЕСОС 🤮]</i>"
+                                        curse_tag = get_debuff_footer("curse")
+                                        self.author_content['text'] += f"\n\n<i>{curse_tag}</i>"
                                 if is_shat:
                                     if 'text' in self.author_content and self.author_content['text']:
-                                        if "[💩 ИЗМАЗАН ГОВНОМ 💩]" not in self.author_content['text']:
-                                            self.author_content['text'] += "\n\n<i>[💩 ИЗМАЗАН ГОВНОМ 💩]</i>"
+                                        shit_tag = get_debuff_footer("shit")
+                                        self.author_content['text'] += f"\n\n<i>{shit_tag}</i>"
                                 if is_vomited:
                                     if 'text' in self.author_content and self.author_content['text']:
-                                        if "[🤮 ИЗБЛЕВАН 🤮]" not in self.author_content['text']:
-                                            self.author_content['text'] += "\n\n<i>[🤮 ИЗБЛЕВАН 🤮]</i>"
+                                        vomit_tag = get_debuff_footer("vomit")
+                                        self.author_content['text'] += f"\n\n<i>{vomit_tag}</i>"
                                 if is_flag_ua:
                                     if 'text' in self.author_content and self.author_content['text']:
-                                        if "[🇺🇦 ЩЕ НЕ ВМЕРЛА 🇺🇦]" not in self.author_content['text']:
-                                            self.author_content['text'] += "\n\n<i>[🇺🇦 ЩЕ НЕ ВМЕРЛА 🇺🇦]</i>"
+                                        flag_ua_tag = get_debuff_footer("flag_ua")
+                                        self.author_content['text'] += f"\n\n<i>{flag_ua_tag}</i>"
                                 if is_flag_ru:
                                     if 'text' in self.author_content and self.author_content['text']:
-                                        if "[🇷🇺 ZA НАШИХ / ГОЙДА 🇷🇺]" not in self.author_content['text']:
-                                            self.author_content['text'] += "\n\n<i>[🇷🇺 ZA НАШИХ / ГОЙДА 🇷🇺]</i>"
+                                        flag_ru_tag = get_debuff_footer("flag_ru")
+                                        self.author_content['text'] += f"\n\n<i>{flag_ru_tag}</i>"
                                 if is_schizo:
-                                    schizo_tags = [
-                                        "👁️ [СИГНАЛ ПЕРЕХВАЧЕН СИОНО-МАСОНАМИ]",
-                                        "📡 [ВЫШКА 5G ВЕДЕТ ЗАПИСЬ МЫСЛЕЙ]",
-                                        "💊 [ПРИНУДИТЕЛЬНАЯ ТЕРАПИЯ АМИНАЗИНОМ]",
-                                        "👽 [РЕПТИЛОИДЫ УПРАВЛЯЮТ ЭТИМ ТЕЛОМ]",
-                                        "🧠 [ПСИ-ИЗЛУЧАТЕЛЬ НА 100% МОЩНОСТИ]",
-                                        "📻 [ШИЗОФАЗИЯ 4-Й СТЕПЕНИ ЗАФИКСИРОВАНА]"
-                                    ]
-                                    tag = random.choice(schizo_tags)
+                                    tag = get_debuff_footer("schizo")
                                     if 'text' in self.author_content and self.author_content['text']:
                                         if "ШИЗО-ТАБЛЕТКА" not in self.author_content['text']:
                                             self.author_content['text'] = f"💊 <i>[ШИЗО-ТАБЛЕТКА]</i> {self.author_content['text']}\n\n<i>{tag}</i>"
