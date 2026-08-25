@@ -1,80 +1,95 @@
-# Project: Dvachbot Web Platform Media & Frontend Restoration (`site_tgach`)
+# Project: DvachBot Next-Generation Analytics, Posters, Telegram Hub, Wrapped & WebApp
 
 ## Architecture
-- **Backend**: FastAPI web application (`site_tgach/main.py`), Jinja2 templating (`site_tgach/templates/`), SQLite database (`dvach_bot.db`), background tagging and thumbnail workers (`site_tgach/tagging_worker.py`).
-- **Media Proxy**: In-memory and disk cache for Telegram files, bot token rotation pool, ffmpeg frame extraction fallback, CDN mirror integration (ImgBB, PixHost, FreeImage).
-- **Frontend Core**: Monolithic client script `site_tgach/static/js/main.src.js` (compiled to `main.js` and `main.js.gz`), CSS stylesheets `site_tgach/static/css/style.src.css` (compiled to `style.css` and `style.css.gz`).
-- **Build Pipeline**: `scratch/minify_assets.py` synchronizes source CSS/JS into minified and gzipped browser bundles.
+DvachBot Next-Gen Analytics is designed as a high-performance, non-blocking, multi-channel analytical subsystem operating concurrently with existing DvachBot core operations.
+
+```
+                  ┌─────────────────────────────────────────────────────────┐
+                  │                 SQLite WAL Database                     │
+                  │                 (dvach_bot.db ~1.7GB)                   │
+                  └─────────────────────────┬───────────────────────────────┘
+                                            │ read-only URI (?mode=ro)
+                    ┌───────────────────────┴────────────────────────┐
+                    │                                                │
+                    ▼                                                ▼
+     ┌─────────────────────────────┐                  ┌─────────────────────────────┐
+     │   Analytics Engine Core     │                  │   FastAPI WebApp Backend    │
+     │     (stats_v2.py /          │                  │        (site_tgach)         │
+     │      stats_hub.py)          │                  │                             │
+     └──────────────┬──────────────┘                  └──────────────┬──────────────┘
+                    │                                                │
+          ┌─────────┴─────────┐                            ┌─────────┴─────────┐
+          │                   │                            │                   │
+          ▼                   ▼                            ▼                   ▼
+┌──────────────────┐ ┌──────────────────┐        ┌──────────────────┐ ┌──────────────────┐
+│  Visual Posters  │ │  2ch Wrapped     │        │  REST APIs       │ │  Interactive UI  │
+│  (1200x675 HD)   │ │  Card Generator  │        │  (/api/stats/*)  │ │  (/app/stats)    │
+│  Dark Cyberpunk  │ │  (/my_wrapped)   │        │  Cached < 15ms   │ │  Chart.js/Plotly │
+└─────────┬────────┘ └────────┬─────────┘        └──────────────────┘ └──────────────────┘
+          │                   │
+          └─────────┬─────────┘
+                    │
+                    ▼
+     ┌─────────────────────────────┐
+     │  Telegram Hub & Routers     │
+     │  (/stats_hub, /deck, etc.)  │
+     │  aiogram v3 (buffered I/O)  │
+     └─────────────────────────────┘
+```
 
 ## Feature Inventory
+Every feature from ORIGINAL_REQUEST.md mapped to its assigned milestone:
+
 | # | Feature | Description | Milestone | Source |
 |---|---------|-------------|-----------|--------|
-| 1 | R1-A: Video Poster Template Fallback | Ensure `<video poster="...">` in all templates uses video thumbnail endpoints (`/thumb/` / dynamic extraction) rather than raw video `/files/BAAC...` streams. | M1 | Survey Media |
-| 2 | R1-B: Video Thumbnail Proxy & FFmpeg Extraction | Add video `file_id -> thumbnail_id` lookup in `FileRegistry` and dynamic 1-frame ffmpeg JPEG extraction in `/thumb/` & `/preview/` endpoints. | M1 | Survey Media |
-| 3 | R1-C: Bot Token Batch Probing & Cache De-poisoning | Eliminate 2-bot probing bottleneck and 120s negative cache poisoning in `get_cached_file_path`; allow protected tokens for board bots. | M1 | Survey Media |
-| 4 | R2-A: Search Gallery Client-Side Error Fallback | Add `onerror="handleImageError(this)"` to `search_results.jinja2` image rendering to trigger immediate fallback to Telegram media proxy on CDN 404s. | M2 | Survey Media |
-| 5 | R2-B: Fast Telegram Proxy Fallback (Bypass Wait Loop) | Ensure media fallback requests with `skip` parameters bypass the 7.5s sleep wait loop in `get_telegram_file` for sub-second responses. | M2 | Survey Media |
-| 6 | R3-A: Chat Mascot Foreground Layering | Bring chat mascot to foreground (`--z-mascot: 100`) across both desktop and mobile viewports by fixing `@media (max-width: 768px)` override. | M3 | Survey Frontend |
-| 7 | R3-B: Mascot Pointer-Events Isolation | Maintain `pointer-events: none` on `#mascot-wrapper` container and `pointer-events: auto` on `.mascot-body` so underlying post interactions remain clickable. | M3 | Survey Frontend |
-| 8 | R4-A: Instant Guest Chat Notice Banner | Fix Jinja2 condition in `chat.jinja2` (`session.user.is_guest` handling) to immediately display `"❌ Гости могут только читать чат. Войдите для общения."`. | M4 | Survey Frontend |
-| 9 | R4-B: Guest Form Input Disabling | Disable textarea, submit buttons, formatting controls, and file attachments in `chat.jinja2` for guest users. | M4 | Survey Frontend |
-| 10 | R5-A: `FormManager.hideFloating()` Null-Check Safeguard | Add defensive box retrieval and optional chaining in `FormManager.hideFloating()` to eliminate `Uncaught TypeError: Cannot read properties of null (reading 'querySelector')`. | M5 | Survey JS Core |
-| 11 | R5-B: Global Keyboard Listener Safeguards & Module Exports | Harden `Alt+Enter`, `Escape`, `KeyR` shortcuts in `main.src.js`; export `FormManager` in `module.exports` for unit testing; compile assets via `minify_assets.py`. | M5 | Survey JS Core |
-| 12 | E2E-TEST: Opaque-Box Test Suite (Tiers 1-4) | Comprehensive test suite validating video previews, CDN fallbacks, mascot z-index, guest notice, and JS runtime execution without errors. | E2E-TEST | Survey JS Core |
+| F1 | Economy & Crime Matrix | Heist/robbery matrix, casino RTP / gamblers' graveyard, airdrop speed, wealth tax & Abu yacht fund | M1 | ORIGINAL_REQUEST §R1 |
+| F2 | PvP & Bioweapons Radar | Debuff warfare (shit/vomit/flags/curses), tinfoil hat ablation/reflection ROI, schizo-pill psych ward | M1 | ORIGINAL_REQUEST §R1 |
+| F3 | Sociology & Drama Graph | Signed directed beef graph ($BII$), board toxicity quotient ($BTQ$), survival curves (Kaplan-Meier), attention parasitism | M1 | ORIGINAL_REQUEST §R1 |
+| F4 | Memetics & Vision Analytics | pHash bayano-meter clustering on 60k files, AI vision tag constellation, slang trend drift, pasta & originality index | M1 | ORIGINAL_REQUEST §R1 |
+| F5 | Instant Text Snapshot & Sparklines | Sub-100ms rich HTML overview with dynamic 8-level ASCII sparklines ( ▂▃▅▆▇█ ) | M2 | ORIGINAL_REQUEST §R2 |
+| F6 | Interactive Inline Category Menu | Keyboard routing `[💰 Экономика]`, `[⚔️ PvP]`, `[🧠 Социология]`, `[🖼 Мемы]`, `[🎴 Мой Срез]`, `[✨ WebApp]` | M2 | ORIGINAL_REQUEST §R2 |
+| F7 | Async HD Poster Delivery | Non-blocking background rendering + in-memory `BufferedInputFile` photo delivery on category click | M2 | ORIGINAL_REQUEST §R2 |
+| F8 | Personal 2ch Wrapped Card | Spotify Wrapped style user card with archetype classification, combat/financial record, degradation meter | M3 | ORIGINAL_REQUEST §R3 |
+| F9 | AI/Heuristic Diagnosis | Sarcastic clinical psychiatric diagnosis & summary of user's 2ch behavior | M3 | ORIGINAL_REQUEST §R3 |
+| F10 | FastAPI WebApp Route `/app/stats` | Interactive dashboard with dark cyberpunk theme, time range filters (24h, 7d, 30d, All), board filters | M4 | ORIGINAL_REQUEST §R4 |
+| F11 | REST APIs `/api/stats/*` | Fast JSON endpoints (<15ms) with in-memory caching (`FastAPICache`) for all analytics categories | M4 | ORIGINAL_REQUEST §R4 |
+| F12 | Interactive Reply Graph & Visuals | Live Plotly/Chart.js network visualization of beef/replies and distribution curves | M4 | ORIGINAL_REQUEST §R4 |
+| F13 | Autonomous Verification Suite | Automated tests validating 100% image renders, zero NaNs, memory cleanup `plt.close('all')`, API latencies | M5 | ORIGINAL_REQUEST §R5 |
+| F14 | Backward Compatibility Gate | Strict regression testing verifying `/bot_stats`, `/stats`, `/my_stats`, and `periodic_publisher.py` | M5 | ORIGINAL_REQUEST §R5 |
 
 ## Milestones
+
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | Video Previews & Media Proxy Restoration | R1-A, R1-B, R1-C: Template poster fallback, `/thumb/` dynamic ffmpeg video extraction, token probing fix. | none | PLANNED |
-| M2 | Tag Search & Media Fallback Optimization | R2-A, R2-B: `search_results.jinja2` `onerror` handler, `get_telegram_file` instant fallback bypass. | none | PLANNED |
-| M3 | Chat Mascot Foreground Layering | R3-A, R3-B: `--z-mascot: 100` in `style.src.css`, mobile override fix, pointer-events isolation, CSS asset build. | none | PLANNED |
-| M4 | Instant Guest Notice in Chat | R4-A, R4-B: `chat.jinja2` guest authentication logic, instant banner display, guest input controls disabled. | none | PLANNED |
-| M5 | Frontend JavaScript TypeError Fix | R5-A, R5-B: `main.src.js` `FormManager.hideFloating()` null-checks, keyboard handler guards, module exports, asset build. | none | PLANNED |
-| E2E-TEST | Opaque-Box E2E Test Suite | Test runner and 4-tier test cases covering R1-R5 requirements, publishing `TEST_READY.md`. | none | PLANNED |
-| M_FINAL | Full E2E Verification & Adversarial Hardening | Verify 100% pass on Tiers 1-4 and execute Tier 5 adversarial testing. | M1, M2, M3, M4, M5, E2E-TEST | PLANNED |
+| M1 | Standalone Analytics & Visual Posters Module | Implement `stats_v2.py` / `stats_hub.py` analytics core + 4 HD dark cyberpunk poster generators (1200x675) | none | PLANNED |
+| M2 | Telegram Hub & Interactive Menu Handlers | Implement aiogram v3 router for `/stats_hub`, `/deck`, `/stats2`, instant ASCII sparklines, inline callback routing | M1 | PLANNED |
+| M3 | Personal "2ch Wrapped" Card Generator | Implement `/my_wrapped` user card generator, archetype classifiers, combat/financial breakdown, sarcastic diagnosis | M1 | PLANNED |
+| M4 | Standalone FastAPI WebApp Dashboard | Implement `site_tgach` routes `GET /app/stats`, templates `stats_dashboard.jinja2`, Chart.js/Plotly charts, cached `/api/stats/*` | M1 | PLANNED |
+| M5 | E2E Integration, Visual Verification & Adversarial Suite | Comprehensive Tier 1-5 test suite, pixel/font/layout audit, concurrency stress tests, backward compatibility verification | M1, M2, M3, M4 | PLANNED |
 
 ## Interface Contracts
-### Media Proxy & Video Previews ↔ Frontend Templates
-- Route: `/thumb/{file_id}` or `/preview/{file_id}`
-- Behavior for video files (`BAAC...`, `CQAC...`, `video/mp4`):
-  - Returns `image/jpeg` MIME type (extracted 1st frame JPEG or registered thumbnail).
-  - Never returns `video/mp4` stream for thumbnail endpoints.
-- Client error fallback:
-  - `<img onerror="handleImageError(this)">`
-  - `<video poster="..." onerror="handleImageError(this)">`
-  - When external CDN mirror fails, client requests `/files/{file_id}?skip=imgbb,pixhost,freeimage` or `/thumb/{file_id}?skip=...`.
 
-### Mascot & Post Interaction Layering
-- CSS Variables:
-  - `--z-mascot: 100`
-  - `--z-content: 1`
-- `#mascot-wrapper`: `z-index: var(--z-mascot)`, `pointer-events: none`
-- `.mascot-body`, `.mascot-bubble`: `pointer-events: auto`
+### M1 Analytics Core ↔ M2 Telegram Hub
+- `async def generate_hub_snapshot() -> Tuple[str, InlineKeyboardMarkup]`: Returns instant HTML formatted text with ASCII sparklines + category buttons.
+- `async def render_category_poster(category: str) -> bytes`: Returns raw PNG bytes for `BufferedInputFile(..., filename=f"{category}.png")`.
+  - Categories: `"economy"`, `"pvp"`, `"sociology"`, `"memetics"`.
 
-### Chat Guest Authentication
-- Backend Context: `session.user = {"id": str, "is_guest": bool, "is_admin": bool}`
-- Unauthenticated / Guest state check: `{% if not session.user or session.user.is_guest %}`
-- Banner HTML:
-  ```html
-  <div class="guest-chat-notice">
-      <span>❌ Гости могут только читать чат. <a href="/login?redirect={{ request.url.path }}">Войдите для общения</a>.</span>
-  </div>
-  ```
-- Form controls: `disabled`, `pointer-events: none`
+### M1 Analytics Core ↔ M3 2ch Wrapped
+- `async def generate_user_wrapped(user_id: int) -> Tuple[bytes, str]`: Returns `(png_bytes, caption_html)`.
+- Fallback: Gracefully handles users with low/zero history with custom "Ньюфаг / Призрак" archetype.
 
-### FormManager Frontend Lifecycle
-- `FormManager.hideFloating(fromHistory = false)`:
-  - Safe against `this === null`, `this === undefined`, `this.floatingBox === null`.
-  - DOM query: `const box = this?.floatingBox || document.getElementById('floating-reply-box');`
-  - QuerySelector: `box?.querySelector?.(...)`
-  - No uncaught TypeErrors when invoked without an open floating box.
+### M1 Analytics Core ↔ M4 FastAPI WebApp
+- `async def get_stats_data(category: str, timespan: str, board: Optional[str] = None) -> Dict[str, Any]`: Structured dictionary for REST endpoints `/api/stats/{category}`.
+- Caching: `@cache(expire=30)` on FastAPI endpoints.
+
+### Concurrency & Threading Contract
+- All SQLite queries use read-only URI: `sqlite3.connect("file:dvach_bot.db?mode=ro", uri=True, timeout=15.0)`.
+- All Matplotlib figure creations and exports MUST be wrapped in `with matplotlib_guard():` from `common.chart_lock` with explicit `plt.close(fig)` or `plt.close('all')` in a `finally` block.
 
 ## Code Layout
-- `site_tgach/main.py`: Media proxy endpoints (`get_telegram_file`, `get_cached_file_path`), auth dependency (`get_current_user_or_guest`), chat route (`read_board_chat`).
-- `site_tgach/templates/chat.jinja2`: Chat UI template, guest notice banner, form inputs, video poster attributes.
-- `site_tgach/templates/search_results.jinja2`: Tag search gallery templates, `onerror` fallback handlers.
-- `site_tgach/templates/thread.jinja2`, `board.jinja2`, `overboard.jinja2`, `gallery.jinja2`: Video poster thumbnail bindings.
-- `site_tgach/static/css/style.src.css`: Source stylesheet (compiled to `style.css` and `style.css.gz`).
-- `site_tgach/static/js/main.src.js`: Source JavaScript (compiled to `main.js` and `main.js.gz`).
-- `scratch/minify_assets.py`: Asset compilation script.
-- `tests/`: Automated unit, integration, and E2E test suites.
+- `stats_v2.py` / `stats_hub.py`: Main analytics query engine & Matplotlib/PIL poster rendering engine (Owned by M1).
+- `handlers/stats_hub_handlers.py` or `stats_hub_router.py`: Aiogram v3 Telegram commands & callback query handlers (Owned by M2).
+- `wrapped_v2.py` or integrated into `stats_hub.py`: Wrapped card generator (Owned by M3).
+- `site_tgach/routers/stats_dashboard.py` & `site_tgach/templates/stats_dashboard.jinja2`: FastAPI routes and frontend template (Owned by M4).
+- `tests/test_stats_v2.py`, `tests/test_stats_hub_e2e.py`, `tests/test_visual_posters.py`: Test suites (Owned by M5).
+- Legacy files (DO NOT MODIFY): `periodic_publisher.py`, `stats_manager.py` (legacy parts), existing command handlers in `main.py` lines 7163, 9858, 13324.

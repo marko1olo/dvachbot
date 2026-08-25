@@ -118,26 +118,14 @@ def apply_tinfoil_damage(
 # EARN MENU
 # ====================
 
-@economy_router.message(Command("earn", "bomj", "economy"))
+@economy_router.message(Command("earn", "bomj", "economy", "work", "job", "работа", "биржа", ignore_case=True, ignore_mention=True))
 async def cmd_work_menu(message: types.Message, board_id: str | None = None):
     if not board_id:
         return
-    
-    text = (
-        "🛠️ <b>Биржа Труда (Заработок)</b>\n\n"
-        "Выбери способ заработать Шекели:\n"
-        "1. 🍾 <b>Сдать стеклотару</b> — <i>10-50 Шек (Раз в 24 часа)</i>\n"
-        "2. 👩‍👦 <b>Продать мать</b> — <i>10000 Шек (Разово, дает вечное клеймо)</i>\n"
-    )
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🍾 Сдать бутылки", callback_data="work_bottles")],
-        [InlineKeyboardButton(text="👩‍👦 Продать мать", callback_data="work_sell_mother")]
-    ])
-    
-    await message.reply(text, reply_markup=kb, parse_mode="HTML")
-    try: await message.delete()
-    except (TelegramBadRequest, TelegramForbiddenError, TelegramAPIError, Exception): pass
+    import main
+    if hasattr(main, 'cmd_work'):
+        await main.cmd_work(message, board_id)
+        return
 
 @economy_router.callback_query(F.data.in_({"work_bottles", "work_sell_mother"}))
 async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = None):
@@ -519,7 +507,12 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
     except Exception:
         final_items = {}
         
-    final_items["shit_until"] = int(time.time()) + 3600
+    duration_sec = random.randint(3600, 10800)
+    dur_h = duration_sec // 3600
+    dur_m = (duration_sec % 3600) // 60
+    dur_str = f"{dur_h}ч {dur_m}мин" if dur_m else f"{dur_h}ч"
+
+    final_items["shit_until"] = int(time.time()) + duration_sec
     
     async with db_lock:
         if bounce:
@@ -532,13 +525,13 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(final_items), target_id, board_id))
         await db.commit()
-    register_attacker_effect("shit_gun", user_id, final_target, 3600)
+    register_attacker_effect("shit_gun", user_id, final_target, duration_sec)
         
     if bounce:
         try:
             await message.bot.send_message(
                 user_id, 
-                "🐒 Ты попытался метнуть говно, но ветер дунул в лицо! Ты сам обмазан говном на час 💩", 
+                f"🐒 Ты попытался метнуть говно, но ветер дунул в лицо! Ты сам обмазан говном на {dur_str} 💩", 
                 parse_mode="HTML"
             )
         except Exception: pass
@@ -546,7 +539,7 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
         try:
             await message.bot.send_message(
                 target_id, 
-                "🐒 В тебя метнули кусок говна! Ты обмазан говном на час 💩", 
+                f"🐒 В тебя метнули кусок говна! Ты обмазан говном на {dur_str} 💩", 
                 parse_mode="HTML"
             )
         except Exception: pass

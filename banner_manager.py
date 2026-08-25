@@ -168,12 +168,14 @@ def save_cache():
 def get_banner_file(
     category: Optional[str] = None,
     banner_name: Optional[str] = None,
-    user_id: Optional[int] = None
+    user_id: Optional[int] = None,
+    bot_id: Optional[int] = None
 ) -> Tuple[str, Union[str, FSInputFile]]:
     """
     Returns (banner_filename, photo_payload).
     Uses a Shuffle-Bag (Anti-Repeat) algorithm to cycle through all banners evenly.
     photo_payload is either a cached Telegram file_id (str) or FSInputFile for upload.
+    Cached file_ids are scoped per bot_id to ensure cross-bot compatibility.
     """
     if not _CATEGORIZED_BANNERS.get("all"):
         _init_banners()
@@ -211,14 +213,21 @@ def get_banner_file(
                 _USER_RECENT_BANNERS[user_id] = deque(maxlen=8)
             _USER_RECENT_BANNERS[user_id].append(chosen_file)
 
-    # Check if we have a cached file_id from Telegram CDN
+    # Check if we have a cached file_id from Telegram CDN for this specific bot
+    if bot_id:
+        cached_fid = _BANNER_CACHE.get(f"{bot_id}:{chosen_file}")
+        if cached_fid:
+            return chosen_file, cached_fid
+
     cached_fid = _BANNER_CACHE.get(chosen_file)
     if cached_fid:
         return chosen_file, cached_fid
 
     # Fallback to local FSInputFile
     local_path = BANNERS_DIR / chosen_file
-    return chosen_file, FSInputFile(str(local_path))
+    if local_path.exists():
+        return chosen_file, FSInputFile(str(local_path))
+    return chosen_file, ""
 
 
 async def send_banner_message(
@@ -231,21 +240,16 @@ async def send_banner_message(
     parse_mode: str = "HTML"
 ) -> Optional[types.Message]:
     """
-    Sends a photo message with banner, caching the file_id automatically on first upload.
-    Falls back to text message if photo sending fails.
+    Sends a photo message with banner, caching the file_id automatically per bot.
+    Falls back to text message if photo sending fails, and plain text if HTML parsing fails.
     """
-    fname, photo_payload = get_banner_file(category=category, banner_name=banner_name, user_id=chat_id)
+    bot_id = getattr(bot, "id", None)
+    fname, photo_payload = get_banner_file(category=category, banner_name=banner_name, user_id=chat_id, bot_id=bot_id)
     
     # Telegram photo captions are limited to 1024 characters.
     # If no photo available, send as text.
     if not photo_payload:
-        return await bot.send_message(
-            chat_id=chat_id,
-            text=caption,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            disable_web_page_preview=True
-        )
+        return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode)
 
     # If caption exceeds 1024 chars, send photo first (no caption), then reply with text.
     if len(caption) > 1024:
@@ -255,28 +259,44 @@ async def send_banner_message(
                 photo=photo_payload
             )
             # Cache file_id from the photo message
-            if photo_msg.photo and fname and fname not in _BANNER_CACHE:
-                _BANNER_CACHE[fname] = photo_msg.photo[-1].file_id
+            if photo_msg.photo and fname:
+                fid = photo_msg.photo[-1].file_id
+                if bot_id:
+                    _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
+                _BANNER_CACHE[fname] = fid
                 save_cache()
             # Reply to the photo with the full text
-            return await bot.send_message(
+            return await _send_text_with_fallback(
+                bot=bot,
                 chat_id=chat_id,
                 text=caption,
-                reply_to_message_id=photo_msg.message_id,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
-                disable_web_page_preview=True
+                reply_to_message_id=photo_msg.message_id
             )
         except Exception as e:
-            logger.warning(f"[banner_manager] Photo+reply failed for {fname}: {e}")
-            # Fallback: just send text
-            return await bot.send_message(
-                chat_id=chat_id,
-                text=caption,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                disable_web_page_preview=True
-            )
+            logger.warning(f"[banner_manager] Photo+reply failed for {fname}: {e}. Retrying local file...")
+            local_path = BANNERS_DIR / fname
+            if local_path.exists() and not isinstance(photo_payload, FSInputFile):
+                try:
+                    photo_msg = await bot.send_photo(chat_id=chat_id, photo=FSInputFile(str(local_path)))
+                    if photo_msg.photo:
+                        fid = photo_msg.photo[-1].file_id
+                        if bot_id:
+                            _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
+                        _BANNER_CACHE[fname] = fid
+                        save_cache()
+                    return await _send_text_with_fallback(
+                        bot=bot,
+                        chat_id=chat_id,
+                        text=caption,
+                        reply_markup=reply_markup,
+                        parse_mode=parse_mode,
+                        reply_to_message_id=photo_msg.message_id
+                    )
+                except Exception as e2:
+                    logger.warning(f"[banner_manager] Local photo retry failed: {e2}")
+            return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode)
 
     try:
         msg = await bot.send_photo(
@@ -288,21 +308,26 @@ async def send_banner_message(
         )
         
         # Cache file_id if this was an initial upload
-        if msg.photo and fname and fname not in _BANNER_CACHE:
-            largest_photo = msg.photo[-1]
-            _BANNER_CACHE[fname] = largest_photo.file_id
+        if msg.photo and fname:
+            fid = msg.photo[-1].file_id
+            if bot_id:
+                _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
+            _BANNER_CACHE[fname] = fid
             save_cache()
             
         return msg
     except Exception as e:
         err_text = str(e).lower()
-        if ("wrong file identifier" in err_text or "wrong file_id" in err_text or "file is temporarily unavailable" in err_text) and fname:
-            # Cached file_id was rejected (e.g. from different bot token or expired CDN cache). Invalidate and retry from local disk.
+        # If cached file_id was rejected (wrong file identifier, unparseable, wrong bot token)
+        if fname:
+            if bot_id and f"{bot_id}:{fname}" in _BANNER_CACHE:
+                _BANNER_CACHE.pop(f"{bot_id}:{fname}", None)
             if fname in _BANNER_CACHE:
                 _BANNER_CACHE.pop(fname, None)
-                save_cache()
+            save_cache()
+
             local_path = BANNERS_DIR / fname
-            if local_path.exists():
+            if local_path.exists() and not isinstance(photo_payload, FSInputFile):
                 try:
                     msg = await bot.send_photo(
                         chat_id=chat_id,
@@ -312,31 +337,56 @@ async def send_banner_message(
                         parse_mode=parse_mode
                     )
                     if msg.photo:
-                        _BANNER_CACHE[fname] = msg.photo[-1].file_id
+                        fid = msg.photo[-1].file_id
+                        if bot_id:
+                            _BANNER_CACHE[f"{bot_id}:{fname}"] = fid
+                        _BANNER_CACHE[fname] = fid
                         save_cache()
                     return msg
                 except Exception as retry_e:
                     logger.warning(f"[banner_manager] Local file retry also failed for {fname}: {retry_e}")
 
-        if "caption is too long" in err_text or "caption_too_long" in err_text:
-            logger.info(f"[banner_manager] Caption exceeds 1024 chars for {fname}, sending as text message.")
-        else:
-            logger.warning(f"[banner_manager] send_photo failed for {fname}, falling back to text: {e}")
-        try:
-            return await bot.send_message(
-                chat_id=chat_id,
-                text=caption,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                disable_web_page_preview=True
-            )
-        except Exception as inner_e:
-            err_msg = str(inner_e).lower()
-            if "forbidden" in err_msg or "blocked" in err_msg or "deactivated" in err_msg or "not found" in err_msg:
-                logger.info(f"[banner_manager] User {chat_id} unreachable/blocked bot: {inner_e}")
-            else:
-                logger.error(f"[banner_manager] Fallback send_message failed for {chat_id}: {inner_e}")
-            return None
+        logger.warning(f"[banner_manager] send_photo failed for {fname}, falling back to text: {e}")
+        return await _send_text_with_fallback(bot, chat_id, caption, reply_markup, parse_mode)
+
+
+async def _send_text_with_fallback(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    reply_markup: Optional[types.InlineKeyboardMarkup] = None,
+    parse_mode: Optional[str] = "HTML",
+    reply_to_message_id: Optional[int] = None
+) -> Optional[types.Message]:
+    """Helper to send text message with graceful fallback from HTML to plain text."""
+    try:
+        return await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            reply_to_message_id=reply_to_message_id,
+            disable_web_page_preview=True
+        )
+    except Exception as e1:
+        if parse_mode is not None:
+            # HTML parse error or entity mismatch: retry without parse mode (plain text)
+            try:
+                # Strip basic tags for cleaner plain text
+                clean_text = re.sub(r'<[^>]+>', '', text)
+                return await bot.send_message(
+                    chat_id=chat_id,
+                    text=clean_text,
+                    reply_markup=reply_markup,
+                    parse_mode=None,
+                    reply_to_message_id=reply_to_message_id,
+                    disable_web_page_preview=True
+                )
+            except Exception as e2:
+                err_msg = str(e2).lower()
+                if not any(ign in err_msg for ign in ["forbidden", "blocked", "deactivated", "not found"]):
+                    logger.error(f"[banner_manager] Text fallback without parse_mode failed for {chat_id}: {e2}")
+        return None
 
 
 def get_all_banners_summary() -> Dict[str, Any]:

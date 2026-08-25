@@ -217,10 +217,13 @@ def build_character_card(
     # Dynamic RPG Attributes
     has_curse = cursed_until > now_ts or active_items.get("cursed_until", 0) > now_ts
     has_shit = active_items.get("shit_until", 0) > now_ts
+    has_vomit = active_items.get("vomit_until", 0) > now_ts
+    has_flag_ua = active_items.get("flag_ua_until", 0) > now_ts
+    has_flag_ru = active_items.get("flag_ru_until", 0) > now_ts
 
     tox_val = min(100, int(15 + posts_count * 0.04 + (30 if active_items.get("knife_gun") else 0) + (40 if active_items.get("partyvan_gun") else 0)))
     def_val = min(100, (45 if has_tinfoil else 5) + (35 if has_shield else 0) + (25 if active_items.get("pepperspray_gun") else 0))
-    san_val = max(0, 100 - (50 if has_curse else 0) - (30 if has_shit else 0) - min(40, posts_count // 120))
+    san_val = max(0, 100 - (50 if has_curse else 0) - (30 if has_shit else 0) - (25 if has_vomit else 0) - min(40, posts_count // 120))
     wealth_val = min(100, int((balance / 1500) * 100))
 
     # Apply Set Bonus stats if present
@@ -321,9 +324,9 @@ def build_character_html_card(
     equipped_feet = active_items.get("equipped_feet")
 
     has_tinfoil = active_items.get("tinfoil_hat", 0) > time.time()
-    has_shield = active_items.get("shield_active", 0) > time.time()
-    has_curse = cursed_until > time.time()
-    has_shit = active_items.get("shit_covered_until", 0) > time.time()
+    has_shield = active_items.get("shield_active", 0) > time.time() or active_items.get("reflect_shield_until", 0) > time.time()
+    has_curse = cursed_until > time.time() or active_items.get("cursed_until", 0) > time.time()
+    has_shit = active_items.get("shit_until", 0) > time.time() or active_items.get("shit_covered_until", 0) > time.time()
 
     head_name = CLOTHING_CATALOG.get(equipped_head, {}).get("name") if equipped_head in CLOTHING_CATALOG else ("👽 Шапочка из фольги" if has_tinfoil else ("👑 VIP Корона" if custom_prefix else "<i>(Пусто)</i>"))
     torso_name = CLOTHING_CATALOG.get(equipped_torso, {}).get("name", "<i>(Пусто)</i>")
@@ -336,6 +339,9 @@ def build_character_html_card(
     elif active_items.get("pepperspray_gun"): weapon_name = "🧯 Перцовый баллончик"
     elif active_items.get("mute_gun"): weapon_name = "🔇 Мут-Ган"
     elif active_items.get("shit_gun"): weapon_name = "💩 Кусок говна"
+    elif active_items.get("vomit_gun"): weapon_name = "🤮 Блевота"
+    elif active_items.get("flag_ua_gun"): weapon_name = "🇺🇦 Флаг Украины"
+    elif active_items.get("flag_ru_gun"): weapon_name = "🇷🇺 Флаг России"
 
     # RPG Stats calculation
     toxicity = min(100, max(5, int(posts_count * 1.5) % 100))
@@ -390,9 +396,15 @@ def build_character_html_card(
         f"🛡️ <b>Щит:</b>     {'🛡️ Зеркальный Щит' if has_shield else '<i>(Пусто)</i>'}",
     ]
 
-    if has_curse or has_shit:
-        debuff = "🚽 Проклятие поноса" if has_curse else "💩 Обмазан говном"
-        lines.append(f"⚠️ <b>Дебафф:</b> {debuff}")
+    active_debuffs = []
+    if has_curse: active_debuffs.append("🚽 Проклятие поноса")
+    if has_shit: active_debuffs.append("💩 Обмазан говном")
+    if active_items.get("vomit_until", 0) > time.time(): active_debuffs.append("🤮 Изблеван")
+    if active_items.get("flag_ua_until", 0) > time.time(): active_debuffs.append("🇺🇦 Флаг Украины")
+    if active_items.get("flag_ru_until", 0) > time.time(): active_debuffs.append("🇷🇺 Флаг России")
+
+    if active_debuffs:
+        lines.append(f"⚠️ <b>Дебаффы:</b> {', '.join(active_debuffs)}")
 
     if active_sets:
         lines.append("")

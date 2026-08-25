@@ -1270,6 +1270,8 @@ class MessageBroadcaster:
                     return None
             except TelegramForbiddenError:
                 raise 
+            except TelegramRetryAfter:
+                raise
             except TelegramServerError as srv_err:
                 self.stats['errors'] += 1
                 main.runtime_logger.warning(f"⚠️ Telegram server error in _send_one for user {uid}: {srv_err}")

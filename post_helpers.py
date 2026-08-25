@@ -147,6 +147,9 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
         import json
         db = await get_pool()
         has_poop = False
+        has_vomit = False
+        has_flag_ua = False
+        has_flag_ru = False
         prefix_str = ""
         badge_emoji = ""
         COLOR_EMOJIS = {
@@ -161,6 +164,12 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                         items = json.loads(row[0])
                         if items.get("shit_until", 0) > now_ts:
                             has_poop = True
+                        if items.get("vomit_until", 0) > now_ts:
+                            has_vomit = True
+                        if items.get("flag_ua_until", 0) > now_ts:
+                            has_flag_ua = True
+                        if items.get("flag_ru_until", 0) > now_ts:
+                            has_flag_ru = True
                         if items.get("badge_color_expires", 0) > now_ts or items.get("badge_color_active"):
                             b_col = items.get("badge_color", "gold")
                             badge_emoji = f"{COLOR_EMOJIS.get(b_col, '🟣')} "
@@ -169,7 +178,8 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
                 if row[1] and row[2] and now_ts < row[2]:
                     prefix_str = f"{row[1]} "
         
-        custom_prefix = badge_emoji + ("💩 " if has_poop else "") + prefix_str
+        debuff_icons = ("💩 " if has_poop else "") + ("🤮 " if has_vomit else "") + ("🇺🇦 " if has_flag_ua else "") + ("🇷🇺 " if has_flag_ru else "")
+        custom_prefix = badge_emoji + debuff_icons + prefix_str
                     
     res = await _format_header_inner(board_id, post_num, stream)
     return custom_prefix + res

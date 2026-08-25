@@ -2379,6 +2379,10 @@ app.mount(
 )
 templates = Jinja2Templates(directory=os.path.join(site_root, "templates"))
 templates.env.globals["static_version"] = "10.1"
+app.state.templates = templates
+
+from site_tgach.stats_api import router as stats_v2_router
+app.include_router(stats_v2_router)
 
 
 @app.get("/robots.txt", response_class=Response)

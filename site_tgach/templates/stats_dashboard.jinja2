@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ТГАЧ • Аналитический Дашборд</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        cyber: {
+                            bg: '#0b0f17',
+                            card: '#131924',
+                            border: '#1f293d',
+                            cyan: '#00f0ff',
+                            pink: '#ff0055',
+                            green: '#39d353',
+                            amber: '#ffaa00',
+                            purple: '#a855f7'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Telegram WebApp SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body {
+            background-color: #0b0f17;
+            color: #f1f5f9;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .neon-border-cyan { box-shadow: 0 0 15px rgba(0, 240, 255, 0.15); }
+        .neon-border-pink { box-shadow: 0 0 15px rgba(255, 0, 85, 0.15); }
+        .neon-border-green { box-shadow: 0 0 15px rgba(57, 211, 83, 0.15); }
+        .neon-border-amber { box-shadow: 0 0 15px rgba(255, 170, 0, 0.15); }
+        .neon-border-purple { box-shadow: 0 0 15px rgba(168, 85, 247, 0.15); }
+        .tab-btn.active {
+            border-bottom: 2px solid #00f0ff;
+            color: #00f0ff;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body class="bg-cyber-bg min-h-screen pb-12">
+    <!-- Top Bar -->
+    <header class="sticky top-0 z-30 bg-cyber-card/90 backdrop-blur border-b border-cyber-border px-4 py-3 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+            <span class="w-3 h-3 rounded-full bg-cyber-green animate-pulse"></span>
+            <h1 class="text-base font-bold tracking-wide text-cyber-cyan uppercase">ТГАЧ АНАЛИТИКА</h1>
+        </div>
+        <div class="flex items-center space-x-2">
+            <span id="updateTime" class="text-xs text-slate-400">Загрузка...</span>
+            <button onclick="fetchStatsData(true)" class="p-1.5 rounded-lg bg-cyber-border hover:bg-slate-700 text-slate-300 text-xs">
+                🔄
+            </button>
+        </div>
+    </header>
+
+    <!-- Quick Stats Cards (KPI) -->
+    <div class="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="bg-cyber-card p-3 rounded-xl border border-cyber-border neon-border-cyan">
+            <div class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Высеров (24ч)</div>
+            <div id="kpiPosts" class="text-xl font-black text-cyber-cyan mt-0.5">...</div>
+            <div class="text-[10px] text-slate-400 mt-1">Все разделы</div>
+        </div>
+        <div class="bg-cyber-card p-3 rounded-xl border border-cyber-border neon-border-green">
+            <div class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Шизо-Онлайн (DAU)</div>
+            <div id="kpiUsers" class="text-xl font-black text-cyber-green mt-0.5">...</div>
+            <div class="text-[10px] text-slate-400 mt-1">Уникальных анонов</div>
+        </div>
+        <div class="bg-cyber-card p-3 rounded-xl border border-cyber-border neon-border-amber">
+            <div class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Оборот Казны</div>
+            <div id="kpiVolume" class="text-xl font-black text-cyber-amber mt-0.5">...</div>
+            <div class="text-[10px] text-slate-400 mt-1">Шекелей за 24ч</div>
+        </div>
+        <div class="bg-cyber-card p-3 rounded-xl border border-cyber-border neon-border-pink">
+            <div class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Топ Баян</div>
+            <div id="kpiBayan" class="text-xl font-black text-cyber-pink mt-0.5">...</div>
+            <div class="text-[10px] text-slate-400 mt-1">Форсов за неделю</div>
+        </div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="px-4 border-b border-cyber-border flex space-x-4 overflow-x-auto text-sm text-slate-400 no-scrollbar">
+        <button onclick="switchTab('traffic')" id="tab-traffic" class="tab-btn active pb-2.5 whitespace-nowrap">📈 Трафик</button>
+        <button onclick="switchTab('economy')" id="tab-economy" class="tab-btn pb-2.5 whitespace-nowrap">💰 Экономика</button>
+        <button onclick="switchTab('pvp')" id="tab-pvp" class="tab-btn pb-2.5 whitespace-nowrap">⚔️ Войны & Броня</button>
+        <button onclick="switchTab('memes')" id="tab-memes" class="tab-btn pb-2.5 whitespace-nowrap">🖼️ Мемы & Баяны</button>
+        <button onclick="switchTab('drama')" id="tab-drama" class="tab-btn pb-2.5 whitespace-nowrap">🧠 Социология</button>
+    </div>
+
+    <!-- Tab 1: Traffic & Online -->
+    <div id="view-traffic" class="tab-view px-4 py-4 space-y-4">
+        <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+            <h2 class="text-sm font-bold text-cyber-cyan mb-2">🌊 Циркадный Ритм Постинга (24 часа)</h2>
+            <div class="h-56 relative">
+                <canvas id="chartHourly"></canvas>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+                <h2 class="text-sm font-bold text-cyber-green mb-2">🏆 Активность по Доскам</h2>
+                <div class="h-48 relative">
+                    <canvas id="chartBoards"></canvas>
+                </div>
+            </div>
+            <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+                <h2 class="text-sm font-bold text-cyber-purple mb-2">📁 Форматы Контента (30д)</h2>
+                <div class="h-48 relative">
+                    <canvas id="chartMedia"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 2: Economy & Casino -->
+    <div id="view-economy" class="tab-view hidden px-4 py-4 space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+                <h2 class="text-sm font-bold text-cyber-amber mb-2">🎰 Баланс Казино & Выплаты (RTP)</h2>
+                <div class="h-52 relative flex items-center justify-center">
+                    <canvas id="chartCasino"></canvas>
+                </div>
+            </div>
+            <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+                <h2 class="text-sm font-bold text-cyber-pink mb-2">🔪 Топ Трейдеров и Олигархов</h2>
+                <div class="h-52 relative">
+                    <canvas id="chartTraders"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+            <h2 class="text-sm font-bold text-cyber-amber mb-2">🏛️ Распределение богатства по децилям</h2>
+            <div class="h-48 relative">
+                <canvas id="chartDeciles"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 3: PvP & Debuffs -->
+    <div id="view-pvp" class="tab-view hidden px-4 py-4 space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+                <h2 class="text-sm font-bold text-cyber-green mb-2">🧪 Использованное Оружие & Дебаффы</h2>
+                <div class="h-52 relative">
+                    <canvas id="chartWeapons"></canvas>
+                </div>
+            </div>
+            <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+                <h2 class="text-sm font-bold text-cyber-cyan mb-2">🛡️ Защита Фольги (Отражение атак)</h2>
+                <div class="h-52 relative flex items-center justify-center">
+                    <canvas id="chartFoil"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 4: Memes & Bayanometer -->
+    <div id="view-memes" class="tab-view hidden px-4 py-4 space-y-4">
+        <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+            <h2 class="text-sm font-bold text-cyber-cyan mb-2">♻️ Баянометр: Топ Вирусных Репостов</h2>
+            <div class="h-52 relative">
+                <canvas id="chartBayans"></canvas>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+                <h2 class="text-sm font-bold text-cyber-purple mb-2">🌌 AI-Теги Картинок</h2>
+                <div class="h-48 relative">
+                    <canvas id="chartTags"></canvas>
+                </div>
+            </div>
+            <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+                <h2 class="text-sm font-bold text-cyber-amber mb-2">📈 Частота Сленга</h2>
+                <div class="h-48 relative">
+                    <canvas id="chartSlang"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 5: Drama & Sociology -->
+    <div id="view-drama" class="tab-view hidden px-4 py-4 space-y-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+                <h2 class="text-sm font-bold text-cyber-pink mb-2">⚔️ Карта Бифов (Стычки Врагов)</h2>
+                <div class="h-52 relative">
+                    <canvas id="chartBeefs"></canvas>
+                </div>
+            </div>
+            <div class="bg-cyber-card p-4 rounded-xl border border-cyber-border">
+                <h2 class="text-sm font-bold text-cyber-pink mb-2">☢️ Токсичность Досок (% мата)</h2>
+                <div class="h-52 relative">
+                    <canvas id="chartToxBoards"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Init Telegram WebApp
+        if (window.Telegram && window.Telegram.WebApp) {
+            window.Telegram.WebApp.expand();
+            window.Telegram.WebApp.ready();
+        }
+
+        function haptic() {
+            if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.HapticFeedback) {
+                window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+            }
+        }
+
+        let charts = {};
+
+        function switchTab(tabId) {
+            haptic();
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-view').forEach(view => view.classList.add('hidden'));
+
+            document.getElementById('tab-' + tabId).classList.add('active');
+            document.getElementById('view-' + tabId).classList.remove('hidden');
+        }
+
+        async function fetchStatsData(isRefresh = false) {
+            if (isRefresh) haptic();
+            try {
+                const res = await fetch('/api/stats/dashboard_data');
+                const data = await res.json();
+                renderKPIs(data);
+                renderCharts(data);
+                document.getElementById('updateTime').textContent = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+            } catch (err) {
+                console.error("Failed to load stats:", err);
+            }
+        }
+
+        function renderKPIs(data) {
+            document.getElementById('kpiPosts').textContent = Number(data.posts_24h || 0).toLocaleString();
+            document.getElementById('kpiUsers').textContent = Number(data.users_24h || 0).toLocaleString();
+            document.getElementById('kpiVolume').textContent = Number(data.tx_volume || 0).toLocaleString() + ' ₪';
+            document.getElementById('kpiBayan').textContent = 'x' + (data.top_bayan_times || 0);
+        }
+
+        function renderCharts(data) {
+            // 1. Hourly Wave
+            if (charts.hourly) charts.hourly.destroy();
+            const ctxHourly = document.getElementById('chartHourly').getContext('2d');
+            charts.hourly = new Chart(ctxHourly, {
+                type: 'line',
+                data: {
+                    labels: Array.from({length: 24}, (_, i) => `${i}:00`),
+                    datasets: [{
+                        label: 'Постов в час',
+                        data: data.hourly_series || [],
+                        borderColor: '#00f0ff',
+                        backgroundColor: 'rgba(0, 240, 255, 0.15)',
+                        fill: true,
+                        tension: 0.35,
+                        pointRadius: 3,
+                        pointBackgroundColor: '#00f0ff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { color: '#1f293d' }, ticks: { color: '#94a3b8', font: { size: 9 } } },
+                        y: { grid: { color: '#1f293d' }, ticks: { color: '#94a3b8', font: { size: 9 } } }
+                    }
+                }
+            });
+
+            // 2. Active Boards
+            if (charts.boards) charts.boards.destroy();
+            const ctxBoards = document.getElementById('chartBoards').getContext('2d');
+            charts.boards = new Chart(ctxBoards, {
+                type: 'bar',
+                data: {
+                    labels: (data.top_boards || []).map(b => '/' + b[0] + '/'),
+                    datasets: [{
+                        data: (data.top_boards || []).map(b => b[1]),
+                        backgroundColor: ['#39d353', '#00f0ff', '#ffaa00', '#a855f7', '#ff0055'],
+                        borderRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8' } },
+                        y: { grid: { color: '#1f293d' }, ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+
+            // 3. Media Formats
+            if (charts.media) charts.media.destroy();
+            const ctxMedia = document.getElementById('chartMedia').getContext('2d');
+            charts.media = new Chart(ctxMedia, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Фото', 'Видео', 'GIF', 'Стикеры'],
+                    datasets: [{
+                        data: data.media_formats || [500, 150, 80, 40],
+                        backgroundColor: ['#38bdf8', '#ff0055', '#ffaa00', '#a855f7'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'right', labels: { color: '#f1f5f9', boxWidth: 10 } } }
+                }
+            });
+
+            // 4. Casino RTP
+            if (charts.casino) charts.casino.destroy();
+            const ctxCasino = document.getElementById('chartCasino').getContext('2d');
+            charts.casino = new Chart(ctxCasino, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Выигрыши анонов', 'Казна Абу'],
+                    datasets: [{
+                        data: [data.casino_wins || 800, data.casino_rake || 200],
+                        backgroundColor: ['#39d353', '#ff0055'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom', labels: { color: '#f1f5f9' } } }
+                }
+            });
+
+            // 5. Deciles
+            if (charts.deciles) charts.deciles.destroy();
+            const ctxDeciles = document.getElementById('chartDeciles').getContext('2d');
+            charts.deciles = new Chart(ctxDeciles, {
+                type: 'bar',
+                data: {
+                    labels: ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9', 'D10'],
+                    datasets: [{
+                        data: data.deciles || [0, 0, 0, 0, 0, 1, 2, 5, 12, 80],
+                        backgroundColor: '#ffaa00',
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: '#94a3b8' } },
+                        y: { grid: { color: '#1f293d' }, ticks: { color: '#94a3b8' } }
+                    }
+                }
+            });
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            fetchStatsData();
+        });
+    </script>
+</body>
+</html>

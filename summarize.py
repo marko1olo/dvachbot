@@ -83,63 +83,51 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, model_preference: 
 
 async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     if model_preference == "persona" or model_preference == "persona_gemini":
-        # Persona Bot priority: 3.7 Flash -> 3.6 Flash -> 3.5 Flash -> 2.5 Flash -> 3.5 Flash-Lite -> 3.1 Flash-Lite -> Qwen
+        # Persona Bot priority: 3.5 Flash-Lite (500-1500 RPD) -> 3.1 Flash-Lite -> Qwen -> 3.6 Flash -> 3.7 Flash
         models_cascade = [
-            ("gemini-3.7-flash", "gemini"),
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
-            ("gemini-2.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-3.6-flash", "gemini"),
+            ("gemini-3.7-flash", "gemini"),
         ]
     elif model_preference == "fast":
         models_cascade = [
-            ("gemini-3.7-flash", "gemini"),
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-3.6-flash", "gemini"),
         ]
     elif model_preference == "gemini":
         models_cascade = [
-            ("gemini-3.7-flash", "gemini"),
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
-            ("gemini-2.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
+            ("gemini-3.7-flash", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
         ]
     elif model_preference == "qwen":
         models_cascade = [
             ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.7-flash", "gemini"),
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
         ]
     elif model_preference == "llama":
         models_cascade = [
-            ("gemini-3.7-flash", "gemini"),
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
         ]
     else:
-        # Default summarization cascade: 3.7 -> 3.6 -> 3.5 -> 2.5 -> Lite -> Groq
+        # Default summarization cascade: Lite -> Qwen -> Fallback Flash
         models_cascade = [
-            ("gemini-3.7-flash", "gemini"),
-            ("gemini-3.6-flash", "gemini"),
-            ("gemini-3.5-flash", "gemini"),
-            ("gemini-2.5-flash", "gemini"),
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
+            ("gemini-3.6-flash", "gemini"),
+            ("gemini-3.7-flash", "gemini"),
         ]
 
     

@@ -69,22 +69,30 @@ async def format_header(board_id: str, post_num: int, author_id: int = 0, stream
         import json
         db = await get_pool()
         has_poop = False
+        has_vomit = False
+        has_flag_ua = False
+        has_flag_ru = False
         prefix_str = ""
+        now_ts = int(time.time())
         async with db.execute("SELECT active_items, custom_prefix, prefix_expires_at FROM Users WHERE user_id = ?", (author_id,)) as c:
             async for row in c:
                 if row[0]:
                     try:
                         items = json.loads(row[0])
-                        if items.get("shit_until", 0) > int(time.time()):
+                        if items.get("shit_until", 0) > now_ts:
                             has_poop = True
+                        if items.get("vomit_until", 0) > now_ts:
+                            has_vomit = True
+                        if items.get("flag_ua_until", 0) > now_ts:
+                            has_flag_ua = True
+                        if items.get("flag_ru_until", 0) > now_ts:
+                            has_flag_ru = True
                     except Exception:
                         import traceback; traceback.print_exc()
-                if row[1] and row[2] and int(time.time()) < row[2]:
+                if row[1] and row[2] and now_ts < row[2]:
                     prefix_str = f"<b>{row[1]}</b> "
-        if has_poop:
-            custom_prefix = "💩 " + prefix_str
-        else:
-            custom_prefix = prefix_str
+        debuffs = ("💩 " if has_poop else "") + ("🤮 " if has_vomit else "") + ("🇺🇦 " if has_flag_ua else "") + ("🇷🇺 " if has_flag_ru else "")
+        custom_prefix = debuffs + prefix_str
                     
     res = await _format_header_inner(board_id, post_num, stream)
     return custom_prefix + res

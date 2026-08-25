@@ -342,15 +342,24 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                         
                                     import json
                                     parsed = json.loads(json_str)
-                                    if "tags" in parsed and "description" in parsed:
+                                    raw_t = parsed.get("tags")
+                                    raw_d = parsed.get("description")
+                                    
+                                    if raw_t is not None and raw_d is not None:
+                                        if isinstance(raw_t, list):
+                                            tags_str = ", ".join(str(t).strip() for t in raw_t if t)
+                                        else:
+                                            tags_str = str(raw_t).strip()
+                                        desc_str = str(raw_d).strip()
+                                        
                                         logger.info(f"👁️ [VISION] [{source}] ✅ Success via {provider} ({model_name}).")
-                                        return json.dumps(parsed, ensure_ascii=False)
+                                        return json.dumps({"tags": tags_str, "description": desc_str}, ensure_ascii=False)
                                     else:
                                         logger.warning(f"⚠️ [VISION] [{source}] {provider} JSON missing 'tags'/'description' keys. Trying next model.")
                                         permanent_model_failures += 1
                                         break  # malformed schema — next model
-                                except json.JSONDecodeError:
-                                    # Fallback: extract tags and description via regex before saving parse_error
+                                except (json.JSONDecodeError, Exception):
+                                    # Fallback: extract tags and description via regex before saving
                                     tags_match = re.search(r'"tags"\s*:\s*\[?(?:"([^"]+)"|([^}\]\n]+))', content)
                                     desc_match = re.search(r'"description"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', content, flags=re.DOTALL)
                                     if not desc_match:
@@ -364,8 +373,11 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                         logger.info(f"👁️ [VISION] [{source}] ✅ Recovered JSON via regex from {provider} ({model_name}).")
                                         return json.dumps({"tags": cleaned_tags, "description": extracted_desc}, ensure_ascii=False)
                                         
-                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} returned invalid JSON and regex recovery failed. Using raw content.")
-                                    return json.dumps({"tags": "parse_error", "description": content}, ensure_ascii=False)
+                                    words = [w.lower().strip(".,!?:;()[]\"'") for w in extracted_desc.split() if len(w) > 3]
+                                    clean_words = [w for w in words if not w.startswith("http") and not w.startswith("data:")]
+                                    synthesized_tags = ", ".join(list(dict.fromkeys(clean_words))[:10]) if clean_words else "media, image"
+                                    logger.warning(f"⚠️ [VISION] [{source}] {provider} returned unstructured text. Synthesized tags: {synthesized_tags[:60]}")
+                                    return json.dumps({"tags": synthesized_tags, "description": extracted_desc}, ensure_ascii=False)
 
                             else:
                                  # Empty response (Safety filter or empty candidates)

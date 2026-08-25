@@ -743,7 +743,9 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Проверь, что переме�
 last_gc_time = time.time()
 dp = Dispatcher()
 from economy_extension import economy_router, apply_tinfoil_damage
+from stats_hub_router import router as stats_hub_router
 dp.include_router(economy_router)
+dp.include_router(stats_hub_router)
 dp.message.middleware(DeduplicationMiddleware())
 dp.message.middleware(BoardMiddleware())
 dp.callback_query.middleware(BoardMiddleware())
@@ -3697,6 +3699,9 @@ import lootbox_engine
 BASE_SHOP_PRICES = {
     # ⚔️ Оружие и токсичность
     'shit': 80,
+    'vomit': 90,
+    'flag_ua': 120,
+    'flag_ru': 120,
     'knife': 300,
     'pepperspray': 300,
     'mute': 500,
@@ -3783,6 +3788,9 @@ def _build_main_shop_hub(user_id: int, balance: float):
 
 def _build_weapons_shop_content(user_id: int, balance: float):
     p_shit = get_current_item_price('shit')
+    p_vomit = get_current_item_price('vomit')
+    p_flag_ua = get_current_item_price('flag_ua')
+    p_flag_ru = get_current_item_price('flag_ru')
     p_knife = get_current_item_price('knife')
     p_spray = get_current_item_price('pepperspray')
     p_mute = get_current_item_price('mute')
@@ -3794,30 +3802,40 @@ def _build_weapons_shop_content(user_id: int, balance: float):
     text = (
         f"⚔️ <b>ЧЕРНЫЙ РЫНОК ОРУЖИЯ И ТОКСИЧНОСТИ</b>\n"
         f"Твой баланс: <code>{int(balance):,} ₪</code>\n\n"
-        f"1. 🐒 <b>Кусок говна</b> — <i>{p_shit} ₪</i> (Бросок /shit, дебафф на час)\n"
-        f"2. 🔪 <b>Заточка</b> — <i>{p_knife} ₪</i> (Ограбить анона на 10-30% через /rob)\n"
-        f"3. 🧯 <b>Перцовый баллончик</b> — <i>{p_spray} ₪</i> (Авто-защита: ослепляет грабителя!)\n"
-        f"4. 🔇 <b>Мут-Ган (1ч)</b> — <i>{p_mute} ₪</i> (Кикнуть реплаем через /shoot)\n"
-        f"5. 🚽 <b>Слабительное</b> — <i>{p_lax} ₪</i> (Проклятие поноса: /curse)\n"
-        f"6. 💊 <b>Шизо-Таблетка</b> — <i>{p_schizo} ₪</i> (Проклятие шизы: /schizopill)\n"
-        f"7. 🧹 <b>Билет Дворника (6ч)</b> — <i>{p_jan} ₪</i> (Права удаления /del)\n"
-        f"8. 🚔 <b>Пативэн-Ган</b> — <i>{p_van} ₪</i> (Вызов ОМОНа на 12ч через /partyvan)"
+        f"1. 🐒 <b>Кусок говна</b> — <i>{p_shit} ₪</i> (Бросок /shit, дебафф 1-3ч 💩)\n"
+        f"2. 🤮 <b>Блевота</b> — <i>{p_vomit} ₪</i> (Облевать через /vomit на 1-3ч 🤮)\n"
+        f"3. 🇺🇦 <b>Флаг Украины</b> — <i>{p_flag_ua} ₪</i> (Повесить через /flag_ua на 1-3ч 🇺🇦)\n"
+        f"4. 🇷🇺 <b>Флаг России</b> — <i>{p_flag_ru} ₪</i> (Повесить через /flag_ru на 1-3ч 🇷🇺)\n"
+        f"5. 🔪 <b>Заточка</b> — <i>{p_knife} ₪</i> (Ограбить анона на 10-30% через /rob)\n"
+        f"6. 🧯 <b>Перцовый баллончик</b> — <i>{p_spray} ₪</i> (Авто-защита: ослепляет грабителя!)\n"
+        f"7. 🔇 <b>Мут-Ган (1ч)</b> — <i>{p_mute} ₪</i> (Кикнуть реплаем через /shoot)\n"
+        f"8. 🚽 <b>Слабительное</b> — <i>{p_lax} ₪</i> (Проклятие поноса: /curse)\n"
+        f"9. 💊 <b>Шизо-Таблетка</b> — <i>{p_schizo} ₪</i> (Проклятие шизы: /schizopill)\n"
+        f"10. 🧹 <b>Билет Дворника (6ч)</b> — <i>{p_jan} ₪</i> (Права удаления /del)\n"
+        f"11. 🚔 <b>Пативэн-Ган</b> — <i>{p_van} ₪</i> (Вызов ОМОНа на 12ч через /partyvan)"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text=f"🐒 Говно ({p_shit}₪)", callback_data="shop_buy_shit"),
-            InlineKeyboardButton(text=f"🔪 Заточка ({p_knife}₪)", callback_data="shop_buy_knife")
+            InlineKeyboardButton(text=f"🤮 Блевота ({p_vomit}₪)", callback_data="shop_buy_vomit")
         ],
         [
-            InlineKeyboardButton(text=f"🧯 Перцовка ({p_spray}₪)", callback_data="shop_buy_pepperspray"),
-            InlineKeyboardButton(text=f"🔇 Мут-Ган ({p_mute}₪)", callback_data="shop_buy_mute")
+            InlineKeyboardButton(text=f"🇺🇦 Флаг UA ({p_flag_ua}₪)", callback_data="shop_buy_flag_ua"),
+            InlineKeyboardButton(text=f"🇷🇺 Флаг RU ({p_flag_ru}₪)", callback_data="shop_buy_flag_ru")
         ],
         [
-            InlineKeyboardButton(text=f"🚽 Слабительное ({p_lax}₪)", callback_data="shop_buy_laxative"),
-            InlineKeyboardButton(text=f"💊 Шизопил ({p_schizo}₪)", callback_data="shop_buy_schizopill")
+            InlineKeyboardButton(text=f"🔪 Заточка ({p_knife}₪)", callback_data="shop_buy_knife"),
+            InlineKeyboardButton(text=f"🧯 Перцовка ({p_spray}₪)", callback_data="shop_buy_pepperspray")
         ],
         [
-            InlineKeyboardButton(text=f"🧹 Дворник ({p_jan}₪)", callback_data="shop_buy_janitor"),
+            InlineKeyboardButton(text=f"🔇 Мут-Ган ({p_mute}₪)", callback_data="shop_buy_mute"),
+            InlineKeyboardButton(text=f"🚽 Слабительное ({p_lax}₪)", callback_data="shop_buy_laxative")
+        ],
+        [
+            InlineKeyboardButton(text=f"💊 Шизопил ({p_schizo}₪)", callback_data="shop_buy_schizopill"),
+            InlineKeyboardButton(text=f"🧹 Дворник ({p_jan}₪)", callback_data="shop_buy_janitor")
+        ],
+        [
             InlineKeyboardButton(text=f"🚔 Пативэн ({p_van}₪)", callback_data="shop_buy_partyvan")
         ],
         [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
@@ -4031,7 +4049,7 @@ def _build_color_picker_content(user_id: int, balance: float, active_items: dict
     return text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
 
-@dp.message(Command("shop", "store", "market", "магазин", "рынок"))
+@dp.message(Command("shop", "store", "market", "магазин", "рынок", ignore_case=True, ignore_mention=True))
 async def cmd_shop(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -4713,6 +4731,21 @@ async def _build_inventory_content(user_id: int, board_id: str):
         left_m = (shit_until - now) // 60
         buffs.append(f"🐒 <b>Обмазан говном:</b> ({left_m} мин)")
 
+    vomit_until = items.get("vomit_until", 0)
+    if vomit_until > now:
+        left_m = (vomit_until - now) // 60
+        buffs.append(f"🤮 <b>Изблеван:</b> ({left_m} мин)")
+
+    flag_ua_until = items.get("flag_ua_until", 0)
+    if flag_ua_until > now:
+        left_m = (flag_ua_until - now) // 60
+        buffs.append(f"🇺🇦 <b>Флаг Украины:</b> ({left_m} мин)")
+
+    flag_ru_until = items.get("flag_ru_until", 0)
+    if flag_ru_until > now:
+        left_m = (flag_ru_until - now) // 60
+        buffs.append(f"🇷🇺 <b>Флаг России:</b> ({left_m} мин)")
+
     if cursed_until > now:
         left_m = (cursed_until - now) // 60
         buffs.append(f"🚽 <b>Проклятие поноса:</b> Активно ({left_m} мин)")
@@ -4729,6 +4762,12 @@ async def _build_inventory_content(user_id: int, board_id: str):
         weapons.append("🧯 <b>Перцовый баллончик:</b> 1 шт. <i>(Авто-защита от /rob)</i>")
     if items.get("shit_gun"):
         weapons.append("🐒 <b>Кусок говна:</b> 1 шт. <i>(Реплай + /shit)</i>")
+    if items.get("vomit_gun"):
+        weapons.append("🤮 <b>Блевота:</b> 1 шт. <i>(Реплай + /vomit)</i>")
+    if items.get("flag_ua_gun"):
+        weapons.append("🇺🇦 <b>Флаг Украины:</b> 1 шт. <i>(Реплай + /flag_ua)</i>")
+    if items.get("flag_ru_gun"):
+        weapons.append("🇷🇺 <b>Флаг России:</b> 1 шт. <i>(Реплай + /flag_ru)</i>")
     if items.get("pills_gun"):
         weapons.append("💊 <b>Аминазин:</b> 1 шт. <i>(Снять дебаффы)</i>")
     if items.get("laxative_gun"):
@@ -4926,14 +4965,38 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
                 err_msg = "Карманы уже полны говна! Сделай Reply + /shit"
             else:
                 active_items["shit_gun"] = True
-                msg = "🐒 Ты подобрал кусок говна! Сделай Reply на пост с командой /shit (дебафф на 1 час)."
+                msg = "🐒 Ты подобрал кусок говна! Сделай Reply на пост с командой /shit (дебафф на 1-3 часа)."
+
+        elif item == "vomit":
+            if active_items.get("vomit_gun"):
+                err_msg = "У тебя уже есть Блевота в карманах! Сделай Reply + /vomit"
+            else:
+                active_items["vomit_gun"] = True
+                msg = "🤮 Ты набрал свежей блевоты! Сделай Reply на пост с командой /vomit (дебафф на 1-3 часа)."
+
+        elif item == "flag_ua":
+            if active_items.get("flag_ua_gun"):
+                err_msg = "У тебя уже есть Флаг Украины! Сделай Reply + /flag_ua"
+            else:
+                active_items["flag_ua_gun"] = True
+                msg = "🇺🇦 Ты купил Флаг Украины! Сделай Reply на пост с командой /flag_ua (повесить флаг на 1-3 часа)."
+
+        elif item == "flag_ru":
+            if active_items.get("flag_ru_gun"):
+                err_msg = "У тебя уже есть Флаг России! Сделай Reply + /flag_ru"
+            else:
+                active_items["flag_ru_gun"] = True
+                msg = "🇷🇺 Ты купил Флаг России! Сделай Reply на пост с командой /flag_ru (повесить флаг на 1-3 часа)."
 
         elif item == "pills":
             active_items.pop("shit_until", None)
+            active_items.pop("vomit_until", None)
+            active_items.pop("flag_ua_until", None)
+            active_items.pop("flag_ru_until", None)
             active_items.pop("peppersprayed_until", None)
             active_items.pop("schizopill_active", None)
             await db.execute("UPDATE Users SET cursed_until = 0 WHERE user_id = ? AND board_id = ?", (user_id, board_id))
-            msg = "💊 Ты выпил Аминазин! Все дебаффы (говно, перец, понос, шиза) моментально сняты."
+            msg = "💊 Ты выпил Аминазин! Все дебаффы (говно, блевота, флаги, перец, понос, шиза) моментально смыты."
 
         elif item == "knife":
             if active_items.get("knife_gun"):
@@ -5875,7 +5938,7 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
     except (TelegramBadRequest, TelegramAPIError, Exception):
         pass
 
-@dp.message(Command("shit"))
+@dp.message(Command("shit", ignore_case=True, ignore_mention=True))
 async def cmd_shit(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -5936,13 +5999,19 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     
     t_items = await _get_user_active_items(db, target_id, board_id)
     
-    # КУСОК ГОВНА РАЗРЕШЕН ВСЕГДА! (Не блокируется ограничениями других дебаффов)
+    # КУСОК ГОВНА РАЗРЕШЕН ВСЕГДА!
     active_items["shit_gun"] = False
     register_target_attack(target_id)
     set_combat_cooldown(user_id, 180)
     
+    # Рандомная длительность от 1 до 3 часов
+    duration_sec = random.randint(3600, 10800)
+    dur_h = duration_sec // 3600
+    dur_m = (duration_sec % 3600) // 60
+    dur_str = f"{dur_h}ч {dur_m}мин" if dur_m else f"{dur_h}ч"
+    
     if t_items.get("tinfoil_hat", 0) > current_time:
-        active_items["shit_until"] = current_time + 3600
+        active_items["shit_until"] = current_time + duration_sec
         destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=2.0, burn_chance=0.05)
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
@@ -5950,10 +6019,10 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
             await db.commit()
             
         if destroyed:
-            reply_txt = "👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Говно отскочило от фольги прямо тебе в лицо. Теперь ТЫ обмазан говном на 1 час!\nОт едкой субстанции Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Говно отскочило от фольги прямо тебе в лицо. Теперь ТЫ обмазан говном на {dur_str}!\nОт едкой субстанции Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
             target_txt = "🔥 <b>ШАПОЧКА ИСПОРЧЕНА!</b>\nКакой-то анон кинул в тебя говно! Твоя Шапочка отбила его обратно в метателя, но от едкого кала <b>сгорела дотла</b>!"
         else:
-            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Говно отскочило от фольги прямо тебе в лицо. Теперь ТЫ обмазан говном на 1 час!\nФольга жертвы испачкалась (-2ч, осталось {left_h}ч {left_m}мин)."
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Говно отскочило от фольги прямо тебе в лицо. Теперь ТЫ обмазан говном на {dur_str}!\nФольга жертвы испачкалась (-2ч, осталось {left_h}ч {left_m}мин)."
             target_txt = f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\nКакой-то анон кинул в тебя говно! Твоя Шапочка отбила его обратно в метателя, но потеряла 2ч прочности (осталось {left_h}ч {left_m}мин)."
             
         await message.answer(reply_txt, parse_mode="HTML")
@@ -5963,7 +6032,7 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
             pass
         return
 
-    t_items["shit_until"] = current_time + 3600
+    t_items["shit_until"] = current_time + duration_sec
     async with db_lock:
         await db.execute(
             "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
@@ -5976,19 +6045,21 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
             (target_id, board_id, json.dumps(t_items))
         )
         await db.commit()
-    register_attacker_effect("shit_gun", user_id, target_id, 3600)
-    await message.answer("🐒 <b>ПОПАДАНИЕ!</b>\nТы метко кинул кусок говна! Жертва обмазана на 1 час и получит иконку 💩 во всех своих постах.", parse_mode="HTML")
+    register_attacker_effect("shit_gun", user_id, target_id, duration_sec)
+    await message.answer(f"🐒 <b>ПОПАДАНИЕ!</b>\nТы метко кинул кусок говна! Жертва обмазана на {dur_str} и получит иконку 💩 во всех своих постах.", parse_mode="HTML")
     try:
         set_combat_cooldown(user_id, 180)
+        pills_price = get_current_item_price('pills')
+        foil_price = get_current_item_price('tinfoil')
         kb_rescue = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💊 Смыть говно Аминазином (100 ₪)", callback_data="fast_rescue:clean_pills")],
-            [InlineKeyboardButton(text="👽 Надеть Шапочку из фольги (800 ₪)", callback_data="fast_rescue:buy_tinfoil")]
+            [InlineKeyboardButton(text=f"💊 Смыть говно Аминазином ({pills_price} ₪)", callback_data="fast_rescue:clean_pills")],
+            [InlineKeyboardButton(text=f"👽 Надеть Шапочку из фольги ({foil_price} ₪)", callback_data="fast_rescue:buy_tinfoil")]
         ])
         await message.bot.send_message(
             target_id,
-            "🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\n"
-            "Какой-то анон обмазал тебя. У тебя статус 💩 на 1 час.\n\n"
-            "⚡ <b>Быстрое спасение:</b> нажми кнопку ниже, чтобы мгновенно отмыться:",
+            f"🐒 <b>В ТЕБЯ КИНУЛИ ГОВНОМ!</b>\n"
+            f"Какой-то анон обмазал тебя. У тебя статус 💩 на {dur_str}.\n\n"
+            f"⚡ <b>Быстрое спасение:</b> нажми кнопку ниже, чтобы мгновенно отмыться:",
             reply_markup=kb_rescue,
             parse_mode="HTML"
         )
@@ -5999,7 +6070,401 @@ async def cmd_shit(message: types.Message, board_id: str | None, stream: str = '
     except (TelegramBadRequest, TelegramAPIError, Exception):
         pass
 
-@dp.message(Command("curse", "vomit"))
+
+@dp.message(Command("vomit", "блевота", "блевать", "puke", "blevota", ignore_case=True, ignore_mention=True))
+async def cmd_vomit(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ Сделай Reply на пост того, кого хочешь облевать!")
+        return
+
+    import time
+    from shared_state import (
+        count_active_attacker_effects, register_attacker_effect,
+        get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
+    )
+    db = await get_pool()
+    current_time = int(time.time())
+
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0 or target_id == user_id: 
+        await message.answer("⚠️ Не удалось прицелиться или ты пытаешься облевать сам себя.")
+        return
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
+        return
+
+    if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
+        return
+
+    if await check_target_grief_protection(message, target_id, user_id, board_id):
+        return
+
+    cd_rem = get_combat_cooldown_remaining(user_id)
+    if cd_rem > 0:
+        cd_min = cd_rem // 60
+        cd_sec = cd_rem % 60
+        time_str = f"{cd_min}м {cd_sec}с" if cd_min > 0 else f"{cd_sec}с"
+        await message.answer(
+            f"⏳ <b>Перезарядка оружия!</b>\n"
+            f"Ты недавно совершил нападение. Следующая атака доступна через <b>{time_str}</b>.\n"
+            f"<i>(Глобальный кулдаун на оружие: 3 мин)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("vomit_gun"):
+        await message.answer("⚠️ У тебя нет блевоты в карманах! Купи её в /shop.")
+        return
+
+    if count_active_attacker_effects("vomit_gun", user_id) >= 2:
+        await message.answer(
+            "🤮 <b>Лимит активных атак!</b>\n"
+            "Ты уже облевал 2 анонов одновременно.\n"
+            "Подожди, пока хотя бы один отмоется, прежде чем плевать снова.\n"
+            "Блевота осталась в твоих карманах.",
+            parse_mode="HTML"
+        )
+        return
+    
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    
+    active_items["vomit_gun"] = False
+    register_target_attack(target_id)
+    set_combat_cooldown(user_id, 180)
+    
+    # Рандомная длительность от 1 до 3 часов
+    duration_sec = random.randint(3600, 10800)
+    dur_h = duration_sec // 3600
+    dur_m = (duration_sec % 3600) // 60
+    dur_str = f"{dur_h}ч {dur_m}мин" if dur_m else f"{dur_h}ч"
+    
+    if t_items.get("tinfoil_hat", 0) > current_time:
+        active_items["vomit_until"] = current_time + duration_sec
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=2.0, burn_chance=0.05)
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+            
+        if destroyed:
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Блевота отскочила от фольги прямо тебе в лицо. Теперь ТЫ изблеван на {dur_str}!\nОт кислоты Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            target_txt = "🔥 <b>ШАПОЧКА ИСПОРЧЕНА!</b>\nКакой-то анон пытался облевать тебя! Твоя Шапочка отбила блевоту обратно в нападающего, но от кислоты <b>сгорела дотла</b>!"
+        else:
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Блевота отскочила от фольги прямо тебе в лицо. Теперь ТЫ изблеван на {dur_str}!\nФольга жертвы испачкалась (-2ч, осталось {left_h}ч {left_m}мин)."
+            target_txt = f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\nКакой-то анон пытался облевать тебя! Твоя Шапочка отбила блевоту обратно в нападающего, но потеряла 2ч прочности (осталось {left_h}ч {left_m}мин)."
+            
+        await message.answer(reply_txt, parse_mode="HTML")
+        try:
+            await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
+        except Exception:
+            pass
+        return
+
+    t_items["vomit_until"] = current_time + duration_sec
+    async with db_lock:
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (user_id, board_id, json.dumps(active_items))
+        )
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (target_id, board_id, json.dumps(t_items))
+        )
+        await db.commit()
+    register_attacker_effect("vomit_gun", user_id, target_id, duration_sec)
+    await message.answer(f"🤮 <b>ПОПАДАНИЕ!</b>\nТы смачно облевал анона! Жертва изблевана на {dur_str} и получит иконку 🤮 во всех своих постах.", parse_mode="HTML")
+    try:
+        set_combat_cooldown(user_id, 180)
+        pills_price = get_current_item_price('pills')
+        foil_price = get_current_item_price('tinfoil')
+        kb_rescue = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💊 Отмыться Аминазином ({pills_price} ₪)", callback_data="fast_rescue:clean_pills")],
+            [InlineKeyboardButton(text=f"👽 Надеть Шапочку из фольги ({foil_price} ₪)", callback_data="fast_rescue:buy_tinfoil")]
+        ])
+        await message.bot.send_message(
+            target_id,
+            f"🤮 <b>ТЕБЯ ОБЛЕВАЛИ!</b>\n"
+            f"Какой-то анон смачно облевал тебя. У тебя статус 🤮 на {dur_str}.\n\n"
+            f"⚡ <b>Быстрое спасение:</b> нажми кнопку ниже, чтобы мгновенно отмыться:",
+            reply_markup=kb_rescue,
+            parse_mode="HTML"
+        )
+    except TelegramForbiddenError:
+        await purge_users_from_board_ram(board_id, [target_id])
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
+    except (TelegramBadRequest, TelegramAPIError, Exception):
+        pass
+
+
+@dp.message(Command("flag_ua", "ua", "ukraine", "украина", "хохол", "жовтоблакит", "флаг_украины", ignore_case=True, ignore_mention=True))
+async def cmd_flag_ua(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ Сделай Reply на пост того, кому хочешь повесить флаг Украины!")
+        return
+
+    import time
+    from shared_state import (
+        count_active_attacker_effects, register_attacker_effect,
+        get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
+    )
+    db = await get_pool()
+    current_time = int(time.time())
+
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0 or target_id == user_id: 
+        await message.answer("⚠️ Не удалось прицелиться или ты пытаешься повесить флаг сам себе.")
+        return
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
+        return
+
+    if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
+        return
+
+    if await check_target_grief_protection(message, target_id, user_id, board_id):
+        return
+
+    cd_rem = get_combat_cooldown_remaining(user_id)
+    if cd_rem > 0:
+        cd_min = cd_rem // 60
+        cd_sec = cd_rem % 60
+        time_str = f"{cd_min}м {cd_sec}с" if cd_min > 0 else f"{cd_sec}с"
+        await message.answer(
+            f"⏳ <b>Перезарядка оружия!</b>\n"
+            f"Ты недавно совершил нападение. Следующая атака доступна через <b>{time_str}</b>.\n"
+            f"<i>(Глобальный кулдаун на оружие: 3 мин)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("flag_ua_gun"):
+        await message.answer("⚠️ У тебя нет Флага Украины в карманах! Купи его в /shop.")
+        return
+
+    if count_active_attacker_effects("flag_ua_gun", user_id) >= 2:
+        await message.answer(
+            "🇺🇦 <b>Лимит активных флагов!</b>\n"
+            "Ты уже повесил флаг Украины 2 анонам одновременно.\n"
+            "Подожди, пока хотя бы один снимет его, прежде чем вешать снова.\n"
+            "Флаг остался в твоих карманах.",
+            parse_mode="HTML"
+        )
+        return
+    
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    
+    active_items["flag_ua_gun"] = False
+    register_target_attack(target_id)
+    set_combat_cooldown(user_id, 180)
+    
+    # Рандомная длительность от 1 до 3 часов
+    duration_sec = random.randint(3600, 10800)
+    dur_h = duration_sec // 3600
+    dur_m = (duration_sec % 3600) // 60
+    dur_str = f"{dur_h}ч {dur_m}мин" if dur_m else f"{dur_h}ч"
+    
+    if t_items.get("tinfoil_hat", 0) > current_time:
+        active_items["flag_ua_until"] = current_time + duration_sec
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=2.0, burn_chance=0.05)
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+            
+        if destroyed:
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Флаг отскочил от фольги и прилип к твоему лбу. Теперь у ТЕБЯ флаг 🇺🇦 на {dur_str}!\nОт сильного удара Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            target_txt = "🔥 <b>ШАПОЧКА ИСПОРЧЕНА!</b>\nКакой-то анон пытался повесить на тебя флаг Украины! Твоя Шапочка отбила его обратно, но <b>сгорела дотла</b>!"
+        else:
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Флаг отскочил от фольги и прилип к твоему лбу. Теперь у ТЕБЯ флаг 🇺🇦 на {dur_str}!\nФольга жертвы помялась (-2ч, осталось {left_h}ч {left_m}мин)."
+            target_txt = f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\nКакой-то анон пытался повесить на тебя флаг Украины! Твоя Шапочка отбила его обратно, но потеряла 2ч прочности (осталось {left_h}ч {left_m}мин)."
+            
+        await message.answer(reply_txt, parse_mode="HTML")
+        try:
+            await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
+        except Exception:
+            pass
+        return
+
+    t_items["flag_ua_until"] = current_time + duration_sec
+    async with db_lock:
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (user_id, board_id, json.dumps(active_items))
+        )
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (target_id, board_id, json.dumps(t_items))
+        )
+        await db.commit()
+    register_attacker_effect("flag_ua_gun", user_id, target_id, duration_sec)
+    await message.answer(f"🇺🇦 <b>ПАТРИОТИЧЕСКИЙ УДАР!</b>\nТы повесил флаг Украины анону! Жертва ходит со статусом 🇺🇦 на {dur_str} во всех своих постах.", parse_mode="HTML")
+    try:
+        set_combat_cooldown(user_id, 180)
+        pills_price = get_current_item_price('pills')
+        foil_price = get_current_item_price('tinfoil')
+        kb_rescue = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💊 Снять флаг Аминазином ({pills_price} ₪)", callback_data="fast_rescue:clean_pills")],
+            [InlineKeyboardButton(text=f"👽 Надеть Шапочку из фольги ({foil_price} ₪)", callback_data="fast_rescue:buy_tinfoil")]
+        ])
+        await message.bot.send_message(
+            target_id,
+            f"🇺🇦 <b>НА ТЕБЯ ПОВЕСИЛИ ФЛАГ!</b>\n"
+            f"Какой-то анон прицепил тебе флаг Украины. У тебя статус 🇺🇦 на {dur_str}.\n\n"
+            f"⚡ <b>Быстрое спасение:</b> нажми кнопку ниже, чтобы мгновенно смыть:",
+            reply_markup=kb_rescue,
+            parse_mode="HTML"
+        )
+    except TelegramForbiddenError:
+        await purge_users_from_board_ram(board_id, [target_id])
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
+    except (TelegramBadRequest, TelegramAPIError, Exception):
+        pass
+
+
+@dp.message(Command("flag_ru", "ru", "russia", "россия", "гойда", "триколор", "флаг_россии", ignore_case=True, ignore_mention=True))
+async def cmd_flag_ru(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    if not board_id: return
+    user_id = message.from_user.id
+    if not message.reply_to_message:
+        await message.answer("⚠️ Сделай Reply на пост того, кому хочешь повесить флаг России!")
+        return
+
+    import time
+    from shared_state import (
+        count_active_attacker_effects, register_attacker_effect,
+        get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
+    )
+    db = await get_pool()
+    current_time = int(time.time())
+
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0 or target_id == user_id: 
+        await message.answer("⚠️ Не удалось прицелиться или ты пытаешься повесить флаг сам себе.")
+        return
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
+        return
+
+    if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
+        return
+
+    if await check_target_grief_protection(message, target_id, user_id, board_id):
+        return
+
+    cd_rem = get_combat_cooldown_remaining(user_id)
+    if cd_rem > 0:
+        cd_min = cd_rem // 60
+        cd_sec = cd_rem % 60
+        time_str = f"{cd_min}м {cd_sec}с" if cd_min > 0 else f"{cd_sec}с"
+        await message.answer(
+            f"⏳ <b>Перезарядка оружия!</b>\n"
+            f"Ты недавно совершил нападение. Следующая атака доступна через <b>{time_str}</b>.\n"
+            f"<i>(Глобальный кулдаун на оружие: 3 мин)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if not active_items.get("flag_ru_gun"):
+        await message.answer("⚠️ У тебя нет Флага России в карманах! Купи его в /shop.")
+        return
+
+    if count_active_attacker_effects("flag_ru_gun", user_id) >= 2:
+        await message.answer(
+            "🇷🇺 <b>Лимит активных флагов!</b>\n"
+            "Ты уже повесил флаг России 2 анонам одновременно.\n"
+            "Подожди, пока хотя бы один снимет его, прежде чем вешать снова.\n"
+            "Флаг остался в твоих карманах.",
+            parse_mode="HTML"
+        )
+        return
+    
+    t_items = await _get_user_active_items(db, target_id, board_id)
+    
+    active_items["flag_ru_gun"] = False
+    register_target_attack(target_id)
+    set_combat_cooldown(user_id, 180)
+    
+    # Рандомная длительность от 1 до 3 часов
+    duration_sec = random.randint(3600, 10800)
+    dur_h = duration_sec // 3600
+    dur_m = (duration_sec % 3600) // 60
+    dur_str = f"{dur_h}ч {dur_m}мин" if dur_m else f"{dur_h}ч"
+    
+    if t_items.get("tinfoil_hat", 0) > current_time:
+        active_items["flag_ru_until"] = current_time + duration_sec
+        destroyed, left_h, left_m, _ = apply_tinfoil_damage(t_items, current_time, hours_damage=2.0, burn_chance=0.05)
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(t_items), target_id, board_id))
+            await db.commit()
+            
+        if destroyed:
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Флаг отскочил от фольги и прилип к твоему лбу. Теперь у ТЕБЯ флаг 🇷🇺 на {dur_str}!\nОт сильного удара Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
+            target_txt = "🔥 <b>ШАПОЧКА ИСПОРЧЕНА!</b>\nКакой-то анон пытался повесить на тебя флаг России! Твоя Шапочка отбила его обратно, но <b>сгорела дотла</b>!"
+        else:
+            reply_txt = f"👽 <b>ШАПОЧКА ИЗ ФОЛЬГИ!</b>\nЖертва оказалась под защитой! Флаг отскочил от фольги и прилип к твоему лбу. Теперь у ТЕБЯ флаг 🇷🇺 на {dur_str}!\nФольга жертвы помялась (-2ч, осталось {left_h}ч {left_m}мин)."
+            target_txt = f"⚡️ <b>УДАР ПО ФОЛЬГЕ!</b>\nКакой-то анон пытался повесить на тебя флаг России! Твоя Шапочка отбила его обратно, но потеряла 2ч прочности (осталось {left_h}ч {left_m}мин)."
+            
+        await message.answer(reply_txt, parse_mode="HTML")
+        try:
+            await message.bot.send_message(target_id, target_txt, parse_mode="HTML")
+        except Exception:
+            pass
+        return
+
+    t_items["flag_ru_until"] = current_time + duration_sec
+    async with db_lock:
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (user_id, board_id, json.dumps(active_items))
+        )
+        await db.execute(
+            "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+            (target_id, board_id, json.dumps(t_items))
+        )
+        await db.commit()
+    register_attacker_effect("flag_ru_gun", user_id, target_id, duration_sec)
+    await message.answer(f"🇷🇺 <b>ГОЙДА НАПАДЕНИЕ!</b>\nТы повесил флаг России анону! Жертва ходит со статусом 🇷🇺 на {dur_str} во всех своих постах.", parse_mode="HTML")
+    try:
+        set_combat_cooldown(user_id, 180)
+        pills_price = get_current_item_price('pills')
+        foil_price = get_current_item_price('tinfoil')
+        kb_rescue = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💊 Снять флаг Аминазином ({pills_price} ₪)", callback_data="fast_rescue:clean_pills")],
+            [InlineKeyboardButton(text=f"👽 Надеть Шапочку из фольги ({foil_price} ₪)", callback_data="fast_rescue:buy_tinfoil")]
+        ])
+        await message.bot.send_message(
+            target_id,
+            f"🇷🇺 <b>НА ТЕБЯ ПОВЕСИЛИ ФЛАГ!</b>\n"
+            f"Какой-то анон прицепил тебе флаг России. У тебя статус 🇷🇺 на {dur_str}.\n\n"
+            f"⚡ <b>Быстрое спасение:</b> нажми кнопку ниже, чтобы мгновенно смыть:",
+            reply_markup=kb_rescue,
+            parse_mode="HTML"
+        )
+    except TelegramForbiddenError:
+        await purge_users_from_board_ram(board_id, [target_id])
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 1.0)
+    except (TelegramBadRequest, TelegramAPIError, Exception):
+        pass
+
+
+@dp.message(Command("curse", "laxative", "понос", "слабительное", ignore_case=True, ignore_mention=True))
 async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -6765,7 +7230,7 @@ DAILY_STREAK_REWARDS = {
     7: {"cash": 2000, "item": "lootbox", "desc": "+2 000 ₪ и Мусорный Лутбокс 📦 (ДЖЕКПОТ СТРИКА!)"},
 }
 
-@dp.message(Command("daily", "bonus", "ежедневно", "бонус"))
+@dp.message(Command("daily", "bonus", "ежедневно", "бонус", ignore_case=True, ignore_mention=True))
 async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -7222,7 +7687,7 @@ async def cb_duel_decline(callback: types.CallbackQuery, board_id: str | None):
     try: await callback.answer()
     except Exception: pass
 
-@dp.message(Command("wallet", "balance", "money", "кошелек", "баланс", "шекели", "деньги", "cash"))
+@dp.message(Command("wallet", "balance", "money", "кошелек", "баланс", "шекели", "деньги", "cash", ignore_case=True, ignore_mention=True))
 async def cmd_wallet(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -7623,6 +8088,9 @@ async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
             else:
                 await deduct_user_global_balance(db, user_id, board_id, cost)
                 user_items["shit_until"] = 0
+                user_items["vomit_until"] = 0
+                user_items["flag_ua_until"] = 0
+                user_items["flag_ru_until"] = 0
                 user_items["cursed_until"] = 0
                 user_items["schizo_pill_until"] = 0
                 await db.execute("BEGIN IMMEDIATE")
@@ -7634,7 +8102,7 @@ async def cb_fast_rescue(callback: types.CallbackQuery, board_id: str | None):
                     try: await db.execute("ROLLBACK")
                     except Exception: pass
                     raise
-                answer_text = "💊 Аминазин принят! Все дебаффы (говно, понос, шиза) мгновенно смыты."
+                answer_text = "💊 Аминазин принят! Все дебаффы (говно, блевота, флаги, понос, шиза) мгновенно смыты."
                 edit_html = (
                     f"✨ <b>ТЫ ПОЛНОСТЬЮ ОЧИЩЕН!</b>\n\n"
                     f"💊 Ты принял Аминазин за {cost} ₪. Все дебаффы и проклятия мгновенно сняты.\n"
@@ -7810,19 +8278,22 @@ async def _build_work_card(user_id: int, board_id: str) -> tuple[str, InlineKeyb
         eff_min = int(min_r * mult)
         eff_max = int(max_r * mult)
 
+        parts = job['title'].split()
+        short_title = f"{parts[0]} {parts[1]}" if len(parts) > 1 else (parts[0] if parts else job_id)
+
         if total_shifts < req_shifts:
             status_tag = f"🔒 (нужно {req_shifts} смен)"
-            btn_text = f"🔒 {job['title'].split()[0]} {job['title'].split()[1]}"
+            btn_text = f"🔒 {short_title}"
         elif passed < base_cd:
             left_sec = base_cd - passed
             if left_sec >= 3600: cd_fmt = f"{left_sec // 3600}ч {(left_sec % 3600) // 60}м"
             elif left_sec >= 60: cd_fmt = f"{left_sec // 60}м"
             else: cd_fmt = f"{left_sec}с"
             status_tag = f"⏳ ({cd_fmt})"
-            btn_text = f"⏳ {job['title'].split()[0]} ({cd_fmt})"
+            btn_text = f"⏳ {parts[0]} ({cd_fmt})"
         else:
             status_tag = f"✅ <b>+{eff_min}–{eff_max} ₪</b>"
-            btn_text = f"{job['title'].split()[0]} {job['title'].split()[1]} (+{eff_min}₪)"
+            btn_text = f"{short_title} (+{eff_min}₪)"
 
         lines.append(f"• <b>{job['title']}</b> — {status_tag}")
         row.append(InlineKeyboardButton(text=btn_text, callback_data=f"work_do_{job_id}"))
@@ -7847,23 +8318,31 @@ async def _build_work_card(user_id: int, board_id: str) -> tuple[str, InlineKeyb
 
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
-@dp.message(Command("work", "биржа", "работа", "job", "заработок", "earn", "bomj", "economy"))
+@dp.message(Command("work", "биржа", "работа", "job", "заработок", "earn", "bomj", "economy", ignore_case=True, ignore_mention=True))
 async def cmd_work(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
-    text, kb = await _build_work_card(user_id, board_id)
+    try:
+        text, kb = await _build_work_card(user_id, board_id)
 
-    from banner_manager import send_banner_message
-    await send_banner_message(
-        bot=message.bot,
-        chat_id=message.chat.id,
-        caption=text,
-        reply_markup=kb,
-        category="wallet",
-        parse_mode="HTML"
-    )
-    try: await message.delete()
-    except Exception: pass
+        from banner_manager import send_banner_message
+        await send_banner_message(
+            bot=message.bot,
+            chat_id=message.chat.id,
+            caption=text,
+            reply_markup=kb,
+            category="wallet",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        runtime_logger.exception("cmd_work failed for user=%s board=%s: %s", user_id, board_id, e)
+        try:
+            await message.answer(f"💼 <b>Биржа труда:</b>\n{e}", parse_mode="HTML")
+        except Exception:
+            pass
+    finally:
+        try: await message.delete()
+        except Exception: pass
 
 @dp.callback_query(F.data.startswith("work_do_"))
 async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
@@ -8462,7 +8941,7 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
 
 # --- КАЗИНО: ХАБ, СЛОТЫ, МОНЕТКА, БЛЭКДЖЕК, РУЛЕТКА ---
 
-@dp.message(Command("casino", "казино", "игры", "games", "казик", "рулетка", "слоты", "777"))
+@dp.message(Command("casino", "казино", "игры", "games", "казик", "рулетка", "слоты", "777", ignore_case=True, ignore_mention=True))
 async def cmd_casino_hub(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -9691,7 +10170,7 @@ async def cb_prof_shop(callback: types.CallbackQuery, board_id: str | None, stre
     await cmd_shop(fake_msg, board_id=board_id, stream=stream)
 
 
-@dp.message(Command("dossier", "досье", "дело", "case", "личноедело", "пробив"))
+@dp.message(Command("dossier", "досье", "дело", "case", "личноедело", "пробив", ignore_case=True, ignore_mention=True))
 async def cmd_dossier(message: types.Message, board_id: str | None, stream: str = 'ru'):
     """
     Генерирует платное секретное 'Личное Дело Анона' (стоимость 300 ₪).
@@ -11547,7 +12026,7 @@ def detect_suggested_stream(lang_code: str | None) -> str:
     if code in cis_langs:
         return 'ru'
     return 'en'
-@dp.message(Command("start"))
+@dp.message(Command("start", ignore_case=True, ignore_mention=True))
 async def cmd_start(message: types.Message, state: FSMContext, board_id: str | None, stream: str = 'ru'):
     user_id = message.from_user.id
     if not board_id: return
@@ -13231,7 +13710,7 @@ async def cq_tagcloud_menu(callback: types.CallbackQuery):
     except Exception as e:
         print(f"⚠️ Ошибка в cq_tagcloud_menu: {e}")
 
-@dp.message(Command("help", "помощь", "справка", "команды", "хелп"))
+@dp.message(Command("help", "помощь", "справка", "команды", "хелп", ignore_case=True, ignore_mention=True))
 async def cmd_help(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
@@ -13251,7 +13730,7 @@ async def cmd_help(message: types.Message, board_id: str | None, stream: str = '
         await message.delete()
     except (TelegramBadRequest, Exception):
         pass
-@dp.message(Command("dice", "roll100", "d100", "кости"))
+@dp.message(Command("dice", "roll100", "d100", "кости", ignore_case=True, ignore_mention=True))
 async def cmd_dice(message: types.Message, board_id: str | None, stream: str = 'ru'):
     try: spawn_task(delete_message_after_delay(message, 5))
     except Exception as e: runtime_logger.warning(f"Failed to spawn delete_message task: {e}")
@@ -14631,8 +15110,9 @@ async def handle_quick_menu_click(callback: types.CallbackQuery, state: FSMConte
         fake_msg = SafeMessageProxy(callback.message, callback.from_user)
         await cmd_rates(fake_msg, board_id, stream=stream)
     elif action == "stats":
+        from stats_hub_router import cmd_stats_hub
         fake_msg = SafeMessageProxy(callback.message, callback.from_user)
-        await cmd_stats(fake_msg, board_id)
+        await cmd_stats_hub(fake_msg)
     elif action == "token":
         try:
             token = await get_or_create_api_token(user_id, generate_unique_token)
@@ -20432,7 +20912,7 @@ async def cq_poll_vote(callback: types.CallbackQuery, board_id: str | None, stre
                 )
             )
             pending_edit_tasks[post_num] = new_task
-@dp.message(Command("roll", "roulette", "ruletka", "rulet", "fortune", "фортуна", "рулетка"))
+@dp.message(Command("roll", "roulette", "ruletka", "rulet", "fortune", "фортуна", "рулетка", ignore_case=True, ignore_mention=True))
 async def cmd_roll(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
     try: spawn_task(delete_message_after_delay(message, 5))
@@ -22215,9 +22695,14 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="fap", description="Случайная аниме-картинка"),
         BotCommand(command="hent", description="Случайная хентай-картинка"),
         BotCommand(command="loli", description="Случайная лоли-картинка"),
-        BotCommand(command="gatari", description="Картинка Monogatari Series"),
         BotCommand(command="abu_fund", description="Офшорный Фонд Яхты Абу"),
-        BotCommand(command="ledger", description="Выписка и история операций")
+        BotCommand(command="ledger", description="Выписка и история операций"),
+        BotCommand(command="stats_hub", description="📊 Пульс статистики и WebApp дашборд"),
+        BotCommand(command="my_wrapped", description="🎴 Мой 2ch Wrapped (Паспорт анона)"),
+        BotCommand(command="economy_stats", description="💰 Срез экономики и казино"),
+        BotCommand(command="pvp_stats", description="⚔️ Срез войн и дебаффов"),
+        BotCommand(command="drama_stats", description="🧠 Карта бифов и врагов"),
+        BotCommand(command="memes_stats", description="🖼️ Баянометр и вирусные мемы")
     ]
     
     admin_commands = user_commands.copy() + [
@@ -23386,10 +23871,16 @@ async def cb_prof_ledger(callback: types.CallbackQuery, board_id: str | None):
     await _render_shop_subview(callback, text, kb, category="wallet")
     await callback.answer()
 
-@dp.message(F.text.regexp(r"^/\w+(@\w+)?\b"))
+# --- Fallback router: MUST be included LAST so all sub-routers get a chance first ---
+from aiogram import Router as _Router
+_fallback_router = _Router(name="fallback_unknown_cmd")
+
+@_fallback_router.message(F.text.regexp(r"^/\w+(@\w+)?\b"))
 async def handle_unknown_command_spam(message: types.Message):
     """
     Отлавливает все неопознанные команды и применяет к ним анти-спам политику.
+    ВАЖНО: этот хэндлер теперь в отдельном router (а не на dp напрямую),
+    чтобы sub-routers (stats_hub_router, economy_router и др.) имели приоритет.
     """
     user_id = message.from_user.id
     current_time = time.time()
@@ -23424,6 +23915,7 @@ async def handle_unknown_command_spam(message: types.Message):
 
 from handlers.message_router import message_router
 dp.include_router(message_router)
+dp.include_router(_fallback_router)  # LAST — catches unhandled /commands AFTER all other routers
 
 async def main():
 

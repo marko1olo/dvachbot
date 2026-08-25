@@ -770,8 +770,14 @@ async def tagging_loop():
                         import json
                         try:
                             parsed = json.loads(ai_response)
-                            tags = parsed.get("tags", "")
-                            description = parsed.get("description", "")
+                            raw_t = parsed.get("tags", "")
+                            if isinstance(raw_t, list):
+                                tags = ", ".join(str(t).strip() for t in raw_t if t)
+                            else:
+                                tags = str(raw_t or "").strip()
+                            if tags == "parse_error":
+                                tags = "media, photo"
+                            description = str(parsed.get("description", "")).strip()
                         except json.JSONDecodeError:
                             tags = ai_response
                 if tags is None and ai_response in (None, "error_api_exhausted"):

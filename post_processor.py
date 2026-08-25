@@ -182,17 +182,27 @@ class NewPostProcessor:
                                 is_cursed = False
                                 is_schizo = False
                                 is_shat = False
-                                if row[0] and int(time.time()) < row[0]:
+                                is_vomited = False
+                                is_flag_ua = False
+                                is_flag_ru = False
+                                now_ts = int(time.time())
+                                if row[0] and now_ts < row[0]:
                                     is_cursed = True
                                 if row[1]:
                                     try:
                                         itms = json.loads(row[1])
-                                        if itms.get("cursed_until", 0) > int(time.time()):
+                                        if itms.get("cursed_until", 0) > now_ts:
                                             is_cursed = True
-                                        if itms.get("schizo_pill_until", 0) > int(time.time()):
+                                        if itms.get("schizo_pill_until", 0) > now_ts:
                                             is_schizo = True
-                                        if itms.get("shit_until", 0) > int(time.time()):
+                                        if itms.get("shit_until", 0) > now_ts:
                                             is_shat = True
+                                        if itms.get("vomit_until", 0) > now_ts:
+                                            is_vomited = True
+                                        if itms.get("flag_ua_until", 0) > now_ts:
+                                            is_flag_ua = True
+                                        if itms.get("flag_ru_until", 0) > now_ts:
+                                            is_flag_ru = True
                                     except Exception:
                                         pass
                                 if is_cursed:
@@ -203,6 +213,18 @@ class NewPostProcessor:
                                     if 'text' in self.author_content and self.author_content['text']:
                                         if "[💩 ИЗМАЗАН ГОВНОМ 💩]" not in self.author_content['text']:
                                             self.author_content['text'] += "\n\n<i>[💩 ИЗМАЗАН ГОВНОМ 💩]</i>"
+                                if is_vomited:
+                                    if 'text' in self.author_content and self.author_content['text']:
+                                        if "[🤮 ИЗБЛЕВАН 🤮]" not in self.author_content['text']:
+                                            self.author_content['text'] += "\n\n<i>[🤮 ИЗБЛЕВАН 🤮]</i>"
+                                if is_flag_ua:
+                                    if 'text' in self.author_content and self.author_content['text']:
+                                        if "[🇺🇦 ЩЕ НЕ ВМЕРЛА 🇺🇦]" not in self.author_content['text']:
+                                            self.author_content['text'] += "\n\n<i>[🇺🇦 ЩЕ НЕ ВМЕРЛА 🇺🇦]</i>"
+                                if is_flag_ru:
+                                    if 'text' in self.author_content and self.author_content['text']:
+                                        if "[🇷🇺 ZA НАШИХ / ГОЙДА 🇷🇺]" not in self.author_content['text']:
+                                            self.author_content['text'] += "\n\n<i>[🇷🇺 ZA НАШИХ / ГОЙДА 🇷🇺]</i>"
                                 if is_schizo:
                                     schizo_tags = [
                                         "👁️ [СИГНАЛ ПЕРЕХВАЧЕН СИОНО-МАСОНАМИ]",
