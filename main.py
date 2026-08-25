@@ -4316,6 +4316,7 @@ async def cb_color_set(callback: types.CallbackQuery, board_id: str | None):
         await callback.answer("Неверный цвет.", show_alert=True)
         return
 
+    db = await get_pool()
     async with db_lock:
         balance = await get_user_global_balance(db, user_id)
         active_items = await _get_user_active_items(db, user_id, board_id)
@@ -13254,6 +13255,7 @@ async def cmd_dice(message: types.Message, board_id: str | None, stream: str = '
     if len(args) > 1:
         arg_val = args[1].lower().strip().lstrip('+')
         err_text = None
+        db = await get_pool()
         async with db_lock:
             async with db.execute("SELECT SUM(balance) FROM Users WHERE user_id = ?", (user_id,)) as c:
                 row = await c.fetchone()
