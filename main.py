@@ -15916,14 +15916,6 @@ async def auto_memory_cleaner():
             except Exception:
                 pass
 
-            # 6. Прогрессивный налог на сверхнакопления (Demurrage / Wealth Tax)
-            try:
-                db_clean = await get_pool()
-                affected_count, burned_shekels = await apply_daily_wealth_tax(db_clean)
-                if affected_count > 0:
-                    runtime_logger.info(f"🏛️ [Demurrage / Wealth Tax] Налог собран с {affected_count} олигархов. Сожжено: {burned_shekels:,.2f} ₪")
-            except Exception as e:
-                runtime_logger.error(f"Ошибка списания налога на богатство: {e}")
 
             total_stale = sum(removed.values())
             if done_tasks or cache_size or total_stale:
