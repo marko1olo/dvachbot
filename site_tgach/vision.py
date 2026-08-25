@@ -153,12 +153,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 f"}}\n"
                 f"Do not wrap in markdown (```). Output ONLY the raw JSON object."
             )
-            # Deterministic best-first vision cascade: Smart Flash models first, then lite models, then Groq.
+            # Lightweight high-throughput vision cascade: Flash-Lite first, then Groq Qwen.
             models_cascade = [
-                ("gemini-3.7-flash", "gemini"),
-                ("gemini-3.6-flash", "gemini"),
-                ("gemini-3.5-flash", "gemini"),
-                ("gemini-2.5-flash", "gemini"),
                 ("gemini-3.5-flash-lite", "gemini"),
                 ("gemini-3.1-flash-lite", "gemini"),
                 ("qwen/qwen3.6-27b", "groq"),
