@@ -152,23 +152,28 @@ async def market_event_generator():
                         post_num = state['post_counter']
 
                     if post_num:
-                        state['post_counter'] = max(state.get('post_counter', 0), post_num)
-                        post_to_messages[post_num] = {}
-                        messages_storage[post_num] = {
-                            'board_id': board_id,
-                            'author_id': -1,
-                            'content': content,
-                            'timestamp': time.time()
-                        }
-                        await enqueue_board_message(board_id, {
-                            'board_id': board_id,
-                            'post_num': post_num,
-                            'author_id': -1,
-                            'author_name': 'Black Market',
-                            'content': content,
-                            'reply_to': None,
-                            'is_op': False
-                        })
+                        b_data = board_data.get(board_id, {})
+                        recipients = set(b_data.get('users', {}).get('active', set())) - set(b_data.get('users', {}).get('banned', set()))
+                        async with storage_lock:
+                            state['post_counter'] = max(state.get('post_counter', 0), post_num)
+                            post_to_messages[post_num] = {}
+                            messages_storage[post_num] = {
+                                'board_id': board_id,
+                                'author_id': -1,
+                                'content': content,
+                                'timestamp': time.time()
+                            }
+                        if recipients:
+                            await enqueue_board_message(board_id, {
+                                'recipients': recipients,
+                                'board_id': board_id,
+                                'post_num': post_num,
+                                'author_id': -1,
+                                'author_name': 'Black Market',
+                                'content': content,
+                                'reply_to': None,
+                                'is_op': False
+                            })
 
             runtime_logger.info(f"Market event generated: {event_text}")
 

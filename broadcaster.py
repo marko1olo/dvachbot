@@ -1285,6 +1285,10 @@ class MessageBroadcaster:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
+                if "flood" in str(e).lower() or "retry after" in str(e).lower():
+                    wait_m = re.search(r'\d+', str(e))
+                    wait_s = int(wait_m.group()) if wait_m else 15
+                    raise TelegramRetryAfter(method="send", message=str(e), retry_after=wait_s)
                 main.runtime_logger.error(f"Unexpected error in _send_one for user {uid}: {e}", exc_info=True)
                 self.stats['errors'] += 1
                 return None

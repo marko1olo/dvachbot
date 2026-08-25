@@ -21497,6 +21497,10 @@ async def periodic_board_summary():
                 fid = next(iter(_BANNER_CACHE.values()), None)
             # Для Telegraph ВСЕГДА используем type: 'text', чтобы Telegram автоматически развернул Instant View веб-превью статьи
             is_photo = False if telegraph_url else bool(fid)
+            if is_photo and len(final_text) > 1024:
+                # Telegram limit for photo caption is 1024 chars; fallback to text if exceeded
+                is_photo = False
+
             content_obj = {
                 'type': 'photo' if is_photo else 'text',
                 'file_id': fid if is_photo else None,
@@ -21531,8 +21535,19 @@ async def periodic_board_summary():
             print(f"❌ [PERIODIC SUMMARY] Ошибка: {e}")
 
 async def periodic_thread_digest():
+    """Дайджест активных тредов каждые 8 часов (04:00, 12:00, 20:00 UTC)."""
+    from datetime import datetime, timezone, timedelta
     while True:
-        await asyncio.sleep(28800) # 8 часов (8 * 3600)
+        now = datetime.now(timezone.utc)
+        current_hour = now.hour
+        # Сдвиг на 4 часа относительно summary для распределения нагрузки
+        next_slot_hour = (((current_hour - 4) // 8) + 1) * 8 + 4
+        if next_slot_hour >= 24:
+            next_slot_time = now.replace(hour=next_slot_hour % 24, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        else:
+            next_slot_time = now.replace(hour=next_slot_hour, minute=0, second=0, microsecond=0)
+        sleep_seconds = max(5, (next_slot_time - now).total_seconds())
+        await asyncio.sleep(sleep_seconds)
         try:
             print("📊 Сборка дайджеста активных тредов...")
             from common.database import get_top_active_threads
@@ -21541,11 +21556,11 @@ async def periodic_thread_digest():
                 continue
             digest_text = "🔥 <b>ГОРЯЧИЕ ТРЕДЫ ЗА 8 ЧАСОВ</b>\n\n"
             for i, t in enumerate(top_threads, 1):
-                raw_title = html.unescape(t.get('title', ''))
+                raw_title = html.unescape(t.get('title') or '')
                 clean_title = clean_html_tags(raw_title)
                 safe_title = html.escape(clean_title)[:50] + ".."
                 url = f"https://tgach.top/{t['board_id']}/res/{t['thread_id']}.html"
-                digest_text += f"{i}. <a href='{url}'>{safe_title}</a> (💬 {t['posts_count']})\n"
+                digest_text += f"{i}. <a href='{url}'>{safe_title}</a> (💬 {t.get('posts_count', 0)})\n"
             digest_text += "\n🚀 <i>Будь в центре движухи!</i>"
             target_boards = ['thread', 'b']
             for board_id in target_boards:
@@ -21591,11 +21606,17 @@ async def periodic_thread_digest():
             print(f"❌ Ошибка дайджеста: {e}")
 
 async def periodic_newspaper_broadcast():
+    """Ежедневный выпуск газеты в 09:00 MSK (06:00 UTC)."""
+    from datetime import datetime, timezone, timedelta
     while True:
-        await asyncio.sleep(86400) # 24 часа
+        now = datetime.now(timezone.utc)
+        target = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        sleep_seconds = max(5, (target - now).total_seconds())
+        await asyncio.sleep(sleep_seconds)
         try:
-            import datetime
-            yesterday = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+            yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
             url = f"{SITE_PUBLIC_BASE_URL}/newspaper/{yesterday}"
             
             newspaper_text = (
@@ -21639,7 +21660,7 @@ async def periodic_newspaper_broadcast():
                     async with storage_lock:
                         messages_storage[pnum] = {
                             'author_id': 0, 
-                            'timestamp': datetime.datetime.now(datetime.timezone.utc), 
+                            'timestamp': datetime.now(UTC), 
                             'content': content, 
                             'board_id': board_id
                         }
@@ -21653,10 +21674,15 @@ async def periodic_newspaper_broadcast():
             print(f"❌ Ошибка отправки газеты: {e}")
 
 async def periodic_shop_broadcast():
+    """Ежедневная реклама теневого магазина в 18:00 MSK (15:00 UTC)."""
     import random
+    from datetime import datetime, timezone, timedelta
     while True:
-        # Sleep for 24 hours plus a random offset (0 to 4 hours) to avoid exact daily timing
-        sleep_seconds = 86400 + random.randint(0, 4 * 3600)
+        now = datetime.now(timezone.utc)
+        target = now.replace(hour=15, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        sleep_seconds = max(5, (target - now).total_seconds()) + random.randint(0, 1800)
         await asyncio.sleep(sleep_seconds)
         try:
             print("🛒 [SHOP BROADCAST] Рассылка рекламы теневого магазина...")
@@ -21702,7 +21728,7 @@ async def periodic_shop_broadcast():
                     async with storage_lock:
                         messages_storage[pnum] = {
                             'author_id': 0, 
-                            'timestamp': datetime.datetime.now(datetime.timezone.utc), 
+                            'timestamp': datetime.now(UTC), 
                             'content': content, 
                             'board_id': board_id
                         }
@@ -22270,8 +22296,8 @@ async def wealth_tax_daily_loop(bots: dict[str, Bot]):
             else:
                 next_run_msk = target_msk
 
-            # Если с последнего списания прошло менее 20 часов и сейчас не время 04:00 MSK
-            if time_since_last_run < 72000 and now_msk.hour != 4:
+            # Если с последнего списания прошло менее 20 часов
+            if time_since_last_run < 72000:
                 sleep_seconds = max(10.0, (next_run_msk - now_msk).total_seconds())
                 print(
                     f"🏛️ [WEALTH TAX] Следующее раскулачивание запланировано на "
