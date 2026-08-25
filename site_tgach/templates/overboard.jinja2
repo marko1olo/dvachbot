@@ -196,7 +196,7 @@
                                     {% for file in post.content.files %}
                                         {% if file.type in ['image', 'photo', 'sticker', 'video_note', 'video', 'gif', 'animation'] %}
                                             {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
-                                            {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or file.thumbnail_url or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.original_url %}
+                                            {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                                             {% if file.type == 'image' or file.type == 'photo' or file.type == 'sticker' %}
                                                 <a href="{{ file_orig_src }}" class="file-thumb" data-filename="{{ file.filename }}" data-file-id="{{ file.original_file_id }}" data-type="image">
                                                     {% if file.blurhash %}

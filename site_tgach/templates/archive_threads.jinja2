@@ -84,7 +84,7 @@
                             <div class="post-files-container">
                                 {% for file in post.content.files %}
                                     {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
-                                    {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or file.thumbnail_url or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.original_url %}
+                                    {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                                     <a href="{{ file_orig_src }}" class="file-thumb">
                                         {% if file.type in ['image', 'photo', 'sticker'] %}
                                             <img loading="lazy" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 

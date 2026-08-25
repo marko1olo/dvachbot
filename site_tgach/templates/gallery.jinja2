@@ -122,7 +122,7 @@
                 {% for post in media_posts %}
                     {% for file in post.content.files %}
                         {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
-                        {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or file.thumbnail_url or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.original_url %}
+                        {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                         <a href="{{ file_orig_src }}" 
                            class="gallery-item gallery-trigger"
                            data-type="{{ file.type }}"

@@ -3347,8 +3347,13 @@ def _select_mirror_strategically(
     """
     Выбирает URL для файла и его превью на основе приоритетов региона.
     """
-    base_original_url = file_info.get("original_url", "")
-    base_thumbnail_url = file_info.get("thumbnail_url", "")
+    base_original_url = file_info.get("original_url", "") or ""
+    base_thumbnail_url = file_info.get("thumbnail_url", "") or ""
+    
+    if "ibb.co" in base_original_url or "imgbb" in base_original_url:
+        base_original_url = ""
+    if "ibb.co" in base_thumbnail_url or "imgbb" in base_thumbnail_url:
+        base_thumbnail_url = ""
 
     # Проверка R2 CDN
     r2_candidate = mirrors.get("r2") or mirrors.get("r2_url")

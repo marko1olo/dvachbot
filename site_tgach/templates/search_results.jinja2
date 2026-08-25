@@ -14,6 +14,19 @@
     <link rel="canonical" href="{{ request.state.canonical_url }}">
     <meta property="og:type" content="website">
     <meta property="og:url" content="{{ request.url }}">
+    
+    {% if is_tag_search %}
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "ImageGallery",
+      "name": "{{ meta_title or current_tag }}",
+      "description": "{{ meta_description or 'Галерея изображений по тегу ' ~ current_tag }}",
+      "url": "{{ request.url }}"
+    }
+    </script>
+    {% endif %}
+    
     <link rel="icon" href="/static/favicon.ico">
     <link rel="preconnect" href="https://api.telegram.org" crossorigin>
     <link rel="dns-prefetch" href="https://files.catbox.moe">
@@ -101,7 +114,7 @@
                 <div class="gallery-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 15px; padding: 10px;">
                     {% for file in search_images %}
                         {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
-                        {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or file.thumbnail_url or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.original_url %}
+                        {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                         <div class="gallery-item-wrapper" style="position: relative; border: 1px solid var(--border-primary); border-radius: 4px; overflow: hidden; background: var(--bg-post); display: flex; flex-direction: column;">
                             <a href="{{ file_orig_src }}" 
                                class="gallery-item gallery-trigger"
@@ -164,7 +177,7 @@
                             <div class="post-files-container post-gallery">
                                 {% for file in post.content.files %}
                                     {% set file_orig_src = (file.original_file_id and '/files/' ~ file.original_file_id) or file.original_url %}
-                                    {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or file.thumbnail_url or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.original_url %}
+                                    {% set file_thumb_src = (file.thumbnail_file_id and '/files/' ~ file.thumbnail_file_id) or (file.original_file_id and '/thumb/' ~ file.original_file_id) or file.thumbnail_url or file.original_url %}
                                     {% if file.type in ['image', 'photo', 'sticker'] %}
                                          {% if file.type == 'sticker' %}
                                              <div class="sticker-wrapper" style="display:inline-block; vertical-align:bottom;">

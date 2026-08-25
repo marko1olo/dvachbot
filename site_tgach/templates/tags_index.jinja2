@@ -12,6 +12,16 @@
     <meta property="og:description" content="{{ meta_description }}">
     <link rel="canonical" href="{{ request.state.canonical_url }}">
     
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "CollectionPage",
+      "name": "{{ meta_title }}",
+      "description": "{{ meta_description }}",
+      "url": "{{ request.url }}"
+    }
+    </script>
+    
     <style>
         .tag-cloud-wrapper {
             background: var(--bg-post);
