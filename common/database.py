@@ -1675,8 +1675,8 @@ async def create_post(
     
     # Глобальный Lock: защищает от состояния гонки между задачами внутри одного процесса бота
     try:
-        async with asyncio.timeout(10.0):
-            async with db_lock:
+        async with db_lock:
+            async with asyncio.timeout(45.0):
                 for attempt in range(10):
                     try:
                         db = await get_pool()
