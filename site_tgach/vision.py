@@ -153,12 +153,14 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 f"}}\n"
                 f"Do not wrap in markdown (```). Output ONLY the raw JSON object."
             )
-            # Deterministic best-first vision cascade.
+            # Deterministic best-first vision cascade: Smart Flash models first, then lite models, then Groq.
             models_cascade = [
+                ("gemini-3.7-flash", "gemini"),
+                ("gemini-3.6-flash", "gemini"),
+                ("gemini-3.5-flash", "gemini"),
+                ("gemini-2.5-flash", "gemini"),
                 ("gemini-3.5-flash-lite", "gemini"),
                 ("gemini-3.1-flash-lite", "gemini"),
-                ("gemini-3.6-flash", "gemini"),
-                ("gemini-2.5-flash", "gemini"),
                 ("qwen/qwen3.6-27b", "groq"),
             ]
             
@@ -255,6 +257,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     if 0 < wait_time < min_wait:
                                         min_wait = wait_time
                                         best_key = api_key
+                                pass
                                 if best_key:
                                     selected_key = best_key
                                     sleep_time = global_wait + min_wait
@@ -299,6 +302,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 msg_obj = getattr(resp.choices[0], "message", None)
                                 if msg_obj:
                                     content = getattr(msg_obj, "content", None)
+                                    if not content and hasattr(msg_obj, "reasoning_content"):
+                                        content = getattr(msg_obj, "reasoning_content", None)
                             
                             if content:
                                 # Quick cleanup just in case

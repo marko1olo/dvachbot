@@ -475,14 +475,14 @@ class MessageBroadcaster:
                     queue.clear()
                     interrupted_reason = "phase_budget"
                     break
-                if remaining_phase_sec <= DELIVERY_PHASE_GUARD_SEC:
+                if remaining_phase_sec <= DELIVERY_PHASE_GUARD_SEC + 3.0:
                     remaining_recipients_for_later.update(queue)
                     queue.clear()
                     interrupted_reason = "phase_budget_guard"
                     break
                 send_timeout_sec = min(
                     DELIVERY_PER_RECIPIENT_TIMEOUT_SEC,
-                    max(1.0, remaining_phase_sec - DELIVERY_PHASE_GUARD_SEC),
+                    max(3.0, remaining_phase_sec - DELIVERY_PHASE_GUARD_SEC),
                 )
             chunk = []
             for _ in range(min(len(queue), CHUNK_SIZE)):
