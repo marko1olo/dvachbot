@@ -10,7 +10,7 @@ logger = logging.getLogger("summarize")
 
 GROQ_CONFIG = {
     "base_url": "https://api.groq.com/openai/v1",
-    "model": "llama-3.3-70b-versatile", 
+    "model": "qwen/qwen3.6-27b", 
     "temperature": 0.8,
 }
 
@@ -83,48 +83,48 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, model_preference: 
 
 async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
     if model_preference == "persona" or model_preference == "persona_gemini":
-        # Persona Bot priority: Gemini Lite -> Qwen 27B -> Llama 70B / 8B
+        # Persona Bot priority: Gemini Lite 3.1 -> Qwen 27B -> Gemini Lite 3.5 -> Gemini Flash
         models_cascade = [
-            ("gemini-2.5-flash-lite", "gemini"),
-            ("gemini-2.0-flash-lite", "gemini"),
-            ("gemini-2.0-flash", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
-            ("llama-3.3-70b-versatile", "groq"),
-            ("llama-3.1-8b-instant", "groq"),
+            ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
         ]
     elif model_preference == "fast":
         models_cascade = [
-            ("gemini-2.5-flash", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-1.5-flash", "gemini"),
+            ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
         ]
     elif model_preference == "gemini":
         models_cascade = [
-            ("gemini-2.5-flash", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
-            ("gemini-1.5-flash", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
         ]
     elif model_preference == "qwen":
         models_cascade = [
             ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-2.5-flash", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-3.5-flash-lite", "gemini"),
         ]
     elif model_preference == "llama":
         models_cascade = [
             ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-2.5-flash", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
+            ("gemini-3.5-flash-lite", "gemini"),
         ]
     else:
         # Default summarization cascade
         models_cascade = [
-            ("gemini-2.5-flash", "gemini"),
-            ("gemini-2.5-flash-lite", "gemini"),
+            ("gemini-3.1-flash-lite", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-1.5-flash", "gemini"),
+            ("gemini-3.5-flash-lite", "gemini"),
+            ("gemini-3.6-flash", "gemini"),
+            ("gemini-2.5-flash", "gemini"),
         ]
 
     
@@ -183,6 +183,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     model=model_name,
                     messages=messages,
                     temperature=0.8,
+                    timeout=15.0,
                 )
                 if model_max_tokens is not None:
                     create_kwargs["max_tokens"] = model_max_tokens

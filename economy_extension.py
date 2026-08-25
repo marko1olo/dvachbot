@@ -264,7 +264,7 @@ async def cmd_heist(message: types.Message, board_id: str | None = None):
             
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         data = {
-            "model": "llama-3.3-70b-versatile",
+            "model": "qwen/qwen3.6-27b",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 200,
             "temperature": 0.8
