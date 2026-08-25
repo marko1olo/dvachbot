@@ -7594,10 +7594,10 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
     if amount < 50 or amount > 100000:
         await message.answer(
             "⚔️ <b>Дуэль</b> — вызов другого анона на ставку.\n\n"
-            "Использование: <code>/duel 200</code> — выставить ставку 200 RUB.\n"
+            "Использование: <code>/duel 200</code> — выставить ставку 200 ₪.\n"
             "Любой анон может ответить: <code>/duel accept</code>\n"
             "Победитель забирает всю ставку, рандом 50/50.\n"
-            "<i>Минимальная ставка: 50 RUB, максимальная: 100 000 RUB</i>",
+            "<i>Минимальная ставка: 50 ₪, максимальная: 100 000 ₪</i>",
             parse_mode="HTML"
         )
         return
@@ -7609,12 +7609,11 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
         await message.answer("⚠️ Не спамь вызовами дуэлей. Подожди 10 секунд.")
         return
 
-    # Проверяем баланс под локом; ответ юзеру — уже без него, db_lock
-    # сериализует весь доступ к базе в процессе.
+    # Проверяем баланс под локом
     async with db_lock:
         bal = await get_user_global_balance(db, user_id)
     if bal < amount:
-        await message.answer(f"❌ Не хватает бабок. Ставка {amount} RUB, у тебя {int(bal)} RUB.")
+        await message.answer(f"❌ Не хватает шекелей. Ставка {amount:,} ₪, у тебя {int(bal):,} ₪.")
         return
 
     # Записываем время последнего вызова
@@ -7626,18 +7625,16 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
 
     kb_duel = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text=f"⚔️ Принять вызов ({amount} ₪)", callback_data=f"duel_accept:{user_id}"),
-            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"duel_decline:{user_id}")
+            InlineKeyboardButton(text="❌ Отменить вызов", callback_data=f"duel_cancel:{user_id}")
         ]
     ])
 
-    # Отправляем сообщение-вызов
+    # Отправляем подтверждение создателю вызова
     sent_msg = await message.answer(
-        f"⚔️ <b>Анон [{get_anon_id(user_id)}] вызывает на дуэль!</b>\n\n"
+        f"⚔️ <b>ВЫЗОВ НА ДУЭЛЬ ВЫСТАВЛЕН!</b>\n\n"
         f"💰 Ставка: <code>{amount:,} ₪</code>\n"
-        f"🎲 Победитель забирает всё, шанс 50/50.\n\n"
-        f"Нажми кнопку ниже или напиши <code>/duel accept</code>.\n"
-        f"<i>(Вызов активен 2 минуты)</i>",
+        f"🎲 Победитель забирает куш (шанс 50/50).\n\n"
+        f"⏳ <i>Вызов активен 2 минуты. Жди, пока другой анон напишет <code>/duel accept</code> или примет бой.</i>",
         reply_markup=kb_duel,
         parse_mode="HTML"
     )
@@ -7671,11 +7668,15 @@ async def cb_duel_accept(callback: types.CallbackQuery, board_id: str | None):
         await callback.answer("Ошибка данных", show_alert=True)
         return
     challenger_id = int(parts[1])
-    await accept_duel_logic(callback.message, challenger_id, board_id)
+    user_id = callback.from_user.id
+    if user_id == challenger_id:
+        await callback.answer("❌ Ты не можешь принять собственный вызов!", show_alert=True)
+        return
+    await accept_duel_logic(callback.message, challenger_id, board_id, user_id=user_id)
     try: await callback.answer()
     except Exception: pass
 
-@dp.callback_query(F.data.startswith("duel_decline:"))
+@dp.callback_query(F.data.startswith("duel_decline:") | F.data.startswith("duel_cancel:"))
 async def cb_duel_decline(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
     parts = callback.data.split(":")
@@ -7683,7 +7684,8 @@ async def cb_duel_decline(callback: types.CallbackQuery, board_id: str | None):
         await callback.answer("Ошибка данных", show_alert=True)
         return
     challenger_id = int(parts[1])
-    await decline_duel_logic(callback.message, challenger_id)
+    user_id = callback.from_user.id
+    await decline_duel_logic(callback.message, challenger_id, user_id=user_id)
     try: await callback.answer()
     except Exception: pass
 

@@ -52,11 +52,11 @@ async def _get_user_active_items(db, user_id: int, board_id: str) -> dict:
     except Exception:
         return {}
 
-async def accept_duel_logic(message: types.Message, challenger_id: int, board_id: str):
+async def accept_duel_logic(message: types.Message, challenger_id: int, board_id: str, user_id: int | None = None):
     import time
     db = await get_pool()
-    user_id = message.from_user.id
-    time.time()
+    if user_id is None:
+        user_id = message.from_user.id
     
     if challenger_id == user_id:
         await message.answer("Нельзя принять собственный вызов, трус.")
@@ -67,11 +67,6 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
         ch_bal = await get_user_global_balance(db, challenger_id)
         op_bal = await get_user_global_balance(db, user_id)
 
-        # Ответ юзеру откладываем до выхода из лока: db_lock сериализует ВЕСЬ
-        # доступ к базе в процессе, и держать его на время сетевого вызова
-        # Telegram — значит остановить создание постов и любые запросы во всём
-        # боте. Решение (проверка балансов, изъятие дуэли из пула и перевод)
-        # целиком остаётся под локом, иначе одну дуэль приняли бы дважды.
         reject_msg = None
         if challenger_id not in _active_duels:
             reject_msg = "⚔️ Эта дуэль уже была принята или истекла."
@@ -83,7 +78,7 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
             elif op_bal < amount:
                 # Возвращаем дуэль обратно в пул
                 _active_duels[challenger_id] = duel
-                reject_msg = f"❌ У тебя недостаточно бабок. Нужно {amount} RUB, есть {int(op_bal)}."
+                reject_msg = f"❌ У тебя недостаточно шекелей. Нужно {amount:,} ₪, у тебя {int(op_bal):,} ₪."
             else:
                 winner_id = random.choice([challenger_id, user_id])
                 loser_id  = challenger_id if winner_id == user_id else user_id
@@ -123,7 +118,7 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
     duel_text = (
         f"⚔️ <b>ДУЭЛЬ ЗАВЕРШЕНА!</b>\n\n"
         f"🎲 Монета решила исход битвы:\n"
-        f"🏆 Победитель: <b>{w_tag}</b>{you_w} <code>+{amount:,} ₪</code>\n"
+        f"🏆 Победитель: <b>{w_tag}</b>{you_w} <code>+{net_win:,} ₪</code>\n"
         f"💀 Проигравший: <b>{l_tag}</b>{you_l} <code>-{amount:,} ₪</code>"
     )
     try:
@@ -147,8 +142,9 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
     except Exception:
         await message.answer(duel_text, parse_mode="HTML")
 
-async def decline_duel_logic(message: types.Message, challenger_id: int):
-    user_id = message.from_user.id
+async def decline_duel_logic(message: types.Message, challenger_id: int, user_id: int | None = None):
+    if user_id is None:
+        user_id = message.from_user.id
     if challenger_id not in _active_duels:
         return False
         
