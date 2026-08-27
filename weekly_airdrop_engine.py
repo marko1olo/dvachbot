@@ -2,19 +2,20 @@
 """
 weekly_airdrop_engine.py — Еженедельный пропорциональный аирдроп активным анонам.
 
-Каждое воскресенье в 21:00 MSK:
+Каждое воскресенье в 21:00 MSK (плюс первый проверочный запуск через 15 минут после старта):
 1. Подсчитывает активность всех авторов за последние 7 дней (таблица Posts).
-2. Формирует призовой фонд: базовый минимум (75 000 ₪) + 10 ₪ за каждый созданный пост недели.
+2. Формирует призовой фонд: базовый минимум (200 000 ₪) + 30 ₪ за каждый созданный пост недели (~500k ₪ при 10k постов).
 3. Распределяет шекели пропорционально активности по сублинейной степенной формуле (posts ** 0.65)
-   с верхним капом не более 15% в одни руки (защита от монополизации фонда 1-2 спамерами).
+   с верхним капом не более 15% в одни руки (защита от монополизации фонда 1-2 гипер-спамерами).
 4. Атомарно начисляет шекели через add_user_global_balance и пишет проводку в UserTransactions.
-5. Публикует сводку в треды /b/ и /thread/, а также рассылает личные уведомления в ЛС.
+5. Публикует черный циничный анонс в треды /b/ и /thread/, а также рассылает личные уведомления в ЛС.
 """
 
 import asyncio
 import json
 import logging
 import math
+import random
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -44,27 +45,21 @@ def seconds_until_next_sunday_2100(now_msk: datetime) -> tuple[datetime, float]:
     target_time = (now_msk + timedelta(days=days_ahead)).replace(
         hour=21, minute=0, second=0, microsecond=0
     )
-    return target_time, max(1.0, (target_time - now_msk).total_seconds())
+    sleep_seconds = max(1.0, (target_time - now_msk).total_seconds())
+    return target_time, sleep_seconds
 
 
 async def fetch_weekly_contributors(db, days: int = 7, min_posts: int = MIN_POSTS_REQUIRED) -> list[dict]:
     """
-    Выбирает пользователей, написавших хотя бы min_posts видимых постов за последние days дней.
-    Возвращает список словарей: [{'user_id': int, 'posts_count': int, 'media_count': int}].
+    Извлекает из базы список авторов за последние `days` дней с числом постов >= `min_posts`.
+    Исключает системные аккаунты (author_id <= 0) и теневые посты.
     """
-    cutoff = time.time() - (days * 86400)
+    since_ts = time.time() - (days * 86400)
     query = """
-        SELECT 
+        SELECT
             author_id,
             COUNT(*) as total_posts,
-            SUM(CASE 
-                WHEN content LIKE '%"file_id"%' 
-                  OR content LIKE '%"type": "photo"%' 
-                  OR content LIKE '%"type": "video"%' 
-                  OR content LIKE '%"type": "animation"%' 
-                  OR content LIKE '%"type": "voice"%' 
-                  OR content LIKE '%"type": "media_group"%' 
-                THEN 1 ELSE 0 END) as media_posts
+            SUM(CASE WHEN content LIKE '%file_id%' OR content LIKE '%photo%' OR content LIKE '%video%' THEN 1 ELSE 0 END) as media_posts
         FROM Posts
         WHERE timestamp >= ?
           AND author_id > 0
@@ -74,17 +69,14 @@ async def fetch_weekly_contributors(db, days: int = 7, min_posts: int = MIN_POST
         ORDER BY total_posts DESC
     """
     results = []
-    try:
-        async with db.execute(query, (cutoff, min_posts)) as cur:
-            rows = await cur.fetchall()
-            for r in rows:
-                results.append({
-                    "user_id": int(r[0]),
-                    "posts_count": int(r[1]),
-                    "media_count": int(r[2] or 0),
-                })
-    except Exception as e:
-        logger.error(f"Error fetching weekly contributors: {e}")
+    async with db.execute(query, (since_ts, min_posts)) as cur:
+        rows = await cur.fetchall()
+        for row in rows:
+            results.append({
+                "user_id": int(row[0]),
+                "posts_count": int(row[1]),
+                "media_count": int(row[2] or 0)
+            })
     return results
 
 
@@ -124,7 +116,7 @@ def compute_airdrop_allocations(
     remaining_weights = total_weight
     unconstrained_indices = set(range(len(contributors)))
 
-    # Итеративное применение капа (до 3 итераций на случай каскадного насыщения)
+    # Итеративное применение капа (до 5 итераций на случай каскадного насыщения)
     payouts = [0.0] * len(contributors)
     for _ in range(5):
         capped_this_round = False
@@ -146,11 +138,10 @@ def compute_airdrop_allocations(
             share = weights[idx] / remaining_weights
             payouts[idx] = round(share * remaining_pool, 2)
 
-    # Нормализация округления (целые или 2 знака шекелей)
+    # Нормализация округления
     sum_allocated = sum(payouts)
     diff = round(total_pool - sum_allocated, 2)
     if abs(diff) > 0 and contributors:
-        # Корректируем на первого незакапленного или первого участника
         target_idx = next(iter(unconstrained_indices)) if unconstrained_indices else 0
         payouts[target_idx] = round(payouts[target_idx] + diff, 2)
 
@@ -169,51 +160,143 @@ def compute_airdrop_allocations(
     return allocations
 
 
+# -----------------------------------------------------------------------------
+# Черный юмор и ебанутые фразочки Абустана
+# -----------------------------------------------------------------------------
+
+AIRDROP_BOARD_TEMPLATES = [
+    {
+        "title": "💸 <b>ПОСОБИЕ ПО БЕЗРАБОТИЦЕ И ШИТПОСТИНГУ АБУСТАНА</b> 💸",
+        "intro": (
+            "Товарищи дегенераты, омежки и ноулайферы!\n"
+            "Вы успешно проебали очередные 7 дней своей никчемной жизни, высрав <b>{total_posts_week:,}</b> постов в треды "
+            "вместо того, чтобы найти работу, завести бабу или хотя бы помыться.\n\n"
+            "Абу сжалился над вашим экзистенциальным убожеством и производит еженедельную инъекцию казенных шекелей из Фонда Яхты!"
+        ),
+        "footer": "💡 <i>Шекели упали на счета. Бегом в /shop скупать мут-ганы и сводить счеты с обидчиками. Чем больше срёте — тем жирнее куш!</i>"
+    },
+    {
+        "title": "💉 <b>ВЕРТОЛЕТНЫЕ ШЕКЕЛИ ИЗ ПСИХДИСПАНСЕРА ТГАЧА</b> 💉",
+        "intro": (
+            "Срочное обращение главврача дурдома!\n"
+            "За прошедшие 7 дней в палатах зафиксировано <b>{total_posts_week:,}</b> приступов шизофазии, вайпов и параноидального бреда.\n\n"
+            "Фармацевтический комитет выделил стимулирующую субсидию на покупку галоперидола и пива для самых буйных пациентов:"
+        ),
+        "footer": "💡 <i>Казна выплатила всё до копейки. Если недоволен — пиздуй на завод (/work) или крути рулетку в казино.</i>"
+    },
+    {
+        "title": "🏦 <b>РОСПИЛ КАЗНЫ ИМЕНИ ВЕЛИКОГО АБУ</b> 🏦",
+        "intro": (
+            "Пока за окном рушится нормисный мир, наши диванные войска напердели в /b/ целых <b>{total_posts_week:,}</b> постов.\n\n"
+            "ОБЭП закрыл глаза, налоговая получила откат, и мы расчехляем печатный станок шекелей для ударников клавиатурного станка:"
+        ),
+        "footer": "💡 <i>Шекели на балансах. Иди в /shop, купи заточку (/rob) и ограбь соседа, пока он спит.</i>"
+    },
+    {
+        "title": "⚰️ <b>ЕЖЕНЕДЕЛЬНЫЕ ДИВИДЕНДЫ ИЗ ЦИФРОВОГО МОРГА</b> ⚰️",
+        "intro": (
+            "Неделя подошла к концу, а ты всё ещё сидишь перед монитором в тёмной комнате.\n"
+            "За 7 дней коллективный разум сычей выдал <b>{total_posts_week:,}</b> криков о помощи и токсичных высеров.\n\n"
+            "За верность борде и абсолютную социальную смерть администрация отсыпает пособие на выживание:"
+        ),
+        "footer": "💡 <i>Деньги в кармане. Не проеби всё в рулетку за 5 минут, хотя кого мы обманываем...</i>"
+    }
+]
+
+RANK_TITLES = {
+    1: "👑 <b>ГЛАВНЫЙ СЫЧ ВСЕЛЕННОЙ</b> <i>(абсолютный ноулайфер недели)</i>",
+    2: "🥈 <b>СЕРЕБРЯНЫЙ ШИТПОСТЕР</b> <i>(клавиатура уже дымится)</i>",
+    3: "🥉 <b>ПОЧЕТНЫЙ ШИЗОИД</b> <i>(третье место в палате)</i>",
+    4: "🎖 <i>Ударник клавиатурного станка</i>",
+    5: "🎖 <i>Мастер спорта по диванным боям</i>",
+    6: "🎖 <i>Штатный генератор кринжа</i>",
+    7: "🎖 <i>Скуф на удаленке</i>",
+    8: "🎖 <i>Агент диванных войск</i>",
+    9: "🎖 <i>Претендент на путевку в ПНД</i>",
+    10: "🎖 <i>Замыкающий палаты №6</i>",
+}
+
+AIRDROP_PM_TEMPLATES = [
+    (
+        "💊 <b>ПОСОБИЕ НА ГАЛОПЕРИДОЛ НАЧИСЛЕНО!</b> 💊\n\n"
+        "Товарищ анон! ПНД и Абу высоко ценят твой непрерывный бред.\n\n"
+        "📊 Твой вклад в безумие за 7 дней: <b>{posts_count}</b> постов\n"
+        "🏅 Место в палате: <b>#{rank}</b> из {total_recipients}\n"
+        "💵 Капнуло на сберкнижку: +<code>{payout:,} ₪</code>\n\n"
+        "<i>Бегом в /shop закупать Мут-Ган или Заточку, пока инфляция не сожрала!</i>\n"
+        "Проверить баланс: /wallet"
+    ),
+    (
+        "🍕 <b>СТИМУЛ-ЧЕК НА ПИВО И ДОШИРАК</b> 🍕\n\n"
+        "Абу посмотрел на твои <b>{posts_count}</b> постов и пустил скупую слезу.\n\n"
+        "📊 Активность за неделю: <b>{posts_count}</b> постов\n"
+        "🏅 Ранг среди сычей: <b>#{rank}</b> из {total_recipients}\n"
+        "💵 Выплата за деградацию: +<code>{payout:,} ₪</code>\n\n"
+        "<i>Не благодари. Можешь слить всё в казино или вызвать Пативэн неугодным: /shop</i>\n"
+        "Кошелек: /wallet"
+    ),
+    (
+        "☠️ <b>КОМПЕНСАЦИЯ ЗА УБИТУЮ МОЛОДОСТЬ</b> ☠️\n\n"
+        "Ты потратил ещё одну неделю своей бесценной жизни на Тгач.\n\n"
+        "📊 Настрочил: <b>{posts_count}</b> высеров\n"
+        "🏅 Место на социальном дне: <b>#{rank}</b> из {total_recipients}\n"
+        "💵 Компенсация за деградацию: +<code>{payout:,} ₪</code>\n\n"
+        "<i>Иди приоденься в бутике /wardrobe или купи шапочку из фольги в /shop!</i>\n"
+        "Проверить заначку: /wallet"
+    ),
+    (
+        "🚔 <b>ГОНОРАР ОТ ТОВАРИЩА МАЙОРА</b> 🚔\n\n"
+        "За добросовестное засорение каналов связи (<b>{posts_count}</b> постов) тебе выписан закрытый чек.\n\n"
+        "📊 Зафиксировано сигналов: <b>{posts_count}</b>\n"
+        "🏅 Твой номер в личном деле: <b>#{rank}</b> из {total_recipients}\n"
+        "💵 Выручка осведомителя: +<code>{payout:,} ₪</code>\n\n"
+        "<i>Трать аккуратно, чтобы не привлечь внимание ОБЭПа: /shop</i>\n"
+        "Баланс: /wallet"
+    )
+]
+
+
 def format_airdrop_board_announcement(
     total_pool: float,
     total_recipients: int,
     total_posts_week: int,
     top_allocations: list[dict]
 ) -> str:
-    """Формирует пост для тредов /b/ и /thread/."""
+    """Формирует черный ебанутый пост для тредов /b/ и /thread/."""
+    tmpl = random.choice(AIRDROP_BOARD_TEMPLATES)
     lines = [
-        "💰 <b>ЕЖЕНЕДЕЛЬНЫЙ СТИМУЛ-ЧЕК АБУСТАНА</b> 💰\n",
-        f"Неделя подошла к концу! За 7 дней аноны высрали <b>{total_posts_week:,}</b> постов.\n"
-        f"Казна Абу выплачивает дивиденды активным работягам борды!\n\n"
-        f"🏦 <b>Общий фонд раздачи:</b> <code>{int(total_pool):,} ₪</code>\n"
-        f"👥 <b>Награждено стахановцев:</b> <code>{total_recipients}</code>\n\n"
-        "🏆 <b>ТОП-10 УДАРНИКОВ ТРУДА:</b>"
+        tmpl["title"] + "\n",
+        tmpl["intro"].format(total_posts_week=total_posts_week) + "\n",
+        f"🏦 <b>Общий фонд распила:</b> <code>{int(total_pool):,} ₪</code>",
+        f"👥 <b>Награждено стахановцев:</b> <code>{total_recipients}</code>\n",
+        "🏆 <b>ТОП-10 ГЛАВНЫХ ЗАДРОТОВ БОРДЫ:</b>"
     ]
     for rank, item in enumerate(top_allocations[:10], 1):
+        title = RANK_TITLES.get(rank, f"🎖 <i>Анон #{rank}</i>")
         lines.append(
-            f"{rank}. Анон <code>{item['user_id']}</code>: "
-            f"+<b>{item['payout']:,} ₪</b> <i>({item['posts_count']} постов)</i>"
+            f"{rank}. {title} [ID <code>{item['user_id']}</code>]: "
+            f"+<b>{item['payout']:,} ₪</b> <i>({item['posts_count']} шт.)</i>"
         )
 
-    lines.append(
-        "\n<i>💡 Шекели уже начислены на балансы. Чем активнее вы постите на неделе, "
-        "тем жирнее призовой пул следующего воскресенья!</i>"
-    )
+    lines.append("\n" + tmpl["footer"])
     return "\n".join(lines)
 
 
 def format_airdrop_pm_notification(payout: int, posts_count: int, rank: int, total_recipients: int) -> str:
-    """Формирует персональное уведомление для пользователя в ЛС."""
-    return (
-        f"💰 <b>ЕЖЕНЕДЕЛЬНЫЙ АИРДРОП АБУ</b> 💰\n\n"
-        f"Товарищ анон! Родина и Абу ценят твой шитпостинг.\n\n"
-        f"📊 Твоя активность за 7 дней: <b>{posts_count}</b> постов\n"
-        f"🏅 Твоё место среди актива: <b>#{rank}</b> из {total_recipients}\n"
-        f"💵 Начислено на баланс: +<code>{payout:,} ₪</code> (Шекелей)\n\n"
-        f"Проверить баланс: /wallet\n"
-        f"Заглянуть на рынок: /shop"
+    """Формирует персональное уведомление с черным юмором для пользователя в ЛС."""
+    tmpl = random.choice(AIRDROP_PM_TEMPLATES)
+    return tmpl.format(
+        payout=payout,
+        posts_count=posts_count,
+        rank=rank,
+        total_recipients=total_recipients
     )
 
 
 async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
     """
     Выполняет полный цикл начисления еженедельного аирдропа:
-    - Защита от двойного запуска через GlobalStats.
+    - Защита от двойного запуска через GlobalStats (5 дней).
     - Транзакционное начисление шекелей и запись в UserTransactions.
     - Анонс в треды и ЛС получателям.
     """
@@ -234,38 +317,34 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
                 except ValueError:
                     last_run_ts = 0.0
 
-    if now_ts - last_run_ts < 5 * 86400:
-        logger.warning("Weekly airdrop already ran recently. Skipping execution.")
+    if (now_ts - last_run_ts) < (5 * 86400):
+        logger.info(f"Weekly airdrop skipped: already executed recently at {last_run_ts}")
         return {"status": "skipped", "reason": "already_ran_recently"}
 
-    # 2. Собираем участников
+    # 2. Собираем авторов за 7 дней
     contributors = await fetch_weekly_contributors(db, days=7, min_posts=MIN_POSTS_REQUIRED)
     if not contributors:
-        logger.warning("No weekly contributors found for airdrop.")
+        logger.warning("Weekly airdrop: no qualifying contributors found.")
         return {"status": "skipped", "reason": "no_contributors"}
 
     total_posts_week = sum(c["posts_count"] for c in contributors)
     total_pool = calculate_weekly_pool(total_posts_week)
     allocations = compute_airdrop_allocations(contributors, total_pool)
 
-    if not allocations:
-        return {"status": "skipped", "reason": "empty_allocations"}
-
-    logger.info(
-        f"🏛 [AIRDROP] Начинаем начисление {total_pool:,.0f} ₪ для {len(allocations)} анонов..."
-    )
-
-    # 3. Транзакционное начисление шекелей
-    credited_count = 0
+    # 3. Транзакционно начисляем баланс
     total_credited = 0
+    credited_count = 0
+
     async with db_lock:
         for item in allocations:
             uid = item["user_id"]
             payout = item["payout"]
+            if payout <= 0:
+                continue
             try:
                 await add_user_global_balance(db, uid, "b", float(payout))
                 await record_user_transaction(
-                    db,
+                    db=db,
                     user_id=uid,
                     amount=float(payout),
                     category="airdrop",
@@ -346,13 +425,38 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
 async def weekly_airdrop_loop(bots: dict[str, Bot]):
     """
     Фоновый воркер еженедельного аирдропа:
-    - Запускается раз в неделю строго в воскресенье в 21:00 MSK.
-    - При старте бота СПИТ до целевого воскресенья 21:00 MSK (НИКОГДА не раздает при рестарте).
+    - При первом старте (если не запускался за последние 5 дней) ждет 15 минут (900 сек) и проводит раздачу.
+    - В дальнейшем засыпает до ближайшего воскресенья 21:00 MSK и раздает строго раз в неделю.
     """
-    from common.db_pool import get_pool
+    from common.db_pool import get_pool, db_lock
 
-    await asyncio.sleep(45)  # Небольшая пауза на прогрев пула соединений при старте бота
+    await asyncio.sleep(30)  # Пауза на старт бота и соединений
 
+    try:
+        db = await get_pool()
+        now_ts = time.time()
+        last_run_ts = 0.0
+        async with db_lock:
+            async with db.execute("SELECT value FROM GlobalStats WHERE key = 'last_weekly_airdrop_run'") as cur:
+                row = await cur.fetchone()
+                if row and row[0]:
+                    try:
+                        last_run_ts = float(row[0])
+                    except ValueError:
+                        last_run_ts = 0.0
+
+        # Если за последние 5 дней аирдропа еще не было — запускаем ровно через 15 минут!
+        if (now_ts - last_run_ts) > (5 * 86400):
+            print("🎁 [AIRDROP] Первичный запуск аирдропа назначен через 15 минут (900 сек)...")
+            await asyncio.sleep(900)
+            print("🎁 [AIRDROP] Старт первичного еженедельного аирдропа...")
+            res = await execute_weekly_airdrop(db, bots)
+            print(f"🎁 [AIRDROP] Результат первого запуска: {res}")
+            await asyncio.sleep(300)
+    except Exception as e:
+        logger.error(f"Error in initial airdrop trigger: {e}")
+
+    # Основной еженедельный цикл (воскресенье 21:00 MSK)
     while True:
         try:
             now_msk = datetime.now(timezone.utc).astimezone(MSK)
