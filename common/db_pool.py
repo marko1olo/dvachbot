@@ -200,15 +200,16 @@ async def wal_checkpoint_truncate(db=None) -> bool:
     global _db_connection
     try:
         async with db_lock:
-            conn = db or _db_connection or await get_pool()
-            if conn:
-                async with conn.execute("PRAGMA wal_checkpoint(TRUNCATE);") as cursor:
-                    row = await cursor.fetchone()
-                    if row:
-                        busy, log_frames, ckpt_frames = row
-                        print(f"[DB] WAL Checkpoint (TRUNCATE): Busy={busy}, Log={log_frames}, Checkpointed={ckpt_frames}")
-                        return busy == 0
-                    return True
+            conn = db or _db_connection
+            if conn is None:
+                return True
+            async with conn.execute("PRAGMA wal_checkpoint(TRUNCATE);") as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    busy, log_frames, ckpt_frames = row
+                    print(f"[DB] WAL Checkpoint (TRUNCATE): Busy={busy}, Log={log_frames}, Checkpointed={ckpt_frames}")
+                    return busy == 0
+                return True
     except Exception as e:
         print(f"[DB] WAL Checkpoint (TRUNCATE) error: {e}")
     return False

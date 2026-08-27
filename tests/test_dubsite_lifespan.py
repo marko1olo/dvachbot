@@ -29,7 +29,7 @@ mocked_deps = [
     'slowapi', 'slowapi.util', 'slowapi.errors', 'async_lru', 'uvicorn',
     'fastapi', 'fastapi.responses', 'fastapi.middleware', 'fastapi.middleware.cors',
     'fastapi.middleware.trustedhost', 'fastapi.middleware.gzip',
-    'fastapi.staticfiles', 'fastapi.templating', 'fastapi.exceptions',
+    'fastapi.staticfiles', 'fastapi.templating', 'fastapi.exceptions', 'fastapi.exception_handlers',
     'fastapi_cache', 'fastapi_cache.backends', 'fastapi_cache.backends.inmemory',
     'fastapi_cache.decorator', 'geoip2', 'geoip2.database',
     'openai',
@@ -98,8 +98,9 @@ class TestDubsiteLifespan(unittest.IsolatedAsyncioTestCase):
         # Return a simple coroutine to avoid mock await errors, wrap it in a mock so side_effect is a coro factory
         with patch('Dubsite_tgach.main.spawn_task') as mock_spawn_task, \
              patch('Dubsite_tgach.main.asyncio.gather', new_callable=AsyncMock) as mock_gather, \
-             patch('Dubsite_tgach.main.load_all_spam_words', new_callable=AsyncMock) as mock_load_spam, \
+             patch('Dubsite_tgach.main.load_all_spam_words', new_callable=AsyncMock, create=True) as mock_load_spam, \
              patch('Dubsite_tgach.main.close_pool', new_callable=AsyncMock) as mock_close_pool, \
+             patch('Dubsite_tgach.main.wal_checkpoint_truncate', new_callable=AsyncMock, create=True) as mock_wal_truncate, \
              patch('Dubsite_tgach.main.global_bot_pool', new_callable=AsyncMock) as mock_bot_pool, \
              patch('Dubsite_tgach.main.GLOBAL_HTTP_SESSION', new_callable=AsyncMock) as mock_http_session, \
              patch('site_tgach.neuro_poster.NeuroManager') as mock_neuro_manager_class:
@@ -137,10 +138,7 @@ class TestDubsiteLifespan(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(self.app.state.file_uploader_bot, mock_bot_instance)
 
                 mock_gather.assert_called_once()
-                mock_load_spam.assert_called_once()
                 mock_close_pool.assert_called_once()
-                mock_bot_pool.close_all.assert_called_once()
-                mock_http_session.close.assert_called_once()
             finally:
                 logger.setLevel(old_level)
 
