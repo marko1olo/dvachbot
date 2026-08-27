@@ -65,6 +65,18 @@ def test_compute_airdrop_allocations_proportional_and_capped():
     assert abs(total_distributed - pool) < 50
 
 
+def test_get_seconds_until_next_weekly_run():
+    from weekly_airdrop_engine import get_seconds_until_next_weekly_run
+    # 1. First run ever (last_run_ts <= 0) -> exactly 900 seconds (15 min)
+    target, sleep_sec = get_seconds_until_next_weekly_run(0.0, 1000.0)
+    assert sleep_sec == 900.0
+
+    # 2. Subsequent run -> exactly 7 days (604800s) from last run
+    last_run = 1000.0
+    now = 1000.0 + 86400.0  # 1 day later
+    target, sleep_sec = get_seconds_until_next_weekly_run(last_run, now)
+    assert sleep_sec == 6 * 86400.0
+
 def test_seconds_until_next_sunday_2100():
     msk = timezone(timedelta(hours=3))
     now = datetime.now(timezone.utc).astimezone(msk)
@@ -124,6 +136,7 @@ async def test_fetch_weekly_contributors_and_execute_airdrop():
                 value TEXT
             )
         """)
+        await db.execute("INSERT INTO GlobalStats (key, value) VALUES ('abu_yacht_fund', '1000000')")
         await db.commit()
 
         # Insert test posts:

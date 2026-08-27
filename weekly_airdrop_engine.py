@@ -2,13 +2,14 @@
 """
 weekly_airdrop_engine.py — Еженедельный пропорциональный аирдроп активным анонам.
 
-Каждое воскресенье в 21:00 MSK (плюс первый проверочный запуск через 15 минут после старта):
-1. Подсчитывает активность всех авторов за последние 7 дней (таблица Posts).
-2. Формирует призовой фонд: базовый минимум (200 000 ₪) + 30 ₪ за каждый созданный пост недели (~500k ₪ при 10k постов).
-3. Распределяет шекели пропорционально активности по сублинейной степенной формуле (posts ** 0.65)
-   с верхним капом не более 15% в одни руки (защита от монополизации фонда 1-2 гипер-спамерами).
-4. Атомарно начисляет шекели через add_user_global_balance и пишет проводку в UserTransactions.
-5. Публикует черный циничный анонс в треды /b/ и /thread/, а также рассылает личные уведомления в ЛС.
+- При первом запуске: стартует СЕГОДНЯ ровно через 15 минут (900 сек).
+- В дальнейшем: регулярная рассылка строго раз в неделю (каждые 7 дней).
+- Подсчитывает активность всех авторов за последние 7 дней (таблица Posts).
+- Формирует призовой фонд: базовый минимум (200 000 ₪) + 30 ₪ за каждый созданный пост недели (~500k ₪ при 10k постов).
+- Распределяет шекели пропорционально активности по сублинейной степенной формуле (posts ** 0.65)
+  с верхним капом не более 15% в одни руки (защита от монополизации фонда 1-2 гипер-спамерами).
+- Атомарно начисляет шекели через add_user_global_balance и пишет проводку в UserTransactions.
+- Публикует черный циничный анонс в треды /b/ и /thread/, а также рассылает личные уведомления в ЛС.
 """
 
 import asyncio
@@ -32,13 +33,27 @@ POST_BONUS_RATE = 30.0           # Дополнительно шекелей в 
 MIN_POSTS_REQUIRED = 3           # Минимальный порог постов за неделю для участия
 POWER_EXPONENT = 0.65            # Сублинейный коэффициент сглаживания (Diminishing returns)
 MAX_USER_SHARE = 0.15            # Максимум 15% пула в одни руки
+WEEKLY_INTERVAL_SECONDS = 7 * 86400  # 7 суток между регулярными рассылками (раз в неделю)
+
+
+def get_seconds_until_next_weekly_run(last_run_ts: float, now_ts: float) -> tuple[datetime, float]:
+    """
+    Рассчитывает время следующей еженедельной раздачи:
+    - Если раздачи еще ни разу не было (last_run_ts <= 0) — назначается СЕГОДНЯ через 15 минут (900 сек).
+    - Если раздача уже была — строго через 7 суток (WEEKLY_INTERVAL_SECONDS) от последней.
+    """
+    if last_run_ts <= 0:
+        target_ts = now_ts + 900.0
+        return datetime.fromtimestamp(target_ts, tz=MSK), 900.0
+
+    next_run_ts = last_run_ts + WEEKLY_INTERVAL_SECONDS
+    sleep_seconds = max(0.0, next_run_ts - now_ts)
+    target_dt = datetime.fromtimestamp(next_run_ts, tz=MSK)
+    return target_dt, sleep_seconds
 
 
 def seconds_until_next_sunday_2100(now_msk: datetime) -> tuple[datetime, float]:
-    """
-    Возвращает (целевое время MSK, сколько секунд спать) до ближайшего воскресенья 21:00 MSK.
-    Monday == 0 ... Sunday == 6.
-    """
+    """Вспомогательная функция обратной совместимости."""
     days_ahead = 6 - now_msk.weekday()
     if days_ahead < 0 or (days_ahead == 0 and (now_msk.hour > 21 or (now_msk.hour == 21 and now_msk.minute >= 0))):
         days_ahead += 7
@@ -260,7 +275,8 @@ def format_airdrop_board_announcement(
     total_pool: float,
     total_recipients: int,
     total_posts_week: int,
-    top_allocations: list[dict]
+    top_allocations: list[dict],
+    remaining_fund: float = 0.0
 ) -> str:
     """Формирует черный ебанутый пост для тредов /b/ и /thread/."""
     tmpl = random.choice(AIRDROP_BOARD_TEMPLATES)
@@ -268,9 +284,14 @@ def format_airdrop_board_announcement(
         tmpl["title"] + "\n",
         tmpl["intro"].format(total_posts_week=total_posts_week) + "\n",
         f"🏦 <b>Общий фонд распила:</b> <code>{int(total_pool):,} ₪</code>",
-        f"👥 <b>Награждено стахановцев:</b> <code>{total_recipients}</code>\n",
-        "🏆 <b>ТОП-10 ГЛАВНЫХ ЗАДРОТОВ БОРДЫ:</b>"
+        f"👥 <b>Награждено стахановцев:</b> <code>{total_recipients}</code>",
     ]
+    if remaining_fund > 0:
+        lines.append(f"🛥️ <b>Казна Яхты Абу:</b> оплачено из казны, остаток: <code>{int(remaining_fund):,} ₪</code>\n")
+    else:
+        lines.append("")
+
+    lines.append("🏆 <b>ТОП-10 ГЛАВНЫХ ЗАДРОТОВ БОРДЫ:</b>")
     for rank, item in enumerate(top_allocations[:10], 1):
         title = RANK_TITLES.get(rank, f"🎖 <i>Анон #{rank}</i>")
         lines.append(
@@ -297,10 +318,14 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
     """
     Выполняет полный цикл начисления еженедельного аирдропа:
     - Защита от двойного запуска через GlobalStats (5 дней).
+    - Транзакционное списание шекелей из Казны Яхты Абу (закрытый контур).
     - Транзакционное начисление шекелей и запись в UserTransactions.
     - Анонс в треды и ЛС получателям.
     """
-    from common.database import add_user_global_balance, record_user_transaction, create_post
+    from common.database import (
+        add_user_global_balance, record_user_transaction, create_post,
+        deduct_from_abu_fund, get_abu_fund_total
+    )
     from common.db_pool import db_lock
 
     now_ts = time.time()
@@ -317,7 +342,7 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
                 except ValueError:
                     last_run_ts = 0.0
 
-    if (now_ts - last_run_ts) < (5 * 86400):
+    if last_run_ts > 0 and (now_ts - last_run_ts) < (5 * 86400):
         logger.info(f"Weekly airdrop skipped: already executed recently at {last_run_ts}")
         return {"status": "skipped", "reason": "already_ran_recently"}
 
@@ -329,6 +354,12 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
 
     total_posts_week = sum(c["posts_count"] for c in contributors)
     total_pool = calculate_weekly_pool(total_posts_week)
+
+    # Проверяем баланс Казны Яхты Абу (закрытый контур экономики)
+    current_fund = await get_abu_fund_total(db)
+    if current_fund > 0 and total_pool > current_fund:
+        total_pool = round(current_fund * 0.5, 2)
+
     allocations = compute_airdrop_allocations(contributors, total_pool)
 
     # 3. Транзакционно начисляем баланс
@@ -365,53 +396,112 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
         )
         await db.commit()
 
+    # Списываем средства из Казны Яхты Абу (закрытый контур экономики)
+    remaining_fund = await deduct_from_abu_fund(db, float(total_credited), reason="weekly_airdrop")
+    logger.info(f"🛥️ [AIRDROP] Из Казны Яхты Абу списано {total_credited:,} ₪. Остаток в казне: {remaining_fund:,.2f} ₪")
     logger.info(f"✅ [AIRDROP] Успешно начислено {total_credited:,} ₪ ({credited_count} получателей).")
 
-    # 4. Публикация анонса в треды /b/ и /thread/
+    # 4. Публикация общего анонса в треды /b/ и /thread/ (ЧТО ДОЙДЕТ ВСЕМ АНОНАМ)
     announcement_text = format_airdrop_board_announcement(
         total_pool=total_credited,
         total_recipients=credited_count,
         total_posts_week=total_posts_week,
-        top_allocations=allocations
+        top_allocations=allocations,
+        remaining_fund=remaining_fund
     )
-    b_bot = bots.get('b') or (next(iter(bots.values())) if bots else None)
-    if b_bot:
-        for target_board in ["b", "thread"]:
+    for target_board in ["b", "thread"]:
+        try:
+            content = {
+                "type": "text",
+                "text": announcement_text,
+                "is_system_message": True,
+                "archive_allowed": True
+            }
+            pnum = await create_post(
+                author_id=0,
+                board_id=target_board,
+                content=content,
+                timestamp=time.time(),
+                stream="ru"
+            )
+            # Ставим в очередь доставки борды, чтобы сообщение ушло ВСЕМ активным анонам в Telegram:
             try:
-                content = {
-                    "type": "text",
-                    "text": announcement_text,
-                    "is_system_message": True,
-                    "archive_allowed": True
-                }
-                await create_post(
-                    author_id=0,
-                    board_id=target_board,
-                    content=content,
-                    timestamp=time.time(),
-                    stream="ru"
+                from shared_state import (
+                    board_data, enqueue_board_message, storage_lock,
+                    state, post_to_messages, messages_storage
                 )
-            except Exception as post_err:
-                logger.error(f"Failed to post airdrop announcement to {target_board}: {post_err}")
+                b_users = board_data.get(target_board, {}).get("users", {})
+                active_users = set(b_users.get("active", set())) - set(b_users.get("banned", set()))
+                if pnum and active_users:
+                    async with storage_lock:
+                        state['post_counter'] = max(state.get('post_counter', 0), pnum)
+                        post_to_messages[pnum] = {}
+                        messages_storage[pnum] = {
+                            'board_id': target_board,
+                            'author_id': 0,
+                            'content': content,
+                            'timestamp': time.time()
+                        }
+                    await enqueue_board_message(target_board, {
+                        "recipients": active_users,
+                        "board_id": target_board,
+                        "post_num": pnum,
+                        "author_id": 0,
+                        "author_name": "Абу",
+                        "content": content,
+                        "reply_to": None,
+                        "is_op": False
+                    })
+            except Exception as broadcast_err:
+                logger.warning(f"Failed to enqueue airdrop broadcast for {target_board}: {broadcast_err}")
+        except Exception as post_err:
+            logger.error(f"Failed to post airdrop announcement to {target_board}: {post_err}")
 
-    # 5. Рассылка уведомлений в ЛС получателям (фоном)
-    if b_bot:
-        total_recipients = len(allocations)
-        async def _send_pm_notifications():
-            for rank, item in enumerate(allocations, 1):
-                uid = item["user_id"]
-                pm_text = format_airdrop_pm_notification(
-                    payout=item["payout"],
-                    posts_count=item["posts_count"],
-                    rank=rank,
-                    total_recipients=total_recipients
-                )
+    # 5. Рассылка персональных уведомлений (ЧТО ДОЙДЕТ ИНДИВИДУАЛЬНО КАЖДОМУ)
+    active_bots_list = list(bots.values()) if bots else []
+    total_recipients = len(allocations)
+
+    async def _send_pm_notifications():
+        from common.database import create_alert
+        for rank, item in enumerate(allocations, 1):
+            uid = item["user_id"]
+            payout = item["payout"]
+            posts_cnt = item["posts_count"]
+            pm_text = format_airdrop_pm_notification(
+                payout=payout,
+                posts_count=posts_cnt,
+                rank=rank,
+                total_recipients=total_recipients
+            )
+
+            # 1. Личное сообщение в Telegram (пробуем ботов по очереди)
+            sent = False
+            for b in active_bots_list:
                 try:
-                    await b_bot.send_message(chat_id=uid, text=pm_text, parse_mode="HTML")
+                    await b.send_message(chat_id=uid, text=pm_text, parse_mode="HTML")
+                    sent = True
+                    break
                 except Exception:
-                    pass
-                await asyncio.sleep(0.1)
+                    continue
 
+            # 2. Персистентный внутриигровой алерт в БД (UserAlerts)
+            # Если ЛС закрыт или бот заблокирован — уведомление всплывет в боте при первой активности!
+            try:
+                alert_text = (
+                    f"💰 <b>ЕЖЕНЕДЕЛЬНЫЙ АИРДРОП:</b> Тебе начислено <b>+{payout:,} ₪</b> "
+                    f"за {posts_cnt} постов на этой неделе (Ранг #{rank})! Проверь /wallet"
+                )
+                await create_alert(
+                    user_id=uid,
+                    content=alert_text,
+                    target_board='all'
+                )
+            except Exception as alert_err:
+                logger.warning(f"Failed to create persistent alert for user {uid}: {alert_err}")
+
+            await asyncio.sleep(0.05)
+
+    if active_bots_list:
         asyncio.create_task(_send_pm_notifications())
 
     return {
@@ -425,58 +515,51 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
 async def weekly_airdrop_loop(bots: dict[str, Bot]):
     """
     Фоновый воркер еженедельного аирдропа:
-    - При первом старте (если не запускался за последние 5 дней) ждет 15 минут (900 сек) и проводит раздачу.
-    - В дальнейшем засыпает до ближайшего воскресенья 21:00 MSK и раздает строго раз в неделю.
+    - При первом старте: стартует СЕГОДНЯ ровно через 15 минут (900 сек).
+    - В дальнейшем: регулярная рассылка строго раз в неделю (каждые 7 дней от последней).
+    - При перезапусках бота: проверяет время последней раздачи и точно рассчитывает остаток сна до следующей недели.
     """
     from common.db_pool import get_pool, db_lock
 
-    await asyncio.sleep(30)  # Пауза на старт бота и соединений
+    await asyncio.sleep(20)  # Даем 20 секунд на прогрев соединений при старте
 
-    try:
-        db = await get_pool()
-        now_ts = time.time()
-        last_run_ts = 0.0
-        async with db_lock:
-            async with db.execute("SELECT value FROM GlobalStats WHERE key = 'last_weekly_airdrop_run'") as cur:
-                row = await cur.fetchone()
-                if row and row[0]:
-                    try:
-                        last_run_ts = float(row[0])
-                    except ValueError:
-                        last_run_ts = 0.0
-
-        # Если за последние 5 дней аирдропа еще не было — запускаем ровно через 15 минут!
-        if (now_ts - last_run_ts) > (5 * 86400):
-            print("🎁 [AIRDROP] Первичный запуск аирдропа назначен через 15 минут (900 сек)...")
-            await asyncio.sleep(900)
-            print("🎁 [AIRDROP] Старт первичного еженедельного аирдропа...")
-            res = await execute_weekly_airdrop(db, bots)
-            print(f"🎁 [AIRDROP] Результат первого запуска: {res}")
-            await asyncio.sleep(300)
-    except Exception as e:
-        logger.error(f"Error in initial airdrop trigger: {e}")
-
-    # Основной еженедельный цикл (воскресенье 21:00 MSK)
     while True:
         try:
-            now_msk = datetime.now(timezone.utc).astimezone(MSK)
-            target_time, sleep_seconds = seconds_until_next_sunday_2100(now_msk)
-
-            print(
-                f"🎁 [AIRDROP] Следующая еженедельная выплата активным анонам запланирована на "
-                f"{target_time.strftime('%Y-%m-%d %H:%M:%S')} MSK (через {sleep_seconds / 3600:.1f} ч)"
-            )
-
-            await asyncio.sleep(sleep_seconds)
-
-            # Проснулись ровно в воскресенье в 21:00 MSK!
-            print("🎁 [AIRDROP] Время еженедельной раздачи шекелей! Запуск процедуры...")
             db = await get_pool()
+            now_ts = time.time()
+            last_run_ts = 0.0
+
+            async with db_lock:
+                async with db.execute("SELECT value FROM GlobalStats WHERE key = 'last_weekly_airdrop_run'") as cur:
+                    row = await cur.fetchone()
+                    if row and row[0]:
+                        try:
+                            last_run_ts = float(row[0])
+                        except ValueError:
+                            last_run_ts = 0.0
+
+            target_dt, sleep_seconds = get_seconds_until_next_weekly_run(last_run_ts, now_ts)
+
+            if last_run_ts <= 0:
+                print(
+                    f"🎁 [AIRDROP] СЕГОДНЯ ПЕРВЫЙ ЗАПУСК! Раздача начнется ровно через 15 минут "
+                    f"({target_dt.strftime('%Y-%m-%d %H:%M:%S')} MSK)..."
+                )
+                await asyncio.sleep(sleep_seconds)
+            elif sleep_seconds > 0:
+                print(
+                    f"🎁 [AIRDROP] Следующая еженедельная выплата активным анонам запланирована на "
+                    f"{target_dt.strftime('%Y-%m-%d %H:%M:%S')} MSK (через {sleep_seconds / 3600:.1f} ч)"
+                )
+                await asyncio.sleep(sleep_seconds)
+
+            # Настало время раздачи!
+            print("🎁 [AIRDROP] Время еженедельной раздачи шекелей! Запуск процедуры...")
             result = await execute_weekly_airdrop(db, bots)
             print(f"🎁 [AIRDROP] Результат раздачи: {result}")
 
-            # Спим 1 час, чтобы гарантированно выйти из слота 21:00 MSK
-            await asyncio.sleep(3600)
+            # Пауза после раздачи, чтобы гарантированно сместить now_ts вперед
+            await asyncio.sleep(300)
 
         except Exception as e:
             logger.error(f"Error in weekly_airdrop_loop: {e}")

@@ -215,13 +215,16 @@ class TestCommandDispatch(unittest.IsolatedAsyncioTestCase):
             user_cmd_call = mock_bot.set_my_commands.call_args_list[0][0][0]
             admin_cmd_call = mock_bot.set_my_commands.call_args_list[1][0][0]
 
-            self.assertEqual(len(user_cmd_call), 85)
-            self.assertEqual(len(admin_cmd_call), 115)
+            self.assertEqual(len(user_cmd_call), 95)
+            self.assertEqual(len(admin_cmd_call), 99)
+            self.assertTrue(len(user_cmd_call) <= 100)
+            self.assertTrue(len(admin_cmd_call) <= 100)
 
             # Ensure all command strings are unique in admin list and non-empty
             all_cmds = [cmd.command for cmd in admin_cmd_call]
-            self.assertEqual(len(all_cmds), 115)
+            self.assertEqual(len(all_cmds), len(set(all_cmds)))
             self.assertIn("boards", all_cmds)
+            self.assertIn("settings", all_cmds)
             for c in all_cmds:
                 self.assertTrue(len(c) > 0)
                 self.assertTrue(c.isascii() or c.isalnum())

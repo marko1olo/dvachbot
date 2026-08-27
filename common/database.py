@@ -9051,6 +9051,30 @@ async def add_to_abu_fund(db, amount: float, donor_id: int = 0, reason: str = ""
 
     return new_total
 
+async def deduct_from_abu_fund(db, amount: float, reason: str = "") -> float:
+    """Списывает средства из Фонда Яхты Абу (закрытый контур: аирдроп работягам) и возвращает обновленный тотал."""
+    if amount <= 0:
+        return await get_abu_fund_total(db)
+    async def _do_deduct():
+        try:
+            await db.execute(
+                """
+                UPDATE GlobalStats
+                SET value = CAST(MAX(0.0, CAST(value AS REAL) - ?) AS TEXT)
+                WHERE key = 'abu_yacht_fund'
+                """,
+                (amount,)
+            )
+            await db.commit()
+        except Exception:
+            pass
+    if getattr(db_lock, "is_owned_by_current_task", lambda: False)():
+        await _do_deduct()
+    else:
+        async with db_lock:
+            await _do_deduct()
+    return await get_abu_fund_total(db)
+
 async def get_abu_fund_total(db) -> float:
     """Возвращает текущую сумму в Фонде Яхты Абу."""
     query = "SELECT value FROM GlobalStats WHERE key = 'abu_yacht_fund'"
