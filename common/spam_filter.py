@@ -1,5 +1,6 @@
 import time
 import asyncio
+import hashlib
 from typing import Dict, List, Tuple
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, UTC
@@ -10,6 +11,7 @@ class SpamResult(Enum):
     WARNING = auto()
     BAN_REQUIRED = auto()
     GLOBAL_BAN_REQUIRED = auto()
+    BAYAN_MUTE = auto()  # New: bayan-triggered shadowmute
 
 # Volatile State Trackers
 user_spam_locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -22,16 +24,29 @@ _spam_violations: Dict[str, Dict[int, dict]] = defaultdict(dict)
 _spam_filter_words: Dict[str, set] = defaultdict(set)
 _reaction_banned_users: Dict[str, set] = defaultdict(set)
 
+# --- Bayan Detection ---
+# Tracks per-user content fingerprints with timestamps: {user_id: deque of (timestamp, fingerprint)}
+_bayan_tracker: Dict[int, deque] = defaultdict(lambda: deque(maxlen=50))
+# Tracks how many times a user has been bayan-muted (for exponential escalation)
+_bayan_mute_count: Dict[int, int] = defaultdict(int)
+# Tracks when the last bayan mute was applied (to reset count after long periods of good behavior)
+_bayan_mute_last_ts: Dict[int, float] = defaultdict(float)
+
+BAYAN_WINDOW_SEC = 180       # 3 minutes
+BAYAN_THRESHOLD = 3          # 3 duplicate posts in the window
+BAYAN_BASE_MUTE_SEC = 1200   # 20 minutes base shadowmute
+BAYAN_RESET_SEC = 3600       # Reset escalation counter after 1 hour of no mutes
+
 
 # --- Configuration ---
 SPAM_RULES = {
     'text': {'max_repeats': 5, 'min_length': 4, 'window_sec': 15, 'max_per_window': 10},
     'sticker': {'max_repeats': 5, 'max_per_window': 10, 'window_sec': 20},
     'animation': {'max_repeats': 5, 'max_per_window': 10, 'window_sec': 20},
-    'photo': {'max_repeats': 8, 'max_per_window': 15, 'window_sec': 30},
-    'video': {'max_repeats': 8, 'max_per_window': 15, 'window_sec': 30},
-    'document': {'max_repeats': 8, 'max_per_window': 15, 'window_sec': 30},
-    'media': {'max_repeats': 10, 'max_per_window': 20, 'window_sec': 30}
+    'photo': {'max_repeats': 4, 'max_per_window': 8, 'window_sec': 30},
+    'video': {'max_repeats': 4, 'max_per_window': 8, 'window_sec': 30},
+    'document': {'max_repeats': 4, 'max_per_window': 8, 'window_sec': 30},
+    'media': {'max_repeats': 5, 'max_per_window': 10, 'window_sec': 30}
 }
 SPAM_LIMIT = 20
 SPAM_WINDOW = 15
@@ -63,6 +78,80 @@ def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
         return True
     return False
 
+
+def _content_fingerprint(content: str, msg_type: str) -> str:
+    """Generate a fingerprint for content deduplication.
+    For media (file_id), uses the file_id directly.
+    For text, uses a normalized hash.
+    """
+    if msg_type in ('photo', 'video', 'document', 'sticker', 'animation'):
+        # file_id is already unique per media
+        return f"media:{content}"
+    elif msg_type == 'text' and content:
+        # Normalize text: lowercase, strip whitespace, hash
+        normalized = content.strip().lower()
+        if len(normalized) < 4:
+            return ""  # Too short to consider bayan
+        h = hashlib.md5(normalized.encode('utf-8', errors='replace')).hexdigest()
+        return f"text:{h}"
+    return ""
+
+
+def check_bayan(user_id: int, content: str, msg_type: str) -> Tuple[bool, int]:
+    """Check if user is posting duplicate content (bayan).
+    
+    Returns (is_bayan, bayan_mute_seconds).
+    is_bayan=True means threshold exceeded and mute should be applied.
+    bayan_mute_seconds is the computed mute duration (with exponential escalation).
+    """
+    if not content:
+        return False, 0
+    
+    fp = _content_fingerprint(content, msg_type)
+    if not fp:
+        return False, 0
+    
+    now = time.time()
+    tracker = _bayan_tracker[user_id]
+    
+    # Prune entries older than the bayan window
+    while tracker and now - tracker[0][0] > BAYAN_WINDOW_SEC:
+        tracker.popleft()
+    
+    # Add current fingerprint
+    tracker.append((now, fp))
+    
+    # Count how many times this exact fingerprint appears in the window
+    fp_count = sum(1 for ts, f in tracker if f == fp)
+    
+    if fp_count >= BAYAN_THRESHOLD:
+        # Clear the tracker for this user (reset after triggering)
+        tracker.clear()
+        
+        # Compute exponential mute duration
+        # Reset escalation if last mute was long ago
+        last_mute_ts = _bayan_mute_last_ts[user_id]
+        if last_mute_ts and now - last_mute_ts > BAYAN_RESET_SEC:
+            _bayan_mute_count[user_id] = 0
+        
+        escalation = _bayan_mute_count[user_id]
+        mute_seconds = BAYAN_BASE_MUTE_SEC * (2 ** escalation)  # 20m, 40m, 80m, 160m, ...
+        # Cap at 24 hours
+        mute_seconds = min(mute_seconds, 86400)
+        
+        _bayan_mute_count[user_id] = escalation + 1
+        _bayan_mute_last_ts[user_id] = now
+        
+        return True, mute_seconds
+    
+    return False, 0
+
+
+def get_bayan_escalation_level(user_id: int) -> int:
+    """Get the current bayan escalation level for a user."""
+    return _bayan_mute_count.get(user_id, 0)
+
+
 def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules: dict, violations: dict) -> bool:
     """Check if the user is repeatedly sending the same or highly similar messages."""
     try:
@@ -88,7 +177,6 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
 
     if last_items_deque is not None:
         now = time.time()
-        # Очищаем элементы старше 30 секунд
         while last_items_deque and (not isinstance(last_items_deque[0], tuple) or now - last_items_deque[0][0] > 30):
             if not isinstance(last_items_deque[0], tuple):
                 last_items_deque.popleft()
@@ -180,6 +268,7 @@ async def analyze_message_for_spam(user_id: int, board_id: str, content: str, ms
     """
     Decoupled engine for spam analysis.
     Returns a tuple: (SpamResult, current_violation_level).
+    Now also checks for bayan (duplicate content) spam.
     """
     try:
         from bot_helpers import is_admin
@@ -193,6 +282,12 @@ async def analyze_message_for_spam(user_id: int, board_id: str, content: str, ms
     if content and not skip_cross_board:
         if not _check_cross_board_spam(user_id, board_id, content, msg_type, raw_content_type):
             return SpamResult.GLOBAL_BAN_REQUIRED, 0
+
+    # --- Bayan check: 3 duplicates in 3 minutes ---
+    if content:
+        is_bayan, bayan_mute_sec = check_bayan(user_id, content, msg_type or raw_content_type)
+        if is_bayan:
+            return SpamResult.BAYAN_MUTE, bayan_mute_sec
 
     rules = SPAM_RULES.get(msg_type) or SPAM_RULES.get(raw_content_type)
     if not rules:
@@ -208,7 +303,6 @@ async def analyze_message_for_spam(user_id: int, board_id: str, content: str, ms
         violations['level'] = 0
         violations['last_reset'] = now
 
-    # We skip exact repeat checks here for simplicity, but rate limits cover most
     if not check_rate_limit(board_id, user_id, rules):
         violations['level'] += 1
         return SpamResult.BAN_REQUIRED, violations['level']
@@ -221,7 +315,6 @@ def check_image_spam_limit(board_id: str, requested_images: int) -> bool:
     now_ts = time.time()
     tracker = image_spam_tracker[board_id]
     
-    # Prune
     tracker[:] = [t for t in tracker if now_ts - t < IMAGE_SPAM_WINDOW]
     
     if len(tracker) + requested_images > IMAGE_SPAM_LIMIT:
@@ -247,4 +340,3 @@ def acquire_spam_lock(user_id: int):
 
 def get_spam_violation_level(board_id: str, user_id: int) -> int:
     return _spam_violations[board_id].get(user_id, {}).get('level', 0)
-

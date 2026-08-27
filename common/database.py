@@ -1579,8 +1579,20 @@ async def remove_user_from_board(user_id: int, board_id: str):
 async def update_shadow_mute(user_id: int, board_id: str, expires_at: float | None):
     """
     Добавляет, обновляет или удаляет теневой мут.
+    Синхронизирует состояние как в БД (таблица Mutes), так и в RAM (board_data).
     """
     from common.db_pool import get_pool, db_lock
+    
+    # Sync in RAM if board_data is available
+    try:
+        from shared_state import board_data
+        if board_id in board_data:
+            if expires_at and expires_at > time.time():
+                board_data[board_id].setdefault('shadow_mutes', {})[user_id] = datetime.fromtimestamp(expires_at, UTC)
+            else:
+                board_data[board_id].get('shadow_mutes', {}).pop(user_id, None)
+    except Exception:
+        pass
     
     async with db_lock:
         try:
@@ -1925,6 +1937,180 @@ async def get_shadow_mute_status(user_id: int, board_id: str) -> bool:
             except Exception:
                 break
     return False
+
+async def is_shadow_muted(user_id: int, board_id: str) -> bool:
+    """
+    Проверяет, находится ли пользователь в теневом муте на данной доске (или глобально).
+    Сначала проверяет память RAM (board_data), затем БД.
+    Администраторы защищены от теневого мута.
+    """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return False
+    except Exception:
+        pass
+
+    # RAM check
+    try:
+        from shared_state import board_data
+        now_dt = datetime.now(UTC)
+        now_ts = time.time()
+        for b_key in (board_id, 'ALL'):
+            b_sm = board_data.get(b_key, {}).get('shadow_mutes', {})
+            expiry = b_sm.get(user_id)
+            if expiry:
+                if isinstance(expiry, datetime):
+                    if expiry > now_dt:
+                        return True
+                elif isinstance(expiry, (int, float)):
+                    if expiry > now_ts:
+                        return True
+    except Exception:
+        pass
+
+    # DB check
+    return await get_shadow_mute_status(user_id, board_id)
+
+
+async def get_shadow_mute_info(user_id: int, board_id: str) -> dict:
+    """
+    Возвращает детальную информацию о статусе теневого мута пользователя:
+    {'user_id': int, 'board_id': str, 'is_muted': bool, 'expires_at': float | None, 'remaining_seconds': float}
+    """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return {
+                'user_id': user_id,
+                'board_id': board_id,
+                'is_muted': False,
+                'expires_at': None,
+                'remaining_seconds': 0.0,
+            }
+    except Exception:
+        pass
+
+    now_ts = time.time()
+    now_dt = datetime.now(UTC)
+
+    # 1. RAM check
+    try:
+        from shared_state import board_data
+        for b_key in (board_id, 'ALL'):
+            b_sm = board_data.get(b_key, {}).get('shadow_mutes', {})
+            expiry = b_sm.get(user_id)
+            if expiry:
+                if isinstance(expiry, datetime):
+                    exp_ts = expiry.timestamp()
+                else:
+                    exp_ts = float(expiry)
+                if exp_ts > now_ts:
+                    return {
+                        'user_id': user_id,
+                        'board_id': board_id,
+                        'is_muted': True,
+                        'expires_at': exp_ts,
+                        'remaining_seconds': max(0.0, exp_ts - now_ts),
+                    }
+    except Exception:
+        pass
+
+    # 2. DB check
+    from common.db_pool import get_pool, db_lock
+    async with db_lock:
+        for attempt in range(10):
+            try:
+                db = await get_pool()
+                query = """
+                    SELECT expires_at 
+                    FROM Mutes 
+                    WHERE user_id = ? 
+                      AND (board_id = ? OR board_id = 'ALL')
+                      AND mute_type = 'shadow' 
+                      AND expires_at > ?
+                    ORDER BY expires_at DESC
+                    LIMIT 1
+                """
+                async with db.execute(query, (user_id, board_id, now_ts)) as cursor:
+                    row = await cursor.fetchone()
+                    if row and row[0] is not None:
+                        exp_ts = float(row[0])
+                        return {
+                            'user_id': user_id,
+                            'board_id': board_id,
+                            'is_muted': True,
+                            'expires_at': exp_ts,
+                            'remaining_seconds': max(0.0, exp_ts - now_ts),
+                        }
+                break
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() or "busy" in str(e).lower():
+                    await db_sleep(0.1 * (attempt + 1))
+                    continue
+                break
+            except Exception:
+                break
+
+    return {
+        'user_id': user_id,
+        'board_id': board_id,
+        'is_muted': False,
+        'expires_at': None,
+        'remaining_seconds': 0.0,
+    }
+
+
+async def apply_shadow_mute(
+    user_id: int,
+    board_id: str,
+    duration_seconds: float = 1200.0,
+    reason: str = "",
+    is_exponential: bool = True
+) -> float:
+    """
+    Применяет теневой мут. Если пользователь уже в теневом муте и is_exponential=True,
+    длительность экспоненциально увеличивается (удвоение оставшегося времени или 20м -> 40м -> 80м -> 160м...).
+    Возвращает timestamp окончания мута.
+    """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return 0.0
+    except Exception:
+        pass
+
+    now_ts = time.time()
+    info = await get_shadow_mute_info(user_id, board_id)
+    
+    if info['is_muted'] and is_exponential:
+        remaining = info['remaining_seconds']
+        # Экспоненциальный рост: удваиваем остаток (не менее базового шага удвоения 2400с)
+        new_duration = min(86400.0 * 30.0, max(remaining * 2.0, duration_seconds * 2.0))
+        new_expires_at = now_ts + new_duration
+        log_msg = (
+            f"⏳ [AUTOSHADOWMUTE] Экспоненциальный рост мута: user {user_id} на доске {board_id}, "
+            f"остаток был {remaining:.0f}с -> стало {new_duration:.0f}с ({new_duration/60:.1f} мин). Причина: {reason}"
+        )
+    else:
+        new_duration = duration_seconds
+        new_expires_at = now_ts + new_duration
+        log_msg = (
+            f"⏳ [AUTOSHADOWMUTE] Выдан теневой мут: user {user_id} на доске {board_id}, "
+            f"длительность {new_duration:.0f}с ({new_duration/60:.1f} мин). Причина: {reason}"
+        )
+
+    print(log_msg)
+    try:
+        from common.database import log_global_event
+        from bot_helpers import spawn_task
+        spawn_task(log_global_event('bot', log_msg))
+    except Exception:
+        pass
+
+    await update_shadow_mute(user_id, board_id, new_expires_at)
+    return new_expires_at
+
 def _process_site_db_row(row):
     """
     Обрабатывает строку из БД. ПУЛЕНЕПРОБИВАЕМАЯ ВЕРСИЯ.

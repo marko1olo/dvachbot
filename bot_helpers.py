@@ -624,7 +624,12 @@ def _get_msg_content_and_type(msg: Message) -> Tuple[Optional[str], Optional[str
         return msg.animation.file_id, 'animation'
     elif msg.content_type == 'audio':
         return None, 'audio'
-    elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
-        return msg.caption, 'text'
+    elif msg.content_type == 'photo':
+        file_id = msg.photo[-1].file_id if msg.photo else None
+        return file_id, 'photo'
+    elif msg.content_type == 'video':
+        return msg.video.file_id if msg.video else None, 'video'
+    elif msg.content_type == 'document':
+        return msg.document.file_id if msg.document else None, 'document'
     return None, None
 

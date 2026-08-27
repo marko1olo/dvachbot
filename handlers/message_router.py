@@ -988,6 +988,30 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
                 board_data[b].setdefault('shadow_mutes', {})[user_id] = expires_dt
                 spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
         return False
+    elif result == SpamResult.BAYAN_MUTE:
+        # level carries mute duration in seconds for BAYAN_MUTE
+        mute_seconds = level
+        from common.database import update_shadow_mute, log_global_event
+        from common.spam_filter import get_bayan_escalation_level
+        expires_dt = datetime.now(UTC) + timedelta(seconds=mute_seconds)
+        board_data[board_id].setdefault('shadow_mutes', {})[user_id] = expires_dt
+        await update_shadow_mute(user_id, board_id, expires_dt.timestamp())
+        escalation = get_bayan_escalation_level(user_id)
+        mute_label = f"{mute_seconds // 60}м" if mute_seconds < 3600 else f"{mute_seconds // 3600}ч"
+        log_msg = f"🔄 [{board_id}] БАЯН-СПАМ: user {user_id} получил шедоумут на {mute_label} (эскалация x{escalation})"
+        print(log_msg)
+        spawn_task(log_global_event('bot', log_msg))
+        try:
+            warn_text = (
+                f"⚠️ <b>Обнаружен баян-спам!</b>\n\n"
+                f"Ты отправляешь одно и то же содержимое слишком часто. Шедоумут на <b>{mute_label}</b>.\n"
+                f"При повторных нарушениях длительность удваивается."
+            )
+            sent = await msg.bot.send_message(user_id, warn_text, parse_mode="HTML")
+            spawn_task(delete_message_after_delay(sent, 15))
+        except Exception:
+            pass
+        return False
     elif result == SpamResult.BAN_REQUIRED:
         return False
 
@@ -1015,15 +1039,29 @@ async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id
             return
             
         current_smute = b_data.get('shadow_mutes', {}).get(user_id)
-        if current_smute and current_smute > datetime.now(UTC):
+        now_dt = datetime.now(UTC)
+        
+        if current_smute and current_smute > now_dt:
+            # EXPONENTIAL ESCALATION: user is already muted and keeps spamming
+            remaining_sec = (current_smute - now_dt).total_seconds()
+            # Double the remaining time, minimum 20 minutes, cap at 24 hours
+            new_mute_sec = max(remaining_sec * 2, 1200)
+            new_mute_sec = min(new_mute_sec, 86400)
+            expires_dt = now_dt + timedelta(seconds=new_mute_sec)
+            b_data.setdefault('shadow_mutes', {})[user_id] = expires_dt
+            from common.database import update_shadow_mute, log_global_event
+            await update_shadow_mute(user_id, board_id, expires_dt.timestamp())
+            mute_label = f"{int(new_mute_sec // 60)}м" if new_mute_sec < 3600 else f"{new_mute_sec / 3600:.1f}ч"
+            log_msg = f"📈 [{board_id}] ЭСКАЛАЦИЯ ШЕДОУМУТА: user {user_id} продолжает спамить в муте, новая длительность: {mute_label}"
+            print(log_msg)
+            spawn_task(log_global_event('bot', log_msg))
             return
             
-        # Адекватная градация с жестким потолком (Hard Cap) в 15 минут:
-        # level 1 -> 2 мин, level 2 -> 5 мин, level 3 -> 10 мин, level >= 4 -> 15 мин
+        # Standard penalty tiers
         tier_minutes = {1: 2, 2: 5, 3: 10}
         mute_minutes = tier_minutes.get(level, 15)
         mute_seconds = mute_minutes * 60
-        expires_dt = datetime.now(UTC) + timedelta(seconds=mute_seconds)
+        expires_dt = now_dt + timedelta(seconds=mute_seconds)
         
         b_data.setdefault('shadow_mutes', {})[user_id] = expires_dt
         from common.database import update_shadow_mute, log_global_event

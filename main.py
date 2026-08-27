@@ -2368,8 +2368,13 @@ def _get_msg_content_and_type(msg: Message) -> Tuple[Optional[str], Optional[str
         return msg.animation.file_id, 'animation'
     elif msg.content_type == 'audio':
         return None, 'audio'
-    elif msg.content_type in ['photo', 'video', 'document'] and msg.caption:
-        return msg.caption, 'text'
+    elif msg.content_type == 'photo':
+        file_id = msg.photo[-1].file_id if msg.photo else None
+        return file_id, 'photo'
+    elif msg.content_type == 'video':
+        return msg.video.file_id if msg.video else None, 'video'
+    elif msg.content_type == 'document':
+        return msg.document.file_id if msg.document else None, 'document'
     return None, None
 
 
@@ -20316,6 +20321,14 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
 async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: int, minutes: int):
     try: await message.edit_text("⏳ Сжигаю посты (процесс запущен, может занять несколько минут)...", parse_mode="HTML")
     except Exception: pass
+    # A priori: shadowmute the target for 1 hour minimum before deleting posts
+    try:
+        from common.database import update_shadow_mute
+        smute_expires = (datetime.now(UTC) + timedelta(hours=1)).timestamp()
+        await update_shadow_mute(target_id, board_id, smute_expires)
+        await log_global_event('bot', f"🔇 WIPE SHADOWMUTE: Юзер {target_id} получил шедоумут на 1ч на /{board_id}/ (авто при /wipe)")
+    except Exception as e:
+        print(f"⚠️ Wipe shadowmute failed: {e}")
     deleted_count = await delete_user_posts(bot, target_id, minutes, board_id)
     await log_global_event('bot', f"🚮 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на /{board_id}/ (глубина {minutes}м)")
     anon_name = generate_anon_name(target_id)
