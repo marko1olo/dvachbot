@@ -43,9 +43,9 @@ SPAM_RULES = {
     'text': {'max_repeats': 5, 'min_length': 4, 'window_sec': 15, 'max_per_window': 10},
     'sticker': {'max_repeats': 5, 'max_per_window': 10, 'window_sec': 20},
     'animation': {'max_repeats': 5, 'max_per_window': 10, 'window_sec': 20},
-    'photo': {'max_repeats': 4, 'max_per_window': 8, 'window_sec': 30},
-    'video': {'max_repeats': 4, 'max_per_window': 8, 'window_sec': 30},
-    'document': {'max_repeats': 4, 'max_per_window': 8, 'window_sec': 30},
+    'photo': {'max_repeats': 4, 'max_per_window': 15, 'window_sec': 30},
+    'video': {'max_repeats': 4, 'max_per_window': 15, 'window_sec': 30},
+    'document': {'max_repeats': 4, 'max_per_window': 15, 'window_sec': 30},
     'media': {'max_repeats': 5, 'max_per_window': 10, 'window_sec': 30}
 }
 SPAM_LIMIT = 20
