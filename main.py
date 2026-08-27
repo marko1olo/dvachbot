@@ -8564,6 +8564,18 @@ async def cb_work_do(callback: types.CallbackQuery, board_id: str | None):
     if is_cd:
         return
 
+    # Trigger automatic notification when cooldown expires
+    try:
+        from work_alerts import schedule_work_cooldown_alert
+        from common.work_engine import WORK_VACANCIES
+        if job_id in WORK_VACANCIES:
+            job_cd = WORK_VACANCIES[job_id]["cooldown_sec"]
+            if items.get("equipped_feet") == "feet_slippers":
+                job_cd = int(job_cd * 0.8)
+            schedule_work_cooldown_alert(callback.bot, user_id, board_id, job_cd)
+    except Exception:
+        pass
+
     text, kb = await _build_work_card(user_id, board_id)
     try:
         await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
