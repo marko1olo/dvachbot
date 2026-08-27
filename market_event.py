@@ -3,18 +3,24 @@
 market_event.py — Black Market Dynamic Economy & News Generator for ТГАЧ
 Generates authentic, cynical, imageboard-themed market news and dynamically shifts
 item multipliers across /shop, /wardrobe, and /work.
+
+Синхронизирован со сменой торговых суток: запускается строго в 00:00 MSK (полночь).
+При перезапусках бота состояние биржи восстанавливается из БД, без спама в треды.
 """
 
 import asyncio
 import time
 import json
 import random
+from datetime import datetime, timezone, timedelta
 from summarize import summarize_text_with_hf
 from shared_state import (
     market_state, runtime_logger, BOARDS, GLOBAL_BOTS,
     enqueue_board_message, post_to_messages, messages_storage, state,
     board_data, storage_lock
 )
+
+MSK = timezone(timedelta(hours=3))
 
 # -----------------------------------------------------------------------------
 # Curated Authentic Imageboard & Crypto-Market Events Pool
@@ -64,17 +70,79 @@ CURATED_MARKET_EVENTS = [
 ]
 
 
+def seconds_until_next_midnight_msk(now_msk: datetime) -> tuple[datetime, float]:
+    """Возвращает (целевое время MSK, секунды сна) до следующих 00:00:00 MSK."""
+    target = (now_msk + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return target, max(1.0, (target - now_msk).total_seconds())
+
+
+async def restore_market_state_from_db():
+    """Восстанавливает сохраненное состояние биржи из БД при старте процесса без спама."""
+    try:
+        from common.db_pool import get_pool, db_lock
+        db = await get_pool()
+        async with db_lock:
+            async with db.execute("SELECT value FROM GlobalStats WHERE key = 'market_state_json'") as cur:
+                row = await cur.fetchone()
+                if row and row[0]:
+                    data = json.loads(row[0])
+                    if isinstance(data, dict):
+                        market_state.update(data)
+                        runtime_logger.info("Restored market_state from GlobalStats.")
+                        return
+    except Exception as e:
+        runtime_logger.warning(f"Failed to restore market_state: {e}")
+
+
 async def market_event_generator():
-    """Фоновая задача: периодически обновляет экономическую сводку и мультипликаторы черного рынка"""
-    await asyncio.sleep(30)  # Старт через 30 сек после запуска
+    """
+    Фоновая задача: обновляет экономическую сводку и мультипликаторы черного рынка
+    строго в полночь (00:00 MSK). При старте бота СПИТ до полуночи, подтянув цены из БД.
+    """
+    from common.db_pool import get_pool, db_lock
+    from common.database import create_post
+
+    # 1. При старте восстанавливаем сохраненные цены из базы без создания постов
+    await restore_market_state_from_db()
+
     while True:
         try:
-            # 1. Выбираем реалистичное событие или генерируем через LLM со строгим промптом
+            now_msk = datetime.now(timezone.utc).astimezone(MSK)
+            target_msk, sleep_sec = seconds_until_next_midnight_msk(now_msk)
+
+            print(
+                f"🛒 [BLACK MARKET] Следующее обновление черного рынка запланировано на "
+                f"{target_msk.strftime('%Y-%m-%d %H:%M:%S')} MSK (через {sleep_sec / 3600:.1f} ч)"
+            )
+
+            await asyncio.sleep(sleep_sec)
+
+            # Проснулись в полночь!
+            # Проверяем защиту от дубликатов (не обновлялся ли рынок за последние 12 часов)
+            db = await get_pool()
+            now_ts = time.time()
+            last_run_ts = 0.0
+            async with db_lock:
+                async with db.execute("SELECT value FROM GlobalStats WHERE key = 'last_market_event_run'") as cur:
+                    row = await cur.fetchone()
+                    if row and row[0]:
+                        try:
+                            last_run_ts = float(row[0])
+                        except ValueError:
+                            last_run_ts = 0.0
+
+            if now_ts - last_run_ts < 43200:
+                # Уже обновлялся недавно (например, при рестарте в 00:05)
+                await asyncio.sleep(120)
+                continue
+
+            print("🛒 [BLACK MARKET] Обновление биржи и черного рынка...")
+
+            # 2. Выбираем событие или генерируем через LLM
             event_obj = random.choice(CURATED_MARKET_EVENTS)
             event_text = event_obj["text"]
             base_mults = event_obj.get("mults", {})
 
-            # Попробуем сгенерировать уникальную вариацию, если доступна LLM
             try:
                 prompt = (
                     "Напиши одну короткую (1-2 предложения) циничную и смешную новость черного рынка для анонимного имиджборда (Двач/Тгач). "
@@ -88,7 +156,7 @@ async def market_event_generator():
             except Exception:
                 pass
 
-            # 2. Формируем множители цен (в пределах 0.75 – 1.45)
+            # 3. Формируем новые множители цен
             new_multipliers = {
                 'janitor': round(base_mults.get('janitor', random.uniform(0.85, 1.30)), 2),
                 'mute': round(base_mults.get('mute', random.uniform(0.85, 1.35)), 2),
@@ -109,77 +177,83 @@ async def market_event_generator():
 
             market_state['event_text'] = event_text
             market_state['multipliers'] = new_multipliers
-            market_state['last_update'] = time.time()
+            market_state['last_update'] = now_ts
 
-            # 3. Рассылаем новость в треды (ТОЛЬКО на доски с активностью >= 60 постов в час)
-            bot_instance = None
-            if GLOBAL_BOTS:
-                bot_instance = list(GLOBAL_BOTS.values())[0]
+            # 4. Сохраняем состояние в GlobalStats
+            async with db_lock:
+                await db.execute(
+                    """
+                    INSERT INTO GlobalStats (key, value) VALUES ('market_state_json', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = ?
+                    """,
+                    (json.dumps(dict(market_state)), json.dumps(dict(market_state)))
+                )
+                await db.execute(
+                    """
+                    INSERT INTO GlobalStats (key, value) VALUES ('last_market_event_run', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = ?
+                    """,
+                    (str(now_ts), str(now_ts))
+                )
+                await db.commit()
 
-            if bot_instance:
-                from common.database import create_post
-                from common.db_pool import get_pool
+            # 5. Рассылаем новость в треды (только для досок с активностью >= 60 постов в час)
+            one_hour_ago = int(now_ts) - 3600
+            for board_id in BOARDS:
+                try:
+                    async with db.execute(
+                        "SELECT COUNT(*) FROM Posts WHERE board_id = ? AND timestamp > ? AND author_id != -1",
+                        (board_id, one_hour_ago)
+                    ) as cur_act:
+                        row_act = await cur_act.fetchone()
+                        activity = row_act[0] if row_act else 0
+                except Exception:
+                    activity = 0
 
-                db = await get_pool()
-                one_hour_ago = int(time.time()) - 3600
+                if activity < 60:
+                    continue
 
-                for board_id in BOARDS:
-                    # Проверяем активность на доске за последний час
-                    try:
-                        async with db.execute(
-                            "SELECT COUNT(*) FROM Posts WHERE board_id = ? AND timestamp > ? AND author_id != -1",
-                            (board_id, one_hour_ago)
-                        ) as cur_act:
-                            row_act = await cur_act.fetchone()
-                            activity = row_act[0] if row_act else 0
-                    except Exception:
-                        activity = 0
+                msg_text = f"📉 <b>ТОРГОВАЯ СВОДКА ЧЕРНОГО РЫНКА (/shop)</b> 📈\n\n{event_text}\n\n<i>Цены на снаряжение и услуги обновлены.</i>"
+                content = {'type': 'text', 'text': msg_text, 'is_system_message': True, 'archive_allowed': True}
+                try:
+                    post_num = await create_post(
+                        author_id=-1,
+                        board_id=board_id,
+                        content=content,
+                        timestamp=time.time(),
+                        stream='ru'
+                    )
+                except Exception:
+                    state['post_counter'] = state.get('post_counter', 0) + 1
+                    post_num = state['post_counter']
 
-                    if activity < 60:
-                        continue
-
-                    msg_text = f"📉 <b>ТОРГОВАЯ СВОДКА ЧЕРНОГО РЫНКА (/shop)</b> 📈\n\n{event_text}\n\n<i>Цены на снаряжение и услуги обновлены.</i>"
-                    content = {'type': 'text', 'text': msg_text}
-                    try:
-                        post_num = await create_post(
-                            author_id=-1,
-                            board_id=board_id,
-                            content=content,
-                            timestamp=time.time(),
-                            stream='ru'
-                        )
-                    except Exception:
-                        state['post_counter'] = state.get('post_counter', 0) + 1
-                        post_num = state['post_counter']
-
-                    if post_num:
-                        b_data = board_data.get(board_id, {})
-                        recipients = set(b_data.get('users', {}).get('active', set())) - set(b_data.get('users', {}).get('banned', set()))
-                        async with storage_lock:
-                            state['post_counter'] = max(state.get('post_counter', 0), post_num)
-                            post_to_messages[post_num] = {}
-                            messages_storage[post_num] = {
-                                'board_id': board_id,
-                                'author_id': -1,
-                                'content': content,
-                                'timestamp': time.time()
-                            }
-                        if recipients:
-                            await enqueue_board_message(board_id, {
-                                'recipients': recipients,
-                                'board_id': board_id,
-                                'post_num': post_num,
-                                'author_id': -1,
-                                'author_name': 'Black Market',
-                                'content': content,
-                                'reply_to': None,
-                                'is_op': False
-                            })
+                if post_num:
+                    b_data = board_data.get(board_id, {})
+                    recipients = set(b_data.get('users', {}).get('active', set())) - set(b_data.get('users', {}).get('banned', set()))
+                    async with storage_lock:
+                        state['post_counter'] = max(state.get('post_counter', 0), post_num)
+                        post_to_messages[post_num] = {}
+                        messages_storage[post_num] = {
+                            'board_id': board_id,
+                            'author_id': -1,
+                            'content': content,
+                            'timestamp': time.time()
+                        }
+                    if recipients:
+                        await enqueue_board_message(board_id, {
+                            'recipients': recipients,
+                            'board_id': board_id,
+                            'post_num': post_num,
+                            'author_id': -1,
+                            'author_name': 'Black Market',
+                            'content': content,
+                            'reply_to': None,
+                            'is_op': False
+                        })
 
             runtime_logger.info(f"Market event generated: {event_text}")
+            await asyncio.sleep(120)
 
         except Exception as e:
             runtime_logger.error(f"Error in market_event_generator: {e}")
-
-        # Ждем 24 часа
-        await asyncio.sleep(86400)
+            await asyncio.sleep(60)

@@ -88,6 +88,11 @@ except ImportError:
     market_event_generator = None
 
 try:
+    from weekly_airdrop_engine import weekly_airdrop_loop
+except ImportError:
+    weekly_airdrop_loop = None
+
+try:
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding='utf-8')
         sys.stderr.reconfigure(encoding='utf-8')
@@ -22384,12 +22389,27 @@ async def wealth_tax_daily_loop(bots: dict[str, Bot]):
 
     while True:
         try:
-            db = await get_pool()
             now_utc = datetime.now(timezone.utc)
             now_msk = now_utc.astimezone(MSK)
-            now_ts = now_utc.timestamp()
 
-            # 1. Проверяем время последнего запуска в GlobalStats
+            # Вычисляем целевое время следующего запуска (строго ночью в 04:00 MSK)
+            target_msk = now_msk.replace(hour=4, minute=0, second=0, microsecond=0)
+            if now_msk >= target_msk:
+                next_run_msk = target_msk + timedelta(days=1)
+            else:
+                next_run_msk = target_msk
+
+            sleep_seconds = max(1.0, (next_run_msk - now_msk).total_seconds())
+            print(
+                f"🏛 [WEALTH TAX] Следующее раскулачивание запланировано на "
+                f"{next_run_msk.strftime('%Y-%m-%d %H:%M:%S')} MSK (через {sleep_seconds / 3600:.1f} ч)"
+            )
+            await asyncio.sleep(sleep_seconds)
+
+            # Проснулись ровно в 04:00 MSK!
+            # Проверяем защиту от дубликатов (не списывался ли налог за последние 12 часов)
+            db = await get_pool()
+            now_ts = datetime.now(timezone.utc).timestamp()
             last_run_ts = 0.0
             async with db_lock:
                 async with db.execute(
@@ -22402,23 +22422,9 @@ async def wealth_tax_daily_loop(bots: dict[str, Bot]):
                         except ValueError:
                             last_run_ts = 0.0
 
-            time_since_last_run = now_ts - last_run_ts
-            
-            # 2. Вычисляем целевое время следующего запуска (04:00 MSK)
-            target_msk = now_msk.replace(hour=4, minute=0, second=0, microsecond=0)
-            if now_msk >= target_msk:
-                next_run_msk = target_msk + timedelta(days=1)
-            else:
-                next_run_msk = target_msk
-
-            # Если с последнего списания прошло менее 20 часов
-            if time_since_last_run < 72000:
-                sleep_seconds = max(10.0, (next_run_msk - now_msk).total_seconds())
-                print(
-                    f"🏛 [WEALTH TAX] Следующее раскулачивание запланировано на "
-                    f"{next_run_msk.strftime('%Y-%m-%d %H:%M:%S')} MSK (через {sleep_seconds / 3600:.1f} ч)"
-                )
-                await asyncio.sleep(sleep_seconds)
+            if now_ts - last_run_ts < 43200:
+                # Уже списывали сегодня (например, при рестарте в 04:05)
+                await asyncio.sleep(120)
                 continue
 
             print("🏛 [WEALTH TAX] Запуск процедуры суточного раскулачивания олигархов...")
@@ -22568,6 +22574,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
         "postcopies_daily_cleanup": lambda: postcopies_daily_cleanup_loop(),
         "drop_expiry_cleaner": lambda: drop_expiry_loop(),
         "wealth_tax_daily": lambda: wealth_tax_daily_loop(bots),
+        "weekly_airdrop": lambda: weekly_airdrop_loop(bots) if callable(weekly_airdrop_loop) else asyncio.sleep(0),
         "periodic_stats_publisher": lambda: periodic_publisher.periodic_stats_publisher(
             bots,
             lambda: board_data.get('b', {}).get('users', {}).get('active', set())
