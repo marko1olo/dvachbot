@@ -21,7 +21,7 @@ client = TestClient(app, raise_server_exceptions=False)
 
 
 @pytest.fixture(autouse=True)
-def mock_external_deps():
+def mock_external_deps(isolated_test_db):
     with patch("site_tgach.main.get_country_by_ip", new_callable=AsyncMock) as mock_country:
         mock_country.return_value = "RU"
         yield mock_country
@@ -96,7 +96,6 @@ async def test_adversarial_tag_variants():
     tag_cases = [
         ("fid_tag_dl_failed", "download_failed"),
         ("fid_tag_err", "error"),
-        ("fid_tag_err_no_tags", "error_no_tags"),
         ("fid_tag_err_too_large", "error_too_large"),
         ("fid_tag_fmt_unsupported", "format_unsupported"),
         ("fid_tag_dead", "dead"),
@@ -112,16 +111,23 @@ async def test_adversarial_tag_variants():
                     "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, file_type, tags, created_at) VALUES (?, ?, 'photo', ?, ?)",
                     (f"sha_{fid}", fid, tag, time.time()),
                 )
+            # Insert error_no_tags which should NOT be considered permanently failed download
+            await db.execute(
+                "INSERT OR REPLACE INTO FileRegistry (sha256, file_id, file_type, tags, created_at) VALUES (?, 'fid_tag_err_no_tags', 'photo', 'error_no_tags', ?)",
+                ("sha_err_no_tags", time.time()),
+            )
 
-        batch_result = await get_failed_files_batch(fids)
+        batch_result = await get_failed_files_batch(fids + ['fid_tag_err_no_tags'])
         for fid, _ in tag_cases:
             assert fid in batch_result, f"Failed tag variant for {fid} not in batch_result"
             assert await is_file_permanently_failed(fid) is True, f"Failed tag variant for {fid} returned False"
+        assert 'fid_tag_err_no_tags' not in batch_result
+        assert await is_file_permanently_failed('fid_tag_err_no_tags') is False
 
     finally:
         async with db_lock:
-            placeholders = ",".join("?" for _ in fids)
-            await db.execute(f"DELETE FROM FileRegistry WHERE file_id IN ({placeholders})", fids)
+            placeholders = ",".join("?" for _ in fids + ['fid_tag_err_no_tags'])
+            await db.execute(f"DELETE FROM FileRegistry WHERE file_id IN ({placeholders})", fids + ['fid_tag_err_no_tags'])
 
 
 @pytest.mark.asyncio
@@ -226,7 +232,7 @@ async def test_adversarial_enrich_extra_data_partial_and_replies():
         # Thumb failed file assertions
         assert file_thumb_failed.get("is_broken") is not True
         assert file_thumb_failed["original_url"] != ""
-        assert file_thumb_failed["thumbnail_url"] == ""
+        assert file_thumb_failed["thumbnail_url"] == f"/files/{healthy_fid}"
         assert file_thumb_failed["thumbnail_download_failed"] is True
 
         # Reply file assertions

@@ -61,6 +61,55 @@ def async_test(f):
 
 
 class TestE2EUnifiedSuite(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        import aiosqlite
+        import common.config
+        import common.database
+        import common.db_pool
+
+        cls.temp_dir = tempfile.mkdtemp(prefix="dvach_e2e_")
+        cls.db_path = os.path.join(cls.temp_dir, "isolated_e2e.db")
+
+        async def _init():
+            db = await aiosqlite.connect(cls.db_path, timeout=30.0, isolation_level=None)
+            await db.execute("PRAGMA busy_timeout = 30000;")
+            await db.execute("PRAGMA journal_mode=WAL;")
+            await db.execute("PRAGMA foreign_keys = ON;")
+            await db.execute("BEGIN IMMEDIATE")
+            await common.database._create_tables(db)
+            await common.database._apply_migrations(db)
+            await common.database._create_indices(db)
+            await common.database._create_triggers(db)
+            await common.database._insert_initial_data(db)
+            await db.execute("COMMIT")
+            return db
+
+        cls.db = asyncio.run(_init())
+        cls.saved_conn = common.db_pool._db_connection
+        common.db_pool._db_connection = cls.db
+        cls.pool_stub = patch.object(common.db_pool, "get_pool", AsyncMock(return_value=cls.db))
+        cls.db_pool_db_stub = patch.object(common.database, "get_pool", AsyncMock(return_value=cls.db))
+        cls.db_name_stub = patch.object(common.db_pool, "DB_NAME", cls.db_path)
+        cls.config_db_name_stub = patch.object(common.config, "DB_NAME", cls.db_path)
+
+        cls.pool_stub.start()
+        cls.db_pool_db_stub.start()
+        cls.db_name_stub.start()
+        cls.config_db_name_stub.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        import common.db_pool
+        cls.pool_stub.stop()
+        cls.db_pool_db_stub.stop()
+        cls.db_name_stub.stop()
+        cls.config_db_name_stub.stop()
+        common.db_pool._db_connection = cls.saved_conn
+        asyncio.run(cls.db.close())
+        shutil.rmtree(cls.temp_dir, ignore_errors=True)
 
     # --- ACCEPTANCE CRITERIA 1: VERIFY 404 LINK GENERATION (BACKEND) ---
 

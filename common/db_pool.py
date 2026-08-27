@@ -205,3 +205,228 @@ async def db_sleep(delay: float):
             except RuntimeError:
                 db_lock._owner = None
             db_lock._depth = saved_depth
+
+
+class db_transaction:
+    """
+    Асинхронный контекстный менеджер для безопасного выполнения транзакций.
+    - Автоматически захватывает db_lock (если текущая задача им еще не владеет).
+    - Предотвращает ошибки SQLite 'cannot start a transaction within a transaction'
+      путем использования SAVEPOINT при вложенных транзакциях.
+    - Поддерживает автоматический retry при sqlite3.OperationalError: database is locked.
+    - Гарантирует отсутствие 'cannot commit - no transaction is active' и 'cannot rollback'.
+    - Корректно откатывает только свой savepoint при вложенной ошибке или всю транзакцию на верхнем уровне.
+    """
+    _sp_counter = 0
+
+    def __init__(self, db=None, immediate: bool = True, max_retries: int = 5, base_delay: float = 0.1):
+        self.db = db
+        self.immediate = immediate
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+        self._is_nested = False
+        self._savepoint_name = None
+        self._lock_acquired = False
+
+    async def __aenter__(self):
+        if not db_lock.is_owned_by_current_task():
+            await db_lock.acquire()
+            self._lock_acquired = True
+
+        if self.db is None:
+            self.db = await get_pool()
+
+        in_tx = getattr(self.db, "in_transaction", False)
+        if not in_tx:
+            conn = getattr(self.db, "_conn", None)
+            if conn:
+                in_tx = getattr(conn, "in_transaction", False)
+
+        for attempt in range(self.max_retries):
+            try:
+                if in_tx:
+                    self._is_nested = True
+                    db_transaction._sp_counter += 1
+                    self._savepoint_name = f"sp_{id(self)}_{db_transaction._sp_counter}"
+                    await self.db.execute(f"SAVEPOINT {self._savepoint_name}")
+                else:
+                    self._is_nested = False
+                    if self.immediate:
+                        await self.db.execute("BEGIN IMMEDIATE")
+                    else:
+                        await self.db.execute("BEGIN")
+                break
+            except Exception as e:
+                err_str = str(e).lower()
+                if ("locked" in err_str or "busy" in err_str) and attempt < self.max_retries - 1:
+                    await asyncio.sleep(self.base_delay * (2 ** attempt))
+                else:
+                    raise
+        return self.db
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        try:
+            if exc_type is not None:
+                if self._is_nested and self._savepoint_name:
+                    try:
+                        await self.db.execute(f"ROLLBACK TO {self._savepoint_name}")
+                        await self.db.execute(f"RELEASE {self._savepoint_name}")
+                    except Exception:
+                        pass
+                else:
+                    in_tx = getattr(self.db, "in_transaction", False)
+                    if not in_tx:
+                        conn = getattr(self.db, "_conn", None)
+                        if conn:
+                            in_tx = getattr(conn, "in_transaction", False)
+                    if in_tx:
+                        try:
+                            await self.db.execute("ROLLBACK")
+                        except Exception:
+                            pass
+            else:
+                if self._is_nested and self._savepoint_name:
+                    try:
+                        await self.db.execute(f"RELEASE {self._savepoint_name}")
+                    except Exception:
+                        pass
+                else:
+                    in_tx = getattr(self.db, "in_transaction", False)
+                    if not in_tx:
+                        conn = getattr(self.db, "_conn", None)
+                        if conn:
+                            in_tx = getattr(conn, "in_transaction", False)
+                    if in_tx:
+                        try:
+                            await self.db.execute("COMMIT")
+                        except Exception:
+                            pass
+        finally:
+            if self._lock_acquired:
+                db_lock.release()
+                self._lock_acquired = False
+
+
+async def execute_with_retry(func_or_coro, *args, max_retries: int = 5, base_delay: float = 0.1, **kwargs):
+    """
+    Выполняет асинхронную функцию или корутину с автоматическим повтором при блокировках SQLite
+    (sqlite3.OperationalError: database is locked / busy) с экспоненциальным backoff.
+    """
+    for attempt in range(max_retries):
+        try:
+            if callable(func_or_coro):
+                res = func_or_coro(*args, **kwargs)
+                if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                    return await res
+                return res
+            return await func_or_coro
+        except Exception as e:
+            err_str = str(e).lower()
+            if ("locked" in err_str or "busy" in err_str) and attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                await db_sleep(delay)
+            else:
+                raise
+
+
+async def safe_begin_immediate(db) -> bool:
+    """
+    Безопасно начинает транзакцию BEGIN IMMEDIATE, если транзакция еще не активна.
+    Возвращает True, если транзакция была начата этим вызовом, иначе False.
+    """
+    if db is None:
+        db = await get_pool()
+    in_tx = getattr(db, "in_transaction", False)
+    if not in_tx:
+        conn = getattr(db, "_conn", None)
+        if conn:
+            in_tx = getattr(conn, "in_transaction", False)
+    if in_tx:
+        return False
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        return True
+    except Exception as e:
+        if "cannot start a transaction within a transaction" in str(e).lower():
+            return False
+        raise
+
+
+async def safe_commit(db, started_by_caller: bool = True):
+    """
+    Безопасно фиксирует транзакцию, если она активна и была начата данным контекстом.
+    """
+    if not started_by_caller or db is None:
+        return
+    in_tx = getattr(db, "in_transaction", False)
+    if not in_tx:
+        conn = getattr(db, "_conn", None)
+        if conn:
+            in_tx = getattr(conn, "in_transaction", False)
+    if in_tx:
+        try:
+            await db.execute("COMMIT")
+        except Exception as e:
+            if "no transaction is active" in str(e).lower():
+                pass
+            else:
+                raise
+
+
+async def safe_rollback(db, started_by_caller: bool = True):
+    """
+    Безопасно откатывает транзакцию, если она активна и была начата данным контекстом.
+    """
+    if not started_by_caller or db is None:
+        return
+    in_tx = getattr(db, "in_transaction", False)
+    if not in_tx:
+        conn = getattr(db, "_conn", None)
+        if conn:
+            in_tx = getattr(conn, "in_transaction", False)
+    if in_tx:
+        try:
+            await db.execute("ROLLBACK")
+        except Exception:
+            pass
+
+
+async def sqlite_wal_checkpoint_task(interval_seconds: int = 600):
+    """
+    Периодическая фоновая задача сброса SQLite WAL в основной файл базы данных.
+    - Раз в 10-15 минут выполняет PRAGMA wal_checkpoint(PASSIVE).
+    - В ночные часы (03:00 - 06:00) выполняет PRAGMA wal_checkpoint(TRUNCATE) для усечения WAL-файла.
+    """
+    import logging
+    from datetime import datetime
+    wal_logger = logging.getLogger("wal_checkpoint")
+
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            db = await get_pool()
+            if not db:
+                continue
+
+            current_hour = datetime.now().hour
+            is_night_time = 3 <= current_hour < 6
+            mode = "TRUNCATE" if is_night_time else "PASSIVE"
+
+            async def _do_checkpoint():
+                async with db_lock:
+                    async with db.execute(f"PRAGMA wal_checkpoint({mode});") as cursor:
+                        row = await cursor.fetchone()
+                        if row:
+                            busy, log_frames, ckpt_frames = row
+                            wal_logger.info(
+                                f"💾 [WAL Checkpoint] Mode={mode}, Busy={busy}, Log={log_frames}, Checkpointed={ckpt_frames}"
+                            )
+
+            await execute_with_retry(_do_checkpoint, max_retries=3, base_delay=0.5)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            wal_logger.warning(f"⚠️ [WAL Checkpoint] Error during checkpoint: {e}")
+            await asyncio.sleep(30)
+

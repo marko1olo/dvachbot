@@ -36,14 +36,140 @@ active_drops: Dict[str, DropRecord] = {}
 drop_lock = asyncio.Lock()
 # Track all sent messages for each drop_id: {drop_id: [(chat_id, message_id), ...]}
 _drop_messages: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
+# Anti-spam cooldown tracking: {donor_id: cooldown_expiry_timestamp}
+_user_drop_cooldowns: Dict[int, float] = {}
+
+# -----------------------------------------------------------------------------
+# Limits & Excuses
+# -----------------------------------------------------------------------------
+
+MIN_DROP_AMOUNT: int = 150
+MAX_DROP_AMOUNT: int = 1_000_000
+
+# Пул отмазок с черным юмором в стиле Двача при сумме меньше минимальной (< 150 ₪)
+DROP_MIN_EXCUSES: List[str] = [
+    "Слышь, нищеброд, твои копейки ({amount} ₪) даже на доширак не наскребут. Минимальный дроп — 150 ₪. Не позорься перед бордой.",
+    "Ты кого тут насмешить вздумал своими {amount} ₪? Бомжи у параши громче сморкаются. Минимум 150 ₪, нищук.",
+    "{amount} ₪? Серьёзно, сука? Ты эту сдачу с маршрутки у мамки из кармана вытащил? Меньше 150 ₪ в тред не высирай.",
+    "Абу отказался принимать твои {amount} ₪ — сказал, что от такой нищеты у него серверная плесенью покроется. Минималка — 150 ₪.",
+    "Твои {amount} ₪ — это даже не капля в море, а плевок в лицо анонам. Закидывай от 150 ₪ или пиздуй собирать бутылки.",
+    "Экономический комитет Двача постановил: дропы меньше 150 ₪ приравниваются к биомусору. У тебя всего {amount} ₪.",
+    "Ты бы ещё пыль из-под ногтей в тред дропнул. Твои {amount} ₪ — позор рода. Минимальный чек — 150 ₪.",
+    "Шекелевый инспектор зафиксировал критический уровень нищеты ({amount} ₪). Меньше 150 ₪ даже цыгане не подберут.",
+    "Пошел нахуй со своими {amount} ₪. Тут уважаемая борда, а не благотворительная столовая для опущенных. Минимум — 150 ₪.",
+    "Твой донат на {amount} ₪ вызвал приступ смеха у модераторов. Не позорься, копи до 150 ₪.",
+    "Дропнуть {amount} ₪? Да тебя за такие копейки в /b/ обоссут и на мороз выкинут. Минимальный дроп — 150 ₪.",
+    "Твои {amount} ₪ застряли между половицами. Меньше 150 ₪ сюда даже не суй, нищета.",
+]
+
+# Пул отмазок с черным юмором в стиле Двача при превышении лимита (> 1 000 000 ₪)
+DROP_MAX_EXCUSES: List[str] = [
+    "Осади коней, Ротшильд мамкин. Дропнуть {amount} ₪? Максимум 1 000 000 ₪ за раз, иначе серверная Абу сгорит от гиперинфляции.",
+    "{amount} ₪ за один дроп?! Ты чё, печатный станок ЦБ ограбил? Лимит — 1 000 000 ₪, не ломай экономику борды.",
+    "Шекелевый инфаркт! Сумма {amount} ₪ превышает лимит в 1 000 000 ₪. Моссад уже выехал по твою душу за отмывание триллионов.",
+    "Куда разогнался, олигарх комнатный? {amount} ₪ — это перебор. Максимальный дроп — 1 000 000 ₪.",
+    "Транзакция на {amount} ₪ заблокирована Интерполом Двача. Максимум за один раз — 1 000 000 ₪.",
+    "Ты решил весь золотовалютный фонд треда в один клик слить? {amount} ₪ не пролезет, потолок — 1 000 000 ₪.",
+    "Слишком жирно! Твои {amount} ₪ разорвут баланс борды на атомы. Срежь осетра до 1 000 000 ₪.",
+    "Абу подавился мацой, увидев твои {amount} ₪. Лимит одного чека — ровно 1 000 000 ₪.",
+    "Притормози, криптомагнат хуев! {amount} ₪ — слишком много для одной транзакции. Максимум — 1 000 000 ₪.",
+    "Эй, Дракон Смауг, придержи чешую. Дроп на {amount} ₪ отклонен, лимит — 1 000 000 ₪ за раз.",
+]
+
+# Пул отмазок с черным юмором в стиле Двача при срабатывании кулдауна (20+ фраз)
+DROP_COOLDOWN_PHRASES: List[str] = [
+    "Слышь, нищеброд, твои копейки даже бомжи у параши не поднимают. Погоди {seconds}с, пока Абу подметёт твои гроши.",
+    "Ты чё, автомат по выдаче мелочи? Засунь свои шекели обратно в очко и подожди {seconds}с.",
+    "Еврейская община в ахуе от твоей щедрости. Остынь на {seconds}с перед следующим плевком в вечность.",
+    "Руки от кошелька убрал, лудоман хуев. Раскидывать мелочь сможешь через {seconds}с.",
+    "Остынь, меценат мамкин. Твой нищенский спам на кулдауне ещё {seconds}с.",
+    "Абу конфисковал твою мелочь на ремонт серверов. Жди {seconds}с, олигарх из трущоб.",
+    "Шекелевый инфаркт жопы. Твоя подачка на проверке в налоговой Моссада, таймер: {seconds}с.",
+    "Твой благотворительный фонд «Помощь нищим даунам» заморожен. Кулдаун {seconds}с.",
+    "Не сри мелочью в тред, тут люди деградируют. Подожди {seconds}с и подумай над своим поведением.",
+    "Ты кого тут подкупить пытаешься, олигарх с помойки? Жди {seconds}с до следующего высера.",
+    "Копеечный спамер детектирован. Санитары выехали, а твоя кнопка заблокирована на {seconds}с.",
+    "Даже цыгане на вокзале побрезговали твоим дропом. Остынь на {seconds}с.",
+    "Опять ты со своей сдачей от школьного обеда. Подожди {seconds}с, пока твой позор забудут.",
+    "Твои копейки застряли в зубах у Абу. Выковыривать будут ещё {seconds}с.",
+    "Финансовый регулятор Двача заблокировал твои гроши за отмывание бомжатских денег. Жди {seconds}с.",
+    "Пособие по безработице кончилось? Не части, жди {seconds}с перед следующим дропом.",
+    "Шекелемет перегрелся от твоих микро-плевков. Охлаждение ствола: {seconds}с.",
+    "Анон, ты забыл таблетки и решил раздать всё имущество? Санитары прописали тайм-аут на {seconds}с.",
+    "Твои три копейки вызвали дефляцию в Зимбабве. Посиди смирно {seconds}с, спамер.",
+    "Дропалка не выросла так часто шекелями раскидываться. Подожди {seconds}с.",
+]
+
+COOLDOWN_EXCUSES = DROP_COOLDOWN_PHRASES
+
+
+def get_min_drop_rejection_message(amount: int) -> str:
+    """Генерирует рандомную токсичную отмазку для суммы меньше 150 ₪."""
+    template = secrets.choice(DROP_MIN_EXCUSES)
+    return f"❌ {template.format(amount=amount)}"
+
+
+def get_max_drop_rejection_message(amount: int) -> str:
+    """Генерирует рандомную токсичную отмазку для суммы больше 1 000 000 ₪."""
+    template = secrets.choice(DROP_MAX_EXCUSES)
+    return f"❌ {template.format(amount=amount)}"
+
+
+def get_drop_cooldown_seconds(amount: int) -> int:
+    """
+    Дифференцированный кулдаун на создание дропов:
+    - 150 – 500 ₪: 45 секунд
+    - 500 – 5 000 ₪: 20 секунд
+    - > 5 000 ₪: 10 секунд
+    """
+    if amount <= 500:
+        return 45
+    elif amount <= 5000:
+        return 20
+    else:
+        return 10
+
+
+def get_user_cooldown_remaining(user_id: int) -> float:
+    """Возвращает оставшееся время кулдауна пользователя в секундах (float >= 0.0)."""
+    expiry = _user_drop_cooldowns.get(user_id, 0.0)
+    now = time.time()
+    if now < expiry:
+        return expiry - now
+    return 0.0
+
+
+def get_cooldown_rejection_message(remaining_seconds: int) -> str:
+    """Генерирует рандомную отмазку с таймером в стиле Двача."""
+    template = secrets.choice(COOLDOWN_EXCUSES)
+    return f"⏳ {template.format(seconds=max(1, remaining_seconds))}"
+
+
+def reset_drop_cooldowns():
+    """Сбрасывает кулдауны всех пользователей (для тестов)."""
+    _user_drop_cooldowns.clear()
+
+
+def set_user_drop_cooldown(user_id: int, duration_sec: float):
+    """Устанавливает кулдаун пользователю на указанное количество секунд."""
+    _user_drop_cooldowns[user_id] = time.time() + duration_sec
+
 
 def register_drop_message(drop_id: str, chat_id: int, message_id: int):
     """Регистрирует отправленное сообщение о дропе для последующего обновления при перехвате."""
-    _drop_messages[drop_id].append((chat_id, message_id))
+    pair = (chat_id, message_id)
+    if pair not in _drop_messages[drop_id]:
+        _drop_messages[drop_id].append(pair)
+
 
 def get_drop_messages(drop_id: str) -> List[Tuple[int, int]]:
     """Возвращает список всех (chat_id, message_id) для данного drop_id."""
     return list(_drop_messages.get(drop_id, []))
+
+
+def clear_drop_messages(drop_id: str):
+    """Очищает зарегистрированные сообщения для drop_id."""
+    _drop_messages.pop(drop_id, None)
 
 
 # -----------------------------------------------------------------------------
@@ -99,18 +225,31 @@ async def create_money_drop(
     db_lock: asyncio.Lock,
     db_conn,
     timeout_sec: float = 600.0,
+    check_cooldown: bool = True,
 ) -> Tuple[bool, str, Optional[DropRecord]]:
     """
     Atomically creates a public money drop by deducting funds from donor global balance.
     Persists drop in MoneyDrops DB table.
+    Enforces minimum drop (150 ₪), maximum drop (1,000,000 ₪), and anti-spam differentiated cooldowns.
     """
-    if amount < 10:
-        return False, "❌ Минимальная сумма для дропа — 10 ₪.", None
+    if amount < MIN_DROP_AMOUNT:
+        return False, get_min_drop_rejection_message(amount), None
+
+    if amount > MAX_DROP_AMOUNT:
+        return False, get_max_drop_rejection_message(amount), None
+
+    now = time.time()
+
+    async with drop_lock:
+        if check_cooldown:
+            expiry = _user_drop_cooldowns.get(donor_id, 0.0)
+            if now < expiry:
+                rem_sec = int(expiry - now) + 1
+                return False, get_cooldown_rejection_message(rem_sec), None
 
     from common.database import deduct_user_global_balance, get_user_global_balance
 
     drop_id = secrets.token_hex(6)
-    now = time.time()
 
     async with db_lock:
         try:
@@ -142,6 +281,9 @@ async def create_money_drop(
     
     async with drop_lock:
         active_drops[drop_id] = record
+        # Set cooldown for the donor based on amount dropped
+        cd_duration = get_drop_cooldown_seconds(amount)
+        _user_drop_cooldowns[donor_id] = now + cd_duration
 
     return True, "✅ Дроп успешно создан и отправлен в чат!", record
 
@@ -289,9 +431,9 @@ def get_drop_claim_keyboard(drop_id: str, amount: int) -> InlineKeyboardMarkup:
 
 
 def get_drop_creator_keyboard(current_balance: int) -> InlineKeyboardMarkup:
-    third = max(10, current_balance // 3)
-    half = max(10, current_balance // 2)
-    all_in = max(10, current_balance)
+    third = max(MIN_DROP_AMOUNT, current_balance // 3)
+    half = max(MIN_DROP_AMOUNT, current_balance // 2)
+    all_in = max(MIN_DROP_AMOUNT, current_balance)
 
     buttons = [
         [
@@ -302,9 +444,14 @@ def get_drop_creator_keyboard(current_balance: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=f"🔥 Выбросить всё ({all_in} ₪)", callback_data=f"drop:create:{all_in}"),
         ],
         [
-            InlineKeyboardButton(text="100 ₪", callback_data="drop:create:100"),
+            InlineKeyboardButton(text="150 ₪", callback_data="drop:create:150"),
             InlineKeyboardButton(text="500 ₪", callback_data="drop:create:500"),
-            InlineKeyboardButton(text="1000 ₪", callback_data="drop:create:1000"),
+            InlineKeyboardButton(text="1 000 ₪", callback_data="drop:create:1000"),
+        ],
+        [
+            InlineKeyboardButton(text="5 000 ₪", callback_data="drop:create:5000"),
+            InlineKeyboardButton(text="10 000 ₪", callback_data="drop:create:10000"),
+            InlineKeyboardButton(text="50 000 ₪", callback_data="drop:create:50000"),
         ],
         [
             InlineKeyboardButton(text="❌ Отмена", callback_data="drop:cancel_menu"),

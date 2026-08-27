@@ -15,6 +15,9 @@ import ssl
 from datetime import datetime
 from common.text_utils import clean_html_tags, RE_YOU_PATTERN
 from common.database import get_post_by_num, get_post_copies, add_post_copies
+def is_ai_slop_content(content: dict | None = None, text: str | None = None) -> bool:
+    from common.bot_helpers import is_ai_slop_content as _check_slop
+    return _check_slop(content, text)
 from common.config import (
     BOT_DELIVERY_INITIAL_CHUNK_SIZE,
     BOT_DELIVERY_MAX_CHUNK_SIZE,
@@ -52,7 +55,7 @@ from common.text_utils import generate_poll_text_display
 def _format_quote_block(quote_info: dict | None) -> str | None:
     if not quote_info:
         return None
-    quote_text_raw = quote_info.get('text') or ''
+    quote_text_raw = quote_info.get('text') or quote_info.get('quote_text') or ''
     quote_text_clean = clean_html_tags(quote_text_raw) or ''
 
     quote_parts = []
@@ -312,13 +315,15 @@ class MessageBroadcaster:
         self.common_formatted_body = None
         self.base_head_html = ""
         self.highlight_head_html = ""
-        self.base_header_text = ""
         self.final_keyboard = self.keyboard
         self.post_num = self.content.get('post_num')
+        self.base_header_text = self.content.get('header', '')
+        self.base_head_html = f"<i>{escape_html(self.base_header_text)}</i>"
         self.raw_text = self.content.get('text') or self.content.get('caption') or ''
         # Переопределяется в _prepare_content_and_mentions, когда известен header.
-        self.hide_check_text = self.raw_text.lower()
+        self.hide_check_text = (str(self.base_header_text or '') + " " + str(self.raw_text or '')).lower()
         self.content_for_common = self.content.copy()
+        self.is_ai_content = is_ai_slop_content(self.content, self.raw_text)
 
     async def broadcast(self) -> list:
         if not self.recipients or not self.content or 'type' not in self.content:
@@ -331,6 +336,12 @@ class MessageBroadcaster:
             uid for uid in self.recipients
             if uid > 0 and uid not in self.b_data['users']['banned']
         }
+        if self.is_ai_content:
+            users_settings = self.b_data.get('user_settings', {})
+            active_recipients = {
+                uid for uid in active_recipients
+                if not (users_settings.get(uid, {}).get('disable_ai_roasts') or users_settings.get(uid, {}).get('hide_ai_slop'))
+            }
         if not active_recipients:
             return DeliveryResults([], remaining_recipients=set(), interrupted_reason=None)
 
@@ -735,9 +746,12 @@ class MessageBroadcaster:
     async def _send_one(self, uid: int, telegram_request_timeout_sec: int):
         request_timeout = max(3, int(telegram_request_timeout_sec))
         u_set = self.users_settings.get(uid, {'nsfw': False, 'hide': set()})
-        if u_set['hide']:
+        if (u_set.get('disable_ai_roasts') or u_set.get('hide_ai_slop')) and self.is_ai_content:
+            return None
+        user_hide = u_set.get('hide')
+        if user_hide:
             check_text = self.hide_check_text
-            if any(word in check_text for word in u_set['hide']):
+            if any(str(word).strip().lower() in check_text for word in user_hide if str(word).strip()):
                 lang_local = 'en' if self.board_id == 'int' else 'ru'
                 placeholder = "🛡 Message hidden" if lang_local == 'en' else "🛡 Сообщение скрыто"
                 try:
@@ -873,7 +887,7 @@ class MessageBroadcaster:
                     reply_to_message_id=reply_to_mid if i == 0 else None,
                     reply_markup=self.final_keyboard if i == len(parts) - 1 else None,
                     disable_notification=is_sage,
-                    link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True),
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
@@ -935,7 +949,7 @@ class MessageBroadcaster:
                     reply_to_message_id=target_reply_id if i == 0 else None,
                     reply_markup=self.final_keyboard if include_keyboard and i == len(parts) - 1 else None,
                     disable_notification=is_sage,
-                    link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True),
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
                     request_timeout=request_timeout,
                 )
                 sent_msgs.append(m)
@@ -943,6 +957,8 @@ class MessageBroadcaster:
             return sent_msgs
 
         def _plain_media_source(media_type: str):
+            if current_content.get("voice_bytes"):
+                return BufferedInputFile(current_content["voice_bytes"], filename="roast.ogg")
             if current_content.get("image_bytes"):
                 extensions = {'photo': 'jpg', 'animation': 'gif', 'audio': 'mp3', 'voice': 'ogg'}
                 ext = extensions.get(media_type, 'mp4')
@@ -952,7 +968,7 @@ class MessageBroadcaster:
         async def _send_plain_media_fallback(reason: str):
             plain_text = _plain_delivery_text()
             ct = str(current_content.get("type") or "").split('.')[-1].lower()
-            if ct == "text":
+            if ct == "text" or reason == "bad_file_id":
                 return await _send_plain_text_parts(reason, plain_text)
             if ct in {'photo', 'video', 'animation', 'document', 'audio', 'voice'}:
                 file_source = _plain_media_source(ct)
@@ -1067,11 +1083,17 @@ class MessageBroadcaster:
                     return sent_msgs
                 elif ct in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
                     file_source = None
-                    if current_content.get("image_bytes"):
+                    if current_content.get("voice_bytes"):
+                        file_source = BufferedInputFile(current_content["voice_bytes"], filename="roast.ogg")
+                    elif current_content.get("image_bytes"):
                         if ct == 'photo': 
                             filename = "file.jpg"
                         elif ct == 'animation':
                             filename = "file.gif" 
+                        elif ct == 'voice':
+                            filename = "roast.ogg"
+                        elif ct == 'audio':
+                            filename = "audio.mp3"
                         else:
                             filename = "video.mp4"
                         file_source = BufferedInputFile(current_content["image_bytes"], filename=filename)
@@ -1262,7 +1284,41 @@ class MessageBroadcaster:
                     self.stats['errors'] += 1
                     return None
                 elif "wrong remote file identifier" in err_low or "unserialize" in err_low or "wrong padding" in err_low or "invalid file_id" in err_low or "wrong file identifier" in err_low:
-                    main.runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID] Fallback text for bad media user {uid}: {e}")
+                    main.runtime_logger.warning(f"⚠️ [BROKEN_FILE_ID] Auto-downloading media buffer for cross-bot delivery to user {uid}: {e}")
+                    try:
+                        from archive_manager import _download_media_bytes
+                        fid = current_content.get("file_id") or current_content.get("image_url")
+                        if fid and not current_content.get("image_bytes"):
+                            fb, _ = await _download_media_bytes(fid)
+                            if fb:
+                                current_content["image_bytes"] = fb
+                                ct = str(current_content.get("type") or "").split('.')[-1].lower()
+                                ext = "jpg" if ct == "photo" else ("mp4" if ct in ["video", "animation"] else "dat")
+                                file_source = BufferedInputFile(fb, filename=f"media.{ext}")
+                                send_method = getattr(self.bot_instance, f"send_{ct}")
+                                if len(full_text) <= 1024:
+                                    common_kwargs['caption'] = full_text
+                                    common_kwargs['parse_mode'] = "HTML"
+                                    common_kwargs[ct] = file_source
+                                    res = await send_method(**common_kwargs)
+                                    self.stats['success'] += 1
+                                    return res
+                                else:
+                                    common_kwargs[ct] = file_source
+                                    media_msg = await send_method(**common_kwargs)
+                                    text_parts = split_text(full_text, 4096)
+                                    for part in text_parts:
+                                        await self.bot_instance.send_message(
+                                            chat_id=uid, text=part, parse_mode="HTML",
+                                            reply_to_message_id=media_msg.message_id,
+                                            disable_notification=is_sage,
+                                            link_preview_options=LinkPreviewOptions(is_disabled=True),
+                                            request_timeout=request_timeout,
+                                        )
+                                    self.stats['success'] += 1
+                                    return media_msg
+                    except Exception as dl_err:
+                        main.runtime_logger.warning(f"⚠️ Buffer download fallback failed: {dl_err}")
                     return await _send_plain_media_fallback("bad_file_id")
                 else:
                     print(f"⚠️ BadRequest отправки user {uid}: {e}")

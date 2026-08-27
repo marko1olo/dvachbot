@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import pytest
 from datetime import datetime, timedelta, UTC
 from common.spam_filter import (

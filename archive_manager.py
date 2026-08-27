@@ -51,12 +51,72 @@ def _build_archive_header(board_id: str, post_num: int, content: dict, lang: str
         header_text = f"<b>/{board_id}/</b> | {raw_header}{reply_suffix}"
     return header_text
 
+
+def prepare_telegram_text(text: str, max_len: int = 4096) -> str:
+    """
+    Безопасно форматирует и обрезает текст для отправки в Telegram:
+    - Применяет clean_html_for_tg
+    - Если длина превышает max_len, безопасно усекает с запасом под '...' и закрывающие теги
+    - Повторно балансирует и закрывает все HTML-теги через clean_html_for_tg
+    - Если даже после этого текст превышает max_len, возвращает чистый текст без тегов
+    """
+    if not text:
+        return ""
+    cleaned = clean_html_for_tg(text)
+    if len(cleaned) <= max_len:
+        return cleaned
+
+    cutoff = max(10, max_len - 30)
+    truncated = cleaned[:cutoff].rstrip() + "..."
+    balanced = clean_html_for_tg(truncated)
+
+    if len(balanced) <= max_len:
+        return balanced
+
+    # Фолбэк: голый текст без HTML-тегов, строго обрезанный
+    plain = clean_html_tags(text)
+    if len(plain) > max_len:
+        plain = plain[:max_len - 3] + "..."
+    return plain
+
 import io
 from aiogram.types import BufferedInputFile, URLInputFile
 from common.database import get_file_mirrors, get_file_owner_id, add_file_mirror
 
 async def _download_media_bytes(file_id: str) -> tuple[bytes | None, str]:
-    """Downloads file bytes via the owning bot or any active bot in GLOBAL_BOTS."""
+    """Downloads file bytes via HTTP URL, file mirrors, or any active bot in GLOBAL_BOTS."""
+    if not file_id:
+        return None, ""
+
+    # If file_id is already an HTTP URL, download directly
+    if str(file_id).startswith(("http://", "https://")):
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                resp = await client.get(file_id)
+                if resp.status_code == 200 and resp.content:
+                    return resp.content, "media.dat"
+        except Exception as http_err:
+            logger.debug(f"HTTP download failed for {file_id}: {http_err}")
+
+    # Check FileMirrors for external URL mirrors
+    try:
+        mirrors = await get_file_mirrors(file_id)
+        if mirrors:
+            for m_type in ['catbox', 'pixhost', 'huggingface', '0x0', 'imgbb']:
+                m_url = mirrors.get(m_type)
+                if m_url and isinstance(m_url, str) and m_url.startswith(("http://", "https://")):
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                            resp = await client.get(m_url)
+                            if resp.status_code == 200 and resp.content:
+                                return resp.content, "media.dat"
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+
     owner_bot = None
     try:
         owner_id = await get_file_owner_id(file_id)
@@ -76,10 +136,7 @@ async def _download_media_bytes(file_id: str) -> tuple[bytes | None, str]:
             if b not in candidate_bots:
                 candidate_bots.append(b)
 
-    if not file_id or str(file_id).startswith(("http://", "https://")):
-        return None, ""
-
-    for bot_inst in candidate_bots[:3]:
+    for bot_inst in candidate_bots[:10]:
         try:
             buf = io.BytesIO()
             await asyncio.wait_for(bot_inst.download(file_id, destination=buf), timeout=12.0)
@@ -143,14 +200,14 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
 
     raw_cap = content.get('caption', '')
     converted_cap = convert_site_tags_to_telegram(raw_cap)
-    full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
-    if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
-    full_caption = clean_html_for_tg(full_caption)
+    full_caption = prepare_telegram_text(f"{header_text}\n\n{sanitize_html(converted_cap)}".strip(), max_len=1024)
 
     async def _build_group(force_download=False):
         builder = MediaGroupBuilder()
         for i, media_item in enumerate(media_list):
             orig_fid = media_item.get('file_id') or media_item.get('media') or media_item.get('path') or media_item.get('tg_file_id')
+            if not orig_fid:
+                continue
             m_type = str(media_item.get('type') or '').split('.')[-1].lower()
             caption = full_caption if i == 0 else None
             
@@ -160,11 +217,28 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
             else:
                 media_src = await _resolve_media_source(sender_bot, orig_fid, media_item)
 
+            if not media_src:
+                continue
+
             if m_type == 'photo': builder.add_photo(media=media_src, caption=caption, parse_mode="HTML")
             elif m_type == 'video': builder.add_video(media=media_src, caption=caption, parse_mode="HTML")
             elif m_type == 'document': builder.add_document(media=media_src, caption=caption, parse_mode="HTML")
             elif m_type == 'audio': builder.add_audio(media=media_src, caption=caption, parse_mode="HTML")
         return builder.build()
+
+    async def _send_text_fallback():
+        safe_msg = prepare_telegram_text(f"{header_text}\n\n{sanitize_html(converted_cap)}".strip(), max_len=4096)
+        try:
+            return await sender_bot.send_message(channel_id, safe_msg, parse_mode="HTML", request_timeout=30)
+        except TelegramBadRequest as tbe:
+            logger.warning(f"Media group text fallback HTML error ({tbe}), trying plain text...")
+            plain_txt = clean_html_tags(f"{header_text}\n\n{converted_cap}")[:4090]
+            try:
+                return await sender_bot.send_message(channel_id, plain_txt, parse_mode=None, request_timeout=30)
+            except Exception:
+                return None
+        except Exception:
+            return None
 
     try:
         group = await _build_group(force_download=False)
@@ -178,27 +252,18 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
             raise
         except Exception as ex:
             logger.error(f"❌ Media group fallback failed: {ex}. Sending as text...")
-            try:
-                msg = await sender_bot.send_message(channel_id, full_caption, parse_mode="HTML", request_timeout=30)
-                return msg, []
-            except Exception:
-                return None, []
+            msg = await _send_text_fallback()
+            return msg, []
     except TelegramRetryAfter:
         raise
     except (TelegramNetworkError, asyncio.TimeoutError) as net_err:
         logger.warning(f"⚠️ Archive media group timeout to channel {channel_id}: {net_err}. Sending text fallback...")
-        try:
-            msg = await sender_bot.send_message(channel_id, full_caption, parse_mode="HTML", request_timeout=30)
-            return msg, []
-        except Exception:
-            return None, []
+        msg = await _send_text_fallback()
+        return msg, []
     except Exception as e:
         logger.error(f"⚠️ Failed to send archive media group to channel {channel_id}: {e}")
-        try:
-            msg = await sender_bot.send_message(channel_id, full_caption, parse_mode="HTML", request_timeout=30)
-            return msg, []
-        except Exception:
-            return None, []
+        msg = await _send_text_fallback()
+        return msg, []
 
     sent_message = None
     new_files_data = []
@@ -239,9 +304,8 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
         return None, []
     raw_cap = content.get('caption', '')
     converted_cap = convert_site_tags_to_telegram(raw_cap)
-    full_caption = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
-    if len(full_caption) > 1024: full_caption = full_caption[:1021] + "..."
-    caption = clean_html_for_tg(full_caption)
+    raw_full_cap = f"{header_text}\n\n{sanitize_html(converted_cap)}".strip()
+    caption = prepare_telegram_text(raw_full_cap, max_len=1024)
     ct_str = str(content_type).split('.')[-1].lower()
     common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML", "request_timeout": 60}
     
@@ -256,11 +320,25 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
         elif ct_str == 'voice': return await sender_bot.send_voice(voice=src, **common_args)
         elif ct_str == 'sticker':
             await sender_bot.send_sticker(channel_id, sticker=src, request_timeout=60)
-            return await sender_bot.send_message(channel_id, header_text, parse_mode="HTML", request_timeout=30)
+            return await sender_bot.send_message(channel_id, prepare_telegram_text(header_text, max_len=4096), parse_mode="HTML", request_timeout=30)
         elif ct_str == 'video_note':
             await sender_bot.send_video_note(channel_id, video_note=src, request_timeout=60)
-            return await sender_bot.send_message(channel_id, header_text, parse_mode="HTML", request_timeout=30)
+            return await sender_bot.send_message(channel_id, prepare_telegram_text(header_text, max_len=4096), parse_mode="HTML", request_timeout=30)
         return None
+
+    async def _send_single_text_fallback():
+        safe_msg = prepare_telegram_text(raw_full_cap if raw_full_cap else caption, max_len=4096)
+        try:
+            return await sender_bot.send_message(channel_id, safe_msg, parse_mode="HTML", request_timeout=30)
+        except TelegramBadRequest as tbe:
+            logger.warning(f"Single media text fallback HTML error ({tbe}), trying plain text...")
+            plain_txt = clean_html_tags(raw_full_cap if raw_full_cap else caption)[:4090]
+            try:
+                return await sender_bot.send_message(channel_id, plain_txt, parse_mode=None, request_timeout=30)
+            except Exception:
+                return None
+        except Exception:
+            return None
 
     sent_message = None
     try:
@@ -299,18 +377,12 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
         raise
     except (TelegramNetworkError, asyncio.TimeoutError) as net_err:
         logger.warning(f"⚠️ Single archive media timeout to {channel_id}: {net_err}. Sending text fallback...")
-        try:
-            msg = await sender_bot.send_message(channel_id, caption, parse_mode="HTML", request_timeout=30)
-            return msg, []
-        except Exception:
-            return None, []
+        msg = await _send_single_text_fallback()
+        return msg, []
     except Exception as e:
         logger.warning(f"⚠️ Failed to send single archive media ({ct_str}) to channel {channel_id}: {e}")
-        try:
-            msg = await sender_bot.send_message(channel_id, caption, parse_mode="HTML", request_timeout=30)
-            return msg, []
-        except Exception:
-            return None, []
+        msg = await _send_single_text_fallback()
+        return msg, []
 
     new_files_data = []
     if sent_message:
@@ -345,20 +417,57 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
             elif has_media:
                 sent_message, new_files_data = await _send_archive_single_media(sender_bot, channel_id, content, content_type, header_text)
             else:
-                sent_message = await sender_bot.send_message(
-                    chat_id=channel_id,
-                    text=text_to_send,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                    request_timeout=30
-                )
+                try:
+                    safe_to_send = prepare_telegram_text(text_to_send, max_len=4096)
+                    sent_message = await sender_bot.send_message(
+                        chat_id=channel_id,
+                        text=safe_to_send,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                        request_timeout=30
+                    )
+                except TelegramBadRequest as parse_err:
+                    err_msg = str(parse_err).lower()
+                    if "can't parse entities" in err_msg or "find end tag" in err_msg or "tag" in err_msg or "too long" in err_msg:
+                        logger.warning(f"Archive text HTML rejected for {channel_id}, falling back to plain text: {parse_err}")
+                        plain_txt = clean_html_tags(text_to_send)
+                        if len(plain_txt) > 4096:
+                            plain_txt = plain_txt[:4090] + "..."
+                        sent_message = await sender_bot.send_message(
+                            chat_id=channel_id,
+                            text=plain_txt,
+                            parse_mode=None,
+                            disable_web_page_preview=True,
+                            request_timeout=30
+                        )
+                    else:
+                        raise
             return sent_message, new_files_data
         except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError):
             if attempt < 2: await asyncio.sleep(2)
         except TelegramRetryAfter as e:
             await asyncio.sleep(e.retry_after + 1)
-        except (TelegramBadRequest, TelegramForbiddenError) as e:
+        except TelegramForbiddenError as e:
             logger.warning(f"Archive destination invalid or bot kicked ({channel_id}): {e}")
+            break
+        except TelegramBadRequest as e:
+            err_msg = str(e).lower()
+            if "can't parse entities" in err_msg or "find end tag" in err_msg or "tag" in err_msg or "too long" in err_msg:
+                try:
+                    plain_text = clean_html_tags(text_to_send or "")
+                    if len(plain_text) > 4096:
+                        plain_text = plain_text[:4090] + "..."
+                    sent_message = await sender_bot.send_message(
+                        chat_id=channel_id,
+                        text=plain_text,
+                        parse_mode=None,
+                        disable_web_page_preview=True,
+                        request_timeout=30
+                    )
+                    return sent_message, new_files_data
+                except Exception:
+                    pass
+            logger.warning(f"Archive TelegramBadRequest ({channel_id}): {e}")
             break
         except Exception as e:
             logger.warning(f"Archive media sending error on attempt {attempt}: {e}")
@@ -375,10 +484,8 @@ def _format_archive_text_content(content: dict, header_text: str) -> str | None:
         poll_text = generate_poll_text_display(content['poll_data'])
         text_content = f"{text_content}\n\n{poll_text}".strip()
 
-    final_text = f"{header_text}\n\n{text_content}"
-    if len(final_text) > 4096:
-        final_text = final_text[:4093] + "..."
-    return final_text
+    final_text = f"{header_text}\n\n{text_content}".strip()
+    return prepare_telegram_text(final_text, max_len=4096)
 
 async def _update_archive_post_content(post_num: int, content: dict, content_type: str, new_files_data: list, sender_bot_id: int):
     from common.database import register_file_owner, update_post_content
@@ -609,7 +716,7 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
                         file_id = media_list[0].get('file_id') or media_list[0].get('tg_file_id')
                         content_type_str = media_list[0].get('type', content_type_str or 'photo')
 
-                final_caption = caption_text[:1021] + "..." if len(caption_text) > 1024 else caption_text
+                final_caption = prepare_telegram_text(caption_text, max_len=1024)
                 sent_msg = None
 
                 if content_type_str == 'photo' and file_id:
@@ -632,7 +739,7 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
                     await archive_bot.send_video_note(ARCHIVE_CHANNEL_ID, file_id)
                     sent_msg = await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_caption, parse_mode="HTML", disable_web_page_preview=True)
                 else:
-                    final_text_for_message = caption_text[:4093] + "..." if len(caption_text) > 4096 else caption_text
+                    final_text_for_message = prepare_telegram_text(caption_text, max_len=4096)
                     sent_msg = await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
 
                 if sent_msg:
@@ -659,8 +766,14 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
             except TelegramBadRequest as e:
                 print(f"❌ BadRequest on happy post #{post_num}: {e}. Trying text fallback...")
                 try:
-                    final_text_for_message = caption_text[:4093] + "..." if len(caption_text) > 4096 else caption_text
-                    sent_msg = await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
+                    final_text_for_message = prepare_telegram_text(caption_text, max_len=4096)
+                    try:
+                        sent_msg = await archive_bot.send_message(ARCHIVE_CHANNEL_ID, final_text_for_message, parse_mode="HTML", disable_web_page_preview=True)
+                    except TelegramBadRequest:
+                        plain_txt = clean_html_tags(caption_text)
+                        if len(plain_txt) > 4096:
+                            plain_txt = plain_txt[:4090] + "..."
+                        sent_msg = await archive_bot.send_message(ARCHIVE_CHANNEL_ID, plain_txt, parse_mode=None, disable_web_page_preview=True)
                     if sent_msg:
                         try:
                             from common.database import add_channel_copy
@@ -682,7 +795,9 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
 
     check_post = await get_post_by_num(post_num)
     if not check_post:
-        return
+        async with storage_lock:
+            if post_num not in messages_storage:
+                return
     archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID) or GLOBAL_BOTS.get('b')
     sender_bot = bot_instance if (board_id in AUTHORIZED_ARCHIVE_BOTS and bot_instance) else (GLOBAL_BOTS.get('b') or archive_bot)
     if not sender_bot:
@@ -695,11 +810,35 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
     content_type = content.get("type", "text")
     text_to_send = _format_archive_text_content(content, header_text) or header_text
     
+    # Build ordered list of fallback bots: primary sender first, then all others
+    all_bots = [sender_bot]
+    if isinstance(GLOBAL_BOTS, dict):
+        for b in GLOBAL_BOTS.values():
+            if b not in all_bots:
+                all_bots.append(b)
+
     db_updated = False
     for channel_id in MIRROR_CHANNELS:
         if not channel_id or channel_id == 0:
             continue
-        sent_message, new_files_data = await _send_archive_media(sender_bot, channel_id, content, content_type, text_to_send, header_text)
+        try:
+            from common.database import get_pool
+            db = await get_pool()
+            async with db.execute("SELECT 1 FROM ChannelCopies WHERE post_num = ? AND channel_id = ? LIMIT 1", (post_num, channel_id)) as cur:
+                if await cur.fetchone():
+                    continue
+        except Exception:
+            pass
+
+        sent_message = None
+        new_files_data = []
+        for try_bot in all_bots:
+            sent_message, new_files_data = await _send_archive_media(try_bot, channel_id, content, content_type, text_to_send, header_text)
+            if sent_message is not None:
+                sender_bot_id = getattr(try_bot, 'id', sender_bot_id)
+                break
+            # _send_archive_media logs and returns None on ForbiddenError — try next bot
+
         if sent_message:
             try:
                 await add_channel_copy(post_num, channel_id, sent_message.message_id)
@@ -708,3 +847,6 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
                     db_updated = True
             except Exception:
                 pass
+        else:
+            logger.warning(f"⚠️ [Archive] Пост #{post_num} не удалось доставить в канал {channel_id} — все боты недоступны или не имеют доступа.")
+

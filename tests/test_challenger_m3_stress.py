@@ -21,7 +21,7 @@ client = TestClient(app, raise_server_exceptions=False)
 
 
 @pytest.fixture(autouse=True)
-def mock_external_deps():
+def mock_external_deps(isolated_test_db):
     with patch("site_tgach.main.get_country_by_ip", new_callable=AsyncMock) as mock_country:
         mock_country.return_value = "RU"
         yield mock_country
@@ -54,7 +54,7 @@ async def test_worker_failure_persistence_and_gap_elimination():
 
     async with db_lock:
         await db.execute(
-            "INSERT INTO Posts (post_num, thread_id, board_id, content, created_at) VALUES (?, 1, 'b', ?, ?)",
+            "INSERT INTO Posts (post_num, thread_id, board_id, author_id, content, timestamp) VALUES (?, 1, 'b', 1, ?, ?)",
             (post_num, post_content, time.time())
         )
 

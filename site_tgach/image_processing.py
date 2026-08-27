@@ -46,7 +46,7 @@ import time
 import math
 import imagehash
 from io import BytesIO
-from common.database import add_file_mirror, check_file_deduplication, register_new_file, check_phash_ban, add_to_hf_queue
+from common.database import add_file_mirror, check_file_deduplication, register_new_file, register_file_owner, check_phash_ban, add_to_hf_queue
 from common.secret_redaction import install_logging_redaction
 from site_tgach.catbox import upload_url_to_catbox, upload_bytes_to_catbox
 from site_tgach.huggingface import upload_to_hf
@@ -293,6 +293,7 @@ async def process_and_upload_image(
                         with Image.open(BytesIO(thumbnail_bytes)) as im:
                             small = im.resize((32, 32))
                             return encode_blurhash_internal(small, 4, 3)
+                    blurhash_str = await asyncio.to_thread(_calc_blur)
                 except Exception as e:
                     logger.debug(f"Blurhash calculation failed: {e}")
         except Exception as e:
@@ -457,6 +458,11 @@ async def process_and_upload_image(
             result_data['type'], 
             blurhash_str
         )
+        if current_bot_id and str(current_bot_id) not in ('unknown', 'None'):
+            if result_data.get('original_file_id'):
+                await register_file_owner(result_data['original_file_id'], current_bot_id)
+            if result_data.get('thumbnail_file_id'):
+                await register_file_owner(result_data['thumbnail_file_id'], current_bot_id)
     except Exception as e:
         logger.error(f"DB Register error: {e}", exc_info=True)
 

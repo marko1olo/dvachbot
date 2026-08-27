@@ -17,7 +17,7 @@ from common.board_config import BOARD_CONFIG
 from post_helpers import format_header
 from common.thread_manager import get_threads_data
 from thread_texts import thread_messages
-from common.bot_helpers import process_new_post
+from common.bot_helpers import process_new_post, is_ai_slop_content
 from datetime import timezone, datetime, timedelta
 import __main__ as main
 UTC = timezone.utc
@@ -50,7 +50,7 @@ def _contains_volatile_payload(value, depth: int = 0) -> bool:
         return True
     if isinstance(value, dict):
         for key, nested in value.items():
-            if key == "image_bytes" and nested:
+            if key in ("image_bytes", "voice_bytes") and nested:
                 return True
             if _contains_volatile_payload(nested, depth + 1):
                 return True
@@ -153,6 +153,9 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter
 from collections import defaultdict
 import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 from shared_state import (
     board_data, messages_storage, state,
@@ -562,10 +565,11 @@ async def edit_post_for_all_recipients(post_num: int, bot_instance: Bot):
         header_text = content_copy.get('header', '')
         u_set = users_settings.get(user_id, {'hide': set()})
         should_hide = False
-        if u_set['hide']:
+        user_hide = u_set.get('hide')
+        if user_hide:
             raw_content_text = content_copy.get('text') or content_copy.get('caption') or ""
-            check_text = (header_text + " " + raw_content_text).lower()
-            if any(word in check_text for word in u_set['hide']):
+            check_text = (str(header_text or '') + " " + str(raw_content_text or '')).lower()
+            if any(str(word).strip().lower() in check_text for word in user_hide if str(word).strip()):
                 should_hide = True
         head = f"<i>{escape_html(header_text)}</i>"
         if user_id == reply_author_id:
@@ -903,6 +907,17 @@ class MessageDeliveryTask:
                         print(f"[Active] Post #{p_num} [/{self.board_id}/] sent to active: {prio_success}/{prio_total} | Time: {prio_elapsed:.1f}s")
                     except Exception:
                         pass
+
+            if self.post_num and not self.content.get('archive_skip') and not self.content.get('is_shadow_muted') and not self.msg_data.get('durable_delivery_id'):
+                from archive_manager import _forward_post_to_realtime_archive
+                from common.task_manager import spawn_task
+                spawn_task(_forward_post_to_realtime_archive(
+                    bot_instance=self.bot_instance,
+                    board_id=self.board_id,
+                    post_num=self.post_num,
+                    content=self.content,
+                    is_shadow_muted=False
+                ))
         except Exception:
             if planned_passive_durable_id and passive_recipients_for_later:
                 planned_passive_item["durable_delivery_id"] = planned_passive_durable_id
@@ -1029,6 +1044,12 @@ class MessageDeliveryTask:
                 if uid > 0 and user_states.get(uid, {}).get('location', 'main') == 'main'
             }
             active_recipients = {uid for uid in recipients_on_main if uid not in self.b_data['users']['banned']}
+        if is_ai_slop_content(self.content):
+            users_settings = self.b_data.get('user_settings', {})
+            active_recipients = {
+                uid for uid in active_recipients
+                if not (users_settings.get(uid, {}).get('disable_ai_roasts') or users_settings.get(uid, {}).get('hide_ai_slop'))
+            }
         return active_recipients
 
     def _determine_delivery_phases(self, active_recipients):
@@ -1212,17 +1233,32 @@ async def send_missed_messages(bot: Bot, board_id: str, user_id: int, target_loc
 
 async def board_help_worker(board_id: str):
     """
-    Индивидуальный воркер рассылки помощи. 
-    Исправлено: message.queues -> message_queues
+    Индивидуальный воркер регулярной рассылки помощи и советов (каждые 4-6 часов).
+    Использует детерминированную рассинхронизацию (staggering) и проверку нагрузки (backpressure).
     """
-    await asyncio.sleep(random.randint(10, 300))
+    # Размазываем начальный запуск по доскам, чтобы 26 воркеров не стреляли одновременно
+    initial_stagger = (abs(hash(board_id)) % 26) * 60 + random.randint(30, 180)
+    await asyncio.sleep(initial_stagger)
     while True:
         try:
-            delay = random.randint(28800, 43200) # от 8 до 12 часов (не чаще 8ч)
+            delay = random.randint(14400, 21600) # от 4 до 6 часов
             await asyncio.sleep(delay)
+
+            # Проверка бэкпрешера: если доска или система перегружены рассылкой, уступаем дорогу пользовательским постам
+            queue = message_queues.get(board_id)
+            if queue and queue.qsize() > 0:
+                print(f"⏳ [{board_id}] Очередь занята ({queue.qsize()} сообщений), рассылка помощи отложена.")
+                await asyncio.sleep(300)
+                continue
+
+            if len(current_deliveries) > 3:
+                print(f"⏳ [{board_id}] Высокая нагрузка системы ({len(current_deliveries)} активных доставок), помощь отложена.")
+                await asyncio.sleep(180)
+                continue
+
             activity = await main.get_board_activity_last_hours(board_id, hours=24)
-            if activity < 15: # Если меньше 15 постов за сутки - доска мертва
-                print(f"💀 [{board_id}] Доска полудохлая (акт: {activity}), пропускаем рассылку помощи.")
+            if activity < 1: # Пропускаем только если за сутки не было ни одного поста
+                print(f"💀 [{board_id}] Доска неактивна (акт: {activity}), пропускаем рассылку помощи.")
                 continue
             b_data = board_data[board_id]
             streams_to_process = ['ru']
@@ -1267,7 +1303,15 @@ async def board_help_worker(board_id: str):
                     else: message_text = random.choice(main.MECHANICS_INFO_TEXT_RU)
                 now_dt = datetime.now(UTC)
                 from banner_manager import get_banner_file, _BANNER_CACHE
-                banner_cat = "start" if choice == 1 else "calm"
+                cat_map = {
+                    1: "summary",
+                    2: "newspaper",
+                    3: "night",
+                    4: "schizo",
+                    5: "digest",
+                    6: "shop"
+                }
+                banner_cat = cat_map.get(choice, "start")
                 fname, photo_payload = get_banner_file(category=banner_cat)
                 fid = photo_payload if isinstance(photo_payload, str) else _BANNER_CACHE.get(fname)
                 if not fid and _BANNER_CACHE:
@@ -1454,6 +1498,16 @@ async def complete_media_group_after_delay(media_group_key: str, bot_instance: B
     finally:
         _release_media_group_timer(media_group_key)
 
+async def _roast_album_tracks_sequentially(bot, audio_msgs, board_id, stream, post_num):
+    from ai_manager import handle_music_roast
+    for msg in audio_msgs:
+        try:
+            await handle_music_roast(bot, msg, board_id, stream=stream, post_num=post_num)
+        except Exception as e:
+            logger.warning(f"⚠️ [Music Roast] Ошибка роаста трека из альбома: {e}")
+        await asyncio.sleep(2.0) # пауза между треками
+
+
 async def process_complete_media_group(media_group_key: str, group: dict, bot_instance: Bot):
     if not group or not group.get('media'):
         return
@@ -1553,6 +1607,16 @@ async def process_complete_media_group(media_group_key: str, group: dict, bot_in
             ))
 
     if first_post_num:
+        raw_msgs = group.get('raw_messages') or []
+        from ai_manager import is_music_document
+        audio_msgs = [
+            m for m in raw_msgs
+            if getattr(m, 'audio', None) or (getattr(m, 'document', None) and is_music_document(m.document))
+        ]
+        is_user_bot = (user_id <= 0) or any(getattr(getattr(m, 'from_user', None), 'is_bot', False) is True for m in raw_msgs)
+        if audio_msgs and not is_user_bot and board_id != 'trash':
+            spawn_task(_roast_album_tracks_sequentially(bot_instance, audio_msgs, board_id, stream, first_post_num))
+
         first_photo_id = None
         for m in all_media:
             if m.get('type') == 'photo' and m.get('file_id'):
@@ -1832,7 +1896,7 @@ async def site_posts_broadcaster():
                             else:
                                 runtime_logger.error(f"[site_posts_broadcaster] enqueue FAILED for #{post_num} board={board_id} — NOT marking as sent")
                             
-                            if not content.get('archive_skip') and not is_shadow_muted:
+                            if not content.get('archive_skip') and not is_shadow_muted and not content.get('is_system_message'):
                                 bot_to_use = main.GLOBAL_BOTS.get(board_id) or main.GLOBAL_BOTS.get('b')
                                 if bot_to_use:
                                     spawn_task(main._forward_post_to_realtime_archive(

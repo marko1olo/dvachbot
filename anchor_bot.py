@@ -173,35 +173,8 @@ async def fire_anchor_post(
             'text': reply_text,
             'is_system_message': True,
             'is_anchor': True,
-            'archive_allowed': False,
+            'archive_allowed': True,
         }
-        pnum = await create_post(
-            board_id=board_id,
-            author_id=0,
-            content=content,
-            timestamp=now_dt.timestamp(),
-            is_from_site=False,
-            stream=stream,
-            reply_to=None
-        )
-        if not pnum:
-            print(f"[Anchor] create_post returned None for board '{board_id}'", flush=True)
-            return False
-
-        header_prefix = "### АНОН ###" if stream == 'ru' else "### ANON ###"
-        header = await _main.format_header(board_id, pnum, 0)
-        content['header'] = f"{header_prefix}\n{header}"
-        await update_post_content(pnum, content)
-
-        async with _main.storage_lock:
-            _main.messages_storage[pnum] = {
-                'author_id': 0,
-                'timestamp': now_dt,
-                'content': content,
-                'board_id': board_id,
-                'reply_to_post_num': None,
-            }
-
         await _main.process_new_post(_main.NewPostParams(
             bot_instance=bot,
             board_id=board_id,
@@ -211,7 +184,7 @@ async def fire_anchor_post(
             is_shadow_muted=False,
             stream=stream
         ))
-        print(f"[Anchor] Post #{pnum} submitted on board '{board_id}'", flush=True)
+        print(f"[Anchor] Post submitted on board '{board_id}'", flush=True)
         return True
 
     except Exception as e:

@@ -18,7 +18,7 @@ client = TestClient(app, raise_server_exceptions=False)
 
 
 @pytest.fixture(autouse=True)
-def mock_external_deps():
+def mock_external_deps(isolated_test_db):
     with patch("site_tgach.main.get_country_by_ip", new_callable=AsyncMock) as mock_country:
         mock_country.return_value = "RU"
         yield mock_country

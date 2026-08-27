@@ -124,7 +124,14 @@ class TestR1BVideoThumbnails:
     @pytest.mark.asyncio
     async def test_thumb_route_registration(self):
         """The FastAPI app must register /thumb/{file_id:path} and /preview/{file_id:path}."""
-        routes = [route.path for route in app.routes]
+        routes = []
+        for route in app.routes:
+            if hasattr(route, "path"):
+                routes.append(route.path)
+            elif hasattr(route, "routes"):
+                for sub_r in getattr(route, "routes", []):
+                    if hasattr(sub_r, "path"):
+                        routes.append(sub_r.path)
         assert "/thumb/{file_id:path}" in routes
         assert "/preview/{file_id:path}" in routes
 

@@ -11,7 +11,7 @@ from aiogram import Router, F, types
 from aiogram.types import Message, WebAppInfo
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, TelegramAPIError
 from deanonymizer import generate_deanon_info
-from common.database import get_post_info_by_copy, get_post_by_num, get_post_author_by_copy, get_pool
+from common.database import get_post_info_by_copy, get_post_by_num, get_post_author_by_copy, get_pool, update_user_settings_db
 from common.html_utils import escape_html
 from thread_texts import thread_messages
 from text_assets import INVITE_TEXTS, INVITE_TEXTS_EN, INVITE_TEXTS_JP, DEANON_COOLDOWN_PHRASES
@@ -117,6 +117,73 @@ async def cmd_nsfw(message: types.Message, board_id: str | None, stream: str = '
         err = "Error: Use 'on' or 'off'." if lang != 'ru' else "Ошибка: Используйте 'on' или 'off'."
         await message.answer(err)
 
+@router.message(Command("settings", "настройки", "настройка", "setting", "options", "prefs", ignore_case=True, ignore_mention=True))
+async def cmd_settings(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Открывает меню личных настроек пользователя (/settings).
+    """
+    if not board_id: return
+    user_id = message.from_user.id
+    from main import get_personal_menu_keyboard
+    text, kb = get_personal_menu_keyboard(board_id, user_id, stream=stream)
+    from banner_manager import send_banner_message
+    await send_banner_message(
+        bot=message.bot,
+        chat_id=message.chat.id,
+        caption=text,
+        reply_markup=kb,
+        category="start",
+        parse_mode="HTML"
+    )
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+@router.message(Command("slop", "roast", "roasts", "слоп", "нейрослоп", ignore_case=True, ignore_mention=True))
+async def cmd_toggle_ai_slop(message: types.Message, board_id: str | None, stream: str = 'ru'):
+    """
+    Команда быстрого включения/выключения AI-роастов и нейрослопа (/slop on / off / hide / show).
+    """
+    if not board_id: return
+    args = (message.text or message.caption or "").split()
+    user_id = message.from_user.id
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    b_data = board_data[board_id]
+    if user_id not in b_data.get('user_settings', {}):
+        b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False}
+    current_status = bool(b_data['user_settings'][user_id].get('disable_ai_roasts') or b_data['user_settings'][user_id].get('hide_ai_slop'))
+    if len(args) < 2:
+        status_str = ("Скрыт 🚫" if current_status else "Включен 👁") if lang == 'ru' else ("Hidden 🚫" if current_status else "Enabled 👁")
+        if lang == 'en':
+            msg = f"Current AI Roasts / Slop filter status: <b>{status_str}</b>.\nUsage: <code>/slop hide</code> (or <code>/slop on</code>) / <code>/slop show</code> (or <code>/slop off</code>)"
+        elif lang == 'jp':
+            msg = f"現在のAI煽り・スロップ設定: <b>{status_str}</b>\n使い方: <code>/slop hide</code> または <code>/slop show</code>"
+        else:
+            msg = f"Текущий статус фильтра AI-разъёбов / нейрослопа: <b>{status_str}</b>.\nИспользование: <code>/slop hide</code> (скрыть) или <code>/slop show</code> (показывать)"
+        await message.answer(msg, parse_mode="HTML")
+        return
+    action = args[1].lower()
+    new_status = None
+    if action in ['on', 'enable', 'hide', '1', 'вкл', 'скрыть', 'disable_roasts', 'mute']:
+        new_status = True
+    elif action in ['off', 'disable', 'show', '0', 'выкл', 'показать', 'enable_roasts', 'unmute']:
+        new_status = False
+    if new_status is not None:
+        b_data['user_settings'][user_id]['disable_ai_roasts'] = new_status
+        b_data['user_settings'][user_id]['hide_ai_slop'] = new_status
+        spawn_task(update_user_settings_db(user_id, board_id, disable_ai_roasts=1 if new_status else 0, hide_ai_slop=1 if new_status else 0))
+        if lang == 'en':
+            reply = "🚫 AI Roasts and Neuro-Slop are now hidden." if new_status else "👁 AI Roasts and Neuro-Slop are now enabled."
+        elif lang == 'jp':
+            reply = "🚫 AI煽り・スロップを非表示にしました。" if new_status else "👁 AI煽り・スロップを表示します。"
+        else:
+            reply = "🚫 AI-разъёбы и нейрослоп теперь скрыты." if new_status else "👁 AI-разъёбы и нейрослоп теперь включены."
+        await message.answer(reply)
+    else:
+        err = "Error: Use 'hide' / 'on' or 'show' / 'off'." if lang != 'ru' else "Ошибка: Используйте 'hide' / 'on' или 'show' / 'off'."
+        await message.answer(err)
+
 @router.message(Command("hide"))
 async def cmd_hide(message: types.Message, board_id: str | None, stream: str = 'ru'):
 
@@ -126,8 +193,15 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     b_data = board_data[board_id]
     if user_id not in b_data.get('user_settings', {}):
-        b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set()}
-    user_hide_set = b_data['user_settings'][user_id]['hide']
+        b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False}
+    
+    settings = b_data['user_settings'][user_id]
+    raw_hide = settings.get('hide', set())
+    if not isinstance(raw_hide, set):
+        raw_hide = set(raw_hide) if raw_hide else set()
+    user_hide_set = {str(w).strip().lower() for w in raw_hide if str(w).strip()}
+    settings['hide'] = user_hide_set
+
     if len(args) < 2:
         if lang == 'en':
             help_text = (
@@ -160,50 +234,53 @@ async def cmd_hide(message: types.Message, board_id: str | None, stream: str = '
             else: txt = "Ваш список скрытых слов пуст."
             await message.answer(txt)
         else:
-            words_str = ", ".join([f"<code>{escape_html(w)}</code>" for w in user_hide_set])
-            if lang == 'en': header = "🚫 <b>Hidden words:</b>"
-            elif lang == 'jp': header = "🚫 <b>NGワード:</b>"
-            else: header = "🚫 <b>Скрытые слова:</b>"
+            sorted_words = sorted(list(user_hide_set))
+            words_str = ", ".join([f"<code>{escape_html(w)}</code>" for w in sorted_words])
+            if lang == 'en': header = f"🚫 <b>Hidden words ({len(sorted_words)}):</b>"
+            elif lang == 'jp': header = f"🚫 <b>NGワード ({len(sorted_words)}):</b>"
+            else: header = f"🚫 <b>Скрытые слова ({len(sorted_words)}):</b>"
             await message.answer(f"{header}\n{words_str}", parse_mode="HTML")
     elif action == 'add':
         word_part = (message.text or message.caption or "").split(maxsplit=2)
-        if len(word_part) < 3:
+        if len(word_part) < 3 or not word_part[2].strip():
              err = "Usage: /hide add &lt;word&gt;"
              await message.answer(err)
              return
-        word = word_part[2].lower().strip()
+        word = word_part[2].strip().lower()
         if len(word) < 2:
             if lang == 'en': err = "Word too short."
             elif lang == 'jp': err = "単語が短すぎます。"
             else: err = "Слово слишком короткое."
             await message.answer(err)
             return
-        if len(user_hide_set) >= 60:
+        if word not in user_hide_set and len(user_hide_set) >= 60:
             if lang == 'en': msg = "🚫 Limit exceeded! Max 60 hidden words allowed."
             elif lang == 'jp': msg = "🚫 制限を超えました！最大60語までです。"
             else: msg = "🚫 Лимит превышен! Максимум 60 скрытых слов."
             await message.answer(msg, parse_mode="HTML")
             return
         user_hide_set.add(word)
-        spawn_task(update_user_settings_db(user_id, board_id, hidden_words=list(user_hide_set)))
+        spawn_task(update_user_settings_db(user_id, board_id, hidden_words=sorted(list(user_hide_set))))
         if lang == 'en': msg = f"✅ Word '<b>{escape_html(word)}</b>' added to hidden list."
         elif lang == 'jp': msg = f"✅ '<b>{escape_html(word)}</b>' をリストに追加しました。"
         else: msg = f"✅ Слово '<b>{escape_html(word)}</b>' добавлено в скрытые."
         await message.answer(msg, parse_mode="HTML")
-    elif action == 'remove' or action == 'del':
+    elif action in ('remove', 'del', 'delete', 'rm'):
         word_part = (message.text or message.caption or "").split(maxsplit=2)
-        if len(word_part) < 3:
+        if len(word_part) < 3 or not word_part[2].strip():
              await message.answer("Usage: /hide remove &lt;word&gt;")
              return
-        word = word_part[2].lower().strip()
+        word = word_part[2].strip().lower()
         if word in user_hide_set:
-            user_hide_set.remove(word)
-            spawn_task(update_user_settings_db(user_id, board_id, hidden_words=list(user_hide_set)))
+            user_hide_set.discard(word)
+            spawn_task(update_user_settings_db(user_id, board_id, hidden_words=sorted(list(user_hide_set))))
             if lang == 'en': msg = f"🗑 Word '<b>{escape_html(word)}</b>' removed from list."
             elif lang == 'jp': msg = f"🗑 '<b>{escape_html(word)}</b>' を削除しました。"
             else: msg = f"🗑 Слово '<b>{escape_html(word)}</b>' удалено из списка."
             await message.answer(msg, parse_mode="HTML")
         else:
+            user_hide_set.discard(word)
+            spawn_task(update_user_settings_db(user_id, board_id, hidden_words=sorted(list(user_hide_set))))
             if lang == 'en': msg = "Word not found in your list."
             elif lang == 'jp': msg = "リストに見つかりません。"
             else: msg = "Слово не найдено в вашем списке."
@@ -1839,13 +1916,53 @@ async def process_help_menu(callback: types.CallbackQuery, board_id: str | None,
                 "<code>/duel accept</code> — Принять активный вызов"
             )
 
+    elif cat == "boards":
+        from help_text import get_help_hub_page
+        text = get_help_hub_page("boards", lang=lang)
+    elif cat in ["chat", "economy", "media", "ai", "modes", "actions", "settings", "all"]:
+        from help_text import get_help_hub_page
+        text = get_help_hub_page(cat, lang=lang)
+    else:
+        from help_text import get_help_hub_page
+        text = get_help_hub_page(cat, lang=lang)
+
+    kb = get_help_keyboard(cat, board_id, stream)
     try:
-        await callback.message.edit_text(text, reply_markup=get_help_keyboard(cat, board_id, stream), parse_mode="HTML", disable_web_page_preview=True)
+        if callback.message.photo:
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower():
             runtime_logger.warning(f"process_help_menu edit_text TelegramBadRequest: {e}")
+            try:
+                from banner_manager import send_banner_message
+                await callback.message.delete()
+                await send_banner_message(
+                    bot=callback.message.bot,
+                    chat_id=callback.message.chat.id,
+                    caption=text,
+                    reply_markup=kb,
+                    category="start",
+                    parse_mode="HTML"
+                )
+            except Exception as e2:
+                runtime_logger.warning(f"process_help_menu banner fallback failed: {e2}")
     except Exception as e:
         runtime_logger.warning(f"process_help_menu edit_text failed: {e}")
+        try:
+            from banner_manager import send_banner_message
+            await callback.message.delete()
+            await send_banner_message(
+                bot=callback.message.bot,
+                chat_id=callback.message.chat.id,
+                caption=text,
+                reply_markup=kb,
+                category="start",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
     await callback.answer()
 
 try:

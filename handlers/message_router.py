@@ -28,6 +28,7 @@ from common.database import (
 )
 from common.db_pool import db_lock
 from common.spam_filter import _check_cross_board_spam, check_rate_limit as _check_rate_limit
+from common.forward_utils import is_forward_message, is_forwarded_from_bot, contains_board_post_header, format_forwarded_quote, extract_board_post_number
 from post_helpers import _quote_info_from_content
 from media_utils import extract_msg_media_file_id
 from shared_state import *
@@ -51,16 +52,14 @@ RE_ARCHIVE_LINK = re.compile(
 
 async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
     """
-    Parses archive links (t.me/tgchan_archive/..., tgach.top/..., >>12345, #12345) from the first line
+    Parses archive links (t.me/tgchan_archive/..., tgach.top/..., >>12345, #12345) from the text
     and resolves the corresponding post_num from the database.
     Returns: (resolved_post_num, cleaned_text)
     """
     if not text or not isinstance(text, str):
         return None, text
     
-    lines = text.split('\n', 1)
-    first_line = lines[0].strip()
-    match = RE_ARCHIVE_LINK.match(first_line)
+    match = RE_ARCHIVE_LINK.search(text)
     if not match:
         return None, text
     
@@ -91,7 +90,9 @@ async def resolve_archive_or_inline_reply(text: str) -> tuple[int | None, str]:
         return None, text
                     
     if resolved_post_num:
-        rest_text = lines[1].strip() if len(lines) > 1 else ""
+        prefix_part = text[:match.start()].strip()
+        suffix_part = text[match.end():].strip()
+        rest_text = f"{prefix_part} {suffix_part}".strip()
         cleaned_text = rest_text if rest_text else f">>{resolved_post_num}"
         return resolved_post_num, cleaned_text
         
@@ -102,7 +103,7 @@ from text_assets import (
     EARNING_NOTIFICATIONS, PENALTY_NOTIFICATIONS, REACTION_NOTIFY_PHRASES, ALBUM_EDUCATION_PHRASES, 
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP
 )
-from ai_manager import schedule_persona_reply, check_and_send_contextual_reply, transcribe_and_roast_voice_note
+from ai_manager import schedule_persona_reply, check_and_send_contextual_reply, transcribe_and_roast_voice_note, handle_music_roast, is_music_document
 import __main__ as main
 
 # Some functions like `spawn_task` and `execute_delayed_edit` are in main.py, 
@@ -295,8 +296,8 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                     db = await get_pool()
                     
                     if action == 'like':
-                        # Бонус за лайк: в среднем ~12 рублей (10-15 RUB)
-                        reward_amount = random.randint(10, 15)
+                        # Бонус за лайк: 15-30 ₪ за качественный контент
+                        reward_amount = random.randint(15, 30)
                         await db.execute(
                             """
                             INSERT INTO Users (user_id, board_id, balance, reaction_reward_counter) 
@@ -326,15 +327,15 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                                 global_balance = sum_row[0] if sum_row and sum_row[0] else 0
                             
                             if random.random() < 0.5:
-                                display_reward = random.randint(35, 65)
+                                display_reward = random.randint(75, 150)
                                 notif_tpl = random.choice(EARNING_NOTIFICATIONS)
-                                notif_text = notif_tpl.format(amount=display_reward, balance=int(global_balance))
+                                notif_text = notif_tpl.format(amount=display_reward, balance=int(global_balance)).replace("RUB", "₪").replace("₽", "₪")
                                 final_bot = bot_instance if bot_instance else reaction.bot
                                 spawn_task(_send_notification_quietly(final_bot, author_id, notif_text))
                     
                     elif action == 'dislike':
-                        # Штраф за дизлайк/сажу: в среднем ~5.5 рублей (4-7 RUB, меньше чем за лайк)
-                        penalty_amount = random.randint(4, 7)
+                        # Штраф за дизлайк/сажу: 8-16 ₪ (мотивирует постить годноту, а не спам)
+                        penalty_amount = random.randint(8, 16)
                         await deduct_user_global_balance(db, author_id, board_id, penalty_amount)
                         await db.execute(
                             """
@@ -364,7 +365,7 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                                 global_balance = sum_row[0] if sum_row and sum_row[0] else 0
                             
                             if random.random() < 0.5:
-                                penalty_display = random.randint(15, 30)
+                                penalty_display = random.randint(40, 80)
                                 notif_pool = getattr(shared_state, 'PENALTY_NOTIFICATIONS', None)
                                 if not notif_pool:
                                     try:
@@ -372,16 +373,16 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
                                         notif_pool = P_NOTIFS
                                     except ImportError:
                                         notif_pool = [
-                                            "💩 <b>САЖА-ШТРАФ | TGACH</b>\nАноны закидали твой пост сажей! Списано <b>-{amount} RUB</b>.\n💰 Баланс: <code>{balance} RUB</code>\n👉 Пополнить баланс: /work"
+                                            "💩 <b>САЖА-ШТРАФ | TGACH</b>\nАноны закидали твой пост сажей! Списано <b>-{amount} ₪</b>.\n💰 Баланс: <code>{balance} ₪</code>\n👉 Пополнить баланс: /work"
                                         ]
                                 notif_tpl = random.choice(notif_pool)
-                                notif_text = notif_tpl.format(amount=penalty_display, balance=int(global_balance))
+                                notif_text = notif_tpl.format(amount=penalty_display, balance=int(global_balance)).replace("RUB", "₪").replace("₽", "₪")
                                 final_bot = bot_instance if bot_instance else reaction.bot
                                 spawn_task(_send_notification_quietly(final_bot, author_id, notif_text))
                     
                     elif action == 'neutral':
-                        # Символический бонус за активность в треде (1-3 RUB)
-                        neutral_reward = random.randint(1, 3)
+                        # Символический бонус за активность в треде (2-5 ₪)
+                        neutral_reward = random.randint(2, 5)
                         await db.execute(
                             """
                             INSERT INTO Users (user_id, board_id, balance) 
@@ -439,9 +440,18 @@ async def handle_message_reaction(reaction: types.MessageReactionUpdated, board_
 @message_router.message(~F.media_group_id)
 async def handle_message(message: Message, board_id: str | None, stream: str = 'ru'):
     user_id = message.from_user.id
-    print(f"📩 [MSG RECEIVED] user={user_id} chat={message.chat.id} board={board_id} text={repr(message.text or message.caption or message.content_type)}")
+    try:
+        print(f"📩 [MSG RECEIVED] user={user_id} chat={message.chat.id} board={board_id} text={repr(message.text or message.caption or message.content_type)}")
+    except Exception:
+        try:
+            print(f"[MSG RECEIVED] user={user_id} chat={message.chat.id} board={board_id}")
+        except Exception:
+            pass
     if not board_id:
-        print(f"⚠️ [MSG REJECTED] board_id is None for user={user_id} bot={message.bot.id}")
+        try:
+            print(f"⚠️ [MSG REJECTED] board_id is None for user={user_id} bot={message.bot.id}")
+        except Exception:
+            pass
         return
     if board_id in THREAD_BOARDS:
         if await ensure_user_in_valid_thread(message.bot, board_id, user_id):
@@ -586,7 +596,7 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         b_data['last_activity'][user_id] = datetime.now(UTC)
         if user_id not in b_data['users']['active']:
             b_data['users']['active'].add(user_id)
-            b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set()}
+            b_data.setdefault('user_settings', {})[user_id] = {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False}
             try:
                 await asyncio.wait_for(add_or_activate_user(user_id, board_id), timeout=3.0)
                 print(f"✅ [{board_id}] Добавлен новый пользователь: ID {user_id}")
@@ -802,7 +812,13 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                     async with storage_lock:
                         message_to_post[lookup_key] = reply_to_post
                     print(f"👀 ID #{reply_to_post} восстановлен через чтение текста сообщения!")
+    is_fwd_bot = is_forwarded_from_bot(message, message.bot)
+    is_fwd_msg = is_forward_message(message)
+    is_forward = is_fwd_bot or is_fwd_msg
+
     content = {'type': message.content_type}
+    if is_forward:
+        content['is_forward'] = True
     text_for_corpus = None
     # file_unique_id из апдейта Telegram — основа определения баяна.
     # Ничего не качаем и не хешируем, просто читаем готовое поле.
@@ -812,6 +828,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         html_val = getattr(message, 'html_text', None)
         raw_text_html = html_val if isinstance(html_val, str) else (message.text or "")
         safe_html_text = sanitize_html(raw_text_html)
+        if is_forward or contains_board_post_header(safe_html_text):
+            safe_html_text = format_forwarded_quote(safe_html_text, is_forward=is_forward)
         content.update({'text': safe_html_text})
     elif message.content_type in ['photo', 'video', 'animation', 'document', 'audio', 'voice']:
         text_for_corpus = message.caption
@@ -820,6 +838,8 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         caption_html_val = getattr(message, 'caption_html_text', None)
         raw_caption_html = caption_html_val if isinstance(caption_html_val, str) else (message.caption or "")
         safe_caption_html = sanitize_html(raw_caption_html)
+        if safe_caption_html and (is_forward or contains_board_post_header(safe_caption_html)):
+            safe_caption_html = format_forwarded_quote(safe_caption_html, is_forward=is_forward)
         content.update({'file_id': file_id_obj.file_id, 'caption': safe_caption_html})
         _media_unique_id = getattr(file_id_obj, 'file_unique_id', None)
         file_name = getattr(file_id_obj, 'file_name', None)
@@ -850,9 +870,6 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
         async with storage_lock: last_messages.append(text_for_corpus)
         if board_id != 'trash':
             spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_for_corpus, board_id, stream=stream))
-    elif message.content_type in ('voice', 'video_note'):
-        if board_id != 'trash':
-            spawn_task(transcribe_and_roast_voice_note(message.bot, message, board_id, stream=stream))
     if not is_shadow_muted and text_for_corpus and not is_admin(user_id, board_id):
         if is_spam_filtered(text_for_corpus, board_id, user_id):
             is_shadow_muted = True
@@ -896,7 +913,13 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
             is_shadow_muted=False,
             stream=stream
         ))
-        if post_num:
+        if post_num and user_id > 0 and not getattr(message.from_user, 'is_bot', False):
+            if message.content_type in ('voice', 'video_note') and board_id != 'trash':
+                spawn_task(transcribe_and_roast_voice_note(message.bot, message, board_id, stream=stream, post_num=post_num))
+            elif message.content_type == 'audio' and board_id != 'trash':
+                spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=post_num))
+            elif message.content_type == 'document' and is_music_document(message.document) and board_id != 'trash':
+                spawn_task(handle_music_roast(message.bot, message, board_id, stream=stream, post_num=post_num))
             should_reply = False
             def extract_msg_media_file_id(msg):
                 if not msg: return None
@@ -1219,11 +1242,16 @@ async def handle_media_group_init(message: Message, board_id: str | None, stream
                         reply_to_post = info[0]
             raw_caption_html = getattr(message, 'caption_html_text', message.caption or "")
             safe_caption_html = sanitize_html(raw_caption_html)
+            is_fwd_group = is_forwarded_from_bot(message, message.bot) or is_forward_message(message)
+            if safe_caption_html and (is_fwd_group or contains_board_post_header(safe_caption_html)):
+                safe_caption_html = format_forwarded_quote(safe_caption_html, is_forward=is_fwd_group)
             if not reply_to_post and raw_caption_html:
                 resolved_pnum, cleaned_cap = await resolve_archive_or_inline_reply(raw_caption_html)
                 if resolved_pnum:
                     reply_to_post = resolved_pnum
                     safe_caption_html = sanitize_html(cleaned_cap)
+                    if is_fwd_group or contains_board_post_header(safe_caption_html):
+                        safe_caption_html = format_forwarded_quote(safe_caption_html, is_forward=is_fwd_group)
                     print(f"🔗 ID #{reply_to_post} распознан из архивной ссылки в подписи медиагруппы!")
             group.update({
                 'board_id': board_id, 'author_id': user_id, 'stream': stream,

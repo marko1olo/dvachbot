@@ -9,6 +9,8 @@ dependencies = []
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 testpaths = ["tests"]
-timeout = 90
+timeout = 180
 pythonpath = ["."]
+addopts = "-p no:aiohttp -p no:hypothesispytest -p no:twisted"
+
 

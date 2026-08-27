@@ -5,6 +5,7 @@ import asyncio
 from html.parser import HTMLParser
 from openai import AsyncOpenAI
 from common.token_pool import groq_pool, google_pool
+from common.text_utils import clean_ai_thinking, strip_thinking_tags
 
 logger = logging.getLogger("summarize")
 
@@ -67,6 +68,7 @@ def _load_google_keys() -> list[str]:
     return []
 
 _key_cooldowns: dict[tuple[str, str], float] = {}
+_provider_cooldowns: dict[str, float] = {}
 
 async def summarize_text_with_hf(prompt: str, text_dump: str, model_preference: str | None = None) -> str:
     """
@@ -82,8 +84,7 @@ async def summarize_text_with_hf(prompt: str, text_dump: str, model_preference: 
 
 
 async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = None, model_preference: str | None = None) -> str:
-    if model_preference == "persona" or model_preference == "persona_gemini":
-        # Persona Bot priority: 3.5 Flash-Lite (500-1500 RPD) -> 3.1 Flash-Lite -> Qwen -> 3.6 Flash -> 3.7 Flash
+    if model_preference in ("persona", "persona_gemini"):
         models_cascade = [
             ("gemini-3.5-flash-lite", "gemini"),
             ("gemini-3.1-flash-lite", "gemini"),
@@ -106,14 +107,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
             ("gemini-3.7-flash", "gemini"),
             ("qwen/qwen3.6-27b", "groq"),
         ]
-    elif model_preference == "qwen":
-        models_cascade = [
-            ("qwen/qwen3.6-27b", "groq"),
-            ("gemini-3.5-flash-lite", "gemini"),
-            ("gemini-3.1-flash-lite", "gemini"),
-            ("gemini-3.6-flash", "gemini"),
-        ]
-    elif model_preference == "llama":
+    elif model_preference in ("qwen", "llama", "groq"):
         models_cascade = [
             ("qwen/qwen3.6-27b", "groq"),
             ("gemini-3.5-flash-lite", "gemini"),
@@ -150,6 +144,10 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
     now_ts = time.time()
 
     for model_name, provider in models_cascade:
+        if _provider_cooldowns.get(provider, 0) > now_ts:
+            logger.info(f"{provider} is in TPD cooldown ({_provider_cooldowns[provider] - now_ts:.1f}s remaining). Skipping model {model_name}.")
+            continue
+
         if provider == "gemini":
             keys = google_pool.get_all_active_tokens()
             base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -196,21 +194,7 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     if choice.message is not None:
                         result = choice.message.content
                         if result:
-                            import re
-                            # Удаляем преамбулы рассуждений LLM (Thinking process)
-                            result = re.sub(r"(?i)^(?:Here's a thinking process:?|Thinking Process:?|Here is a summary:?)\s*", "", result).strip()
-                            if "<think" in result.lower():
-                                if "</think>" in result.lower():
-                                    result = re.sub(r"<think\b[^>]*>.*?</think>", "", result, flags=re.DOTALL | re.IGNORECASE).strip()
-                                else:
-                                    parts = re.split(r"</think>", result, flags=re.IGNORECASE)
-                                    if len(parts) > 1 and parts[1].strip():
-                                        result = parts[1].strip()
-                                    else:
-                                        parts2 = re.split(r"<think\b[^>]*>", result, flags=re.IGNORECASE)
-                                        result = (parts2[0].strip() or parts2[1].strip()) if len(parts2) > 1 else result.strip()
-                            result = re.sub(r"(?i)^(?:Here's a thinking process:?|Thinking Process:?)\s*", "", result).strip()
-                            result = result.strip()
+                            result = clean_ai_thinking(result)
                             if result:
                                 return result
                             else:
@@ -222,9 +206,12 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                 if "404" in err_str or "model_not_found" in err_str or "does not exist" in err_str.lower():
                     logger.warning(f"⚠️ {provider} model {model_name} not found (404). Skipping model.")
                     break
-                if provider == "groq" and ("401" in err_str or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower()):
-                    logger.error(f"❌ Groq key {api_key[:12]}... is unauthorized (401). Removing from pool.")
-                    groq_pool.ban_token(api_key)
+                if "401" in err_str or "unauthorized" in err_str.lower() or "invalid api key" in err_str.lower():
+                    logger.error(f"❌ {provider} key {api_key[:12]}... is unauthorized (401). Removing from pool.")
+                    if provider == "gemini":
+                        google_pool.remove_token(api_key)
+                    else:
+                        groq_pool.remove_token(api_key)
                     await asyncio.sleep(2.5)
                     continue  # try next key
                 if "413" in err_str or "too large" in err_str.lower() or "context_length_exceeded" in err_str.lower():
@@ -245,7 +232,8 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                     await asyncio.sleep(3.0)
                     continue  # try next key, NOT next model
                 if "tokens per day" in err_str.lower() or "tpd" in err_str.lower():
-                    logger.warning(f"⚠️ {provider} daily token limit (TPD) reached for {model_name}. Skipping model.")
+                    logger.warning(f"⚠️ {provider} daily token limit (TPD) reached for {model_name}. Pausing {provider} for 15m.")
+                    _provider_cooldowns[provider] = time.time() + 900.0
                     break
                 if "429" in err_str or "rate limit" in err_str.lower() or "quota" in err_str.lower() or "exhausted" in err_str.lower():
                     consecutive_429 += 1
@@ -260,6 +248,9 @@ async def _summarize_inner(prompt: str, text_dump: str, hf_token: str | None = N
                         break
                     await asyncio.sleep(3.0)
                     continue  # try next key
+                if "timeout" in err_str.lower() or "timed out" in err_str.lower():
+                    logger.warning(f"⚠️ {provider} request timed out for {model_name}. Trying next candidate...")
+                    break
                 # Any other error: skip model entirely
                 logger.warning(f"⚠️ Unhandled error for {model_name}: {err_str[:80]}. Skipping model.")
                 await asyncio.sleep(0.5)
@@ -302,32 +293,86 @@ def _telegraph_create_account_sync() -> str:
     return result.get("access_token", "")
 
 def _telegraph_create_page_sync(token: str, title: str, content_nodes: list) -> str:
-    """Create a Telegraph page and return its URL."""
+    """Create a Telegraph page and return its URL with auto-shrinking if CONTENT_TOO_BIG."""
     import json
     import requests
     import time
     url = "https://api.telegra.ph/createPage"
+    
+    def _get_payload_size(nodes: list) -> int:
+        return len(json.dumps(nodes, ensure_ascii=False).encode('utf-8'))
+
+    # Ensure initial payload is safely under Telegraph's limit (<= 55,000 bytes)
+    while _get_payload_size(content_nodes) > 55000:
+        if len(content_nodes) > 1:
+            if isinstance(content_nodes[-1], dict) and content_nodes[-1].get("children") == [{"tag": "i", "children": ["... (Текст сокращен из-за лимита Telegraph)"]}]:
+                content_nodes.pop()
+            new_len = max(1, int(len(content_nodes) * 0.75))
+            if new_len >= len(content_nodes):
+                new_len = len(content_nodes) - 1
+            content_nodes = content_nodes[:new_len]
+            content_nodes.append({"tag": "p", "children": [{"tag": "i", "children": ["... (Текст сокращен из-за лимита Telegraph)"]}]})
+        else:
+            # Single massive node: truncate text inside the node
+            node = content_nodes[0]
+            if isinstance(node, dict) and "children" in node and node["children"]:
+                first_child = node["children"][0]
+                if isinstance(first_child, str):
+                    node["children"][0] = first_child[:8000] + "… (Текст сокращен из-за лимита Telegraph)"
+                else:
+                    node["children"] = ["... (Текст сокращен из-за лимита Telegraph)"]
+            else:
+                content_nodes = [{"tag": "p", "children": ["... (Текст сокращен из-за лимита Telegraph)"]}]
+            break
+
     payload = {
         "access_token": token,
         "title": title[:256],  # Telegraph title limit
-        "content": json.dumps(content_nodes),
+        "content": json.dumps(content_nodes, ensure_ascii=False),
         "return_content": "false"
     }
     
     last_err = None
-    for attempt in range(3):
+    for attempt in range(4):
         try:
             resp = requests.post(url, data=payload, timeout=20, proxies={"http": None, "https": None})
             resp.raise_for_status()
             data = resp.json()
             if not data.get("ok"):
-                raise RuntimeError(f"Telegraph createPage error: {data.get('error', 'unknown')}")
+                err_str = str(data.get("error", "unknown"))
+                if "CONTENT_TOO_BIG" in err_str:
+                    logger.warning(f"Telegraph reported CONTENT_TOO_BIG on attempt {attempt}, reducing nodes...")
+                    if isinstance(content_nodes[-1], dict) and content_nodes[-1].get("children") == [{"tag": "i", "children": ["... (Текст сокращен из-за лимита Telegraph)"]}]:
+                        content_nodes.pop()
+                    if len(content_nodes) > 1:
+                        new_len = max(1, int(len(content_nodes) * 0.6))
+                        if new_len >= len(content_nodes):
+                            new_len = len(content_nodes) - 1
+                        content_nodes = content_nodes[:new_len]
+                        content_nodes.append({"tag": "p", "children": [{"tag": "i", "children": ["... (Текст сокращен из-за лимита Telegraph)"]}]})
+                    else:
+                        content_nodes = [{"tag": "p", "children": ["... (Текст сокращен из-за лимита Telegraph)"]}]
+                    payload["content"] = json.dumps(content_nodes, ensure_ascii=False)
+                    continue
+                raise RuntimeError(f"Telegraph createPage error: {err_str}")
             return data["result"]["url"]
         except Exception as e:
             last_err = e
-            time.sleep(2 * (attempt + 1))
+            if "CONTENT_TOO_BIG" in str(e):
+                if isinstance(content_nodes[-1], dict) and content_nodes[-1].get("children") == [{"tag": "i", "children": ["... (Текст сокращен из-за лимита Telegraph)"]}]:
+                    content_nodes.pop()
+                if len(content_nodes) > 1:
+                    new_len = max(1, int(len(content_nodes) * 0.6))
+                    if new_len >= len(content_nodes):
+                        new_len = len(content_nodes) - 1
+                    content_nodes = content_nodes[:new_len]
+                    content_nodes.append({"tag": "p", "children": [{"tag": "i", "children": ["... (Текст сокращен из-за лимита Telegraph)"]}]})
+                else:
+                    content_nodes = [{"tag": "p", "children": ["... (Текст сокращен из-за лимита Telegraph)"]}]
+                payload["content"] = json.dumps(content_nodes, ensure_ascii=False)
+            time.sleep(1.5 * (attempt + 1))
             
-    raise RuntimeError(f"Telegraph createPage failed after 3 attempts: {last_err}")
+    raise RuntimeError(f"Telegraph createPage failed after retries: {last_err}")
 
 def get_telegraph_token() -> str:
     global _telegraph_token_cache
@@ -485,16 +530,16 @@ def _create_telegraph_page_blocking(title: str, html_content: str, author: str =
     if not token:
         raise RuntimeError("API token is required")
         
-    # Prevent Telegraph CONTENT_TOO_BIG error (limits at ~64KB of JSON payload)
-    if len(html_content) > 30000:
-        logger.warning(f"Telegraph content too big ({len(html_content)} chars), pre-truncating to 30000...")
-        truncated = html_content[:30000]
+    # Prevent Telegraph CONTENT_TOO_BIG error (limits at ~64KB of JSON payload, AST nodes take ~3x size)
+    if len(html_content) > 18000:
+        logger.warning(f"Telegraph content too big ({len(html_content)} chars), pre-truncating to 18000...")
+        truncated = html_content[:18000]
         last_lt = truncated.rfind('<')
         last_gt = truncated.rfind('>')
         if last_lt > last_gt:
             # We cut right in the middle of a tag, truncate before the tag
             truncated = truncated[:last_lt]
-        html_content = truncated + "\n\n<i>... (Саммари слишком большое, конец текста обрезан)</i>"
+        html_content = truncated + "\n\n<i>... (Саммари сокращено по лимиту Telegraph)</i>"
         
     nodes = _text_to_telegraph_nodes(html_content)
     return _telegraph_create_page_sync(token, title, nodes)

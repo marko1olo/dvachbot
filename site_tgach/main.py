@@ -208,7 +208,9 @@ def get_real_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    return request.client.host
+    if getattr(request, "client", None) and getattr(request.client, "host", None):
+        return request.client.host
+    return "127.0.0.1"
 
 
 GEOIP_READER = None
@@ -813,7 +815,7 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-URL_PATTERN = re.compile(r'(https?://[^\s<>"\'`]+)')
+URL_PATTERN = re.compile(r'(?<!["\'=])(https?://[^\s<>"\'`\]]+)')
 
 
 def _clean_url_and_suffix(full: str):
@@ -3196,7 +3198,7 @@ def _apply_bbcode_and_effects(text: str) -> str:
         url = match.group(1)
         if url.strip().lower().startswith("javascript:"):
             url = "#"
-        safe_url = html.escape(url, quote=True)
+        safe_url = html.escape(html.unescape(url), quote=True)
         btn_text = match.group(2)
         return (
             f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer" '
@@ -3235,8 +3237,8 @@ def format_post_text(text: str) -> str:
 
     text = _apply_xss_protection(text)
     text = html.escape(text, quote=True)
-    text = _format_lines_and_greentext(text)
     text = _apply_bbcode_and_effects(text)
+    text = _format_lines_and_greentext(text)
 
     return text
 
@@ -4832,6 +4834,10 @@ async def api_makaba_thread(board_id: str, thread_num: int):
 
     if board_id not in BOARD_CONFIG:
         return JSONResponse({}, status_code=404)
+    real_thread_id = await get_thread_op_by_post_num(thread_num)
+    if not real_thread_id:
+        return JSONResponse({"Error": "Thread not found"}, status_code=404)
+    thread_num = int(real_thread_id)
     thread_data = await get_thread_by_op_post(thread_num)
     if not thread_data:
         return JSONResponse({"Error": "Thread not found"}, status_code=404)
@@ -6093,7 +6099,7 @@ async def api_makaba_posting(
             spawn_task(process_backlinks(new_post_num, content["text"], reply_to))
             if board not in ["thread", "test"]:
                 await process_mentions_and_notify(
-                    new_post_num, board, content["text"], reply_to
+                    new_post_num, board, content["text"], author_id, reply_to
                 )
 
     return {"Status": "OK", "Num": new_post_num}
@@ -6307,6 +6313,10 @@ async def read_thread(
     real_thread_id = await get_thread_op_by_post_num(post_num)
     if not real_thread_id:
         raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Если передан номер поста-ответа, редиректим на тред с якорем на пост
+    if str(real_thread_id) != str(post_num):
+        return RedirectResponse(url=f"/{board_id}/res/{real_thread_id}.html#post-{post_num}", status_code=302)
 
     # --- HYBRID DELIVERY ---
     user_agent = request.headers.get("user-agent", "").lower()
@@ -9138,6 +9148,11 @@ async def api_get_thread(
 ):
     board_id = board_id.lower()
 
+    real_thread_id = await get_thread_op_by_post_num(thread_id)
+    if not real_thread_id:
+        return []
+    thread_id = int(real_thread_id)
+
     # Кэширование на основе версии доски (обновляется при любом посте)
     current_version = BOARD_VERSIONS[board_id]
     stream = getattr(request.state, "stream", "ru")
@@ -10809,22 +10824,22 @@ async def get_telegram_file(
     if file_id.startswith(("AgAC", "AAMC")):
         orig_fid = None
         try:
-            async with get_db_connection() as conn:
-                async with conn.execute(
-                    "SELECT file_id FROM FileRegistry WHERE thumbnail_id = ? LIMIT 1",
+            db = await get_pool()
+            async with db.execute(
+                "SELECT file_id FROM FileRegistry WHERE thumbnail_id = ? LIMIT 1",
+                (file_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    orig_fid = row[0]
+            if not orig_fid:
+                async with db.execute(
+                    "SELECT original_file_id FROM PostFiles WHERE thumbnail_file_id = ? LIMIT 1",
                     (file_id,),
                 ) as cursor:
                     row = await cursor.fetchone()
                     if row:
                         orig_fid = row[0]
-                if not orig_fid:
-                    async with conn.execute(
-                        "SELECT original_file_id FROM PostFiles WHERE thumbnail_file_id = ? LIMIT 1",
-                        (file_id,),
-                    ) as cursor:
-                        row = await cursor.fetchone()
-                        if row:
-                            orig_fid = row[0]
         except Exception as e:
             logger.error(f"Error querying original file for thumbnail fallback: {e}", exc_info=True)
             
@@ -10835,22 +10850,22 @@ async def get_telegram_file(
     elif file_id.startswith(("BAAC", "CQAC", "BQAC", "CgAC")):
         thumb_fid = None
         try:
-            async with get_db_connection() as conn:
-                async with conn.execute(
-                    "SELECT thumbnail_id FROM FileRegistry WHERE file_id = ? LIMIT 1",
+            db = await get_pool()
+            async with db.execute(
+                "SELECT thumbnail_id FROM FileRegistry WHERE file_id = ? LIMIT 1",
+                (file_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row and row[0]:
+                    thumb_fid = row[0]
+            if not thumb_fid:
+                async with db.execute(
+                    "SELECT thumbnail_file_id FROM PostFiles WHERE original_file_id = ? LIMIT 1",
                     (file_id,),
                 ) as cursor:
                     row = await cursor.fetchone()
                     if row and row[0]:
                         thumb_fid = row[0]
-                if not thumb_fid:
-                    async with conn.execute(
-                        "SELECT thumbnail_file_id FROM PostFiles WHERE original_file_id = ? LIMIT 1",
-                        (file_id,),
-                    ) as cursor:
-                        row = await cursor.fetchone()
-                        if row and row[0]:
-                            thumb_fid = row[0]
         except Exception as e:
             logger.error(f"Error querying thumbnail file for video fallback: {e}", exc_info=True)
 

@@ -48,13 +48,19 @@ import random
 import re
 import asyncio
 import httpx
+
+try:
+    from main import cmd_mega
+except Exception:
+    async def cmd_mega(*args, **kwargs):
+        pass
 import os
 import logging
 
 logger = logging.getLogger(__name__)
 
 from datetime import datetime, timedelta, UTC
-from aiogram import Router, types, F
+from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest, TelegramRetryAfter, TelegramAPIError
@@ -115,17 +121,22 @@ def apply_tinfoil_damage(
 
 
 # ====================
-# EARN MENU
+# EARN MENU (Clean Route to Career Hub)
 # ====================
 
-@economy_router.message(Command("earn", "bomj", "economy", "work", "job", "работа", "биржа", ignore_case=True, ignore_mention=True))
 async def cmd_work_menu(message: types.Message, board_id: str | None = None):
+    """
+    Career work hub delegate.
+    Primary command routing is handled by main.py:cmd_work (@dp.message(Command(...))).
+    """
     if not board_id:
         return
-    import main
-    if hasattr(main, 'cmd_work'):
-        await main.cmd_work(message, board_id)
-        return
+    try:
+        from main import cmd_work
+        await cmd_work(message, board_id=board_id)
+    except Exception:
+        pass
+
 
 @economy_router.callback_query(F.data.in_({"work_bottles", "work_sell_mother"}))
 async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = None):
@@ -136,13 +147,8 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
     ans_text = ""
     db = await get_pool()
     async with db_lock:
-        async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
-            row = await c.fetchone()
-            active_items_str = row[0] if row and row[0] else "{}"
-        try:
-            active_items = json.loads(active_items_str)
-        except (json.JSONDecodeError, TypeError):
-            active_items = {}
+        from common.bot_helpers import _get_user_active_items
+        active_items = await _get_user_active_items(db, user_id, board_id)
     
         if action == "bottles":
             now = int(time.time())
@@ -157,9 +163,11 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 active_items["last_bottles"] = now
                 
                 await add_user_global_balance(db, user_id, board_id, earned)
+                await record_user_transaction(db, user_id, earned, 'work', 'Сдал стеклотару у теплотрассы')
                 await db.execute(
-                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                    (json.dumps(active_items), user_id, board_id)
+                    "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                    (user_id, board_id, json.dumps(active_items))
                 )
                 await db.commit()
                 ans_text = f"🍾 Ты успешно сдал бутылки у теплотрассы и заработал {earned} Шекелей!"
@@ -172,14 +180,32 @@ async def cb_work_action(callback: types.CallbackQuery, board_id: str | None = N
                 await add_user_global_balance(db, user_id, board_id, 8000)
                 await record_user_transaction(db, user_id, 8000, 'work', 'Продал мать на органы')
                 await db.execute(
-                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                    (json.dumps(active_items), user_id, board_id)
+                    "INSERT INTO Users (user_id, board_id, active_items) VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id, board_id) DO UPDATE SET active_items = excluded.active_items",
+                    (user_id, board_id, json.dumps(active_items))
                 )
                 await db.commit()
                 ans_text = "💸 Сделка века! Ты продал мать и получил 8000 Шекелей! Клеймо занесено в твоё Личное Дело и Паспорт."
 
     if ans_text:
-        await callback.answer(ans_text, show_alert=True)
+        try:
+            await callback.answer(ans_text, show_alert=True)
+        except Exception:
+            try:
+                await callback.answer(ans_text[:100], show_alert=False)
+            except Exception:
+                pass
+
+    # In-place refresh of the career work card
+    try:
+        from main import _build_work_card
+        text, kb = await _build_work_card(user_id, board_id)
+        if callback.message.photo:
+            await callback.message.edit_caption(caption=text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
 
 # ====================
 # INTERACTIVE COMMANDS
@@ -314,7 +340,7 @@ async def cmd_heist(message: types.Message, board_id: str | None = None):
         await message.reply(f"❌ Ошибка ИИ при ограблении: {e}")
 
 
-@economy_router.message(Command("partyvan"))
+# Note: Active /partyvan handler is registered on main.dp with full board announcements & protections
 async def cmd_partyvan(message: types.Message, board_id: str | None = None):
     if not board_id: return
     user_id = message.from_user.id
@@ -379,23 +405,12 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
 
     if target_items.get("tinfoil_hat", 0) > now:
         active_items["partyvan_gun"] = False
-        destroyed, left_h, left_m, _ = apply_tinfoil_damage(target_items, now, hours_damage=12.0, burn_chance=0.50)
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(target_items), target_id, board_id))
             await db.commit()
         
-        if destroyed:
-            attacker_msg = "🚔 Твой вызов ОМОНа отбит, но Шапочка из фольги жертвы <b>СГОРЕЛА ДОТЛА</b> от штурма спецназа! Защиты больше нет — цель открыта для повторной атаки!"
-            target_msg = f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b> Анон <b>[{get_anon_id(user_id)}]</b> попытался вызвать на тебя Пативэн, но Шапочка спасла тебя от КПЗ и <b>расплавилась дотла</b>! Ты остался <b>БЕЗ ЗАЩИТЫ</b>!"
-        else:
-            attacker_msg = f"🚔 Твой вызов ОМОНа отбит Шапочкой из фольги! Но от мощного штурма её прочность упала на 12ч (осталось {left_h}ч {left_m}мин)."
-            target_msg = f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался вызвать на тебя Пативэн, но Шапочка из фольги скрыла твои координаты! Она потеряла 12ч защиты (осталось {left_h}ч {left_m}мин)."
-
-        try: await message.bot.send_message(user_id, attacker_msg, parse_mode="HTML")
-        except Exception: pass
+        target_msg = f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался вызвать на тебя Пативэн, но Шапочка из фольги скрыла твои координаты!"
         try: await message.bot.send_message(target_id, target_msg, parse_mode="HTML")
         except Exception: pass
         try: await message.delete()
@@ -443,7 +458,7 @@ async def cmd_partyvan(message: types.Message, board_id: str | None = None):
     except Exception:
         pass
 
-@economy_router.message(Command("shit"))
+# Note: Active /shit handler is registered on main.dp with tinfoil bounce & debuff phrases
 async def cmd_shit(message: types.Message, board_id: str | None = None):
     if not board_id: return
     user_id = message.from_user.id
@@ -555,7 +570,7 @@ async def cmd_shit(message: types.Message, board_id: str | None = None):
     except Exception:
         pass
 
-@economy_router.message(Command("rob"))
+# Note: Active /rob handler is registered on main.dp with knife item & Wasserman vest protection
 async def cmd_rob(message: types.Message, board_id: str | None = None):
     if not board_id: return
     user_id = message.from_user.id
@@ -679,7 +694,7 @@ async def cmd_rob(message: types.Message, board_id: str | None = None):
     try: await message.delete()
     except Exception: pass
 
-@economy_router.message(Command("curse"))
+# Note: Active /curse handler is registered on main.dp with laxative diarrhea AI rewrite & debuff phrases
 async def cmd_curse(message: types.Message, board_id: str | None = None):
     if not board_id: return
     user_id = message.from_user.id
@@ -741,20 +756,14 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
     except Exception: target_items = {}
 
     if target_items.get("tinfoil_hat", 0) > now:
-        destroyed, left_h, left_m, _ = apply_tinfoil_damage(target_items, now, hours_damage=4.0, burn_chance=0.10)
+        active_items["laxative_gun"] = False
         async with db_lock:
             await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
                              (json.dumps(active_items), user_id, board_id))
-            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
-                             (json.dumps(target_items), target_id, board_id))
             await db.commit()
             
-        if destroyed:
-            attacker_msg = "🚽 Твоё проклятие отскочило от Шапочки из фольги жертвы! Своё слабительное ты потратил впустую, но от едкой магии Шапочка жертвы <b>СГОРЕЛА ДОТЛА</b>!"
-            target_msg = f"🔥 <b>ШАПОЧКА СГОРЕЛА!</b> Анон <b>[{get_anon_id(user_id)}]</b> попытался подсыпать тебе слабительное, но твоя Шапочка из фольги спасла твои штаны! От едкой химии она <b>расплавилась</b>!"
-        else:
-            attacker_msg = f"🚽 Твоё проклятие отскочило от Шапочки из фольги жертвы! Своё слабительное ты потратил впустую. Фольга жертвы потеряла 4ч (осталось {left_h}ч {left_m}мин)."
-            target_msg = f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался подсыпать тебе слабительное, но твоя Шапочка из фольги спасла твои штаны! Она потеряла 4ч прочности (осталось {left_h}ч {left_m}мин)."
+        attacker_msg = "🚽 Твоё проклятие отскочило от Шапочки из фольги жертвы! Своё слабительное ты потратил впустую."
+        target_msg = f"👽 Анон <b>[{get_anon_id(user_id)}]</b> попытался подсыпать тебе слабительное, но твоя Шапочка из фольги спасла твои штаны!"
 
         try: await message.bot.send_message(user_id, attacker_msg, parse_mode="HTML")
         except Exception: pass
@@ -784,7 +793,7 @@ async def cmd_curse(message: types.Message, board_id: str | None = None):
     try: await message.delete()
     except Exception: pass
 
-@economy_router.message(Command("schizopill", "schizo_pill", "шизотаблетка", "шизопил"))
+# Note: Active /schizopill handler is registered on main.dp with paranoid schizo AI rewrite & suit immunity
 async def cmd_schizopill(message: types.Message, board_id: str | None = None):
     if not board_id: return
     user_id = message.from_user.id
@@ -883,4 +892,74 @@ async def cmd_schizopill(message: types.Message, board_id: str | None = None):
     except Exception: pass
     try: await message.delete()
     except Exception: pass
+
+
+# Note: Active /mega handler is registered on main.dp with persistent board pin settings
+async def cmd_mega(message: types.Message, board_id: str | None = None, stream: str = 'ru', bot: Bot | None = None):
+    if not board_id:
+        return
+    user_id = message.from_user.id if message.from_user else 0
+    target_id = await get_reply_target(message)
+    if not target_id:
+        await message.reply("Сделай Reply на СВОЙ пост, который хочешь закрепить!")
+        return
+    if target_id != user_id:
+        await message.reply("Мегафон работает только на свои собственные посты!")
+        return
+
+    db = await get_pool()
+    async with db.execute("SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)) as c:
+        row = await c.fetchone()
+        active_items_str = row[0] if row and row[0] else "{}"
+    try: active_items = json.loads(active_items_str)
+    except Exception: active_items = {}
+
+    if not active_items.get("megaphone_gun"):
+        await message.reply("У тебя нет рупора! Купи его в /shop.")
+        return
+
+    active_items["megaphone_gun"] = False
+    async with db_lock:
+        await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                         (json.dumps(active_items), user_id, board_id))
+        await db.commit()
+
+    chat_id = message.chat.id
+    target_msg_id = message.reply_to_message.message_id if message.reply_to_message else 0
+    bot_inst = bot or getattr(message, "bot", None)
+
+    try:
+        if bot_inst:
+            await bot_inst.pin_chat_message(chat_id, target_msg_id)
+        try:
+            if bot_inst:
+                await bot_inst.send_message(user_id, "📣 Твой пост успешно закреплен с помощью Мегафона!", parse_mode="HTML")
+        except Exception:
+            pass
+        try:
+            if bot_inst:
+                await bot_inst.send_message(chat_id, "📣 <b>ВНИМАНИЕ!</b> Кто-то из анонов проплатил закрепление поста через Мегафон!", reply_to_message_id=target_msg_id, parse_mode="HTML")
+        except Exception:
+            pass
+        try:
+            await message.delete()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Error pinning message in cmd_mega: {e}")
+        active_items["megaphone_gun"] = True
+        async with db_lock:
+            await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                             (json.dumps(active_items), user_id, board_id))
+            await db.commit()
+        try:
+            if bot_inst:
+                await bot_inst.send_message(user_id, f"❌ Ошибка закрепления: {e}", parse_mode="HTML")
+        except Exception:
+            pass
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
 

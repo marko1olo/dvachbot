@@ -33,13 +33,22 @@ from enum import Enum
 from datetime import datetime, UTC
 from typing import Optional, Dict, Any, Tuple, List, Union
 from aiogram.types import BufferedInputFile, InputFile
-from common.db_pool import get_pool, db_sleep, db_lock
+from common.db_pool import (
+    get_pool,
+    db_sleep,
+    db_lock,
+    db_transaction,
+    safe_begin_immediate,
+    safe_commit,
+    safe_rollback,
+)
 from common.config import (
     DB_NAME,
     DB_TIMEOUT,
     BOT_COPY_CACHE_POST_LIMIT,
     POST_COPY_RETENTION_DAYS,
     POST_COPY_RETENTION_POSTS,
+    ENABLE_REPLY_NOTIFICATIONS,
 )
 logger = logging.getLogger(__name__)
 
@@ -137,6 +146,7 @@ async def _create_tables(db):
             api_token TEXT,
             nsfw_spoiler INTEGER DEFAULT 0,
             hidden_words TEXT DEFAULT '[]',
+            disable_ai_roasts INTEGER DEFAULT 0,
             lie_media INTEGER DEFAULT 0,
             role TEXT DEFAULT 'user',
             balance REAL DEFAULT 0,
@@ -659,6 +669,10 @@ async def _apply_migrations(db):
             print("✅ Migrated: Added lie_media to Users.")
         except aiosqlite.OperationalError: pass
         try:
+            await cursor.execute("ALTER TABLE Users ADD COLUMN disable_ai_roasts INTEGER DEFAULT 0;")
+            print("✅ Migrated: Added disable_ai_roasts to Users.")
+        except aiosqlite.OperationalError: pass
+        try:
             await cursor.execute("ALTER TABLE Users ADD COLUMN role TEXT DEFAULT 'user';")
             print("✅ Migrated: Added role to Users.")
         except aiosqlite.OperationalError: pass
@@ -1008,6 +1022,8 @@ async def initialize_database():
             await _create_indices(db)
             await _create_triggers(db)
             await _insert_initial_data(db)
+            if not ENABLE_REPLY_NOTIFICATIONS:
+                await db.execute("DELETE FROM NotificationQueue")
             
             await db.execute("COMMIT")
         print("✅ База данных успешно инициализирована.")
@@ -1145,7 +1161,7 @@ async def load_state_from_db(thread_boards: set) -> dict:
     state_data = {
         'board_data': defaultdict(lambda: {
             'users': {'active': set(), 'banned': set()},
-            'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set()}),
+            'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False}),
             'shadow_mutes': {},
             'mutes': {},
             'threads_data': {},
@@ -1179,9 +1195,9 @@ async def load_state_from_db(thread_boards: set) -> dict:
             
             print("  > Загрузка пользователей...")
             try:
-                async with db.execute("SELECT user_id, board_id, status, location, nsfw_spoiler, hidden_words, shadow_ban_gif, shadow_ban_sticker, shadow_ban_media, lie_media FROM Users WHERE user_id > 0") as cursor:
+                async with db.execute("SELECT user_id, board_id, status, location, nsfw_spoiler, hidden_words, shadow_ban_gif, shadow_ban_sticker, shadow_ban_media, lie_media, disable_ai_roasts FROM Users WHERE user_id > 0") as cursor:
                     async for row in cursor:
-                        user_id, board_id, status, location, nsfw, words_json, s_gif, s_sticker, s_media, s_lie = row
+                        user_id, board_id, status, location, nsfw, words_json, s_gif, s_sticker, s_media, s_lie, d_ai = row
                         if status == 'active':
                             state_data['board_data'][board_id]['users']['active'].add(user_id)
                         elif status == 'banned':
@@ -1189,7 +1205,11 @@ async def load_state_from_db(thread_boards: set) -> dict:
                         if location != 'main':
                             state_data['board_data'][board_id]['user_state'].setdefault(user_id, {})['location'] = location
                         try:
-                            h_words = set(json.loads(words_json)) if words_json else set()
+                            raw_words = json.loads(words_json) if words_json else []
+                            if isinstance(raw_words, (list, set, tuple)):
+                                h_words = {str(w).strip().lower() for w in raw_words if str(w).strip()}
+                            else:
+                                h_words = set()
                         except (json.JSONDecodeError, TypeError):
                             h_words = set()
                         state_data['board_data'][board_id]['user_settings'][user_id] = {
@@ -1198,7 +1218,9 @@ async def load_state_from_db(thread_boards: set) -> dict:
                             'shadow_gif': bool(s_gif),       
                             'shadow_sticker': bool(s_sticker),
                             'shadow_media': bool(s_media),
-                            'lie_media': bool(s_lie)
+                            'lie_media': bool(s_lie),
+                            'disable_ai_roasts': bool(d_ai),
+                            'hide_ai_slop': bool(d_ai)
                         }
             except Exception:
                 # Fallback для старой схемы (на всякий случай)
@@ -1363,13 +1385,16 @@ async def load_state_from_db(thread_boards: set) -> dict:
     return state_data
 async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None, hidden_words: list = None, 
                                   shadow_gif: int = None, shadow_sticker: int = None, shadow_media: int = None,
-                                  lie_media: int = None):
+                                  lie_media: int = None, disable_ai_roasts: int = None, hide_ai_slop: int = None):
     """
     Обновляет настройки пользователя.
     Использует явные транзакции и глобальный лок.
     """
     from common.db_pool import get_pool, db_lock
     
+    if disable_ai_roasts is None and hide_ai_slop is not None:
+        disable_ai_roasts = hide_ai_slop
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -1379,7 +1404,11 @@ async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None,
                 if nsfw is not None:
                     await db.execute("UPDATE Users SET nsfw_spoiler = ? WHERE user_id = ? AND board_id = ?", (nsfw, user_id, board_id))
                 if hidden_words is not None:
-                    words_json = json.dumps(hidden_words, ensure_ascii=False)
+                    if isinstance(hidden_words, (list, set, tuple)):
+                        norm_words = sorted(list({str(w).strip().lower() for w in hidden_words if str(w).strip()}))
+                    else:
+                        norm_words = []
+                    words_json = json.dumps(norm_words, ensure_ascii=False)
                     await db.execute("UPDATE Users SET hidden_words = ? WHERE user_id = ? AND board_id = ?", (words_json, user_id, board_id))
                 if shadow_gif is not None:
                     await db.execute("UPDATE Users SET shadow_ban_gif = ? WHERE user_id = ? AND board_id = ?", (shadow_gif, user_id, board_id))
@@ -1389,6 +1418,8 @@ async def update_user_settings_db(user_id: int, board_id: str, nsfw: int = None,
                     await db.execute("UPDATE Users SET shadow_ban_media = ? WHERE user_id = ? AND board_id = ?", (shadow_media, user_id, board_id))
                 if lie_media is not None:
                     await db.execute("UPDATE Users SET lie_media = ? WHERE user_id = ? AND board_id = ?", (lie_media, user_id, board_id))
+                if disable_ai_roasts is not None:
+                    await db.execute("UPDATE Users SET disable_ai_roasts = ? WHERE user_id = ? AND board_id = ?", (disable_ai_roasts, user_id, board_id))
                 
                 await db.execute("COMMIT")
                 return
@@ -2145,7 +2176,7 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
                 # 1. Забираем ОП-пост
                 op_post_query = """
                     SELECT p.post_num, p.content, p.timestamp, p.author_id, p.board_id, 
-                           p.reply_to_post_num, p.is_shadow, p.is_op_hidden,
+                           p.reply_to_post_num, p.thread_id, p.is_shadow, p.is_op_hidden,
                            t.is_endless, t.is_pinned
                     FROM Posts p
                     LEFT JOIN Threads t ON p.post_num = t.thread_num
@@ -2162,6 +2193,19 @@ async def get_thread_by_op_post(op_post_num: int, current_user_id: int = None):
 
                 if not raw_op_data:
                     return None
+                
+                # Если передан номер ответа, а не ОП-поста — переключаемся на реальный ОП-пост
+                if raw_op_data.get('thread_id') and str(raw_op_data['thread_id']) != str(op_post_num):
+                    real_op_num = int(raw_op_data['thread_id'])
+                    async with db.execute(op_post_query, (real_op_num,)) as cursor:
+                        row = await cursor.fetchone()
+                        if row:
+                            cols = [d[0] for d in cursor.description]
+                            if hasattr(row, 'keys'):
+                                raw_op_data = dict(row)
+                            else:
+                                raw_op_data = dict(zip(cols, row))
+                            op_post_num = real_op_num
                 
                 if raw_op_data['is_shadow'] and raw_op_data['author_id'] != current_user_id:
                     return None
@@ -2520,8 +2564,10 @@ async def create_thread_entry(
 async def process_mentions_and_notify(source_post_num: int, board_id: str, text: str, author_id: int, reply_to_ui: int = None):
     """
     Парсит текст на наличие ссылок >>12345 и создает уведомления.
+    source_post_num — номер нового опубликованного поста (ответ).
+    author_id — автор этого нового поста.
     """
-    mentions = set(RE_POST_REF.findall(text))
+    new_reply_post_num = source_post_num
     mentions = set(REF_PATTERN.findall(text))
     if reply_to_ui:
         mentions.add(str(reply_to_ui))
@@ -2542,21 +2588,40 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                 await db.execute("BEGIN IMMEDIATE")
                 
                 notifications_to_insert = []
+                site_notifs = []
                 
-                # 1. Находим получателей
+                # 1. Находим получателей (авторов постов, на которые сослались)
                 query = "SELECT post_num, author_id, thread_id FROM Posts WHERE post_num IN (SELECT value FROM json_each(?)) AND board_id = ?"
                 async with db.execute(query, params) as cursor:
                     async for row in cursor:
-                        ref_post_num, recipient_id, thread_id = row
+                        parent_post_num, recipient_id, thread_id = row
                         if recipient_id > 0 and recipient_id != author_id:
-                            # Если thread_id is None (чат), используем ID поста, на который отвечаем (ref_post_num)
-                            final_thread_id = str(thread_id if thread_id is not None else ref_post_num)
-                            notifications_to_insert.append((
+                            # Если thread_id is None (ОП-пост или чат), используем ID родительского поста
+                            final_thread_id = str(thread_id if thread_id is not None else parent_post_num)
+                            
+                            # NotificationQueue: (recipient_id, source_post_num, reply_post_num, board_id, thread_id, created_at)
+                            # source_post_num = пост получателя (на который ответили)
+                            # reply_post_num = новый пост с ответом
+                            if ENABLE_REPLY_NOTIFICATIONS:
+                                notifications_to_insert.append((
+                                    recipient_id, 
+                                    parent_post_num, 
+                                    new_reply_post_num, 
+                                    board_id, 
+                                    final_thread_id,
+                                    current_time
+                                ))
+                            
+                            # UserReplies: (user_id, board_id, thread_id, post_num, parent_num, is_read, created_at)
+                            # post_num = новый пост с ответом
+                            # parent_num = пост получателя (на который ответили)
+                            site_notifs.append((
                                 recipient_id, 
-                                source_post_num, 
-                                ref_post_num, 
                                 board_id, 
-                                final_thread_id,
+                                final_thread_id, 
+                                new_reply_post_num, 
+                                parent_post_num, 
+                                0, 
                                 current_time
                             ))
                 if notifications_to_insert:
@@ -2566,10 +2631,6 @@ async def process_mentions_and_notify(source_post_num: int, board_id: str, text:
                            VALUES (?, ?, ?, ?, ?, ?)""",
                         notifications_to_insert
                     )
-                    site_notifs = [
-                        (r_id, board_id, t_id, src_num, rep_num, 0, current_time)
-                        for (r_id, src_num, rep_num, _, t_id, _) in notifications_to_insert
-                    ]
                     await db.executemany(
                         """INSERT INTO UserReplies 
                            (user_id, board_id, thread_id, post_num, parent_num, is_read, created_at) 
@@ -2700,38 +2761,30 @@ async def ban_user_on_board(user_id: int, board_id: str) -> bool:
     """
     Устанавливает статус 'banned' для пользователя на указанной доске.
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_lock, db_transaction
     
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-                
-                await db.execute(
-                    "INSERT OR IGNORE INTO Users (user_id, board_id) VALUES (?, ?)",
-                    (user_id, board_id)
-                )
-                await db.execute(
-                    "UPDATE Users SET status = ? WHERE user_id = ? AND board_id = ?",
-                    ("banned", user_id, board_id)
-                )
-                
-                await db.execute("COMMIT")
+                async with db_transaction(db):
+                    await db.execute(
+                        "INSERT OR IGNORE INTO Users (user_id, board_id) VALUES (?, ?)",
+                        (user_id, board_id)
+                    )
+                    await db.execute(
+                        "UPDATE Users SET status = ? WHERE user_id = ? AND board_id = ?",
+                        ("banned", user_id, board_id)
+                    )
                 return True
                 
             except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"Критическая ошибка при бане user #{user_id} на доске {board_id}: {e}")
                 break
             except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
                 print(f"Критическая ошибка при бане user #{user_id} на доске {board_id}: {e}")
                 break
             
@@ -2741,34 +2794,26 @@ async def update_post_content(post_num: int, content: dict):
     Обновляет поле content для существующего поста в базе данных.
     Добавлен механизм retries и явные транзакции (BEGIN IMMEDIATE).
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_lock, db_transaction
     content_json = json.dumps(content, default=_json_serializer)
     
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-                
-                await db.execute(
-                    "UPDATE Posts SET content = ? WHERE post_num = ?",
-                    (content_json, post_num)
-                )
-                
-                await db.execute("COMMIT")
+                async with db_transaction(db):
+                    await db.execute(
+                        "UPDATE Posts SET content = ? WHERE post_num = ?",
+                        (content_json, post_num)
+                    )
                 return
             except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.1 * (attempt + 1))
                     continue
                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при обновлении контента поста #{post_num}: {e}")
                 break
             except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
                 print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при обновлении контента поста #{post_num}: {e}")
                 break
 async def add_post_copies(post_num: int, copies_data: list[tuple[int, int]]):
@@ -2778,7 +2823,7 @@ async def add_post_copies(post_num: int, copies_data: list[tuple[int, int]]):
     if not copies_data:
         return
         
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_lock, db_transaction
     
     data_to_insert = [(post_num, recipient_id, msg_id) for recipient_id, msg_id in copies_data]
     
@@ -2788,19 +2833,13 @@ async def add_post_copies(post_num: int, copies_data: list[tuple[int, int]]):
                 for attempt in range(10):
                     try:
                         db = await get_pool()
-                        await db.execute("BEGIN IMMEDIATE")
-                        
-                        await db.executemany(
-                            "INSERT OR IGNORE INTO PostCopies (post_num, recipient_id, message_id) VALUES (?, ?, ?)",
-                            data_to_insert
-                        )
-                        
-                        await db.execute("COMMIT")
+                        async with db_transaction(db):
+                            await db.executemany(
+                                "INSERT OR IGNORE INTO PostCopies (post_num, recipient_id, message_id) VALUES (?, ?, ?)",
+                                data_to_insert
+                            )
                         return
                     except sqlite3.OperationalError as e:
-                        try: await db.execute("ROLLBACK")
-                        except: pass
-                        
                         if "locked" in str(e).lower() or "busy" in str(e).lower():
                             await db_sleep(0.1 * (attempt + 1))
                             continue
@@ -2810,8 +2849,6 @@ async def add_post_copies(post_num: int, copies_data: list[tuple[int, int]]):
                         print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
                         break
                     except Exception as e:
-                        try: await db.execute("ROLLBACK")
-                        except: pass
                         if "foreign key constraint failed" in str(e).lower():
                             break
                         print(f"⛔ КРИТИЧЕСКАЯ ОШИБКА при сохранении копий поста #{post_num} в БД: {e}")
@@ -2888,7 +2925,7 @@ async def upsert_delivery_queue_item(
     Stores one durable delivery phase. This is intentionally coarse-grained:
     PostCopies remains the source of truth for already delivered recipients.
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_lock, db_transaction
 
     try:
         clean_recipients = sorted({int(uid) for uid in recipients if int(uid) > 0})
@@ -2912,91 +2949,84 @@ async def upsert_delivery_queue_item(
                 for attempt in range(10):
                     try:
                         db = await get_pool()
-                        await db.execute("BEGIN IMMEDIATE")
-                        query = """
-                            SELECT id
-                            FROM DeliveryQueue
-                            WHERE status = 'pending'
-                              AND board_id = ?
-                              AND post_num = ?
-                              AND delivery_phase = ?
-                            ORDER BY id
-                            LIMIT 1
-                        """
-                        async with db.execute(query, (board_id, post_num, phase)) as cursor:
-                            row = await cursor.fetchone()
-                        if row:
-                            item_id = int(row[0])
-                            await db.execute(
-                                """
-                                UPDATE DeliveryQueue
-                                SET recipients = ?,
-                                    content = ?,
-                                    original_recipients = ?,
-                                    thread_id = ?,
-                                    enqueued_at = ?,
-                                    updated_at = ?,
-                                    attempts = attempts + 1,
-                                    status = 'pending'
-                                WHERE id = ?
-                                """,
-                                (
-                                    recipients_json,
-                                    content_json,
-                                    int(original_recipients or len(clean_recipients)),
-                                    str(thread_id) if thread_id is not None else None,
-                                    created_at,
-                                    now,
-                                    item_id,
-                                ),
-                            )
-                        else:
-                            async with db.execute(
-                                """
-                                INSERT INTO DeliveryQueue (
-                                    board_id, post_num, recipients, content, delivery_phase,
-                                    original_recipients, thread_id, enqueued_at, updated_at,
-                                    attempts, status
+                        async with db_transaction(db):
+                            query = """
+                                SELECT id
+                                FROM DeliveryQueue
+                                WHERE status = 'pending'
+                                  AND board_id = ?
+                                  AND post_num = ?
+                                  AND delivery_phase = ?
+                                ORDER BY id
+                                LIMIT 1
+                            """
+                            async with db.execute(query, (board_id, post_num, phase)) as cursor:
+                                row = await cursor.fetchone()
+                            if row:
+                                item_id = int(row[0])
+                                await db.execute(
+                                    """
+                                    UPDATE DeliveryQueue
+                                    SET recipients = ?,
+                                        content = ?,
+                                        original_recipients = ?,
+                                        thread_id = ?,
+                                        enqueued_at = ?,
+                                        updated_at = ?,
+                                        attempts = attempts + 1,
+                                        status = 'pending'
+                                    WHERE id = ?
+                                    """,
+                                    (
+                                        recipients_json,
+                                        content_json,
+                                        int(original_recipients or len(clean_recipients)),
+                                        str(thread_id) if thread_id is not None else None,
+                                        created_at,
+                                        now,
+                                        item_id,
+                                    ),
                                 )
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')
-                                """,
-                                (
-                                    board_id,
-                                    int(post_num),
-                                    recipients_json,
-                                    content_json,
-                                    phase,
-                                    int(original_recipients or len(clean_recipients)),
-                                    str(thread_id) if thread_id is not None else None,
-                                    created_at,
-                                    now,
-                                ),
-                            ) as cursor:
-                                item_id = int(cursor.lastrowid)
-                        await db.execute("COMMIT")
-                        return item_id
+                            else:
+                                async with db.execute(
+                                    """
+                                    INSERT INTO DeliveryQueue (
+                                        board_id, post_num, recipients, content, delivery_phase,
+                                        original_recipients, thread_id, enqueued_at, updated_at,
+                                        attempts, status
+                                    )
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending')
+                                    """,
+                                    (
+                                        board_id,
+                                        int(post_num),
+                                        recipients_json,
+                                        content_json,
+                                        phase,
+                                        int(original_recipients or len(clean_recipients)),
+                                        str(thread_id) if thread_id is not None else None,
+                                        created_at,
+                                        now,
+                                    ),
+                                ) as cursor:
+                                    item_id = int(cursor.lastrowid)
+                            return item_id
                     except sqlite3.IntegrityError:
-                        try: await db.execute("ROLLBACK")
-                        except: pass
                         return None
                     except sqlite3.OperationalError as e:
-                        try: await db.execute("ROLLBACK")
-                        except: pass
                         if "locked" in str(e).lower() or "busy" in str(e).lower():
                             await db_sleep(0.1 * (attempt + 1))
                             continue
                         print(f"⚠️ DeliveryQueue upsert failed for #{post_num}: {e}")
                         break
                     except Exception as e:
-                        try: await db.execute("ROLLBACK")
-                        except: pass
                         print(f"⚠️ DeliveryQueue upsert failed for #{post_num}: {type(e).__name__}: {e}")
                         break
     except Exception as e:
         print(f"⚠️ DeliveryQueue upsert timeout / error for #{post_num}: {e}")
     return None
 async def delete_delivery_queue_item(item_id: int) -> bool:
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_lock, db_transaction
 
     if not item_id:
         return False
@@ -3006,21 +3036,16 @@ async def delete_delivery_queue_item(item_id: int) -> bool:
                 for attempt in range(10):
                     try:
                         db = await get_pool()
-                        await db.execute("BEGIN IMMEDIATE")
-                        await db.execute("DELETE FROM DeliveryQueue WHERE id = ?", (int(item_id),))
-                        await db.execute("COMMIT")
+                        async with db_transaction(db):
+                            await db.execute("DELETE FROM DeliveryQueue WHERE id = ?", (int(item_id),))
                         return True
                     except sqlite3.OperationalError as e:
-                        try: await db.execute("ROLLBACK")
-                        except: pass
                         if "locked" in str(e).lower() or "busy" in str(e).lower():
                             await db_sleep(0.1 * (attempt + 1))
                             continue
                         print(f"⚠️ DeliveryQueue delete failed id={item_id}: {e}")
                         break
                     except Exception as e:
-                        try: await db.execute("ROLLBACK")
-                        except: pass
                         print(f"⚠️ DeliveryQueue delete failed id={item_id}: {type(e).__name__}: {e}")
                         break
     except Exception as e:
@@ -3629,6 +3654,10 @@ async def add_spam_word(board_id: str, word: str) -> bool:
     """
     from common.db_pool import get_pool, db_lock
     
+    norm_word = str(word).strip().lower() if word else ""
+    if not norm_word:
+        return False
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -3637,7 +3666,7 @@ async def add_spam_word(board_id: str, word: str) -> bool:
                 
                 await db.execute(
                     "INSERT OR IGNORE INTO SpamFilterWords (board_id, word) VALUES (?, ?)",
-                    (board_id, word.lower())
+                    (board_id, norm_word)
                 )
                 
                 await db.execute("COMMIT")
@@ -3663,6 +3692,10 @@ async def remove_spam_word(board_id: str, word: str) -> bool:
     """
     from common.db_pool import get_pool, db_lock
     
+    norm_word = str(word).strip().lower() if word else ""
+    if not norm_word:
+        return False
+
     async with db_lock:
         for attempt in range(10):
             try:
@@ -3670,8 +3703,8 @@ async def remove_spam_word(board_id: str, word: str) -> bool:
                 await db.execute("BEGIN IMMEDIATE")
                 
                 async with db.execute(
-                    "DELETE FROM SpamFilterWords WHERE board_id = ? AND word = ?",
-                    (board_id, word.lower())
+                    "DELETE FROM SpamFilterWords WHERE board_id = ? AND LOWER(word) = ?",
+                    (board_id, norm_word)
                 ) as cursor:
                     count = cursor.rowcount
                 
@@ -4266,48 +4299,41 @@ async def sync_boards_with_config(board_config: dict):
     if not board_config:
         return
 
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_lock, db_transaction
 
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
-                await db.execute("BEGIN IMMEDIATE")
-
-                # Оптимизация: используем генератор напрямую в executemany, чтобы избежать N+1 execute
-                # и лишних аллокаций памяти (по сравнению с циклом for ... append).
-                await db.executemany(
-                    """
-                    INSERT INTO Boards (board_id, name, description) VALUES (?, ?, ?)
-                    ON CONFLICT(board_id) DO UPDATE SET
-                        name = excluded.name,
-                        description = excluded.description
-                    """,
-                    (
+                async with db_transaction(db):
+                    # Оптимизация: используем генератор напрямую в executemany, чтобы избежать N+1 execute
+                    # и лишних аллокаций памяти (по сравнению с циклом for ... append).
+                    await db.executemany(
+                        """
+                        INSERT INTO Boards (board_id, name, description) VALUES (?, ?, ?)
+                        ON CONFLICT(board_id) DO UPDATE SET
+                            name = excluded.name,
+                            description = excluded.description
+                        """,
                         (
-                            board_id,
-                            info.get("name", "Unnamed Board"),
-                            json.dumps(info.get("description", ""), ensure_ascii=False) if isinstance(info.get("description", ""), dict) else info.get("description", "")
+                            (
+                                board_id,
+                                info.get("name", "Unnamed Board"),
+                                json.dumps(info.get("description", ""), ensure_ascii=False) if isinstance(info.get("description", ""), dict) else info.get("description", "")
+                            )
+                            for board_id, info in board_config.items()
                         )
-                        for board_id, info in board_config.items()
                     )
-                )
 
-                await db.execute("COMMIT")
                 print(f"✅ Синхронизация досок с БД завершена. Проверено {len(board_config)} досок.")
                 return
             except sqlite3.OperationalError as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
-                
                 if "locked" in str(e).lower() or "busy" in str(e).lower():
                     await db_sleep(0.5 * (attempt + 1))
                     continue
                 print(f"⛔ ОШИБКА при синхронизации досок с БД: {e}")
                 break
             except Exception as e:
-                try: await db.execute("ROLLBACK")
-                except: pass
                 print(f"⛔ ОШИБКА при синхронизации досок с БД: {e}")
                 break
 async def create_bottle(sender_id: int, recipient_id: int, message: str) -> bool:
@@ -5380,7 +5406,8 @@ async def load_all_spam_words() -> Dict[str, set]:
             async with db.execute("SELECT board_id, word FROM SpamFilterWords") as cursor:
                 async for row in cursor:
                     board_id, word = row
-                    spam_words_map[board_id].add(word)
+                    if word and str(word).strip():
+                        spam_words_map[board_id].add(str(word).strip().lower())
             print(f"  > DB: Загружено стоп-слов для спам-фильтра: {sum(len(s) for s in spam_words_map.values())} шт.")
             return spam_words_map
         except Exception as e:
@@ -7767,12 +7794,13 @@ async def add_reply_to_notification_queue(source_post_num: int, reply_post_num: 
                     # Если thread_id is None, используем ID родительского поста
                     effective_thread_id = str(thread_id) if thread_id is not None else str(source_post_num)
 
-                    await db.execute(
-                        """INSERT INTO NotificationQueue 
-                           (recipient_id, source_post_num, reply_post_num, board_id, thread_id, created_at) 
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (original_author_id, source_post_num, reply_post_num, board_id, effective_thread_id, curr_time)
-                    )
+                    if ENABLE_REPLY_NOTIFICATIONS:
+                        await db.execute(
+                            """INSERT INTO NotificationQueue 
+                               (recipient_id, source_post_num, reply_post_num, board_id, thread_id, created_at) 
+                               VALUES (?, ?, ?, ?, ?, ?)""",
+                            (original_author_id, source_post_num, reply_post_num, board_id, effective_thread_id, curr_time)
+                        )
                     
                     await db.execute(
                         """INSERT INTO UserReplies 
@@ -7804,6 +7832,15 @@ async def get_and_clear_notification_queue() -> list[dict]:
     Забирает все уведомления и очищает таблицу.
     """
     from common.db_pool import get_pool, db_lock
+    
+    if not ENABLE_REPLY_NOTIFICATIONS:
+        try:
+            async with db_lock:
+                db = await get_pool()
+                await db.execute("DELETE FROM NotificationQueue")
+        except Exception:
+            pass
+        return []
     
     async with db_lock:
         for attempt in range(10):
@@ -8317,7 +8354,7 @@ def get_db_connection():
 async def clean_old_postcopies_daily(retention_days: int = 14) -> int:
     """
     Аккуратная ежедневная чистка PostCopies: храним данные ровно retention_days дней (по умолчанию 14).
-    Удаление происходит небольшими чанками по 50,000 строк с микро-паузами db_sleep.
+    Удаление происходит небольшими чанками по 2,000 строк с микро-паузами db_sleep и периодическим wal_checkpoint.
     """
     from common.db_pool import get_pool, db_lock, db_sleep
     cutoff_ts = time.time() - (retention_days * 86400)
@@ -8333,8 +8370,9 @@ async def clean_old_postcopies_daily(retention_days: int = 14) -> int:
             return 0
 
         total_deleted = 0
-        batch_size = 50000
+        batch_size = 2000
         while True:
+            deleted = 0
             async with db_lock:
                 await db.execute("BEGIN IMMEDIATE")
                 try:
@@ -8346,7 +8384,7 @@ async def clean_old_postcopies_daily(retention_days: int = 14) -> int:
                             LIMIT ?
                         )
                     """, (threshold_post_num, batch_size)) as cursor:
-                        deleted = cursor.rowcount
+                        deleted = cursor.rowcount or 0
                     await db.execute("COMMIT")
                 except Exception:
                     try:
@@ -8357,9 +8395,21 @@ async def clean_old_postcopies_daily(retention_days: int = 14) -> int:
             total_deleted += deleted
             if deleted == 0:
                 break
-            await db_sleep(0.1)
+            # Периодический пассивный чекпоинт каждые 10к записей для сдерживания размера WAL
+            if total_deleted > 0 and total_deleted % 10000 < batch_size:
+                try:
+                    async with db_lock:
+                        await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
+                except Exception:
+                    pass
+            await db_sleep(0.05)
 
         if total_deleted > 0:
+            try:
+                async with db_lock:
+                    await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
+            except Exception:
+                pass
             logging.getLogger("database").info(f"[POSTCOPIES_CLEANUP] Deleted {total_deleted:,} old records (post_num < {threshold_post_num}). Retention {retention_days} days.")
         return total_deleted
     except Exception as e:
@@ -8385,16 +8435,17 @@ async def clean_old_media_reposts_daily() -> int:
     считается. Это осознанный размен: смысл у баяна есть, пока помнят
     оригинал.
     """
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_lock, db_sleep
 
     cutoff = time.time() - (MEDIA_REPOSTS_RETENTION_DAYS * 86400)
     total_deleted = 0
-    batch_size = 50000
+    batch_size = 2000
     try:
         db = await get_pool()
         if not db:
             return 0
         while True:
+            deleted = 0
             async with db_lock:
                 await db.execute("BEGIN IMMEDIATE")
                 try:
@@ -8421,9 +8472,14 @@ async def clean_old_media_reposts_daily() -> int:
             if deleted == 0:
                 break
             # Уступаем цикл событий между пачками, как в чистке PostCopies.
-            await db_sleep(0.5)
+            await db_sleep(0.05)
 
         if total_deleted > 0:
+            try:
+                async with db_lock:
+                    await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
+            except Exception:
+                pass
             logging.getLogger("database").info(
                 f"🧹 [REPOSTS_CLEANUP] Удалено {total_deleted:,} записей о медиа "
                 f"старше {MEDIA_REPOSTS_RETENTION_DAYS} дней, показанном один раз."
@@ -8492,10 +8548,7 @@ async def add_user_global_balance(db, user_id: int, board_id: str | None, amount
         )
         return await get_user_global_balance(db, user_id)
 
-    if db_lock.is_owned_by_current_task():
-        return await _do_add()
-
-    async with db_lock:
+    async with db_transaction(db):
         return await _do_add()
 
 
@@ -8560,32 +8613,8 @@ async def deduct_user_global_balance(db, user_id: int, board_id: str | None, amo
             new_total = float(row_new[0] or 0.0) if row_new and row_new[0] is not None else 0.0
         return True, new_total
 
-    if db_lock.is_owned_by_current_task():
+    async with db_transaction(db):
         return await _do_deduction()
-
-    async with db_lock:
-        managed_tx = False
-        try:
-            await db.execute("BEGIN IMMEDIATE")
-            managed_tx = True
-        except Exception:
-            managed_tx = False
-
-        try:
-            ok, res_bal = await _do_deduction()
-            if managed_tx:
-                if ok:
-                    await db.execute("COMMIT")
-                else:
-                    await db.execute("ROLLBACK")
-            return ok, res_bal
-        except Exception:
-            if managed_tx:
-                try:
-                    await db.execute("ROLLBACK")
-                except Exception:
-                    pass
-            raise
 
 
 async def get_user_id_by_referral_code(db, code: str) -> Optional[int]:

@@ -463,14 +463,7 @@ def equip_item(active_items: Dict[str, Any], item_id: str) -> Tuple[bool, str]:
             set_note = f"\n✨ <b>АКТИВИРОВАН СЕТ-БОНУС:</b> {s['name']}!\n<i>{s['bonus_desc']}</i>"
             
             # Unlock set achievement
-            set_ach_map = {
-                "set_wasserman": "ach_set_wasserman",
-                "set_riot_police": "ach_set_riot",
-                "set_anime_hikka": "ach_set_anime",
-                "set_gop_skuf": "ach_set_skuf",
-                "set_ward6": "ach_set_ward6"
-            }
-            target_ach = set_ach_map.get(s["id"])
+            target_ach = SET_ACHIEVEMENT_MAP.get(s["id"])
             if target_ach:
                 import achievements_engine
                 unlocked, ach_info = achievements_engine.check_and_unlock_achievement(active_items, target_ach)

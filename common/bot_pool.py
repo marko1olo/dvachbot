@@ -126,6 +126,24 @@ class MultiStreamBotPool:
         self.cooldown_bots[bot_id] = cooldown_until
         logger.warning(f"⏳ Bot {bot_id} put on FloodWait cooldown for {max(15.0, duration_sec):.1f}s (until {cooldown_until:.1f})")
 
+    def mark_bot_cooldown_by_bot(self, bot: Bot, duration_sec: float = 15.0):
+        """Ставит бота в кулдаун по объекту Bot (извлекая bot_id)."""
+        if not bot:
+            return
+        bot_id = getattr(bot, 'id', None)
+        if not bot_id and hasattr(bot, 'token') and ':' in str(bot.token):
+            try:
+                bot_id = int(str(bot.token).split(':', 1)[0])
+            except (ValueError, TypeError):
+                pass
+        if bot_id:
+            self.mark_bot_cooldown(bot_id, duration_sec=duration_sec)
+
+    def is_bot_on_cooldown(self, bot_id: int) -> bool:
+        """Проверяет, находится ли бот на временном кулдауне."""
+        import time
+        return self.cooldown_bots.get(bot_id, 0) > time.time()
+
     def get_next_bot(self, stream: str = 'ru') -> Tuple[int, Bot]:
         """Возвращает следующего доступного бота для загрузки (Round-Robin с обходом кулдауна)."""
         import time
@@ -178,25 +196,108 @@ class MultiStreamBotPool:
                     return self._shared_bots[bot_id]
         return None
     
-    def get_all_active_bots(self) -> List[Bot]:
+    def get_all_active_bots(self, prioritize_ready: bool = True) -> List[Bot]:
         """
         Все уникальные живые боты по всем потокам.
+        Если prioritize_ready=True, боты не на кулдауне идут первыми.
 
         Нужен для фолбэка при скачивании файлов: file_id принадлежит выдавшему
         его боту, остальные получают 'file not found', поэтому приходится
         перебирать весь пул.
-
-        Метод вызывался из site_tgach.tagging_worker.download_file_with_fallback,
-        но НИКОГДА не был определён: каждое скачивание падало с AttributeError,
-        tagging_loop глушил его как 'Crit fail' и откладывал файл на 300 секунд.
-        В результате воркер тегирования не обработал ни одного файла.
         """
+        import time
         for stream_code in ('ru', 'en', 'jp'):
             self.init_stream(stream_code)
-        return [
-            bot for bot_id, bot in self._shared_bots.items()
+        
+        now = time.time()
+        active_items = [
+            (bot_id, bot) for bot_id, bot in self._shared_bots.items()
             if bot_id not in self.disabled_bot_ids
         ]
+        if not prioritize_ready:
+            return [bot for _, bot in active_items]
+
+        ready_bots = []
+        cooling_bots = []
+        for bot_id, bot in active_items:
+            cd_until = self.cooldown_bots.get(bot_id, 0)
+            if cd_until <= now:
+                ready_bots.append(bot)
+            else:
+                cooling_bots.append((cd_until, bot))
+        cooling_bots.sort(key=lambda x: x[0])
+        return ready_bots + [b for _, b in cooling_bots]
+
+    def get_download_candidates(self, primary_bot: Optional[Bot] = None) -> List[Bot]:
+        """
+        Формирует оптимальный список ботов-кандидатов для скачивания медиа:
+        1. Владелец файла (если жив и не в кулдауне)
+        2. Главный бот (если жив и не в кулдауне)
+        3. Другие активные боты, готовые к работе (не в кулдауне)
+        4. Владелец файла (если был в кулдауне)
+        5. Остальные боты в кулдауне (в порядке скорейшего выхода из кулдауна)
+        """
+        import time
+        now = time.time()
+        for stream_code in ('ru', 'en', 'jp'):
+            self.init_stream(stream_code)
+
+        candidates = []
+        seen = set()
+
+        def _get_bid(b):
+            bid = getattr(b, 'id', None)
+            if not bid and hasattr(b, 'token') and ':' in str(b.token):
+                try:
+                    bid = int(str(b.token).split(':', 1)[0])
+                except (ValueError, TypeError):
+                    pass
+            return bid or id(b)
+
+        # 1. Primary bot if ready
+        if primary_bot:
+            p_id = _get_bid(primary_bot)
+            if p_id not in self.disabled_bot_ids:
+                if self.cooldown_bots.get(p_id, 0) <= now:
+                    candidates.append(primary_bot)
+                    seen.add(p_id)
+
+        # 2. Main bot if ready and not seen
+        main_bot = self.get_main_bot()
+        if main_bot:
+            m_id = _get_bid(main_bot)
+            if m_id not in seen and m_id not in self.disabled_bot_ids:
+                if self.cooldown_bots.get(m_id, 0) <= now:
+                    candidates.append(main_bot)
+                    seen.add(m_id)
+
+        # 3. All other active ready bots
+        cooling = []
+        for b_id, b in self._shared_bots.items():
+            if b_id in seen or b_id in self.disabled_bot_ids:
+                continue
+            cd_until = self.cooldown_bots.get(b_id, 0)
+            if cd_until <= now:
+                candidates.append(b)
+                seen.add(b_id)
+            else:
+                cooling.append((cd_until, b_id, b))
+
+        # 4. If primary bot was on cooldown, add it before other cooling bots
+        if primary_bot:
+            p_id = _get_bid(primary_bot)
+            if p_id not in seen and p_id not in self.disabled_bot_ids:
+                candidates.append(primary_bot)
+                seen.add(p_id)
+
+        # 5. Cooling bots ordered by expiration
+        cooling.sort(key=lambda x: x[0])
+        for _, b_id, b in cooling:
+            if b_id not in seen:
+                candidates.append(b)
+                seen.add(b_id)
+
+        return candidates
 
     def get_main_bot(self) -> Optional[Bot]:
         """Возвращает 'главного' бота (первый из RU пула)."""

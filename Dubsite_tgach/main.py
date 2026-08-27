@@ -2721,6 +2721,10 @@ async def api_makaba_catalog(board_id: str):
 async def api_makaba_thread(board_id: str, thread_num: int):
 
     if board_id not in BOARD_CONFIG: return JSONResponse({}, status_code=404)
+    real_thread_id = await get_thread_op_by_post_num(thread_num)
+    if not real_thread_id:
+        return JSONResponse({"Error": "Thread not found"}, status_code=404)
+    thread_num = int(real_thread_id)
     thread_data = await get_thread_by_op_post(thread_num)
     if not thread_data:
         return JSONResponse({"Error": "Thread not found"}, status_code=404)
@@ -3659,7 +3663,7 @@ async def api_makaba_posting(
             await update_thread_last_updated(thread_id, time.time())
             spawn_task(process_backlinks(new_post_num, content['text'], reply_to))
             if board not in ["thread", "test"]:
-                await process_mentions_and_notify(new_post_num, board, content['text'], reply_to)
+                await process_mentions_and_notify(new_post_num, board, content['text'], author_id, reply_to)
                 
     return {"Status": "OK", "Num": new_post_num}
 @app.get("/archive/chat/")
@@ -3789,6 +3793,15 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
     board_id = board_id.lower()
     if board_id not in BOARD_CONFIG: raise HTTPException(status_code=404, detail="Board not found")
     
+    # ПРЕ-ВАЛИДАЦИЯ: Находим реальный ID треда (ОП-поста)
+    real_thread_id = await get_thread_op_by_post_num(post_num)
+    if not real_thread_id:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Если передан номер поста-ответа, редиректим на тред с якорем на пост
+    if str(real_thread_id) != str(post_num):
+        return RedirectResponse(url=f"/{board_id}/res/{real_thread_id}.html#post-{post_num}", status_code=302)
+
     # --- HYBRID DELIVERY ---
     user_agent = request.headers.get('user-agent', '').lower()
     bot_markers = ['bot', 'crawl', 'slurp', 'spider', 'mediapartners', 'whatsapp', 'telegram', 'discord', 'facebook', 'pinterest']
@@ -3797,24 +3810,11 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
     op_post = None
     replies = []
     is_skeleton = False
-    
-    # Заглушка для скелета (чтобы Jinja не ругалась на обращение к полям)
-    skeleton_stub = {
-        'id': post_num,
-        'content': {'text': f"Загрузка треда #{post_num}...", 'files': []},
-        'timestamp': time.time(),
-        'author_id': 0,
-        'is_pinned': False,
-        'is_endless': False,
-        'is_archived': False,
-        'reply_count': 0,
-        'anon_count': 0
-    }
 
     if is_bot:
         # SSR: Полный рендеринг для ботов
         user_id = user['id'] if user else None
-        thread_data = await get_thread_by_op_post(post_num, current_user_id=user_id)
+        thread_data = await get_thread_by_op_post(real_thread_id, current_user_id=user_id)
         if not thread_data: raise HTTPException(status_code=404, detail="Thread not found")
         op_post, replies = thread_data
         
@@ -3832,12 +3832,18 @@ async def read_thread(board_id: str, post_num: int, request: Request, user: dict
                 if reply.get('author_id') == user_id: reply['is_yours'] = True
     else:
         # CSR: Скелет для людей
-        # Быстрая проверка существования треда (чтобы не отдавать 200 OK на несуществующие)
-        if not await get_thread_op_by_post_num(post_num):
-             raise HTTPException(status_code=404, detail="Thread not found")
-        
         is_skeleton = True
-        op_post = skeleton_stub
+        op_post = {
+            'id': real_thread_id,
+            'content': {'text': f"Загрузка треда #{real_thread_id}...", 'files': []},
+            'timestamp': time.time(),
+            'author_id': 0,
+            'is_pinned': False,
+            'is_endless': False,
+            'is_archived': False,
+            'reply_count': 0,
+            'anon_count': 0
+        }
         replies = []
 
     # Общая логика для мета-тегов и шаблона
@@ -5697,6 +5703,11 @@ async def api_get_thread(
     user: dict = Depends(get_current_user_or_guest)
 ):
     board_id = board_id.lower()
+    
+    real_thread_id = await get_thread_op_by_post_num(thread_id)
+    if not real_thread_id:
+        return []
+    thread_id = int(real_thread_id)
     
     # Кэширование на основе версии доски (обновляется при любом посте)
     current_version = BOARD_VERSIONS[board_id]

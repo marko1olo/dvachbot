@@ -13,6 +13,7 @@ from post_helpers import delete_user_posts
 from thread_texts import thread_messages
 from common.db_pool import db_lock
 from common.token_generator import generate_unique_token
+from common.board_config import BOARD_CONFIG
 from common.database import (
     get_pool, get_post_author_by_copy, get_post_by_num, get_post_copies,
     get_post_info_by_copy, add_or_activate_user, update_user_status,
@@ -381,6 +382,7 @@ async def cmd_filter(message: types.Message, board_id: str | None, stream: str =
     lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
     parts = (message.text or message.caption or "").split(maxsplit=2)
     subcommand = parts[1].lower() if len(parts) > 1 else "help"
+    b_data.setdefault('spam_filter_words', set())
     if subcommand == "list":
         spam_words = b_data.get('spam_filter_words', set())
         if not spam_words:
@@ -388,9 +390,9 @@ async def cmd_filter(message: types.Message, board_id: str | None, stream: str =
             elif lang == 'jp': resp = "フィルターリストは空です。"
             else: resp = "Список стоп-слов для этой доски пуст."
         else:
-            sorted_words = sorted(list(spam_words))
+            sorted_words = sorted(list({str(w).strip().lower() for w in spam_words if str(w).strip()}))
             word_list = "\n".join([f"• <code>{escape_html(word)}</code>" for word in sorted_words])
-            board_name = BOARD_CONFIG[board_id]['name']
+            board_name = BOARD_CONFIG.get(board_id, {}).get('name', board_id)
             if lang == 'en':
                 resp = f"<b>Stop-words on {board_name}:</b>\n\n{word_list}"
             elif lang == 'jp':
@@ -405,31 +407,51 @@ async def cmd_filter(message: types.Message, board_id: str | None, stream: str =
             else: txt = "Использование: <code>/filter add &lt;слово&gt;</code>"
             await message.answer(txt, parse_mode="HTML")
         else:
-            word_to_add = parts[2].lower().strip()
+            word_to_add = parts[2].strip().lower()
+            if len(word_to_add) < 2:
+                if lang == 'en': err = "Word too short."
+                elif lang == 'jp': err = "単語が短すぎます。"
+                else: err = "Слово слишком короткое."
+                await message.answer(err)
+                return
             if await add_spam_word(board_id, word_to_add):
-                b_data['spam_filter_words'].add(word_to_add)
+                b_data.setdefault('spam_filter_words', set()).add(word_to_add)
+                try:
+                    from common.spam_filter import _spam_filter_words
+                    _spam_filter_words[board_id].add(word_to_add)
+                except Exception:
+                    pass
                 if lang == 'en': msg = f"✅ Added '<code>{escape_html(word_to_add)}</code>'."
                 elif lang == 'jp': msg = f"✅ '<code>{escape_html(word_to_add)}</code>' を追加しました。"
                 else: msg = f"✅ Слово '<code>{escape_html(word_to_add)}</code>' добавлено."
                 await message.answer(msg, parse_mode="HTML")
             else:
                 await message.answer("❌ DB Error.")
-    elif subcommand == "remove":
+    elif subcommand in ("remove", "del", "delete", "rm"):
         if len(parts) < 3 or not parts[2].strip():
             if lang == 'en': txt = "Usage: <code>/filter remove &lt;word&gt;</code>"
             elif lang == 'jp': txt = "使用法: <code>/filter remove &lt;単語&gt;</code>"
             else: txt = "Использование: <code>/filter remove &lt;слово&gt;</code>"
             await message.answer(txt, parse_mode="HTML")
         else:
-            word_to_remove = parts[2].lower().strip()
-            if await remove_spam_word(board_id, word_to_remove):
-                b_data['spam_filter_words'].discard(word_to_remove)
+            word_to_remove = parts[2].strip().lower()
+            removed = await remove_spam_word(board_id, word_to_remove)
+            b_data.setdefault('spam_filter_words', set()).discard(word_to_remove)
+            try:
+                from common.spam_filter import _spam_filter_words
+                _spam_filter_words[board_id].discard(word_to_remove)
+            except Exception:
+                pass
+            if removed:
                 if lang == 'en': msg = f"🗑 Removed '<code>{escape_html(word_to_remove)}</code>'."
                 elif lang == 'jp': msg = f"🗑 '<code>{escape_html(word_to_remove)}</code>' を削除しました。"
                 else: msg = f"🗑 Слово '<code>{escape_html(word_to_remove)}</code>' удалено."
                 await message.answer(msg, parse_mode="HTML")
             else:
-                await message.answer("ℹ️ Word not found.")
+                if lang == 'en': msg = "ℹ️ Word not found."
+                elif lang == 'jp': msg = "ℹ️ リストに見つかりません。"
+                else: msg = "ℹ️ Слово не найдено."
+                await message.answer(msg)
     else:
         if lang == 'en':
             usage = (
@@ -1318,18 +1340,10 @@ async def cmd_del(message: types.Message, board_id: str | None, stream: str = 'r
     active_items = {}
     db = None
     if not admin_status:
-        import json
         import time
         db = await get_pool()
-        async with db.execute(
-            "SELECT active_items FROM Users WHERE user_id = ? AND board_id = ?", (user_id, board_id)
-        ) as c:
-            row = await c.fetchone()
-            ai_str = row[0] if row and row[0] else "{}"
-        try:
-            active_items = json.loads(ai_str)
-        except Exception:
-            active_items = {}
+        from common.bot_helpers import _get_user_active_items
+        active_items = await _get_user_active_items(db, user_id, board_id)
         janitor_until = active_items.get("janitor_until", 0)
         janitor_deletes_left = active_items.get("janitor_deletes_left", 0)
         if janitor_until > time.time() and janitor_deletes_left > 0:

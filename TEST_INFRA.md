@@ -1,41 +1,34 @@
-# E2E Test Infra: DvachBot Next-Gen Analytics & WebApp Dashboard
+# E2E Test Infra: DvachBot Command Dispatch & Multi-Board State Synchronization
 
 ## Test Philosophy
-- Opaque-box, requirement-driven, and white-box adversarial verification.
-- Zero tolerance for mock bypasses, dummy data facade implementations, or hardcoded strings.
-- Concurrency and memory leak safety verification under load.
+- Opaque-box, requirement-driven, and white-box regression verification.
+- Zero tolerances for handler shadowing, unhandled exceptions, or cross-board progression loss.
+- Methodology: Category-Partition + BVA + Pairwise Combinatorial + Multi-Board State Simulation + Matplotlib Figure Leak & Concurrency Testing.
 
-## Feature Inventory & Test Mapping
-| # | Feature | Requirement | Tier 1 (Functional) | Tier 2 (Boundary) | Tier 3 (Pairwise) | Tier 4 (Workload) |
-|---|---------|-------------|:-------------------:|:-----------------:|:-----------------:|:-----------------:|
-| 1 | F1: Economy & Crime Matrix | ORIGINAL_REQUEST §R1 | 5 | 5 | ✓ | ✓ |
-| 2 | F2: PvP & Bioweapons Radar | ORIGINAL_REQUEST §R1 | 5 | 5 | ✓ | ✓ |
-| 3 | F3: Sociology & Drama Graph | ORIGINAL_REQUEST §R1 | 5 | 5 | ✓ | ✓ |
-| 4 | F4: Memetics & Vision Analytics | ORIGINAL_REQUEST §R1 | 5 | 5 | ✓ | ✓ |
-| 5 | F5: ASCII Sparklines Snapshot | ORIGINAL_REQUEST §R2 | 5 | 5 | ✓ | ✓ |
-| 6 | F6: Inline Category Menu | ORIGINAL_REQUEST §R2 | 5 | 5 | ✓ | ✓ |
-| 7 | F7: Async Poster Delivery | ORIGINAL_REQUEST §R2 | 5 | 5 | ✓ | ✓ |
-| 8 | F8: Personal 2ch Wrapped | ORIGINAL_REQUEST §R3 | 5 | 5 | ✓ | ✓ |
-| 9 | F9: Sarcastic Diagnosis | ORIGINAL_REQUEST §R3 | 5 | 5 | ✓ | ✓ |
-| 10 | F10: WebApp Route `/app/stats` | ORIGINAL_REQUEST §R4 | 5 | 5 | ✓ | ✓ |
-| 11 | F11: REST APIs `/api/stats/*` | ORIGINAL_REQUEST §R4 | 5 | 5 | ✓ | ✓ |
-| 12 | F12: Interactive Charts/Plotly | ORIGINAL_REQUEST §R4 | 5 | 5 | ✓ | ✓ |
-| 13 | F13: Visual Quality & Memory Safety | ORIGINAL_REQUEST §R5 | 5 | 5 | ✓ | ✓ |
-| 14 | F14: Backward Compatibility | ORIGINAL_REQUEST §Safety | 5 | 5 | ✓ | ✓ |
+## Feature Inventory
+| # | Feature | Source | Tier 1 (Feature) | Tier 2 (Boundary) | Tier 3 (Pairwise/Cross) | Tier 4 (Workload/E2E) |
+|---|---------|--------|:----------------:|:-----------------:|:-----------------------:|:---------------------:|
+| 1 | 84+ User Commands Dispatch | ORIGINAL_REQUEST §R1 | 84 tests | 25 boundary | 15 pairwise | 10 E2E scenarios |
+| 2 | 30 Admin Commands Dispatch | ORIGINAL_REQUEST §R1 | 30 tests | 10 boundary | 10 pairwise | 5 E2E scenarios |
+| 3 | Autocomplete Alignment | ORIGINAL_REQUEST §R1 | 114 checks | 10 edge cases | 5 pairwise | 5 E2E scenarios |
+| 4 | Multi-Board Career / Shifts | ORIGINAL_REQUEST §R2 | 5 tests | 5 edge boards | 5 job interactions | 5 career paths |
+| 5 | Multi-Board Weapons & Debuffs | ORIGINAL_REQUEST §R2 | 10 weapon tests | 5 edge cases | 10 PvP duels | 5 PvP workflows |
+| 6 | Multi-Board Wardrobe & Sets | ORIGINAL_REQUEST §R2 | 8 wardrobe tests| 5 edge cases | 5 set bonuses | 5 dressing workflows |
+| 7 | Exploit Prevention (25x abuse) | ORIGINAL_REQUEST §R2 | 5 exploit tests | 5 race conditions| 5 cooldown checks | 5 abuse scenarios |
+| 8 | Concurrency & Memory Safety | ORIGINAL_REQUEST §R3 | 5 concurrency | 5 high load | 5 leak audits | 5 sustained stress |
 
 ## Test Architecture
-- **Runner**: `pytest -v tests/` and standalone verification scripts in `tests/`.
-- **Image Verifier**: Direct PIL inspection checking image dimensions (1200x675 / 1080x1350), RGBA/RGB channels, non-zero entropy, non-black/non-blank frames, color contrast ratio > 4.5:1, and absence of visual artifacts or NaN text.
-- **Latency Benchmarker**: Async HTTP/query benchmarking confirming `/stats_hub` sparklines computation < 100ms and cached `/api/stats/*` < 15ms.
-- **Concurrency & WAL Lock Tester**: Simultaneous execution of 50 concurrent read queries alongside mock write transactions to verify zero `database is locked` SQLite OperationalErrors.
-- **Memory & Resource Leak Verifier**: 100 iterations of poster rendering with `tracemalloc` to confirm zero figure leaks (`len(plt.get_fignums()) == 0`) and stable RAM usage.
-- **Backward Compatibility Test**: Invocation of legacy `/bot_stats`, `/stats`, `/my_stats`, and `periodic_publisher.py` functions to verify identical outputs and zero side-effects.
+- `tests/test_dispatcher_routing_compliance.py`: Validates zero shadowed handlers, exact parameter binding resolution, autocomplete synchronization, and dry-run dispatch.
+- `tests/test_multiboard_state_synchronization.py`: Tests multi-board data aggregation across `/b/`, `/sex/`, `/vg/`, `/po/`, `/a/`, `/int/` for weapons, shifts, gear, achievements, and cooldowns.
+- `tests/test_concurrency_and_leak_guards.py`: Tests SQLite WAL concurrent access under `db_lock` and asserts zero matplotlib figure memory leaks.
+- `tests/test_e2e_requirements_suite.py`: Starlette/FastAPI requirements test suite.
+- Existing 155 unit & integration test files in `tests/`.
 
 ## Real-World Application Scenarios (Tier 4)
-| # | Scenario | Features Exercised | Expected Outcome |
-|---|----------|--------------------|------------------|
-| 1 | High-Activity Chat Telegram Hub | F1-F7 | Instant sparkline message, responsive keyboard navigation, instant category poster replies |
-| 2 | New/Empty User Wrapped Card Request | F8, F9 | Graceful generation of "Newfag / Ghost" archetype card without crash or 500 error |
-| 3 | Heavy User (Top Giga-Schizo) Wrapped | F8, F9 | Accurate aggregation of 1000+ posts, top rivalries, accurate weapons/debuffs tally |
-| 4 | WebApp Multi-Filter Exploration | F10, F11, F12 | Fast filter switching (24h/7d/30d/All, /b/, /po/, /vg/), live chart rerendering |
-| 5 | Concurrent Bot & WebApp Surge | F1-F14 | 20 simultaneous WebApp users + 10 bot commands without database lock contention |
+| # | Scenario | Features Exercised | Complexity |
+|---|----------|--------------------|------------|
+| 1 | User starts on `/b/`, buys knife and ushanka, switches to `/vg/` to duel, switches to `/sex/` to work | Wardrobe, Weapons, Shop, Career Shifts, Cross-board sync | High |
+| 2 | Admin issues ban and unmask on `/threads`, uses `/mega` to pin thread on `/po/`, runs `/stats_hub` | Admin routing, `/threads`, `/mega`, `/stats_hub`, permissions | High |
+| 3 | Casino Hub mini-game navigation: `/casino` -> clicks Tic-Tac-Toe, Dice Duel, Russian Roulette | Callback routing, Casino UI, Mini-games | Medium |
+| 4 | Multi-board daily bonus & bottle search rate limit enforcement across 6 boards | Cooldown sync, exploit prevention, database atomicity | Medium |
+| 5 | 50 concurrent transactions performing simultaneous work shifts, rob actions, and shop buys | SQLite concurrency, WAL mode, `db_lock` integrity | High |

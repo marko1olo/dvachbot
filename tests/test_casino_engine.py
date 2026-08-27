@@ -28,7 +28,7 @@ class TestCasinoAndDrop(unittest.IsolatedAsyncioTestCase):
         cf_wins = 0
         for _ in range(500):
             side, is_win, mult, text = casino_engine.play_coinflip("heads")
-            self.assertIn(mult, [0.0, 1.95])
+            self.assertIn(mult, [0.0, 1.96])
             if is_win:
                 cf_wins += 1
         self.assertTrue(150 <= cf_wins <= 350)

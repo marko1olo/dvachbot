@@ -42,7 +42,7 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         ]
     },
     "sweeper": {
-        "title": "🧹 Дворник в спальном районе",
+        "title": "🚮 Дворник в спальном районе",
         "desc": "Утренняя уборка окурков, борьба с собачниками и расчистка сугробов",
         "tier": "Уровень 2 • Работяга",
         "required_shifts": 3,
@@ -103,7 +103,7 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         ]
     },
     "captcha": {
-        "title": "⌨️ Ввод капчи на буксах",
+        "title": "📝 Ввод капчи на буксах",
         "desc": "Монотонное разгадывание светофоров и пешеходных переходов по 12 часов в сутки",
         "tier": "Уровень 4 • Мамкин Фрилансер",
         "required_shifts": 15,
@@ -124,7 +124,7 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "Победил hCaptcha на 300 сайтах подряд со скоростью робота: премия за скорость <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
-            "👁️ <b>АНТИФРОД!</b> Нейросеть заподозрила в тебе бота и забанила аккаунт с балансом: сгорело <code>-{penalty} ₪</code>!",
+            "🔍 <b>АНТИФРОД!</b> Нейросеть заподозрила в тебе бота и забанила аккаунт с балансом: сгорело <code>-{penalty} ₪</code>!",
             "Залипание клавиш привело к 50 ошибкам подряд: сервис списал штраф <code>-{penalty} ₪</code>!",
             "Отрубился интернет в момент вывода средств: комиссия за сбой <code>-{penalty} ₪</code>!"
         ],
@@ -133,7 +133,7 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         ]
     },
     "spy": {
-        "title": "🕵️ Слив инфы майору / Стукач",
+        "title": "🔍 Слив инфы майору / Стукач",
         "desc": "Анонимные доносы на треды, слив IP-адресов вайперов и аналитика для товарища майора",
         "tier": "Уровень 5 • Тайный Осведомитель",
         "required_shifts": 25,
@@ -223,7 +223,7 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         ]
     },
     "scam": {
-        "title": "🕶️ Теневой Арбитраж & Скам",
+        "title": "😎 Теневой Арбитраж & Скам",
         "desc": "Фейковые шопы, развод мамонтов на Авито и крипто-дропы",
         "tier": "Уровень 8 • Темщик",
         "required_shifts": 85,
@@ -256,7 +256,7 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         ]
     },
     "deputy": {
-        "title": "🏛️ Помощник депутата / Распил",
+        "title": "🏢 Помощник депутата / Распил",
         "desc": "Освоение грантов на патриотизм, импортозамещение и укладка плитки",
         "tier": "Уровень 9 • Хозяин Жизни",
         "required_shifts": 120,
@@ -319,7 +319,7 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         ]
     },
     "crypto_cartel": {
-        "title": "🪙 Дрейнер кошельков / Памп & Дамп",
+        "title": "💰 Дрейнер кошельков / Памп & Дамп",
         "desc": "Создание щиткоинов на Solana, кража сид-фраз у хомяков и запуск скам-ботов",
         "tier": "Уровень 11 • Картель Мемкоинов",
         "required_shifts": 210,
@@ -395,7 +395,7 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "Сгенерировал 100 000 фейковых хвалебных отзывов для китайского маркетплейса: выплата <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
-            "🛡️ <b>ГЛОБАЛЬНЫЙ БАН СЕТКИ!</b> Telegram и Cloudflare забанили 80% прокси-фермы: закупка новых IP <code>-{penalty} ₪</code>!",
+            "🔒 <b>ГЛОБАЛЬНЫЙ БАН СЕТКИ!</b> Telegram и Cloudflare забанили 80% прокси-фермы: закупка новых IP <code>-{penalty} ₪</code>!",
             "Серверная стойка с ботнетом сгорела от майнинга Monero в фоновом режиме: ремонт оборудования <code>-{penalty} ₪</code>!",
             "Хакеры перехватили управление ботнетом и завайпили твой собственный канал: ущерб <code>-{penalty} ₪</code>!"
         ],
@@ -432,7 +432,7 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         ]
     },
     "shadow_oligarch": {
-        "title": "🛥️ Олигарх Офшоров / Яхтенный Магнат",
+        "title": "🚢 Олигарх Офшоров / Яхтенный Магнат",
         "desc": "Покупка заводов за 1 ₪, вывод капитала на Кипр, приватизация советского наследия и скупка недвижимости в Лондоне",
         "tier": "Уровень 15 • Мировая Закулиса",
         "required_shifts": 510,
@@ -451,7 +451,7 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
             "Пролоббировал субсидию на 100 миллиардов для своего убыточного холдинга: освоено <code>+{reward} ₪</code>!"
         ],
         "fail_phrases": [
-            " санкции <b>ЗАМОРОЗКА АКТИВОВ!</b> Лондонский суд арестовал счета и арестовал две яхты в Монако: взятка юристам <code>-{penalty} ₪</code>!",
+            "⚖️ <b>ЗАМОРОЗКА АКТИВОВ!</b> Лондонский суд арестовал счета и арестовал две яхты в Монако: взятка юристам <code>-{penalty} ₪</code>!",
             "Внезапная национализация нефтегазового месторождения: потеря доли на <code>-{penalty} ₪</code>!",
             "Аудиторы нашли двойную бухгалтерию в швейцарском банке: штраф регулятора <code>-{penalty} ₪</code>!"
         ],
@@ -460,7 +460,7 @@ WORK_VACANCIES: Dict[str, Dict[str, Any]] = {
         ]
     },
     "matrix_architect": {
-        "title": "👁️ Архитектор Матрицы / Бог Шитпостинга",
+        "title": "🌐 Архитектор Матрицы / Бог Шитпостинга",
         "desc": "Полный контроль над реальностью ТГАЧа, генерация мировых кризисов ради лулзов, симуляция вселенной в Python",
         "tier": "Уровень 16 • Демиург Бытия",
         "required_shifts": 620,
@@ -555,21 +555,21 @@ def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str
         from wardrobe_engine import get_active_set_bonus
         active_set = get_active_set_bonus(current_items)
         if active_set:
-            if active_set["id"] == "set_wasserman":
+            if active_set.get("id") in ["set_wasserman", "set_onotole"]:
                 salary_mult += 0.40
                 buff_notes.append("🦺 Сет Онотоле: +40% ЗП")
-            elif active_set["id"] in ["set_gop_skuf", "set_skuf"]:
+            elif active_set.get("id") in ["set_gop_skuf", "set_skuf"]:
                 salary_mult += 0.35
                 buff_notes.append("🍺 Сет Скуфа: +35% получки")
-            elif active_set["id"] == "set_neo":
+            elif active_set.get("id") == "set_neo":
                 salary_mult += 0.25
-                buff_notes.append("🕶️ Сет Нео: +25% ЗП")
+                buff_notes.append("😎 Сет Нео: +25% ЗП")
     except Exception:
         active_set = None
 
     # Failure & Risk Calculation
     risk_pct = job.get("risk_pct", 0.0)
-    if active_set and active_set["id"] in ["set_riot_police", "set_omon"]:
+    if active_set and active_set.get("id") in ["set_riot_police", "set_omon"]:
         risk_pct = 0.0  # Riot police immunity to work fines
         buff_notes.append("🪖 Спецназ: 0% штрафов")
 
@@ -624,7 +624,7 @@ def execute_job_action(job_id: str, current_items: dict) -> Tuple[bool, int, str
         pass
 
     # Check Random Item Drop (Anime set doubles drop rate)
-    drop_rate_mult = 2.0 if (active_set and active_set["id"] == "set_anime") else 1.0
+    drop_rate_mult = 2.0 if (active_set and active_set.get("id") in ["set_anime", "set_anime_hikka"]) else 1.0
     if head == "hat_bag":
         drop_rate_mult *= 1.5
 

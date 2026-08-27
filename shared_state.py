@@ -5,6 +5,7 @@ from aiogram.types import InlineKeyboardMarkup
 import os
 import re
 import asyncio
+import random
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Any, Optional
@@ -59,7 +60,7 @@ SYMBOLIC_REACTIONS = {'🏴‍☠️', '♂️'}
 INSULT_REACTIONS = {'🐓', '🐖'}
 MAT_WORDS = ["сука", "блядь", "пиздец", "ебать", "нах", "пизда", "хуйня", "ебал", "блять", "отъебись", "ебаный", "еблан", "ХУЙ", "ПИЗДА", "хуйло", "долбаёб", "пидорас"]
 
-BEST_CHANNEL_ID = -1001234567890
+BEST_CHANNEL_ID = int(os.getenv("BEST_CHANNEL_ID", -1002827087363))
 LIKES_THRESHOLD = 3
 AUTHOR_NOTIFY_LIMIT_PER_MINUTE = 4
 ENABLE_MULTILANG = False
@@ -103,6 +104,7 @@ _ACTIVE_AUTHOR_ATTACKS: dict[str, dict[int, dict[int, float]]] = defaultdict(lam
 _GLOBAL_COMBAT_COOLDOWNS: dict[int, float] = {}
 _TARGET_LAST_ATTACKED_TS: dict[int, float] = {}
 _ATTACKER_SERIES_HISTORY: dict[int, list[float]] = defaultdict(list)
+_VICTIM_ROB_COOLDOWNS: dict[int, float] = {}
 
 def get_target_grief_protection_remaining(target_id: int) -> int:
     """
@@ -114,11 +116,32 @@ def get_target_grief_protection_remaining(target_id: int) -> int:
         return int(last_attack - now)
     return 0
 
-def register_target_attack(target_id: int, duration_seconds: int = 300):
+def register_target_attack(target_id: int, duration_seconds: int = 300, attacker_id: int | None = None):
     """
     Регистрирует атаку на цель, включая 5-минутное окно анти-гриферской защиты (diminishing returns).
+    Защищает от эксплойта самоатаки: если attacker_id == target_id, иммунитет не дается.
     """
+    if attacker_id is not None and attacker_id == target_id:
+        return
     _TARGET_LAST_ATTACKED_TS[target_id] = time.time() + duration_seconds
+
+def get_victim_rob_cooldown_remaining(target_id: int) -> int:
+    """
+    Возвращает оставшееся время (сек) иммунитета жертвы от повторных ограблений (20 минут).
+    """
+    now = time.time()
+    expire_ts = _VICTIM_ROB_COOLDOWNS.get(target_id, 0.0)
+    if now < expire_ts:
+        return int(expire_ts - now)
+    return 0
+
+def set_victim_rob_cooldown(target_id: int, cooldown_seconds: int | None = None):
+    """
+    Устанавливает кулдаун жертвы от повторных ограблений (рандом 5-15 минут: больничка / мусарня).
+    """
+    if cooldown_seconds is None:
+        cooldown_seconds = random.randint(300, 900)
+    _VICTIM_ROB_COOLDOWNS[target_id] = time.time() + cooldown_seconds
 
 def calculate_escalating_combat_cooldown(attacker_id: int, base_seconds: int = 180) -> int:
     """
@@ -180,12 +203,12 @@ def register_attacker_effect(item_type: str, attacker_id: int, target_id: int, d
 _DAILY_SHOP_PURCHASES: dict[tuple[int, str, str], int] = defaultdict(int)
 
 SHOP_DAILY_LIMITS = {
-    "mute": 3,
+    "mute": 6,
     "partyvan": 2,
-    "knife": 5,
-    "shit": 5,
-    "laxative": 3,
-    "schizopill": 3
+    "knife": 10,
+    "shit": 20,
+    "laxative": 6,
+    "schizopill": 6
 }
 
 def get_user_daily_shop_buys(user_id: int, item: str) -> int:
@@ -244,6 +267,15 @@ def check_attack_abuse_limit(attacker_id: int, target_id: int) -> tuple[bool, st
         _ATTACKER_ABUSE_WARNINGS[attacker_id] = warn_count + 1
         return True, "spetsnaz_fine", 1000
 
+def reset_combat_state():
+    _GLOBAL_COMBAT_COOLDOWNS.clear()
+    _TARGET_LAST_ATTACKED_TS.clear()
+    _ACTIVE_AUTHOR_ATTACKS.clear()
+    _ATTACKER_SERIES_HISTORY.clear()
+    _VICTIM_ROB_COOLDOWNS.clear()
+    _ATTACKER_TARGET_HISTORY.clear()
+    _ATTACKER_ABUSE_WARNINGS.clear()
+
 # Explicitly export private helpers so 'from shared_state import *' in
 # broadcaster.py, delivery_manager.py, post_processor.py, archive_manager.py
 # picks them up. Without __all__, Python excludes names starting with '_'.
@@ -257,8 +289,11 @@ __all__ = [
     '_ATTACKER_ABUSE_WARNINGS',
     '_PASSPORT_DATA',
     '_stats_cooldown_tracker',
+    '_VICTIM_ROB_COOLDOWNS',
     'get_target_grief_protection_remaining',
     'register_target_attack',
+    'get_victim_rob_cooldown_remaining',
+    'set_victim_rob_cooldown',
     'calculate_escalating_combat_cooldown',
     'get_combat_cooldown_remaining',
     'set_combat_cooldown',
@@ -525,7 +560,7 @@ board_data = defaultdict(lambda: {
     },
     'single_photo_counter': defaultdict(int), # Трекер для одиночных фото
     'last_photo_group_id': defaultdict(str),  # Чтобы отличать разные группы
-    'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set(), 'lie_media': False}),
+    'user_settings': defaultdict(lambda: {'nsfw': False, 'hide': set(), 'disable_ai_roasts': False, 'hide_ai_slop': False, 'lie_media': False}),
     'active_pin': None, 
     'message_counter': defaultdict(int),
     'last_user_msgs': {},

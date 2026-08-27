@@ -134,10 +134,10 @@ def clean_html_for_tg(text: str) -> str:
     text = re.sub(r'<hr\s*/?>', '\n', text, flags=re.IGNORECASE)
     text = re.sub(r'</?h[1-6]\s*[^>]*>', '\n', text, flags=re.IGNORECASE)
     text = re.sub(r'</?(?:li|dt|dd|tr|td|th)\s*[^>]*>', '\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'</?(?:div|section|article|header|footer|main|nav|aside|span|em|strong|ul|ol|table|thead|tbody|tfoot|blockquote|figure|figcaption)\s*[^>]*>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?(?:div|section|article|header|footer|main|nav|aside|span|em|strong|ul|ol|table|thead|tbody|tfoot|figure|figcaption)\s*[^>]*>', '', text, flags=re.IGNORECASE)
 
     # Strip ALL remaining non-allowed tags completely
-    allowed = {'b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'tg-emoji'}
+    allowed = {'b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'tg-emoji', 'blockquote'}
 
     def _replace_tag(m):
         closing = m.group(1)  # '/' or None
@@ -211,3 +211,43 @@ def generate_poll_text_display(poll_data: dict) -> str:
         safe_option_text = escape_html(option_text)
         lines.append(f"<code>{i+1}. {safe_option_text}:</code>\n<code>[{bar}] {vote_count} ({percentage:.0f}%)</code>")
     return "\n".join(lines)
+
+
+def strip_thinking_tags(text: str) -> str:
+    """
+    Rigorously strips all thinking, reasoning, thought, and reflection blocks,
+    including closed tags, unclosed/truncated tags, HTML-escaped tags,
+    and conversational reasoning preambles.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+
+    # 1. Closed reasoning/thinking tags (raw and HTML entity escaped)
+    pattern_closed = r'<(?:think|reasoning|thought|reflection)\b[^>]*>.*?</(?:think|reasoning|thought|reflection)>'
+    text = re.sub(pattern_closed, '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    pattern_escaped_closed = r'&lt;(?:think|reasoning|thought|reflection)\b[^&]*&gt;.*?&lt;/(?:think|reasoning|thought|reflection)&gt;'
+    text = re.sub(pattern_escaped_closed, '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # 2. Unclosed opening tags (from opening tag to end of string)
+    pattern_unclosed = r'<(?:think|reasoning|thought|reflection)\b[^>]*>.*$'
+    text = re.sub(pattern_unclosed, '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    pattern_escaped_unclosed = r'&lt;(?:think|reasoning|thought|reflection)\b[^&]*&gt;.*$'
+    text = re.sub(pattern_escaped_unclosed, '', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # 3. Orphaned closing tags
+    text = re.sub(r'</(?:think|reasoning|thought|reflection)>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'&lt;/(?:think|reasoning|thought|reflection)&gt;', '', text, flags=re.IGNORECASE)
+
+    # 4. Multi-line thinking blocks: 'Thinking Process:\n...\n\n'
+    text = re.sub(r'(?is)^\s*(?:Thinking Process|Reasoning|Thoughts?):\s*\n.*?\n\n', '', text)
+
+    # 5. Standard conversational preambles
+    text = re.sub(r'(?i)^\s*(?:Here(?:\'s| is) (?:a |the )?(?:thinking process|reasoning|summary):?|Thinking Process:?|Thought:?|Reasoning:?|Assistant:)\s*', '', text)
+
+    return text.strip()
+
+
+clean_ai_thinking = strip_thinking_tags
+

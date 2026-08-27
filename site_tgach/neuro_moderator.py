@@ -173,7 +173,7 @@ async def _safe_groq_json(messages, max_tokens=1024):
     gemini_keys = google_pool.get_all_active_tokens()
     if gemini_keys:
         for g_key in gemini_keys:
-            for g_model in ["gemini-3.5-flash-lite", "gemini-2.5-flash"]:
+            for g_model in ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
                 try:
                     transport = AsyncHTTPTransport(local_address="0.0.0.0", retries=1)
                     async with httpx.AsyncClient(timeout=GROQ_TIMEOUT, transport=transport, verify=False) as client:

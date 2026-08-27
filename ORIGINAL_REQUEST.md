@@ -97,3 +97,124 @@ Identify the newly added but unfinished modes/features in the codebase (often re
 - [ ] The trigger commands for the unfinished modes return a static "mode is not active" message.
 - [ ] The core code for the new modes remains in the repository but is functionally disconnected from user execution.
 </USER_REQUEST>
+
+## Follow-up — 2026-08-26T20:40:56Z
+
+<USER_REQUEST>
+Audit, verify, and resolve all outdated/duplicate handlers, handler masking conflicts, argument mismatches, and multi-board persistence desynchronizations (active_items, work shifts, inventory, stats, cooldowns across boards) across all bot commands in DvachBot.
+
+Working directory: C:\Users\danat\Desktop\dvachbot
+Integrity mode: development
+
+## Requirements
+
+### R1. Exhaustive Audit & Cleanup of All Bot Commands & Dispatcher Routing
+- Conduct a systematic audit of all 84+ registered user/admin commands (in main.py and modules like economy_extension.py, ttt_engine.py, dice_duel_engine.py, russian_roulette_pvp.py, votemute_engine.py, stats_hub_router.py, etc.).
+- Eliminate all duplicate, outdated stub handlers or conflicting @dp.message(...) / @dp.callback_query(...) decorators that intercept or shadow modular router logic with invalid function signatures.
+- Ensure every single command has valid parameter bindings (bot, message, board_id, stream, etc.), error handling, and exact argument alignment.
+
+### R2. Universal Cross-Board Persistence & State Synchronization
+- Fix all occurrences where user progress (work shifts, career progression, wardrobe clothing, permanent perks, inventory items, achievements, cooldowns, stats) is isolated or resets to 0 when users switch between boards (/b/, /sex/, /vg/, /po/, /a/, /int/, etc.).
+- Ensure _get_user_active_items, shop purchases, inventory updates, and profile inspections consistently aggregate and preserve account-level progression across all board records.
+
+### R3. Autonomous Verification & Zero Regression
+- Run static syntax verification (py_compile) and test suites (pytest) across all modules.
+- Create automated test cases covering command dispatch, multi-board item inheritance, and shift preservation to prevent future regressions.
+
+## Acceptance Criteria
+
+### Dispatcher & Command Routing
+- [ ] No command has duplicate or shadowed handlers in main.py or router modules.
+- [ ] All 84+ bot commands execute without TypeError, AttributeError, or unhandled exceptions.
+- [ ] Telegram autocomplete list (setup_bot_commands) is 100% synchronized with live router commands.
+
+### Multi-Board Data Consistency
+- [ ] Users moving between boards retain all career shifts (work_shifts), unlocked job tiers, achievements, and owned wardrobe items.
+- [ ] _get_user_active_items and related DB helpers return consistent unified state across all boards.
+
+### Quality & Test Suite
+- [ ] All unit and integration test suites pass with 100% success (pytest tests/).
+- [ ] Zero lint/runtime errors on startup and command dispatch.
+</USER_REQUEST>
+
+## Follow-up — 2026-08-27T08:14:12Z
+
+<USER_REQUEST>
+Music Auto-Roast Engine and Summarize Reasoning/Thinking Tags Sanitization for DvachBot.
+
+Working directory: C:\Users\danat\Desktop\dvachbot
+Integrity mode: development
+
+## Requirements
+
+### R1. Full Music Auto-Roast Engine (`handle_music_roast`)
+- Implement automatic 2ch roast for any audio/music track sent to boards (`message.audio`, music documents `.mp3`, `.wav`, `.flac`, `.ogg`, `.m4a`).
+- Extract track metadata: artist/performer, track title, file name, duration.
+- Transcribe audio sample/lyrics via STT fallback (`Groq Whisper` / `Gemini Audio`).
+- Generate a caustic, unhinged imageboard music critique /b/ review analyzing the genre (drill, phonk, dead-inside rap, popsa, k-pop, shanson, anime OST), roasting the user's taste, and rating it (e.g. `0/10 💩` or `Шедевр мочи`).
+- Deliver formatted response:
+  ```html
+  🎵 <b>Трек:</b> {artist} — {title} (<i>{dur_str}</i>)
+  📝 <b>Текст / Семпл:</b> <i>«{lyrics_sample}»</i>
+  🔥 <b>Рецензия музкритика /b/:</b>
+  {roast_text}
+  💩 <b>Шкала говноедства:</b> {rating}
+  ```
+
+### R2. Complete Reasoning/Thinking Tags Stripping & Summarize Engine Robustness
+- Completely eradicate raw AI thinking tokens and tags (`<think>...</think>`, `<reasoning>...</reasoning>`, unclosed thinking prefixes) across `summarize.py` and `ai_manager.py`.
+- Fix Gemini & Groq model cascade so valid models (`gemini-2.5-flash`, `gemini-2.0-flash`, `llama-3.3-70b-versatile`, `qwen-2.5-32b`) are queried with valid token parameters.
+- Ensure Telegraph page creation never fails with `CONTENT_TOO_BIG` by strictly enforcing AST node payload size limits and automatic chunking.
+
+### R3. Automated Regression & Unit Test Suite
+- Add comprehensive pytest tests in `tests/test_music_roast.py` and `tests/test_summary_thinking_sanitization.py`.
+- Verify 100% clean compilation via `python -m py_compile` across all files.
+
+## Acceptance Criteria
+
+### Music Auto-Roast
+- [ ] Any `audio` message or music file triggers `handle_music_roast` with metadata extraction (artist, title, duration).
+- [ ] STT transcription processes the audio bytes with Whisper/Gemini fallback.
+- [ ] AI prompt outputs a 1-2 paragraph cynical 2ch critique and rating without polite preamble or quotes.
+
+### Summarize & Reasoning Filter
+- [ ] All outputs from reasoning models (Qwen, DeepSeek, Gemini) are 100% stripped of internal thinking processes before display.
+- [ ] Telegraph createPage requests are capped <= 55,000 bytes payload and auto-shrink on `CONTENT_TOO_BIG`.
+- [ ] `summarize_text_with_hf` returns clean HTML compatible with Telegram.
+
+### Test Verification
+- [ ] `python -m py_compile` passes across all repository Python files with 0 errors.
+- [ ] `pytest tests/test_music_roast.py tests/test_summary_thinking_sanitization.py tests/test_work_engine.py` passes 100%.
+
+</USER_REQUEST>
+
+## Follow-up — 2026-08-27T08:17:06Z
+
+<USER_REQUEST>
+CRITICAL USER REFINEMENT FOR MUSIC AUTO-ROAST:
+1. Toxicity Level: The music roast prompt MUST be just as extreme, cynical, caustic, and toxic as the Voice Note roast prompt (authentic 2ch /b/ style, full uncensored slang/profanity, zero polite AI preamble, zero quotes or disclaimers).
+2. Analysis Scope: Roast MUST analyze BOTH the lyrics (распознанный через STT текст песни) AND metadata/track context (исполнитель, название трека, звучание/жанр).
+3. Message Structure:
+   - Header & Track Info: 🎵 <b>Трек:</b> {artist} — {title} (<i>{dur_str}</i>)
+   - Transcribed Lyrics / Sample: 📝 <b>Текст / Семпл:</b> <i>«{lyrics_sample}»</i>
+   - Brutal AI Teardown: 🔥 <b>Вердикт /b/ музкритика:</b>\n{roast_text}
+   - Rating / Diagnosis: 💩 <b>Шкала говноедства:</b> {rating} / 10 (или вердикт)
+
+Incorporate this immediately into the implementation plan, prompt templates, and test assertions!
+</USER_REQUEST>
+
+## Follow-up — 2026-08-27T08:25:36Z
+
+<USER_REQUEST>
+CRITICAL DIRECTIVE ON MODELS:
+DO NOT TOUCH, RENAME, OR DOWNGRADE ANY MODEL NAMES!
+The model cascades in summarize.py and elsewhere MUST remain EXACTLY as originally configured:
+- gemini-3.5-flash-lite
+- gemini-3.1-flash-lite
+- gemini-3.6-flash
+- gemini-3.7-flash
+- qwen/qwen3.6-27b
+Do not assume pretraining cutoffs or call them fantasy names. All test assertions and code must respect the existing 3.x model configuration.
+</USER_REQUEST>
+
+

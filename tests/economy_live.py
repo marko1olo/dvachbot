@@ -213,9 +213,9 @@ async def live_economy():
     work = tempfile.mkdtemp(prefix="dvach-econ-")
     db_path = os.path.join(work, "fresh.db")
     db = await _build_schema(db_path)
-    # Глобалы main, которые заполняет aim_at, - общие с остальными тестами
-    # (tests/test_batch_replies.py тоже пишет в messages_storage), поэтому
-    # снимаем копию и возвращаем на место.
+    import shared_state
+    shared_state.reset_combat_state()
+
     saved_storage = dict(main.messages_storage)
     saved_map = dict(main.message_to_post)
     saved_conn = common.db_pool._db_connection
@@ -227,17 +227,6 @@ async def live_economy():
         mock.patch.object(common.db_pool, "DB_NAME", db_path),
         mock.patch.object(common.database, "DB_NAME", db_path),
         mock.patch.object(common.config, "DB_NAME", db_path),
-        # Свежий замок на каждый тест. common.db_pool.db_lock создаётся один раз
-        # на импорте модуля, а asyncio.Lock привязывается к тому циклу событий, в
-        # котором его впервые ЖДУТ: незанятый замок берётся быстрым путём, вообще
-        # без обращения к циклу. IsolatedAsyncioTestCase даёт каждому тесту новый
-        # цикл, поэтому второй же тест с конкурентными вызовами падал с
-        # "bound to a different event loop". Это артефакт тестов, а не дефект
-        # бота - в проде цикл один. Подменять безопасно: от замка требуется
-        # только сериализовать, а не быть тем же объектом.
-        # Все обращения к db_lock в проекте - локальные импорты внутри функций
-        # (module-level `from common.db_pool import ...` тянет лишь get_pool),
-        # поэтому одна эта подмена накрывает и main.py, и common/database.py.
         mock.patch.object(common.db_pool, "db_lock", asyncio.Lock()),
     ]
     for p in patches:
@@ -252,5 +241,6 @@ async def live_economy():
         main.messages_storage.update(saved_storage)
         main.message_to_post.clear()
         main.message_to_post.update(saved_map)
+        shared_state.reset_combat_state()
         await db.close()
         shutil.rmtree(work, ignore_errors=True)

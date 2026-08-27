@@ -1,3 +1,4 @@
+import shared_state
 from shared_state import *
 from shared_state import _persona_processed_posts
 from aiogram import types
@@ -20,7 +21,7 @@ from common.text_utils import clean_html_for_tg
 import json
 from datetime import timedelta
 from common.database import get_post_by_num, get_pool, delete_post_by_num
-from common.text_utils import clean_html_tags
+from common.text_utils import clean_html_tags, clean_ai_thinking, strip_thinking_tags
 from bot_helpers import delete_message_after_delay, check_cooldown, _activate_mode, disable_mode_after_delay
 from common.task_manager import spawn_task
 from post_helpers import create_post, _format_post_text, _get_author_name, _get_reply_suffix, update_post_content, format_header
@@ -136,16 +137,235 @@ async def check_and_send_contextual_reply(bot, user_id: int, text: str, board_id
     except Exception as e:
         print(f"⛔ Ошибка в check_and_send_contextual_reply для user {user_id}: {e}")
 
-async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str = 'b', stream: str = 'ru'):
+async def _safe_send_voice_roast(
+    message: Message,
+    voice_bytes: bytes,
+    caption: str = "🔥 Разъёб от Киберчеда",
+    log_prefix: str = "Voice Roast",
+    reply_to_message_id: int | None = None,
+) -> bool:
     """
-    Автоматическая транскрипция ГС и кружочков (Whisper/Groq STT)
-    с красивым ответом-расшифровкой в чат и уничтожающим 2ch-роастом.
+    Надёжная отправка голосового ответа Киберчеда:
+    1. Проверяет наличие message, chat и валидного message_id / reply_to_message_id.
+    2. Пробует отправить reply_voice / send_voice с reply_to_message_id и allow_sending_without_reply=True.
+    3. При 'message to be replied not found' или любой ошибке реплая (удаленный пост, анонимный канал, смена чата),
+       автоматически переключается на answer_voice / send_voice без reply_to_message_id.
+    4. Корректно обрабатывает запреты на отправку ГС (Telegram Premium / права чата) и блокировку бота.
     """
-    if not message:
+    if not message or not voice_bytes:
+        return False
+
+    from aiogram.types import BufferedInputFile
+    from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+
+    # 1. Попытка реплая с флагом allow_sending_without_reply=True
+    try:
+        voice_file = BufferedInputFile(voice_bytes, filename="cyberchad_roast.ogg")
+        if (
+            reply_to_message_id
+            and reply_to_message_id != getattr(message, "message_id", None)
+            and hasattr(message, "bot")
+            and message.bot
+            and hasattr(message, "chat")
+            and message.chat
+        ):
+            try:
+                await message.bot.send_voice(
+                    chat_id=message.chat.id,
+                    voice=voice_file,
+                    caption=caption,
+                    reply_to_message_id=reply_to_message_id,
+                    allow_sending_without_reply=True
+                )
+                return True
+            except TypeError:
+                voice_file = BufferedInputFile(voice_bytes, filename="cyberchad_roast.ogg")
+                await message.bot.send_voice(
+                    chat_id=message.chat.id,
+                    voice=voice_file,
+                    caption=caption,
+                    reply_to_message_id=reply_to_message_id
+                )
+                return True
+            except Exception:
+                pass
+
+        if hasattr(message, "reply_voice"):
+            try:
+                await message.reply_voice(voice_file, caption=caption, allow_sending_without_reply=True)
+                return True
+            except TypeError:
+                voice_file = BufferedInputFile(voice_bytes, filename="cyberchad_roast.ogg")
+                await message.reply_voice(voice_file, caption=caption)
+                return True
+        elif hasattr(message, "answer_voice"):
+            await message.answer_voice(voice_file, caption=caption)
+            return True
+    except TelegramBadRequest as err:
+        err_msg = str(err).lower()
+        if "voice_messages_forbidden" in err_msg or "voices_forbidden" in err_msg:
+            logger.warning(f"⚠️ [{log_prefix}] Отправка ГС запрещена настройками приватности чата/пользователя: {err}")
+            return False
+        if "message to be replied not found" in err_msg or "message to reply not found" in err_msg or "reply message not found" in err_msg:
+            logger.debug(f"ℹ️ [{log_prefix}] message_id={reply_to_message_id or getattr(message, 'message_id', None)} не найден (удален/анонимный пост), переходим на answer...")
+        else:
+            logger.info(f"ℹ️ [{log_prefix}] reply_voice/send_voice не удался ({err}), отправляем answer...")
+    except TelegramForbiddenError as err:
+        logger.info(f"ℹ️ [{log_prefix}] Чат недоступен (бот заблокирован пользователем или чат удален): {err}")
+        return False
+    except Exception as err:
+        logger.debug(f"ℹ️ [{log_prefix}] reply_voice завершился с ошибкой: {err}")
+
+    # 2. Безопасный Fallback: отправка напрямую в чат через answer_voice
+    try:
+        voice_file = BufferedInputFile(voice_bytes, filename="cyberchad_roast.ogg")
+        if hasattr(message, "answer_voice"):
+            await message.answer_voice(voice_file, caption=caption)
+            return True
+        elif hasattr(message, "bot") and message.bot and hasattr(message, "chat") and message.chat:
+            await message.bot.send_voice(chat_id=message.chat.id, voice=voice_file, caption=caption)
+            return True
+    except TelegramBadRequest as fb_err:
+        fb_msg = str(fb_err).lower()
+        if "voice_messages_forbidden" in fb_msg or "voices_forbidden" in fb_msg:
+            logger.warning(f"⚠️ [{log_prefix}] Отправка ГС запрещена настройками чата: {fb_err}")
+        else:
+            logger.warning(f"⚠️ [{log_prefix}] Не удалось отправить answer_voice: {fb_err}")
+    except TelegramForbiddenError as fb_err:
+        logger.info(f"ℹ️ [{log_prefix}] Чат недоступен при отправке answer_voice: {fb_err}")
+    except Exception as fb_err:
+        logger.warning(f"⚠️ [{log_prefix}] Не удалось отправить голосовой ответ Киберчеда: {fb_err}")
+
+    return False
+
+
+async def _safe_send_roast(
+    message: Message,
+    target_text: str,
+    reply_to_message_id: int | None = None,
+    log_prefix: str = "Roast"
+) -> bool:
+    """
+    Надёжная отправка текстового роаста с реплаем к исходному посту.
+    1. Пробует message.reply / bot.send_message с reply_to_message_id и allow_sending_without_reply=True.
+    2. При ошибке реплая (удален пост / сменился контекст) автоматически шлет напрямую через answer.
+    3. При ошибке 'message is too long' обрезает текст и отправляет сокращенный вариант.
+    """
+    if not message or not target_text:
+        return False
+
+    from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+
+    try:
+        if (
+            reply_to_message_id
+            and reply_to_message_id != getattr(message, "message_id", None)
+            and hasattr(message, "bot")
+            and message.bot
+            and hasattr(message, "chat")
+            and message.chat
+        ):
+            try:
+                await message.bot.send_message(
+                    chat_id=message.chat.id,
+                    text=target_text,
+                    parse_mode="HTML",
+                    reply_to_message_id=reply_to_message_id,
+                    allow_sending_without_reply=True
+                )
+                return True
+            except TypeError:
+                await message.bot.send_message(
+                    chat_id=message.chat.id,
+                    text=target_text,
+                    parse_mode="HTML",
+                    reply_to_message_id=reply_to_message_id
+                )
+                return True
+            except Exception:
+                pass
+
+        if hasattr(message, "reply"):
+            try:
+                await message.reply(target_text, parse_mode="HTML", allow_sending_without_reply=True)
+                return True
+            except TypeError:
+                await message.reply(target_text, parse_mode="HTML")
+                return True
+        elif hasattr(message, "answer"):
+            await message.answer(target_text, parse_mode="HTML")
+            return True
+    except TelegramBadRequest as err:
+        err_msg = str(err).lower()
+        if "message to be replied not found" in err_msg or "message to reply not found" in err_msg or "reply message not found" in err_msg:
+            try:
+                if hasattr(message, "answer"):
+                    await message.answer(target_text, parse_mode="HTML")
+                    return True
+                elif hasattr(message, "bot") and message.bot and hasattr(message, "chat") and message.chat:
+                    await message.bot.send_message(chat_id=message.chat.id, text=target_text, parse_mode="HTML")
+                    return True
+            except Exception as ans_err:
+                logger.warning(f"⚠️ [{log_prefix}] Fallback answer failed: {ans_err}")
+        elif "message is too long" in err_msg:
+            short_text = target_text[:3800] + "… <i>[сокращено]</i>"
+            try:
+                if hasattr(message, "reply"):
+                    try:
+                        await message.reply(short_text, parse_mode="HTML", allow_sending_without_reply=True)
+                        return True
+                    except TypeError:
+                        await message.reply(short_text, parse_mode="HTML")
+                        return True
+                elif hasattr(message, "answer"):
+                    await message.answer(short_text, parse_mode="HTML")
+                    return True
+                elif hasattr(message, "bot") and message.bot and hasattr(message, "chat") and message.chat:
+                    await message.bot.send_message(chat_id=message.chat.id, text=short_text, parse_mode="HTML")
+                    return True
+            except Exception as short_err:
+                logger.warning(f"⚠️ [{log_prefix}] Truncated send failed: {short_err}")
+        else:
+            logger.warning(f"⚠️ [{log_prefix}] TelegramBadRequest: {err}")
+    except TelegramForbiddenError as err:
+        logger.info(f"ℹ️ [{log_prefix}] Чат недоступен: {err}")
+    except Exception as err:
+        logger.warning(f"⚠️ [{log_prefix}] Ошибка отправки текстового роаста: {err}")
+
+    # Fallback answer
+    try:
+        if hasattr(message, "answer"):
+            await message.answer(target_text[:3800], parse_mode="HTML")
+            return True
+        elif hasattr(message, "bot") and message.bot and hasattr(message, "chat") and message.chat:
+            await message.bot.send_message(chat_id=message.chat.id, text=target_text[:3800], parse_mode="HTML")
+            return True
+    except Exception as final_err:
+        logger.warning(f"⚠️ [{log_prefix}] Итоговый fallback не удался: {final_err}")
+
+    return False
+
+async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str = 'b', stream: str = 'ru', post_num: int | None = None):
+    """
+    Автоматическая транскрипция ГС и кружочков (Whisper/Groq STT + Gemini Multimodal Fallback)
+    с адаптивными таймаутами для аудио любой длительности (включая 5-15+ минут),
+    защитой от лимитов длины сообщений Telegram и 2ch-роастом.
+    """
+    if not message or not bot:
         return
+
+    # Защита от бесконечной петли: игнорируем ботов, системные сообщения и уже сгенерированные роасты
+    if getattr(getattr(message, 'from_user', None), 'is_bot', None) is True:
+        return
+    if getattr(message, 'is_system_message', None) is True:
+        return
+    caption_raw = (getattr(message, 'caption', '') or '').lower() if isinstance(getattr(message, 'caption', None), str) else ''
+    if 'разъёб от киберчеда' in caption_raw or 'разъеб от киберчеда' in caption_raw or 'вердикт /b/' in caption_raw or 'шкала говноедства' in caption_raw:
+        return
+
     try:
         content_type = message.content_type
-        if content_type not in ('voice', 'video_note'):
+        if content_type not in ('voice', 'video_note', 'audio'):
             return
 
         is_video_note = (content_type == 'video_note')
@@ -153,40 +373,127 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
         if not media_obj:
             return
 
-        duration = getattr(media_obj, 'duration', 0)
+        duration = int(getattr(media_obj, 'duration', 0) or 0)
         file_id = getattr(media_obj, 'file_id', None)
 
         transcript = None
+        audio_bytes = None
 
-        # 1. Попытка скачивания аудио и распознавания речи через Groq Whisper STT
+        # 1. Скачивание аудиофайла через Telegram Bot API
         if file_id and bot:
             try:
-                from common.token_pool import groq_pool
                 file_info = await bot.get_file(file_id)
-                file_bytes_io = await bot.download_file(file_info.file_path)
-                audio_bytes = file_bytes_io.read() if hasattr(file_bytes_io, 'read') else file_bytes_io.getvalue()
+                if file_info and file_info.file_path:
+                    file_bytes_io = await bot.download_file(file_info.file_path)
+                    audio_bytes = file_bytes_io.read() if hasattr(file_bytes_io, 'read') else file_bytes_io.getvalue()
+            except Exception as dl_err:
+                logger.warning(f"⚠️ [STT] Не удалось скачать медиа (file_id={file_id}): {dl_err}")
 
-                token = groq_pool.get_token() or os.getenv("GROQ_API_KEY")
-                if token and audio_bytes:
+        if not audio_bytes:
+            return
+
+        # Адаптивный таймаут для STT: базово 60с, до 300с для длинных войсов (5+ минут)
+        stt_timeout = max(60.0, min(300.0, float(duration) * 0.8 + 45.0))
+
+        # 2. Попытка 1: Groq Whisper STT (whisper-large-v3-turbo) с ротацией ключей
+        try:
+            from common.token_pool import groq_pool
+            groq_tokens = groq_pool.get_all_active_tokens() or getattr(groq_pool, "tokens", []) or []
+            if not groq_tokens and os.getenv("GROQ_API_KEY"):
+                groq_tokens = [os.getenv("GROQ_API_KEY")]
+
+            for token in groq_tokens:
+                if not token:
+                    continue
+                try:
                     ext = ".mp4" if is_video_note else ".ogg"
                     filename = f"speech{ext}"
                     headers = {"Authorization": f"Bearer {token}"}
                     files = {"file": (filename, audio_bytes, "application/octet-stream")}
                     data = {"model": "whisper-large-v3-turbo", "response_format": "json"}
                     
-                    async with httpx.AsyncClient(timeout=25.0) as client:
+                    async with httpx.AsyncClient(timeout=stt_timeout) as client:
                         resp = await client.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files, data=data)
                         if resp.status_code == 200:
-                            transcript = resp.json().get("text", "").strip()
-            except Exception as stt_err:
-                logger.warning(f"⚠️ Ошибка STT транскрипции ГС/кружочка: {stt_err}")
+                            res_data = resp.json()
+                            candidate_text = res_data.get("text", "").strip()
+                            if candidate_text:
+                                transcript = candidate_text
+                                logger.info(f"✅ [STT] Успешная расшифровка через Groq Whisper ({duration}с, {len(transcript)} симв.)")
+                                break
+                        elif resp.status_code in (413, 429, 500, 502, 503):
+                            logger.warning(f"⚠️ [STT] Groq status {resp.status_code}, пробуем следующий ключ...")
+                            continue
+                except httpx.TimeoutException:
+                    logger.warning(f"⚠️ [STT] Groq Timeout ({stt_timeout}s) для {duration}с аудио. Переход на Gemini...")
+                    break
+                except Exception as groq_err:
+                    logger.warning(f"⚠️ [STT] Ошибка запроса к Groq: {groq_err}")
+                    continue
+        except Exception as e:
+            logger.warning(f"⚠️ [STT] Ошибка пула Groq: {e}")
 
-        # Если STT не отработал — молча выходим, не подделываем транскрипт
+        # 3. Попытка 2: Gemini Multimodal Audio Fallback (нативная поддержка длинных аудио до 9.5 часов)
         if not transcript:
+            try:
+                import base64
+                from common.token_pool import google_pool
+                from summarize import _load_google_keys
+                google_keys = getattr(google_pool, "tokens", []) or _load_google_keys()
+                proxy_url = os.getenv("PROXY_URL") or None
+                if google_keys:
+                    b64_audio = base64.b64encode(audio_bytes).decode('utf-8')
+                    mime_type = "video/mp4" if is_video_note else "audio/ogg"
+                    gemini_payload = {
+                        "contents": [
+                            {
+                                "parts": [
+                                    {
+                                        "inlineData": {
+                                            "mimeType": mime_type,
+                                            "data": b64_audio
+                                        }
+                                    },
+                                    {
+                                        "text": "Расшифруй это голосовое сообщение / видеозапись дословно на русском языке. Запиши строго только расшифрованный текст, без комментариев, пояснений, кавычек и вступительных фраз."
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                    gemini_timeout = max(45.0, min(240.0, float(duration) * 0.7 + 30.0))
+                    for gkey in google_keys:
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gkey}"
+                        for proxy in [None, proxy_url] if proxy_url else [None]:
+                            try:
+                                async with httpx.AsyncClient(proxy=proxy, verify=False, timeout=gemini_timeout) as client:
+                                    resp = await client.post(url, json=gemini_payload)
+                                    if resp.status_code == 200:
+                                        gdata = resp.json()
+                                        parts = gdata.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                                        if parts and "text" in parts[0]:
+                                            candidate_text = parts[0]["text"].strip()
+                                            if candidate_text and candidate_text != "[Тишина]" and len(candidate_text) > 1:
+                                                transcript = candidate_text
+                                                logger.info(f"✅ [STT] Успешная расшифровка через Gemini Audio ({duration}с, {len(transcript)} симв.)")
+                                                break
+                                    elif resp.status_code == 429:
+                                        break
+                            except Exception:
+                                continue
+                        if transcript:
+                            break
+            except Exception as gemini_stt_err:
+                logger.warning(f"⚠️ [STT] Ошибка Gemini STT фолбэка: {gemini_stt_err}")
+
+        # Если STT не отработал — молча выходим
+        if not transcript:
+            logger.warning(f"⚠️ [STT] Не удалось расшифровать аудио ({duration} сек)")
             return
 
-        # 2. Генерация уничтожающего двачевского роаста
+        # 4. Генерация уничтожающего двачевского роаста
         roast = None
+        transcript_for_roast = transcript[:2000]
         if transcript:
             try:
                 prompt = (
@@ -199,15 +506,14 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                     "3. Запрещены кавычки вокруг ответа.\n"
                     "4. Пиши СТРОГО 1-2 емких, ядовитых, смешных предложения — сразу суть и жесткий вердикт.\n"
                     "5. Используй сочный двачерский сленг и мат по делу.\n\n"
-                    f"Слова автора: «{transcript}»"
+                    f"Слова автора: «{transcript_for_roast}»"
                 )
-                from summarize import summarize_text_with_hf
-                raw_roast = await summarize_text_with_hf(prompt, f"Слова автора: «{transcript}»", model_preference="persona")
+                from common.token_pool import groq_pool
+                raw_roast = await summarize_text_with_hf(prompt, f"Слова автора: «{transcript_for_roast}»", model_preference="persona")
                 if raw_roast and len(raw_roast.strip()) > 5:
-                    roast = clean_html_tags(raw_roast).strip()
+                    roast = clean_html_tags(clean_ai_thinking(raw_roast)).strip()
             except Exception as roast_err:
                 logger.warning(f"⚠️ Ошибка генерации роаста: {roast_err}")
-
 
         if not roast:
             roasts = CONTEXTUAL_REPLIES.get(r'\b(голосов[ауи]|кружоч[еик]|гс|записал|послушай|аудио)\b', [
@@ -218,22 +524,655 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
         icon = "📹" if is_video_note else "🎙"
         title = "Кружочек" if is_video_note else "Голосовое сообщение"
 
+        # Форматирование длительности (сек / мин сек)
+        if duration >= 60:
+            mins = duration // 60
+            secs = duration % 60
+            dur_str = f"{mins} мин {secs} сек" if secs else f"{mins} мин"
+        else:
+            dur_str = f"{duration} сек"
+
+        # Защита от переполнения лимита Telegram (4096 символов)
+        max_disp_len = 2600
+        if len(transcript) > max_disp_len:
+            display_transcript = transcript[:max_disp_len] + "… <i>[текст сокращен]</i>"
+        else:
+            display_transcript = transcript
+
         formatted_response = (
-            f"<b>{icon} {title}</b> (<i>{duration} сек</i>)\n"
-            f"📝 <b>Транскрипция:</b> <i>«{escape_html(transcript)}»</i>\n\n"
+            f"<b>{icon} {title}</b> (<i>{dur_str}</i>)\n"
+            f"📝 <b>Транскрипция:</b> <i>«{escape_html(display_transcript)}»</i>\n\n"
             f"🔥 <b>Вердикт /b/ AI:</b>\n"
             f"{escape_html(roast)}"
         )
 
+        author_id = getattr(getattr(message, 'from_user', None), 'id', None) or (message.chat.id if getattr(message, 'chat', None) else 0)
+        b_data = getattr(shared_state, 'board_data', {}).get(board_id, {})
+        author_settings = b_data.get('user_settings', {}).get(author_id, {}) if author_id else {}
+        author_disabled_ai = bool(author_settings.get('disable_ai_roasts') or author_settings.get('hide_ai_slop'))
+
+        # Определяем target_msg_id для точного ответа на пост автора в чате
+        target_msg_id = None
+        if post_num and author_id:
+            try:
+                async with shared_state.storage_lock:
+                    raw_msg_id = shared_state.post_to_messages.get(post_num, {}).get(author_id)
+                    if not raw_msg_id:
+                        stored = messages_storage.get(post_num)
+                        if stored:
+                            raw_msg_id = stored.get('author_message_id')
+                    if raw_msg_id:
+                        target_msg_id = raw_msg_id[0] if isinstance(raw_msg_id, list) else raw_msg_id
+            except Exception as lookup_err:
+                logger.debug(f"ℹ️ Error looking up target_msg_id for voice roast: {lookup_err}")
+        if not target_msg_id:
+            target_msg_id = getattr(message, 'message_id', None)
+
+        # 1. ТЕКСТОВЫЙ РОАСТ: ВСЕГДА отправляется автору мгновенно с реплаем к посту (без ожидания 5-минутной очереди!)
+        if not author_disabled_ai:
+            await _safe_send_roast(
+                message,
+                formatted_response,
+                reply_to_message_id=target_msg_id,
+                log_prefix="Voice Roast Text"
+            )
+
+        # 2. ГОЛОСОВОЙ РОАСТ Киберчеда (.ogg Opus): ВСЕГДА генерируется и отправляется автору мгновенно с реплаем к посту
+        voice_bytes = None
         try:
-            await message.reply(formatted_response, parse_mode="HTML")
-        except TelegramBadRequest as e:
-            if "message to be replied not found" in str(e).lower() or "message to reply not found" in str(e).lower():
-                await message.answer(formatted_response, parse_mode="HTML")
+            from common.tts_engine import synthesize_cyberchad_voice_with_meta
+            voice_res = await synthesize_cyberchad_voice_with_meta(roast)
+            if isinstance(voice_res, tuple):
+                voice_bytes, _ = voice_res
             else:
-                raise
+                voice_bytes = voice_res
+        except Exception as tts_err:
+            logger.warning(f"⚠️ [Voice Roast] Ошибка синтеза речи Киберчеда: {tts_err}")
+
+        if not author_disabled_ai and voice_bytes:
+            try:
+                await _safe_send_voice_roast(
+                    message,
+                    voice_bytes,
+                    caption="🔥 Разъёб от Киберчеда",
+                    log_prefix="Voice Roast",
+                    reply_to_message_id=target_msg_id
+                )
+            except Exception as tts_err:
+                logger.warning(f"⚠️ [Voice Roast] Не удалось отправить голосовой ответ Киберчеда: {tts_err}")
+
+        # 3. Публикация текстового роаста на доску (для остальных подписчиков доски)
+        if post_num and board_id != 'trash':
+            try:
+                from common.bot_helpers import process_new_post
+                # Исключаем автора из пассивной очереди, так как он уже получил роаст мгновенно выше
+                await process_new_post(shared_state.NewPostParams(
+                    bot_instance=bot,
+                    board_id=board_id,
+                    user_id=0,
+                    content={
+                        'type': 'text',
+                        'text': formatted_response,
+                        'is_system_message': True,
+                        'archive_allowed': True,
+                        'is_ai_roast': True,
+                        'is_ai': True,
+                        'exclude_recipients': {author_id} if author_id else set()
+                    },
+                    reply_to_post=post_num,
+                    is_shadow_muted=False,
+                    stream=stream
+                ))
+            except Exception as board_pub_err:
+                logger.warning(f"⚠️ Ошибка рассылки роаста ГС на доску: {board_pub_err}")
+
+        # 4. Публикация голосового роаста Киберчеда на доску (для остальных подписчиков доски)
+        if post_num and board_id != 'trash' and voice_bytes:
+            try:
+                from common.bot_helpers import process_new_post
+                await process_new_post(shared_state.NewPostParams(
+                    bot_instance=bot,
+                    board_id=board_id,
+                    user_id=0,
+                    content={
+                        'type': 'voice',
+                        'voice_bytes': voice_bytes,
+                        'caption': '🔥 Разъёб от Киберчеда',
+                        'is_ai_roast': True,
+                        'is_ai': True,
+                        'reply_to': post_num,
+                        'exclude_recipients': {author_id} if author_id else set()
+                    },
+                    reply_to_post=post_num,
+                    is_shadow_muted=False,
+                    stream=stream
+                ))
+            except Exception as voice_pub_err:
+                logger.warning(f"⚠️ Ошибка рассылки голосового роаста ГС на доску: {voice_pub_err}")
     except Exception as e:
         logger.error(f"❌ Ошибка в transcribe_and_roast_voice_note: {e}", exc_info=True)
+
+
+MUSIC_EXTENSIONS = ('.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.opus', '.wma', '.aiff', '.alac')
+
+def is_music_document(doc) -> bool:
+    """Checks if a Telegram Document is an audio/music file by extension or MIME type."""
+    if not doc:
+        return False
+    fn = getattr(doc, 'file_name', '') or ''
+    mt = getattr(doc, 'mime_type', '') or ''
+    ext = os.path.splitext(fn.lower())[1]
+    if ext in MUSIC_EXTENSIONS:
+        return True
+    if mt.startswith('audio/') or mt in ('application/ogg', 'application/x-flac', 'audio/x-m4a', 'audio/x-wav'):
+        return True
+    return False
+
+def format_music_duration(duration: int | float | None) -> str:
+    """Форматирует длительность трека в секундах в человекочитаемый вид."""
+    if duration is None:
+        return "время не указано"
+    try:
+        dur_int = int(duration)
+    except (ValueError, TypeError):
+        return "время не указано"
+    if dur_int <= 0:
+        return "время не указано"
+    if dur_int >= 60:
+        mins = dur_int // 60
+        secs = dur_int % 60
+        return f"{mins} мин {secs} сек" if secs else f"{mins} мин"
+    return f"{dur_int} сек"
+
+format_duration = format_music_duration
+
+def extract_music_metadata(message: Message) -> dict:
+    """Extracts artist, title, filename, duration, file_id and mime_type from Message (Audio/Document)."""
+    artist = None
+    title = None
+    filename = ""
+    duration = 0
+    file_id = None
+    file_size = 0
+    mime_type = "audio/mpeg"
+    audio = getattr(message, 'audio', None)
+    doc = getattr(message, 'document', None)
+
+    if audio:
+        file_id = getattr(audio, 'file_id', None)
+        if isinstance(file_id, str):
+            pass
+        elif file_id is not None:
+            file_id = str(file_id)
+
+        perf = getattr(audio, 'performer', None)
+        if isinstance(perf, str) and perf.strip():
+            artist = perf.strip()
+
+        t = getattr(audio, 'title', None)
+        if isinstance(t, str) and t.strip():
+            title = t.strip()
+
+        fn = getattr(audio, 'file_name', None)
+        if isinstance(fn, str):
+            filename = fn
+
+        dur = getattr(audio, 'duration', 0)
+        try:
+            duration = int(dur) if isinstance(dur, (int, float)) or (isinstance(dur, str) and dur.isdigit()) else 0
+        except Exception:
+            duration = 0
+
+        fs = getattr(audio, 'file_size', 0)
+        try:
+            file_size = int(fs) if isinstance(fs, (int, float)) else 0
+        except Exception:
+            file_size = 0
+
+        mt = getattr(audio, 'mime_type', None)
+        if isinstance(mt, str):
+            mime_type = mt
+    elif doc and is_music_document(doc):
+        file_id = getattr(doc, 'file_id', None)
+        if isinstance(file_id, str):
+            pass
+        elif file_id is not None:
+            file_id = str(file_id)
+
+        fn = getattr(doc, 'file_name', None)
+        if isinstance(fn, str):
+            filename = fn
+
+        fs = getattr(doc, 'file_size', 0)
+        try:
+            file_size = int(fs) if isinstance(fs, (int, float)) else 0
+        except Exception:
+            file_size = 0
+
+        mt = getattr(doc, 'mime_type', None)
+        if isinstance(mt, str):
+            mime_type = mt
+
+    # Regex fallback for Artist - Title on filename
+    if filename and (not artist or not title):
+        base_name = os.path.splitext(filename)[0]
+        # Remove leading release tags like [FLAC] [2024] [320kbps] [OST] [Remastered]
+        clean_base = re.sub(r'^(?:\[[^\]]*\]\s*)+', '', base_name).strip()
+        # Split on first occurrence of hyphen surrounded by spaces
+        m_parts = re.split(r'\s+[-–—]\s+', clean_base, maxsplit=1)
+        if len(m_parts) == 2:
+            if not artist and m_parts[0].strip():
+                artist = m_parts[0].strip()
+            if not title and m_parts[1].strip():
+                title = m_parts[1].strip()
+
+    if not artist or not artist.strip():
+        artist = "Неизвестный исполнитель"
+    else:
+        artist = artist.strip()
+
+    if title and title.strip():
+        title = title.strip()
+    elif filename:
+        base = os.path.splitext(filename)[0]
+        title = base if base.strip() else "Без названия"
+    else:
+        title = "Без названия"
+
+    dur_str = format_music_duration(duration)
+
+    return {
+        "artist": artist,
+        "title": title,
+        "filename": filename,
+        "file_name": filename,
+        "duration": duration,
+        "dur_str": dur_str,
+        "file_id": file_id,
+        "file_size": file_size,
+        "mime_type": mime_type,
+    }
+
+
+MUSIC_ROAST_SYSTEM_PROMPT = (
+    "Ты — ультра-токсичный, циничный, мизантропичный музыкальный критик и илитный сноб из раздела /b/ Двача. "
+    "Твоя задача — максимально жестко, уничтожающе и с ядовитым двачерским сарказмом разнести музыкальный вкус анона, "
+    "приславшего этот трек.\n"
+    "Проанализируй исполнителя, название трека, звучание/жанр (дрилл, фонк, дед-инсайд рэп, попса, k-pop, кальянный рэп, шансон, аниме-ост, думающий автотюн-шлак, говнорок) "
+    "и распознанный фрагмент текста/семпла.\n\n"
+    "СТРОГИЕ ПРАВИЛА И ЗАПРЕТЫ:\n"
+    "1. Запрещены любые приветствия, преамбулы и вежливые вступления (НЕЛЬЗЯ: 'Вот моя рецензия:', 'Привет', 'Слушай сюда', 'Ну что сказать').\n"
+    "2. Запрещены оговорки, морализаторство, извинения, дисклеймеры и политкорректность.\n"
+    "3. Запрещены кавычки вокруг всего ответа.\n"
+    "4. Обращайся к автору строго на 'ты' (Ты — ...).\n"
+    "5. Напиши 1-2 концентрированных, убийственно едких абзаца рецензии, а в самом конце на отдельной строке поставь вердикт и оценку по шкале говноедства в формате: 'ОЦЕНКА: <оценка>/10 💩 (<краткий диагноз>)'.\n"
+    "6. Используй аутентичный двачерский сленг и отборный мат по делу."
+)
+
+DEFAULT_MUSIC_ROASTS = [
+    (
+        "Ты на полном серьезе включил это убожество и решил, что другим анонам не все равно на твой дегенеративный вкус? "
+        "Бессвязное бубнение под три притопа два прихлопа, сведенное глухим школьником на коленке.",
+        "10/10 💩 (Шедевр мочи)"
+    ),
+    (
+        "Типичный автотюновый высер для малолетних тиктокеров без намека на слух и смысл. "
+        "Твой плейлист нужно немедленно сжечь в биореакторе вместе с наушниками.",
+        "9/10 💩 (Ушной СПИД)"
+    ),
+    (
+        "Такое чувство, что исполнитель записал этот трек сидя на унитазе в приступе тяжелой диареи. "
+        "А ты это радостно хаваешь и еще на доску тащишь.",
+        "10/10 💩 (Потомственный говноед)"
+    ),
+]
+
+def parse_music_roast_response(raw_text: str) -> tuple[str, str]:
+    """
+    Splits AI music review into roast text and rating.
+    """
+    clean_text = clean_ai_thinking(raw_text).strip()
+    lines = [l.strip() for l in clean_text.split('\n') if l.strip()]
+    if not lines:
+        return "Очередной бездарный кал, высранный ради стримов и тиктока.", "10/10 💩 (Клинический говноед)"
+
+    rating = None
+    roast_lines = []
+
+    last_line = lines[-1]
+    rating_match = re.search(r'(?:(?:ОЦЕНКА|Шкала говноедства|Вердикт|Рейтинг|Шкала кала):\s*)(.*)$', last_line, re.IGNORECASE)
+    if rating_match:
+        rating = rating_match.group(1).strip()
+        roast_lines = lines[:-1]
+    elif re.search(r'\b\d{1,2}\s*/\s*10\b', last_line) and len(last_line) < 80:
+        rating = last_line
+        roast_lines = lines[:-1]
+    else:
+        roast_lines = lines
+
+    roast_text = "\n\n".join(roast_lines).strip()
+    if not roast_text and rating:
+        roast_text = rating
+        rating = "10/10 💩 (Полная безвкусица)"
+    elif not rating:
+        fallback_ratings = [
+            "10/10 💩 (Абсолютный шедевр мочи)",
+            "9/10 💩 (Клиническая стадия ушного кала)",
+            "10/10 💩 (Дно пробито, слушатель слит)",
+            "8/10 💩 (Тикток-шлак для дегенератов)",
+            "0/10 💩 (Даже бомжи на помойке слушают лучше)",
+            "10/10 💩 (Смертельная доза кринжа)"
+        ]
+        rating = random.choice(fallback_ratings)
+
+    roast_text = clean_html_tags(roast_text)
+    roast_text = re.sub(r'^[«"\'\`]+|[»"\'\`]+$', '', roast_text).strip()
+    rating = clean_html_tags(rating)
+    rating = re.sub(r'^[«"\'\`]+|[»"\'\`]+$', '', rating).strip()
+
+    return roast_text, rating
+
+
+async def handle_music_roast(bot, message: Message, board_id: str = 'b', stream: str = 'ru', post_num: int | None = None):
+    """
+    Автоматический двачерский /b/ музкритик-роаст для любых аудио/музыкальных треков
+    (Audio и Document с расширениями .mp3, .wav, .flac, .ogg, .m4a и др.).
+    Извлекает метаданные (исполнитель, трек, длительность), скачивает семпл (до 20МБ),
+    транскрибирует текст через Whisper/Gemini STT и выдает токсичный разнос вкуса.
+    """
+    if not message or not bot:
+        return
+
+    # Защита от бесконечной петли: игнорируем ботов, системные сообщения и уже сгенерированные роасты
+    if getattr(getattr(message, 'from_user', None), 'is_bot', None) is True:
+        return
+    if getattr(message, 'is_system_message', None) is True:
+        return
+    caption_raw = (getattr(message, 'caption', '') or '').lower() if isinstance(getattr(message, 'caption', None), str) else ''
+    if 'разъёб от киберчеда' in caption_raw or 'разъеб от киберчеда' in caption_raw or 'вердикт /b/' in caption_raw or 'шкала говноедства' in caption_raw:
+        return
+
+    # Игнорируем сообщения, которые не являются аудио или музыкальными документами
+    is_audio = bool(getattr(message, 'audio', None))
+    is_music_doc = bool(getattr(message, 'document', None) and is_music_document(message.document))
+    if not is_audio and not is_music_doc:
+        return
+
+    try:
+        meta = extract_music_metadata(message)
+        artist = meta["artist"]
+        title = meta["title"]
+        filename = meta["filename"]
+        duration = meta["duration"]
+        dur_str = meta["dur_str"]
+        file_id = meta["file_id"]
+        file_size = meta["file_size"]
+        mime_type = meta["mime_type"]
+
+        audio_bytes = None
+        sample_note = None
+
+        # 1. Скачивание аудиофайла до 20MB через Telegram Bot API
+        if file_size > 20 * 1024 * 1024:
+            sample_note = "[Файл >20MB — семпл не скачан]"
+        elif file_id:
+            try:
+                file_info = await bot.get_file(file_id)
+                if file_info and getattr(file_info, 'file_path', None):
+                    fi_size = getattr(file_info, 'file_size', 0)
+                    if isinstance(fi_size, (int, float)) and fi_size > 20 * 1024 * 1024:
+                        sample_note = "[Файл >20MB — семпл не скачан]"
+                    else:
+                        file_bytes_io = await bot.download_file(file_info.file_path)
+                        downloaded = file_bytes_io.read() if hasattr(file_bytes_io, 'read') else file_bytes_io.getvalue()
+                        if len(downloaded) > 20 * 1024 * 1024:
+                            sample_note = "[Файл >20MB — семпл не скачан]"
+                        else:
+                            audio_bytes = downloaded
+            except Exception as dl_err:
+                logger.warning(f"⚠️ [Music STT] Не удалось скачать аудио (file_id={file_id}): {dl_err}")
+                if "file is too big" in str(dl_err).lower() or "too large" in str(dl_err).lower():
+                    sample_note = "[Файл >20MB — семпл не скачан]"
+
+        # 2. Транскрипция текста песни/семпла через STT (Whisper + Gemini fallback)
+        transcript = None
+        if audio_bytes:
+            stt_timeout = max(60.0, min(300.0, float(duration) * 0.8 + 45.0))
+            # Попытка 1: Groq Whisper
+            try:
+                from common.token_pool import groq_pool
+                groq_tokens = getattr(groq_pool, "tokens", []) or (groq_pool.get_all_active_tokens() if hasattr(groq_pool, "get_all_active_tokens") else []) or []
+                if not groq_tokens and os.getenv("GROQ_API_KEY"):
+                    groq_tokens = [os.getenv("GROQ_API_KEY")]
+
+                ext = os.path.splitext(filename.lower())[1] if filename else ".mp3"
+                if not ext or ext not in MUSIC_EXTENSIONS:
+                    ext = ".mp3"
+
+                for token in groq_tokens:
+                    if not token:
+                        continue
+                    try:
+                        headers = {"Authorization": f"Bearer {token}"}
+                        files = {"file": (f"track{ext}", audio_bytes, mime_type)}
+                        data = {"model": "whisper-large-v3-turbo", "response_format": "json"}
+                        async with httpx.AsyncClient(timeout=stt_timeout) as client:
+                            resp = await client.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files, data=data)
+                            if resp.status_code == 200:
+                                res_data = resp.json()
+                                candidate_text = res_data.get("text", "").strip()
+                                if candidate_text:
+                                    transcript = candidate_text
+                                    logger.info(f"✅ [Music STT] Успешная расшифровка через Groq Whisper ({len(transcript)} симв.)")
+                                    break
+                            elif resp.status_code in (413, 429, 500, 502, 503):
+                                continue
+                    except httpx.TimeoutException:
+                        break
+                    except Exception as groq_err:
+                        logger.warning(f"⚠️ [Music STT] Groq error: {groq_err}")
+                        continue
+            except Exception as e:
+                logger.warning(f"⚠️ [Music STT] Groq pool error: {e}")
+
+            # Попытка 2: Gemini Audio Fallback
+            if not transcript:
+                try:
+                    import base64
+                    from common.token_pool import google_pool
+                    from summarize import _load_google_keys
+                    google_keys = getattr(google_pool, "tokens", []) or (google_pool.get_all_active_tokens() if hasattr(google_pool, "get_all_active_tokens") else []) or _load_google_keys()
+                    proxy_url = os.getenv("PROXY_URL") or None
+                    if google_keys:
+                        b64_audio = base64.b64encode(audio_bytes).decode('utf-8')
+                        gemini_payload = {
+                            "contents": [
+                                {
+                                    "parts": [
+                                        {
+                                            "inlineData": {
+                                                "mimeType": mime_type if mime_type.startswith("audio/") else "audio/mpeg",
+                                                "data": b64_audio
+                                            }
+                                        },
+                                        {
+                                            "text": "Расшифруй слова/текст этой песни или аудиозаписи дословно на языке оригинала. Запиши строго только распознанный текст песни или фрагмента, без комментариев, пояснений, кавычек и вступительных фраз. Если это инструментал без слов, напиши [Инструментал]."
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                        gemini_timeout = max(45.0, min(240.0, float(duration) * 0.7 + 30.0))
+                        for gkey in google_keys:
+                            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gkey}"
+                            for proxy in [None, proxy_url] if proxy_url else [None]:
+                                try:
+                                    async with httpx.AsyncClient(proxy=proxy, verify=False, timeout=gemini_timeout) as client:
+                                        resp = await client.post(url, json=gemini_payload)
+                                        if resp.status_code == 200:
+                                            gdata = resp.json()
+                                            parts = gdata.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+                                            if parts and "text" in parts[0]:
+                                                cand = parts[0]["text"].strip()
+                                                if cand and cand not in ("[Тишина]", "[Инструментал]") and len(cand) > 1:
+                                                    transcript = cand
+                                                    logger.info(f"✅ [Music STT] Успешная расшифровка через Gemini Audio ({len(transcript)} симв.)")
+                                                    break
+                                        elif resp.status_code == 429:
+                                            break
+                                except Exception:
+                                    continue
+                            if transcript:
+                                break
+                except Exception as gemini_err:
+                    logger.warning(f"⚠️ [Music STT] Gemini audio error: {gemini_err}")
+
+        # Обработка инструментала/отсутствия слов
+        if transcript:
+            cleaned_trans = transcript.strip()
+            if cleaned_trans in ("[Инструментал]", "[Инструментальная музыка]", "[Тишина]", "") or len(cleaned_trans) < 2:
+                lyrics_sample = "[Инструментальный трек / неразборчивый вокал]"
+            else:
+                lyrics_sample = cleaned_trans[:350]
+        elif sample_note:
+            lyrics_sample = sample_note
+        else:
+            lyrics_sample = "[Инструментальный трек / неразборчивый вокал]"
+
+        # 3. Генерация 2ch /b/ музыкальной рецензии
+        roast_text = None
+        rating = None
+        try:
+            track_context = f"Исполнитель: «{artist}»\nНазвание трека: «{title}»\nДлительность: {dur_str}\nФрагмент текста/семпла: «{lyrics_sample}»"
+            user_msg = f"Отрецензируй и уничтожь следующий музыкальный трек:\n\n{track_context}"
+            raw_ai_roast = await summarize_text_with_hf(MUSIC_ROAST_SYSTEM_PROMPT, user_msg, model_preference="persona")
+            if raw_ai_roast and len(raw_ai_roast.strip()) > 5:
+                roast_text, rating = parse_music_roast_response(raw_ai_roast)
+        except Exception as ai_err:
+            logger.warning(f"⚠️ [Music Roast] Ошибка генерации ИИ-рецензии: {ai_err}")
+
+        if not roast_text or not rating:
+            fb_text, fb_rating = random.choice(DEFAULT_MUSIC_ROASTS)
+            if not roast_text:
+                roast_text = fb_text
+            if not rating:
+                rating = fb_rating
+
+        # Форматирование итогового ответа
+        formatted_response = (
+            f"🎵 <b>Трек:</b> {escape_html(artist)} — {escape_html(title)} (<i>{dur_str}</i>)\n"
+            f"📝 <b>Текст / Семпл:</b> <i>«{escape_html(lyrics_sample)}»</i>\n\n"
+            f"🔥 <b>Вердикт /b/ музкритика:</b>\n"
+            f"{escape_html(roast_text)}\n\n"
+            f"💩 <b>Шкала говноедства:</b> {escape_html(rating)}"
+        )
+
+        author_id = getattr(getattr(message, 'from_user', None), 'id', None) or (message.chat.id if getattr(message, 'chat', None) else 0)
+        b_data = getattr(shared_state, 'board_data', {}).get(board_id, {})
+        author_settings = b_data.get('user_settings', {}).get(author_id, {}) if author_id else {}
+        author_disabled_ai = bool(author_settings.get('disable_ai_roasts') or author_settings.get('hide_ai_slop'))
+
+        # Определяем target_msg_id для точного ответа на пост автора в чате
+        target_msg_id = None
+        if post_num and author_id:
+            try:
+                async with shared_state.storage_lock:
+                    raw_msg_id = shared_state.post_to_messages.get(post_num, {}).get(author_id)
+                    if not raw_msg_id:
+                        stored = messages_storage.get(post_num)
+                        if stored:
+                            raw_msg_id = stored.get('author_message_id')
+                    if raw_msg_id:
+                        target_msg_id = raw_msg_id[0] if isinstance(raw_msg_id, list) else raw_msg_id
+            except Exception as lookup_err:
+                logger.debug(f"ℹ️ Error looking up target_msg_id for music roast: {lookup_err}")
+        if not target_msg_id:
+            target_msg_id = getattr(message, 'message_id', None)
+
+        # 1. ТЕКСТОВЫЙ РОАСТ: ВСЕГДА отправляется автору мгновенно с реплаем к посту (без ожидания 5-минутной очереди!)
+        if not author_disabled_ai:
+            await _safe_send_roast(
+                message,
+                formatted_response,
+                reply_to_message_id=target_msg_id,
+                log_prefix="Music Roast Text"
+            )
+
+        # 2. ГОЛОСОВОЙ РОАСТ Киберчеда (.ogg Opus): ВСЕГДА генерируется и отправляется автору мгновенно с реплаем к посту
+        voice_bytes = None
+        try:
+            from common.tts_engine import synthesize_cyberchad_voice_with_meta
+            voice_summary = f"{roast_text} Оценка: {rating}"
+            voice_res = await synthesize_cyberchad_voice_with_meta(voice_summary)
+            if isinstance(voice_res, tuple):
+                voice_bytes, _ = voice_res
+            else:
+                voice_bytes = voice_res
+        except Exception as tts_err:
+            logger.warning(f"⚠️ [Music Roast] Ошибка синтеза речи Киберчеда: {tts_err}")
+
+        if not author_disabled_ai and voice_bytes:
+            try:
+                await _safe_send_voice_roast(
+                    message,
+                    voice_bytes,
+                    caption="🔥 Разъёб от Киберчеда",
+                    log_prefix="Music Roast",
+                    reply_to_message_id=target_msg_id
+                )
+            except Exception as tts_err:
+                logger.warning(f"⚠️ [Music Roast] Не удалось отправить голосовой ответ Киберчеда: {tts_err}")
+
+        # 3. Публикация текстового роаста на доску (для остальных подписчиков доски)
+        if post_num and board_id != 'trash':
+            try:
+                from common.bot_helpers import process_new_post
+                # Исключаем автора из пассивной очереди, так как он уже получил роаст мгновенно выше
+                await process_new_post(shared_state.NewPostParams(
+                    bot_instance=bot,
+                    board_id=board_id,
+                    user_id=0,
+                    content={
+                        'type': 'text',
+                        'text': formatted_response,
+                        'is_system_message': True,
+                        'archive_allowed': True,
+                        'is_ai_roast': True,
+                        'is_ai': True,
+                        'exclude_recipients': {author_id} if author_id else set()
+                    },
+                    reply_to_post=post_num,
+                    is_shadow_muted=False,
+                    stream=stream
+                ))
+            except Exception as board_pub_err:
+                logger.warning(f"⚠️ [Music Roast] Ошибка рассылки роаста трека на доску: {board_pub_err}")
+
+        # 4. Публикация голосового роаста Киберчеда на доску (для остальных подписчиков доски)
+        if post_num and board_id != 'trash' and voice_bytes:
+            try:
+                from common.bot_helpers import process_new_post
+                await process_new_post(shared_state.NewPostParams(
+                    bot_instance=bot,
+                    board_id=board_id,
+                    user_id=0,
+                    content={
+                        'type': 'voice',
+                        'voice_bytes': voice_bytes,
+                        'caption': '🔥 Разъёб от Киберчеда',
+                        'is_ai_roast': True,
+                        'is_ai': True,
+                        'reply_to': post_num,
+                        'exclude_recipients': {author_id} if author_id else set()
+                    },
+                    reply_to_post=post_num,
+                    is_shadow_muted=False,
+                    stream=stream
+                ))
+            except Exception as voice_pub_err:
+                logger.warning(f"⚠️ [Music Roast] Ошибка рассылки голосового роаста трека на доску: {voice_pub_err}")
+    except Exception as e:
+        logger.error(f"❌ [Music Roast] Ошибка в handle_music_roast: {e}", exc_info=True)
 
 
 def _summarize_delivery_metrics() -> dict:
@@ -508,7 +1447,9 @@ async def schedule_persona_reply(bot, board_id: str, target_post_num: int, conte
             content = {
                 'type': attach_media_type if attach_media else 'text',
                 'is_system_message': True,
-                'archive_allowed': True
+                'archive_allowed': True,
+                'is_ai_persona': True,
+                'is_ai': True,
             }
             if attach_media:
                 content['caption'] = text

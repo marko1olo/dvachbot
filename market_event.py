@@ -12,7 +12,8 @@ import random
 from summarize import summarize_text_with_hf
 from shared_state import (
     market_state, runtime_logger, BOARDS, GLOBAL_BOTS,
-    enqueue_board_message, post_to_messages, messages_storage, state
+    enqueue_board_message, post_to_messages, messages_storage, state,
+    board_data, storage_lock
 )
 
 # -----------------------------------------------------------------------------

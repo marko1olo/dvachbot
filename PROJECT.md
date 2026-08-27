@@ -1,95 +1,50 @@
-# Project: DvachBot Next-Generation Analytics, Posters, Telegram Hub, Wrapped & WebApp
+# Project: DvachBot Career Work Engine Restoration & Codebase Audit
 
 ## Architecture
-DvachBot Next-Gen Analytics is designed as a high-performance, non-blocking, multi-channel analytical subsystem operating concurrently with existing DvachBot core operations.
-
-```
-                  ┌─────────────────────────────────────────────────────────┐
-                  │                 SQLite WAL Database                     │
-                  │                 (dvach_bot.db ~1.7GB)                   │
-                  └─────────────────────────┬───────────────────────────────┘
-                                            │ read-only URI (?mode=ro)
-                    ┌───────────────────────┴────────────────────────┐
-                    │                                                │
-                    ▼                                                ▼
-     ┌─────────────────────────────┐                  ┌─────────────────────────────┐
-     │   Analytics Engine Core     │                  │   FastAPI WebApp Backend    │
-     │     (stats_v2.py /          │                  │        (site_tgach)         │
-     │      stats_hub.py)          │                  │                             │
-     └──────────────┬──────────────┘                  └──────────────┬──────────────┘
-                    │                                                │
-          ┌─────────┴─────────┐                            ┌─────────┴─────────┐
-          │                   │                            │                   │
-          ▼                   ▼                            ▼                   ▼
-┌──────────────────┐ ┌──────────────────┐        ┌──────────────────┐ ┌──────────────────┐
-│  Visual Posters  │ │  2ch Wrapped     │        │  REST APIs       │ │  Interactive UI  │
-│  (1200x675 HD)   │ │  Card Generator  │        │  (/api/stats/*)  │ │  (/app/stats)    │
-│  Dark Cyberpunk  │ │  (/my_wrapped)   │        │  Cached < 15ms   │ │  Chart.js/Plotly │
-└─────────┬────────┘ └────────┬─────────┘        └──────────────────┘ └──────────────────┘
-          │                   │
-          └─────────┬─────────┘
-                    │
-                    ▼
-     ┌─────────────────────────────┐
-     │  Telegram Hub & Routers     │
-     │  (/stats_hub, /deck, etc.)  │
-     │  aiogram v3 (buffered I/O)  │
-     └─────────────────────────────┘
-```
+DvachBot is an aiogram 3.x Telegram bot architecture with:
+- `main.py`: Core dispatcher `dp`, bot lifecycle, commands, inline callbacks, photo banner dispatch.
+- `common/work_engine.py`: Career progression engine with 16 endgame vacancies (up to 620 shifts), dynamic salary formulas, risk penalties, gear buffs, wardrobe sets, milestone achievements, and rare item drops.
+- `economy_extension.py`: Economy router with side hustles (bottles, sell mother), shekel transactions, and inventory helpers.
+- Sub-routers: `stats_hub_router.py`, `votemute_engine.py`, `ttt_engine.py`, `dice_duel_engine.py`, `russian_roulette_pvp.py`, `casino_engine.py`, `banner_manager.py`.
+- Storage: SQLite database with JSON-serialized `Users.active_items` for persistence across multiboards (`/b/`, `/sex/`, `/vg/`, etc.).
 
 ## Feature Inventory
-Every feature from ORIGINAL_REQUEST.md mapped to its assigned milestone:
-
-| # | Feature | Description | Milestone | Source |
-|---|---------|-------------|-----------|--------|
-| F1 | Economy & Crime Matrix | Heist/robbery matrix, casino RTP / gamblers' graveyard, airdrop speed, wealth tax & Abu yacht fund | M1 | ORIGINAL_REQUEST §R1 |
-| F2 | PvP & Bioweapons Radar | Debuff warfare (shit/vomit/flags/curses), tinfoil hat ablation/reflection ROI, schizo-pill psych ward | M1 | ORIGINAL_REQUEST §R1 |
-| F3 | Sociology & Drama Graph | Signed directed beef graph ($BII$), board toxicity quotient ($BTQ$), survival curves (Kaplan-Meier), attention parasitism | M1 | ORIGINAL_REQUEST §R1 |
-| F4 | Memetics & Vision Analytics | pHash bayano-meter clustering on 60k files, AI vision tag constellation, slang trend drift, pasta & originality index | M1 | ORIGINAL_REQUEST §R1 |
-| F5 | Instant Text Snapshot & Sparklines | Sub-100ms rich HTML overview with dynamic 8-level ASCII sparklines ( ▂▃▅▆▇█ ) | M2 | ORIGINAL_REQUEST §R2 |
-| F6 | Interactive Inline Category Menu | Keyboard routing `[💰 Экономика]`, `[⚔️ PvP]`, `[🧠 Социология]`, `[🖼 Мемы]`, `[🎴 Мой Срез]`, `[✨ WebApp]` | M2 | ORIGINAL_REQUEST §R2 |
-| F7 | Async HD Poster Delivery | Non-blocking background rendering + in-memory `BufferedInputFile` photo delivery on category click | M2 | ORIGINAL_REQUEST §R2 |
-| F8 | Personal 2ch Wrapped Card | Spotify Wrapped style user card with archetype classification, combat/financial record, degradation meter | M3 | ORIGINAL_REQUEST §R3 |
-| F9 | AI/Heuristic Diagnosis | Sarcastic clinical psychiatric diagnosis & summary of user's 2ch behavior | M3 | ORIGINAL_REQUEST §R3 |
-| F10 | FastAPI WebApp Route `/app/stats` | Interactive dashboard with dark cyberpunk theme, time range filters (24h, 7d, 30d, All), board filters | M4 | ORIGINAL_REQUEST §R4 |
-| F11 | REST APIs `/api/stats/*` | Fast JSON endpoints (<15ms) with in-memory caching (`FastAPICache`) for all analytics categories | M4 | ORIGINAL_REQUEST §R4 |
-| F12 | Interactive Reply Graph & Visuals | Live Plotly/Chart.js network visualization of beef/replies and distribution curves | M4 | ORIGINAL_REQUEST §R4 |
-| F13 | Autonomous Verification Suite | Automated tests validating 100% image renders, zero NaNs, memory cleanup `plt.close('all')`, API latencies | M5 | ORIGINAL_REQUEST §R5 |
-| F14 | Backward Compatibility Gate | Strict regression testing verifying `/bot_stats`, `/stats`, `/my_stats`, and `periodic_publisher.py` | M5 | ORIGINAL_REQUEST §R5 |
+| # | Feature | Description | Milestone | Source | Status |
+|---|---------|-------------|-----------|--------|--------|
+| 1 | 16 Career Vacancies | All 16 endgame tiers up to 620 shifts in `WORK_VACANCIES` | M1 | d52a9b33 / Survey | DONE |
+| 2 | Dynamic Salary & Jackpots | Base salary range + gear buffs + 4% x2-x3 jackpots | M1 | Survey | DONE |
+| 3 | Gear & Wardrobe Set Buffs | Wasserman set (+40%), Skuf set (+35%), Neo (+25%), Riot Police (0% fine), Anime (2x drop) | M1 | Survey | DONE |
+| 4 | Item Drop System | Correct drop key parsing (trash_lootbox, gold_safe, tinfoil_hat, broom, guns) | M1 | Survey | DONE |
+| 5 | Side Hustle Integration | Clean inline options for bottles / mother on career card without replacing it | M1 | Survey | DONE |
+| 6 | Work Card Formatting | Photo banner caption limit <= 1024 chars with status badges (✅/⏳/🔒) | M1 | Survey | DONE |
+| 7 | Command Unshadowing | Decorate `main.py:cmd_work` and deconflict `economy_extension.py:cmd_work_menu` | M2 | Survey | DONE |
+| 8 | 114+ Commands Health | Verify all 114 commands in `setup_bot_commands` route to active live handlers | M2 | Survey | DONE |
+| 9 | Multi-board Persistence | `work_shifts`, `work_cooldowns`, gear, and items persist across `/b/`, `/sex/`, `/vg/` | M2 | Survey | DONE |
+| 10 | Career Unit Test Suite | Comprehensive tests in `tests/test_work_engine.py` for all 16 tiers, buffs, drops | M3 | Survey | DONE |
+| 11 | Dispatch & Multiboard Tests | Tests in `tests/test_command_dispatch_and_multiboard.py` for routing & persistence | M3 | Survey | DONE |
+| 12 | Zero-Regression Suite | `py_compile` on 100% files and 100% test pass on core test suites | M3 | Survey | DONE |
 
 ## Milestones
-
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | Standalone Analytics & Visual Posters Module | Implement `stats_v2.py` / `stats_hub.py` analytics core + 4 HD dark cyberpunk poster generators (1200x675) | none | PLANNED |
-| M2 | Telegram Hub & Interactive Menu Handlers | Implement aiogram v3 router for `/stats_hub`, `/deck`, `/stats2`, instant ASCII sparklines, inline callback routing | M1 | PLANNED |
-| M3 | Personal "2ch Wrapped" Card Generator | Implement `/my_wrapped` user card generator, archetype classifiers, combat/financial breakdown, sarcastic diagnosis | M1 | PLANNED |
-| M4 | Standalone FastAPI WebApp Dashboard | Implement `site_tgach` routes `GET /app/stats`, templates `stats_dashboard.jinja2`, Chart.js/Plotly charts, cached `/api/stats/*` | M1 | PLANNED |
-| M5 | E2E Integration, Visual Verification & Adversarial Suite | Comprehensive Tier 1-5 test suite, pixel/font/layout audit, concurrency stress tests, backward compatibility verification | M1, M2, M3, M4 | PLANNED |
+| 1 | M1: Work Engine Restoration & Enrichment | Restore `/work` handler, 16 tiers, drop table handling, gear buffs, side hustles, compact banner caption | none | DONE |
+| 2 | M2: Codebase Shadowing & Handler Routing | Deconflict command decorators, eliminate handler shadowing, verify all 114+ commands | M1 | DONE |
+| 3 | M3: Automated Verification & Test Suite | Expand `test_work_engine.py`, `test_command_dispatch_and_multiboard.py`, `py_compile` verification | M1, M2 | DONE |
 
 ## Interface Contracts
+### `common/work_engine.py` ↔ `main.py`
+- `WORK_VACANCIES`: Dictionary of 16 vacancies with keys: `name`, `desc`, `tier_name`, `req_shifts`, `base_min`, `base_max`, `cooldown_sec`, `penalty_shekels`, `risk_pct`, `drop_item`, `drop_chance`, `drop_name`, `fail_phrase`, `jackpot_phrase`.
+- `execute_job_action(job_id, current_shifts, active_cooldown_until, user_inventory, wardrobe_equipped)` -> `dict` containing: `success`, `payout`, `cooldown_sec`, `new_shifts`, `penalty`, `dropped_item`, `is_jackpot`, `achievements_unlocked`, `message`, `error`.
+- `_build_work_card(user_id, active_items)` -> `(text_caption: str, keyboard: InlineKeyboardMarkup)` where `len(text_caption) <= 1024`.
 
-### M1 Analytics Core ↔ M2 Telegram Hub
-- `async def generate_hub_snapshot() -> Tuple[str, InlineKeyboardMarkup]`: Returns instant HTML formatted text with ASCII sparklines + category buttons.
-- `async def render_category_poster(category: str) -> bytes`: Returns raw PNG bytes for `BufferedInputFile(..., filename=f"{category}.png")`.
-  - Categories: `"economy"`, `"pvp"`, `"sociology"`, `"memetics"`.
-
-### M1 Analytics Core ↔ M3 2ch Wrapped
-- `async def generate_user_wrapped(user_id: int) -> Tuple[bytes, str]`: Returns `(png_bytes, caption_html)`.
-- Fallback: Gracefully handles users with low/zero history with custom "Ньюфаг / Призрак" archetype.
-
-### M1 Analytics Core ↔ M4 FastAPI WebApp
-- `async def get_stats_data(category: str, timespan: str, board: Optional[str] = None) -> Dict[str, Any]`: Structured dictionary for REST endpoints `/api/stats/{category}`.
-- Caching: `@cache(expire=30)` on FastAPI endpoints.
-
-### Concurrency & Threading Contract
-- All SQLite queries use read-only URI: `sqlite3.connect("file:dvach_bot.db?mode=ro", uri=True, timeout=15.0)`.
-- All Matplotlib figure creations and exports MUST be wrapped in `with matplotlib_guard():` from `common.chart_lock` with explicit `plt.close(fig)` or `plt.close('all')` in a `finally` block.
+### `main.py` ↔ `economy_extension.py`
+- `cmd_work` in `main.py` handles `@dp.message(Command("work", "job", "работа", "биржа", "earn", "bomj", "economy", ignore_case=True, ignore_mention=True))`.
+- `economy_extension.py` handles side hustle callbacks (`work_bottles`, `work_sell_mother`) or delegates cleanly without intercepting top-level `/work` commands.
 
 ## Code Layout
-- `stats_v2.py` / `stats_hub.py`: Main analytics query engine & Matplotlib/PIL poster rendering engine (Owned by M1).
-- `handlers/stats_hub_handlers.py` or `stats_hub_router.py`: Aiogram v3 Telegram commands & callback query handlers (Owned by M2).
-- `wrapped_v2.py` or integrated into `stats_hub.py`: Wrapped card generator (Owned by M3).
-- `site_tgach/routers/stats_dashboard.py` & `site_tgach/templates/stats_dashboard.jinja2`: FastAPI routes and frontend template (Owned by M4).
-- `tests/test_stats_v2.py`, `tests/test_stats_hub_e2e.py`, `tests/test_visual_posters.py`: Test suites (Owned by M5).
-- Legacy files (DO NOT MODIFY): `periodic_publisher.py`, `stats_manager.py` (legacy parts), existing command handlers in `main.py` lines 7163, 9858, 13324.
+- `common/work_engine.py`: Vacancy definitions, career mechanics, gear buffs, drops, achievements.
+- `main.py`: `cmd_work`, `_build_work_card`, `cb_work_do`, `cb_work_refresh`, `cb_work_main_hub`, command setup `setup_bot_commands`.
+- `economy_extension.py`: `economy_router`, `cb_work_action` (`work_bottles`, `work_sell_mother`).
+- `tests/test_work_engine.py`: Tests for 16 career tiers, formulas, gear buffs, drop tables, achievements.
+- `tests/test_command_dispatch_and_multiboard.py`: Tests for command routing, 114 commands, and multiboard persistence.
+- `tests/test_economy_work.py`: Tests for economy integration and side hustles.

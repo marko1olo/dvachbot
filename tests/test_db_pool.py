@@ -158,5 +158,77 @@ class TestDbPool(unittest.IsolatedAsyncioTestCase):
         # Убеждаемся, что замок в итоге свободен
         self.assertFalse(db_pool_module.db_lock.locked())
 
+    async def test_execute_with_retry_success(self):
+        """execute_with_retry успешно возвращает результат без ошибок."""
+        from common.db_pool import execute_with_retry
+        calls = 0
+
+        async def worker():
+            nonlocal calls
+            calls += 1
+            return "success_val"
+
+        res = await execute_with_retry(worker, max_retries=3, base_delay=0.01)
+        self.assertEqual(res, "success_val")
+        self.assertEqual(calls, 1)
+
+    async def test_execute_with_retry_locked_backoff(self):
+        """execute_with_retry повторяет попытки при database is locked с экспоненциальным backoff."""
+        from common.db_pool import execute_with_retry
+        import sqlite3
+        attempts = 0
+
+        async def worker_failing_then_ok():
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise sqlite3.OperationalError("database is locked")
+            return "recovered"
+
+        res = await execute_with_retry(worker_failing_then_ok, max_retries=5, base_delay=0.01)
+        self.assertEqual(res, "recovered")
+        self.assertEqual(attempts, 3)
+
+    async def test_execute_with_retry_exhausted(self):
+        """execute_with_retry выбрасывает исключение после исчерпания всех попыток."""
+        from common.db_pool import execute_with_retry
+        import sqlite3
+        attempts = 0
+
+        async def worker_always_locked():
+            nonlocal attempts
+            attempts += 1
+            raise sqlite3.OperationalError("database is locked")
+
+        with self.assertRaises(sqlite3.OperationalError):
+            await execute_with_retry(worker_always_locked, max_retries=3, base_delay=0.01)
+        self.assertEqual(attempts, 3)
+
+    async def test_sqlite_wal_checkpoint_task_run(self):
+        """Проверка работы sqlite_wal_checkpoint_task на реальной SQLite БД в WAL режиме."""
+        from common.db_pool import sqlite_wal_checkpoint_task
+        import tempfile
+        import aiosqlite
+        import os
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            test_db_file = os.path.join(tmp_dir, "test_wal.db")
+            conn = await aiosqlite.connect(test_db_file, isolation_level=None)
+            await conn.execute("PRAGMA journal_mode=WAL;")
+            await conn.execute("CREATE TABLE test_tab (id INT);")
+            await conn.execute("INSERT INTO test_tab VALUES (1);")
+
+            with patch('common.db_pool.get_pool', return_value=conn):
+                task = asyncio.create_task(sqlite_wal_checkpoint_task(interval_seconds=0.01))
+                await asyncio.sleep(0.05)
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+            await conn.close()
+
+
 if __name__ == '__main__':
     unittest.main()

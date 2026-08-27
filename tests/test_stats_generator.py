@@ -96,7 +96,7 @@ class TestStatsGenerator(unittest.TestCase):
         self.assertEqual(buf, mock_buf)
         self.assertIn("Статистика пользователя Базированный-Анон", text_report)
         self.assertIn("Статус:</b> Модератор (Sup)", text_report)
-        self.assertIn("Баланс:</b> 150 RUB", text_report)
+        self.assertIn("Баланс:</b> <code>150 ₪</code>", text_report)
         self.assertIn("Ранг борды:</b> #2 из 3", text_report)
 
         expected_data = UserStatsCardData(

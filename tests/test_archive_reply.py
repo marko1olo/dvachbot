@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import pytest
 from handlers.message_router import resolve_archive_or_inline_reply
 

@@ -109,7 +109,7 @@ def prepare_image_for_groq(file_path):
 # Per-provider timestamps moved to module-level dict above
 
 async def describe_image(file_paths, caption: str = None, is_passive: bool = False, source: str = "SITE") -> str:
-    """Анализирует изображение(я) через каскад Vision (Gemini 3.5 -> Qwen 3.6 -> Llama 4 Scout)."""
+    """Анализирует изображение(я) через каскад Vision (Gemini 3.1 -> Gemini 2.5 -> Gemini 3.5 -> Qwen 3.6)."""
 
 
     if isinstance(file_paths, str):
@@ -131,7 +131,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                     images_data.append(resized_bytes)
 
             if not image_urls:
-                logger.error(f"\u274c [VISION] [{source}] \u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u043a\u0438 \u0444\u043e\u0442\u043e: \u043d\u0438 \u043e\u0434\u043d\u043e \u0444\u043e\u0442\u043e \u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u0442\u044c.")
+                logger.error(f"❌ [VISION] [{source}] Ошибка подготовки фото: ни одно фото не удалось обработать.")
                 return "error_file_invalid"
 
             context = f" Context from the author: '{caption}'." if caption else ""
@@ -153,16 +153,17 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 f"}}\n"
                 f"Do not wrap in markdown (```). Output ONLY the raw JSON object."
             )
-            # Lightweight high-throughput vision cascade: Flash-Lite first, then Groq Qwen.
+            # Vision cascade: reliable Gemini Flash models with Groq Vision fallback
             models_cascade = [
-                ("gemini-3.5-flash-lite", "gemini"),
                 ("gemini-3.1-flash-lite", "gemini"),
+                ("gemini-2.5-flash", "gemini"),
+                ("gemini-3.5-flash-lite", "gemini"),
                 ("qwen/qwen3.6-27b", "groq"),
+                ("llama-3.2-11b-vision-preview", "groq"),
             ]
             
             skip_gemini_models = False
-
-
+            skip_groq_models = False
 
             permanent_model_failures = 0
 
@@ -197,6 +198,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                 for model_name, provider in models_cascade:
                     if provider == "gemini" and skip_gemini_models:
                         continue
+                    if provider == "groq" and skip_groq_models:
+                        continue
                         
                     if provider == "gemini":
                         pool = google_pool
@@ -222,6 +225,13 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             now = time.time()
                             provider_last = _GLOBAL_GEMINI_LAST_CALL if provider == "gemini" else _GLOBAL_GROQ_LAST_CALL
                             global_wait = max(0.0, provider_last - now)
+                            if global_wait > 15.0:
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} is in cooldown ({global_wait:.1f}s remaining). Skipping {provider} models.")
+                                if provider == "gemini":
+                                    skip_gemini_models = True
+                                else:
+                                    skip_groq_models = True
+                                break
                             eff_now = now + global_wait
 
                             # PASS 1: Try to find a completely free key (no sleep beyond global_wait)
@@ -271,7 +281,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                         if sleep_time > 0:
                             await asyncio.sleep(sleep_time)
 
-                        req_timeout = 45.0 if provider == "gemini" else GROQ_HTTP_TIMEOUT_SECONDS
+                        req_timeout = 25.0 if provider == "gemini" else min(25.0, GROQ_HTTP_TIMEOUT_SECONDS)
                         try:
                             client = AsyncOpenAI(
                                 api_key=selected_key,
@@ -288,7 +298,7 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             kwargs = {
                                 "model": model_name,
                                 "messages": [{"role": "user", "content": content_arr}],
-                                "max_tokens": 4096,
+                                "max_tokens": 2048,
                             }
                             if provider == "groq":
                                 kwargs["temperature"] = 0.2
@@ -323,7 +333,6 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                             if content:
                                 # Quick cleanup just in case
                                 if "<think>" in content:
-                                    import re
                                     if "</think>" in content:
                                         content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
                                     else:
@@ -392,7 +401,8 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 break
                             if "json_validate" in err_str or "max completion tokens" in err_str or "400" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} failed ({err_str[:120]}). Trying next model...")
-                                permanent_model_failures += 1
+                                if not ("image_url" in err_str or "not support" in err_str):
+                                    permanent_model_failures += 1
                                 break
                             if "503" in err_str or "504" in err_str or "unavailable" in err_str or "500" in err_str:
                                 logger.warning(f"⚠️ [VISION] [{source}] {provider} server overloaded ({err_str}). Skipping model {model_name}.")
@@ -402,8 +412,10 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                 async with _KEY_RATE_LOCK:
                                     if provider == "gemini":
                                         _GLOBAL_GEMINI_LAST_CALL = time.time() + 900.0
+                                        skip_gemini_models = True
                                     else:
                                         _GLOBAL_GROQ_LAST_CALL = time.time() + 900.0
+                                        skip_groq_models = True
                                 break
                             if "429" in err_str or "rate limit" in err_str or "quota" in err_str:
                                 consecutive_429 += 1
@@ -422,12 +434,17 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     async with _KEY_RATE_LOCK:
                                         if provider == "gemini":
                                             _GLOBAL_GEMINI_LAST_CALL = time.time() + 60.0
+                                            skip_gemini_models = True
                                         else:
                                             _GLOBAL_GROQ_LAST_CALL = time.time() + 60.0
+                                            skip_groq_models = True
                                     break
 
                                 await asyncio.sleep(3.0)
                                 continue
+                            if "timeout" in err_str or "timed out" in err_str:
+                                logger.warning(f"⚠️ [VISION] [{source}] {provider} model {model_name} timed out for key ...{selected_key[-6:]}. Trying next model candidate...")
+                                break
                             if "401" in err_str or "invalid api key" in err_str or "unauthorized" in err_str:
                                 logger.error(f"❌ [VISION] [{source}] {provider} key {selected_key[:12]}... unauthorized (401). Removing from pool.")
                                 pool.ban_token(selected_key)

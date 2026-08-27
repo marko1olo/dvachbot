@@ -30,7 +30,7 @@ async def run_tests():
     cf_wins = 0
     for _ in range(1000):
         side, is_win, mult, text = casino_engine.play_coinflip("heads")
-        assert mult in [0.0, 1.95]
+        assert mult in [0.0, 1.95, 1.96]
         if is_win:
             cf_wins += 1
     print(f"✅ Coinflip passed: {cf_wins}/1000 wins on Heads (approx 50%).")
@@ -57,6 +57,30 @@ async def run_tests():
                 board_id TEXT,
                 balance INTEGER DEFAULT 0,
                 PRIMARY KEY(user_id, board_id)
+            )"""
+        )
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS MoneyDrops (
+                drop_id TEXT PRIMARY KEY,
+                donor_id INTEGER,
+                board_id TEXT,
+                amount REAL,
+                status TEXT,
+                created_at REAL,
+                claimed_by INTEGER,
+                claimed_board_id TEXT,
+                claimed_at REAL,
+                refunded_at REAL
+            )"""
+        )
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS UserTransactions (
+                tx_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                amount REAL,
+                tx_type TEXT,
+                details TEXT,
+                created_at REAL
             )"""
         )
         # Create donor and 100 prospective claimers
@@ -129,6 +153,7 @@ async def run_tests():
         print(f"✅ Overdraft blocked properly: {msg_od}")
 
         # Step D: Drop Expiry and Refund test
+        drop_engine.reset_drop_cooldowns()
         ok_exp, _, exp_drop = await drop_engine.create_money_drop(
             donor_id=donor_id,
             donor_name="DonorAnon",

@@ -40,7 +40,10 @@ IMAGE_SPAM_LIMIT = 40
 IMAGE_SPAM_WINDOW = 300
 
 def set_spam_filter_words(board_id: str, words: set):
-    _spam_filter_words[board_id] = words
+    if words:
+        _spam_filter_words[board_id] = {str(w).strip().lower() for w in words if str(w).strip()}
+    else:
+        _spam_filter_words[board_id] = set()
 
 def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
     """Checks if a message contains a banned spam filter word."""
@@ -53,8 +56,10 @@ def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
     banned_words = _spam_filter_words.get(board_id)
     if not banned_words:
         return False
-    lower_text = text.lower()
-    if any(word in lower_text for word in banned_words):
+    lower_text = str(text or "").lower()
+    for wl in ["tgach.top", "t.me/tgchan_archive", "t.me/tgach_archive", "tgchan_archive", "tgach_archive"]:
+        lower_text = lower_text.replace(wl, "")
+    if any(str(word).strip().lower() in lower_text for word in banned_words if str(word).strip()):
         return True
     return False
 

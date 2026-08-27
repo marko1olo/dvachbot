@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from common.debuff_phrases import (
     DEBUFF_SHIT_PHRASES,
     DEBUFF_VOMIT_PHRASES,

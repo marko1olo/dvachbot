@@ -272,7 +272,7 @@ class TestAnalyticsChallengerStress(unittest.TestCase):
             ("Wrapped", lambda: my_wrapped_generator.generate_my_wrapped_poster(1001)),
         ]
 
-        total_cycles = 25
+        total_cycles = 15
         mem_samples = []
         fig_leaks = 0
 

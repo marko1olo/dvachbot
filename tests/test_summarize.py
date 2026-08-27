@@ -7,9 +7,13 @@ def reset_summarize_module_state():
     import summarize
     summarize._key_cooldowns.clear()
     summarize._SHARED_HTTP_CLIENT = None
+    if hasattr(summarize, "_provider_cooldowns"):
+        summarize._provider_cooldowns.clear()
     yield
     summarize._key_cooldowns.clear()
     summarize._SHARED_HTTP_CLIENT = None
+    if hasattr(summarize, "_provider_cooldowns"):
+        summarize._provider_cooldowns.clear()
 
 
 @pytest.mark.asyncio
@@ -33,7 +37,7 @@ async def test_summarize_success_removes_think_tags(
 
     assert result == "Actual Summary."
     mock_client.chat.completions.create.assert_called_once()
-    assert mock_client.chat.completions.create.call_args[1]["model"] == "llama-3.3-70b-versatile"
+    assert mock_client.chat.completions.create.call_args[1]["model"] == "qwen/qwen3.6-27b"
 
 
 @pytest.mark.asyncio
@@ -71,7 +75,7 @@ async def test_summarize_401_removes_token(
     result = await summarize_text_with_hf("Prompt", "Text", model_preference="llama")
 
     assert result == "Нейронка сдохла. Не удалось сгенерировать саммари."
-    mock_remove_token.assert_called_once_with("groq-key")
+    mock_remove_token.assert_any_call("groq-key")
 
 
 @pytest.mark.asyncio

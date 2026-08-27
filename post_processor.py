@@ -17,12 +17,14 @@ import aiohttp
 from common.board_config import BOARD_CONFIG
 from common.html_utils import escape_html
 from common.task_manager import spawn_task
-from common.database import update_post_content, add_channel_copy, create_post, get_stream_active_users
+from common.database import update_post_content, add_channel_copy, create_post, get_stream_active_users, process_mentions_and_notify
 
 from text_assets import VERIFICATION_SUCCESS_MESSAGES
 from shared_state import *
 from archive_manager import _forward_post_to_realtime_archive, post_special_num_to_channel
-from broadcaster import send_message_to_users
+async def send_message_to_users(*args, **kwargs):
+    import broadcaster
+    return await broadcaster.send_message_to_users(*args, **kwargs)
 from media_utils import _download_image_with_proxy, _resize_image_if_needed
 from post_helpers import format_header, format_thread_post_header, apply_shadow_autoreplace, check_post_numerals, execute_auto_roast
 from thread_texts import thread_messages
@@ -34,7 +36,7 @@ UTC = timezone.utc
 async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, stream: str):
     if user_id <= 0: return
     
-    from common.db_pool import get_pool, db_lock
+    from common.db_pool import get_pool, db_lock, db_transaction
     db = await get_pool()
 
     # Функция спавнится на КАЖДЫЙ пост, а db_lock сериализует весь доступ к базе
@@ -45,38 +47,31 @@ async def update_user_verification_stats(user_id: int, board_id: str, bot: Bot, 
         async with asyncio.timeout(3.0):
             async with db_lock:
                 try:
-                    await db.execute("BEGIN IMMEDIATE")
-                    
-                    await db.execute(
-                        """
-                        INSERT INTO Users (user_id, board_id, posts_count) 
-                        VALUES (?, ?, 1) 
-                        ON CONFLICT(user_id, board_id) DO UPDATE SET 
-                        posts_count = Users.posts_count + 1
-                        """,
-                        (user_id, board_id)
-                    )
-                    
-                    cursor = await db.execute(
-                        """
-                        UPDATE Users 
-                        SET is_verified_b = 1 
-                        WHERE user_id = ? AND board_id = ? 
-                        AND posts_count >= 10 AND is_verified_b = 0
-                        """,
-                        (user_id, board_id)
-                    )
-                    
-                    should_notify = cursor.rowcount > 0
-
-                    await db.execute("COMMIT")
+                    async with db_transaction(db):
+                        await db.execute(
+                            """
+                            INSERT INTO Users (user_id, board_id, posts_count) 
+                            VALUES (?, ?, 1) 
+                            ON CONFLICT(user_id, board_id) DO UPDATE SET 
+                            posts_count = Users.posts_count + 1
+                            """,
+                            (user_id, board_id)
+                        )
+                        
+                        cursor = await db.execute(
+                            """
+                            UPDATE Users 
+                            SET is_verified_b = 1 
+                            WHERE user_id = ? AND board_id = ? 
+                            AND posts_count >= 10 AND is_verified_b = 0
+                            """,
+                            (user_id, board_id)
+                        )
+                        
+                        should_notify = cursor.rowcount > 0
 
                 except Exception as e:
                     should_notify = False
-                    try:
-                        await db.execute("ROLLBACK")
-                    except Exception:
-                        pass
                     print(f"⚠️ Ошибка верификации для {user_id}: {e}")
     except Exception:
         should_notify = False
@@ -118,6 +113,8 @@ class NewPostProcessor:
         self.final_content = {}
         self.image_bytes_to_send = None
         self.author_image_bytes = None
+        self.voice_bytes_to_send = None
+        self.author_voice_bytes = None
         self.author_results = None
         self.fallback_fetchers = self.content.pop('__fallback_fetcher_tasks', [])
 
@@ -146,6 +143,12 @@ class NewPostProcessor:
                 stream_users = await get_stream_active_users(self.board_id, self.stream)
                 active_stream_users = stream_users.intersection(self.b_data.get('users', {}).get('active', set()))
                 self.recipients = active_stream_users - {self.user_id}
+        if self.content.get('exclude_recipients'):
+            try:
+                excl = set(self.content.get('exclude_recipients'))
+                self.recipients = self.recipients - excl
+            except Exception:
+                pass
         return True
 
     async def _apply_content_transformations(self):
@@ -235,12 +238,23 @@ class NewPostProcessor:
             except Exception:
                 pass
                         
+        try:
+            from common.forward_utils import contains_board_post_header, format_forwarded_quote
+            for field in ('text', 'caption'):
+                val = self.author_content.get(field)
+                if val and isinstance(val, str) and contains_board_post_header(val) and '<blockquote' not in val.lower():
+                    self.author_content[field] = format_forwarded_quote(val)
+        except Exception:
+            pass
+
         self.final_content = apply_shadow_autoreplace(self.author_content)
         self.final_content['reply_to_post'] = self.reply_to_post
         self.author_content['reply_to_post'] = self.reply_to_post
         
         self.image_bytes_to_send = self.final_content.pop('image_bytes', None)
         self.author_image_bytes = self.author_content.pop('image_bytes', None)
+        self.voice_bytes_to_send = self.final_content.pop('voice_bytes', None)
+        self.author_voice_bytes = self.author_content.pop('voice_bytes', None)
 
     async def _create_post_record(self, now_dt):
         self.current_post_num = await create_post(
@@ -295,6 +309,10 @@ class NewPostProcessor:
             self.final_content['image_bytes'] = self.image_bytes_to_send
         if self.author_image_bytes:
             self.author_content['image_bytes'] = self.author_image_bytes
+        if self.voice_bytes_to_send:
+            self.final_content['voice_bytes'] = self.voice_bytes_to_send
+        if self.author_voice_bytes:
+            self.author_content['voice_bytes'] = self.author_voice_bytes
 
     async def _execute_fallback_rescue(self, e):
         print(f"ℹ️ Ошибка отправки поста #{self.current_post_num} по URL. Запускаю 'Спасательный Цикл'...")
@@ -365,6 +383,7 @@ class NewPostProcessor:
                     thread_info_safe['last_activity_at'] = time.time()
             content_for_ram = self.final_content.copy()
             content_for_ram.pop('image_bytes', None)
+            content_for_ram.pop('voice_bytes', None)
             
             chain_depth = 0
             reply_to = self.final_content.get('reply_to_post')
@@ -413,16 +432,20 @@ class NewPostProcessor:
                         self.final_content['media'] = new_media_items
                         self.final_content.pop('image_url', None)
                         self.final_content.pop('image_bytes', None)
+                        self.final_content.pop('voice_bytes', None)
                 elif messages_to_process:
                     msg = messages_to_process[0]
                     file_id_to_persist = None
                     if msg.photo: file_id_to_persist = msg.photo[-1].file_id
                     elif msg.video: file_id_to_persist = msg.video.file_id
                     elif msg.animation: file_id_to_persist = msg.animation.file_id
+                    elif msg.voice: file_id_to_persist = msg.voice.file_id
+                    elif msg.audio: file_id_to_persist = msg.audio.file_id
                     if file_id_to_persist:
                         self.final_content['file_id'] = file_id_to_persist
                         self.final_content.pop('image_url', None)
                         self.final_content.pop('image_bytes', None)
+                        self.final_content.pop('voice_bytes', None)
                 await update_post_content(self.current_post_num, self.final_content)
                 author_message_ids_to_archive = [m.message_id for m in (sent_messages if isinstance(sent_messages, list) else [sent_messages])]
                 messages_to_save = sent_messages if isinstance(sent_messages, list) else [sent_messages]
@@ -479,7 +502,7 @@ class NewPostProcessor:
                     author_id=self.user_id
                 ))
             except Exception as e:
-                logger.warning(f"Error triggering publish_post_numeral_milestone: {e}")
+                logging.getLogger("post_processor").warning(f"Error triggering publish_post_numeral_milestone: {e}")
         if self.thread_id:
             thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
             if thread_info:
@@ -493,6 +516,19 @@ class NewPostProcessor:
                         thread_info=thread_info, event_type='milestone',
                         details={'posts': posts_count}
                     ))
+        # Fire reply notifications (UserReplies + NotificationQueue).
+        # process_mentions_and_notify handles both >>XXXXX inline quotes and
+        # bare Telegram replies (reply_to_post without a quote in the text).
+        _mention_text = self.final_content.get('text', '') or ''
+        _reply_to = self.reply_to_post if self.reply_to_post else None
+        if (not self.is_shadow_muted) and (_mention_text or _reply_to):
+            spawn_task(process_mentions_and_notify(
+                source_post_num=self.current_post_num,
+                board_id=self.board_id,
+                text=_mention_text,
+                author_id=self.user_id,
+                reply_to_ui=_reply_to,
+            ))
         if self.user_id in self.b_data.get('troll_targets', set()):
             pass
 
