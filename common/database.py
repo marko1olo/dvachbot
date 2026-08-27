@@ -19,6 +19,7 @@ Functions:
 import asyncio
 import sqlite3
 from collections import defaultdict
+import collections.abc
 import json
 from common.json_utils import fast_json_loads, fast_json_dumps
 import random
@@ -82,6 +83,10 @@ RE_BOARD_POST_REF = re.compile(r"(?:>>|&gt;&gt;)/([a-z0-9]+)/(\d+)")
 
 def _json_serializer(obj):
     """Специальный сериализатор JSON для обработки несериализуемых объектов aiogram и байтов."""
+    if isinstance(obj, (set, frozenset, tuple, collections.abc.Set)):
+        return list(obj)
+    if hasattr(obj, 'isoformat') and callable(getattr(obj, 'isoformat')):
+        return obj.isoformat()
     if isinstance(obj, (BufferedInputFile, InputFile)):
         filename = getattr(obj, 'filename', 'unknown_file')
         return f"<объект файла: {filename}>"

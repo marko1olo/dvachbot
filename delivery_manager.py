@@ -1896,7 +1896,7 @@ async def site_posts_broadcaster():
                             else:
                                 runtime_logger.error(f"[site_posts_broadcaster] enqueue FAILED for #{post_num} board={board_id} — NOT marking as sent")
                             
-                            if not content.get('archive_skip') and not is_shadow_muted and not content.get('is_system_message'):
+                            if not content.get('archive_skip') and not is_shadow_muted:
                                 bot_to_use = main.GLOBAL_BOTS.get(board_id) or main.GLOBAL_BOTS.get('b')
                                 if bot_to_use:
                                     spawn_task(main._forward_post_to_realtime_archive(

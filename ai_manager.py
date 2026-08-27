@@ -617,7 +617,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                         'archive_allowed': True,
                         'is_ai_roast': True,
                         'is_ai': True,
-                        'exclude_recipients': {author_id} if author_id else set()
+                        'exclude_recipients': [author_id] if author_id else []
                     },
                     reply_to_post=post_num,
                     is_shadow_muted=False,
@@ -641,7 +641,7 @@ async def transcribe_and_roast_voice_note(bot, message: Message, board_id: str =
                         'is_ai_roast': True,
                         'is_ai': True,
                         'reply_to': post_num,
-                        'exclude_recipients': {author_id} if author_id else set()
+                        'exclude_recipients': [author_id] if author_id else []
                     },
                     reply_to_post=post_num,
                     is_shadow_muted=False,
@@ -1139,7 +1139,7 @@ async def handle_music_roast(bot, message: Message, board_id: str = 'b', stream:
                         'archive_allowed': True,
                         'is_ai_roast': True,
                         'is_ai': True,
-                        'exclude_recipients': {author_id} if author_id else set()
+                        'exclude_recipients': [author_id] if author_id else []
                     },
                     reply_to_post=post_num,
                     is_shadow_muted=False,
@@ -1163,7 +1163,7 @@ async def handle_music_roast(bot, message: Message, board_id: str = 'b', stream:
                         'is_ai_roast': True,
                         'is_ai': True,
                         'reply_to': post_num,
-                        'exclude_recipients': {author_id} if author_id else set()
+                        'exclude_recipients': [author_id] if author_id else []
                     },
                     reply_to_post=post_num,
                     is_shadow_muted=False,

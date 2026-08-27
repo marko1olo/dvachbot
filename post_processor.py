@@ -149,6 +149,8 @@ class NewPostProcessor:
                 self.recipients = self.recipients - excl
             except Exception:
                 pass
+            if isinstance(self.content.get('exclude_recipients'), (set, frozenset)):
+                self.content['exclude_recipients'] = list(self.content['exclude_recipients'])
         return True
 
     async def _apply_content_transformations(self):
@@ -255,8 +257,11 @@ class NewPostProcessor:
         self.author_image_bytes = self.author_content.pop('image_bytes', None)
         self.voice_bytes_to_send = self.final_content.pop('voice_bytes', None)
         self.author_voice_bytes = self.author_content.pop('voice_bytes', None)
+        self.final_content.pop('exclude_recipients', None)
+        self.author_content.pop('exclude_recipients', None)
 
     async def _create_post_record(self, now_dt):
+        self.final_content.pop('exclude_recipients', None)
         self.current_post_num = await create_post(
             board_id=self.board_id,
             author_id=self.user_id,
@@ -272,7 +277,7 @@ class NewPostProcessor:
             spawn_task(update_user_verification_stats(self.user_id, self.board_id, self.bot_instance, self.stream))
 
         if self.current_post_num is None:
-            if self.reply_to_post:
+            if self.reply_to_post and self.user_id > 0:
                 try:
                     lang = 'en' if self.board_id == 'int' else 'ru'
                     error_text = "Error: The post you are replying to has been deleted." if lang == 'en' else "Ошибка: пост, на который вы отвечаете, был удален."
@@ -289,30 +294,34 @@ class NewPostProcessor:
         return True
 
     async def _format_and_update_headers(self):
-        if self.thread_id:
-            thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
-            local_post_num = len(thread_info.get('posts', [])) + 1
-            header_text = await format_thread_post_header(self.board_id, local_post_num, self.user_id, thread_info, stream=self.stream)
-        else:
-            header_text = await format_header(self.board_id, self.current_post_num, author_id=self.user_id, stream=self.stream)
-        # Метка баяна идёт первой строкой заголовка. Заголовок и так собирается
-        # здесь перед отправкой, поэтому это конкатенация строки — ни одного
-        # лишнего запроса к Telegram (реакцией это стоило бы по вызову API
-        # на КАЖДОГО получателя).
-        repost_count = self.content.get('repost_count')
-        if isinstance(repost_count, int) and repost_count > 1:
-            header_text = f"🪗 БАЯН ×{repost_count}\n{header_text}"
-        self.final_content['header'] = header_text
-        self.author_content['header'] = header_text
-        await update_post_content(self.current_post_num, self.final_content)
-        if self.image_bytes_to_send:
-            self.final_content['image_bytes'] = self.image_bytes_to_send
-        if self.author_image_bytes:
-            self.author_content['image_bytes'] = self.author_image_bytes
-        if self.voice_bytes_to_send:
-            self.final_content['voice_bytes'] = self.voice_bytes_to_send
-        if self.author_voice_bytes:
-            self.author_content['voice_bytes'] = self.author_voice_bytes
+        try:
+            if self.thread_id:
+                thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
+                local_post_num = len(thread_info.get('posts', [])) + 1
+                header_text = await format_thread_post_header(self.board_id, local_post_num, self.user_id, thread_info, stream=self.stream)
+            else:
+                header_text = await format_header(self.board_id, self.current_post_num, author_id=self.user_id, stream=self.stream)
+            # Метка баяна идёт первой строкой заголовка. Заголовок и так собирается
+            # здесь перед отправкой, поэтому это конкатенация строки — ни одного
+            # лишнего запроса к Telegram (реакцией это стоило бы по вызову API
+            # на КАЖДОГО получателя).
+            repost_count = self.content.get('repost_count')
+            if isinstance(repost_count, int) and repost_count > 1:
+                header_text = f"🪗 БАЯН ×{repost_count}\n{header_text}"
+            self.final_content['header'] = header_text
+            self.author_content['header'] = header_text
+            self.final_content.pop('exclude_recipients', None)
+            self.author_content.pop('exclude_recipients', None)
+            await update_post_content(self.current_post_num, self.final_content)
+        finally:
+            if self.image_bytes_to_send:
+                self.final_content['image_bytes'] = self.image_bytes_to_send
+            if self.author_image_bytes:
+                self.author_content['image_bytes'] = self.author_image_bytes
+            if self.voice_bytes_to_send:
+                self.final_content['voice_bytes'] = self.voice_bytes_to_send
+            if self.author_voice_bytes:
+                self.author_content['voice_bytes'] = self.author_voice_bytes
 
     async def _execute_fallback_rescue(self, e):
         print(f"ℹ️ Ошибка отправки поста #{self.current_post_num} по URL. Запускаю 'Спасательный Цикл'...")
@@ -356,6 +365,8 @@ class NewPostProcessor:
             print(f"⚠️ 'Спасательный цикл' не помог для поста #{self.current_post_num}. Ошибка: {e}. Пост будет обработан без message_id автора.")
 
     async def _send_to_author_with_fallback(self):
+        if self.user_id <= 0:
+            return
         try:
             self.author_results = await send_message_to_users(shared_state.BroadcastConfig(
                 bot_instance=self.bot_instance,

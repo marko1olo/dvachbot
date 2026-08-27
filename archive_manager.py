@@ -176,6 +176,11 @@ async def _resolve_media_source(sender_bot: Bot, orig_fid: str, media_item: dict
     4. Defaults to orig_fid string.
     """
     if not orig_fid:
+        if media_item and isinstance(media_item, dict):
+            if media_item.get('voice_bytes'):
+                return BufferedInputFile(media_item['voice_bytes'], filename="cyberchad_roast.ogg")
+            if media_item.get('image_bytes'):
+                return BufferedInputFile(media_item['image_bytes'], filename="image.jpg")
         return None
 
     try:
@@ -332,7 +337,7 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
                 orig_fid = first_m.get('file_id') or first_m.get('tg_file_id')
             elif isinstance(first_m, str):
                 orig_fid = first_m
-    if not orig_fid:
+    if not orig_fid and not content.get('voice_bytes') and not content.get('image_bytes'):
         return None, []
     raw_cap = content.get('caption', '')
     converted_cap = convert_site_tags_to_telegram(raw_cap)
@@ -342,6 +347,13 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
     common_args = {"chat_id": channel_id, "caption": caption, "parse_mode": "HTML", "request_timeout": 60}
     
     media_source = await _resolve_media_source(sender_bot, orig_fid, content)
+    if not media_source:
+        if content.get('voice_bytes'):
+            media_source = BufferedInputFile(content['voice_bytes'], filename="cyberchad_roast.ogg")
+        elif content.get('image_bytes'):
+            media_source = BufferedInputFile(content['image_bytes'], filename="image.jpg")
+    if not media_source:
+        return None, []
 
     async def _do_send(src):
         if ct_str == 'photo': return await sender_bot.send_photo(photo=src, **common_args)
@@ -391,7 +403,7 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
                 pass
         if not sent_message:
             logger.warning(f"⚠️ TelegramBadRequest sending {ct_str} ({e}). Downloading file buffer fallback...")
-            file_bytes, filename = await _download_media_bytes(orig_fid)
+            file_bytes, filename = (await _download_media_bytes(orig_fid)) if orig_fid else (None, "")
             if file_bytes:
                 try:
                     sent_message = await _do_send(BufferedInputFile(file_bytes, filename=filename))
@@ -447,7 +459,8 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
         elif sent_message.voice: fid = sent_message.voice.file_id
         if fid:
             new_files_data.append(fid)
-            await add_file_mirror(orig_fid, 'tg_shadow', fid)
+            if orig_fid:
+                await add_file_mirror(orig_fid, 'tg_shadow', fid)
     return sent_message, new_files_data
 
 async def _send_archive_media(sender_bot, channel_id: int, content: dict, content_type: str, text_to_send: str, header_text: str):
@@ -554,6 +567,8 @@ def _format_archive_text_content(content: dict, header_text: str) -> str | None:
 async def _update_archive_post_content(post_num: int, content: dict, content_type: str, new_files_data: list, sender_bot_id: int):
     from common.database import register_file_owner, update_post_content
     new_content = content.copy()
+    new_content.pop('voice_bytes', None)
+    new_content.pop('image_bytes', None)
     if content_type == 'media_group':
         new_content['media'] = new_files_data
         for f_info in new_files_data:
