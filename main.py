@@ -2428,90 +2428,90 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
         # Уведомление пользователю отключено по просьбе админа
 async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str) -> tuple[list[int], list, list]:
     for attempt in range(10):
-        async with db_lock:
-            try:
-                db = await get_pool()
-                async with db_transaction(db):
-                    query_posts = "SELECT post_num FROM Posts WHERE author_id = ? AND board_id = ? AND timestamp >= ?"
-                    async with db.execute(query_posts, (user_id, board_id, time_threshold_ts)) as cursor:
-                        rows = await cursor.fetchall()
-                    user_posts = [row[0] for row in rows]
+        try:
+            db = await get_pool()
+            async with db_transaction(db):
+                query_posts = "SELECT post_num FROM Posts WHERE author_id = ? AND board_id = ? AND timestamp >= ?"
+                async with db.execute(query_posts, (user_id, board_id, time_threshold_ts)) as cursor:
+                    rows = await cursor.fetchall()
+                user_posts = [row[0] for row in rows]
 
-                    if not user_posts:
-                        return [], [], []
-                        
-                    posts_to_delete_set = set(user_posts)
-                    threads_to_delete = []
-
-                    import json
-                    if user_posts:
-                        p_strs_json = json.dumps([str(p) for p in user_posts])
-                        p_nums_json = json.dumps(user_posts)
-                        query = """
-                            SELECT thread_id FROM Threads
-                            WHERE thread_id IN (SELECT value FROM json_each(?))
-                               OR thread_num IN (SELECT value FROM json_each(?))
-                        """
-                        async with db.execute(query, (p_strs_json, p_nums_json)) as cursor:
-                            t_rows = await cursor.fetchall()
-                            for tr in t_rows:
-                                threads_to_delete.append(tr[0])
-
-                    if threads_to_delete:
-                        t_ids = []
-                        for t_id in threads_to_delete:
-                            t_ids.append(t_id)
-                            try: t_id_int = int(t_id)
-                            except ValueError: t_id_int = 0
-                            t_ids.append(str(t_id_int))
-
-                        t_ids = list(set(t_ids))
-                        t_ids_json = json.dumps(t_ids)
-
-                        query = "SELECT post_num FROM Posts WHERE thread_id IN (SELECT value FROM json_each(?))"
-                        async with db.execute(query, (t_ids_json,)) as cursor:
-                            p_rows = await cursor.fetchall()
-                            for pr in p_rows:
-                                posts_to_delete_set.add(pr[0])
-
-                    posts_to_delete_nums = list(posts_to_delete_set)
-                    posts_json = json.dumps(posts_to_delete_nums)
-
-                    query_copies = """
-                        SELECT pc.recipient_id, pc.message_id, p.board_id
-                        FROM PostCopies pc
-                        JOIN Posts p ON pc.post_num = p.post_num
-                        WHERE pc.post_num IN (SELECT value FROM json_each(?))
-                    """
-                    async with db.execute(query_copies, (posts_json,)) as cursor:
-                        messages_to_delete_from_api = await cursor.fetchall()
-                        
-                    query_channels = """
-                        SELECT cc.channel_id, cc.message_id, p.board_id
-                        FROM ChannelCopies cc
-                        JOIN Posts p ON cc.post_num = p.post_num
-                        WHERE cc.post_num IN (SELECT value FROM json_each(?))
-                    """
-                    async with db.execute(query_channels, (posts_json,)) as cursor:
-                        channel_messages_to_delete = await cursor.fetchall()
-
-                    await db.execute("DELETE FROM Posts WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
-                    await db.execute("DELETE FROM PostCopies WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
-                    await db.execute("DELETE FROM ChannelCopies WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
-                    await db.execute("DELETE FROM UserReplies WHERE post_num IN (SELECT value FROM json_each(?)) OR parent_num IN (SELECT value FROM json_each(?))", (posts_json, posts_json))
-
-                    if threads_to_delete:
-                        threads_json = json.dumps(threads_to_delete)
-                        await db.execute("DELETE FROM Threads WHERE thread_id IN (SELECT value FROM json_each(?))", (threads_json,))
-
-                    return posts_to_delete_nums, messages_to_delete_from_api, channel_messages_to_delete
-
-            except Exception as e:
-                if "locked" in str(e).lower() or "busy" in str(e).lower():
-                    pass
-                else:
-                    print(f"⛔ DB Error in delete_user_posts: {e}")
+                if not user_posts:
                     return [], [], []
+                    
+                posts_to_delete_set = set(user_posts)
+                threads_to_delete = []
+
+                import json
+                if user_posts:
+                    p_strs_json = json.dumps([str(p) for p in user_posts])
+                    p_nums_json = json.dumps(user_posts)
+                    query = """
+                        SELECT thread_id FROM Threads
+                        WHERE thread_id IN (SELECT value FROM json_each(?))
+                           OR thread_num IN (SELECT value FROM json_each(?))
+                    """
+                    async with db.execute(query, (p_strs_json, p_nums_json)) as cursor:
+                        t_rows = await cursor.fetchall()
+                        for tr in t_rows:
+                            threads_to_delete.append(tr[0])
+
+                if threads_to_delete:
+                    t_ids = []
+                    for t_id in threads_to_delete:
+                        t_ids.append(t_id)
+                        try: t_id_int = int(t_id)
+                        except ValueError: t_id_int = 0
+                        t_ids.append(str(t_id_int))
+
+                    t_ids = list(set(t_ids))
+                    t_ids_json = json.dumps(t_ids)
+
+                    query = "SELECT post_num FROM Posts WHERE thread_id IN (SELECT value FROM json_each(?))"
+                    async with db.execute(query, (t_ids_json,)) as cursor:
+                        p_rows = await cursor.fetchall()
+                        for pr in p_rows:
+                            posts_to_delete_set.add(pr[0])
+
+                posts_to_delete_nums = list(posts_to_delete_set)
+                posts_json = json.dumps(posts_to_delete_nums)
+
+                query_copies = """
+                    SELECT pc.recipient_id, pc.message_id, p.board_id
+                    FROM PostCopies pc
+                    JOIN Posts p ON pc.post_num = p.post_num
+                    WHERE pc.post_num IN (SELECT value FROM json_each(?))
+                """
+                async with db.execute(query_copies, (posts_json,)) as cursor:
+                    messages_to_delete_from_api = await cursor.fetchall()
+                    
+                query_channels = """
+                    SELECT cc.channel_id, cc.message_id, p.board_id
+                    FROM ChannelCopies cc
+                    JOIN Posts p ON cc.post_num = p.post_num
+                    WHERE cc.post_num IN (SELECT value FROM json_each(?))
+                """
+                async with db.execute(query_channels, (posts_json,)) as cursor:
+                    channel_messages_to_delete = await cursor.fetchall()
+
+                await db.execute("DELETE FROM Posts WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM PostCopies WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM ChannelCopies WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM BroadcastQueue WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM UserReplies WHERE post_num IN (SELECT value FROM json_each(?)) OR parent_num IN (SELECT value FROM json_each(?))", (posts_json, posts_json))
+
+                if threads_to_delete:
+                    threads_json = json.dumps(threads_to_delete)
+                    await db.execute("DELETE FROM Threads WHERE thread_id IN (SELECT value FROM json_each(?))", (threads_json,))
+
+                return posts_to_delete_nums, messages_to_delete_from_api, channel_messages_to_delete
+
+        except Exception as e:
+            if "locked" in str(e).lower() or "busy" in str(e).lower():
+                pass
+            else:
+                print(f"⛔ DB Error in delete_user_posts: {e}")
+                return [], [], []
         # Backoff outside db_lock
         await asyncio.sleep(0.2 * (attempt + 1))
     return [], [], []
@@ -3809,7 +3809,9 @@ def _build_main_shop_hub(user_id: int, balance: float):
         f"Твой баланс: <code>{int(balance):,} ₪</code> (Шекелей)\n\n"
         f"<b>📰 Сводка биржи:</b> <i>{market_event}</i>\n\n"
         f"Выбирай торговый сектор:\n"
-        f"⚔️ <b>Черный Рынок</b> — Заточки, перцовки, яды и пативэн\n"
+        f"🏪 <b>P2P Барахолка</b> — Торговля шмотом и оружием между анонами (/market)\n"
+        f"🏦 <b>Банк Абу и Сейф</b> — Защита от /rob и вклады под процент (/bank)\n"
+        f"⚔️ <b>Оружейная</b> — Заточки, перцовки, яды и пативэн\n"
         f"👗 <b>Бутик «Аватария»</b> — Одежда, шапочки, плащи и ушки\n"
         f"💊 <b>Аптека и Защита</b> — Аминазин, зеркальные щиты и взятки\n"
         f"📦 <b>Кейсы и Лутбоксы</b> — Мусорный пакет (150 ₪) и Золотой сейф (500 ₪)\n"
@@ -3818,7 +3820,11 @@ def _build_main_shop_hub(user_id: int, balance: float):
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="⚔️ Черный рынок оружия", callback_data="shop_cat_weapons"),
+            InlineKeyboardButton(text="🏪 P2P Барахолка (/market)", callback_data="market_main_hub"),
+            InlineKeyboardButton(text="🏦 Банк Абу (/bank)", callback_data="bank_main_hub")
+        ],
+        [
+            InlineKeyboardButton(text="⚔️ Оружие и Токсик", callback_data="shop_cat_weapons"),
             InlineKeyboardButton(text="👗 Бутик одежды", callback_data="shop_cat_clothes")
         ],
         [
@@ -4104,7 +4110,7 @@ def _build_color_picker_content(user_id: int, balance: float, active_items: dict
     return text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
 
 
-@dp.message(Command("shop", "store", "market", "магазин", "рынок", ignore_case=True, ignore_mention=True))
+@dp.message(Command("shop", "store", "магазин", ignore_case=True, ignore_mention=True))
 async def cmd_shop(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     user_id = message.from_user.id
@@ -20487,24 +20493,47 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
     duration_str = "1h"
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
+        if not target_id:
+            # Fallback 1: Extract post_num from replied message text / caption
+            reply_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+            import re
+            match = re.search(r'(?:Post\s*№?|№|#|>>)\s*(\d+)', reply_text, re.IGNORECASE)
+            if match:
+                p_num = int(match.group(1))
+                db_p = await get_post_by_num(p_num)
+                if db_p and 'author_id' in db_p:
+                    target_id = db_p['author_id']
+        if not target_id:
+            # Fallback 2: Check ChannelCopies
+            try:
+                db = await get_pool()
+                async with db.execute("SELECT p.author_id FROM ChannelCopies cc JOIN Posts p ON cc.post_num = p.post_num WHERE cc.channel_id = ? AND cc.message_id = ?", (message.reply_to_message.chat.id, message.reply_to_message.message_id)) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        target_id = row[0]
+            except Exception:
+                pass
         if command_args: duration_str = command_args[0]
     elif command_args:
-        try:
-            target_id = int(command_args[0])
-            if len(command_args) > 1: duration_str = command_args[1]
-        except Exception:
-            if message.reply_to_message:
-                duration_str = command_args[0]
-                target_id = await get_author_id_by_reply(message)
+        raw_target = command_args[0].lstrip('#').strip()
+        if raw_target.isdigit():
+            val = int(raw_target)
+            db_p = await get_post_by_num(val)
+            if db_p and 'author_id' in db_p:
+                target_id = db_p['author_id']
             else:
-                await message.answer("❌ Invalid User ID. Укажите числовой ID или ответьте на пост.")
-                return
+                target_id = val
+            if len(command_args) > 1: duration_str = command_args[1]
+        else:
+            await message.answer("❌ Invalid User ID or Post Number.")
+            return
+            
     if not target_id:
         lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
         if lang == 'en':
-            msg = "Usage: <code>/wipe [time]</code> (reply to post) or <code>/wipe &lt;user_id&gt; [time]</code>\nExamples: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>"
+            msg = "Usage: <code>/wipe [time]</code> (reply to post) or <code>/wipe &lt;post_num|user_id&gt; [time]</code>\nExamples: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>"
         else:
-            msg = "Использование: <code>/wipe [время]</code> (в ответ на пост) или <code>/wipe &lt;user_id&gt; [время]</code>\nПримеры: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>"
+            msg = "Использование: <code>/wipe [время]</code> (в ответ на пост) или <code>/wipe &lt;post_num|user_id&gt; [время]</code>\nПримеры: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>"
         await message.answer(msg, parse_mode="HTML")
         return
 
@@ -20521,6 +20550,15 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
         try: minutes = int(duration_str)
         except Exception: minutes = 60
 
+    # A PRIORI SHADOWMUTE: give shadowmute for at least 1 hour (3600 seconds) with reason='wipe'
+    smute_seconds = max(3600, minutes * 60)
+    try:
+        from common.database import update_shadow_mute
+        await update_shadow_mute(user_id=target_id, board_id=board_id, duration_seconds=smute_seconds, reason='wipe')
+        await log_global_event('bot', f"👻 WIPE SHADOWMUTE: Автору {target_id} выдан шедоумут на {smute_seconds}с на /{board_id}/ (авто при /wipe)")
+    except Exception as e:
+        print(f"⚠️ Failed to apply a priori shadowmute on wipe: {e}")
+
     anon_name = generate_anon_name(target_id)
     time_label = f"{minutes} минут" if minutes < 60 else (f"{minutes//60}ч" if minutes < 1440 else (f"{minutes//1440}д" if minutes < 500000 else "за ВСЁ время"))
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -20529,30 +20567,32 @@ async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = '
             InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
         ]
     ])
-    await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) на /{board_id}/ {time_label}?", parse_mode="HTML", reply_markup=kb)
+    await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) на /{board_id}/ {time_label}?\n<i>(Автору уже выдан теневой мут на 1ч)</i>", parse_mode="HTML", reply_markup=kb)
     try: await message.delete()
     except Exception: pass
 
 async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: int, minutes: int):
     try: await message.edit_text("⏳ Сжигаю посты (процесс запущен, может занять несколько минут)...", parse_mode="HTML")
     except Exception: pass
-    # A priori: shadowmute the target for 1 hour minimum before deleting posts
+    
+    # A priori / Guarantee: shadowmute the target for 1 hour minimum with reason='wipe'
+    smute_seconds = max(3600, minutes * 60)
     try:
         from common.database import update_shadow_mute
-        smute_expires = (datetime.now(UTC) + timedelta(hours=1)).timestamp()
-        await update_shadow_mute(target_id, board_id, smute_expires)
-        await log_global_event('bot', f"🔇 WIPE SHADOWMUTE: Юзер {target_id} получил шедоумут на 1ч на /{board_id}/ (авто при /wipe)")
+        await update_shadow_mute(user_id=target_id, board_id=board_id, duration_seconds=smute_seconds, reason='wipe')
+        await log_global_event('bot', f"🔇 WIPE SHADOWMUTE: Юзер {target_id} получил шедоумут на {smute_seconds}с на /{board_id}/ (авто при /wipe)")
     except Exception as e:
         print(f"⚠️ Wipe shadowmute failed: {e}")
+        
     deleted_count = await delete_user_posts(bot, target_id, minutes, board_id)
-    await log_global_event('bot', f"🚮 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на /{board_id}/ (глубина {minutes}м)")
+    await log_global_event('bot', f"🚮 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на /{board_id}/ (глубина {minutes}м, шедоумут {smute_seconds}с)")
     anon_name = generate_anon_name(target_id)
     lang = 'en' if board_id == 'int' else 'ru'
     time_label = f"{minutes}m" if minutes < 60 else (f"{minutes//60}h" if minutes < 1440 else (f"{minutes//1440}d" if minutes < 500000 else "ALL"))
     if lang == 'en':
-        text = f"🚮 Posts by <b>{anon_name}</b> ({time_label}) were wiped.\nTotal deleted: <b>{deleted_count}</b>"
+        text = f"🚮 Posts by <b>{anon_name}</b> ({time_label}) were wiped.\nTotal deleted: <b>{deleted_count}</b>\n👻 User shadowmuted for at least 1h."
     else:
-        text = f"🚮 Посты от <b>{anon_name}</b> ({time_label}) удалены.\nСнесено постов и копий: <b>{deleted_count}</b>"
+        text = f"🚮 Посты от <b>{anon_name}</b> ({time_label}) удалены.\nСнесено постов и копий: <b>{deleted_count}</b>\n👻 Автору выдан шедоумут минимум на 1 час."
     try:
         await message.edit_text(text, parse_mode="HTML")
     except Exception:
@@ -23060,6 +23100,12 @@ async def setup_bot_commands(bots: dict):
 
         # Экономика, баланс и покупки
         BotCommand(command="wallet", description="💳 Баланс кошелька"),
+        BotCommand(command="bank", description="🏦 Банк Абу и Сейф от /rob"),
+        BotCommand(command="deposit", description="📥 Вклад в банк под процент"),
+        BotCommand(command="withdraw", description="📤 Снять шекели из банка"),
+        BotCommand(command="market", description="🏪 P2P Барахолка и рынок лотов"),
+        BotCommand(command="sell", description="🏷️ Выставить вещь на продажу"),
+        BotCommand(command="my_lots", description="📋 Мои активные лоты на рынке"),
         BotCommand(command="balance", description="💰 Баланс шекелей"),
         BotCommand(command="pay", description="💸 Перевести шекели анону (реплай)"),
         BotCommand(command="shop", description="🛒 Теневой черный рынок"),
@@ -24391,7 +24437,11 @@ async def handle_unknown_command_spam(message: types.Message):
     except TelegramBadRequest:
         pass
 
+from market_engine import market_router
+from bank_engine import bank_router
 from handlers.message_router import message_router
+dp.include_router(market_router)
+dp.include_router(bank_router)
 dp.include_router(message_router)
 dp.include_router(_fallback_router)  # LAST — catches unhandled /commands AFTER all other routers
 

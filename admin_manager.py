@@ -959,71 +959,132 @@ async def execute_ban(bot, message, target_id: int, board_id: str, admin_id: int
     await message.edit_text(response_text, parse_mode="HTML")
     await send_moderation_notice(target_id, "ban", board_id, deleted_posts=deleted_posts)
 
-@router.message(Command("wipe"))
+@router.message(Command("wipe", "вайп", "сжечь", "потереть"))
 async def cmd_wipe(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id or not is_admin(message.from_user.id, board_id): return
     command_args = (message.text or message.caption or "").split()[1:]
     target_id = None
     duration_str = "1h" 
+    
     if message.reply_to_message:
         target_id = await get_author_id_by_reply(message)
+        if not target_id:
+            # Fallback: Extract post_num from replied message text / caption
+            reply_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+            import re
+            match = re.search(r'(?:Post\s*№?|№|#|>>)\s*(\d+)', reply_text, re.IGNORECASE)
+            if match:
+                p_num = int(match.group(1))
+                db_p = await get_post_by_num(p_num)
+                if db_p and 'author_id' in db_p:
+                    target_id = db_p['author_id']
+        if not target_id:
+            # Fallback 2: Check ChannelCopies
+            try:
+                db = await get_pool()
+                async with db.execute("SELECT p.author_id FROM ChannelCopies cc JOIN Posts p ON cc.post_num = p.post_num WHERE cc.channel_id = ? AND cc.message_id = ?", (message.reply_to_message.chat.id, message.reply_to_message.message_id)) as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        target_id = row[0]
+            except Exception:
+                pass
         if command_args: duration_str = command_args[0]
     elif command_args:
-        try:
-            target_id = int(command_args[0])
-            if len(command_args) > 1: duration_str = command_args[1]
-        except Exception as e:
-            if message.reply_to_message:
-                duration_str = command_args[0]
-                target_id = await get_author_id_by_reply(message)
+        raw_target = command_args[0].lstrip('#').strip()
+        if raw_target.isdigit():
+            val = int(raw_target)
+            db_p = await get_post_by_num(val)
+            if db_p and 'author_id' in db_p:
+                target_id = db_p['author_id']
             else:
-                await message.answer("❌ Invalid User ID.")
-                return
+                target_id = val
+            if len(command_args) > 1: duration_str = command_args[1]
+        else:
+            await message.answer("❌ Invalid User ID or Post Number.")
+            return
+
     if not target_id:
-        await message.answer("Usage: <code>/wipe &lt;id&gt; [time]</code>", parse_mode="HTML")
+        lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+        if lang == 'en':
+            msg = "Usage: <code>/wipe [time]</code> (reply to post) or <code>/wipe &lt;post_num|user_id&gt; [time]</code>\nExamples: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>"
+        else:
+            msg = "Использование: <code>/wipe [время]</code> (в ответ на пост) или <code>/wipe &lt;post_num|user_id&gt; [время]</code>\nПримеры: <code>/wipe 30m</code>, <code>/wipe 2h</code>, <code>/wipe 1d</code>, <code>/wipe all</code>"
+        await message.answer(msg, parse_mode="HTML")
         return
         
     duration_str = duration_str.lower().replace(" ", "")
-    if duration_str.endswith("m"): minutes = int(duration_str[:-1])
-    elif duration_str.endswith("h"): minutes = int(duration_str[:-1]) * 60
-    elif duration_str.endswith("d"): minutes = int(duration_str[:-1]) * 60 * 24
+    if duration_str in ["all", "все", "всё", "весь"]:
+        minutes = 525600  # 1 year
+    elif duration_str.endswith("m") and duration_str[:-1].isdigit():
+        minutes = int(duration_str[:-1])
+    elif duration_str.endswith("h") and duration_str[:-1].isdigit():
+        minutes = int(duration_str[:-1]) * 60
+    elif duration_str.endswith("d") and duration_str[:-1].isdigit():
+        minutes = int(duration_str[:-1]) * 60 * 24
     else:
         try: minutes = int(duration_str)
-        except Exception as e: minutes = 60
+        except Exception: minutes = 60
+
+    # A PRIORI SHADOWMUTE: give shadowmute for at least 1 hour (3600 seconds) with reason='wipe'
+    smute_seconds = max(3600, minutes * 60)
+    try:
+        from common.database import update_shadow_mute
+        await update_shadow_mute(user_id=target_id, board_id=board_id, duration_seconds=smute_seconds, reason='wipe')
+        await log_global_event('bot', f"👻 WIPE SHADOWMUTE: Автору {target_id} выдан шедоумут на {smute_seconds}с на /{board_id}/ (авто при /wipe)")
+    except Exception as e:
+        print(f"⚠️ Failed to apply a priori shadowmute on wipe: {e}")
 
     anon_name = generate_anon_name(target_id)
+    time_label = f"{minutes} минут" if minutes < 60 else (f"{minutes//60}ч" if minutes < 1440 else (f"{minutes//1440}д" if minutes < 500000 else "за ВСЁ время"))
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🔥 Да, сжечь!", callback_data=f"admin_action:wipe:{target_id}:{board_id}:{minutes}"),
             InlineKeyboardButton(text="❌ Отмена", callback_data="admin_action:cancel:0:0:0")
         ]
     ])
-    await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) за последние {minutes} минут?", parse_mode="HTML", reply_markup=kb)
+    await message.answer(f"⚠️ Вы уверены, что хотите вайпнуть посты <b>{anon_name}</b> (ID: <code>{target_id}</code>) на /{board_id}/ {time_label}?\n<i>(Автору уже выдан теневой мут на 1ч)</i>", parse_mode="HTML", reply_markup=kb)
     try: await message.delete()
     except Exception as e: pass
 
 async def execute_wipe(bot, message, target_id: int, board_id: str, admin_id: int, minutes: int):
     try: await message.edit_text("⏳ Сжигаю посты (процесс запущен, может занять несколько минут)...", parse_mode="HTML")
     except Exception as e: pass
+    
+    # Ensure 1-hour shadowmute in DB
+    smute_seconds = max(3600, minutes * 60)
+    try:
+        from common.database import update_shadow_mute
+        await update_shadow_mute(user_id=target_id, board_id=board_id, duration_seconds=smute_seconds, reason='wipe')
+    except Exception as e:
+        print(f"⚠️ Error ensuring shadowmute in execute_wipe: {e}")
+        
     deleted_count = await delete_user_posts(bot, target_id, minutes, board_id)
-    await log_global_event('bot', f"🧹 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на /{board_id}/ (глубина {minutes}м)")
+    await log_global_event('bot', f"🧹 WIPE: Мод {admin_id} удалил {deleted_count} постов юзера {target_id} на /{board_id}/ (глубина {minutes}м, шедоумут {smute_seconds}с)")
     anon_name = generate_anon_name(target_id)
     lang = 'en' if board_id == 'int' else 'ru'
+    time_label = f"{minutes}m" if minutes < 60 else (f"{minutes//60}h" if minutes < 1440 else (f"{minutes//1440}d" if minutes < 500000 else "ALL"))
     if lang == 'en':
-        text = f"🧹 Posts by <b>{anon_name}</b> in the last {minutes}m were wiped.\nTotal deleted: {deleted_count}"
+        text = f"🧹 Posts by <b>{anon_name}</b> ({time_label}) were wiped.\nTotal deleted: <b>{deleted_count}</b>\n👻 User shadowmuted for at least 1h."
     else:
-        text = f"🧹 Посты от <b>{anon_name}</b> за {minutes}м удалены.\nСнесено: {deleted_count}"
+        text = f"🧹 Посты от <b>{anon_name}</b> ({time_label}) удалены.\nСнесено постов и копий: <b>{deleted_count}</b>\n👻 Автору выдан шедоумут минимум на 1 час."
     await message.edit_text(text, parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("admin_action:"))
 async def on_admin_action(callback: types.CallbackQuery):
     parts = callback.data.split(":")
+    if len(parts) < 2:
+        await callback.answer("Ошибка данных")
+        return
     action = parts[1]
     
     if action == "cancel":
         await callback.message.delete()
         try: await callback.answer("Отменено")
         except Exception as e: pass
+        return
+        
+    if len(parts) < 4:
+        await callback.answer("Ошибка формата данных")
         return
         
     target_id = int(parts[2])
@@ -1038,6 +1099,9 @@ async def on_admin_action(callback: types.CallbackQuery):
         await callback.answer("Баним...")
         await execute_ban(callback.bot, callback.message, target_id, board_id, admin_id)
     elif action == "wipe":
+        if len(parts) < 5 or not parts[4].isdigit():
+            await callback.answer("Ошибка: не указано время вайпа")
+            return
         minutes = int(parts[4])
         await callback.answer("Вайпаем...")
         await execute_wipe(callback.bot, callback.message, target_id, board_id, admin_id, minutes)

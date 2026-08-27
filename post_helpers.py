@@ -488,13 +488,221 @@ async def delete_thread_atomic(bot_instance: Bot, board_id: str, thread_id: str,
                 import traceback; traceback.print_exc()
     print(f"[THREAD DELETE] [{board_id}] Тред {thread_id} удалён. Пользователей переведено: {len(users_in_thread)}. Инициатор: {initiator_id}")
 
-async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str) -> int:
+async def _delete_user_posts_from_db(user_id: int, time_threshold_ts: float, board_id: str = None) -> tuple[list[int], list, list]:
+    from common.db_pool import get_pool, db_lock, db_transaction
+    import json
+    for attempt in range(10):
+        try:
+            db = await get_pool()
+            async with db_transaction(db):
+                if board_id and board_id != 'all':
+                    query_posts = "SELECT post_num FROM Posts WHERE author_id = ? AND board_id = ? AND timestamp >= ?"
+                    params = (user_id, board_id, time_threshold_ts)
+                else:
+                    query_posts = "SELECT post_num FROM Posts WHERE author_id = ? AND timestamp >= ?"
+                    params = (user_id, time_threshold_ts)
+                    
+                async with db.execute(query_posts, params) as cursor:
+                    rows = await cursor.fetchall()
+                user_posts = [row[0] for row in rows]
+
+                if not user_posts:
+                    return [], [], []
+                    
+                posts_to_delete_set = set(user_posts)
+                threads_to_delete = []
+
+                if user_posts:
+                    p_strs_json = json.dumps([str(p) for p in user_posts])
+                    p_nums_json = json.dumps(user_posts)
+                    query = """
+                        SELECT thread_id FROM Threads
+                        WHERE thread_id IN (SELECT value FROM json_each(?))
+                           OR thread_num IN (SELECT value FROM json_each(?))
+                    """
+                    async with db.execute(query, (p_strs_json, p_nums_json)) as cursor:
+                        t_rows = await cursor.fetchall()
+                        for tr in t_rows:
+                            threads_to_delete.append(tr[0])
+
+                if threads_to_delete:
+                    t_ids = []
+                    for t_id in threads_to_delete:
+                        t_ids.append(t_id)
+                        try: t_id_int = int(t_id)
+                        except ValueError: t_id_int = 0
+                        t_ids.append(str(t_id_int))
+
+                    t_ids = list(set(t_ids))
+                    t_ids_json = json.dumps(t_ids)
+
+                    query = "SELECT post_num FROM Posts WHERE thread_id IN (SELECT value FROM json_each(?))"
+                    async with db.execute(query, (t_ids_json,)) as cursor:
+                        p_rows = await cursor.fetchall()
+                        for pr in p_rows:
+                            posts_to_delete_set.add(pr[0])
+
+                posts_to_delete_nums = list(posts_to_delete_set)
+                posts_json = json.dumps(posts_to_delete_nums)
+
+                query_copies = """
+                    SELECT pc.recipient_id, pc.message_id, p.board_id
+                    FROM PostCopies pc
+                    JOIN Posts p ON pc.post_num = p.post_num
+                    WHERE pc.post_num IN (SELECT value FROM json_each(?))
+                """
+                async with db.execute(query_copies, (posts_json,)) as cursor:
+                    messages_to_delete_from_api = await cursor.fetchall()
+                    
+                query_channels = """
+                    SELECT cc.channel_id, cc.message_id, p.board_id
+                    FROM ChannelCopies cc
+                    JOIN Posts p ON cc.post_num = p.post_num
+                    WHERE cc.post_num IN (SELECT value FROM json_each(?))
+                """
+                async with db.execute(query_channels, (posts_json,)) as cursor:
+                    channel_messages_to_delete = await cursor.fetchall()
+
+                await db.execute("DELETE FROM Posts WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM PostCopies WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM ChannelCopies WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM BroadcastQueue WHERE post_num IN (SELECT value FROM json_each(?))", (posts_json,))
+                await db.execute("DELETE FROM UserReplies WHERE post_num IN (SELECT value FROM json_each(?)) OR parent_num IN (SELECT value FROM json_each(?))", (posts_json, posts_json))
+
+                if threads_to_delete:
+                    threads_json = json.dumps(threads_to_delete)
+                    await db.execute("DELETE FROM Threads WHERE thread_id IN (SELECT value FROM json_each(?))", (threads_json,))
+
+                return posts_to_delete_nums, messages_to_delete_from_api, channel_messages_to_delete
+
+        except Exception as e:
+            if "locked" in str(e).lower() or "busy" in str(e).lower():
+                pass
+            else:
+                print(f"⛔ DB Error in delete_user_posts: {e}")
+                return [], [], []
+        await asyncio.sleep(0.2 * (attempt + 1))
+    return [], [], []
+
+async def _clean_posts_from_ram(posts_to_delete_nums: list[int], board_id: str):
+    from common.thread_manager import get_threads_data
+    async with storage_lock:
+        for post_num in posts_to_delete_nums:
+            post_data = messages_storage.pop(post_num, None)
+            if post_data:
+                target_b = board_id or post_data.get('board_id')
+                if target_b and target_b in THREAD_BOARDS:
+                    thread_id = post_data.get('thread_id')
+                    if thread_id:
+                        b_data = board_data.get(target_b, {})
+                        threads_data = get_threads_data(target_b)
+                        if thread_id in threads_data:
+                            try:
+                                if 'posts' in threads_data[thread_id]:
+                                    threads_data[thread_id]['posts'].remove(post_num)
+                            except (ValueError, KeyError):
+                                pass
+            message_copies_in_mem = post_to_messages.pop(post_num, {})
+            for uid, mid_or_list in message_copies_in_mem.items():
+                if isinstance(mid_or_list, list):
+                    for mid in mid_or_list:
+                        message_to_post.pop((uid, mid), None)
+                else:
+                    message_to_post.pop((uid, mid_or_list), None)
+
+def _clean_posts_from_caches(posts_to_delete_nums: list[int]):
+    from common.database import _THREAD_CACHE, _VIDEO_CACHE, _IMAGE_CACHE
+    for post_id_int in posts_to_delete_nums:
+        post_id_str = str(post_id_int)
+        for b in list(_THREAD_CACHE.keys()):
+            if post_id_str in _THREAD_CACHE[b]:
+                try: _THREAD_CACHE[b].remove(post_id_str)
+                except Exception: pass
+        for b in list(_VIDEO_CACHE.keys()):
+            _VIDEO_CACHE[b] = [item for item in _VIDEO_CACHE[b] if item[0] != post_id_int]
+        for b in list(_IMAGE_CACHE.keys()):
+            _IMAGE_CACHE[b] = [item for item in _IMAGE_CACHE[b] if item[0] != post_id_int]
+
+async def _delete_posts_from_channels(channel_messages_to_delete: list, bot_instance):
+    if not channel_messages_to_delete:
+        return
+    from common.config import ARCHIVE_POSTING_BOT_ID
+    archive_bot = GLOBAL_BOTS.get(ARCHIVE_POSTING_BOT_ID)
+    for item in channel_messages_to_delete:
+        if len(item) == 3:
+            chan_id, msg_id, b_id = item
+        elif len(item) == 2:
+            chan_id, msg_id = item
+            b_id = None
+        else:
+            continue
+            
+        bot_candidates = []
+        if archive_bot:
+            bot_candidates.append(archive_bot)
+        if b_id and b_id in GLOBAL_BOTS and GLOBAL_BOTS[b_id] and GLOBAL_BOTS[b_id] not in bot_candidates:
+            bot_candidates.append(GLOBAL_BOTS[b_id])
+        if bot_instance and bot_instance not in bot_candidates:
+            bot_candidates.append(bot_instance)
+        for b in GLOBAL_BOTS.values():
+            if b and b not in bot_candidates:
+                bot_candidates.append(b)
+                
+        for b in bot_candidates:
+            try:
+                await b.delete_message(chat_id=chan_id, message_id=msg_id)
+                break
+            except Exception:
+                continue
+
+async def _delete_message_with_retries(bot_instance, uid: int, mid: int, b_id: str = None) -> bool:
+    from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramRetryAfter
+    import aiohttp
+    deleter = GLOBAL_BOTS.get(b_id) or bot_instance if b_id else bot_instance
+    if not deleter:
+        return False
+    try:
+        await deleter.delete_message(uid, mid)
+        return True
+    except (TelegramBadRequest, TelegramForbiddenError):
+        if deleter != bot_instance and bot_instance:
+            try:
+                await bot_instance.delete_message(uid, mid)
+                return True
+            except Exception:
+                pass
+        return False
+    except (TelegramNetworkError, asyncio.TimeoutError, aiohttp.ClientError, aiohttp.ClientOSError):
+        await asyncio.sleep(0.5)
+        try:
+            await deleter.delete_message(uid, mid)
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+async def _delete_posts_from_pm_api(messages_to_delete_from_api: list, bot_instance) -> int:
+    CHUNK_SIZE = 47
+    DELAY_BETWEEN_CHUNKS = 0.11
+    total_deleted_count = 0
+    for i in range(0, len(messages_to_delete_from_api), CHUNK_SIZE):
+        chunk = messages_to_delete_from_api[i:i + CHUNK_SIZE]
+        tasks = [_delete_message_with_retries(bot_instance, uid, mid, b_id) for uid, mid, b_id in chunk]
+        results = await asyncio.gather(*tasks)
+        total_deleted_count += sum(1 for res in results if res is True)
+        if i + CHUNK_SIZE < len(messages_to_delete_from_api):
+            await asyncio.sleep(DELAY_BETWEEN_CHUNKS)
+    return total_deleted_count
+
+async def delete_user_posts(bot_instance: Bot, user_id: int, time_period_minutes: int, board_id: str = None) -> int:
     """
     Массовое удаление постов пользователя за период.
     Удаляет из БД (с защитой транзакции), RAM, ЛС и ВСЕХ ЗЕРКАЛ КАНАЛОВ.
     Правильно удаляет целые треды из БД/архивов, если удаляется ОП-пост.
     """
     try:
+        from datetime import datetime, timedelta, UTC
         time_threshold_ts = (datetime.now(UTC) - timedelta(minutes=time_period_minutes)).timestamp()
 
         posts_to_delete_nums, messages_to_delete_from_api, channel_messages_to_delete = await _delete_user_posts_from_db(

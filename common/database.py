@@ -582,6 +582,41 @@ async def _create_tables(db):
             user_id INTEGER NOT NULL
         );
         """)
+        await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS MarketListings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            seller_id INTEGER NOT NULL,
+            seller_board_id TEXT NOT NULL DEFAULT 'b',
+            item_id TEXT NOT NULL,
+            item_type TEXT NOT NULL,
+            item_name TEXT NOT NULL,
+            item_data TEXT NOT NULL DEFAULT '{}',
+            price REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at REAL NOT NULL,
+            buyer_id INTEGER,
+            buyer_board_id TEXT,
+            sold_at REAL,
+            cancelled_at REAL
+        );
+        """)
+        await cursor.execute("""
+        CREATE TABLE IF NOT EXISTS BankDeposits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            board_id TEXT NOT NULL DEFAULT 'b',
+            tier_id TEXT NOT NULL,
+            principal REAL NOT NULL,
+            daily_rate REAL NOT NULL,
+            created_at REAL NOT NULL,
+            locked_until REAL NOT NULL,
+            last_accrual_at REAL NOT NULL,
+            accrued_interest REAL NOT NULL DEFAULT 0.0,
+            status TEXT NOT NULL DEFAULT 'active',
+            withdrawn_at REAL,
+            withdrawn_amount REAL DEFAULT 0.0
+        );
+        """)
 
 
 async def _apply_migrations(db):
@@ -816,6 +851,47 @@ async def _apply_migrations(db):
             """)
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_referral_aliases_user_id ON ReferralAliases(user_id);")
         except aiosqlite.OperationalError: pass
+        try:
+            await cursor.execute("""
+            CREATE TABLE IF NOT EXISTS MarketListings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id INTEGER NOT NULL,
+                seller_board_id TEXT NOT NULL DEFAULT 'b',
+                item_id TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                item_data TEXT NOT NULL DEFAULT '{}',
+                price REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at REAL NOT NULL,
+                buyer_id INTEGER,
+                buyer_board_id TEXT,
+                sold_at REAL,
+                cancelled_at REAL
+            );
+            """)
+            print("✅ Migrated: Ensured 'MarketListings' table exists.")
+        except aiosqlite.OperationalError: pass
+        try:
+            await cursor.execute("""
+            CREATE TABLE IF NOT EXISTS BankDeposits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                board_id TEXT NOT NULL DEFAULT 'b',
+                tier_id TEXT NOT NULL,
+                principal REAL NOT NULL,
+                daily_rate REAL NOT NULL,
+                created_at REAL NOT NULL,
+                locked_until REAL NOT NULL,
+                last_accrual_at REAL NOT NULL,
+                accrued_interest REAL NOT NULL DEFAULT 0.0,
+                status TEXT NOT NULL DEFAULT 'active',
+                withdrawn_at REAL,
+                withdrawn_amount REAL DEFAULT 0.0
+            );
+            """)
+            print("✅ Migrated: Ensured 'BankDeposits' table exists.")
+        except aiosqlite.OperationalError: pass
 
 async def _create_indices(db):
     async with db.cursor() as cursor:
@@ -950,6 +1026,16 @@ async def _create_indices(db):
         try:
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_activity_board_ts ON user_activity(board_id, timestamp);")
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_activity_action_ts ON user_activity(action, timestamp);")
+        except aiosqlite.OperationalError:
+            pass
+
+        # Market & Bank Indices
+        try:
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_status_created ON MarketListings(status, created_at DESC);")
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_category_status ON MarketListings(item_type, status, price ASC);")
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_seller_status ON MarketListings(seller_id, status);")
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_bank_deposits_user_status ON BankDeposits(user_id, status);")
+            await cursor.execute("CREATE INDEX IF NOT EXISTS idx_bank_deposits_status ON BankDeposits(status);")
         except aiosqlite.OperationalError:
             pass
 
@@ -1576,13 +1662,21 @@ async def remove_user_from_board(user_id: int, board_id: str):
 # Здесь лежала первая из ДВУХ одинаковых копий remove_users_from_board_batch.
 # Её молча затирало определение ниже по файлу (различалась только строка
 # докстроки), поэтому правка в неё не влияла бы ни на что. Удалена.
-async def update_shadow_mute(user_id: int, board_id: str, expires_at: float | None):
+async def update_shadow_mute(user_id: int, board_id: str = 'b', expires_at: float | None = None, duration_seconds: int | float | None = None, reason: str | None = None):
     """
     Добавляет, обновляет или удаляет теневой мут.
     Синхронизирует состояние как в БД (таблица Mutes), так и в RAM (board_data).
+    Поддерживает указание expires_at или duration_seconds (например 3600), а также причину reason.
     """
     from common.db_pool import get_pool, db_lock
+    from datetime import datetime, timedelta, UTC
     
+    if expires_at is None:
+        if duration_seconds is not None:
+            expires_at = (datetime.now(UTC) + timedelta(seconds=duration_seconds)).timestamp()
+        else:
+            expires_at = (datetime.now(UTC) + timedelta(hours=1)).timestamp()
+
     # Sync in RAM if board_data is available
     try:
         from shared_state import board_data
@@ -1600,13 +1694,35 @@ async def update_shadow_mute(user_id: int, board_id: str, expires_at: float | No
             await db.execute("BEGIN IMMEDIATE")
             
             if expires_at and expires_at > datetime.now(UTC).timestamp():
-                await db.execute(
-                    """
-                    INSERT OR REPLACE INTO Mutes (user_id, board_id, mute_type, expires_at, thread_id)
-                    VALUES (?, ?, 'shadow', ?, NULL)
-                    """,
-                    (user_id, board_id, expires_at)
-                )
+                try:
+                    await db.execute(
+                        """
+                        INSERT OR REPLACE INTO Mutes (user_id, board_id, mute_type, expires_at, thread_id, reason)
+                        VALUES (?, ?, 'shadow', ?, NULL, ?)
+                        """,
+                        (user_id, board_id, expires_at, reason or 'wipe')
+                    )
+                except Exception as col_err:
+                    if "no column named reason" in str(col_err).lower():
+                        try:
+                            await db.execute("ALTER TABLE Mutes ADD COLUMN reason TEXT")
+                            await db.execute(
+                                """
+                                INSERT OR REPLACE INTO Mutes (user_id, board_id, mute_type, expires_at, thread_id, reason)
+                                VALUES (?, ?, 'shadow', ?, NULL, ?)
+                                """,
+                                (user_id, board_id, expires_at, reason or 'wipe')
+                            )
+                        except Exception:
+                            await db.execute(
+                                """
+                                INSERT OR REPLACE INTO Mutes (user_id, board_id, mute_type, expires_at, thread_id)
+                                VALUES (?, ?, 'shadow', ?, NULL)
+                                """,
+                                (user_id, board_id, expires_at)
+                            )
+                    else:
+                        raise col_err
             else:
                 await db.execute(
                     "DELETE FROM Mutes WHERE user_id = ? AND board_id = ? AND mute_type = 'shadow'",

@@ -1,44 +1,81 @@
+# -*- coding: utf-8 -*-
 import time
 import asyncio
 import hashlib
-from typing import Dict, List, Tuple
+import re
+import difflib
+import logging
+from typing import Dict, List, Tuple, Optional
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, UTC
 from enum import Enum, auto
+
+logger = logging.getLogger("spam_filter")
 
 class SpamResult(Enum):
     CLEAN = auto()
     WARNING = auto()
     BAN_REQUIRED = auto()
     GLOBAL_BAN_REQUIRED = auto()
-    BAYAN_MUTE = auto()  # New: bayan-triggered shadowmute
+    BAYAN_MUTE = auto()
+    SHADOW_MUTE_REQUIRED = auto()
 
-# Volatile State Trackers
+# --- Volatile State Trackers ---
 user_spam_locks: Dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
-cross_board_spam_tracker: Dict[int, deque] = defaultdict(lambda: deque(maxlen=3))
+cross_board_spam_tracker: Dict[int, deque] = defaultdict(lambda: deque(maxlen=5))
 image_spam_tracker: Dict[str, List[float]] = defaultdict(list)
 
-# The board-level trackers are mapped by board_id then user_id
+# Board-level trackers mapped by board_id then user_id
 _spam_trackers: Dict[str, Dict[int, List[float]]] = defaultdict(lambda: defaultdict(list))
 _spam_violations: Dict[str, Dict[int, dict]] = defaultdict(dict)
 _spam_filter_words: Dict[str, set] = defaultdict(set)
 _reaction_banned_users: Dict[str, set] = defaultdict(set)
 
-# --- Bayan Detection ---
-# Tracks per-user content fingerprints with timestamps: {user_id: deque of (timestamp, fingerprint)}
-_bayan_tracker: Dict[int, deque] = defaultdict(lambda: deque(maxlen=50))
-# Tracks how many times a user has been bayan-muted (for exponential escalation)
+# --- Bayan Detection Trackers ---
+# {user_id: deque of (timestamp, fingerprint, content_snippet)}
+_bayan_tracker: Dict[int, deque] = defaultdict(lambda: deque(maxlen=100))
+# Board-level recent content fingerprints: {board_id: deque of (timestamp, fingerprint)}
+_board_recent_fingerprints: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
+# Tracks how many times a user has been bayan-muted / escalated: {user_id: int}
 _bayan_mute_count: Dict[int, int] = defaultdict(int)
-# Tracks when the last bayan mute was applied (to reset count after long periods of good behavior)
+# Tracks when the last bayan mute was applied: {user_id: float}
 _bayan_mute_last_ts: Dict[int, float] = defaultdict(float)
 
-BAYAN_WINDOW_SEC = 180       # 3 minutes
-BAYAN_THRESHOLD = 3          # 3 duplicate posts in the window
-BAYAN_BASE_MUTE_SEC = 1200   # 20 minutes base shadowmute
-BAYAN_RESET_SEC = 3600       # Reset escalation counter after 1 hour of no mutes
+# --- Flood Trackers ---
+# {user_id: deque of timestamps}
+_user_request_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=50))
+# {user_id: deque of (timestamp, text_snippet)}
+_user_link_timestamps: Dict[int, deque] = defaultdict(lambda: deque(maxlen=20))
 
+# --- Constants & Thresholds ---
+BAYAN_WINDOW_SEC = 180          # 3 minutes sliding window
+BAYAN_THRESHOLD = 3             # 3 bayans in 3 minutes -> 20 min shadowmute
+BAYAN_BASE_MUTE_SEC = 1200      # 20 minutes base shadowmute (1200 seconds)
+BAYAN_RESET_SEC = 3600          # Reset escalation counter after 1 hour without infractions
+MAX_SHADOW_MUTE_SEC = 86400 * 30  # 30 days hard cap
 
-# --- Configuration ---
+# Flood limits
+BURST_FLOOD_LIMIT = 4           # > 4 messages in 4 seconds
+BURST_FLOOD_WINDOW = 4.0
+RATE_FLOOD_LIMIT = 8            # > 8 messages in 15 seconds
+RATE_FLOOD_WINDOW = 15.0
+MINUTE_FLOOD_LIMIT = 20         # > 20 messages in 60 seconds
+MINUTE_FLOOD_WINDOW = 60.0
+
+# Cross-board limit
+CROSS_BOARD_WINDOW = 60.0       # 60 seconds
+
+# Link & Ad Regex Patterns
+RE_TG_INVITE = re.compile(r'(?:t\.me|telegram\.me)/(?:\+|joinchat/)[a-zA-Z0-9_\-]+', re.IGNORECASE)
+RE_TG_PROMO = re.compile(r'(?:t\.me|telegram\.me)/(?!(?:tgchan_archive|tgach_archive|c/\d+))[a-zA-Z0-9_]{5,}', re.IGNORECASE)
+RE_AD_SCAM = re.compile(
+    r'(1win|казино|вулкан|crypto\s*airdrop|раздача\s*крипт|слив\s*онлифанс|вип\s*канал|подпишись\s*на\s*канал|ставки\s*на\s*спорт|легкий\s*заработок|интим\s*знакомства)',
+    re.IGNORECASE | re.UNICODE
+)
+RE_URL = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+', re.IGNORECASE)
+URL_WHITELIST = {"tgach.top", "t.me/tgchan_archive", "t.me/tgach_archive", "2ch.hk", "dvach.top"}
+
+# Legacy spam rules preserved for compatibility
 SPAM_RULES = {
     'text': {'max_repeats': 5, 'min_length': 4, 'window_sec': 15, 'max_per_window': 10},
     'sticker': {'max_repeats': 5, 'max_per_window': 10, 'window_sec': 20},
@@ -54,11 +91,13 @@ SPAM_WINDOW = 15
 IMAGE_SPAM_LIMIT = 40
 IMAGE_SPAM_WINDOW = 300
 
+
 def set_spam_filter_words(board_id: str, words: set):
     if words:
         _spam_filter_words[board_id] = {str(w).strip().lower() for w in words if str(w).strip()}
     else:
         _spam_filter_words[board_id] = set()
+
 
 def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
     """Checks if a message contains a banned spam filter word."""
@@ -79,77 +118,254 @@ def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
     return False
 
 
-def _content_fingerprint(content: str, msg_type: str) -> str:
-    """Generate a fingerprint for content deduplication.
-    For media (file_id), uses the file_id directly.
-    For text, uses a normalized hash.
+def _content_fingerprint(
+    content: str | None = None,
+    msg_type: str = 'text',
+    file_unique_id: str | None = None,
+    file_id: str | None = None,
+    media_hash: str | None = None
+) -> str:
     """
-    if msg_type in ('photo', 'video', 'document', 'sticker', 'animation'):
-        # file_id is already unique per media
-        return f"media:{content}"
-    elif msg_type == 'text' and content:
-        # Normalize text: lowercase, strip whitespace, hash
-        normalized = content.strip().lower()
-        if len(normalized) < 4:
-            return ""  # Too short to consider bayan
-        h = hashlib.md5(normalized.encode('utf-8', errors='replace')).hexdigest()
-        return f"text:{h}"
+    Generate a fingerprint for content deduplication and bayan detection.
+    - file_unique_id: Telegram's globally persistent media identifier
+    - media_hash: sha256 / phash of the media
+    - file_id: fallback media identifier
+    - text: normalized text hash (lowercase, whitespace collapsed)
+    """
+    if file_unique_id:
+        return f"fuid:{file_unique_id}"
+    if media_hash:
+        return f"mhash:{media_hash}"
+    if msg_type in ('photo', 'video', 'document', 'sticker', 'animation', 'audio', 'voice'):
+        if file_id:
+            return f"media:{file_id}"
+        if isinstance(content, str) and content.strip():
+            return f"media:{content.strip()}"
+    if content:
+        if isinstance(content, str):
+            normalized = " ".join(content.strip().lower().split())
+            if len(normalized) < 4:
+                return ""  # Ignore short trivial text
+            h = hashlib.sha256(normalized.encode('utf-8', errors='replace')).hexdigest()[:16]
+            return f"text:{h}"
+        elif isinstance(content, dict):
+            f_uid = content.get('file_unique_id')
+            if f_uid: return f"fuid:{f_uid}"
+            f_id = content.get('file_id')
+            if f_id: return f"media:{f_id}"
+            t = content.get('text') or content.get('caption')
+            if t:
+                normalized = " ".join(str(t).strip().lower().split())
+                if len(normalized) >= 4:
+                    h = hashlib.sha256(normalized.encode('utf-8', errors='replace')).hexdigest()[:16]
+                    return f"text:{h}"
     return ""
 
 
-def check_bayan(user_id: int, content: str, msg_type: str) -> Tuple[bool, int]:
-    """Check if user is posting duplicate content (bayan).
-    
-    Returns (is_bayan, bayan_mute_seconds).
-    is_bayan=True means threshold exceeded and mute should be applied.
-    bayan_mute_seconds is the computed mute duration (with exponential escalation).
+def is_bayan(
+    user_id: int,
+    board_id: str,
+    content: str | dict | None = None,
+    msg_type: str = 'text',
+    file_unique_id: str | None = None,
+    file_id: str | None = None,
+    media_hash: str | None = None,
+    now_ts: float | None = None
+) -> Tuple[bool, str]:
     """
-    if not content:
-        return False, 0
-    
-    fp = _content_fingerprint(content, msg_type)
+    Checks whether the current message is a bayan (duplicate text, repeat media, hash match).
+    Returns (is_bayan: bool, reason: str).
+    """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return False, ""
+    except Exception:
+        pass
+
+    now = now_ts or time.time()
+    fp = _content_fingerprint(content, msg_type, file_unique_id, file_id, media_hash)
+    if not fp:
+        return False, ""
+
+    # 1. Check if user recently posted this exact fingerprint
+    u_tracker = _bayan_tracker[user_id]
+    for ts, prev_fp, _ in u_tracker:
+        if now - ts <= BAYAN_WINDOW_SEC and prev_fp == fp:
+            return True, f"Повтор сообщения/медиа (fingerprint: {fp})"
+
+    # 2. Check near-duplicate text similarity (Levenstein/diff >= 85%)
+    if fp.startswith("text:") and isinstance(content, str) and len(content.strip()) >= 10:
+        norm_cur = content.strip().lower()
+        for ts, prev_fp, prev_raw in u_tracker:
+            if now - ts <= BAYAN_WINDOW_SEC and prev_fp.startswith("text:") and prev_raw:
+                norm_prev = str(prev_raw).strip().lower()
+                l1, l2 = len(norm_cur), len(norm_prev)
+                if max(l1, l2) > 0 and abs(l1 - l2) / max(l1, l2) <= 0.25:
+                    if difflib.SequenceMatcher(None, norm_cur[:300], norm_prev[:300]).ratio() >= 0.85:
+                        return True, "Схожий дубликат текста (схожесть >= 85%)"
+
+    # 3. Check if media was already seen on board in recent history
+    if fp.startswith(("fuid:", "mhash:", "media:", "fid:")):
+        b_tracker = _board_recent_fingerprints[board_id]
+        for ts, prev_fp in b_tracker:
+            if now - ts <= 3600.0 and prev_fp == fp:
+                return True, f"Медиа-баян на доске {board_id} (fingerprint: {fp})"
+
+    return False, ""
+
+
+def check_bayan(
+    user_id: int,
+    content: str | None = None,
+    msg_type: str = 'text',
+    file_unique_id: str | None = None,
+    file_id: str | None = None,
+    media_hash: str | None = None,
+    board_id: str = 'b',
+    now_ts: float | None = None
+) -> Tuple[bool, int]:
+    """
+    Checks if a user is posting duplicate content (bayan).
+    If >= 3 bayans occur within 3 minutes (180s), triggers auto-shadowmute.
+    Returns (is_mute_triggered: bool, mute_duration_seconds: int).
+    """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return False, 0
+    except Exception:
+        pass
+
+    now = now_ts or time.time()
+    fp = _content_fingerprint(content, msg_type, file_unique_id, file_id, media_hash)
     if not fp:
         return False, 0
-    
-    now = time.time()
+
     tracker = _bayan_tracker[user_id]
     
-    # Prune entries older than the bayan window
+    # Prune old entries
     while tracker and now - tracker[0][0] > BAYAN_WINDOW_SEC:
         tracker.popleft()
+
+    # Record current message
+    tracker.append((now, fp, content if isinstance(content, str) else None))
+
+    # Add to board recent fingerprints
+    _board_recent_fingerprints[board_id].append((now, fp))
+
+    # Check total matching bayans in the window
+    bayan_count = sum(1 for ts, f, _ in tracker if f == fp)
     
-    # Add current fingerprint
-    tracker.append((now, fp))
-    
-    # Count how many times this exact fingerprint appears in the window
-    fp_count = sum(1 for ts, f in tracker if f == fp)
-    
-    if fp_count >= BAYAN_THRESHOLD:
-        # Clear the tracker for this user (reset after triggering)
-        tracker.clear()
-        
-        # Compute exponential mute duration
-        # Reset escalation if last mute was long ago
-        last_mute_ts = _bayan_mute_last_ts[user_id]
-        if last_mute_ts and now - last_mute_ts > BAYAN_RESET_SEC:
+    if bayan_count >= BAYAN_THRESHOLD:
+        last_mute = _bayan_mute_last_ts[user_id]
+        if last_mute and now - last_mute > BAYAN_RESET_SEC:
             _bayan_mute_count[user_id] = 0
-        
+
         escalation = _bayan_mute_count[user_id]
-        mute_seconds = BAYAN_BASE_MUTE_SEC * (2 ** escalation)  # 20m, 40m, 80m, 160m, ...
-        # Cap at 24 hours
-        mute_seconds = min(mute_seconds, 86400)
+        mute_seconds = int(min(86400, BAYAN_BASE_MUTE_SEC * (2 ** escalation)))
         
         _bayan_mute_count[user_id] = escalation + 1
         _bayan_mute_last_ts[user_id] = now
-        
+        tracker.clear()
         return True, mute_seconds
-    
+
     return False, 0
 
 
 def get_bayan_escalation_level(user_id: int) -> int:
     """Get the current bayan escalation level for a user."""
     return _bayan_mute_count.get(user_id, 0)
+
+
+def check_flood(user_id: int, board_id: str, now_ts: float | None = None) -> Tuple[bool, str]:
+    """
+    Checks if a user is flooding requests (burst and minute limit).
+    Returns (is_flooding: bool, reason: str).
+    """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return False, ""
+    except Exception:
+        pass
+
+    now = now_ts or time.time()
+    tracker = _user_request_timestamps[user_id]
+
+    # Prune older than 60s
+    while tracker and now - tracker[0] > MINUTE_FLOOD_WINDOW:
+        tracker.popleft()
+
+    tracker.append(now)
+
+    # 1. Burst flood: > 4 messages in 4 seconds
+    burst_count = sum(1 for ts in tracker if now - ts <= BURST_FLOOD_WINDOW)
+    if burst_count > BURST_FLOOD_LIMIT:
+        return True, f"Burst флуд: {burst_count} сообщений за {BURST_FLOOD_WINDOW}с"
+
+    # 2. Rate flood: > 8 messages in 15 seconds
+    rate_count = sum(1 for ts in tracker if now - ts <= RATE_FLOOD_WINDOW)
+    if rate_count > RATE_FLOOD_LIMIT:
+        return True, f"Частый постинг: {rate_count} сообщений за {RATE_FLOOD_WINDOW}с"
+
+    # 3. Minute flood: > 20 messages in 60 seconds
+    if len(tracker) > MINUTE_FLOOD_LIMIT:
+        return True, f"Минутный флуд: {len(tracker)} сообщений за {MINUTE_FLOOD_WINDOW}с"
+
+    return False, ""
+
+
+def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float | None = None) -> Tuple[bool, str]:
+    """
+    Checks for link spam, Telegram invite links, or advertisement/scam keywords.
+    Returns (is_spam: bool, reason: str).
+    """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return False, ""
+    except Exception:
+        pass
+
+    if not text or not isinstance(text, str):
+        return False, ""
+
+    now = now_ts or time.time()
+    clean_text = text
+
+    # Remove whitelisted domains before evaluation
+    for wl in URL_WHITELIST:
+        clean_text = clean_text.replace(wl, "")
+
+    # 1. Telegram invite links (t.me/+ or t.me/joinchat)
+    if RE_TG_INVITE.search(clean_text):
+        return True, "Инвайт-ссылка Telegram"
+
+    # 2. Casino / Crypto / Scam keywords
+    scam_match = RE_AD_SCAM.search(clean_text)
+    if scam_match:
+        return True, f"Реклама/скам: '{scam_match.group(0)}'"
+
+    # 3. Channel promo links
+    if RE_TG_PROMO.search(clean_text):
+        return True, "Промо-ссылка Telegram канала"
+
+    # 4. Multiple URLs in a single post
+    urls = RE_URL.findall(clean_text)
+    if len(urls) >= 2:
+        return True, f"Массовые ссылки ({len(urls)} шт. в одном посте)"
+
+    # 5. Link frequency spam: >= 3 link messages in 60s
+    if urls:
+        l_tracker = _user_link_timestamps[user_id]
+        while l_tracker and now - l_tracker[0][0] > 60.0:
+            l_tracker.popleft()
+        l_tracker.append((now, text[:50]))
+        if len(l_tracker) >= 3:
+            return True, "Спам ссылками (>= 3 постов со ссылками за минуту)"
+
+    return False, ""
 
 
 def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules: dict, violations: dict) -> bool:
@@ -196,20 +412,20 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
                     last_items_deque.clear()
                     return False
             elif msg_type == 'text':
-                from difflib import SequenceMatcher
                 def _fast_similar(s1: str, s2: str) -> bool:
                     if s1 == s2: return True
                     l1, l2 = len(s1), len(s2)
                     if abs(l1 - l2) / max(l1, l2, 1) > 0.25: return False
-                    return SequenceMatcher(None, s1[:400], s2[:400]).ratio() > 0.85
+                    return difflib.SequenceMatcher(None, s1[:400], s2[:400]).ratio() > 0.85
                 if all(_fast_similar(contents[0], c) for c in contents[1:]):
                     violations['level'] += 1
                     last_items_deque.clear()
                     return False
     return True
 
+
 def _check_cross_board_spam(user_id: int, board_id: str, content: str, msg_type: str, raw_content_type: str) -> bool:
-    """Check for cross-board spam (echodown detection) returning False if detected."""
+    """Check for cross-board spam returning False if detected."""
     try:
         from bot_helpers import is_admin
         if is_admin(user_id, board_id):
@@ -218,20 +434,25 @@ def _check_cross_board_spam(user_id: int, board_id: str, content: str, msg_type:
         pass
     now_ts = time.time()
     user_cb = cross_board_spam_tracker[user_id]
+    
+    # Prune older than CROSS_BOARD_WINDOW
+    while user_cb and now_ts - user_cb[0][0] > CROSS_BOARD_WINDOW:
+        user_cb.popleft()
+
     if not user_cb or user_cb[-1][1] != board_id:
         user_cb.append((now_ts, board_id, content))
-        if len(user_cb) == 3:
+        if len(user_cb) >= 3:
             boards = {b for t, b, c in user_cb}
-            if len(boards) == 3 and user_cb[-1][0] - user_cb[0][0] <= 30:
+            if len(boards) >= 2 and user_cb[-1][0] - user_cb[0][0] <= CROSS_BOARD_WINDOW:
                 contents = [c for t, b, c in user_cb]
                 is_duplicate = False
                 if raw_content_type == 'text' or (raw_content_type in ['photo', 'video', 'document'] and msg_type == 'text'):
-                    import difflib
                     def _fast_sim(s1, s2):
+                        if not s1 or not s2: return False
                         if s1 == s2: return True
                         l1, l2 = len(s1), len(s2)
                         if abs(l1 - l2) / max(l1, l2, 1) > 0.25: return False
-                        return difflib.SequenceMatcher(None, s1[:400], s2[:400]).ratio() > 0.85
+                        return difflib.SequenceMatcher(None, str(s1)[:400], str(s2)[:400]).ratio() > 0.85
                     if _fast_sim(contents[0], contents[1]) and _fast_sim(contents[1], contents[2]):
                         is_duplicate = True
                 elif contents[0] == contents[1] == contents[2]:
@@ -241,6 +462,8 @@ def _check_cross_board_spam(user_id: int, board_id: str, content: str, msg_type:
                     user_cb.clear()
                     return False
     return True
+
+check_cross_board_spam = _check_cross_board_spam
 
 
 def check_rate_limit(board_id: str, user_id: int, rules: dict) -> bool:
@@ -264,11 +487,123 @@ def check_rate_limit(board_id: str, user_id: int, rules: dict) -> bool:
     return True
 
 
-async def analyze_message_for_spam(user_id: int, board_id: str, content: str, msg_type: str, raw_content_type: str, skip_cross_board: bool = False) -> Tuple[SpamResult, int]:
+async def handle_shadow_mute_continuation(
+    user_id: int,
+    board_id: str,
+    reason: str = "Постинг в шедоумуте",
+    now_ts: float | None = None
+) -> Tuple[bool, float]:
+    """
+    If user is already in shadow mute and continues posting or spamming,
+    exponentially increases shadow mute duration (doubles remaining time: 20m -> 40m -> 80m -> 160m...).
+    Returns (was_extended: bool, new_expires_at: float).
+    """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return False, 0.0
+    except Exception:
+        pass
+
+    from common.database import get_shadow_mute_info, apply_shadow_mute
+    info = await get_shadow_mute_info(user_id, board_id)
+    if info['is_muted']:
+        new_expires_at = await apply_shadow_mute(
+            user_id=user_id,
+            board_id=board_id,
+            duration_seconds=BAYAN_BASE_MUTE_SEC,
+            reason=f"{reason} (экспоненциальный рост)",
+            is_exponential=True
+        )
+        return True, new_expires_at
+    return False, 0.0
+
+
+async def evaluate_message_for_autoshadowmute(
+    user_id: int,
+    board_id: str,
+    content: str | dict | None,
+    msg_type: str,
+    raw_content_type: str,
+    file_unique_id: str | None = None,
+    file_id: str | None = None,
+    media_hash: str | None = None,
+    now_ts: float | None = None
+) -> Tuple[bool, str, float]:
+    """
+    Comprehensive evaluation of an incoming message for auto-shadowmute:
+    1. Check if user is already shadowmuted -> exponential continuation
+    2. Check for Flood (burst / minute)
+    3. Check for Link / Ad / Scam spam
+    4. Check for Cross-board spam
+    5. Check for Bayans (>= 3 duplicates in 3 minutes)
+    Returns: (should_mute: bool, reason: str, mute_duration_seconds: float)
+    """
+    try:
+        from bot_helpers import is_admin
+        if is_admin(user_id, board_id):
+            return False, "", 0.0
+    except Exception:
+        pass
+
+    now = now_ts or time.time()
+    text_content = content if isinstance(content, str) else (content.get('text') or content.get('caption') if isinstance(content, dict) else None)
+
+    # 1. Flood check
+    is_flood, flood_reason = check_flood(user_id, board_id, now_ts=now)
+    if is_flood:
+        from common.database import apply_shadow_mute
+        expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=BAYAN_BASE_MUTE_SEC, reason=flood_reason, is_exponential=True)
+        return True, flood_reason, expires_at
+
+    # 2. Link / Ad / Scam spam check
+    if text_content:
+        is_link_spam, link_reason = check_link_or_ad_spam(user_id, board_id, text_content, now_ts=now)
+        if is_link_spam:
+            from common.database import apply_shadow_mute
+            expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=BAYAN_BASE_MUTE_SEC, reason=link_reason, is_exponential=True)
+            return True, link_reason, expires_at
+
+    # 3. Cross-board spam check
+    if text_content or file_unique_id or file_id:
+        payload = text_content or file_unique_id or file_id or ""
+        if not _check_cross_board_spam(user_id, board_id, payload, msg_type, raw_content_type):
+            cb_reason = f"Кросс-борд веерный спам по доскам"
+            from common.database import apply_shadow_mute
+            expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=BAYAN_BASE_MUTE_SEC, reason=cb_reason, is_exponential=True)
+            return True, cb_reason, expires_at
+
+    # 4. Bayan check (>= 3 bayans in 3 minutes)
+    is_bayan_trigger, bayan_mute_sec = check_bayan(
+        user_id=user_id,
+        content=text_content,
+        msg_type=msg_type or raw_content_type,
+        file_unique_id=file_unique_id,
+        file_id=file_id,
+        media_hash=media_hash,
+        board_id=board_id,
+        now_ts=now
+    )
+    if is_bayan_trigger:
+        reason = f"3+ баяна за 3 минуты"
+        from common.database import apply_shadow_mute
+        expires_at = await apply_shadow_mute(user_id, board_id, duration_seconds=float(bayan_mute_sec), reason=reason, is_exponential=True)
+        return True, reason, expires_at
+
+    return False, "", 0.0
+
+
+async def analyze_message_for_spam(
+    user_id: int,
+    board_id: str,
+    content: str,
+    msg_type: str,
+    raw_content_type: str,
+    skip_cross_board: bool = False
+) -> Tuple[SpamResult, int]:
     """
     Decoupled engine for spam analysis.
     Returns a tuple: (SpamResult, current_violation_level).
-    Now also checks for bayan (duplicate content) spam.
     """
     try:
         from bot_helpers import is_admin
@@ -283,10 +618,10 @@ async def analyze_message_for_spam(user_id: int, board_id: str, content: str, ms
         if not _check_cross_board_spam(user_id, board_id, content, msg_type, raw_content_type):
             return SpamResult.GLOBAL_BAN_REQUIRED, 0
 
-    # --- Bayan check: 3 duplicates in 3 minutes ---
+    # Bayan check: 3 duplicates in 3 minutes
     if content:
-        is_bayan, bayan_mute_sec = check_bayan(user_id, content, msg_type or raw_content_type)
-        if is_bayan:
+        is_bayan_hit, bayan_mute_sec = check_bayan(user_id, content, msg_type or raw_content_type, board_id=board_id)
+        if is_bayan_hit:
             return SpamResult.BAYAN_MUTE, bayan_mute_sec
 
     rules = SPAM_RULES.get(msg_type) or SPAM_RULES.get(raw_content_type)
@@ -333,6 +668,7 @@ def get_board_spam_stats(board_id: str) -> dict:
         "spam_tracker_users": len(_spam_trackers[board_id]),
         "spam_tracker_items": sum(len(items) for items in _spam_trackers[board_id].values()),
         "image_spam_items": len(image_spam_tracker[board_id]),
+        "bayan_tracked_users": len(_bayan_tracker),
     }
 
 def acquire_spam_lock(user_id: int):

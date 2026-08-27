@@ -281,7 +281,9 @@ class db_transaction:
         self._lock_acquired = False
 
     async def __aenter__(self):
-        if not db_lock.is_owned_by_current_task():
+        is_owned_fn = getattr(db_lock, "is_owned_by_current_task", None)
+        is_owned = is_owned_fn() if callable(is_owned_fn) else False
+        if not is_owned:
             await db_lock.acquire()
             self._lock_acquired = True
 

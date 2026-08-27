@@ -973,9 +973,45 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
     if is_admin(user_id, board_id):
         return True
     content, msg_type = _get_msg_content_and_type(msg)
-    
     raw_content_type = msg.content_type
     
+    from common.spam_filter import (
+        evaluate_message_for_autoshadowmute,
+        analyze_message_for_spam,
+        SpamResult,
+        SPAM_RULES,
+        _check_repeats,
+        handle_shadow_mute_continuation
+    )
+    from common.database import is_shadow_muted
+
+    # If user is already shadow-muted and continues sending messages
+    if await is_shadow_muted(user_id, board_id):
+        await handle_shadow_mute_continuation(user_id, board_id, reason="Постинг в шедоумуте")
+        return True  # Let handle_message route to process_shadow_reject!
+
+    f_id, f_uid = None, None
+    file_obj = getattr(msg, raw_content_type, None)
+    if isinstance(file_obj, list) and file_obj:
+        file_obj = file_obj[-1]
+    if file_obj:
+        f_id = getattr(file_obj, 'file_id', None)
+        f_uid = getattr(file_obj, 'file_unique_id', None)
+
+    # 1. Comprehensive auto-shadowmute evaluation (Flood, Link/Ad spam, Cross-board, 3+ Bayans in 3 min)
+    should_mute, mute_reason, mute_exp = await evaluate_message_for_autoshadowmute(
+        user_id=user_id,
+        board_id=board_id,
+        content=content,
+        msg_type=msg_type or raw_content_type,
+        raw_content_type=raw_content_type,
+        file_unique_id=f_uid,
+        file_id=f_id
+    )
+    if should_mute:
+        return False
+
+    # 2. Legacy / rate limit analysis
     result, level = await analyze_message_for_spam(user_id, board_id, content, msg_type, raw_content_type)
     if result == SpamResult.GLOBAL_BAN_REQUIRED:
         msg_str = f"🚨 [GLOBAL] ЭХОДАУН ОБНАРУЖЕН: user {user_id}. Выдан перманентный SHADOWMUTE везде кроме /b/."
@@ -988,31 +1024,7 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
                 board_data[b].setdefault('shadow_mutes', {})[user_id] = expires_dt
                 spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
         return False
-    elif result == SpamResult.BAYAN_MUTE:
-        # level carries mute duration in seconds for BAYAN_MUTE
-        mute_seconds = level
-        from common.database import update_shadow_mute, log_global_event
-        from common.spam_filter import get_bayan_escalation_level
-        expires_dt = datetime.now(UTC) + timedelta(seconds=mute_seconds)
-        board_data[board_id].setdefault('shadow_mutes', {})[user_id] = expires_dt
-        await update_shadow_mute(user_id, board_id, expires_dt.timestamp())
-        escalation = get_bayan_escalation_level(user_id)
-        mute_label = f"{mute_seconds // 60}м" if mute_seconds < 3600 else f"{mute_seconds // 3600}ч"
-        log_msg = f"🔄 [{board_id}] БАЯН-СПАМ: user {user_id} получил шедоумут на {mute_label} (эскалация x{escalation})"
-        print(log_msg)
-        spawn_task(log_global_event('bot', log_msg))
-        try:
-            warn_text = (
-                f"⚠️ <b>Обнаружен баян-спам!</b>\n\n"
-                f"Ты отправляешь одно и то же содержимое слишком часто. Шедоумут на <b>{mute_label}</b>.\n"
-                f"При повторных нарушениях длительность удваивается."
-            )
-            sent = await msg.bot.send_message(user_id, warn_text, parse_mode="HTML")
-            spawn_task(delete_message_after_delay(sent, 15))
-        except Exception:
-            pass
-        return False
-    elif result == SpamResult.BAN_REQUIRED:
+    elif result in (SpamResult.BAYAN_MUTE, SpamResult.SHADOW_MUTE_REQUIRED, SpamResult.BAN_REQUIRED):
         return False
 
     rules = SPAM_RULES.get(msg_type)
@@ -1029,64 +1041,20 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
 
     return True
 
-async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id: str, stream: str='ru'):
+async def apply_penalty(bot_instance: Bot, user_id: int, msg_type: str, board_id: str, stream: str='ru', reason: str = ""):
     if is_admin(user_id, board_id):
         return
     async with acquire_spam_lock(user_id):
-        b_data = board_data[board_id]
-        level = get_spam_violation_level(board_id, user_id)
-        if level <= 0:
-            return
+        from common.database import apply_shadow_mute
+        
+        if not reason:
+            violation_type = {
+                'text': 'текстовый спам / флуд', 'sticker': 'спам стикерами', 'animation': 'спам гифками',
+                'audio': 'спам аудио', 'photo': 'спам фото', 'video': 'спам видео', 'media': 'спам медиа'
+            }.get(msg_type, 'спам / частый постинг')
+            reason = f"Автошедоумут за {violation_type}"
             
-        current_smute = b_data.get('shadow_mutes', {}).get(user_id)
-        now_dt = datetime.now(UTC)
-        
-        if current_smute and current_smute > now_dt:
-            # EXPONENTIAL ESCALATION: user is already muted and keeps spamming
-            remaining_sec = (current_smute - now_dt).total_seconds()
-            # Double the remaining time, minimum 20 minutes, cap at 24 hours
-            new_mute_sec = max(remaining_sec * 2, 1200)
-            new_mute_sec = min(new_mute_sec, 86400)
-            expires_dt = now_dt + timedelta(seconds=new_mute_sec)
-            b_data.setdefault('shadow_mutes', {})[user_id] = expires_dt
-            from common.database import update_shadow_mute, log_global_event
-            await update_shadow_mute(user_id, board_id, expires_dt.timestamp())
-            mute_label = f"{int(new_mute_sec // 60)}м" if new_mute_sec < 3600 else f"{new_mute_sec / 3600:.1f}ч"
-            log_msg = f"📈 [{board_id}] ЭСКАЛАЦИЯ ШЕДОУМУТА: user {user_id} продолжает спамить в муте, новая длительность: {mute_label}"
-            print(log_msg)
-            spawn_task(log_global_event('bot', log_msg))
-            return
-            
-        # Standard penalty tiers
-        tier_minutes = {1: 2, 2: 5, 3: 10}
-        mute_minutes = tier_minutes.get(level, 15)
-        mute_seconds = mute_minutes * 60
-        expires_dt = now_dt + timedelta(seconds=mute_seconds)
-        
-        b_data.setdefault('shadow_mutes', {})[user_id] = expires_dt
-        from common.database import update_shadow_mute, log_global_event
-        await update_shadow_mute(user_id, board_id, expires_dt.timestamp())
-        
-        violation_type = {
-            'text': 'текстовый спам', 'sticker': 'спам стикерами', 'animation': 'спам гифками',
-            'audio': 'спам аудио', 'photo': 'спам фото', 'video': 'спам видео', 'media': 'спам медиа'
-        }.get(msg_type, 'частый постинг')
-        mute_duration = f"{mute_minutes} мин"
-        log_msg = f"⏳ [{board_id}] Авто-кулдаун за частый постинг: user {user_id}, тип: {violation_type}, уровень: {level}, длительность: {mute_duration}"
-        print(log_msg)
-        spawn_task(log_global_event('bot', log_msg))
-        
-        # Прозрачное предупреждение пользователю
-        try:
-            warn_text = (
-                f"⚠️ <b>Слишком частый постинг!</b>\n\n"
-                f"Ты отправляешь сообщения слишком быстро. Включён временный кулдаун на <b>{mute_duration}</b>.\n"
-                f"Подожди немного, и возможность постить автоматически восстановится."
-            )
-            sent = await bot_instance.send_message(user_id, warn_text, parse_mode="HTML")
-            spawn_task(delete_message_after_delay(sent, 10))
-        except Exception:
-            pass
+        await apply_shadow_mute(user_id, board_id, duration_seconds=1200.0, reason=reason, is_exponential=True)
 
 async def process_shadow_reject(ctx: shared_state.ShadowRejectContext):
 
