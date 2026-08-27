@@ -235,6 +235,7 @@ AIRDROP_PM_TEMPLATES = [
     (
         "💊 <b>ПОСОБИЕ НА ГАЛОПЕРИДОЛ НАЧИСЛЕНО!</b> 💊\n\n"
         "Товарищ анон! ПНД и Абу высоко ценят твой непрерывный бред.\n\n"
+        "👤 Твой анон-хеш: [<code>{anon_hash}</code>]\n"
         "📊 Твой вклад в безумие за 7 дней: <b>{posts_count}</b> постов\n"
         "🏅 Место в палате: <b>#{rank}</b> из {total_recipients}\n"
         "💵 Капнуло на сберкнижку: +<code>{payout:,} ₪</code>\n\n"
@@ -244,6 +245,7 @@ AIRDROP_PM_TEMPLATES = [
     (
         "🍕 <b>СТИМУЛ-ЧЕК НА ПИВО И ДОШИРАК</b> 🍕\n\n"
         "Абу посмотрел на твои <b>{posts_count}</b> постов и пустил скупую слезу.\n\n"
+        "👤 Твой анон-хеш: [<code>{anon_hash}</code>]\n"
         "📊 Активность за неделю: <b>{posts_count}</b> постов\n"
         "🏅 Ранг среди сычей: <b>#{rank}</b> из {total_recipients}\n"
         "💵 Выплата за деградацию: +<code>{payout:,} ₪</code>\n\n"
@@ -253,6 +255,7 @@ AIRDROP_PM_TEMPLATES = [
     (
         "☠️ <b>КОМПЕНСАЦИЯ ЗА УБИТУЮ МОЛОДОСТЬ</b> ☠️\n\n"
         "Ты потратил ещё одну неделю своей бесценной жизни на Тгач.\n\n"
+        "👤 Твой анон-хеш: [<code>{anon_hash}</code>]\n"
         "📊 Настрочил: <b>{posts_count}</b> высеров\n"
         "🏅 Место на социальном дне: <b>#{rank}</b> из {total_recipients}\n"
         "💵 Компенсация за деградацию: +<code>{payout:,} ₪</code>\n\n"
@@ -262,6 +265,7 @@ AIRDROP_PM_TEMPLATES = [
     (
         "🚔 <b>ГОНОРАР ОТ ТОВАРИЩА МАЙОРА</b> 🚔\n\n"
         "За добросовестное засорение каналов связи (<b>{posts_count}</b> постов) тебе выписан закрытый чек.\n\n"
+        "👤 Твой анон-хеш: [<code>{anon_hash}</code>]\n"
         "📊 Зафиксировано сигналов: <b>{posts_count}</b>\n"
         "🏅 Твой номер в личном деле: <b>#{rank}</b> из {total_recipients}\n"
         "💵 Выручка осведомителя: +<code>{payout:,} ₪</code>\n\n"
@@ -278,7 +282,8 @@ def format_airdrop_board_announcement(
     top_allocations: list[dict],
     remaining_fund: float = 0.0
 ) -> str:
-    """Формирует черный ебанутый пост для тредов /b/ и /thread/."""
+    """Формирует черный ебанутый пост для тредов /b/ и /thread/ с анонимными хешами."""
+    from common.anon_identity import get_anon_id
     tmpl = random.choice(AIRDROP_BOARD_TEMPLATES)
     lines = [
         tmpl["title"] + "\n",
@@ -294,8 +299,9 @@ def format_airdrop_board_announcement(
     lines.append("🏆 <b>ТОП-10 ГЛАВНЫХ ЗАДРОТОВ БОРДЫ:</b>")
     for rank, item in enumerate(top_allocations[:10], 1):
         title = RANK_TITLES.get(rank, f"🎖 <i>Анон #{rank}</i>")
+        anon_hash = get_anon_id(item["user_id"], stream="ru")
         lines.append(
-            f"{rank}. {title} [ID <code>{item['user_id']}</code>]: "
+            f"{rank}. {title} [<code>{anon_hash}</code>]: "
             f"+<b>{item['payout']:,} ₪</b> <i>({item['posts_count']} шт.)</i>"
         )
 
@@ -303,14 +309,17 @@ def format_airdrop_board_announcement(
     return "\n".join(lines)
 
 
-def format_airdrop_pm_notification(payout: int, posts_count: int, rank: int, total_recipients: int) -> str:
+def format_airdrop_pm_notification(payout: int, posts_count: int, rank: int, total_recipients: int, user_id: int = 0) -> str:
     """Формирует персональное уведомление с черным юмором для пользователя в ЛС."""
+    from common.anon_identity import get_anon_id
     tmpl = random.choice(AIRDROP_PM_TEMPLATES)
+    anon_hash = get_anon_id(user_id, stream="ru") if user_id else "Анон"
     return tmpl.format(
         payout=payout,
         posts_count=posts_count,
         rank=rank,
-        total_recipients=total_recipients
+        total_recipients=total_recipients,
+        anon_hash=anon_hash
     )
 
 
@@ -471,7 +480,8 @@ async def execute_weekly_airdrop(db, bots: dict[str, Bot]) -> dict:
                 payout=payout,
                 posts_count=posts_cnt,
                 rank=rank,
-                total_recipients=total_recipients
+                total_recipients=total_recipients,
+                user_id=uid
             )
 
             # 1. Личное сообщение в Telegram (пробуем ботов по очереди)
