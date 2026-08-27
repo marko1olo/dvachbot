@@ -352,7 +352,7 @@ from site_tgach.backup import backup_loop
 from site_tgach.importer import process_import_queue
 from site_tgach.neuro_scanner import scanner_loop, SCANNER_TRIGGER
 import asyncio
-from common.db_pool import create_pool, close_pool, get_pool
+from common.db_pool import create_pool, close_pool, get_pool, wal_checkpoint_truncate
 from common.bot_pool import global_bot_pool
 from site_tgach.admin_config import ADMIN_IDS
 from site_tgach.image_processing import process_and_upload_image
@@ -1903,6 +1903,14 @@ async def lifespan(app: FastAPI):
                 await asyncio.to_thread(GEOIP_READER.close)
             except Exception:
                 import traceback; traceback.print_exc()
+
+        logger.info("💾 Сброс данных из WAL на диск (TRUNCATE)...")
+        try:
+            await wal_checkpoint_truncate()
+            logger.info("✅ WAL успешно сброшен и усечен.")
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка при сбросе WAL: {e}")
+
         await close_pool()
 
 

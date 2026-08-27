@@ -39,6 +39,12 @@ def clean_post_copies():
         print(f"Deleted {deleted} orphans.")
         
     try:
+        conn.execute("DROP TABLE IF EXISTS _stress_table")
+        print("Dropped _stress_table if present.")
+    except Exception as e:
+        print(f"Non-fatal error dropping _stress_table: {e}")
+
+    try:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     except Exception as e:
         print(f"WAL checkpoint non-fatal error: {e}")

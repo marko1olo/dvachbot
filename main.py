@@ -149,7 +149,7 @@ from common.database import (
 from site_tgach.admin_config import ADMIN_IDS
 from site_tgach.tagging_worker import tagging_loop
 from ai_manager import transcribe_and_roast_voice_note, handle_music_roast
-from common.db_pool import create_pool, get_pool, db_lock, close_pool, LazyLock, db_transaction, sqlite_wal_checkpoint_task
+from common.db_pool import create_pool, get_pool, db_lock, close_pool, LazyLock, db_transaction, sqlite_wal_checkpoint_task, wal_checkpoint_truncate
 from common.secret_redaction import add_secret_redaction_filter, install_logging_redaction
 from text_assets import (
     CASINO_FUCK_OFF_PHRASES, CASINO_FUCK_OFF_PHRASES_EN, CASINO_FUCK_OFF_PHRASES_JP,
@@ -21381,7 +21381,7 @@ async def database_cleanup_task():
         try:
             print("🚮 [Maintenance] Запуск плановой очистки очередей в БД...")
             from common.database import cleanup_broadcast_queue
-            await cleanup_broadcast_queue(retention_hours=48)
+            await cleanup_broadcast_queue(retention_hours=6)
             from common.database import cleanup_notification_queue
             await cleanup_notification_queue(retention_hours=48)
             print("✅ [Maintenance] База данных оптимизирована.")
@@ -22739,13 +22739,35 @@ def warm_native_media_stack() -> None:
         print(f"⚠️ Native media warmup failed: {type(exc).__name__}: {exc}")
 
 def setup_lifecycle_handlers(loop: asyncio.AbstractEventLoop, bots: list[Bot], healthcheck_site: web.TCPSite | None):
-
     handler = lambda: spawn_task(graceful_shutdown(bots, healthcheck_site))
     if sys.platform != "win32":
         if hasattr(signal, 'SIGTERM'):
-            loop.add_signal_handler(signal.SIGTERM, handler)
+            try:
+                loop.add_signal_handler(signal.SIGTERM, handler)
+            except (NotImplementedError, RuntimeError):
+                pass
         if hasattr(signal, 'SIGINT'):
-            loop.add_signal_handler(signal.SIGINT, handler)
+            try:
+                loop.add_signal_handler(signal.SIGINT, handler)
+            except (NotImplementedError, RuntimeError):
+                pass
+    else:
+        def _win_sig_handler(signum, frame):
+            try:
+                loop.call_soon_threadsafe(handler)
+            except Exception:
+                pass
+
+        if hasattr(signal, 'SIGINT'):
+            try:
+                signal.signal(signal.SIGINT, _win_sig_handler)
+            except Exception:
+                pass
+        if hasattr(signal, 'SIGTERM'):
+            try:
+                signal.signal(signal.SIGTERM, _win_sig_handler)
+            except Exception:
+                pass
 
 def _read_text_file_stripped(path: str) -> str:
     with open(path, "r", encoding="utf-8") as file:

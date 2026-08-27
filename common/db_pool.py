@@ -1,9 +1,33 @@
 import aiosqlite
 import asyncio
+import atexit
+import sqlite3
+import os
 from common.config import DB_NAME
 
 # Глобальная переменная соединения
 _db_connection = None
+
+
+def _sync_wal_checkpoint_truncate():
+    """
+    Синхронный сброс WAL при завершении процесса Python (через atexit).
+    Гарантирует, что даже при выходе из процесса без вызова close_pool(),
+    WAL сбрасывается и сжимается до 0 байт.
+    """
+    if not isinstance(DB_NAME, str) or not os.path.exists(DB_NAME):
+        return
+    try:
+        conn = sqlite3.connect(DB_NAME, timeout=3.0)
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+atexit.register(_sync_wal_checkpoint_truncate)
 
 class LazyLock:
     def __init__(self):
@@ -168,12 +192,39 @@ async def create_pool():
     """Алиас для инициализации, использует ту же безопасную логику."""
     return await get_pool()
 
+async def wal_checkpoint_truncate(db=None) -> bool:
+    """
+    Принудительный асинхронный сброс всех данных из WAL в основной файл базы данных
+    и усечение WAL-файла до 0 байт (PRAGMA wal_checkpoint(TRUNCATE)).
+    """
+    global _db_connection
+    try:
+        async with db_lock:
+            conn = db or _db_connection or await get_pool()
+            if conn:
+                async with conn.execute("PRAGMA wal_checkpoint(TRUNCATE);") as cursor:
+                    row = await cursor.fetchone()
+                    if row:
+                        busy, log_frames, ckpt_frames = row
+                        print(f"[DB] WAL Checkpoint (TRUNCATE): Busy={busy}, Log={log_frames}, Checkpointed={ckpt_frames}")
+                        return busy == 0
+                    return True
+    except Exception as e:
+        print(f"[DB] WAL Checkpoint (TRUNCATE) error: {e}")
+    return False
+
+
 async def close_pool():
-    """Безопасное закрытие при выключении бота."""
+    """Безопасное закрытие при выключении бота с обязательным TRUNCATE чекпоинтом."""
     global _db_connection
     async with _reconnect_lock:
         if _db_connection:
             try:
+                try:
+                    await _db_connection.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                    print("[DB] WAL checkpoint (TRUNCATE) completed successfully before close.")
+                except Exception as ckpt_e:
+                    print(f"[DB] WAL checkpoint on close error: {ckpt_e}")
                 await _db_connection.close()
                 print("[DB] Connection closed successfully.")
             except Exception as e:

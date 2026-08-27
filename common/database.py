@@ -3200,12 +3200,14 @@ async def get_post_for_broadcast(post_num: int) -> Optional[Dict[str, Any]]:
             except Exception:
                 break
     return None
-async def cleanup_broadcast_queue(retention_hours: int = 1):
+async def cleanup_broadcast_queue(retention_hours: int = 6):
     """
-    Удаляет старые записи из BroadcastQueue.
+    Удаляет старые отправленные записи (is_sent_to_tg=1) из BroadcastQueue старше retention_hours (по умолчанию 6 часов).
+    Также удаляет устаревшие неотправленные записи старше 7 дней.
     """
     from common.db_pool import get_pool, db_lock
     cutoff_timestamp = time.time() - (retention_hours * 3600)
+    stale_unsent_cutoff = time.time() - (7 * 86400)
     
     async with db_lock:
         for attempt in range(10):
@@ -3213,7 +3215,10 @@ async def cleanup_broadcast_queue(retention_hours: int = 1):
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
-                await db.execute("DELETE FROM BroadcastQueue WHERE created_at < ?", (cutoff_timestamp,))
+                await db.execute(
+                    "DELETE FROM BroadcastQueue WHERE (is_sent_to_tg = 1 AND created_at < ?) OR created_at < ?",
+                    (cutoff_timestamp, stale_unsent_cutoff)
+                )
                 
                 await db.execute("COMMIT")
                 return
@@ -3481,7 +3486,7 @@ def _delete_in_chunks(con, table, where_clause, params, chunk_size=100):
 
     return total_deleted
 
-def _cleanup_telegram_copies(con, retention_seconds, retention_limit):
+def _cleanup_telegram_copies(con, retention_seconds, retention_limit, channel_retention_seconds=7 * 86400):
     # Keep a bounded rolling window by age and by global post distance
     copy_cutoff = time.time() - retention_seconds
     with contextlib.closing(con.execute(
@@ -3492,7 +3497,11 @@ def _cleanup_telegram_copies(con, retention_seconds, retention_limit):
     copy_floor_post_num = row[0] if row else 0
     copy_where = "post_num IN (SELECT post_num FROM Posts WHERE timestamp < ? AND post_num < ?)"
     _delete_in_chunks(con, "PostCopies", copy_where, (copy_cutoff, copy_floor_post_num))
-    _delete_in_chunks(con, "ChannelCopies", copy_where, (copy_cutoff, copy_floor_post_num))
+
+    # ChannelCopies retention (7 days)
+    channel_cutoff = time.time() - channel_retention_seconds
+    channel_where = "post_num IN (SELECT post_num FROM Posts WHERE timestamp < ?)"
+    _delete_in_chunks(con, "ChannelCopies", channel_where, (channel_cutoff,))
 
 def _cleanup_logs_and_alerts(con, logs_lifetime, alerts_lifetime):
     logs_cutoff = time.time() - logs_lifetime
@@ -3543,6 +3552,11 @@ def _cleanup_orphans(con):
             where_fast = f"NOT EXISTS (SELECT 1 FROM Posts WHERE Posts.post_num = {table}.{col})"
             _delete_in_chunks(con, table, where_fast, ())
         except: pass
+
+    # Удаление временной таблицы нагрузочного тестирования
+    try:
+        con.execute("DROP TABLE IF EXISTS _stress_table")
+    except: pass
 
 def _cleanup_ephemeral_boards(con, boards, limit):
     for board in boards:
@@ -3602,8 +3616,9 @@ def _cleanup_import_map(con):
 def cleanup_old_posts_from_db(limit: int = 50000):
     SHADOW_LIFETIME = 24 * 3600
     ARCHIVED_THREAD_LIFETIME = 30 * 24 * 3600
-    POST_COPY_RETENTION_SECONDS = max(2 * 24 * 3600, int(POST_COPY_RETENTION_DAYS or 30) * 24 * 3600)
+    POST_COPY_RETENTION_SECONDS = max(1 * 24 * 3600, int(POST_COPY_RETENTION_DAYS or 3) * 24 * 3600)
     POST_COPY_RETENTION_LIMIT = max(1000, int(POST_COPY_RETENTION_POSTS or 12000))
+    CHANNEL_COPY_RETENTION_SECONDS = 7 * 24 * 3600
     LOGS_LIFETIME = 14 * 24 * 3600
     ALERTS_LIFETIME = 14 * 24 * 3600
     EPHEMERAL_BOARDS = ('thread', 'test') 
@@ -3623,8 +3638,8 @@ def cleanup_old_posts_from_db(limit: int = 50000):
             try: con.execute('PRAGMA foreign_keys=ON')
             except: pass
             
-            # 1. Telegram copy retention. PostCopies are required for real Telegram replies.
-            _cleanup_telegram_copies(con, POST_COPY_RETENTION_SECONDS, POST_COPY_RETENTION_LIMIT)
+            # 1. Telegram copy retention. PostCopies (3 days) & ChannelCopies (7 days).
+            _cleanup_telegram_copies(con, POST_COPY_RETENTION_SECONDS, POST_COPY_RETENTION_LIMIT, CHANNEL_COPY_RETENTION_SECONDS)
 
             # 2. Логи и алерты
             _cleanup_logs_and_alerts(con, LOGS_LIFETIME, ALERTS_LIFETIME)
@@ -8351,9 +8366,9 @@ def get_db_connection():
             
     return SafeConnection()
 
-async def clean_old_postcopies_daily(retention_days: int = 14) -> int:
+async def clean_old_postcopies_daily(retention_days: int = 3) -> int:
     """
-    Аккуратная ежедневная чистка PostCopies: храним данные ровно retention_days дней (по умолчанию 14).
+    Аккуратная ежедневная чистка PostCopies: храним данные ровно retention_days дней (по умолчанию 3).
     Удаление происходит небольшими чанками по 2,000 строк с микро-паузами db_sleep и периодическим wal_checkpoint.
     """
     from common.db_pool import get_pool, db_lock, db_sleep
@@ -8416,6 +8431,72 @@ async def clean_old_postcopies_daily(retention_days: int = 14) -> int:
         import traceback
         traceback.print_exc()
         logging.getLogger("database").error(f"[POSTCOPIES_CLEANUP] Cleanup error: {e}")
+        return 0
+
+async def clean_old_channelcopies_daily(retention_days: int = 7) -> int:
+    """
+    Аккуратная ежедневная чистка ChannelCopies: храним данные ровно retention_days дней (по умолчанию 7).
+    Удаление происходит небольшими чанками по 2,000 строк с микро-паузами db_sleep и периодическим wal_checkpoint.
+    """
+    from common.db_pool import get_pool, db_lock, db_sleep
+    cutoff_ts = time.time() - (retention_days * 86400)
+    try:
+        db = await get_pool()
+        if not db:
+            return 0
+        async with db.execute("SELECT MIN(post_num) FROM Posts WHERE timestamp >= ?", (cutoff_ts,)) as cursor:
+            row = await cursor.fetchone()
+            threshold_post_num = row[0] if row else None
+            
+        if not threshold_post_num:
+            return 0
+
+        total_deleted = 0
+        batch_size = 2000
+        while True:
+            deleted = 0
+            async with db_lock:
+                await db.execute("BEGIN IMMEDIATE")
+                try:
+                    async with db.execute("""
+                        DELETE FROM ChannelCopies
+                        WHERE rowid IN (
+                            SELECT rowid FROM ChannelCopies
+                            WHERE post_num < ?
+                            LIMIT ?
+                        )
+                    """, (threshold_post_num, batch_size)) as cursor:
+                        deleted = cursor.rowcount or 0
+                    await db.execute("COMMIT")
+                except Exception:
+                    try:
+                        await db.execute("ROLLBACK")
+                    except Exception:
+                        import traceback; traceback.print_exc()
+                    raise
+            total_deleted += deleted
+            if deleted == 0:
+                break
+            if total_deleted > 0 and total_deleted % 10000 < batch_size:
+                try:
+                    async with db_lock:
+                        await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
+                except Exception:
+                    pass
+            await db_sleep(0.05)
+
+        if total_deleted > 0:
+            try:
+                async with db_lock:
+                    await db.execute("PRAGMA wal_checkpoint(PASSIVE);")
+            except Exception:
+                pass
+            logging.getLogger("database").info(f"[CHANNELCOPIES_CLEANUP] Deleted {total_deleted:,} old records (post_num < {threshold_post_num}). Retention {retention_days} days.")
+        return total_deleted
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        logging.getLogger("database").error(f"[CHANNELCOPIES_CLEANUP] Cleanup error: {e}")
         return 0
 
 # Сколько держим запись о медиа, которое видели РОВНО ОДИН раз.
@@ -8502,10 +8583,9 @@ async def postcopies_daily_cleanup_loop():
             next_run = (now_msk + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
             sleep_sec = (next_run - now_msk).total_seconds()
             await asyncio.sleep(max(10, sleep_sec))
-            await clean_old_postcopies_daily()
-            # Второй уборщик в том же суточном цикле: отдельная фоновая задача
-            # ради одного DELETE в сутки не нужна, а падение любого из двух
-            # ловится общим except ниже и не роняет цикл.
+            await clean_old_postcopies_daily(retention_days=3)
+            await clean_old_channelcopies_daily(retention_days=7)
+            # Третий уборщик в том же суточном цикле:
             await clean_old_media_reposts_daily()
         except asyncio.CancelledError:
             break

@@ -146,6 +146,7 @@ def _check_posts_orphaned_thread(cur):
 def _check_orphan_tables(cur, tables):
     tables_to_check = {
         "PostCopies": "post_num",
+        "ChannelCopies": "post_num",
         "BroadcastQueue": "post_num",
         "NotificationQueue": "source_post_num",
         "Reports": "post_num"

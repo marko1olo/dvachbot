@@ -229,6 +229,40 @@ class TestDbPool(unittest.IsolatedAsyncioTestCase):
 
             await conn.close()
 
+    async def test_wal_checkpoint_truncate(self):
+        """Проверка функции wal_checkpoint_truncate на реальной SQLite БД."""
+        from common.db_pool import wal_checkpoint_truncate
+        import tempfile
+        import aiosqlite
+        import os
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            test_db_file = os.path.join(tmp_dir, "test_wal_trunc.db")
+            conn = await aiosqlite.connect(test_db_file, isolation_level=None)
+            await conn.execute("PRAGMA journal_mode=WAL;")
+            await conn.execute("CREATE TABLE test_data (id INT, val TEXT);")
+            await conn.execute("INSERT INTO test_data VALUES (1, 'hello');")
+
+            wal_file = test_db_file + "-wal"
+            self.assertTrue(os.path.exists(test_db_file))
+
+            success = await wal_checkpoint_truncate(db=conn)
+            self.assertTrue(success)
+
+            await conn.close()
+
+    async def test_close_pool_triggers_wal_checkpoint(self):
+        """Проверка, что close_pool выполняет PRAGMA wal_checkpoint(TRUNCATE) перед закрытием."""
+        from common.db_pool import close_pool
+        mock_conn = AsyncMock()
+        db_pool_module._db_connection = mock_conn
+
+        await close_pool()
+
+        mock_conn.execute.assert_called_with("PRAGMA wal_checkpoint(TRUNCATE);")
+        mock_conn.close.assert_called_once()
+        self.assertIsNone(db_pool_module._db_connection)
+
 
 if __name__ == '__main__':
     unittest.main()
