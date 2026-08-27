@@ -9024,14 +9024,11 @@ def calculate_win_tax(net_profit: float) -> tuple[float, float]:
 
 def calculate_transfer_fee(amount: float) -> float:
     """
-    Нелинейный налог Тобина на прямые переводы шекелей между пользователями:
-    Fee(T) = max(50, T * 0.10 + (T^2) / 50_000_000), capped at max 30% of amount.
+    Налог 5% на прямые переводы шекелей между пользователями (в фонд Абу).
     """
     if not isinstance(amount, (int, float)) or amount <= 0:
         return 0.0
-    fee = max(50.0, amount * 0.10 + (amount ** 2) / 50_000_000.0)
-    max_fee = amount * 0.30
-    return round(min(fee, max_fee) if amount >= 100 else 50.0, 2)
+    return round(amount * 0.05, 2)
 
 
 
