@@ -501,19 +501,6 @@ class NewPostProcessor:
                 bots=active_bots, board_id=self.board_id, post_num=self.current_post_num,
                 level=numeral_level, content=self.final_content, author_id=self.user_id
             ))
-            try:
-                from news_channel_publisher import publish_post_numeral_milestone
-                num_cfg = shared_state.SPECIAL_NUMERALS_CONFIG.get(numeral_level, {'label': 'Гет', 'emojis': ('🎯', '🚀')})
-                spawn_task(publish_post_numeral_milestone(
-                    bot=self.bot_instance,
-                    board_id=self.board_id,
-                    post_num=self.current_post_num,
-                    numeral_info=num_cfg,
-                    content=self.final_content,
-                    author_id=self.user_id
-                ))
-            except Exception as e:
-                logging.getLogger("post_processor").warning(f"Error triggering publish_post_numeral_milestone: {e}")
         if self.thread_id:
             thread_info = self.b_data.get('threads_data', {}).get(self.thread_id)
             if thread_info:
