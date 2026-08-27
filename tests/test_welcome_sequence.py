@@ -35,12 +35,15 @@ async def test_send_welcome_sequence_flow():
         b_args, b_kwargs = mock_banner.call_args
         caption = b_kwargs.get("caption", "")
         assert "ТГАЧ" in caption
-        assert "Культура чистой анонимности" in caption
+        assert "Анонимная имиджборда" in caption
+        assert "Реинкарнация" not in caption
+        assert "духот" not in caption.lower()
+        assert "—" not in caption
         assert "Как здесь общаться" in caption
         assert "Пост в тред" in caption
         assert "Reply" in caption
         assert "Реакции" in caption
-        assert "РПГ" not in caption  # No RPG spam to new users!
+        assert "РПГ" not in caption
 
         # 2. Verify Message 2 (Catalog + Commands + Channels)
         assert mock_bot.send_message.called
@@ -51,3 +54,4 @@ async def test_send_welcome_sequence_flow():
         assert "/wallet" in sec_text
         assert "@tgach_bot" in sec_text
         assert "@tgchan_archive" in sec_text
+        assert "—" not in sec_text

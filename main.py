@@ -3411,21 +3411,21 @@ async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: s
     # СООБЩЕНИЕ 1: Баннер + Манифест анонимной борды + Как общаться
     if lang == 'en':
         primary_message = (
-            f"⚡ <b>TGACH — Anonymous {board_name} in Telegram</b>\n\n"
-            "🌐 <b>Pure Anonymous Culture:</b>\n"
-            "A reincarnation of classic imageboards right inside Telegram — no VPNs, captchas, or censorship. "
+            f"⚡ <b>TGACH - Anonymous {board_name} in Telegram</b>\n\n"
+            "🌐 <b>Anonymous Imageboard:</b>\n"
+            "A true imageboard right inside Telegram: no VPNs, captchas, or censorship. "
             "No usernames, profiles, or avatars: identity resets with every post. You are simply Anon among equals.\n\n"
             "💬 <b>How to participate:</b>\n"
-            "• <b>Create a post:</b> Send any text, photo, video, or sticker to the bot — it instantly publishes to the board under an anonymous number.\n"
+            "• <b>Create a post:</b> Send any text, photo, video, or sticker to the bot - it instantly publishes to the board under an anonymous number.\n"
             "• <b>Reply to Anon:</b> Use <b>Reply</b> to any post in the chat to link your answer.\n"
-            "• <b>Reactions:</b> 👍 awards shekels for quality content, 👎 sinks dull posts in sage.\n\n"
-            "☕ <i>Brew some tea and dive into the stream — you are home, Anon.</i>"
+            "• <b>Reactions:</b> 👍 awards shekels for quality content, 👎 sinks bad posts in sage.\n\n"
+            "☕ <i>Brew some tea and dive into the stream: you are home, Anon.</i>"
         )
     elif lang == 'jp':
         primary_message = (
-            f"⚡ <b>TGACH — Telegram内の完全匿名 {board_name}</b>\n\n"
+            f"⚡ <b>TGACH - Telegram内の完全匿名 {board_name}</b>\n\n"
             "🌐 <b>完全匿名の掲示板文化:</b>\n"
-            "VPNやキャプチャなしで直感的に使えるクラシック掲示板。プロフィールやアイコン、履歴は存在せず、言葉そのものが評価される世界です。\n\n"
+            "VPNやキャプチャなしで直感的に使えるリアルタイム掲示板。プロフィールやアイコン、履歴は存在せず、言葉そのものが評価される世界です。\n\n"
             "💬 <b>使い方:</b>\n"
             "• <b>投稿:</b> テキストや画像、動画を送るだけで、匿名番号で即座に板に流れます。\n"
             "• <b>返信:</b> メッセージに<b>返信（Reply）</b>するとスレッドが繋がります。\n"
@@ -3434,15 +3434,15 @@ async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: s
         )
     else:
         primary_message = (
-            f"⚡ <b>ТГАЧ — Анонимный {board_name} в Telegram</b>\n\n"
-            "🌐 <b>Культура чистой анонимности:</b>\n"
-            "Реинкарнация классического Двача прямо в телеге — без VPN, капчи и цензуры. "
+            f"⚡ <b>ТГАЧ - Анонимная имиджборда {board_name} в Telegram</b>\n\n"
+            "🌐 <b>Анонимная имиджборда:</b>\n"
+            "Настоящая борда прямо в телеге: без VPN, капчи и цензуры. "
             "Профилей, юзернеймов и аватарок нет: личность сбрасывается с каждым постом. Ты просто Анон среди равных.\n\n"
             "💬 <b>Как здесь общаться:</b>\n"
-            "• <b>Пост в тред:</b> Просто отправь любой текст, фото, видео или стикер боту — оно мгновенно появится на доске под анонимным номером.\n"
+            "• <b>Пост в тред:</b> Просто отправь любой текст, фото, видео или стикер боту - оно мгновенно появится на доске под анонимным номером.\n"
             "• <b>Ответ анону:</b> Сделай <b>Reply (Ответить)</b> на сообщение в чате, чтобы привязать ответ.\n"
-            "• <b>Реакции:</b> 👍 начисляет шекели автору за годный пост, 👎 топит сажей за духоту.\n\n"
-            "☕ <i>Заваривай чай и вкатывайся в вечный тред — ты дома, Анон.</i>"
+            "• <b>Реакции:</b> 👍 начисляет шекели автору за годный пост, 👎 топит сажей за хуйню.\n\n"
+            "☕ <i>Заваривай чай и вкатывайся в вечный тред: ты дома, Анон.</i>"
         )
 
     try:
@@ -12177,13 +12177,13 @@ async def cmd_start(message: types.Message, state: FSMContext, board_id: str | N
             )
         else:
             start_text = (
-                f"⚡ <b>ТГАЧ — анонимный /b/ в Telegram</b>\n\n"
-                "🌐 <b>Борда без цензуры</b>\n"
-                f"Обычный Двач, только прямо в телеге. Без VPN, капчи и регистрации. Профилей, юзернеймов и аватарок нет: кидаешь пост в общий поток, и он улетает. Никому не важно, кто ты в жизни, оценивают только сам текст.\n\n"
+                f"⚡ <b>ТГАЧ - анонимная имиджборда в Telegram</b>\n\n"
+                "🌐 <b>Анонимная имиджборда</b>\n"
+                "Настоящая борда прямо в телеге: без VPN, капчи и регистрации. Профилей, юзернеймов и аватарок нет: кидаешь пост в общий поток, и он улетает. Никому не важно, кто ты в жизни, оценивают только сам текст.\n\n"
                 "⚙️ <b>Как это крутится</b>\n"
-                "Всё держится на реплаях и реакциях. За нормальные посты накидывают шекелей, за духоту топят сажей. Прямо в треде можно штамповать демотиваторы, стреляться на дуэлях, крутить рулетку и ловить ивенты, которые меняют доску.\n\n"
+                "Всё держится на реплаях и реакциях. За годные посты накидывают шекелей, за хуйню топят сажей. Прямо в треде можно штамповать демотиваторы, стреляться на дуэлях, крутить рулетку и ловить ивенты, которые меняют доску.\n\n"
                 "☕ <b>Ночная сычевальня</b>\n"
-                "Никаких обидчивых админов и правил про уважение. Пиши то, о чём молчишь в реале, или просто читай чужую шизу в три часа ночи. Если кто-то окончательно берега попутал — чат сам глушит его через вотум.\n\n"
+                "Никаких обидчивых админов и правил про уважение. Пиши то, о чём молчишь в реале, или просто читай чужую шизу в три часа ночи. Если кто-то окончательно берега попутал - чат сам глушит его через вотум.\n\n"
                 "<i>Заходи в /b/ред, если скучно.</i>"
             )
 
