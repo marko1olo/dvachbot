@@ -7224,84 +7224,286 @@ async def cmd_daily(message: types.Message, board_id: str | None, stream: str = 
 # ══════════════════════════════════════════════════════════════════════════════
 # /pay — Перевод шекелей другому анону (через Reply или /pay <anon_id> <amount>)
 # ══════════════════════════════════════════════════════════════════════════════
-@dp.message(Command("pay", "give", "tip", "перевод", "скинуть", "донат"))
+def _parse_pay_amount(token: str, sender_balance: float) -> tuple[int | None, str | None]:
+    """
+    Разбирает сумму перевода из текстового токена.
+    Поддерживает: '500', '500₪', '5k', '1.5k', '1m', 'all', 'все', 'всё', 'вабанк', 'half', '50%' и т.д.
+    """
+    t = token.strip().lower().replace(" ", "").replace(",", ".")
+    for suffix in ["₪", "шекелей", "шекеля", "шекель", "рублей", "рубля", "руб", "р", "rub", "$", "usd"]:
+        if t.endswith(suffix):
+            t = t[:-len(suffix)].strip()
+            break
+
+    if t in ["all", "все", "всё", "вабанк", "ва-банк", "макс", "max", "весь", "всю"]:
+        if sender_balance <= 0:
+            return None, "empty_balance"
+        low, high = 1, int(sender_balance)
+        best = 0
+        while low <= high:
+            mid = (low + high) // 2
+            if mid + calculate_transfer_fee(mid) <= sender_balance:
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        if best <= 0:
+            return None, "cant_afford_fee"
+        return best, None
+
+    if t in ["half", "пол", "половина", "половину", "50%"]:
+        amt = int(sender_balance * 0.5)
+        return (amt if amt > 0 else None), ("empty_balance" if amt <= 0 else None)
+
+    if t.endswith("%"):
+        pct_str = t[:-1]
+        try:
+            pct = float(pct_str)
+            if 0 < pct <= 100:
+                amt = int(sender_balance * (pct / 100.0))
+                return (amt if amt > 0 else None), ("empty_balance" if amt <= 0 else None)
+        except ValueError:
+            pass
+
+    multiplier = 1
+    if t.endswith(("kk", "кк")):
+        multiplier = 1_000_000
+        t = t[:-2]
+    elif t.endswith(("k", "к")):
+        multiplier = 1_000
+        t = t[:-1]
+    elif t.endswith(("m", "м")):
+        multiplier = 1_000_000
+        t = t[:-1]
+
+    try:
+        val = float(t) * multiplier
+        if val <= 0:
+            return None, "negative_or_zero"
+        return int(val), None
+    except (ValueError, OverflowError):
+        return None, "invalid_format"
+
+
+async def _resolve_target_user_id(db, target_str: str) -> int | None:
+    """Определяет Telegram user_id по переданной строке (Anon-ID или числовой ID)."""
+    if not target_str:
+        return None
+    raw = target_str.strip("[]@ #").lower()
+    if not raw:
+        return None
+
+    # 1. Числовой Telegram ID
+    if raw.isdigit() and len(raw) >= 6:
+        try:
+            tid = int(raw)
+            async with db.execute("SELECT 1 FROM Users WHERE user_id = ? LIMIT 1", (tid,)) as cursor:
+                if await cursor.fetchone():
+                    return tid
+        except Exception:
+            pass
+
+    # 2. Поиск по Anon ID среди пользователей в БД
+    try:
+        async with db.execute("SELECT DISTINCT user_id FROM Users LIMIT 5000") as cursor:
+            rows = await cursor.fetchall()
+            for r in rows:
+                uid = r[0]
+                if get_anon_id(uid).lower() == raw or get_anon_id(uid, "en").lower() == raw:
+                    return uid
+    except Exception:
+        pass
+
+    return None
+
+
+@dp.message(Command("pay", "give", "tip", "перевод", "скинуть", "донат", "задонатить", "перевести", "поделиться", "пей", ignore_case=True, ignore_mention=True))
 async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'ru'):
     if not board_id: return
     sender_id = message.from_user.id
     db = await get_pool()
-    parts = (message.text or message.caption or "").strip().split()
+    sender_bal = await get_user_global_balance(db, sender_id)
+    sender_anon = get_anon_id(sender_id)
+
+    raw_text = (message.text or message.caption or "").strip()
+    parts = raw_text.split()
+    args = parts[1:]
 
     target_user_id = None
     amount = None
+    err_reason = None
 
-    # Вариант 1: Через Reply на пост
+    # Сценарий 1: Reply на пост
     if message.reply_to_message:
-        target_user_id = await get_reply_target(message)
-        if len(parts) > 1 and parts[1].isdigit():
-            amount = int(parts[1])
-    # Вариант 2: /pay <anon_id> <amount>
-    elif len(parts) >= 3:
-        anon_target = parts[1].strip("[]")
-        if parts[2].isdigit():
-            amount = int(parts[2])
-        for uid in list(user_to_anon.keys()):
-            if get_anon_id(uid) == anon_target:
-                target_user_id = uid
-                break
+        target_user_id = await get_author_id_by_reply(message)
+        if args:
+            amount, err_reason = _parse_pay_amount(args[0], sender_bal)
+    # Сценарий 2: /pay <target> <amount> или /pay <amount> <target>
+    elif len(args) >= 2:
+        target_candidate = args[0]
+        amt_candidate = args[1]
+        amt_parsed, err = _parse_pay_amount(amt_candidate, sender_bal)
+        if amt_parsed is not None:
+            target_user_id = await _resolve_target_user_id(db, target_candidate)
+            amount, err_reason = amt_parsed, err
+        else:
+            amt_parsed_rev, err_rev = _parse_pay_amount(target_candidate, sender_bal)
+            if amt_parsed_rev is not None:
+                target_user_id = await _resolve_target_user_id(db, amt_candidate)
+                amount, err_reason = amt_parsed_rev, err_rev
+            else:
+                amount, err_reason = None, "invalid_format"
+    elif len(args) == 1:
+        amt_parsed, _ = _parse_pay_amount(args[0], sender_bal)
+        if amt_parsed is not None:
+            amount = amt_parsed
+        else:
+            target_user_id = await _resolve_target_user_id(db, args[0])
 
-    if not amount or amount <= 0:
+    # Подсказка, если команда вызвана без параметров и без реплая
+    if not message.reply_to_message and not target_user_id and amount is None:
         await message.reply(
-            "💸 <b>Как перевести шекели:</b>\n\n"
-            "1. Сделай <b>Reply</b> на пост анона с командой: <code>/pay 500</code>\n"
-            "2. Или отправь команду с Анон-ID: <code>/pay [a1b2] 500</code>",
+            "💸 <b>КАК ПЕРЕВЕСТИ ШЕКЕЛИ АНОНУ:</b>\n\n"
+            "1. <b>В ответ на пост:</b>\n"
+            "• <code>/pay 500</code> — скинуть 500 ₪\n"
+            "• <code>/pay 5k</code> — скинуть 5 000 ₪\n"
+            "• <code>/pay half</code> — скинуть половину баланса\n"
+            "• <code>/pay all</code> — скинуть всё до копейки\n\n"
+            "2. <b>По Анон-ID или Telegram ID:</b>\n"
+            "• <code>/pay [Локада6] 500</code>\n"
+            "• <code>/pay 123456789 500</code>\n\n"
+            f"💳 <i>Твой баланс: <b>{int(sender_bal):,} ₪</b></i>",
             parse_mode="HTML"
         )
         return
 
-    if amount < 10:
-        await message.reply("❌ Минимальная сумма перевода: 10 ₪.", parse_mode="HTML")
+    # Обработка edge cases целей
+    if target_user_id == 0:
+        await message.reply(
+            "🤖 <b>Ты пытаешься задонатить боту?</b>\n"
+            "Абу и так гребёт налог с каждой транзакции себе на яхту. Не корми серверное железо, манька.",
+            parse_mode="HTML"
+        )
         return
-    if amount > 1_000_000:
-        await message.reply("❌ Максимальная сумма перевода за раз: 1 000 000 ₪.", parse_mode="HTML")
+
+    if message.reply_to_message and target_user_id is None:
+        await message.reply(
+            "👻 <b>Не удалось найти автора поста!</b>\n"
+            "Этот пост либо системный (бот/канал/оповещение), либо автор растворился в небытии борды.",
+            parse_mode="HTML"
+        )
         return
 
     if not target_user_id:
-        await message.reply("❌ Не удалось определить получателя. Сделай Reply на пост нужного анона.", parse_mode="HTML")
+        await message.reply(
+            "❌ <b>Кому переводить-то, шизоид?</b>\n"
+            "Сделай <b>Reply</b> на пост анона или укажи его Анон-ID:\n"
+            "<code>/pay [Локада6] 500</code>",
+            parse_mode="HTML"
+        )
         return
 
-    sender_anon = get_anon_id(sender_id)
-    target_anon = get_anon_id(target_user_id)
+    if target_user_id == sender_id:
+        await message.reply(
+            "🤦‍♂️ <b>Перекладываешь шекели из левого кармана в правый?</b>\n"
+            "Самому себе донатить нельзя, шизофреник. Иди на завод устраивайся: /work",
+            parse_mode="HTML"
+        )
+        return
+
+    # Обработка edge cases сумм
+    if amount is None or amount <= 0:
+        if err_reason == "empty_balance":
+            await message.reply(
+                "🦴 <b>Ты нищ как церковная крыса!</b>\n"
+                f"Твой баланс: <b>{int(sender_bal)} ₪</b>. В карманах только прошлогодний насвай и пыль.\n"
+                "Иди подметай парашу (/work) или пытай удачу в /lootbox.",
+                parse_mode="HTML"
+            )
+        elif err_reason == "cant_afford_fee":
+            await message.reply(
+                "💸 <b>Твоих шекелей не хватит даже на налог Абу!</b>\n"
+                "Комиссия за перевод съедает весь твой баланс. Подкопи шекелей через /work.",
+                parse_mode="HTML"
+            )
+        elif err_reason == "negative_or_zero":
+            await message.reply(
+                "🃏 <b>Шулер ебаный, отрицательные шекели в карман не запихнешь.</b>\n"
+                "Введи нормальное положительное число: <code>/pay 500</code>",
+                parse_mode="HTML"
+            )
+        else:
+            await message.reply(
+                "❌ <b>Укажи корректную сумму перевода!</b>\n"
+                "Примеры: <code>/pay 500</code>, <code>/pay 5k</code>, <code>/pay all</code>, <code>/pay half</code>",
+                parse_mode="HTML"
+            )
+        return
+
+    if amount < 10:
+        await message.reply("🪙 <b>Слишком мелкая подачка!</b>\nМинимальный перевод — <b>10 ₪</b>. Меньше даже бомжи на дваче не берут.", parse_mode="HTML")
+        return
+
+    if amount > 10_000_000:
+        await message.reply("🏦 <b>Финмониторинг Абу заблокировал перевод!</b>\nМаксимальная сумма одной транзакции — <b>10 000 000 ₪</b>. Не ломай экономику борды, олигарх мамкин.", parse_mode="HTML")
+        return
 
     fee = calculate_transfer_fee(amount)
     total_deduct = amount + fee
 
+    target_anon = get_anon_id(target_user_id)
+
+    # Проверка баланса до лока
+    if sender_bal < total_deduct:
+        await message.reply(
+            f"💸 <b>Не хватает шекелей на кармане!</b>\n\n"
+            f"💳 Твой баланс: <code>{int(sender_bal):,} ₪</code>\n"
+            f"💰 Сумма перевода: <code>{amount:,} ₪</code>\n"
+            f"🏛 Налог Абу (комиссия): <code>{fee:,} ₪</code>\n"
+            f"🧾 Итого к списанию: <b>{total_deduct:,} ₪</b>\n\n"
+            f"<i>Не хватает: <code>{int(total_deduct - sender_bal):,} ₪</code>. Иди заработай на помойке: /work</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    # Атомарная транзакция
     async with db_lock:
-        sender_bal = await get_user_global_balance(db, sender_id)
-        if sender_bal < total_deduct:
-            await message.reply(f"❌ Недостаточно средств! Твой баланс: <code>{int(sender_bal)} ₪</code>, нужно с комиссией: <code>{total_deduct} ₪</code> (комиссия {fee} ₪).", parse_mode="HTML")
+        sender_bal_fresh = await get_user_global_balance(db, sender_id)
+        if sender_bal_fresh < total_deduct:
+            await message.reply("❌ Недостаточно средств на момент проведения транзакции.", parse_mode="HTML")
             return
 
         ok, new_sender_bal = await deduct_user_global_balance(db, sender_id, board_id, total_deduct)
         if not ok:
-            await message.reply("❌ Ошибка при списании шекелей.", parse_mode="HTML")
+            await message.reply("❌ Ошибка при списании шекелей из казны.", parse_mode="HTML")
             return
 
         await add_user_global_balance(db, target_user_id, board_id, amount)
         if fee > 0:
-            await add_to_abu_fund(db, fee)
-        await record_user_transaction(db, sender_id, -total_deduct, 'pay', f'Перевод анону [{target_anon}] (Комиссия: {fee} ₪)')
+            await add_to_abu_fund(db, fee, sender_id, f"Налог за перевод от [{sender_anon}] к [{target_anon}]")
+        await record_user_transaction(db, sender_id, -total_deduct, 'pay', f'Перевод анону [{target_anon}] (Налог Абу: {fee} ₪)')
         await record_user_transaction(db, target_user_id, amount, 'pay', f'Перевод от анона [{sender_anon}]')
         receiver_bal = await get_user_global_balance(db, target_user_id)
         await db.commit()
 
-    fee_note = f"\n💸 <i>Комиссия за перевод: {fee} ₪ (в фонд Абу)</i>" if fee > 0 else ""
+    flavors = [
+        "Шекели успешно перекочевали в чужой карман.",
+        "Абу довольно пересчитал свой процент на яхте.",
+        "Очередная финансовая спекуляция успешно завершена.",
+        "Деньги ушли, но уважение на борде не купишь.",
+        "Шекели упали на счёт без лишнего шума и пыли.",
+    ]
+    flavor = random.choice(flavors)
+
+    fee_str = f"<code>{fee:,} ₪</code>" if fee > 0 else "<i>без комиссии</i>"
     await message.reply(
-        f"💸 <b>ПЕРЕВОД ШЕКЕЛЕЙ УСПЕШЕН!</b>\n\n"
-        f"От: Анон [<code>{sender_anon}</code>]\n"
-        f"Кому: Анон [<code>{target_anon}</code>]\n"
-        f"Сумма: <b>{amount:,} ₪</b>\n"
-        f"{fee_note}\n\n"
-        f"💳 Твой остаток: <code>{int(new_sender_bal):,} ₪</code>",
+        f"💸 <b>ПЕРЕВОД УСПЕШНО ПРОВЕДЁН!</b>\n\n"
+        f"📤 <b>Отправитель:</b> [<code>{sender_anon}</code>]\n"
+        f"📥 <b>Получатель:</b> [<code>{target_anon}</code>]\n"
+        f"💰 <b>Сумма:</b> <code>+{amount:,} ₪</code>\n"
+        f"🏛 <b>Налог Абу:</b> {fee_str}\n"
+        f"💳 <b>Твой остаток:</b> <code>{int(new_sender_bal):,} ₪</code>\n\n"
+        f"<i>{flavor}</i>",
         parse_mode="HTML"
     )
 
@@ -7309,9 +7511,10 @@ async def cmd_pay(message: types.Message, board_id: str | None, stream: str = 'r
     try:
         await message.bot.send_message(
             target_user_id,
-            f"💰 <b>ТЕБЕ ПРИШЛИ ШЕКЕЛИ!</b>\n\n"
-            f"Анон [<code>{sender_anon}</code>] перевел тебе <b>+{amount:,} ₪</b>!\n"
-            f"💳 Твой новый баланс: <code>{int(receiver_bal):,} ₪</code>",
+            f"💰 <b>ТЕБЕ ПРИВАЛИЛИ ШЕКЕЛИ!</b>\n\n"
+            f"Щедрый анон [<code>{sender_anon}</code>] подогрел тебя на <b>+{amount:,} ₪</b>!\n"
+            f"💳 Твой новый баланс: <code>{int(receiver_bal):,} ₪</code>\n\n"
+            f"<i>Можешь спустить их в /casino или купить заточку в /shop</i>",
             parse_mode="HTML"
         )
     except Exception:
