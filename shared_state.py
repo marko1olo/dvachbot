@@ -633,11 +633,32 @@ async def enqueue_board_message(board_id: str, item: dict) -> bool:
 
 
 # --- Archive Config ---
-MIRROR_CHANNELS = [
-    -1003549106152, 
-    -1003651702446,
-    -1003614166511, 
-]
+def _parse_archive_mirror_channels() -> list[int]:
+    raw = os.getenv("ARCHIVE_CHANNELS") or os.getenv("MIRROR_CHANNELS")
+    if raw:
+        channels = []
+        for ch in raw.split(","):
+            ch = ch.strip()
+            if ch:
+                try:
+                    cid = int(ch)
+                    if cid != 0:
+                        channels.append(cid)
+                except ValueError:
+                    pass
+        if channels:
+            return channels
+    archive_single = os.getenv("ARCHIVE_CHANNEL_ID")
+    if archive_single:
+        try:
+            cid = int(archive_single.strip())
+            if cid != 0:
+                return [cid]
+        except ValueError:
+            pass
+    return [-1003549106152, -1003651702446]
+
+MIRROR_CHANNELS = _parse_archive_mirror_channels()
 
 ARCHIVE_CHANNEL_ID = int(os.getenv("ARCHIVE_CHANNEL_ID", -1002827087363))
 

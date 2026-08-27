@@ -124,7 +124,7 @@ def _db_counts() -> dict:
             except: pass
             try: conn.execute('PRAGMA busy_timeout=15000')
             except: pass
-            try: conn.execute('PRAGMA wal_autocheckpoint=1000')
+            try: conn.execute('PRAGMA wal_autocheckpoint=500')
             except: pass
             cur = conn.cursor()
             result["quick_check"] = cur.execute("PRAGMA quick_check").fetchone()[0]

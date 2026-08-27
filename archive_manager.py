@@ -20,6 +20,23 @@ from common.database import add_channel_copy
 
 logger = logging.getLogger(__name__)
 
+_INACCESSIBLE_CHANNELS: set[int] = set()
+
+
+def _is_chat_not_found_or_forbidden(e: Exception) -> bool:
+    err_str = str(e).lower()
+    return (
+        "chat not found" in err_str
+        or "channel not found" in err_str
+        or "chat_id is empty" in err_str
+        or "chat is not accessible" in err_str
+        or "chat_not_found" in err_str
+        or "bot was blocked" in err_str
+        or "bot was kicked" in err_str
+        or "bot is not a member" in err_str
+        or "peer_id_invalid" in err_str
+    )
+
 
 def _build_archive_header(board_id: str, post_num: int, content: dict, lang: str) -> str:
     raw_header = content.get('header', f"Пост №{post_num}")
@@ -244,6 +261,11 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
         group = await _build_group(force_download=False)
         sent_msgs = await sender_bot.send_media_group(channel_id, media=group, request_timeout=60)
     except TelegramBadRequest as e:
+        if _is_chat_not_found_or_forbidden(e):
+            if channel_id not in _INACCESSIBLE_CHANNELS:
+                _INACCESSIBLE_CHANNELS.add(channel_id)
+                logger.warning(f"⚠️ [Archive] Channel {channel_id} not found/inaccessible on media group ({e}). Disabling mirror for this channel.")
+            return None, []
         logger.warning(f"⚠️ TelegramBadRequest on media group ({e}). Forcing download fallback...")
         try:
             group = await _build_group(force_download=True)
@@ -254,6 +276,11 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
             logger.error(f"❌ Media group fallback failed: {ex}. Sending as text...")
             msg = await _send_text_fallback()
             return msg, []
+    except TelegramForbiddenError as e:
+        if channel_id not in _INACCESSIBLE_CHANNELS:
+            _INACCESSIBLE_CHANNELS.add(channel_id)
+            logger.warning(f"⚠️ [Archive] Channel {channel_id} forbidden on media group ({e}). Disabling mirror for this channel.")
+        return None, []
     except TelegramRetryAfter:
         raise
     except (TelegramNetworkError, asyncio.TimeoutError) as net_err:
@@ -261,6 +288,11 @@ async def _send_archive_media_group(sender_bot, channel_id: int, content: dict, 
         msg = await _send_text_fallback()
         return msg, []
     except Exception as e:
+        if _is_chat_not_found_or_forbidden(e):
+            if channel_id not in _INACCESSIBLE_CHANNELS:
+                _INACCESSIBLE_CHANNELS.add(channel_id)
+                logger.warning(f"⚠️ [Archive] Channel {channel_id} not found/inaccessible ({e}). Disabling mirror for this channel.")
+            return None, []
         logger.error(f"⚠️ Failed to send archive media group to channel {channel_id}: {e}")
         msg = await _send_text_fallback()
         return msg, []
@@ -344,6 +376,11 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
     try:
         sent_message = await _do_send(media_source)
     except TelegramBadRequest as e:
+        if _is_chat_not_found_or_forbidden(e):
+            if channel_id not in _INACCESSIBLE_CHANNELS:
+                _INACCESSIBLE_CHANNELS.add(channel_id)
+                logger.warning(f"⚠️ [Archive] Channel {channel_id} not found/inaccessible ({e}). Disabling mirror for this channel.")
+            return None, []
         err_str = str(e).lower()
         if "can't parse entities" in err_str or "find end tag" in err_str:
             common_args["parse_mode"] = None
@@ -359,6 +396,11 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
                 try:
                     sent_message = await _do_send(BufferedInputFile(file_bytes, filename=filename))
                 except TelegramBadRequest as be:
+                    if _is_chat_not_found_or_forbidden(be):
+                        if channel_id not in _INACCESSIBLE_CHANNELS:
+                            _INACCESSIBLE_CHANNELS.add(channel_id)
+                            logger.warning(f"⚠️ [Archive] Channel {channel_id} not found/inaccessible on buffer send ({be}). Disabling mirror for this channel.")
+                        return None, []
                     b_err_str = str(be).lower()
                     if "can't parse entities" in b_err_str or "find end tag" in b_err_str:
                         common_args["parse_mode"] = None
@@ -373,6 +415,11 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
                     return None, []
             else:
                 return None, []
+    except TelegramForbiddenError as e:
+        if channel_id not in _INACCESSIBLE_CHANNELS:
+            _INACCESSIBLE_CHANNELS.add(channel_id)
+            logger.warning(f"⚠️ [Archive] Channel {channel_id} forbidden on single media ({e}). Disabling mirror for this channel.")
+        return None, []
     except TelegramRetryAfter:
         raise
     except (TelegramNetworkError, asyncio.TimeoutError) as net_err:
@@ -380,6 +427,11 @@ async def _send_archive_single_media(sender_bot, channel_id: int, content: dict,
         msg = await _send_single_text_fallback()
         return msg, []
     except Exception as e:
+        if _is_chat_not_found_or_forbidden(e):
+            if channel_id not in _INACCESSIBLE_CHANNELS:
+                _INACCESSIBLE_CHANNELS.add(channel_id)
+                logger.warning(f"⚠️ [Archive] Channel {channel_id} not found/inaccessible ({e}). Disabling mirror for this channel.")
+            return None, []
         logger.warning(f"⚠️ Failed to send single archive media ({ct_str}) to channel {channel_id}: {e}")
         msg = await _send_single_text_fallback()
         return msg, []
@@ -448,7 +500,9 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
         except TelegramRetryAfter as e:
             await asyncio.sleep(e.retry_after + 1)
         except TelegramForbiddenError as e:
-            logger.warning(f"Archive destination invalid or bot kicked ({channel_id}): {e}")
+            if channel_id not in _INACCESSIBLE_CHANNELS:
+                _INACCESSIBLE_CHANNELS.add(channel_id)
+                logger.warning(f"⚠️ [Archive] Destination forbidden ({channel_id}): {e}. Disabling forwarding to this channel.")
             break
         except TelegramBadRequest as e:
             err_msg = str(e).lower()
@@ -467,9 +521,19 @@ async def _send_archive_media(sender_bot, channel_id: int, content: dict, conten
                     return sent_message, new_files_data
                 except Exception:
                     pass
-            logger.warning(f"Archive TelegramBadRequest ({channel_id}): {e}")
+            if _is_chat_not_found_or_forbidden(e):
+                if channel_id not in _INACCESSIBLE_CHANNELS:
+                    _INACCESSIBLE_CHANNELS.add(channel_id)
+                    logger.warning(f"⚠️ [Archive] Channel {channel_id} not found/inaccessible ({e}). Disabling mirror for this channel.")
+            else:
+                logger.warning(f"Archive TelegramBadRequest ({channel_id}): {e}")
             break
         except Exception as e:
+            if _is_chat_not_found_or_forbidden(e):
+                if channel_id not in _INACCESSIBLE_CHANNELS:
+                    _INACCESSIBLE_CHANNELS.add(channel_id)
+                    logger.warning(f"⚠️ [Archive] Channel {channel_id} not found/inaccessible ({e}). Disabling mirror for this channel.")
+                break
             logger.warning(f"Archive media sending error on attempt {attempt}: {e}")
             break
     return None, []
@@ -500,12 +564,20 @@ async def _update_archive_post_content(post_num: int, content: dict, content_typ
     await update_post_content(post_num, new_content)
 
 async def post_archive_to_channel(bots: dict[str, Bot], file_path: str, board_id: str, thread_info: dict) -> None:
+    if not ARCHIVE_CHANNEL_ID or ARCHIVE_CHANNEL_ID == 0 or ARCHIVE_CHANNEL_ID in _INACCESSIBLE_CHANNELS:
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except OSError:
+            pass
+        return
 
     bot_instance = bots.get(shared_state.ARCHIVE_POSTING_BOT_ID)
     if not bot_instance:
         print(f"⛔ Ошибка: бот для постинга архивов ('{shared_state.ARCHIVE_POSTING_BOT_ID}') не найден в списке активных ботов.")
         try:
-            os.remove(file_path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
         except OSError: pass
         return
     try:
@@ -526,7 +598,12 @@ async def post_archive_to_channel(bots: dict[str, Bot], file_path: str, board_id
         )
         print(f"✅ Архив треда '{title}' отправлен в канал {ARCHIVE_CHANNEL_ID}.")
     except Exception as e:
-        print(f"⛔ Не удалось отправить архив в канал {ARCHIVE_CHANNEL_ID}: {e}")
+        if _is_chat_not_found_or_forbidden(e):
+            if ARCHIVE_CHANNEL_ID not in _INACCESSIBLE_CHANNELS:
+                _INACCESSIBLE_CHANNELS.add(ARCHIVE_CHANNEL_ID)
+                logger.warning(f"⚠️ [Archive] Archive channel {ARCHIVE_CHANNEL_ID} not found/inaccessible: {e}")
+        else:
+            print(f"⛔ Не удалось отправить архив в канал {ARCHIVE_CHANNEL_ID}: {e}")
     finally:
         try:
             if os.path.exists(file_path):
@@ -670,6 +747,8 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
     Отправляет уведомление о "счастливом" посте (гет/квадрипл/пентипл и т.д.) в канал архивов/новостей.
     Надежно обрабатывает все типы медиа, экранирует HTML и сохраняет связку копии в БД.
     """
+    if not ARCHIVE_CHANNEL_ID or ARCHIVE_CHANNEL_ID == 0 or ARCHIVE_CHANNEL_ID in _INACCESSIBLE_CHANNELS:
+        return
     try:
         # 1. Надежный поиск бота для отправки
         bot_instance = (bots.get(board_id) if bots else None) or \
@@ -752,6 +831,11 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
                 print(f"✅ Уведомление о счастливом посте #{post_num} ({label}) отправлено в канал.")
                 return
 
+            except TelegramForbiddenError as e:
+                if ARCHIVE_CHANNEL_ID not in _INACCESSIBLE_CHANNELS:
+                    _INACCESSIBLE_CHANNELS.add(ARCHIVE_CHANNEL_ID)
+                    logger.warning(f"⚠️ [Archive] Destination forbidden ({ARCHIVE_CHANNEL_ID}): {e}")
+                return
             except TelegramRetryAfter as e:
                 wait_time = e.retry_after + 1
                 print(f"⚠️ API Limit on happy post #{post_num}. Waiting {wait_time}s...")
@@ -764,6 +848,11 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
                 else:
                     raise e
             except TelegramBadRequest as e:
+                if _is_chat_not_found_or_forbidden(e):
+                    if ARCHIVE_CHANNEL_ID not in _INACCESSIBLE_CHANNELS:
+                        _INACCESSIBLE_CHANNELS.add(ARCHIVE_CHANNEL_ID)
+                        logger.warning(f"⚠️ [Archive] Archive channel {ARCHIVE_CHANNEL_ID} not found/inaccessible: {e}")
+                    return
                 print(f"❌ BadRequest on happy post #{post_num}: {e}. Trying text fallback...")
                 try:
                     final_text_for_message = prepare_telegram_text(caption_text, max_len=4096)
@@ -785,6 +874,11 @@ async def post_special_num_to_channel(bots: dict[str, Bot], board_id: str, post_
                     print(f"❌ Финальная попытка отправки текста для #{post_num} также провалилась: {final_e}")
                 return
     except Exception as e:
+        if _is_chat_not_found_or_forbidden(e):
+            if ARCHIVE_CHANNEL_ID not in _INACCESSIBLE_CHANNELS:
+                _INACCESSIBLE_CHANNELS.add(ARCHIVE_CHANNEL_ID)
+                logger.warning(f"⚠️ [Archive] Archive channel {ARCHIVE_CHANNEL_ID} not found/inaccessible: {e}")
+            return
         import traceback
         print(f"⛔ Не удалось отправить счастливый пост #{post_num} в канал после всех попыток: {e}\n{traceback.format_exc()}")
 
@@ -819,7 +913,7 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
 
     db_updated = False
     for channel_id in MIRROR_CHANNELS:
-        if not channel_id or channel_id == 0:
+        if not channel_id or channel_id == 0 or channel_id in _INACCESSIBLE_CHANNELS:
             continue
         try:
             from common.database import get_pool
@@ -833,11 +927,15 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
         sent_message = None
         new_files_data = []
         for try_bot in all_bots:
+            if channel_id in _INACCESSIBLE_CHANNELS:
+                break
             sent_message, new_files_data = await _send_archive_media(try_bot, channel_id, content, content_type, text_to_send, header_text)
             if sent_message is not None:
                 sender_bot_id = getattr(try_bot, 'id', sender_bot_id)
                 break
-            # _send_archive_media logs and returns None on ForbiddenError — try next bot
+            if channel_id in _INACCESSIBLE_CHANNELS:
+                # Fatal channel error occurred, do not spam all remaining bots
+                break
 
         if sent_message:
             try:
@@ -847,6 +945,6 @@ async def _forward_post_to_realtime_archive(bot_instance: Bot, board_id: str, po
                     db_updated = True
             except Exception:
                 pass
-        else:
+        elif channel_id not in _INACCESSIBLE_CHANNELS:
             logger.warning(f"⚠️ [Archive] Пост #{post_num} не удалось доставить в канал {channel_id} — все боты недоступны или не имеют доступа.")
 

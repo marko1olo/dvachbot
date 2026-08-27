@@ -6953,7 +6953,7 @@ def _generate_stats_charts_locked(board_id: str) -> list[bytes]:
     except Exception: pass
     try: con.execute('PRAGMA busy_timeout=15000')
     except Exception: pass
-    try: con.execute('PRAGMA wal_autocheckpoint=1000')
+    try: con.execute('PRAGMA wal_autocheckpoint=500')
     except Exception: pass
     try:
         cur = con.cursor()

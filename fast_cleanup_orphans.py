@@ -8,7 +8,7 @@ def clean_post_copies():
     except: pass
     try: conn.execute('PRAGMA busy_timeout=15000')
     except: pass
-    try: conn.execute('PRAGMA wal_autocheckpoint=1000')
+    try: conn.execute('PRAGMA wal_autocheckpoint=500')
     except: pass
     cursor = conn.cursor()
     

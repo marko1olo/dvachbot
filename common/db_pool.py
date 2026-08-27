@@ -172,7 +172,7 @@ async def get_pool():
                 await conn.execute("PRAGMA cache_size = -131072;")
 
                 await conn.execute("PRAGMA foreign_keys = ON;")
-                await conn.execute("PRAGMA wal_autocheckpoint=1000;")
+                await conn.execute("PRAGMA wal_autocheckpoint=500;")
                 # Нет await conn.commit(), так как мы в режиме autocommit (isolation_level=None)
                 
                 _db_connection = conn

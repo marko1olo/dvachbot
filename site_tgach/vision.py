@@ -389,8 +389,15 @@ async def describe_image(file_paths, caption: str = None, is_passive: bool = Fal
                                     return json.dumps({"tags": synthesized_tags, "description": extracted_desc}, ensure_ascii=False)
 
                             else:
-                                 # Empty response (Safety filter or empty candidates)
-                                 logger.info(f"ℹ️ [VISION] [{source}] {provider} ({model_name}) safety filter or empty response. Falling back to next candidate...")
+                                 # Empty response = safety filter censored the image.
+                                 # If this is Gemini, skip ALL remaining Gemini models immediately —
+                                 # they share the same safety filter and will all block the same image.
+                                 # Jump straight to Groq.
+                                 if provider == "gemini":
+                                     logger.info(f"ℹ️ [VISION] [{source}] gemini ({model_name}) safety filter — skipping all Gemini models, trying Groq next.")
+                                     skip_gemini_models = True
+                                 else:
+                                     logger.info(f"ℹ️ [VISION] [{source}] {provider} ({model_name}) safety filter or empty response. Falling back to next candidate...")
                                  break
                         except Exception as e:
                             err_str = str(e).lower()

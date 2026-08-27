@@ -1004,7 +1004,7 @@ async def initialize_database():
             except: pass
             try: await db.execute('PRAGMA busy_timeout=15000')
             except: pass
-            try: await db.execute('PRAGMA wal_autocheckpoint=1000')
+            try: await db.execute('PRAGMA wal_autocheckpoint=500')
             except: pass
             # Настройки соединения
             await db.execute("PRAGMA busy_timeout = 30000;")
@@ -1118,7 +1118,7 @@ async def is_database_migrated() -> bool:
         except: pass
         try: await db.execute('PRAGMA busy_timeout=15000')
         except: pass
-        try: await db.execute('PRAGMA wal_autocheckpoint=1000')
+        try: await db.execute('PRAGMA wal_autocheckpoint=500')
         except: pass
         await db.execute("PRAGMA journal_mode=WAL;")
         await db.execute("PRAGMA mmap_size = 268435456;")
@@ -3633,7 +3633,7 @@ def cleanup_old_posts_from_db(limit: int = 50000):
             except: pass
             try: con.execute('PRAGMA busy_timeout=60000')
             except: pass
-            try: con.execute('PRAGMA wal_autocheckpoint=1000')
+            try: con.execute('PRAGMA wal_autocheckpoint=500')
             except: pass
             try: con.execute('PRAGMA foreign_keys=ON')
             except: pass
@@ -8349,7 +8349,7 @@ def get_db_connection():
             except: pass
             try: await self.conn.execute('PRAGMA busy_timeout=15000')
             except: pass
-            try: await self.conn.execute('PRAGMA wal_autocheckpoint=1000')
+            try: await self.conn.execute('PRAGMA wal_autocheckpoint=500')
             except: pass
             await self.conn.execute("PRAGMA busy_timeout = 60000;")
             await self.conn.execute("PRAGMA journal_mode=WAL;")
