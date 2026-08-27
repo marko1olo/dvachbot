@@ -656,7 +656,7 @@ def _parse_archive_mirror_channels() -> list[int]:
                 return [cid]
         except ValueError:
             pass
-    return [-1003549106152, -1003651702446]
+    return [-1003549106152, -1003651702446, -1003614166511]
 
 MIRROR_CHANNELS = _parse_archive_mirror_channels()
 
