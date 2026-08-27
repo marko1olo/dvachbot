@@ -205,7 +205,7 @@ BOARD_CONFIG = {
         "category": "system",
         "description": {"ru": "International", "en": "International", "jp": "国際"},
         "color1": "#2980b9", "color2": "#7f8c8d",
-        "username": "@tgach_chatbot", "token": parse_token(os.getenv("INT_BOT_TOKEN")), "admins": parse_admins(os.getenv("INT_ADMINS", ""))
+        "username": "@tgchan_chatbot", "token": parse_token(os.getenv("INT_BOT_TOKEN")), "admins": parse_admins(os.getenv("INT_ADMINS", ""))
     },
     'meta': {
         "name": "/meta/",

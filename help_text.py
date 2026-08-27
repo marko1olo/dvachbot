@@ -132,29 +132,22 @@ HELP_HUB_PAGES_RU = {
     ),
     "boards": (
         "🌐 <b>Каталог Борд &amp; Каналов ТГАЧ</b>\n\n"
-        "Сеть анонимных Telegram-борд нового поколения. Все доски связаны единой экономикой, шекелями и базой!\n\n"
-        "⚡ <b>Основные:</b>\n"
+        "Сеть анонимных Telegram-борд и веб-разделов единой экосистемы ТГАЧ!\n\n"
+        "🤖 <b>Живые доски прямо в Telegram (боты):</b>\n"
         "• <b>/b/</b> (@dvach_chatbot) — Свободное общение\n"
         "• <b>/a/</b> (@dvach_a_chatbot) — Аниме и Манга\n"
-        "• <b>/po/</b> (@dvach_po_chatbot) — Политика и дебаты\n\n"
-        "🔞 <b>Биопроблемы:</b>\n"
-        "• <b>/sex/</b> (@dvach_sex_chatbot) — Секс и отношения\n"
-        "• <b>/soc/</b> (@tgach_soc_bot) — Знакомства и общение\n"
-        "• <b>/h/</b> (@tgach_h_bot) — Хентай и 18+ арты\n"
-        "• <b>/bunker/</b> (@tgach_bunker_bot) — Убежище и рефуджи\n\n"
-        "🎮 <b>Тематические доски:</b>\n"
-        "• <b>/vg/</b> (@dvach_vg_chatbot) | <b>/v/</b> (@tgach_v_bot) — Видеоигры\n"
-        "• <b>/tech/</b> (@tgach_tech_bot) | <b>/ai/</b> (@tgach_ai_bot) — IT &amp; Нейросети\n"
-        "• <b>/wh40k/</b> (@tgach_wh40k_bot) — Warhammer 40,000\n"
-        "• <b>/mu/</b> (@tgach_mu_bot) | <b>/tv/</b> (@tgach_tv_bot) — Музыка &amp; Кино\n"
-        "• <b>/fit/</b> (@tgach_fit_bot) | <b>/me/</b> (@tgach_me_bot) — Фитнес &amp; Медицина\n"
-        "• <b>/sci/</b> (@tgach_sci_bot) | <b>/biz/</b> (@tgach_biz_bot) — Наука &amp; Бизнес\n"
-        "• <b>/news/</b> (@tgach_news_bot) | <b>/fa/</b> (@tgach_fa_bot) — Новости &amp; Мода\n"
-        "• <b>/x/</b> (@tgach_x_bot) | <b>/vt/</b> (@tgach_vt_bot) | <b>/au/</b> (@tgach_au_bot) — Мистика, VT, Авто\n\n"
-        "🏛 <b>Система &amp; Интернационал:</b>\n"
-        "• <b>/int/</b> (@tgach_chatbot) — International board\n"
+        "• <b>/po/</b> (@dvach_po_chatbot) — Политика и дебаты\n"
+        "• <b>/sex/</b> (@dvach_sex_chatbot) — Секс и биопроблемы\n"
+        "• <b>/vg/</b> (@dvach_vg_chatbot) — Геймдев и треды видеоигр\n"
+        "• <b>/v/</b> (@tgach_v_bot) — Видеоигры и консоли\n"
+        "• <b>/tech/</b> (@tgach_tech_bot) — IT, софт и технологии\n"
+        "• <b>/ai/</b> (@tgach_ai_bot) — AI &amp; Нейросети\n"
+        "• <b>/news/</b> (@tgach_news_bot) — Новости\n"
+        "• <b>/int/</b> (@tgchan_chatbot) — International board\n"
         "• <b>/meta/</b> (@tgach_meta_bot) — Работа борды\n"
-        "• <b>/thread/</b> (@thread_chatbot) — Техраздел &amp; треды\n\n"
+        "• <b>/thread/</b> (@thread_chatbot) — Каталог и отдельные треды\n\n"
+        "🌐 <b>Тематические доски на сайте (<a href=\"https://tgach.top\">tgach.top</a>):</b>\n"
+        "• /soc/ (Знакомства), /h/ (Хентай), /bunker/ (Убежище), /fit/ (Фитнес), /me/ (Медицина), /tv/ (Кино/ТВ), /sci/ (Наука), /wh40k/ (Warhammer), /biz/ (Бизнес), /mu/ (Музыка), /fa/ (Мода), /x/ (Мистика), /vt/ (Витьюберы), /au/ (Авто)\n\n"
         "📢 <b>Официальные Telegram-каналы:</b>\n"
         "• <b>Новости &amp; Апдейты:</b> @tgach_bot\n"
         "• <b>Вечный архив тредов:</b> @tgchan_archive\n\n"
@@ -267,29 +260,22 @@ HELP_HUB_PAGES_EN = {
     ),
     "boards": (
         "🌐 <b>TGACH Boards &amp; Channels Hub</b>\n\n"
-        "Next-generation network of anonymous Telegram imageboards, unified under one economy and archive!\n\n"
-        "⚡ <b>Core Boards:</b>\n"
+        "Next-generation anonymous ecosystem with live Telegram boards and web portals!\n\n"
+        "🤖 <b>Active Telegram Boards (Bots):</b>\n"
         "• <b>/b/</b> (@dvach_chatbot) — General Discussion\n"
         "• <b>/a/</b> (@dvach_a_chatbot) — Anime &amp; Manga\n"
-        "• <b>/po/</b> (@dvach_po_chatbot) — Politics &amp; Debates\n\n"
-        "🔞 <b>Adult &amp; Social:</b>\n"
+        "• <b>/po/</b> (@dvach_po_chatbot) — Politics &amp; Debates\n"
         "• <b>/sex/</b> (@dvach_sex_chatbot) — Sex &amp; Relationships\n"
-        "• <b>/soc/</b> (@tgach_soc_bot) — Social &amp; Dating\n"
-        "• <b>/h/</b> (@tgach_h_bot) — Hentai &amp; 18+ Art\n"
-        "• <b>/bunker/</b> (@tgach_bunker_bot) — Bunker / Refuge\n\n"
-        "🎮 <b>Thematic Boards:</b>\n"
-        "• <b>/vg/</b> (@dvach_vg_chatbot) | <b>/v/</b> (@tgach_v_bot) — Video Games\n"
-        "• <b>/tech/</b> (@tgach_tech_bot) | <b>/ai/</b> (@tgach_ai_bot) — Technology &amp; AI\n"
-        "• <b>/wh40k/</b> (@tgach_wh40k_bot) — Warhammer 40,000\n"
-        "• <b>/mu/</b> (@tgach_mu_bot) | <b>/tv/</b> (@tgach_tv_bot) — Music &amp; Cinema\n"
-        "• <b>/fit/</b> (@tgach_fit_bot) | <b>/me/</b> (@tgach_me_bot) — Fitness &amp; Medicine\n"
-        "• <b>/sci/</b> (@tgach_sci_bot) | <b>/biz/</b> (@tgach_biz_bot) — Science &amp; Business\n"
-        "• <b>/news/</b> (@tgach_news_bot) | <b>/fa/</b> (@tgach_fa_bot) — News &amp; Fashion\n"
-        "• <b>/x/</b> (@tgach_x_bot) | <b>/vt/</b> (@tgach_vt_bot) | <b>/au/</b> (@tgach_au_bot) — Paranormal, VTubers, Auto\n\n"
-        "🏛 <b>System &amp; International:</b>\n"
-        "• <b>/int/</b> (@tgach_chatbot) — International Board\n"
+        "• <b>/vg/</b> (@dvach_vg_chatbot) — Video Game Generals\n"
+        "• <b>/v/</b> (@tgach_v_bot) — Video Games &amp; Consoles\n"
+        "• <b>/tech/</b> (@tgach_tech_bot) — Tech, Software &amp; IT\n"
+        "• <b>/ai/</b> (@tgach_ai_bot) — AI &amp; Neural Nets\n"
+        "• <b>/news/</b> (@tgach_news_bot) — News\n"
+        "• <b>/int/</b> (@tgchan_chatbot) — International Board\n"
         "• <b>/meta/</b> (@tgach_meta_bot) — Board Operations\n"
-        "• <b>/thread/</b> (@thread_chatbot) — Tech Support &amp; Threads\n\n"
+        "• <b>/thread/</b> (@thread_chatbot) — Catalog &amp; Custom Threads\n\n"
+        "🌐 <b>Web Boards (<a href=\"https://tgach.top\">tgach.top</a>):</b>\n"
+        "• /soc/ (Social), /h/ (Hentai), /bunker/ (Refuge), /fit/ (Fitness), /me/ (Medicine), /tv/ (TV/Cinema), /sci/ (Science), /wh40k/ (Warhammer), /biz/ (Business), /mu/ (Music), /fa/ (Fashion), /x/ (Paranormal), /vt/ (VTubers), /au/ (Auto)\n\n"
         "📢 <b>Official Telegram Channels:</b>\n"
         "• <b>News &amp; Updates:</b> @tgach_bot\n"
         "• <b>Permanent Post Archive:</b> @tgchan_archive\n\n"
@@ -397,29 +383,22 @@ HELP_HUB_PAGES_JP = {
     ),
     "boards": (
         "🌐 <b>TGちゃん 板＆チャンネル一覧</b>\n\n"
-        "次世代の匿名画像掲示板ネットワーク！すべての板でシェケル経済とアーカイブが共有されています。\n\n"
-        "⚡ <b>メイン板:</b>\n"
+        "Telegram上のリアルタイム掲示板とWebポータルからなる次世代匿名ネットワーク！\n\n"
+        "🤖 <b>Telegram上で稼働中の板（ボット）:</b>\n"
         "• <b>/b/</b> (@dvach_chatbot) — 雑談・何でもあり\n"
         "• <b>/a/</b> (@dvach_a_chatbot) — アニメ＆マンガ\n"
-        "• <b>/po/</b> (@dvach_po_chatbot) — 政治・時事\n\n"
-        "🔞 <b>大人向け＆出会い:</b>\n"
+        "• <b>/po/</b> (@dvach_po_chatbot) — 政治・時事\n"
         "• <b>/sex/</b> (@dvach_sex_chatbot) — セックス＆恋愛\n"
-        "• <b>/soc/</b> (@tgach_soc_bot) — 出会い・交流\n"
-        "• <b>/h/</b> (@tgach_h_bot) — 変態＆エッチアート\n"
-        "• <b>/bunker/</b> (@tgach_bunker_bot) — 避難所\n\n"
-        "🎮 <b>テーマ板:</b>\n"
-        "• <b>/vg/</b> (@dvach_vg_chatbot) | <b>/v/</b> (@tgach_v_bot) — ゲーム全般\n"
-        "• <b>/tech/</b> (@tgach_tech_bot) | <b>/ai/</b> (@tgach_ai_bot) — 技術＆AI\n"
-        "• <b>/wh40k/</b> (@tgach_wh40k_bot) — ウォーハンマー40K\n"
-        "• <b>/mu/</b> (@tgach_mu_bot) | <b>/tv/</b> (@tgach_tv_bot) — 音楽＆映画\n"
-        "• <b>/fit/</b> (@tgach_fit_bot) | <b>/me/</b> (@tgach_me_bot) — 健康＆医学\n"
-        "• <b>/sci/</b> (@tgach_sci_bot) | <b>/biz/</b> (@tgach_biz_bot) — 科学＆ビジネス\n"
-        "• <b>/news/</b> (@tgach_news_bot) | <b>/fa/</b> (@tgach_fa_bot) — ニュース＆ファッション\n"
-        "• <b>/x/</b> (@tgach_x_bot) | <b>/vt/</b> (@tgach_vt_bot) | <b>/au/</b> (@tgach_au_bot) — オカルト、VTuber、車\n\n"
-        "🏛 <b>システム＆国際:</b>\n"
-        "• <b>/int/</b> (@tgach_chatbot) — 国際英語板\n"
+        "• <b>/vg/</b> (@dvach_vg_chatbot) — ゲーム全般・開発\n"
+        "• <b>/v/</b> (@tgach_v_bot) — ビデオゲーム・コンシューマ\n"
+        "• <b>/tech/</b> (@tgach_tech_bot) — 技術＆IT\n"
+        "• <b>/ai/</b> (@tgach_ai_bot) — AI＆ニューラルネット\n"
+        "• <b>/news/</b> (@tgach_news_bot) — ニュース速報\n"
+        "• <b>/int/</b> (@tgchan_chatbot) — 国際英語板\n"
         "• <b>/meta/</b> (@tgach_meta_bot) — 運営・要望\n"
-        "• <b>/thread/</b> (@thread_chatbot) — 技術板＆スレッド\n\n"
+        "• <b>/thread/</b> (@thread_chatbot) — 技術板＆個別スレッド\n\n"
+        "🌐 <b>Web限定板 (<a href=\"https://tgach.top\">tgach.top</a>):</b>\n"
+        "• /soc/ (出会い), /h/ (変態), /bunker/ (避難所), /fit/ (健康), /me/ (医学), /tv/ (映画), /sci/ (科学), /wh40k/ (WH40K), /biz/ (ビジネス), /mu/ (音楽), /fa/ (ファッション), /x/ (オカルト), /vt/ (VTuber), /au/ (自動車)\n\n"
         "📢 <b>公式Telegramチャンネル:</b>\n"
         "• <b>速報・アプデ:</b> @tgach_bot\n"
         "• <b>永久ログ保管庫:</b> @tgchan_archive\n\n"
@@ -516,17 +495,12 @@ BOARD_LIST_HEADERS_JP = [
 
 def generate_boards_list(board_configs: dict, lang: str = 'ru') -> str:
     """
-    Генерирует список досок, выбирая описание на нужном языке.
-    Убирает мусор вида {'ru': '...'} из вывода.
+    Генерирует честный каталог досок:
+    - Разделяет живые Telegram-боты (с токенами в .env)
+    - И веб-доски на сайте (доступные на tgach.top)
     """
-    if lang == 'en':
-        header = random.choice(BOARD_LIST_HEADERS_EN)
-    elif lang == 'jp':
-        header = random.choice(BOARD_LIST_HEADERS_JP)
-    else:
-        header = random.choice(BOARD_LIST_HEADERS_RU)
-
-    board_lines = []
+    tg_lines = []
+    web_names = []
 
     for b_id, config in board_configs.items():
         if b_id == 'test':
@@ -537,17 +511,27 @@ def generate_boards_list(board_configs: dict, lang: str = 'ru') -> str:
         desc_str = ""
 
         if isinstance(raw_desc, dict):
-            # Пытаемся взять нужный язык, если нет — английский, если нет — первый попавшийся
             desc_str = raw_desc.get(lang) or raw_desc.get('en') or list(raw_desc.values())[0]
         else:
             desc_str = str(raw_desc) if raw_desc else ""
 
-        # Формат: /b/ Описание - @link
-        board_lines.append(
-            f"<b>{config['name']}</b> {desc_str} - {config['username']}"
-        )
+        has_token = bool(config.get("token"))
+        if has_token:
+            tg_lines.append(f"• <b>{config['name']}</b> {desc_str} — {config['username']}")
+        else:
+            web_names.append(f"<b>{config['name']}</b> ({desc_str})")
 
-    return f"{header}\n" + "\n".join(board_lines)
+    if lang == 'en':
+        tg_header = "🤖 <b>Telegram Boards (Active Bots):</b>"
+        web_header = "🌐 <b>Web Boards (<a href=\"https://tgach.top\">tgach.top</a>):</b>"
+    elif lang == 'jp':
+        tg_header = "🤖 <b>Telegram 板（稼働中ボット）:</b>"
+        web_header = "🌐 <b>Web 板 (<a href=\"https://tgach.top\">tgach.top</a>):</b>"
+    else:
+        tg_header = "🤖 <b>Доски прямо в Telegram (живые боты):</b>"
+        web_header = "🌐 <b>Доски на сайте (<a href=\"https://tgach.top\">tgach.top</a>):</b>"
+
+    return f"{tg_header}\n" + "\n".join(tg_lines) + f"\n\n{web_header}\n" + ", ".join(web_names)
 
 
 def generate_secondary_welcome_message(board_configs: dict, lang: str = 'ru') -> str:
