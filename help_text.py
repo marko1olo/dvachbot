@@ -549,6 +549,65 @@ def generate_boards_list(board_configs: dict, lang: str = 'ru') -> str:
 
     return f"{header}\n" + "\n".join(board_lines)
 
+
+def generate_secondary_welcome_message(board_configs: dict, lang: str = 'ru') -> str:
+    """
+    Генерирует исчерпывающее второе сообщение новичку:
+    - Полный каталог досок сети ТГАЧ
+    - Базовые команды для жизни на борде
+    - Официальные каналы и архив
+    """
+    boards_block = generate_boards_list(board_configs, lang=lang)
+    if lang == 'en':
+        return (
+            f"{boards_block}\n\n"
+            "⚡ <b>Essential Commands:</b>\n"
+            "• <code>/menu</code> — Interactive main dashboard\n"
+            "• <code>/settings</code> — Content filters and NSFW spoiler toggle\n"
+            "• <code>/wallet</code> — Shekel balance and transactions\n"
+            "• <code>/work</code> — Labor exchange to earn shekels\n"
+            "• <code>/shop</code> — Shadow market (defense & weapons)\n"
+            "• <code>/votemute</code> — Community vote to mute spammers (Reply)\n"
+            "• <code>/help</code> — Full command manual\n\n"
+            "📢 <b>Official Channels & Archive:</b>\n"
+            "• News & Updates: @tgach_bot\n"
+            "• Permanent Thread Archive: @tgchan_archive\n"
+            "• Web Mirror: <a href=\"https://tgach.top\">tgach.top</a>"
+        )
+    elif lang == 'jp':
+        return (
+            f"{boards_block}\n\n"
+            "⚡ <b>基本コマンド:</b>\n"
+            "• <code>/menu</code> — メインダッシュボード\n"
+            "• <code>/settings</code> — フィルター・NSFW設定\n"
+            "• <code>/wallet</code> — シェケル財布と残高\n"
+            "• <code>/work</code> — 労働市場（シェケル稼ぎ）\n"
+            "• <code>/shop</code> — 闇市（武器・防御アイテム）\n"
+            "• <code>/votemute</code> — スパマー追放投票（返信）\n"
+            "• <code>/help</code> — 全コマンドヘルプ\n\n"
+            "📢 <b>公式チャンネル・アーカイブ:</b>\n"
+            "• ニュース: @tgach_bot\n"
+            "• スレッドアーカイブ: @tgchan_archive\n"
+            "• Webミラー: <a href=\"https://tgach.top\">tgach.top</a>"
+        )
+    else:
+        return (
+            f"{boards_block}\n\n"
+            "⚡ <b>Главные команды борды:</b>\n"
+            "• <code>/menu</code> — Главное интерактивное меню\n"
+            "• <code>/settings</code> — Настройки, фильтры слов и спойлеры на 18+\n"
+            "• <code>/wallet</code> — Баланс шекелей и кошелек\n"
+            "• <code>/work</code> — Биржа труда (заработок шекелей)\n"
+            "• <code>/shop</code> — Теневой рынок (мут-ганы, баллончики, броня)\n"
+            "• <code>/votemute</code> — Народный суд: замутить шиза реплаем на 30 мин\n"
+            "• <code>/help</code> — Полный интерактивный справочник\n\n"
+            "📢 <b>Официальные ресурсы:</b>\n"
+            "• Новости и обновления: @tgach_bot\n"
+            "• Вечный архив тредов: @tgchan_archive\n"
+            "• Сайт-зеркало: <a href=\"https://tgach.top\">tgach.top</a>"
+        )
+
+
 THREAD_PROMO_TEXT_RU = [
     (
         "<b>Твоя конфа — тюрьма с админом-вертухаем?</b>\n\n"

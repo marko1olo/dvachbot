@@ -256,7 +256,7 @@ from deanonymizer import (
 )
 from help_text import (
     HELP_TEXT_COMMANDS, HELP_TEXT_EN_COMMANDS, HELP_TEXT_JP_COMMANDS,
-    generate_boards_list,
+    generate_boards_list, generate_secondary_welcome_message,
     THREAD_PROMO_TEXT_RU, THREAD_PROMO_TEXT_EN, THREAD_PROMO_TEXT_JP,
     MODE_INFO_TEXT_RU, MODE_INFO_TEXT_EN, MODE_INFO_TEXT_JP,
     MECHANICS_INFO_TEXT_RU, MECHANICS_INFO_TEXT_EN, MECHANICS_INFO_TEXT_JP,
@@ -3401,48 +3401,77 @@ async def help_broadcaster():
     await asyncio.gather(*tasks)
 async def send_welcome_sequence(bot: Bot, chat_id: int, board_id: str, stream: str = 'ru'):
     """
-    Отправляет новому пользователю приветственную последовательность
-    на выбранном языке (stream).
+    Отправляет новому пользователю структурированную приветственную последовательность:
+    1. Баннер + Манифест анонимной борды + Как общаться (постинг, реплаи, реакции) + Инлайн-кнопки меню.
+    2. Полный каталог досок + Ключевые команды для жизни + Официальные каналы/архивы (всё вместе, без рандома!).
     """
-    lang = stream
-    if not ENABLE_MULTILANG:
-         lang = 'en' if board_id == 'int' else 'ru'
+    lang = stream if ENABLE_MULTILANG else ('en' if board_id == 'int' else 'ru')
+    board_name = BOARD_CONFIG.get(board_id, {}).get('name', f"/{board_id}/")
+
+    # СООБЩЕНИЕ 1: Баннер + Манифест анонимной борды + Как общаться
     if lang == 'en':
-        primary_message = random.choice(HELP_TEXT_EN_COMMANDS)
+        primary_message = (
+            f"⚡ <b>TGACH — Anonymous {board_name} in Telegram</b>\n\n"
+            "🌐 <b>Pure Anonymous Culture:</b>\n"
+            "A reincarnation of classic imageboards right inside Telegram — no VPNs, captchas, or censorship. "
+            "No usernames, profiles, or avatars: identity resets with every post. You are simply Anon among equals.\n\n"
+            "💬 <b>How to participate:</b>\n"
+            "• <b>Create a post:</b> Send any text, photo, video, or sticker to the bot — it instantly publishes to the board under an anonymous number.\n"
+            "• <b>Reply to Anon:</b> Use <b>Reply</b> to any post in the chat to link your answer.\n"
+            "• <b>Reactions:</b> 👍 awards shekels for quality content, 👎 sinks dull posts in sage.\n\n"
+            "☕ <i>Brew some tea and dive into the stream — you are home, Anon.</i>"
+        )
     elif lang == 'jp':
-        primary_message = random.choice(HELP_TEXT_JP_COMMANDS)
+        primary_message = (
+            f"⚡ <b>TGACH — Telegram内の完全匿名 {board_name}</b>\n\n"
+            "🌐 <b>完全匿名の掲示板文化:</b>\n"
+            "VPNやキャプチャなしで直感的に使えるクラシック掲示板。プロフィールやアイコン、履歴は存在せず、言葉そのものが評価される世界です。\n\n"
+            "💬 <b>使い方:</b>\n"
+            "• <b>投稿:</b> テキストや画像、動画を送るだけで、匿名番号で即座に板に流れます。\n"
+            "• <b>返信:</b> メッセージに<b>返信（Reply）</b>するとスレッドが繋がります。\n"
+            "• <b>リアクション:</b> 👍でシェケル獲得、👎でsage。\n\n"
+            "☕ <i>お茶を用意して、混沌のストリームへようこそ。ここは君の居場所だ、名無しさん。</i>"
+        )
     else:
-        primary_message = random.choice(HELP_TEXT_COMMANDS)
+        primary_message = (
+            f"⚡ <b>ТГАЧ — Анонимный {board_name} в Telegram</b>\n\n"
+            "🌐 <b>Культура чистой анонимности:</b>\n"
+            "Реинкарнация классического Двача прямо в телеге — без VPN, капчи и цензуры. "
+            "Профилей, юзернеймов и аватарок нет: личность сбрасывается с каждым постом. Ты просто Анон среди равных.\n\n"
+            "💬 <b>Как здесь общаться:</b>\n"
+            "• <b>Пост в тред:</b> Просто отправь любой текст, фото, видео или стикер боту — оно мгновенно появится на доске под анонимным номером.\n"
+            "• <b>Ответ анону:</b> Сделай <b>Reply (Ответить)</b> на сообщение в чате, чтобы привязать ответ.\n"
+            "• <b>Реакции:</b> 👍 начисляет шекели автору за годный пост, 👎 топит сажей за духоту.\n\n"
+            "☕ <i>Заваривай чай и вкатывайся в вечный тред — ты дома, Анон.</i>"
+        )
+
     try:
         from banner_manager import send_banner_message
-        await send_banner_message(bot, chat_id, caption=primary_message, category="start", parse_mode="HTML")
+        await send_banner_message(
+            bot=bot,
+            chat_id=chat_id,
+            caption=primary_message,
+            category="start",
+            reply_markup=get_quick_menu_keyboard(board_id, stream=stream),
+            parse_mode="HTML"
+        )
     except Exception as e:
         logger.warning(f"[welcome] Не удалось отправить приветствие {chat_id}: {e}")
         return
+
     await asyncio.sleep(1.5)
-    secondary_pool = []
-    if lang == 'en':
-        secondary_pool.extend(THREAD_PROMO_TEXT_EN)
-        secondary_pool.extend(MODE_INFO_TEXT_EN)
-        secondary_pool.extend(CHANNEL_PROMO_TEXT_EN)
-        secondary_pool.extend(MECHANICS_INFO_TEXT_EN)
-    elif lang == 'jp':
-        secondary_pool.extend(THREAD_PROMO_TEXT_JP)
-        secondary_pool.extend(MODE_INFO_TEXT_JP)
-        secondary_pool.extend(CHANNEL_PROMO_TEXT_JP)
-        secondary_pool.extend(MECHANICS_INFO_TEXT_JP)
-    else:
-        secondary_pool.extend(THREAD_PROMO_TEXT_RU)
-        secondary_pool.extend(MODE_INFO_TEXT_RU)
-        secondary_pool.extend(CHANNEL_PROMO_TEXT_RU)
-        secondary_pool.extend(MECHANICS_INFO_TEXT_RU)
-    secondary_pool.append(generate_boards_list(BOARD_CONFIG, lang))
-    if secondary_pool:
-        secondary_message = random.choice(secondary_pool)
-        try:
-            await bot.send_message(chat_id, secondary_message, parse_mode="HTML", disable_web_page_preview=True)
-        except Exception:
-            pass
+
+    # СООБЩЕНИЕ 2: И каталог досок, И команды, И каналы/архивы (всё вместе, без рандома!)
+    secondary_message = generate_secondary_welcome_message(BOARD_CONFIG, lang=lang)
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=secondary_message,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        logger.warning(f"[welcome] Не удалось отправить второе сообщение {chat_id}: {e}")
 async def send_active_pin_to_new_user(bot: Bot, user_id: int, board_id: str):
     """
     Проверяет, есть ли на доске активный глобальный закреп.
