@@ -279,16 +279,27 @@ async def accept_dice_challenge(
         game = active_dice_games.get(game_id)
         if not game:
             return False, "❌ Игра не найдена или время вызова истекло.", None
-        if game["state"] != "pending":
+        if game["state"] not in ("pending",):
             return False, "❌ Этот вызов уже принят или закрыт!", None
         if game["player_1"] == acceptor_id:
             return False, "❌ Нельзя играть в кости с самим собой, шизофреник.", None
         if game.get("target_id") and game["target_id"] != acceptor_id:
             return False, "❌ Этот вызов адресован персонально другому анону!", None
+        # Prevent acceptor from joining two games simultaneously
+        existing_gid = user_active_dice_game.get(acceptor_id)
+        if existing_gid and existing_gid in active_dice_games and not active_dice_games[existing_gid].get("finished"):
+            return False, "⚠️ У тебя уже есть активная партия в кости! Заверши её или дождись таймаута.", None
 
         bet = game["bet"]
         board_id = game["board_id"]
         challenger_id = game["player_1"]
+        # Mark 'accepting' immediately to prevent double-accept race condition
+        game["state"] = "accepting"
+
+    def _rollback_state():
+        g = active_dice_games.get(game_id)
+        if g and g.get("state") == "accepting":
+            g["state"] = "pending"
 
     db = await get_pool()
     async with db_lock:
@@ -296,8 +307,10 @@ async def accept_dice_challenge(
         bal_a = await get_user_global_balance(db, acceptor_id)
 
         if bal_c < bet:
+            async with dice_engine_lock: _rollback_state()
             return False, "❌ У создателя вызова уже не хватает шекелей на балансе!", None
         if bal_a < bet:
+            async with dice_engine_lock: _rollback_state()
             return False, f"❌ У тебя не хватает шекелей! Ставка: <b>{bet:,} ₪</b>, твой баланс: <b>{int(bal_a):,} ₪</b>.", None
 
         # Atomic Escrow deduction with safe rollback
@@ -309,6 +322,7 @@ async def accept_dice_challenge(
                 await add_user_global_balance(db, challenger_id, board_id, bet)
             if ok_a:
                 await add_user_global_balance(db, acceptor_id, board_id, bet)
+            async with dice_engine_lock: _rollback_state()
             return False, "❌ Ошибка списания средств. У одного из игроков изменился баланс.", None
 
         await record_user_transaction(db, challenger_id, -bet, 'dice_duel', f'Ставка в Дайс-Дуэль #{game_id}')
@@ -631,23 +645,33 @@ async def dice_watchdog_step(bot=None):
                     if now - last_tick >= 10.0:
                         game["last_tick_ts"] = now
                         live_tick_games.append(gid)
-            elif game["state"] == "pending" and now > (game["created_ts"] + DICE_CHALLENGE_TIMEOUT_SEC):
-                # Expire unaccepted challenge
-                game["finished"] = True
-                game["state"] = "expired"
-                ch_id = game["player_1"]
-                user_active_dice_game.pop(ch_id, None)
-                expired_pending.append(gid)
+            elif game["state"] == "pending":
+                if now > (game["created_ts"] + DICE_CHALLENGE_TIMEOUT_SEC):
+                    # Expire unaccepted challenge
+                    game["finished"] = True
+                    game["state"] = "expired"
+                    ch_id = game["player_1"]
+                    user_active_dice_game.pop(ch_id, None)
+                    expired_pending.append(gid)
+                else:
+                    # Live countdown update for pending challenges every 15 seconds
+                    last_tick = game.get("last_tick_ts", game["created_ts"])
+                    if now - last_tick >= 15.0:
+                        game["last_tick_ts"] = now
+                        live_tick_games.append(gid)
 
-    # 1. Live countdown updates
+    # 1. Live countdown updates (playing + pending)
     for gid in live_tick_games:
         game = active_dice_games.get(gid)
         if not game or game.get("finished"):
             continue
         if bot and game.get("chat_id") and game.get("msg_id"):
             try:
-                turn_user = game.get("current_turn")
-                kb = get_dice_roll_keyboard(gid, turn_user)
+                if game["state"] == "playing":
+                    turn_user = game.get("current_turn")
+                    kb = get_dice_roll_keyboard(gid, turn_user)
+                else:
+                    kb = get_dice_challenge_keyboard(gid)
                 updated_text = format_dice_game_message(game)
                 await bot.edit_message_text(
                     chat_id=game["chat_id"],
@@ -874,6 +898,9 @@ def register_dice_duel_handlers(dp: Any):
 
         ok, msg_text, game = await accept_dice_challenge(game_id, user_id)
         if not ok:
+            shared_state.runtime_logger.warning(
+                f"[DiceDuel] accept FAILED gid={game_id} uid={user_id}: {msg_text}"
+            )
             await callback.answer(msg_text, show_alert=True)
             return
 
