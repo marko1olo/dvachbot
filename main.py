@@ -19397,17 +19397,27 @@ async def cmd_dopros(message: types.Message, board_id: str | None):
     user_id = message.from_user.id
     now = time.time()
 
+    if not message.reply_to_message:
+        await message.answer("⚠️ Сделай <b>Reply (ответ)</b> на пост подозреваемого анона с командой <code>/dopros</code>!", parse_mode="HTML")
+        return
+
     last_time = USER_DOPROS_COOLDOWN.get(user_id, 0.0)
     if now - last_time < DOPROS_COOLDOWN_SEC:
         rem_min = int((DOPROS_COOLDOWN_SEC - (now - last_time)) // 60) + 1
         await message.answer(f"⏳ Товарищ майор сейчас занят заполнением протоколов. Следующий вызов на допрос через {rem_min} мин.")
         return
 
-    target_id = user_id
-    target_name = "Анон"
-    if message.reply_to_message and message.reply_to_message.from_user:
+    target_id = await get_author_id_by_reply(message)
+    if not target_id and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
         target_id = message.reply_to_message.from_user.id
-        target_name = message.reply_to_message.from_user.first_name or "Анон"
+
+    if not target_id or target_id == 0:
+        await message.answer("⚠️ Не удалось определить подозреваемого по ответу на сообщение (возможно, это системный пост бота).")
+        return
+
+    if target_id == user_id:
+        await message.answer("🤦‍♂️ Ты не можешь вызвать на допрос самого себя! Сделай Reply на пост подозреваемого.")
+        return
 
     if is_admin(target_id, board_id):
         await message.answer(
@@ -19433,12 +19443,37 @@ async def cmd_dopros(message: types.Message, board_id: str | None):
         [InlineKeyboardButton(text="👉 Сдать соседа по борде", callback_data=f"dopros_snitch:{dopros_id}")]
     ])
 
+    target_anon = f"Анон [{get_anon_id(target_id)}]"
     text = (
         f"📋 <b>ПОВЕСТКА НА ДОПРОС В ОТДЕЛ «К» №{protocol_num}</b>\n\n"
-        f"Гражданин <b>{target_name}</b> (ID: <code>{target_id}</code>) вызван в кабинет №404 по подозрению в антисоветском шизопостинге, хранении запрещённых мемов и неуважении к товарищу майору!\n\n"
+        f"Гражданин <b>{target_anon}</b> вызван в кабинет №404 по подозрению в антисоветском шизопостинге, хранении запрещённых мемов и неуважении к товарищу майору!\n\n"
         f"<i>Следователь положил на стол чистый протокол и тяжёлый взгляд. Твоя линия защиты:</i>"
     )
-    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+    try:
+        await message.bot.send_message(
+            chat_id=message.chat.id,
+            text=text,
+            reply_to_message_id=message.reply_to_message.message_id,
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+    except Exception:
+        await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+    try:
+        await message.bot.send_message(
+            chat_id=target_id,
+            text=(
+                f"🚨 <b>ВАС ВЫЗВАЛИ НА ДОПРОС В ОТДЕЛ «К»!</b>\n\n"
+                f"На борде <b>/{board_id}/</b> на вас поступило заявление.\n\n"
+                f"{text}"
+            ),
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
 
 @dp.callback_query(F.data.startswith("dopros_"))
 async def cb_dopros_action(callback: types.CallbackQuery, board_id: str | None):
@@ -19522,11 +19557,18 @@ async def cmd_fine(message: types.Message, board_id: str | None):
     now = time.time()
     db = await get_pool()
 
-    if not message.reply_to_message or not message.reply_to_message.from_user:
+    if not message.reply_to_message:
         await message.answer("❌ Команда применяется <b>ответом (Reply)</b> на сообщение нарушителя!", parse_mode="HTML")
         return
 
-    target_id = message.reply_to_message.from_user.id
+    target_id = await get_author_id_by_reply(message)
+    if not target_id and message.reply_to_message.from_user and not message.reply_to_message.from_user.is_bot:
+        target_id = message.reply_to_message.from_user.id
+
+    if not target_id or target_id == 0:
+        await message.answer("❌ Не удалось определить автора поста для выписки штрафа (системное сообщение)!")
+        return
+
     if target_id == user_id:
         await message.answer("❌ Нельзя выписать штраф самому себе, шизоид!")
         return
@@ -19595,15 +19637,36 @@ async def cmd_fine(message: types.Message, board_id: str | None):
     else:
         druzh_reward = 0.0
 
-    target_name = message.reply_to_message.from_user.first_name or "Анон"
-    await message.answer(
+    target_anon = f"Анон [{get_anon_id(target_id)}]"
+    fine_text = (
         f"🪪 <b>ШТРАФ ОТ НАРОДНОЙ ДРУЖИНЫ!</b>\n\n"
-        f"Дружинник выявил нарушение общественного порядка у анона <b>{target_name}</b>!\n"
+        f"Дружинник выявил нарушение общественного порядка у гражданина <b>{target_anon}</b>!\n"
         f"💸 С нарушителя взыскано: <code>-{act_target_fine:,.0f} ₪</code>\n"
         f"💰 Премия дружинника: <code>+{druzh_reward:,.0f} ₪</code> <i>(5 ₪ ушло в Фонд Абу)</i>\n"
-        f"<i>(Следующий рейд со штрафом доступен через 24 часа.)</i>",
-        parse_mode="HTML"
+        f"<i>(Следующий рейд со штрафом доступен через 24 часа.)</i>"
     )
+
+    try:
+        await message.bot.send_message(
+            chat_id=message.chat.id,
+            text=fine_text,
+            reply_to_message_id=message.reply_to_message.message_id,
+            parse_mode="HTML"
+        )
+    except Exception:
+        await message.answer(fine_text, parse_mode="HTML")
+
+    try:
+        await message.bot.send_message(
+            chat_id=target_id,
+            text=(
+                f"🪪 <b>ПОСТАНОВЛЕНИЕ О ШТРАФЕ ОТ ДРУЖИНЫ!</b>\n\n"
+                f"На борде <b>/{board_id}/</b> дружинник оштрафовал вас на <code>{act_target_fine:,.0f} ₪</code> за нарушение порядка."
+            ),
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
 
 async def _process_stacked_anime_command(
     message: types.Message,

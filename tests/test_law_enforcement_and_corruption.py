@@ -164,10 +164,15 @@ async def test_cmd_dopros_and_admin_immunity():
     msg_admin.from_user.id = user_id
     msg_admin.reply_to_message = MagicMock()
     msg_admin.reply_to_message.from_user.id = 999999
-    msg_admin.reply_to_message.from_user.first_name = "SuperAdmin"
+    msg_admin.reply_to_message.from_user.is_bot = False
+    msg_admin.reply_to_message.message_id = 1001
+    msg_admin.chat.id = -100123456
+    msg_admin.bot.send_message = AsyncMock()
     msg_admin.answer = AsyncMock()
 
-    with patch("main.get_pool", AsyncMock(return_value=mock_db)),          patch("main.is_admin", return_value=True):
+    with patch("main.get_pool", AsyncMock(return_value=mock_db)), \
+         patch("main.get_author_id_by_reply", AsyncMock(return_value=999999)), \
+         patch("main.is_admin", return_value=True):
         await cmd_dopros(msg_admin, board_id)
         msg_admin.answer.assert_called_once()
         assert "ОТМЕНА ОПЕРАЦИИ!" in msg_admin.answer.call_args[0][0]
@@ -178,14 +183,21 @@ async def test_cmd_dopros_and_admin_immunity():
     msg_target.from_user.id = user_id
     msg_target.reply_to_message = MagicMock()
     msg_target.reply_to_message.from_user.id = 555666
-    msg_target.reply_to_message.from_user.first_name = "SuspectAnon"
+    msg_target.reply_to_message.from_user.is_bot = False
+    msg_target.reply_to_message.message_id = 1002
+    msg_target.chat.id = -100123456
+    msg_target.bot.send_message = AsyncMock()
     msg_target.answer = AsyncMock()
 
-    with patch("main.get_pool", AsyncMock(return_value=mock_db)),          patch("main.is_admin", return_value=False):
+    with patch("main.get_pool", AsyncMock(return_value=mock_db)), \
+         patch("main.get_author_id_by_reply", AsyncMock(return_value=555666)), \
+         patch("main.is_admin", return_value=False):
         await cmd_dopros(msg_target, board_id)
-        msg_target.answer.assert_called_once()
-        sent_html = msg_target.answer.call_args[0][0]
+        assert msg_target.bot.send_message.call_count >= 1
+        sent_html = msg_target.bot.send_message.call_args_list[0][1]["text"]
         assert "ПОВЕСТКА НА ДОПРОС В ОТДЕЛ «К»" in sent_html
+        assert "555666" not in sent_html
+        assert "Анон [" in sent_html
         assert len(ACTIVE_DOPROS) == 1
 
         dopros_id = list(ACTIVE_DOPROS.keys())[0]
@@ -197,7 +209,10 @@ async def test_cmd_dopros_and_admin_immunity():
         cb_bribe.answer = AsyncMock()
         cb_bribe.message.edit_text = AsyncMock()
 
-        with patch("main.get_user_global_balance", AsyncMock(return_value=100.0)),              patch("main.deduct_user_global_balance", AsyncMock(return_value=(True, 50.0))),              patch("main.add_to_abu_fund", AsyncMock()),              patch("main.record_user_transaction", AsyncMock()):
+        with patch("main.get_user_global_balance", AsyncMock(return_value=100.0)), \
+             patch("main.deduct_user_global_balance", AsyncMock(return_value=(True, 50.0))), \
+             patch("main.add_to_abu_fund", AsyncMock()), \
+             patch("main.record_user_transaction", AsyncMock()):
             await cb_dopros_action(cb_bribe, board_id)
             cb_bribe.message.edit_text.assert_called_once()
             assert "ДЕЛО ЗАКРЫТО!" in cb_bribe.message.edit_text.call_args[0][0]
@@ -215,11 +230,16 @@ async def test_cmd_fine_mechanics():
     msg.from_user.id = druzh_id
     msg.reply_to_message = MagicMock()
     msg.reply_to_message.from_user.id = target_id
-    msg.reply_to_message.from_user.first_name = "RuleBreaker"
+    msg.reply_to_message.from_user.is_bot = False
+    msg.reply_to_message.message_id = 2001
+    msg.chat.id = -100123456
+    msg.bot.send_message = AsyncMock()
     msg.answer = AsyncMock()
 
     # 1. No badge -> error
-    with patch("main.get_pool", AsyncMock(return_value=mock_db)),          patch("main._get_user_active_items", AsyncMock(return_value={})):
+    with patch("main.get_pool", AsyncMock(return_value=mock_db)), \
+         patch("main.get_author_id_by_reply", AsyncMock(return_value=target_id)), \
+         patch("main._get_user_active_items", AsyncMock(return_value={})):
         await cmd_fine(msg, board_id)
         msg.answer.assert_called_once()
         assert "Удостоверения дружинника" in msg.answer.call_args[0][0]
@@ -227,7 +247,14 @@ async def test_cmd_fine_mechanics():
     # 2. Has badge, targets admin -> druzhinnik gets fined!
     USER_DRUZHINA_COOLDOWN.clear()
     msg.answer.reset_mock()
-    with patch("main.get_pool", AsyncMock(return_value=mock_db)),          patch("main._get_user_active_items", AsyncMock(return_value={"badge_druzhinnik_expires": time.time() + 86400})),          patch("main.is_admin", return_value=True),          patch("main.get_user_global_balance", AsyncMock(return_value=50.0)),          patch("main.deduct_user_global_balance", AsyncMock(return_value=(True, 20.0))),          patch("main.add_to_abu_fund", AsyncMock()),          patch("main.record_user_transaction", AsyncMock()):
+    with patch("main.get_pool", AsyncMock(return_value=mock_db)), \
+         patch("main.get_author_id_by_reply", AsyncMock(return_value=target_id)), \
+         patch("main._get_user_active_items", AsyncMock(return_value={"badge_druzhinnik_expires": time.time() + 86400})), \
+         patch("main.is_admin", return_value=True), \
+         patch("main.get_user_global_balance", AsyncMock(return_value=50.0)), \
+         patch("main.deduct_user_global_balance", AsyncMock(return_value=(True, 20.0))), \
+         patch("main.add_to_abu_fund", AsyncMock()), \
+         patch("main.record_user_transaction", AsyncMock()):
         await cmd_fine(msg, board_id)
         msg.answer.assert_called_once()
         assert "ПРЕВЫШЕНИЕ СЛУЖЕБНЫХ ПОЛНОМОЧИЙ!" in msg.answer.call_args[0][0]
@@ -235,13 +262,23 @@ async def test_cmd_fine_mechanics():
     # 3. Successful fine against normal target
     USER_DRUZHINA_COOLDOWN.clear()
     msg.answer.reset_mock()
-    with patch("main.get_pool", AsyncMock(return_value=mock_db)),          patch("main._get_user_active_items", AsyncMock(side_effect=[
+    with patch("main.get_pool", AsyncMock(return_value=mock_db)), \
+         patch("main.get_author_id_by_reply", AsyncMock(return_value=target_id)), \
+         patch("main._get_user_active_items", AsyncMock(side_effect=[
              {"badge_druzhinnik_expires": time.time() + 86400}, # druzhinnik
              {} # target has no shield
-         ])),          patch("main.is_admin", return_value=False),          patch("main.get_user_global_balance", AsyncMock(return_value=100.0)),          patch("main.deduct_user_global_balance", AsyncMock(return_value=(True, 85.0))),          patch("main.add_user_global_balance", AsyncMock(return_value=110.0)),          patch("main.add_to_abu_fund", AsyncMock()),          patch("main.record_user_transaction", AsyncMock()):
+         ])), \
+         patch("main.is_admin", return_value=False), \
+         patch("main.get_user_global_balance", AsyncMock(return_value=100.0)), \
+         patch("main.deduct_user_global_balance", AsyncMock(return_value=(True, 85.0))), \
+         patch("main.add_user_global_balance", AsyncMock(return_value=110.0)), \
+         patch("main.add_to_abu_fund", AsyncMock()), \
+         patch("main.record_user_transaction", AsyncMock()):
         await cmd_fine(msg, board_id)
-        msg.answer.assert_called_once()
-        sent_html = msg.answer.call_args[0][0]
+        assert msg.bot.send_message.call_count >= 1
+        sent_html = msg.bot.send_message.call_args_list[0][1]["text"]
         assert "ШТРАФ ОТ НАРОДНОЙ ДРУЖИНЫ!" in sent_html
         assert "-15 ₪" in sent_html
         assert "+10 ₪" in sent_html
+        assert "333555" not in sent_html
+        assert "Анон [" in sent_html
