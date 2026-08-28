@@ -576,24 +576,54 @@ async def _finish_rr_game(
 
 async def rr_watchdog_step(bot=None):
     """
-    Single iteration step of background watchdog checking expired turns.
+    Single iteration step of background watchdog checking expired turns,
+    updating countdowns dynamically, and cleaning expired challenges.
     """
     now = time.time()
     expired_games = []
+    expired_pending = []
+    live_tick_games = []
 
     async with rr_lock:
         for gid, game in list(active_rr_games.items()):
             if game.get("finished"):
                 continue
-            if game["state"] == "playing" and now > game["turn_deadline_ts"]:
-                expired_games.append(gid)
+            if game["state"] == "playing":
+                if now > game["turn_deadline_ts"]:
+                    expired_games.append(gid)
+                else:
+                    # Live countdown auto-update every 10 seconds
+                    last_tick = game.get("last_tick_ts", game["turn_deadline_ts"] - RR_TURN_TIMEOUT_SEC)
+                    if now - last_tick >= 10.0:
+                        game["last_tick_ts"] = now
+                        live_tick_games.append(gid)
             elif game["state"] == "pending" and now > (game["created_ts"] + RR_CHALLENGE_TIMEOUT_SEC):
                 # Expire unaccepted challenge
                 game["finished"] = True
                 game["state"] = "expired"
                 ch_id = game["challenger_id"]
                 user_active_rr_game.pop(ch_id, None)
+                expired_pending.append(gid)
 
+    # 1. Update live countdown timer in playing games
+    for gid in live_tick_games:
+        game = active_rr_games.get(gid)
+        if not game or game.get("finished"):
+            continue
+        if bot and game.get("chat_id") and game.get("msg_id"):
+            try:
+                updated_text = format_rr_game_message(game)
+                await bot.edit_message_text(
+                    chat_id=game["chat_id"],
+                    message_id=game["msg_id"],
+                    text=updated_text,
+                    reply_markup=get_rr_game_keyboard(gid),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    # 2. Finish expired turn games (timeout forfeit)
     for gid in expired_games:
         game = active_rr_games.get(gid)
         if not game or game.get("finished"):
@@ -615,6 +645,27 @@ async def rr_watchdog_step(bot=None):
             except Exception:
                 pass
 
+    # 3. Clean and edit expired pending challenges
+    for gid in expired_pending:
+        game = active_rr_games.get(gid)
+        if not game:
+            continue
+        if bot and game.get("chat_id") and game.get("msg_id"):
+            try:
+                await bot.edit_message_text(
+                    chat_id=game["chat_id"],
+                    message_id=game["msg_id"],
+                    text=(
+                        "⏳ <b>ВЫЗОВ В РУССКУЮ РУЛЕТКУ ИСТЕК!</b>\n\n"
+                        "Ни один анон не принял вызов на дуэль за 2 минуты.\n"
+                        "Вызов аннулирован, ставка не списана."
+                    ),
+                    reply_markup=None,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
 
 async def start_rr_watchdog_loop(bot):
     """
@@ -628,7 +679,7 @@ async def start_rr_watchdog_loop(bot):
             break
         except Exception as e:
             logger.error(f"Error in rr_watchdog_loop: {e}")
-        await asyncio.sleep(3.0)
+        await asyncio.sleep(2.5)
 
 
 # -----------------------------------------------------------------------------

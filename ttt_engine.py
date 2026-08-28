@@ -402,10 +402,28 @@ async def publish_ttt_board_announcement(
 # ============================================================================
 
 async def _turn_timeout_watcher(game_id: str, turn_user_id: int) -> None:
-    """Asynchronous background watchdog enforcing strictly 60 seconds per turn."""
+    """Asynchronous background watchdog enforcing strictly 60 seconds per turn with live dynamic countdown updates."""
     try:
-        await asyncio.sleep(TURN_TIMEOUT_SECONDS)
-        
+        # Tick in 10-second increments for dynamic live countdown updates
+        for _ in range(6):
+            await asyncio.sleep(10)
+            async with ttt_lock:
+                game = active_ttt_games.get(game_id)
+                if not game or game.status != "active" or game.current_turn != turn_user_id:
+                    return
+            # Dynamic live message edit if game is still running
+            if game.get_remaining_time() > 0 and game.bot_instance and game.chat_id and game.msg_id:
+                try:
+                    await game.bot_instance.edit_message_text(
+                        chat_id=game.chat_id,
+                        message_id=game.msg_id,
+                        text=render_game_text(game),
+                        reply_markup=get_ttt_game_keyboard(game),
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+
         async with ttt_lock:
             game = active_ttt_games.get(game_id)
             if not game or game.status != "active":
@@ -1121,3 +1139,54 @@ async def cb_ttt_refresh(callback: CallbackQuery):
 async def cb_ttt_noop(callback: CallbackQuery):
     """Clicked on an already occupied cell."""
     await callback.answer("⚠️ Клетка уже занята!", show_alert=False)
+
+
+# ============================================================================
+# BACKGROUND WATCHDOG FOR CHALLENGE EXPIRATION
+# ============================================================================
+
+async def ttt_watchdog_step(bot=None):
+    """Checks for expired pending challenges in TTT (120s) and cleans them up with message edits."""
+    now = time.time()
+    expired_pending = []
+    async with ttt_lock:
+        for gid, game in list(active_ttt_games.items()):
+            if game.status == "waiting" and (now - game.created_at) > CHALLENGE_TIMEOUT_SECONDS:
+                game.status = "finished"
+                game.finish_reason = "cancelled"
+                user_active_ttt_session.pop(game.challenger_id, None)
+                expired_pending.append(gid)
+
+    for gid in expired_pending:
+        game = active_ttt_games.get(gid)
+        if not game:
+            continue
+        bot_to_use = bot or game.bot_instance
+        if bot_to_use and game.chat_id and game.msg_id:
+            try:
+                await bot_to_use.edit_message_text(
+                    chat_id=game.chat_id,
+                    message_id=game.msg_id,
+                    text=(
+                        "⏳ <b>ВЫЗОВ В КРЕСТИКИ-НОЛИКИ ИСТЕК!</b>\n\n"
+                        "Ни один анон не принял вызов за 2 минуты.\n"
+                        "Вызов аннулирован, ставка не списана."
+                    ),
+                    reply_markup=None,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+
+async def start_ttt_watchdog_loop(bot):
+    """Continuous background watchdog loop for TTT challenge expiration."""
+    logger.info("TTT watchdog loop started.")
+    while True:
+        try:
+            await ttt_watchdog_step(bot)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in ttt_watchdog_loop: {e}")
+        await asyncio.sleep(3.0)

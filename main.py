@@ -7899,7 +7899,8 @@ async def _handle_duel_create(message: types.Message, board_id: str, args: list,
         "board_id": board_id,
         "amount":   amount,
         "ts":       now,
-        "msg_id":   sent_msg.message_id
+        "msg_id":   sent_msg.message_id,
+        "chat_id":  sent_msg.chat.id,
     }
 
     try: await message.delete()
@@ -7943,6 +7944,71 @@ async def cb_duel_decline(callback: types.CallbackQuery, board_id: str | None):
     await decline_duel_logic(callback.message, challenger_id, user_id=user_id)
     try: await callback.answer()
     except Exception: pass
+
+
+# -----------------------------------------------------------------------------
+# Classic Duel Watchdog & Live Dynamic Countdown Updates
+# -----------------------------------------------------------------------------
+async def classic_duel_watchdog_step(bot: Bot | None = None):
+    """Checks for expired classic /duel challenges (120s) and cleans them up with live updates."""
+    now = time.time()
+    for ch_id, duel in list(_active_duels.items()):
+        elapsed = now - duel["ts"]
+        if elapsed > _DUEL_TIMEOUT:
+            _active_duels.pop(ch_id, None)
+            if bot and duel.get("chat_id") and duel.get("msg_id"):
+                try:
+                    await bot.edit_message_text(
+                        chat_id=duel["chat_id"],
+                        message_id=duel["msg_id"],
+                        text=(
+                            f"⏳ <b>ВЫЗОВ НА ДУЭЛЬ ИСТЕК!</b>\n\n"
+                            f"Ни один анон не принял вызов на <code>{duel['amount']:,} ₪</code> за 2 минуты.\n"
+                            f"Вызов аннулирован, шекели целы."
+                        ),
+                        reply_markup=None,
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+        else:
+            # Dynamic live update of remaining time every 15s
+            last_tick = duel.get("last_tick_ts", duel["ts"])
+            if now - last_tick >= 15.0:
+                duel["last_tick_ts"] = now
+                rem = max(0, int(_DUEL_TIMEOUT - elapsed))
+                if rem > 5 and bot and duel.get("chat_id") and duel.get("msg_id"):
+                    try:
+                        kb_duel = InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(text="❌ Отменить вызов", callback_data=f"duel_cancel:{ch_id}")]
+                        ])
+                        await bot.edit_message_text(
+                            chat_id=duel["chat_id"],
+                            message_id=duel["msg_id"],
+                            text=(
+                                f"⚔️ <b>ВЫЗОВ НА ДУЭЛЬ ВЫСТАВЛЕН!</b>\n\n"
+                                f"💰 Ставка: <code>{duel['amount']:,} ₪</code>\n"
+                                f"🎲 Победитель забирает куш (шанс 50/50).\n\n"
+                                f"⏳ <i>Вызов активен (осталось {rem} сек). Жди, пока другой анон напишет <code>/duel accept</code> или примет бой.</i>"
+                            ),
+                            reply_markup=kb_duel,
+                            parse_mode="HTML"
+                        )
+                    except Exception:
+                        pass
+
+
+async def start_classic_duel_watchdog_loop(bot: Bot):
+    """Continuous background loop for classic /duel expiration and dynamic updates."""
+    runtime_logger.info("Classic /duel watchdog loop started.")
+    while True:
+        try:
+            await classic_duel_watchdog_step(bot)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            runtime_logger.error(f"Error in classic_duel_watchdog_loop: {e}")
+        await asyncio.sleep(2.5)
 
 
 # =============================================================================
@@ -23591,6 +23657,9 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
             lambda: board_data.get('b', {}).get('users', {}).get('active', set())
         ),
         "russian_roulette_watchdog": lambda: russian_roulette_pvp.start_rr_watchdog_loop(bots.get('ru') or active_bots_list[0]),
+        "dice_duel_watchdog": lambda: dice_duel_engine.start_dice_watchdog_loop(bots.get('ru') or active_bots_list[0]),
+        "ttt_watchdog": lambda: ttt_engine.start_ttt_watchdog_loop(bots.get('ru') or active_bots_list[0]),
+        "classic_duel_watchdog": lambda: start_classic_duel_watchdog_loop(bots.get('ru') or active_bots_list[0]),
     }
     if ENABLE_REPLY_NOTIFICATIONS:
         tasks_to_run["reply_notifier_task"] = lambda: reply_notifier_task()

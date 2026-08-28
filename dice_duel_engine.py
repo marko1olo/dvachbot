@@ -29,6 +29,7 @@ from common.database import (
     add_to_abu_fund,
     record_user_transaction
 )
+from common.anon_identity import get_anon_id
 
 # -----------------------------------------------------------------------------
 # Configuration Constants
@@ -467,11 +468,13 @@ async def _finish_dice_game(
 
         game["outcome"] = "draw"
         game["payout"] = refund_amt
-
+        
+        p1_anon_ann = get_anon_id(p1) if p1 else "???"
+        p2_anon_ann = get_anon_id(p2) if p2 else "???"
         announcement = (
             f"🎲 <b>PvP ДАЙС-ДУЭЛЬ: МЁРТВАЯ НИЧЬЯ!</b>\n\n"
             f">кости брошены трижды, победитель не выявлен\n"
-            f"⚖️ <b>Анон <code>[ID:{p1}]</code></b> и <b>Анон <code>[ID:{p2}]</code></b> сошлись на равных на <b>{bet:,} ₪</b>!\n\n"
+            f"⚖️ <b>Анон <code>[ID:{p1_anon_ann}]</code></b> и <b>Анон <code>[ID:{p2_anon_ann}]</code></b> сошлись на равных на <b>{bet:,} ₪</b>!\n\n"
             f"💰 Ставки возвращены анонам за вычетом 2% в Казну Абу."
         )
         if bot:
@@ -499,20 +502,23 @@ async def _finish_dice_game(
 
         w_vis = format_dice_visual(w_rolls) if w_rolls else "Бросок"
         l_vis = format_dice_visual(l_rolls) if l_rolls else "Фейл"
+        
+        winner_anon = get_anon_id(winner_id) if winner_id else "???"
+        loser_anon = get_anon_id(loser_id) if loser_id else "???"
 
         if reason == "timeout":
             announcement = (
                 f"⏱️ <b>PvP ДАЙС-ДУЭЛЬ: ТЕХНИЧЕСКИЙ НОКАУТ!</b>\n\n"
                 f">сыч испугался бросать кости и убежал в слезах\n"
-                f"😴 Анон <code>[ID:{loser_id}]</code> пропустил таймер хода (45 сек)!\n"
-                f"👑 <b>Победитель:</b> Анон <code>[ID:{winner_id}]</code> забирает весь банк <b>+{win_payout:,} ₪</b>!\n"
+                f"😴 Анон <code>[ID:{loser_anon}]</code> пропустил таймер хода (45 сек)!\n"
+                f"👑 <b>Победитель:</b> Анон <code>[ID:{winner_anon}]</code> забирает весь банк <b>+{win_payout:,} ₪</b>!\n"
                 f"🐒 Налог Абу: <code>{rake:,} ₪</code>"
             )
         elif reason == "surrender":
             announcement = (
                 f"🏳️ <b>PvP ДАЙС-ДУЭЛЬ: КАПИТУЛЯЦИЯ!</b>\n\n"
                 f">выкинул белый флаг прямо на игровое сукно\n"
-                f"👑 <b>Победитель:</b> Анон <code>[ID:{winner_id}]</code>\n"
+                f"👑 <b>Победитель:</b> Анон <code>[ID:{winner_anon}]</code>\n"
                 f"💰 Выигрыш: <b>+{win_payout:,} ₪</b> (Ставка: {bet:,} ₪)."
             )
         else:
@@ -522,9 +528,9 @@ async def _finish_dice_game(
                 f"🎲 <b>PvP ДАЙС-ДУЭЛЬ: РАЗНОС НА КОСТЯХ!</b>\n\n"
                 f">сошлись два анона на сукне у параши\n"
                 f">кости брошены, удача улыбнулась сильнейшему\n\n"
-                f"👑 <b>Победитель:</b> Анон <code>[ID:{winner_id}]</code>\n"
+                f"👑 <b>Победитель:</b> Анон <code>[ID:{winner_anon}]</code>\n"
                 f"🎲 Выкинул: {w_vis} — <i>{w_combo}</i>\n\n"
-                f"💀 <b>Проигравший:</b> Анон <code>[ID:{loser_id}]</code>\n"
+                f"💀 <b>Проигравший:</b> Анон <code>[ID:{loser_anon}]</code>\n"
                 f"🎲 Выкинул: {l_vis} — <i>{l_combo}</i>\n\n"
                 f"💰 <b>Банк игры:</b> <code>{total_pot:,} ₪</code>\n"
                 f"🏆 <b>Чистый выигрыш:</b> <code>+{win_payout:,} ₪</code> отправлен чемпиону!\n"
@@ -548,12 +554,15 @@ def format_dice_game_message(game: Dict[str, Any]) -> str:
     round_num = game.get("round", 1)
     state = game["state"]
 
+    p1_anon = get_anon_id(p1) if p1 else "Анон"
+    p2_anon = get_anon_id(p2) if p2 else "Анон"
+
     if state == "pending":
         rem = max(0, int(game["turn_deadline_ts"] - time.time()))
-        target_str = f"Анону <code>[ID:{game['target_id']}]</code>" if game.get("target_id") else "Любому желающему анону"
+        target_str = f"Анону <code>[ID:{get_anon_id(game['target_id'])}]</code>" if game.get("target_id") else "Любому желающему анону"
         return (
             f"🎲 <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ ({mode})</b>\n\n"
-            f"👤 <b>Создатель:</b> Анон <code>[ID:{p1}]</code>\n"
+            f"👤 <b>Создатель:</b> Анон <code>[ID:{p1_anon}]</code>\n"
             f"🎯 <b>Кому:</b> {target_str}\n"
             f"💰 <b>Ставка:</b> <code>{bet:,} ₪</code> | <b>Банк:</b> <code>{bet*2:,} ₪</code>\n"
             f"⏳ <b>Время на принятие:</b> <code>{rem}с</code>\n\n"
@@ -567,13 +576,14 @@ def format_dice_game_message(game: Dict[str, Any]) -> str:
     p2_status = format_dice_visual(p2_rolls) if p2_rolls else "⏳ <i>Ожидает броска...</i>"
 
     turn_user = game.get("current_turn")
+    turn_anon = get_anon_id(turn_user) if turn_user else "???"
     turn_rem = max(0, int(game["turn_deadline_ts"] - time.time()))
 
     header = f"🎲 <b>PvP ДАЙС-ДУЭЛЬ ({mode}) — РАУНД {round_num}</b>\n\n"
     body = (
         f"💰 <b>Банк:</b> <code>{bet*2:,} ₪</code> (Ставка: <code>{bet:,} ₪</code>)\n\n"
-        f"🔴 <b>Игрок 1 [ID:{p1}]:</b> {p1_status}\n"
-        f"🔵 <b>Игрок 2 [ID:{p2}]:</b> {p2_status}\n\n"
+        f"🔴 <b>Игрок 1 [ID:{p1_anon}]:</b> {p1_status}\n"
+        f"🔵 <b>Игрок 2 [ID:{p2_anon}]:</b> {p2_status}\n\n"
     )
 
     if game.get("finished"):
@@ -582,16 +592,131 @@ def format_dice_game_message(game: Dict[str, Any]) -> str:
             footer = f"🤝 <b>Игра завершена вничью!</b> Ставки возвращены."
         else:
             w = game.get("winner")
+            w_anon = get_anon_id(w) if w else "???"
             payout = game.get("payout", 0)
-            footer = f"👑 <b>Победитель: Анон [ID:{w}]!</b> Забрал <code>+{payout:,} ₪</code>!"
+            footer = f"👑 <b>Победитель: Анон [ID:{w_anon}]!</b> Забрал <code>+{payout:,} ₪</code>!"
     else:
         footer = (
-            f"👉 <b>Сейчас бросает:</b> Анон <code>[ID:{turn_user}]</code>\n"
+            f"👉 <b>Сейчас бросает:</b> Анон <code>[ID:{turn_anon}]</code>\n"
             f"⏱️ <b>Таймер на бросок:</b> <code>{turn_rem}с</code>\n\n"
             f"<i>Нажми кнопку «🎲 Бросить кости!» ниже, чтобы бросить кубики.</i>"
         )
 
     return header + body + footer
+
+
+# -----------------------------------------------------------------------------
+# Background Watchdog & Live Dynamic Updates for Dice Duel
+# -----------------------------------------------------------------------------
+async def dice_watchdog_step(bot=None):
+    """
+    Single iteration step of background watchdog checking expired dice turns,
+    updating live countdowns dynamically, and cleaning expired challenges.
+    """
+    now = time.time()
+    expired_games = []
+    expired_pending = []
+    live_tick_games = []
+
+    async with dice_engine_lock:
+        for gid, game in list(active_dice_games.items()):
+            if game.get("finished"):
+                continue
+            if game["state"] == "playing":
+                if now > game["turn_deadline_ts"]:
+                    expired_games.append(gid)
+                else:
+                    # Live countdown auto-update every 10 seconds
+                    last_tick = game.get("last_tick_ts", game["turn_deadline_ts"] - DICE_TURN_TIMEOUT_SEC)
+                    if now - last_tick >= 10.0:
+                        game["last_tick_ts"] = now
+                        live_tick_games.append(gid)
+            elif game["state"] == "pending" and now > (game["created_ts"] + DICE_CHALLENGE_TIMEOUT_SEC):
+                # Expire unaccepted challenge
+                game["finished"] = True
+                game["state"] = "expired"
+                ch_id = game["player_1"]
+                user_active_dice_game.pop(ch_id, None)
+                expired_pending.append(gid)
+
+    # 1. Live countdown updates
+    for gid in live_tick_games:
+        game = active_dice_games.get(gid)
+        if not game or game.get("finished"):
+            continue
+        if bot and game.get("chat_id") and game.get("msg_id"):
+            try:
+                turn_user = game.get("current_turn")
+                kb = get_dice_roll_keyboard(gid, turn_user)
+                updated_text = format_dice_game_message(game)
+                await bot.edit_message_text(
+                    chat_id=game["chat_id"],
+                    message_id=game["msg_id"],
+                    text=updated_text,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    # 2. Expired turn games (timeout forfeit)
+    for gid in expired_games:
+        game = active_dice_games.get(gid)
+        if not game or game.get("finished"):
+            continue
+        loser_id = game.get("current_turn")
+        winner_id = game["player_2"] if loser_id == game["player_1"] else game["player_1"]
+        ok, msg, fin_game = await _finish_dice_game(gid, winner_id, loser_id, "timeout", bot)
+
+        if bot and game.get("chat_id") and game.get("msg_id"):
+            try:
+                updated_text = format_dice_game_message(fin_game)
+                kb = get_dice_finished_keyboard(gid, fin_game["bet"])
+                await bot.edit_message_text(
+                    chat_id=game["chat_id"],
+                    message_id=game["msg_id"],
+                    text=updated_text,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+    # 3. Expired pending challenges
+    for gid in expired_pending:
+        game = active_dice_games.get(gid)
+        if not game:
+            continue
+        if bot and game.get("chat_id") and game.get("msg_id"):
+            try:
+                await bot.edit_message_text(
+                    chat_id=game["chat_id"],
+                    message_id=game["msg_id"],
+                    text=(
+                        "⏳ <b>ВЫЗОВ НА PvP ДАЙС-ДУЭЛЬ ИСТЕК!</b>\n\n"
+                        "Ни один анон не принял вызов на кости за 2 минуты.\n"
+                        "Вызов аннулирован, ставка не списана."
+                    ),
+                    reply_markup=None,
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+
+
+async def start_dice_watchdog_loop(bot):
+    """
+    Continuous background watchdog loop for Dice Duel timeouts and live countdowns.
+    """
+    shared_state.runtime_logger.info("Dice Duel PvP watchdog loop started.")
+    while True:
+        try:
+            await dice_watchdog_step(bot)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            shared_state.runtime_logger.error(f"Error in dice_watchdog_loop: {e}")
+        await asyncio.sleep(2.5)
 
 
 # -----------------------------------------------------------------------------
