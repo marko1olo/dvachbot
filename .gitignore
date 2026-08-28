@@ -83,6 +83,12 @@ AUTONOMOUS_PROGRESS.md
 security_reports/
 .venv/
 .agents/
+scripts/archive/logs_and_dumps/
+scripts/archive/bin/
+*.exe
+*.ogg
+*.mp3
+*.wav
 scratch/
 scratch_*.py
 

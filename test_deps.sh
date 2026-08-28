@@ -1,2 +1,0 @@
-pip install psutil
-pip install aiosqlite aiogram pydantic python-dotenv matplotlib openai seaborn tenacity tgcrypto orjson slowapi async_lru uvicorn jinja2 fastapi-cache2 python-multipart bs4 lxml itsdangerous ujson passlib pycryptodome bleach deep-translator httpx-socks geoip2 filetype dnspython loguru websockets uvloop user-agents thefuzz rsa feedparser markdown fastapi-limiter python-jose pandas scikit-learn networkx limits httpx scipy pytest pytest-asyncio Pillow rich starlette imagehash fastapi==0.111.0 pydantic==2.8.2 pyrogram huggingface_hub
