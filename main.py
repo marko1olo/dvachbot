@@ -23590,6 +23590,7 @@ async def start_background_tasks(bots: dict[str, Bot], healthcheck_site: web.TCP
             bots,
             lambda: board_data.get('b', {}).get('users', {}).get('active', set())
         ),
+        "russian_roulette_watchdog": lambda: russian_roulette_pvp.start_rr_watchdog_loop(bots.get('ru') or active_bots_list[0]),
     }
     if ENABLE_REPLY_NOTIFICATIONS:
         tasks_to_run["reply_notifier_task"] = lambda: reply_notifier_task()
