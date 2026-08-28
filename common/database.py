@@ -1835,6 +1835,23 @@ async def create_post(
     from common.db_pool import get_pool, db_lock
     
     local_logger = logging.LoggerAdapter(logging.getLogger(__name__), {'request_id': request_id_for_log})
+    # Anti-Dox: auto-mask leaked phone numbers in post content (unless admin)
+    try:
+        from bot_helpers import is_admin
+        author_is_admin = is_admin(author_id, board_id) if author_id else False
+    except Exception:
+        author_is_admin = False
+
+    if not author_is_admin and isinstance(content, dict):
+        try:
+            from common.spam_filter import mask_phone_numbers, contains_phone_number
+            if content.get('text') and isinstance(content['text'], str) and contains_phone_number(content['text']):
+                content['text'] = mask_phone_numbers(content['text'])
+            if content.get('caption') and isinstance(content['caption'], str) and contains_phone_number(content['caption']):
+                content['caption'] = mask_phone_numbers(content['caption'])
+        except Exception:
+            pass
+
     content_json = fast_json_dumps(content, default=_json_serializer)
     
     # Глобальный Lock: защищает от состояния гонки между задачами внутри одного процесса бота
@@ -5977,15 +5994,26 @@ async def get_pending_import_requests() -> list[dict]:
 async def create_feedback(user_id: int, category: str, contact: str, message: str) -> bool:
     from common.db_pool import get_pool, db_lock
     
+    now = time.time()
     async with db_lock:
         for attempt in range(10):
             try:
                 db = await get_pool()
                 await db.execute("BEGIN IMMEDIATE")
                 
+                # Дедупликация: если тот же текст от того же юзера пришел менее 10 сек назад — отдавать True без повторной вставки
+                async with db.execute(
+                    "SELECT id FROM Feedback WHERE user_id = ? AND message = ? AND created_at > ? ORDER BY created_at DESC LIMIT 1",
+                    (user_id, message, now - 10.0)
+                ) as cursor:
+                    existing = await cursor.fetchone()
+                    if existing:
+                        await db.execute("COMMIT")
+                        return True
+                
                 await db.execute(
                     "INSERT INTO Feedback (user_id, category, contact, message, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (user_id, category, contact, message, time.time())
+                    (user_id, category, contact, message, now)
                 )
                 
                 await db.execute("COMMIT")
@@ -9066,14 +9094,27 @@ def calculate_daily_wealth_tax(total_balance: float) -> float:
 
 async def apply_daily_wealth_tax(db) -> tuple[int, float, list[dict]]:
     """
-    Применяет суточный налог на богатство ко всем пользователям с балансом > 5000 ₪.
+    Применяет суточный налог на богатство ко всем пользователям с общим капиталом > 5000 ₪.
+    Учитывает как баланс в кошельке (Users.balance), так и активные вклады в Банке Абу (BankDeposits).
     Пополняет Фонд Яхты Абу и фиксирует проводки в UserTransactions.
     Возвращает (affected_users_count, total_burned_shekels, list_of_affected_details).
     """
     async def _do_tax() -> tuple[int, float, list[dict]]:
-        async with db.execute(
-            "SELECT user_id, SUM(balance) as total_bal FROM Users GROUP BY user_id HAVING total_bal > 5000"
-        ) as c:
+        query = """
+            SELECT u.user_id,
+                   SUM(u.balance) as wallet_bal,
+                   COALESCE(b.bank_total, 0.0) as bank_bal
+            FROM Users u
+            LEFT JOIN (
+                SELECT user_id, SUM(principal + accrued_interest) as bank_total
+                FROM BankDeposits
+                WHERE status = 'active'
+                GROUP BY user_id
+            ) b ON u.user_id = b.user_id
+            GROUP BY u.user_id
+            HAVING (SUM(u.balance) + COALESCE(b.bank_total, 0.0)) > 5000
+        """
+        async with db.execute(query) as c:
             rich_users = await c.fetchall()
 
         affected = 0
@@ -9081,29 +9122,81 @@ async def apply_daily_wealth_tax(db) -> tuple[int, float, list[dict]]:
         details = []
 
         for row in rich_users:
-            uid, total_bal = row[0], float(row[1] or 0.0)
-            tax = calculate_daily_wealth_tax(total_bal)
-            if tax > 0:
-                ok, new_bal = await deduct_user_global_balance(db, uid, "b", tax)
-                if ok:
-                    affected += 1
-                    total_confiscated += tax
-                    # 1. Запись в транзакционный леджер
-                    await record_user_transaction(
-                        db,
-                        user_id=uid,
-                        amount=-tax,
-                        category="tax",
-                        description=f"Суточный налог на богатство ({tax:,.0f} ₪ в Казну Абу)"
-                    )
-                    details.append({
-                        "user_id": uid,
-                        "tax_amount": tax,
-                        "old_balance": total_bal,
-                        "new_balance": new_bal
-                    })
+            uid = row[0]
+            wallet_bal = float(row[1] or 0.0)
+            bank_bal = float(row[2] or 0.0)
+            total_wealth = wallet_bal + bank_bal
 
-        # 2. Пополнение глобального фонда Яхты Абу
+            tax = calculate_daily_wealth_tax(total_wealth)
+            if tax <= 0:
+                continue
+
+            tax_to_deduct = tax
+            wallet_deducted = 0.0
+            bank_deducted = 0.0
+
+            # 1. Сначала списываем из кошелька
+            if wallet_bal > 0:
+                w_tax = min(wallet_bal, tax_to_deduct)
+                ok, new_bal = await deduct_user_global_balance(db, uid, "b", w_tax)
+                if ok:
+                    wallet_deducted = w_tax
+                    tax_to_deduct -= w_tax
+
+            # 2. Если в кошельке не хватило, списываем оставшийся налог с активных депозитов в банке
+            if tax_to_deduct > 0.001 and bank_bal > 0:
+                async with db.execute(
+                    "SELECT id, principal, accrued_interest FROM BankDeposits WHERE user_id = ? AND status = 'active' ORDER BY principal DESC, id ASC",
+                    (uid,)
+                ) as dep_c:
+                    active_deps = await dep_c.fetchall()
+
+                for dep in active_deps:
+                    if tax_to_deduct <= 0.001:
+                        break
+                    dep_id, dep_princ, dep_accr = dep[0], float(dep[1]), float(dep[2])
+                    dep_val = dep_princ + dep_accr
+                    if dep_val <= 0:
+                        continue
+
+                    cut = min(dep_val, tax_to_deduct)
+                    # Списываем сначала с principal
+                    if dep_princ >= cut:
+                        new_princ = dep_princ - cut
+                        await db.execute("UPDATE BankDeposits SET principal = ? WHERE id = ?", (round(new_princ, 2), dep_id))
+                    else:
+                        rem_cut = cut - dep_princ
+                        new_accr = max(0.0, dep_accr - rem_cut)
+                        await db.execute("UPDATE BankDeposits SET principal = 0.0, accrued_interest = ? WHERE id = ?", (round(new_accr, 2), dep_id))
+
+                    tax_to_deduct -= cut
+                    bank_deducted += cut
+
+            total_actual_deducted = round(wallet_deducted + bank_deducted, 2)
+            if total_actual_deducted > 0:
+                affected += 1
+                total_confiscated += total_actual_deducted
+                # Запись в транзакционный леджер
+                desc = f"Суточный налог на богатство ({total_actual_deducted:,.0f} ₪ в Казну Абу, капитал: {total_wealth:,.0f} ₪)"
+                if bank_deducted > 0:
+                    desc += f" [из банка: {bank_deducted:,.0f} ₪]"
+                await record_user_transaction(
+                    db,
+                    user_id=uid,
+                    amount=-total_actual_deducted,
+                    category="tax",
+                    description=desc
+                )
+                details.append({
+                    "user_id": uid,
+                    "tax_amount": total_actual_deducted,
+                    "old_wealth": total_wealth,
+                    "new_wealth": round(total_wealth - total_actual_deducted, 2),
+                    "from_wallet": wallet_deducted,
+                    "from_bank": bank_deducted
+                })
+
+        # Пополнение глобального фонда Яхты Абу
         if total_confiscated > 0:
             await add_to_abu_fund(db, total_confiscated)
 

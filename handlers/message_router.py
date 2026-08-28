@@ -639,9 +639,10 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
     input_text = cursed_text_override if cursed_text_override else (message.text or message.caption or "")
     multi_reply_blocks, limit_hit = _parse_and_split_multi_replies(input_text)
     
+    from common.database import is_shadow_muted as check_db_shadow_muted
     is_shadow_muted = (not is_admin(user_id, board_id) and 
-                       user_id in b_data['shadow_mutes'] and 
-                       b_data['shadow_mutes'][user_id] > datetime.now(UTC))
+                       ((user_id in b_data.get('shadow_mutes', {}) and b_data['shadow_mutes'][user_id] > datetime.now(UTC)) or
+                        await check_db_shadow_muted(user_id, board_id)))
                        
     if multi_reply_blocks:
         try: await message.delete()
@@ -866,13 +867,14 @@ async def handle_message(message: Message, board_id: str | None, stream: str = '
                 content['caption'] = sanitize_html(cleaned_corpus_text)
             print(f"🔗 ID #{reply_to_post} распознан из архивной ссылки/цитаты в тексте сообщения!")
 
-    if text_for_corpus:
-        async with storage_lock: last_messages.append(text_for_corpus)
-        if board_id != 'trash':
-            spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_for_corpus, board_id, stream=stream))
     if not is_shadow_muted and text_for_corpus and not is_admin(user_id, board_id):
         if is_spam_filtered(text_for_corpus, board_id, user_id):
             is_shadow_muted = True
+
+    if text_for_corpus:
+        async with storage_lock: last_messages.append(text_for_corpus)
+        if board_id != 'trash' and not is_shadow_muted:
+            spawn_task(check_and_send_contextual_reply(message.bot, user_id, text_for_corpus, board_id, stream=stream))
     if not is_admin(user_id, board_id):
         user_settings = b_data.get('user_settings', {}).get(user_id, {})
         if (message.content_type == 'animation' and user_settings.get('shadow_gif')) or \
@@ -1009,7 +1011,10 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
         file_id=f_id
     )
     if should_mute:
-        return False
+        # User is placed into silent shadow-mute in DB and RAM.
+        # Return True so handle_message smoothly routes to process_shadow_reject (Ghost Posting)
+        # instead of deleting the message without confirmation.
+        return True
 
     # 2. Legacy / rate limit analysis
     result, level = await analyze_message_for_spam(user_id, board_id, content, msg_type, raw_content_type)
@@ -1024,7 +1029,9 @@ async def check_spam(user_id: int, msg: Message, board_id: str) -> bool:
                 board_data[b].setdefault('shadow_mutes', {})[user_id] = expires_dt
                 spawn_task(update_shadow_mute(user_id, b, expires_dt.timestamp()))
         return False
-    elif result in (SpamResult.BAYAN_MUTE, SpamResult.SHADOW_MUTE_REQUIRED, SpamResult.BAN_REQUIRED):
+    elif result in (SpamResult.BAYAN_MUTE, SpamResult.SHADOW_MUTE_REQUIRED):
+        return True  # Route to process_shadow_reject!
+    elif result == SpamResult.BAN_REQUIRED:
         return False
 
     rules = SPAM_RULES.get(msg_type)

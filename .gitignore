@@ -1,10 +1,11 @@
 # Файлы базы данных SQLite
 *.db
-*.db-journal
-*.db-wal
-*.db-shm
+*.db-*
+*.db.*
+*.db_*
 *.db.before_merge
 *.before_merge
+data/thumbnails/
 
 # Кэш Python
 __pycache__/

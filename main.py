@@ -38,7 +38,7 @@ This module is designed to be extensible and maintainable, allowing for future e
 import asyncio
 from common.thread_manager import get_threads_data, get_thread_info, set_thread_info, delete_thread_data, acquire_thread_lock, get_thread_locks_count, get_active_threads, trim_thread_posts, save_threads_data, initialize_board_threads
 from common.spam_filter import analyze_message_for_spam, SpamResult, check_image_spam_limit, update_image_spam_tracker, acquire_spam_lock, get_spam_violation_level, is_spam_filtered, user_spam_locks, image_spam_tracker, IMAGE_SPAM_LIMIT, IMAGE_SPAM_WINDOW
-from archive_manager import archive_thread, _forward_post_to_realtime_archive, _site_file_send_type
+from archive_manager import archive_thread, _forward_post_to_realtime_archive, _site_file_send_type, _site_public_url, _site_file_source
 from delivery_manager import message_broadcaster, send_missed_messages, execute_delayed_edit, edit_post_for_all_recipients, _get_thread_entry_keyboard, validate_message_format, board_help_worker, _remove_already_delivered_recipients, _delete_durable_delivery_item
 from post_processor import NewPostProcessor, NewPostContext
 from post_helpers import apply_shadow_autoreplace, _format_header_inner, format_header
@@ -140,6 +140,7 @@ from common.database import (
     get_user_transaction_summary,
     get_abu_fund_total,
     add_to_abu_fund,
+    deduct_from_abu_fund,
     initialize_database, is_database_migrated, load_state_from_db, get_and_clear_reaction_queue, get_post_by_num, get_stream_active_users, 
     update_board_settings, add_or_activate_user, update_user_status, get_and_clear_broadcast_queue, mark_broadcast_posts_sent,
     create_post, update_shadow_mute, create_thread, update_user_location, get_op_posts_for_board, get_thread_by_op_post, add_channel_copy, get_all_channel_copies,
@@ -329,6 +330,10 @@ ANIME_COMMAND_MAP = {
     "Lolico": get_loli_image,
     "LOL1": get_loli_image,
     "LOLICO": get_loli_image,
+    "лоли": get_loli_image,
+    "лоликон": get_loli_image,
+    "дщдш": get_loli_image,
+    "дщдшсщт": get_loli_image,
 }
 from common.text_utils import clean_html_tags, sanitize_html, RE_YOU_PATTERN, unwrap_tg_emoji, clean_html_for_tg, generate_poll_text_display
 RE_POST_HEADER_CLEAN = re.compile(r'^(Пост №\d+.*?\n|Post No\.\d+.*?\n)', flags=re.MULTILINE)
@@ -2131,6 +2136,16 @@ async def board_statistics_broadcaster():
                         "recipients": recipients, "content": content, 
                         "post_num": post_num, "board_id": board_id
                     })
+                    target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
+                    if target_bot:
+                        spawn_task(_forward_post_to_realtime_archive(
+                            bot_instance=target_bot,
+                            board_id=board_id,
+                            post_num=post_num,
+                            content=content,
+                            is_shadow_muted=False,
+                            stream=stream
+                        ))
                     print(f"✅ [{board_id}] Статистика ({stream}) #{post_num} добавлена в очередь.")
         except Exception as e:
             logger.error(f"❌ Ошибка в board_statistics_broadcaster: {e}", exc_info=True)
@@ -3769,6 +3784,8 @@ BASE_SHOP_PRICES = {
     'shield': 500,
     'bribe': 450,
     'tinfoil': 450,
+    'ksiva_polkovnik': 650,
+    'badge_druzhinnik': 400,
     # 👗 Гардероб и шмот
     'prefix': 350,
     'badge_color': 500,
@@ -4029,14 +4046,18 @@ def _build_pharma_shop_content(user_id: int, balance: float):
     p_shield = get_current_item_price('shield')
     p_bribe = get_current_item_price('bribe')
     p_foil = get_current_item_price('tinfoil')
+    p_ksiva = get_current_item_price('ksiva_polkovnik')
+    p_druzh = get_current_item_price('badge_druzhinnik')
 
     text = (
-        f"💊 <b>АПТЕКА, МЕДИЦИНА И ЗАЩИТА</b>\n"
+        f"💊 <b>АПТЕКА, ЗАЩИТА И КОРРУПЦИЯ</b>\n"
         f"Твой баланс: <code>{int(balance):,} ₪</code>\n\n"
         f"1. 💊 <b>Аминазин</b> — <i>{p_pills} ₪</i> (Моментально смывает говно, понос и шизу)\n"
         f"2. 🔰 <b>Зеркальный Щит (6ч)</b> — <i>{p_shield} ₪</i> (Отражает выстрел Мут-Гана в стрелка!)\n"
         f"3. 📜 <b>Взятка (Индульгенция)</b> — <i>{p_bribe} ₪</i> (Моментально снимает мут)\n"
-        f"4. 👽 <b>Шапочка из фольги (6ч)</b> — <i>{p_foil} ₪</i> (Защита от грабежа и говна)"
+        f"4. 👽 <b>Шапочка из фольги (6ч)</b> — <i>{p_foil} ₪</i> (Защита от грабежа и говна)\n"
+        f"5. 🎖️ <b>Ксива полковника</b> — <i>{p_ksiva} ₪</i> (100% спасение от облавы пативана)\n"
+        f"6. 🪪 <b>Удостоверение дружинника (7д)</b> — <i>{p_druzh} ₪</i> (Штрафы анонов /fine)"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -4046,6 +4067,10 @@ def _build_pharma_shop_content(user_id: int, balance: float):
         [
             InlineKeyboardButton(text=f"📜 Взятка ({p_bribe}₪)", callback_data="shop_buy_bribe"),
             InlineKeyboardButton(text=f"👽 Фольга ({p_foil}₪)", callback_data="shop_buy_tinfoil")
+        ],
+        [
+            InlineKeyboardButton(text=f"🎖️ Ксива ({p_ksiva}₪)", callback_data="shop_buy_ksiva_polkovnik"),
+            InlineKeyboardButton(text=f"🪪 Дружинник ({p_druzh}₪)", callback_data="shop_buy_badge_druzhinnik")
         ],
         [InlineKeyboardButton(text="⬅️ Назад в Торговый Хаб", callback_data="shop_main_hub")]
     ])
@@ -4889,6 +4914,93 @@ async def cb_prof_inventory(callback: types.CallbackQuery, board_id: str | None)
     await callback.answer()
 
 
+_LOOTBOX_USER_COOLDOWNS: dict[int, float] = {}
+
+LOOTBOX_COOLDOWN_EXCUSES = [
+    "⏳ Клешни от коробки убрал! Лудоман ебаный, подожди {seconds}с, пока Абу набивает лутбокс мусором.",
+    "⏳ Осади, лудоман мамкин! Дрочилка коробок на кулдауне ещё {seconds}с.",
+    "⏳ Ты чё, автомат по вскрытию помоек? Дай серверу остыть, таймер: {seconds}с.",
+    "⏳ Не части, а то выпадет говно на палочке. Пауза между коробками: {seconds}с.",
+    "⏳ Абу ещё не успел пересчитать твои шекели. Жди {seconds}с до следующего сундука.",
+    "⏳ Пальцы дрожат от лудомании? Прими галоперидол и подожди {seconds}с.",
+    "⏳ Коробка заела от твоего бешеного клика! Отпусти мышку на {seconds}с.",
+    "⏳ Санитары дурки закрыли сундук на дезинфекцию. Таймер: {seconds}с.",
+    "⏳ Лудоманский пылесос перегрелся! Остынь на {seconds}с перед новым сливом.",
+    "⏳ Абу ещё не подложил утешительный мусор в твой следующий ящик. Жди {seconds}с.",
+    "⏳ Ты думал, тут благотворительность? Пауза между лутбоксами: {seconds}с.",
+    "⏳ Руки трясутся, слюна капает? Отдышись {seconds}с, лудик.",
+    "⏳ Серверная плавится от твоих попыток выбить джекпот. Таймаут: {seconds}с.",
+    "⏳ Не ломай петли сундука! Следующее открытие через {seconds}с.",
+    "⏳ Азартный бес в жопе заиграл? Посиди смирно {seconds}с.",
+    "⏳ Генератор случайного мусора на перезарядке. Жди {seconds}с.",
+    "⏳ Сундук временно заблокирован от шизофреников. Пауза: {seconds}с.",
+    "⏳ Медленнее лутай, а то шекели кончатся быстрее, чем санитары приедут. Таймер: {seconds}с.",
+    "⏳ Хватит строчить по кнопке открытия как ошпаренный! Остынь на {seconds}с.",
+    "⏳ Абу подкручивает шансы на выпадение говна... Подожди {seconds}с.",
+    "⏳ Защита от бешеных лудоманов: перерыв {seconds}с перед следующей коробкой.",
+    "⏳ Вскрывалка сломается! Пауза {seconds}с между сундуками.",
+    "⏳ Твой азарт превысил допустимые нормы Минздрава. Жди {seconds}с.",
+    "⏳ Сундук закрыт на переучёт мацы и перьев. Открытие через {seconds}с.",
+    "⏳ Остынь, искатель сокровищ с помойки. Кулдаун ящика: {seconds}с."
+]
+
+SHOP_LIMIT_EXCUSES = [
+    "🛑 Слишком жирно! Суточный лимит покупок ({max_lim} шт) исчерпан (куплено {cur_cnt}). Иди работай на завод, шопоголик.",
+    "🛑 Карманы лопнут! Лимит {max_lim} шт. в сутки превышен. Приходи завтра после смены на заводе.",
+    "🛑 Торговая палата Двача ввела эмбарго на твоё рыло: лимит {max_lim} шт. исчерпан!",
+    "🛑 Олигарх комнатный, сбавь обороты! Больше {max_lim} шт. в сутки Абу в одни руки не отпускает.",
+    "🛑 Товар отпускается строго по талонам! Суточный лимит ({max_lim} шт) исчерпан.",
+    "🛑 Магазин закрыт перед твоим носом! Ты выкупил все допустимые {max_lim} шт. за сегодня.",
+    "🛑 Харя треснет столько скупать! Лимит {max_lim} шт/сутки исчерпан.",
+    "🛑 Абу лично запретил продавать тебе этот товар до завтра. Лимит: {max_lim} шт.",
+    "🛑 Ты чё, перекуп с Авито? Больше {max_lim} шт. в сутки не продаём.",
+    "🛑 Склад пуст от твоих заказов! Суточная норма ({max_lim} шт) выполнена. Гуляй до завтра.",
+    "🛑 Антимонопольный комитет Двача заблокировал скупку: лимит {max_lim} шт. исчерпан.",
+    "🛑 Шопоголик в треде! Прими успокоительное и приходи завтра (лимит {max_lim} шт).",
+    "🛑 Хватит скупать весь инвентарь борды! Суточный потолок ({max_lim} шт) достигнут.",
+    "🛑 Твоя тележка переполнена! Максимум {max_lim} шт. в сутки для одного анона.",
+    "🛑 Продавщица ушла на переучёт от твоей наглости. Лимит {max_lim} шт. исчерпан.",
+    "🛑 На сегодня шопинг окончен! Дневной лимит {max_lim} шт. исчерпан. Пиздуй в тред.",
+    "🛑 Касса заблокирована для твоего профиля: превышен лимит {max_lim} шт. в сутки.",
+    "🛑 Ты решил весь магазин приватизировать? Лимит {max_lim} шт. исчерпан.",
+    "🛑 Больше {max_lim} шт. в сутки отпускается только по справке от нарколога. Жди завтра.",
+    "🛑 Дефицит товара! Ты выбрал свою суточную квоту ({max_lim} шт).",
+    "🛑 Куда столько гребешь? Суточный лимит {max_lim} шт. исчерпан!",
+    "🛑 Абу опломбировал витрину: лимит {max_lim} шт. в сутки на одного сыча.",
+    "🛑 Магазинный лимит жадности: {cur_cnt}/{max_lim} выкуплено. Жди сброса таймера.",
+    "🛑 Завскладом послал тебя нахуй до завтра: суточный лимит {max_lim} шт. исчерпан.",
+    "🛑 Слишком много покупок для одной хрущевки. Лимит {max_lim} шт. исчерпан."
+]
+
+INSUFFICIENT_FUNDS_EXCUSES = [
+    "❌ Нищеброд детектед! Нужно {price} ₪, а у тебя всего {balance} ₪. Продай почку или иди в /work.",
+    "❌ Бомж на кассе! В кармане {balance} ₪, а замахнулся на {price} ₪. Пиздуй собирать бутылки.",
+    "❌ Абу посмотрел в твой пустой кошелёк ({balance} ₪) и плюнул в лицо. Накопи хотя бы {price} ₪.",
+    "❌ Шекелевый дефолт! Не хватает на покупку ({price} ₪ vs {balance} ₪). Бегом на смену в /work!",
+    "❌ Кассир посмеялся над твоими грошами ({balance} ₪). Цена вопроса: {price} ₪. Иди клянчи в треде.",
+    "❌ Ты пришел в магазин без штанов и без денег! Баланс: {balance} ₪, требуется: {price} ₪.",
+    "❌ Не по сеньке шапка! Товар стоит {price} ₪, а в твоем дырявом кармане всего {balance} ₪.",
+    "❌ Пособие по нищебродству не покрывает {price} ₪ (у тебя жалкие {balance} ₪). Работать, негр!",
+    "❌ Твоих шекелей ({balance} ₪) не хватит даже понюхать этот предмет ({price} ₪). Копи дальше.",
+    "❌ Охранник вышвырнул тебя из магазина за попытку купить товар за {price} ₪ с балансом {balance} ₪.",
+    "❌ В твоем кошельке гуляет эхо и мышь повесилась ({balance} ₪). Нужно {price} ₪.",
+    "❌ Нищенская доля: цена {price} ₪, в наличии {balance} ₪. Пиздуй мести улицы в /work.",
+    "❌ Шекелей кот наплакал ({balance} ₪). Накопи {price} ₪ перед тем как жать кнопки.",
+    "❌ Абу в долг не дает, а кредит опущенцам закрыт. Нужно {price} ₪, у тебя {balance} ₪.",
+    "❌ Ты забыл, что ты нищий? Товар стоит {price} ₪, а у тебя {balance} ₪. Иди попрошайничай.",
+    "❌ Недостаточно средств для жизни на широкую ногу! Цена: {price} ₪, твой баланс: {balance} ₪.",
+    "❌ Денег нет, но вы держитесь! Нужно {price} ₪, а наскреб всего {balance} ₪.",
+    "❌ Твой баланс ({balance} ₪) вызывает слезы у завмага. Товар стоит {price} ₪.",
+    "❌ Проснись, ты обосрался! На счету {balance} ₪ вместо необходимых {price} ₪.",
+    "❌ Финансовое фиаско: нужно {price} ₪, а в карманах вошь на аркане ({balance} ₪).",
+    "❌ Хватит заглядывать в витрину с пустыми карманами ({balance} ₪). Цена: {price} ₪.",
+    "❌ Даже в рассрочку не отдадим! Накопи {price} ₪ (сейчас у тебя {balance} ₪).",
+    "❌ С твоим балансом ({balance} ₪) вход в премиум-отдел запрещен. Нужно {price} ₪.",
+    "❌ Проси милостыню через /drop или иди в /work. Нужно {price} ₪, у тебя {balance} ₪.",
+    "❌ Шекелевый банкрот: {balance} ₪ из необходимых {price} ₪. Позор на всю борду."
+]
+
+
 @dp.callback_query(F.data.startswith("shop_buy_"))
 async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     if not board_id: return
@@ -4896,10 +5008,22 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     item = callback.data.replace("shop_buy_", "")
     db = await get_pool()
 
+    # Rate limiting on lootbox openings (3 seconds anti-bot cooldown)
+    if item in ("lootbox_trash", "lootbox_gold", "trash_lootbox", "gold_safe"):
+        last_open = _LOOTBOX_USER_COOLDOWNS.get(user_id, 0.0)
+        time_since = time.time() - last_open
+        if time_since < 3.0:
+            rem_sec = round(3.0 - time_since, 1)
+            excuse = secrets.choice(LOOTBOX_COOLDOWN_EXCUSES).format(seconds=rem_sec)
+            await callback.answer(excuse, show_alert=True)
+            return
+        _LOOTBOX_USER_COOLDOWNS[user_id] = time.time()
+
     from shared_state import check_shop_purchase_limit, record_shop_purchase
     is_allowed, cur_cnt, max_lim = check_shop_purchase_limit(user_id, item)
     if not is_allowed:
-        await callback.answer(f"🛑 Суточный лимит покупок исчерпан! Максимум {max_lim} шт. в сутки (куплено {cur_cnt}).", show_alert=True)
+        excuse = secrets.choice(SHOP_LIMIT_EXCUSES).format(max_lim=max_lim, cur_cnt=cur_cnt)
+        await callback.answer(excuse, show_alert=True)
         return
 
     price = get_current_item_price(item)
@@ -4910,7 +5034,8 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
     async with db_lock:
         balance = await get_user_global_balance(db, user_id)
         if balance < price:
-            await callback.answer(f"Недостаточно шекелей! Нужно {price} ₪, у тебя {int(balance)} ₪.", show_alert=True)
+            excuse = secrets.choice(INSUFFICIENT_FUNDS_EXCUSES).format(price=price, balance=int(balance))
+            await callback.answer(excuse, show_alert=True)
             return
 
         active_items = await _get_user_active_items(db, user_id, board_id)
@@ -4927,6 +5052,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
             active_items, final_cash, recycle_note = lootbox_engine.apply_lootbox_reward(active_items, payload, base_cash)
             if final_cash > 0:
                 await add_user_global_balance(db, user_id, board_id, final_cash)
+                await record_user_transaction(db, user_id, final_cash, 'shop', f'Кешбэк/награда: {item}')
             async with db_transaction(db):
                 await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
 
@@ -4956,6 +5082,7 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
             active_items, final_cash, recycle_note = lootbox_engine.apply_lootbox_reward(active_items, payload, base_cash)
             if final_cash > 0:
                 await add_user_global_balance(db, user_id, board_id, final_cash)
+                await record_user_transaction(db, user_id, final_cash, 'shop', f'Кешбэк/награда: {item}')
             async with db_transaction(db):
                 await db.execute("UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?", (json.dumps(active_items), user_id, board_id))
 
@@ -4976,7 +5103,10 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
 
         # --- 2. WEAPONS & COMBAT ---
         if item == "janitor":
-            active_items["janitor_until"] = now + 6 * 3600
+            max_cap = now + 7 * 86400
+            current_exp = active_items.get("janitor_until", 0)
+            base = current_exp if current_exp > now else now
+            active_items["janitor_until"] = min(base + 6 * 3600, max_cap)
             active_items["janitor_deletes_left"] = 5
             msg = "🚮 Ты получил Билет Дворника на 6 часов (5 удалений через /del)!"
 
@@ -4988,8 +5118,12 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
                 msg = "🔇 Ты купил Мут-Ган! Сделай Reply на пост с командой /shoot, чтобы кикнуть анона на 1 час."
 
         elif item == "shield":
-            active_items["reflect_shield_until"] = now + 6 * 3600
-            active_items["shield_until"] = now + 6 * 3600
+            max_cap = now + 7 * 86400
+            current_shield = active_items.get("shield_until", 0)
+            base = current_shield if current_shield > now else now
+            new_until = min(base + 6 * 3600, max_cap)
+            active_items["reflect_shield_until"] = new_until
+            active_items["shield_until"] = new_until
             msg = "🔰 Зеркальный Щит активирован на 6 часов! Выстрелы Мут-Гана отрикошетят в стрелка."
 
         elif item == "partyvan":
@@ -5052,8 +5186,12 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
                 msg = "🧯 Ты вооружился Перцовым баллончиком! Если на тебя нападут с заточкой (/rob), баллончик ослепит нападающего и выбьет из него деньги!"
 
         elif item == "tinfoil" or item == "hat_tinfoil":
-            active_items["tinfoil_hat"] = now + 6 * 3600
-            active_items["tinfoil_until"] = now + 6 * 3600
+            max_cap = now + 7 * 86400
+            current_tf = active_items.get("tinfoil_until", 0)
+            base = current_tf if current_tf > now else now
+            new_until = min(base + 6 * 3600, max_cap)
+            active_items["tinfoil_hat"] = new_until
+            active_items["tinfoil_until"] = new_until
             active_items["equipped_head"] = "hat_tinfoil"
             active_items["owned_hat_tinfoil"] = True
             msg = "👽 Ты надел Шапочку из фольги на 6 часов! Защищает от говна (/shit) и грабежей (/rob)."
@@ -5080,6 +5218,23 @@ async def cb_shop_buy(callback: types.CallbackQuery, board_id: str | None):
             else:
                 active_items["schizopill_gun"] = True
                 msg = "💊 Ты купил Шизо-Таблетку! Сделай Reply на пост с командой /schizopill (нейро-бред на 1 час)."
+
+        elif item == "ksiva_polkovnik":
+            cur_charges = active_items.get("ksiva_polkovnik", 0)
+            if cur_charges >= 5:
+                err_msg = "У тебя уже максимальный запас ксив полковника (5 шт)!"
+            else:
+                active_items["ksiva_polkovnik"] = cur_charges + 1
+                msg = f"🎖️ Ты приобрёл Ксиву полковника юстиции (всего: {cur_charges + 1} шт)! При любой облаве пативана майор отдаст честь и отменит штраф!"
+
+        elif item == "badge_druzhinnik":
+            max_cap = now + 14 * 86400
+            current_dr = active_items.get("badge_druzhinnik_expires", 0)
+            base = current_dr if current_dr > now else now
+            new_until = min(base + 7 * 86400, max_cap)
+            active_items["badge_druzhinnik_expires"] = new_until
+            days = round((new_until - now) / 86400, 1)
+            msg = f"🪪 Ты получил Удостоверение дружинника на {days} дн.! Теперь ты можешь штрафовать нарушителей в тредах командой /fine (раз в сутки)."
 
         # --- 3. CLOTHING & APPAREL ---
         elif item.startswith("hat_") or item.startswith("body_") or item.startswith("face_") or item.startswith("feet_"):
@@ -5407,9 +5562,6 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
         count_active_attacker_effects, register_attacker_effect,
         get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
     )
-    db = await get_pool()
-    current_time = int(time.time())
-
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0:
         await message.answer("🚫 Не удалось найти автора поста...")
@@ -5420,6 +5572,9 @@ async def cmd_shoot(message: types.Message, board_id: str | None, stream: str = 
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
+
+    db = await get_pool()
+    current_time = int(time.time())
 
     cd_rem = get_combat_cooldown_remaining(user_id)
     if cd_rem > 0:
@@ -5584,9 +5739,6 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
     from shared_state import (
         get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
     )
-    db = await get_pool()
-    current_time = int(time.time())
-
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0:
         await message.answer("🚫 Не удалось найти автора поста...")
@@ -5597,6 +5749,9 @@ async def cmd_pepperspray(message: types.Message, board_id: str | None, stream: 
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
+
+    db = await get_pool()
+    current_time = int(time.time())
 
     cd_rem = get_combat_cooldown_remaining(user_id)
     if cd_rem > 0:
@@ -5722,6 +5877,17 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
         )
         return
 
+    target_id = await get_author_id_by_reply(message)
+    if not target_id or target_id == 0:
+        await message.answer("⚠️ Не удалось найти цель для ограбления.")
+        return
+    if target_id == user_id:
+        await message.answer("🤦‍♂️ Ты попытался ограбить сам себя. Заточка осталась при тебе.")
+        return
+    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
+        await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
+        return
+
     db = await get_pool()
     active_items = await _get_user_active_items(db, user_id, board_id)
     current_time = int(time.time())
@@ -5738,16 +5904,6 @@ async def cmd_rob(message: types.Message, board_id: str | None, stream: str = 'r
 
     if not active_items.get("knife_gun"):
         await message.answer("🔪 У тебя нет Заточки! Купи её в теневом магазине: /shop")
-        return
-    target_id = await get_author_id_by_reply(message)
-    if not target_id or target_id == 0:
-        await message.answer("⚠️ Не удалось найти цель для ограбления.")
-        return
-    if target_id == user_id:
-        await message.answer("🤦‍♂️ Ты попытался ограбить сам себя. Заточка осталась при тебе.")
-        return
-    if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
-        await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
 
     if await handle_attack_abuse_check(message, db, board_id, user_id, target_id):
@@ -6338,9 +6494,6 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
         count_active_attacker_effects, register_attacker_effect,
         get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
     )
-    db = await get_pool()
-    current_time = int(time.time())
-
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0 or target_id == user_id: 
         await message.answer("⚠️ Не удалось найти цель или ты пытаешься проклясть сам себя.")
@@ -6348,6 +6501,9 @@ async def cmd_curse(message: types.Message, board_id: str | None, stream: str = 
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
+
+    db = await get_pool()
+    current_time = int(time.time())
 
     active_items = await _get_user_active_items(db, user_id, board_id)
     if not active_items.get("laxative_gun"):
@@ -6460,9 +6616,6 @@ async def cmd_schizopill(message: types.Message, board_id: str | None, stream: s
         count_active_attacker_effects, register_attacker_effect,
         get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
     )
-    db = await get_pool()
-    current_time = int(time.time())
-
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0 or target_id == user_id:
         await message.answer("⚠️ Не удалось найти цель или ты пытаешься накормить таблетками сам себя.")
@@ -6470,6 +6623,9 @@ async def cmd_schizopill(message: types.Message, board_id: str | None, stream: s
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
+
+    db = await get_pool()
+    current_time = int(time.time())
 
     cd_rem = get_combat_cooldown_remaining(user_id)
     if cd_rem > 0:
@@ -6587,9 +6743,6 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
         count_active_attacker_effects, register_attacker_effect,
         get_combat_cooldown_remaining, set_combat_cooldown, register_target_attack
     )
-    db = await get_pool()
-    current_time = int(time.time())
-
     target_id = await get_author_id_by_reply(message)
     if not target_id or target_id == 0 or target_id == user_id: 
         await message.answer("⚠️ Не удалось определить цель доноса или ты пытаешься посадить сам себя.")
@@ -6597,6 +6750,9 @@ async def cmd_partyvan(message: types.Message, board_id: str | None, stream: str
     if is_admin(target_id, board_id) and not is_admin(user_id, board_id):
         await message.answer(_get_stealth_admin_miss_text(), parse_mode="HTML")
         return
+
+    db = await get_pool()
+    current_time = int(time.time())
 
     # Проверка идемпотентности: цель уже отбывает длительный срок в КПЗ (> 11 часов)
     existing_mute = board_data.get(board_id, {}).get('mutes', {}).get(target_id)
@@ -8863,6 +9019,8 @@ async def cmd_drop(message: types.Message, board_id: str | None, stream: str = '
             amount=amount,
             db_lock=db_lock,
             db_conn=db,
+            check_active_limit=True,
+            check_board_flood=True,
         )
         if not ok or not drop_rec:
             await message.reply(msg, parse_mode="HTML")
@@ -8995,6 +9153,10 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
             claimer_board_id=board_id,
             db_lock=db_lock,
             db_conn=db,
+            check_reaction_delay=True,
+            check_claimer_rate_limit=True,
+            check_farm_laundering=True,
+            min_reaction_delay=1.0,
         )
         if not ok:
             await callback.answer(msg, show_alert=True)
@@ -9050,6 +9212,8 @@ async def cb_drop_handler(callback: types.CallbackQuery, board_id: str | None):
             amount=amount,
             db_lock=db_lock,
             db_conn=db,
+            check_active_limit=True,
+            check_board_flood=True,
         )
         if not ok or not drop_rec:
             await callback.answer(msg, show_alert=True)
@@ -11616,6 +11780,16 @@ async def _send_motivation_message(board_id: str, stream: str, recipients: set):
         'board_id': board_id,
         'keyboard': keyboard
     })
+    target_bot = GLOBAL_BOTS.get(board_id) or shared_state.GLOBAL_BOTS.get(board_id) or GLOBAL_BOTS.get('b')
+    if target_bot:
+        spawn_task(_forward_post_to_realtime_archive(
+            bot_instance=target_bot,
+            board_id=board_id,
+            post_num=post_num,
+            content=content,
+            is_shadow_muted=False,
+            stream=stream
+        ))
 
 
 async def _board_motivation_worker(board_id: str):
@@ -12720,7 +12894,7 @@ class StackedAnimeHandler:
         canonical_map = {
             **{k: 'fap' for k in ["fap", "hent", "hentai", "hentay", "nsfw", "ecchi", "ero", "FAP", "HENT", "HENTAI", "HENTAY", "NSFW", "ECCHI", "ERO"]},
             **{k: 'gatari' for k in ["gatari", "monogatari", "GATARI", "MONOGATARI"]},
-            **{k: 'loli' for k in ["loli", "lolicon", "lolis", "LOLI", "LOLICON", "LOLIS"]},
+            **{k: 'loli' for k in ["loli", "lolicon", "lolis", "LOLI", "LOLICON", "LOLIS", "лоли", "лоликон", "дщдш", "дщдшсщт", "Лоли", "Лоликон", "ЛОЛИ", "ЛОЛИКОН"]},
         }
 
         for command, num_no_space, num_with_space in self.matches:
@@ -18958,6 +19132,479 @@ async def _publish_anime_post(message: types.Message, board_id: str, user_id: in
         )
         spawn_task(delete_message_after_delay(sent_notification, 15))
 
+USER_LOLI_REWARD_COOLDOWN: dict[int, float] = {}
+LOLI_REWARD_COOLDOWN_SEC: float = 3600.0
+LOLI_BUST_STATE: dict[str, dict] = {}
+
+LOLI_EXPLANATION_TEXTS = [
+    "Гражданин майор! Папку с лолями мне подбросили агенты ЦРУ через открытый порт 8080. Сам я правоверный скуф и смотрю только передачи Соловьёва.",
+    "Проводил комплексный культурологический анализ традиционного японского изобразительного искусства эпохи Хэйан для диссертации в ВШЭ. Картинки не разглядывал, изучал исключительно композицию.",
+    "Мой рыжий персидский кот прыгнул на клавиатуру, нажал слэш и задом набрал команду /loli10. Прошу привлечь кота к уголовной ответственности по ст. 242 УК РФ.",
+    "Я слепой инвалид третьей группы, использую голосовой ввод. Сказал Алисе включить Ольгу Бузову, а робот распознал это как запрос на аниме-пак. Моей вины нет.",
+    "Был пьян, перепутал борду с сайтом Госуслуг при попытке оформить пособие по безработице. Готов искупить вину ударным трудом на заводе /work.",
+    "Это нейросетевой сбой майнинг-фермы соседа по коммуналке. Я просто держал роутер.",
+    "Являюсь внештатным тайным агентом ФСБ под прикрытием. Проводил контрольную закупку на борде с целью выявления деструктивных элементов.",
+    "Палец соскользнул с кнопки /help на кнопки /loli. В темноте клавиатура бликовала от монитора. Раскаиваюсь, больше 2 пикч заказывать не буду.",
+    "Искал рецепт борща со сметаной, но проклятые алгоритмы Телеграма подсунули японских школьниц. Прошу переквалифицировать дело на халатность провайдера.",
+    "Данный контент предназначался исключительно для калибровки цветопередачи нового монитора. Вину признаю частично, прошу понять и простить."
+]
+
+async def _process_loli_reward_and_risk(
+    message: types.Message,
+    board_id: str,
+    user_id: int,
+    pic_count: int
+) -> None:
+    """
+    Механика рулетки и наград за команду /loli (1-10 пикч) не чаще 1 раза в час:
+    - 1-2 пикчи: +15 ₪ (риск 0%)
+    - 3-5 пикч: +50 ₪ (риск 15%, штраф 30 ₪)
+    - 6-8 пикч: +120 ₪ (риск 30%, штраф 100 ₪)
+    - 9-10 пикч: +250 ₪ ДЖЕКПОТ (риск 50%, штраф 200 ₪)
+    - Ксива полковника: 100% спасение от облавы и штрафа!
+    - Объяснительная: инлайн-кнопка при облаве с шансом вернуть 50% штрафа.
+    """
+    if not user_id or user_id <= 0:
+        return
+
+    now = time.time()
+    last_reward = USER_LOLI_REWARD_COOLDOWN.get(user_id, 0.0)
+    if now - last_reward < LOLI_REWARD_COOLDOWN_SEC:
+        return
+
+    USER_LOLI_REWARD_COOLDOWN[user_id] = now
+    count = min(10, max(1, pic_count))
+    db = await get_pool()
+
+    if count <= 2:
+        reward = 15.0
+        risk_pct = 0.0
+        fine = 0.0
+    elif count <= 5:
+        reward = 50.0
+        risk_pct = 0.15
+        fine = 30.0
+    elif count <= 8:
+        reward = 120.0
+        risk_pct = 0.30
+        fine = 100.0
+    else:  # 9-10
+        reward = 250.0
+        risk_pct = 0.50
+        fine = 200.0
+
+    is_busted = (risk_pct > 0.0 and random.random() < risk_pct)
+
+    if is_busted:
+        active_items = await _get_user_active_items(db, user_id, board_id)
+        ksiva_charges = active_items.get("ksiva_polkovnik", 0)
+        if ksiva_charges > 0:
+            active_items["ksiva_polkovnik"] = ksiva_charges - 1
+            async with db_transaction(db):
+                await db.execute(
+                    "UPDATE Users SET active_items = ? WHERE user_id = ? AND board_id = ?",
+                    (json.dumps(active_items), user_id, board_id)
+                )
+            new_bal = await add_user_global_balance(db, user_id, board_id, reward)
+            await record_user_transaction(db, user_id, reward, "admin", "Награда /loli (ксива полковника)")
+            text = (
+                f"🎖️ <b>ТОЛЬКО ДЛЯ СЛУЖЕБНОГО ПОЛЬЗОВАНИЯ!</b>\n\n"
+                f"Товарищ майор нагрянул с облавой на <b>{count} лолей</b>, но ты небрежно бросил на стол <b>Ксиву полковника юстиции</b>!\n"
+                f"🫡 Майор побелел, вытянулся в струнку, отдал честь и поспешно ретировался.\n"
+                f"💵 Награда от Абу начислена в полном объеме: <code>+{reward:,.0f} ₪</code>!\n"
+                f"💰 Твой баланс: <code>{new_bal:,.2f} ₪</code> <i>(осталось ксив: {ksiva_charges - 1} шт)</i>\n"
+                f"<i>⏳ Следующая награда через 1 час.</i>"
+            )
+            try:
+                await message.answer(text, parse_mode="HTML")
+            except Exception as err:
+                runtime_logger.warning(f"Could not send loli reward notice: {err}")
+            return
+
+        current_bal = await get_user_global_balance(db, user_id)
+        actual_fine = min(fine, max(0.0, current_bal))
+        if actual_fine > 0:
+            _, new_bal = await deduct_user_global_balance(db, user_id, board_id, actual_fine)
+            await add_to_abu_fund(db, actual_fine, donor_id=user_id, reason=f"Штраф майора за /loli ({count} шт)")
+            await record_user_transaction(
+                db, user_id, -actual_fine, "police",
+                f"Штраф за облаву /loli ({count} шт)"
+            )
+        else:
+            new_bal = 0.0
+
+        bust_id = f"{user_id}_{int(now)}"
+        LOLI_BUST_STATE[bust_id] = {
+            "user_id": user_id,
+            "board_id": board_id,
+            "count": count,
+            "fine": fine,
+            "actual_fine": actual_fine,
+            "created_at": now,
+        }
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Написать объяснительную майору", callback_data=f"loli_explain:{bust_id}")]
+        ])
+
+        fine_str = f"-{actual_fine:,.0f} ₪" if actual_fine > 0 else "0 ₪ (с голодранца взять нечего)"
+        if count >= 9:
+            text = (
+                f"🚓 <b>ПАТИВАН У ПОДЪЕЗДА!</b>\n\n"
+                f"Анон позарился на максимальный пак из <b>{count} лолей</b>, но попал под 50% облаву!\n"
+                f"💸 Награда аннулирована, удержан штраф: <code>{fine_str}</code> в Фонд Абу.\n"
+                f"💰 Твой баланс: <code>{new_bal:,.2f} ₪</code>\n"
+                f"<i>(Жадность фраера сгубила. Можешь попробовать написать объяснительную!)</i>"
+            )
+        elif count >= 6:
+            text = (
+                f"🚨 <b>ОБЛАВА ОБЭП!</b>\n\n"
+                f"Слишком много лолей ({count} шт)! Нагрянула внезапная проверка.\n"
+                f"💸 Списан штраф за жадность: <code>{fine_str}</code> в Фонд Абу.\n"
+                f"💰 Твой баланс: <code>{new_bal:,.2f} ₪</code>\n"
+                f"<i>(Можешь попробовать написать объяснительную майору!)</i>"
+            )
+        else:
+            text = (
+                f"👮‍♂️ <b>ВНИМАНИЕ: ТОВАРИЩ МАЙОР!</b>\n\n"
+                f"Зафиксирована подозрительная активность на {count} лолей (риск 15%).\n"
+                f"💸 Штраф за интерес: <code>{fine_str}</code> в Фонд Абу.\n"
+                f"💰 Твой баланс: <code>{new_bal:,.2f} ₪</code>\n"
+                f"<i>(Можешь попробовать написать объяснительную майору!)</i>"
+            )
+        try:
+            await message.answer(text, parse_mode="HTML", reply_markup=kb)
+        except Exception as err:
+            runtime_logger.warning(f"Could not send loli reward notice: {err}")
+        return
+    else:
+        new_bal = await add_user_global_balance(db, user_id, board_id, reward)
+        await record_user_transaction(
+            db, user_id, reward, "admin",
+            f"Награда за /loli ({count} шт)"
+        )
+        if count >= 9:
+            text = (
+                f"🔥 <b>ДЖЕКПОТ ОТ АБУ!</b> 🍭\n\n"
+                f"Ты рискнул на полный пак из <b>{count} лолей</b> (риск облавы был 50%) и победил!\n"
+                f"💵 Награда от Абу: <code>+{reward:,.0f} ₪</code>!\n"
+                f"💰 Твой баланс: <code>{new_bal:,.2f} ₪</code>\n"
+                f"<i>⏳ Следующая награда будет доступна через 1 час.</i>"
+            )
+        elif count >= 6:
+            text = (
+                f"🎉 <b>ЖАДНО, НО ПРОКАТИЛО!</b> 🍭\n\n"
+                f"Абу оценил коллекцию из {count} лолей и выдал солидный куш!\n"
+                f"💵 Начислено: <code>+{reward:,.0f} ₪</code>\n"
+                f"💰 Твой баланс: <code>{new_bal:,.2f} ₪</code>\n"
+                f"<i>⏳ Следующая награда будет доступна через 1 час.</i>"
+            )
+        elif count >= 3:
+            text = (
+                f"🍭 <b>НАГРАДА ОТ АБУ</b>\n\n"
+                f"Отличная подборка из {count} лолей!\n"
+                f"💵 Начислено: <code>+{reward:,.0f} ₪</code>\n"
+                f"💰 Твой баланс: <code>{new_bal:,.2f} ₪</code>\n"
+                f"<i>⏳ Следующая награда будет доступна через 1 час.</i>"
+            )
+        else:
+            text = (
+                f"🍭 <b>СКРОМНОСТЬ ВОЗНАГРАЖДЕНА</b>\n\n"
+                f"Абу похвалил анона за скромный запрос ({count} шт, риск 0%)!\n"
+                f"💵 На карманные расходы: <code>+{reward:,.0f} ₪</code>\n"
+                f"💰 Твой баланс: <code>{new_bal:,.2f} ₪</code>\n"
+                f"<i>⏳ Следующая награда будет доступна через 1 час.</i>"
+            )
+
+    try:
+        await message.answer(text, parse_mode="HTML")
+    except Exception as err:
+        runtime_logger.warning(f"Could not send loli reward notice: {err}")
+
+@dp.callback_query(F.data.startswith("loli_explain:"))
+async def cb_loli_explain(callback: types.CallbackQuery, board_id: str | None):
+    bust_id = callback.data.split(":", 1)[1]
+    bust = LOLI_BUST_STATE.get(bust_id)
+    if not bust:
+        await callback.answer("Дело уже закрыто и сдано в архив! Объяснительную писать поздно.", show_alert=True)
+        return
+    if callback.from_user.id != bust["user_id"]:
+        await callback.answer("Это не твоё уголовное дело! Не суй нос в чужие протоколы.", show_alert=True)
+        return
+
+    LOLI_BUST_STATE.pop(bust_id, None)
+    user_id = bust["user_id"]
+    target_board = bust["board_id"] or board_id or "b"
+    actual_fine = bust["actual_fine"]
+    chosen_text = random.choice(LOLI_EXPLANATION_TEXTS)
+    db = await get_pool()
+
+    is_mercy = random.random() < 0.25
+
+    if is_mercy:
+        refund = round(actual_fine * 0.5, 2)
+        if refund > 0:
+            new_bal = await add_user_global_balance(db, user_id, target_board, refund)
+            await deduct_from_abu_fund(db, refund, reason=f"Возврат 50% штрафа по объяснительной user={user_id}")
+            await record_user_transaction(db, user_id, refund, "police", "Возврат 50% штрафа по объяснительной")
+        else:
+            new_bal = await get_user_global_balance(db, user_id)
+
+        result_text = (
+            f"📝 <b>ОБЪЯСНИТЕЛЬНАЯ ПРИНЯТА К СВЕДЕНИЮ</b>\n\n"
+            f"<i>«{chosen_text}»</i>\n\n"
+            f"🥹 <b>РЕШЕНИЕ МАЙОРА:</b>\n"
+            f"Товарищ майор вытер скупую мужскую слезу, глубоко вздохнул и постановил:\n"
+            f"<i>«Чёрт с тобой, анон. Видно, что дурак, но не со зла. Половину штрафа возвращаю, но чтоб больше на глаза не попадался!»</i>\n\n"
+            f"💸 Возвращено на баланс: <code>+{refund:,.0f} ₪</code>\n"
+            f"💰 Твой баланс: <code>{new_bal:,.2f} ₪</code>"
+        )
+    else:
+        extra_fine = 20.0
+        cur_bal = await get_user_global_balance(db, user_id)
+        act_extra = min(extra_fine, max(0.0, cur_bal))
+        if act_extra > 0:
+            _, new_bal = await deduct_user_global_balance(db, user_id, target_board, act_extra)
+            await add_to_abu_fund(db, act_extra, donor_id=user_id, reason="Штраф за дачу ложных показаний майору")
+            await record_user_transaction(db, user_id, -act_extra, "police", "Штраф за ложные показания")
+        else:
+            new_bal = 0.0
+
+        extra_str = f"-{act_extra:,.0f} ₪" if act_extra > 0 else "0 ₪ (с голодранца взять нечего)"
+        result_text = (
+            f"📝 <b>ОБЪЯСНИТЕЛЬНАЯ ОТКЛОНЕНА</b>\n\n"
+            f"<i>«{chosen_text}»</i>\n\n"
+            f"🚨 <b>РЕШЕНИЕ МАЙОРА:</b>\n"
+            f"Товарищ майор скомкал листок и со всей дури хлопнул папкой по столу:\n"
+            f"<i>«Ты кого наебать пытаешься, сыч?! За попытку дачи заведомо ложных показаний накидываю ещё 20 ₪ сверху в доход государства!»</i>\n\n"
+            f"💸 Дополнительный штраф: <code>{extra_str}</code> в Фонд Абу.\n"
+            f"💰 Твой баланс: <code>{new_bal:,.2f} ₪</code>"
+        )
+
+    try:
+        await callback.message.edit_text(result_text, parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(result_text, parse_mode="HTML")
+    await callback.answer()
+
+# --- ДОПРОС В ОТДЕЛЕ К ---
+USER_DOPROS_COOLDOWN: dict[int, float] = {}
+DOPROS_COOLDOWN_SEC: float = 1800.0
+ACTIVE_DOPROS: dict[str, dict] = {}
+
+@dp.message(Command("dopros", "допрос", ignore_case=True, ignore_mention=True))
+async def cmd_dopros(message: types.Message, board_id: str | None):
+    if not board_id: return
+    user_id = message.from_user.id
+    now = time.time()
+
+    last_time = USER_DOPROS_COOLDOWN.get(user_id, 0.0)
+    if now - last_time < DOPROS_COOLDOWN_SEC:
+        rem_min = int((DOPROS_COOLDOWN_SEC - (now - last_time)) // 60) + 1
+        await message.answer(f"⏳ Товарищ майор сейчас занят заполнением протоколов. Следующий вызов на допрос через {rem_min} мин.")
+        return
+
+    target_id = user_id
+    target_name = "Анон"
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target_id = message.reply_to_message.from_user.id
+        target_name = message.reply_to_message.from_user.first_name or "Анон"
+
+    if is_admin(target_id, board_id):
+        await message.answer(
+            "👮‍♂️ <b>ОТМЕНА ОПЕРАЦИИ!</b>\n\n"
+            "Товарищ майор заглянул в личное дело подозреваемого, увидел генеральские погоны Администратора, вытянулся в струнку, извинился и поспешно сжёг повестку в пепельнице.",
+            parse_mode="HTML"
+        )
+        return
+
+    USER_DOPROS_COOLDOWN[user_id] = now
+    dopros_id = secrets.token_hex(4)
+    protocol_num = random.randint(100, 999)
+    ACTIVE_DOPROS[dopros_id] = {
+        "target_id": target_id,
+        "initiator_id": user_id,
+        "board_id": board_id,
+        "created_at": now,
+    }
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💸 Дать взятку (50 ₪)", callback_data=f"dopros_bribe:{dopros_id}")],
+        [InlineKeyboardButton(text="🤐 51-я статья (молчать)", callback_data=f"dopros_art51:{dopros_id}")],
+        [InlineKeyboardButton(text="👉 Сдать соседа по борде", callback_data=f"dopros_snitch:{dopros_id}")]
+    ])
+
+    text = (
+        f"📋 <b>ПОВЕСТКА НА ДОПРОС В ОТДЕЛ «К» №{protocol_num}</b>\n\n"
+        f"Гражданин <b>{target_name}</b> (ID: <code>{target_id}</code>) вызван в кабинет №404 по подозрению в антисоветском шизопостинге, хранении запрещённых мемов и неуважении к товарищу майору!\n\n"
+        f"<i>Следователь положил на стол чистый протокол и тяжёлый взгляд. Твоя линия защиты:</i>"
+    )
+    await message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("dopros_"))
+async def cb_dopros_action(callback: types.CallbackQuery, board_id: str | None):
+    parts = callback.data.split(":")
+    if len(parts) != 2: return
+    action, dopros_id = parts[0], parts[1]
+    dopros = ACTIVE_DOPROS.get(dopros_id)
+    if not dopros:
+        await callback.answer("Протокол допроса уже сдан в архив!", show_alert=True)
+        return
+    if callback.from_user.id != dopros["target_id"]:
+        await callback.answer("Это не твой допрос, гражданин! Проходи, не задерживай следствие.", show_alert=True)
+        return
+
+    ACTIVE_DOPROS.pop(dopros_id, None)
+    target_id = dopros["target_id"]
+    target_board = dopros["board_id"] or board_id or "b"
+    db = await get_pool()
+
+    if action == "dopros_bribe":
+        b_amount = 50.0
+        cur_bal = await get_user_global_balance(db, target_id)
+        if cur_bal < b_amount:
+            await callback.answer("❌ Взятка отклонена! У тебя даже 50 ₪ нет на кармане!", show_alert=True)
+            text = (
+                "🔒 <b>ВЗЯТКА НЕ ПРОШЛА!</b>\n\n"
+                "Следователь брезгливо посмотрел на пустые карманы анона:\n"
+                "<i>«С голодранца и взять нечего. Пиши явку с повинной!»</i>\n\n"
+                "Анон отправлен в КПЗ на 5 минут за попытку подкупа при отсутствии денег!"
+            )
+            await update_shadow_mute(user_id=target_id, board_id=target_board, duration_seconds=300, reason="dopros_failed_bribe")
+        else:
+            await deduct_user_global_balance(db, target_id, target_board, b_amount)
+            await add_to_abu_fund(db, b_amount, donor_id=target_id, reason="Взятка на допросе в Отделе К")
+            await record_user_transaction(db, target_id, -b_amount, "police", "Взятка следователю /dopros")
+            text = (
+                "💸 <b>ДЕЛО ЗАКРЫТО!</b>\n\n"
+                "Конверт с <b>50 ₪</b> незаметно перекочевал в ящик стола следователя.\n"
+                "<i>«По результатам проверки состав преступления не обнаружен. Протокол случайно попал в шредер. Свободен, гражданин!»</i>"
+            )
+    elif action == "dopros_art51":
+        if random.random() < 0.50:
+            text = (
+                "🤐 <b>51-Я СТАТЬЯ СРАБОТАЛА!</b>\n\n"
+                "Анон сидел с каменным лицом и молчал как партизан.\n"
+                "Следователь вздохнул, не нашёл прямых улик и с досадой постановил:\n"
+                "<i>«Умный больно? Ладно, гуляй пока. Но ты у нас на карандаше!»</i>"
+            )
+        else:
+            await update_shadow_mute(user_id=target_id, board_id=target_board, duration_seconds=300, reason="dopros_art51_contempt")
+            text = (
+                "🚨 <b>НЕУВАЖЕНИЕ К СЛЕДСТВИЮ!</b>\n\n"
+                "Анон решил поиграть в молчанку, но следователь оказался старой закалки.\n"
+                "<i>«Молчишь? Значит, виновен! 5 минут в КПЗ (шедоумут) освежат твою память!»</i>"
+            )
+    elif action == "dopros_snitch":
+        text = (
+            "👉 <b>ДОНОС СОСТАВЛЕН!</b>\n\n"
+            "Анон исписал 12 страниц мелким почерком, сдав с потрохами всех щитпостеров и любителей лолей в треде!\n"
+            "Товарищ майор довольно потёр руки и пожал руку сознательному гражданину:\n"
+            "<i>«Родина тебя не забудет! Пативан выезжает по новым адресам!»</i>\n\n"
+            "Гражданин отпущен с почётной грамотой осведомителя."
+        )
+    else:
+        text = "Допрос окончен."
+
+    try:
+        await callback.message.edit_text(text, parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text, parse_mode="HTML")
+    await callback.answer()
+
+# --- ДРУЖИННИК И ШТРАФЫ ---
+USER_DRUZHINA_COOLDOWN: dict[int, float] = {}
+DRUZHINA_COOLDOWN_SEC: float = 86400.0
+
+@dp.message(Command("fine", "штраф", "druzhina", "дружинник", ignore_case=True, ignore_mention=True))
+async def cmd_fine(message: types.Message, board_id: str | None):
+    if not board_id: return
+    user_id = message.from_user.id
+    now = time.time()
+    db = await get_pool()
+
+    if not message.reply_to_message or not message.reply_to_message.from_user:
+        await message.answer("❌ Команда применяется <b>ответом (Reply)</b> на сообщение нарушителя!", parse_mode="HTML")
+        return
+
+    target_id = message.reply_to_message.from_user.id
+    if target_id == user_id:
+        await message.answer("❌ Нельзя выписать штраф самому себе, шизоид!")
+        return
+
+    active_items = await _get_user_active_items(db, user_id, board_id)
+    if active_items.get("badge_druzhinnik_expires", 0) <= now:
+        p_druzh = get_current_item_price("badge_druzhinnik")
+        await message.answer(
+            f"❌ У тебя нет активного <b>Удостоверения дружинника</b>!\n"
+            f"Приобрети его в <code>/shop</code> (раздел Аптека) за {p_druzh} ₪ на 7 дней.",
+            parse_mode="HTML"
+        )
+        return
+
+    last_fine = USER_DRUZHINA_COOLDOWN.get(user_id, 0.0)
+    if now - last_fine < DRUZHINA_COOLDOWN_SEC:
+        rem_h = int((DRUZHINA_COOLDOWN_SEC - (now - last_fine)) // 3600) + 1
+        await message.answer(f"⏳ Твоя дружинницкая смена окончена. Следующий рейд со штрафом доступен через {rem_h} ч.")
+        return
+
+    if is_admin(target_id, board_id):
+        admin_fine = 30.0
+        cur_bal = await get_user_global_balance(db, user_id)
+        act_fine = min(admin_fine, max(0.0, cur_bal))
+        if act_fine > 0:
+            await deduct_user_global_balance(db, user_id, board_id, act_fine)
+            await add_to_abu_fund(db, act_fine, donor_id=user_id, reason="Штраф дружиннику за наезд на админа")
+            await record_user_transaction(db, user_id, -act_fine, "police", "Штраф за наезд на админа")
+        await message.answer(
+            f"🚨 <b>ПРЕВЫШЕНИЕ СЛУЖЕБНЫХ ПОЛНОМОЧИЙ!</b>\n\n"
+            f"Ты попытался оштрафовать <b>Администратора</b> борды!\n"
+            f"Товарищ майор лично оторвал дружиннику погоны и выписал штраф <code>-{act_fine:,.0f} ₪</code> за самоуправство!",
+            parse_mode="HTML"
+        )
+        return
+
+    target_items = await _get_user_active_items(db, target_id, board_id)
+    if target_items.get("reflect_shield_until", 0) > now or target_items.get("shield_until", 0) > now:
+        cur_bal = await get_user_global_balance(db, user_id)
+        act_fine = min(15.0, max(0.0, cur_bal))
+        if act_fine > 0:
+            await deduct_user_global_balance(db, user_id, board_id, act_fine)
+            await add_to_abu_fund(db, act_fine, donor_id=user_id, reason="Отражение штрафа щитом")
+        USER_DRUZHINA_COOLDOWN[user_id] = now
+        await message.answer(
+            "🔰 <b>РИКОШЕТ ЗЕРКАЛЬНОГО ЩИТА!</b>\n\n"
+            "У нарушителя оказался активирован Зеркальный Щит!\n"
+            "Постановление о штрафе отскочило обратно в дружинника. Ты оштрафован сам на 15 ₪!",
+            parse_mode="HTML"
+        )
+        return
+
+    USER_DRUZHINA_COOLDOWN[user_id] = now
+    fine_val = 15.0
+    target_bal = await get_user_global_balance(db, target_id)
+    act_target_fine = min(fine_val, max(0.0, target_bal))
+
+    if act_target_fine > 0:
+        await deduct_user_global_balance(db, target_id, board_id, act_target_fine)
+        await add_to_abu_fund(db, 5.0, donor_id=target_id, reason="Доля Абу от штрафа дружинника")
+        await record_user_transaction(db, target_id, -act_target_fine, "police", "Штраф от дружинника")
+        druzh_reward = max(0.0, act_target_fine - 5.0)
+        if druzh_reward > 0:
+            await add_user_global_balance(db, user_id, board_id, druzh_reward)
+            await record_user_transaction(db, user_id, druzh_reward, "police", "Премия дружинника")
+    else:
+        druzh_reward = 0.0
+
+    target_name = message.reply_to_message.from_user.first_name or "Анон"
+    await message.answer(
+        f"🪪 <b>ШТРАФ ОТ НАРОДНОЙ ДРУЖИНЫ!</b>\n\n"
+        f"Дружинник выявил нарушение общественного порядка у анона <b>{target_name}</b>!\n"
+        f"💸 С нарушителя взыскано: <code>-{act_target_fine:,.0f} ₪</code>\n"
+        f"💰 Премия дружинника: <code>+{druzh_reward:,.0f} ₪</code> <i>(5 ₪ ушло в Фонд Абу)</i>\n"
+        f"<i>(Следующий рейд со штрафом доступен через 24 часа.)</i>",
+        parse_mode="HTML"
+    )
+
 async def _process_stacked_anime_command(
     message: types.Message,
     board_id: str,
@@ -19013,6 +19660,10 @@ async def _process_stacked_anime_command(
 
         await _publish_anime_post(message, board_id, user_id, content, stream, len(successful_downloads))
         
+        # --- LOLI HOURLY RISK-REWARD EVENT ---
+        if is_loli:
+            spawn_task(_process_loli_reward_and_risk(message, board_id, user_id, len(successful_downloads)))
+
         # --- EVENT / WAIFU BONUS DROP LOGIC ---
         if random.random() < 0.15:
             is_nsfw_board = board_id in ['b', 'h', 'a']
@@ -23167,6 +23818,8 @@ async def setup_bot_commands(bots: dict):
         BotCommand(command="flag_ru", description="🇷🇺 Повесить флаг России (реплай)"),
         BotCommand(command="flag_ua", description="🇺🇦 Повесить флаг Украины (реплай)"),
         BotCommand(command="votemute", description="🗳️ Народный шизо-мут (реплай)"),
+        BotCommand(command="dopros", description="📋 Вызов на допрос в Отдел «К» (реплай/себе)"),
+        BotCommand(command="fine", description="🪪 Штраф от дружинника (реплай)"),
         BotCommand(command="heist", description="🦹 Теневое AI-ограбление (реплай)"),
         BotCommand(command="mega", description="📌 Закрепить свой пост (реплай)"),
         BotCommand(command="ans", description="✉️ Задать вопрос автору поста"),
@@ -24395,6 +25048,13 @@ async def cb_prof_ledger(callback: types.CallbackQuery, board_id: str | None):
     await _render_shop_subview(callback, text, kb, category="wallet")
     await callback.answer()
 
+from market_engine import market_router
+from bank_engine import bank_router
+from handlers.message_router import message_router
+dp.include_router(market_router)
+dp.include_router(bank_router)
+dp.include_router(message_router)
+
 # --- Fallback router: MUST be included LAST so all sub-routers get a chance first ---
 from aiogram import Router as _Router
 _fallback_router = _Router(name="fallback_unknown_cmd")
@@ -24437,12 +25097,6 @@ async def handle_unknown_command_spam(message: types.Message):
     except TelegramBadRequest:
         pass
 
-from market_engine import market_router
-from bank_engine import bank_router
-from handlers.message_router import message_router
-dp.include_router(market_router)
-dp.include_router(bank_router)
-dp.include_router(message_router)
 dp.include_router(_fallback_router)  # LAST — catches unhandled /commands AFTER all other routers
 
 async def main():
@@ -24561,6 +25215,10 @@ async def main():
             elif GLOBAL_BOTS:
                 bots_to_close = list(GLOBAL_BOTS.values())
             await graceful_shutdown(bots_to_close, healthcheck_site)
+        try:
+            await close_pool()
+        except Exception as e:
+            print(f"⚠️ Ошибка при close_pool в main: {e}")
         if session:
             try:
                 await session.close()

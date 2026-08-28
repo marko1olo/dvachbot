@@ -150,6 +150,12 @@ async def test_wallet_message_shows_dual_balance_if_bank_present(tmp_path):
         status TEXT NOT NULL DEFAULT 'active'
     )
     """)
+    await db.execute("""
+    CREATE TABLE IF NOT EXISTS ReferralAliases (
+        code TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL
+    )
+    """)
     user_id = 8888
     await db.execute("INSERT INTO Users (user_id, board_id, balance) VALUES (?, 'b', 500.0)", (user_id,))
     await db.execute(
@@ -174,8 +180,14 @@ async def test_wallet_message_shows_dual_balance_if_bank_present(tmp_path):
         main = _get_main_module()
         if main and hasattr(main, "cmd_wallet"):
             await main.cmd_wallet(message_mock, board_id="b", stream="ru")
-            assert message_mock.answer.called
-            sent_text = message_mock.answer.call_args[0][0]
+            if message_mock.answer.called:
+                sent_text = message_mock.answer.call_args[0][0]
+            elif message_mock.bot.send_photo.called:
+                sent_text = message_mock.bot.send_photo.call_args[1].get("caption", "") or str(message_mock.bot.send_photo.call_args)
+            elif message_mock.bot.send_message.called:
+                sent_text = message_mock.bot.send_message.call_args[1].get("text", "") or str(message_mock.bot.send_message.call_args)
+            else:
+                sent_text = ""
             assert "500" in sent_text or "баланс" in sent_text.lower()
         else:
             # Verify bank deposit isolation

@@ -84,3 +84,6 @@ CIS_COUNTRY_CODES = {'RU', 'UA', 'BY', 'KZ', 'KG', 'TJ', 'UZ', 'AM', 'AZ', 'MD',
 # Превращаем строку "123,456" в множество {123, 456}
 admin_env = os.getenv("ADMINS", "")
 ADMIN_IDS = {int(x.strip()) for x in admin_env.split(",") if x.strip().isdigit()}
+
+SITE_PUBLIC_BASE_URL = os.getenv("SITE_PUBLIC_BASE_URL", "https://tgach.top").rstrip("/")
+

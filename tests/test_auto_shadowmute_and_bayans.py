@@ -214,17 +214,17 @@ class TestAutoShadowmuteAndBayans(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(res3)
 
     async def test_link_and_ad_spam_detection(self):
-        """Telegram invite links and casino/scam keywords must trigger link spam."""
+        """Telegram links are allowed; casino/scam keywords must trigger spam."""
         now = 1000000.0
         
+        # Telegram links are now allowed
         is_sp, r = check_link_or_ad_spam(self.user_id, self.board_id, "Вступайте в чат t.me/+AbCdEfGhIjKl", now_ts=now)
-        self.assertTrue(is_sp)
-        self.assertIn("Инвайт-ссылка", r)
+        self.assertFalse(is_sp)
         
         is_sp, r = check_link_or_ad_spam(self.user_id, self.board_id, "Конфа тут: t.me/joinchat/xyz12345", now_ts=now)
-        self.assertTrue(is_sp)
-        self.assertIn("Инвайт-ссылка", r)
+        self.assertFalse(is_sp)
         
+        # Casino / Scam keywords remain blocked
         is_sp, r = check_link_or_ad_spam(self.user_id, self.board_id, "Поднимай бабло в 1win и казино вулкан", now_ts=now)
         self.assertTrue(is_sp)
         self.assertIn("Реклама/скам", r)

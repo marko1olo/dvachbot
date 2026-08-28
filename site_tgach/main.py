@@ -420,6 +420,14 @@ async def is_request_from_ru(request: Request) -> bool:
 from logging.handlers import RotatingFileHandler
 
 
+class SafeRotatingFileHandler(RotatingFileHandler):
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except (PermissionError, OSError):
+            pass
+
+
 class _RequestIdDefaultFilter(logging.Filter):
     def filter(self, record):
         if not hasattr(record, "request_id"):
@@ -433,7 +441,7 @@ def _add_request_id_filter(handler: logging.Handler) -> logging.Handler:
 
 
 file_handler = _add_request_id_filter(
-    RotatingFileHandler(
+    SafeRotatingFileHandler(
         "site.log", maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
     )
 )
@@ -473,13 +481,6 @@ try:
     logger.info(f"Loaded {len(VALID_HF_REPOS)} valid HF repos for link filtering.")
 except Exception as e:
     logger.warning(f"Error parsing HF_ACCOUNTS for filtering: {e}")
-
-class SafeRotatingFileHandler(RotatingFileHandler):
-    def doRollover(self):
-        try:
-            super().doRollover()
-        except (PermissionError, OSError):
-            pass
 
 
 # Настройка компактного логгера посетителей
@@ -7169,6 +7170,9 @@ class AdminAlertRequest(BaseModel):
     target_board: str = "all"
 
 
+_feedback_dedup_cache: dict[tuple[int, str], float] = {}
+
+
 @app.post("/api/feedback")
 @limiter.limit("2/minute", key_func=get_user_id_from_session)
 async def api_send_feedback(
@@ -7180,8 +7184,23 @@ async def api_send_feedback(
     if len(data.message) > 2000:
         raise HTTPException(400, "Too long")
     uid = int(user["id"])
+    
+    # Server-side fast dedup cache
+    now = time.time()
+    msg_hash = hashlib.sha256(data.message.strip().encode()).hexdigest()
+    cache_key = (uid, msg_hash)
+    if now - _feedback_dedup_cache.get(cache_key, 0.0) < 10.0:
+        return {"status": "ok"}
+    
     success = await create_feedback(uid, data.category, data.contact, data.message)
     if success:
+        _feedback_dedup_cache[cache_key] = now
+        if len(_feedback_dedup_cache) > 200:
+            cutoff = now - 60.0
+            for k in list(_feedback_dedup_cache.keys()):
+                if _feedback_dedup_cache[k] < cutoff:
+                    _feedback_dedup_cache.pop(k, None)
+
         notify_text = (
             f"📬 <b>Фидбек с сайта!</b>\n\n"
             f"👤 <b>User:</b> <code>{uid}</code>\n"
@@ -7189,9 +7208,11 @@ async def api_send_feedback(
             f"📧 <b>Связь:</b> {html.escape(data.contact or 'Нет')}\n\n"
             f"💬 <b>Текст:</b>\n{html.escape(data.message)}"
         )
-        bg_tasks.add_task(
-            notify_admins, request.app.state.file_uploader_bot, notify_text
-        )
+        bot = getattr(request.app.state, "file_uploader_bot", None)
+        if bot:
+            bg_tasks.add_task(
+                notify_admins, bot, notify_text
+            )
         return {"status": "ok"}
     raise HTTPException(500, "Save error")
 

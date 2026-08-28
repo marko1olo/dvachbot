@@ -265,9 +265,12 @@ class TestMainAdminImmunity(unittest.IsolatedAsyncioTestCase):
 class TestCombatTargetImmunity(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         common.config.ADMIN_IDS.add(ADMIN_USER_ID)
+        self.patch_pool = patch('main.get_pool', AsyncMock(return_value=AsyncMock()))
+        self.patch_pool.start()
 
     def tearDown(self):
         common.config.ADMIN_IDS.discard(ADMIN_USER_ID)
+        self.patch_pool.stop()
 
     async def test_combat_target_immunity_shoot(self):
         """Non-admin shooting an admin with /shoot must be blocked with stealth miss (no admin leak)."""

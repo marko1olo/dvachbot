@@ -4,7 +4,14 @@ from handlers.message_router import resolve_archive_or_inline_reply
 
 
 @pytest.mark.asyncio
-async def test_resolve_archive_or_inline_reply_formats():
+async def test_resolve_archive_or_inline_reply_formats(isolated_test_db):
+    db = isolated_test_db
+    import time, json
+    await db.execute(
+        "INSERT INTO Posts (post_num, board_id, author_id, content, timestamp) VALUES (501707, 'b', 123, ?, ?)",
+        (json.dumps({'type': 'text', 'text': 'Original post'}), time.time())
+    )
+
     # 1. Non-matching regular text
     pnum, cleaned = await resolve_archive_or_inline_reply("обычный текст без реплая")
     assert pnum is None

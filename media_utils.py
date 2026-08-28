@@ -9,7 +9,13 @@ from PIL import Image
 from typing import Optional, Tuple
 from japanese_translator import get_dynamic_proxy_url
 
+try:
+    import cv2
+except (ImportError, ModuleNotFoundError):
+    cv2 = None
+
 logger = logging.getLogger(__name__)
+
 
 # Pre-built SSL context to avoid blocking ssl.create_default_context()
 # or repeated SSLContext() inside the async event loop.
@@ -127,9 +133,10 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
     ВАЖНО: Пропускает видео (MP4, WebM) и анимированные GIF без изменений, чтобы не ломать кодировку.
     Корректно обрабатывает прозрачность RGBA/LA на белый фон без черных артефактов.
     """
-    MAX_DIMENSION_SUM = 10000
+    MAX_DIMENSION_SUM = 4096
+    MAX_SINGLE_SIDE = 2560
     MAX_ASPECT_RATIO = 20.0
-    MAX_FILE_SIZE_BYTES = 9.5 * 1024 * 1024
+    MAX_FILE_SIZE_BYTES = 3.5 * 1024 * 1024
     if not image_bytes:
         return image_bytes
     header = image_bytes[:12]
@@ -143,9 +150,14 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
             format_original = img.format
             if getattr(img, 'is_animated', False):
                 return image_bytes
-            needs_resize_dims = width + height > MAX_DIMENSION_SUM or width / height > MAX_ASPECT_RATIO or height / width > MAX_ASPECT_RATIO
+            needs_resize_dims = (
+                width + height > MAX_DIMENSION_SUM 
+                or max(width, height) > MAX_SINGLE_SIDE
+                or width / height > MAX_ASPECT_RATIO 
+                or height / width > MAX_ASPECT_RATIO
+            )
             if not needs_resize_dims and input_size <= MAX_FILE_SIZE_BYTES:
-                if format_original == 'PNG' and input_size > 5 * 1024 * 1024:
+                if format_original == 'PNG' and input_size > 2.5 * 1024 * 1024:
                     pass
                 else:
                     return image_bytes
@@ -160,17 +172,21 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
                 img = img.convert('RGB')
 
             new_width, new_height = (width, height)
-            if width + height > MAX_DIMENSION_SUM:
-                scale_factor = MAX_DIMENSION_SUM / (width + height)
-                new_width = int(width * scale_factor)
-                new_height = int(height * scale_factor)
+            if max(new_width, new_height) > MAX_SINGLE_SIDE:
+                scale_factor = MAX_SINGLE_SIDE / max(new_width, new_height)
+                new_width = int(new_width * scale_factor)
+                new_height = int(new_height * scale_factor)
+            if new_width + new_height > MAX_DIMENSION_SUM:
+                scale_factor = MAX_DIMENSION_SUM / (new_width + new_height)
+                new_width = int(new_width * scale_factor)
+                new_height = int(new_height * scale_factor)
             if new_width / new_height > MAX_ASPECT_RATIO:
                 new_width = int(new_height * MAX_ASPECT_RATIO)
             elif new_height / new_width > MAX_ASPECT_RATIO:
                 new_height = int(new_width * MAX_ASPECT_RATIO)
             if new_width != width or new_height != height:
                 img = img.resize((max(1, new_width), max(1, new_height)), Image.LANCZOS)
-            quality = 95
+            quality = 90
             output_buffer = io.BytesIO()
             img.save(output_buffer, format='JPEG', quality=quality)
             current_size = output_buffer.tell()

@@ -5,6 +5,56 @@ import sqlite3
 import os
 from common.config import DB_NAME
 
+
+def _patch_aiosqlite_safe_worker():
+    """
+    Защищает рабочий поток aiosqlite от краша с RuntimeError('Event loop is closed')
+    при завершении работы бота и закрытии asyncio event loop.
+    """
+    try:
+        import aiosqlite.core
+        if getattr(aiosqlite.core.Connection, "_safe_worker_patched", False):
+            return
+
+        def _safe_run(self):
+            while True:
+                tx_item = self._tx.get()
+                if tx_item is aiosqlite.core._STOP_RUNNING_SENTINEL:
+                    break
+
+                future, function = tx_item
+
+                try:
+                    result = function()
+                    loop = getattr(future, "get_loop", None)
+                    if loop:
+                        ev_loop = loop()
+                        if ev_loop and not ev_loop.is_closed():
+                            try:
+                                ev_loop.call_soon_threadsafe(aiosqlite.core.set_result, future, result)
+                            except RuntimeError:
+                                pass
+                except BaseException as e:
+                    try:
+                        loop = getattr(future, "get_loop", None)
+                        if loop:
+                            ev_loop = loop()
+                            if ev_loop and not ev_loop.is_closed():
+                                try:
+                                    ev_loop.call_soon_threadsafe(aiosqlite.core.set_exception, future, e)
+                                except RuntimeError:
+                                    pass
+                    except Exception:
+                        pass
+
+        aiosqlite.core.Connection.run = _safe_run
+        aiosqlite.core.Connection._safe_worker_patched = True
+    except Exception as e:
+        print(f"[DB] Could not patch aiosqlite worker: {e}")
+
+
+_patch_aiosqlite_safe_worker()
+
 # Глобальная переменная соединения
 _db_connection = None
 
@@ -220,13 +270,22 @@ async def close_pool():
     global _db_connection
     async with _reconnect_lock:
         if _db_connection:
+            conn = _db_connection
             try:
                 try:
-                    await _db_connection.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                    await conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
                     print("[DB] WAL checkpoint (TRUNCATE) completed successfully before close.")
                 except Exception as ckpt_e:
                     print(f"[DB] WAL checkpoint on close error: {ckpt_e}")
-                await _db_connection.close()
+                await conn.close()
+                is_alive_fn = getattr(conn, "is_alive", None)
+                if callable(is_alive_fn) and not asyncio.iscoroutinefunction(is_alive_fn):
+                    try:
+                        alive = is_alive_fn()
+                        if alive and not asyncio.iscoroutine(alive):
+                            await asyncio.wait_for(asyncio.to_thread(conn.join, 2.0), timeout=2.5)
+                    except Exception:
+                        pass
                 print("[DB] Connection closed successfully.")
             except Exception as e:
                 print(f"[DB] Close error: {e}")
@@ -328,16 +387,10 @@ class db_transaction:
                     except Exception:
                         pass
                 else:
-                    in_tx = getattr(self.db, "in_transaction", False)
-                    if not in_tx:
-                        conn = getattr(self.db, "_conn", None)
-                        if conn:
-                            in_tx = getattr(conn, "in_transaction", False)
-                    if in_tx:
-                        try:
-                            await self.db.execute("ROLLBACK")
-                        except Exception:
-                            pass
+                    try:
+                        await self.db.execute("ROLLBACK")
+                    except Exception:
+                        pass
             else:
                 if self._is_nested and self._savepoint_name:
                     try:
@@ -345,16 +398,10 @@ class db_transaction:
                     except Exception:
                         pass
                 else:
-                    in_tx = getattr(self.db, "in_transaction", False)
-                    if not in_tx:
-                        conn = getattr(self.db, "_conn", None)
-                        if conn:
-                            in_tx = getattr(conn, "in_transaction", False)
-                    if in_tx:
-                        try:
-                            await self.db.execute("COMMIT")
-                        except Exception:
-                            pass
+                    try:
+                        await self.db.execute("COMMIT")
+                    except Exception:
+                        pass
         finally:
             if self._lock_acquired:
                 db_lock.release()

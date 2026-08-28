@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import aiosqlite
 from aiogram import F, Router, types, Bot
-from aiogram.filters import Command
+from aiogram.filters import Command, BaseFilter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from common.db_pool import db_lock, db_transaction, get_pool
@@ -118,6 +118,167 @@ def get_tier_info(tier_id: str) -> Optional[Dict[str, Any]]:
     if canon and canon in BANK_TIERS:
         return BANK_TIERS[canon]
     return None
+
+
+# -----------------------------------------------------------------------------
+# User Pending Deposit State Tracking & Amount Parsers
+# -----------------------------------------------------------------------------
+
+USER_PENDING_BANK_DEPOSIT: Dict[int, Dict[str, Any]] = {}
+PENDING_DEPOSIT_TTL_SEC: float = 300.0  # 5 минут ожидание ввода суммы
+
+
+def set_user_pending_deposit(user_id: int, tier_id: str, chat_id: int = 0, board_id: str = "b") -> None:
+    """Запоминает выбранный пользователем тариф для ввода произвольной суммы из чата."""
+    USER_PENDING_BANK_DEPOSIT[user_id] = {
+        "tier_id": normalize_tier_id(tier_id) or "sych",
+        "chat_id": chat_id,
+        "board_id": board_id or "b",
+        "expires_at": time.time() + PENDING_DEPOSIT_TTL_SEC,
+    }
+
+
+def get_user_pending_deposit(user_id: int) -> Optional[Dict[str, Any]]:
+    """Возвращает активное состояние ожидания ввода суммы, если не истёк TTL."""
+    pending = USER_PENDING_BANK_DEPOSIT.get(user_id)
+    if not pending:
+        return None
+    if time.time() > pending.get("expires_at", 0):
+        USER_PENDING_BANK_DEPOSIT.pop(user_id, None)
+        return None
+    return pending
+
+
+def clear_user_pending_deposit(user_id: int) -> None:
+    """Сбрасывает ожидание ввода суммы."""
+    USER_PENDING_BANK_DEPOSIT.pop(user_id, None)
+
+
+def parse_deposit_amount(raw_text: str, wallet_balance: float) -> Optional[float]:
+    """
+    Парсит произвольный ввод суммы из чата:
+    - Числа: 50000, 1000, 150.50, 150,50, "50 000"
+    - Сокращения: 50k, 50к, 1.5m, 1.5м
+    - Проценты: 25%, 50%, 75%, 100%
+    - Ключевые слова: all, все, всё, макс, max, пол, половина, half
+    - Валютные суффиксы: 50000 ₪, 1000 руб, 500 шекелей
+    Возвращает float > 0 или None при ошибке парсинга.
+    """
+    if not raw_text or not isinstance(raw_text, str):
+        return None
+
+    txt = raw_text.strip().lower()
+    # Убираем валютные знаки и слова
+    for suffix in ["шекелей", "шекеля", "шекель", "шек", "рублей", "рубля", "руб", "р.", "р", "₪", "$"]:
+        txt = txt.replace(suffix, "").strip()
+
+    # Убираем внутренние пробелы (например: "50 000" -> "50000")
+    txt = txt.replace(" ", "").replace(",", ".")
+
+    if not txt:
+        return None
+
+    # Ключевые слова
+    if txt in ("all", "все", "всё", "макс", "max", "весь", "всю"):
+        return max(0.0, round(wallet_balance, 2))
+    if txt in ("half", "пол", "половина", "половину"):
+        return max(0.0, round(wallet_balance * 0.5, 2))
+    if txt in ("треть",):
+        return max(0.0, round(wallet_balance / 3.0, 2))
+    if txt in ("четверть",):
+        return max(0.0, round(wallet_balance * 0.25, 2))
+
+    # Проценты
+    if txt.endswith("%"):
+        try:
+            pct_val = float(txt[:-1])
+            if pct_val <= 0:
+                return None
+            return max(0.0, round(wallet_balance * (pct_val / 100.0), 2))
+        except ValueError:
+            return None
+
+    # k / m суффиксы
+    try:
+        if txt.endswith("k") or txt.endswith("к"):
+            return round(float(txt[:-1]) * 1000.0, 2)
+        elif txt.endswith("m") or txt.endswith("м"):
+            return round(float(txt[:-1]) * 1000000.0, 2)
+        else:
+            val = float(txt)
+            return round(val, 2) if val > 0 else None
+    except ValueError:
+        return None
+
+
+def parse_amount_and_tier(raw_text: str, default_tier: str = "sych") -> Optional[Tuple[str, str]]:
+    """
+    Проверяет, содержит ли входящее сообщение из чата валидный ввод суммы для депозита,
+    и опционально упоминание тарифа (skuf, sych, mmm).
+    Возвращает кортеж (amount_str, detected_tier) или None, если текст не является суммой.
+    """
+    if not raw_text or not isinstance(raw_text, str):
+        return None
+
+    text = raw_text.strip()
+    if not text or text.startswith("/"):
+        return None
+
+    tokens = text.split()
+    if len(tokens) > 4:
+        return None  # Обычные длинные посты борды игнорируются
+
+    detected_tier = default_tier
+    remaining_tokens = []
+    ignore_words = {"в", "на", "во", "to", "in", "into"}
+
+    for tok in tokens:
+        clean_tok = tok.lower().strip(".,!?:;()[]{}")
+        norm_t = normalize_tier_id(clean_tok)
+        if norm_t:
+            detected_tier = norm_t
+        elif clean_tok in ignore_words:
+            continue
+        else:
+            remaining_tokens.append(tok)
+
+    if not remaining_tokens:
+        return None
+
+    amt_candidate = " ".join(remaining_tokens)
+    # Проверяем, парсится ли кандидат в сумму при тестовом балансе
+    test_parsed = parse_deposit_amount(amt_candidate, 1000000.0)
+    if test_parsed is None or test_parsed <= 0:
+        return None
+
+    return amt_candidate, detected_tier
+
+
+class PendingBankDepositFilter(BaseFilter):
+    """
+    Фильтр aiogram для перехвата ввода суммы в чат, когда пользователь
+    находится на экране выбора/оформления вклада в Банке Абу.
+    Если пользователь не оформляет депозит или ввёл не сумму — возвращает False,
+    пропуская сообщение дальше по цепочке роутеров к борде.
+    """
+    async def __call__(self, message: types.Message) -> bool | dict:
+        if not message.text or message.text.startswith("/"):
+            return False
+        user_id = message.from_user.id if message.from_user else message.chat.id
+        pending = get_user_pending_deposit(user_id)
+        if not pending:
+            return False
+
+        parsed = parse_amount_and_tier(message.text, default_tier=pending.get("tier_id", "sych"))
+        if parsed is None:
+            return False
+
+        amt_str, detected_tier = parsed
+        return {
+            "pending_deposit": pending,
+            "amount_str": amt_str,
+            "detected_tier": detected_tier,
+        }
 
 
 # -----------------------------------------------------------------------------
@@ -575,8 +736,8 @@ def build_deposit_presets_kb(tier_id: str, wallet_balance: float) -> Tuple[str, 
         f"📝 <i>{tier_info['desc']}</i>\n\n"
         f"💰 <b>Твой баланс в кошельке:</b> <code>{wallet_balance:,.2f} ₪</code>\n"
         f"💵 <b>Минимальный депозит:</b> <code>{min_dep:,.0f} ₪</code>\n\n"
-        f"Выбери готовую сумму из кнопок ниже или отправь в чат:\n"
-        f"<code>/deposit [сумма] {tier_id}</code>"
+        f"💬 <b>Напиши любую сумму сообщением прямо в чат</b> (например: <code>50000</code>, <code>25k</code>, <code>все</code>)\n"
+        f"или нажми на процент / готовую кнопку ниже:"
     )
 
     kb_rows = [
@@ -705,13 +866,14 @@ async def cmd_deposit(message: types.Message, board_id: str | None = None, strea
         return
 
     # Интерактивный режим: выбор тарифа
+    set_user_pending_deposit(user_id, "sych", chat_id=message.chat.id, board_id=b_id)
     text = (
         "🏦 <b>ОФОРМЛЕНИЕ ВКЛАДА В БАНК АБУ</b>\n\n"
         "Выбери один из доступных тарифов для надежного сохранения и преумножения шекелей:\n\n"
         "1. 📦 <b>Сейф Сыча (0.5%/сутки)</b> — бессрочный, вывод в любой момент (1% комиссия)\n"
         "2. 🍺 <b>Депозит Скуфа (2.5%/сутки)</b> — заморозка 72ч (7.5% за срок), 0% комиссия\n"
         "3. 🚀 <b>Пирамида МММ Абу (6.0%/сутки)</b> — заморозка 24ч, 3% риск облавы ОБЭП (-50%)\n\n"
-        "<i>Нажми на нужный тариф ниже:</i>"
+        "<i>Нажми на нужный тариф ниже или просто отправь сумму сообщением в чат:</i>"
     )
     kb = build_deposit_tiers_kb()
     await _render_bank_view(message, text, kb, category="wallet")
@@ -808,6 +970,7 @@ async def cmd_withdraw(message: types.Message, board_id: str | None = None, stre
 @bank_router.callback_query(F.data.in_(["bank_main_hub", "bank_view"]))
 async def cb_bank_hub(callback: types.CallbackQuery, board_id: str | None = None):
     """Главный экран Банка по колбэку."""
+    clear_user_pending_deposit(callback.from_user.id)
     b_id = board_id or "b"
     user_id = callback.from_user.id
     db = await get_pool()
@@ -838,13 +1001,14 @@ async def cb_bank_refresh(callback: types.CallbackQuery, board_id: str | None = 
 @bank_router.callback_query(F.data == "bank_deposit_menu")
 async def cb_bank_deposit_menu(callback: types.CallbackQuery, board_id: str | None = None):
     """Меню выбора тарифа депозита."""
+    set_user_pending_deposit(callback.from_user.id, "sych", chat_id=callback.message.chat.id, board_id=board_id or "b")
     text = (
         "🏦 <b>ОФОРМЛЕНИЕ ВКЛАДА В БАНК АБУ</b>\n\n"
         "Выбери один из доступных тарифов для надежного сохранения и преумножения шекелей:\n\n"
         "1. 📦 <b>Сейф Сыча (0.5%/сутки)</b> — бессрочный, вывод в любой момент (1% комиссия)\n"
         "2. 🍺 <b>Депозит Скуфа (2.5%/сутки)</b> — заморозка 72ч (7.5% за срок), 0% комиссия\n"
         "3. 🚀 <b>Пирамида МММ Абу (6.0%/сутки)</b> — заморозка 24ч, 3% риск облавы ОБЭП (-50%)\n\n"
-        "<i>Нажми на нужный тариф ниже:</i>"
+        "<i>Нажми на нужный тариф ниже или напиши сумму сообщением прямо в чат:</i>"
     )
     kb = build_deposit_tiers_kb()
     await _render_bank_view(callback, text, kb, category="wallet")
@@ -856,6 +1020,7 @@ async def cb_bank_deposit_tier(callback: types.CallbackQuery, board_id: str | No
     """Экран выбора суммы и готовых пресетов для выбранного тарифа."""
     raw = callback.data
     tier_id = raw.split(":", 1)[1] if ":" in raw else raw.replace("bank_sel_tier_", "")
+    set_user_pending_deposit(callback.from_user.id, tier_id, chat_id=callback.message.chat.id, board_id=board_id or "b")
 
     db = await get_pool()
     user_id = callback.from_user.id
@@ -869,6 +1034,7 @@ async def cb_bank_deposit_tier(callback: types.CallbackQuery, board_id: str | No
 @bank_router.callback_query(F.data.startswith("bank_do_deposit:") | F.data.startswith("bank_dep_"))
 async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None = None):
     """Исполнение создания депозита по нажатию пресета."""
+    clear_user_pending_deposit(callback.from_user.id)
     b_id = board_id or "b"
     user_id = callback.from_user.id
     raw = callback.data
@@ -917,6 +1083,7 @@ async def cb_bank_do_deposit(callback: types.CallbackQuery, board_id: str | None
 @bank_router.callback_query(F.data == "bank_withdraw_menu")
 async def cb_bank_withdraw_menu(callback: types.CallbackQuery, board_id: str | None = None):
     """Список депозитов, доступных для вывода."""
+    clear_user_pending_deposit(callback.from_user.id)
     b_id = board_id or "b"
     user_id = callback.from_user.id
     db = await get_pool()
@@ -1035,3 +1202,79 @@ async def cb_bank_withdraw_confirm(callback: types.CallbackQuery, board_id: str 
     ])
     await _render_bank_view(callback, resp, kb, category="wallet")
     await callback.answer("✅ Досрочный вывод завершен", show_alert=False)
+
+
+# -----------------------------------------------------------------------------
+# Direct Chat Message Deposit Handler
+# -----------------------------------------------------------------------------
+
+@bank_router.message(PendingBankDepositFilter())
+async def handle_chat_deposit_amount(
+    message: types.Message,
+    pending_deposit: dict,
+    amount_str: str,
+    detected_tier: str,
+    board_id: str | None = None,
+    stream: str = 'ru'
+) -> None:
+    """
+    Обрабатывает ввод произвольной суммы сообщением прямо в чат, когда пользователь
+    находится на экране оформления вклада (вместо мелких кнопок и процентов).
+    """
+    user_id = message.from_user.id if message.from_user else message.chat.id
+    b_id = board_id or pending_deposit.get("board_id") or "b"
+    db = await get_pool()
+
+    wallet_balance = await get_user_global_balance(db, user_id)
+    amount = parse_deposit_amount(amount_str, wallet_balance)
+
+    canon_tier = normalize_tier_id(detected_tier) or pending_deposit.get("tier_id") or "sych"
+    tier_info = BANK_TIERS.get(canon_tier, BANK_TIERS["sych"])
+
+    if amount is None or amount <= 0:
+        await message.answer(
+            "❌ <b>Неверный формат суммы вклада.</b>\n"
+            "Напиши число (например: <code>50000</code> или <code>25k</code>) или выбери готовую кнопку с процентом.",
+            parse_mode="HTML"
+        )
+        return
+
+    if amount > wallet_balance:
+        await message.answer(
+            f"❌ <b>Недостаточно средств в кошельке!</b>\n\n"
+            f"💵 Запрошено внести: <code>{amount:,.2f} ₪</code>\n"
+            f"💰 Доступно в кошельке: <code>{wallet_balance:,.2f} ₪</code>\n\n"
+            f"<i>Напиши меньшую сумму или отправь <code>все</code> для внесения всего остатка.</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    if amount < tier_info["min_deposit"]:
+        await message.answer(
+            f"❌ <b>Сумма меньше минимального депозита!</b>\n\n"
+            f"💵 Минимальный вклад для тарифа <b>{tier_info['name']}</b>: <code>{tier_info['min_deposit']:,.0f} ₪</code>\n"
+            f"Ты указал: <code>{amount:,.2f} ₪</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    ok, dep, err = await create_bank_deposit(db, user_id, b_id, canon_tier, amount)
+
+    if not ok:
+        await message.answer(f"❌ <b>Ошибка оформления вклада:</b> {err}", parse_mode="HTML")
+        return
+
+    clear_user_pending_deposit(user_id)
+
+    resp = (
+        f"🎉 <b>ВКЛАД УСПЕШНО ОФОРМЛЕН!</b>\n\n"
+        f"🏦 <b>Тариф:</b> {tier_info['name']}\n"
+        f"💵 <b>Внесено:</b> <code>{dep['principal']:,.2f} ₪</code>\n"
+        f"📈 <b>Доходность:</b> <code>{tier_info['daily_rate'] * 100:.1f}% в сутки</code>\n"
+        f"🛡️ <i>Шекели изолированы в сейфе и защищены от грабежей (/rob)!</i>"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏦 В Банк Абу", callback_data="bank_main_hub")],
+    ])
+    await message.answer(resp, reply_markup=kb, parse_mode="HTML")
+

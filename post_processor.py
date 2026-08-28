@@ -1,6 +1,7 @@
 import shared_state
 import asyncio
 import logging
+logger = logging.getLogger(__name__)
 import re
 import html
 import random
@@ -490,7 +491,8 @@ class NewPostProcessor:
                 'recipients': self.recipients, 'content': self.final_content, 'post_num': self.current_post_num,
                 'board_id': self.board_id, 'thread_id': self.thread_id
             })
-        if not self.final_content.get('archive_skip') and not self.is_shadow_muted:
+        should_archive = not self.is_shadow_muted and (self.final_content.get('archive_allowed') or not self.final_content.get('archive_skip'))
+        if should_archive:
             spawn_task(_forward_post_to_realtime_archive(
                 bot_instance=self.bot_instance, board_id=self.board_id, post_num=self.current_post_num, content=self.final_content, is_shadow_muted=self.is_shadow_muted
             ))
@@ -584,9 +586,31 @@ async def post_thread_notification_to_channel(bots: dict[str, Bot], board_id: st
     :param event_type: Тип события ('new_thread', 'milestone', 'high_activity').
     :param details: Дополнительная информация (например, {'posts': 150} или {'activity': 25.5}).
     """
-    bot_instance = bots.get(ARCHIVE_POSTING_BOT_ID)
-    if not bot_instance:
-        print(f"⛔ Ошибка: бот для постинга ('{ARCHIVE_POSTING_BOT_ID}') не найден.")
+    if not ARCHIVE_CHANNEL_ID or ARCHIVE_CHANNEL_ID == 0:
+        return
+    g_bots = getattr(shared_state, 'GLOBAL_BOTS', {}) or {}
+    candidate_bots = []
+    if bots:
+        if bots.get(ARCHIVE_POSTING_BOT_ID):
+            candidate_bots.append(bots[ARCHIVE_POSTING_BOT_ID])
+        if bots.get('b') and bots['b'] not in candidate_bots:
+            candidate_bots.append(bots['b'])
+        if bots.get(board_id) and bots[board_id] not in candidate_bots:
+            candidate_bots.append(bots[board_id])
+        for b in bots.values():
+            if b not in candidate_bots:
+                candidate_bots.append(b)
+    if g_bots:
+        if g_bots.get(ARCHIVE_POSTING_BOT_ID) and g_bots[ARCHIVE_POSTING_BOT_ID] not in candidate_bots:
+            candidate_bots.append(g_bots[ARCHIVE_POSTING_BOT_ID])
+        if g_bots.get('b') and g_bots['b'] not in candidate_bots:
+            candidate_bots.append(g_bots['b'])
+        for b in g_bots.values():
+            if b not in candidate_bots:
+                candidate_bots.append(b)
+
+    if not candidate_bots:
+        print(f"⛔ Ошибка: боты для постинга в служебный канал не найдены.")
         return
     details = details or {}
     title = escape_html(thread_info.get('title', 'Без названия'))
@@ -614,15 +638,24 @@ async def post_thread_notification_to_channel(bots: dict[str, Bot], board_id: st
         )
     else:
         return
-    try:
-        await bot_instance.send_message(
-            chat_id=ARCHIVE_CHANNEL_ID,
-            text=message_text,
-            parse_mode="HTML"
-        )
-        print(f"✅ Уведомление о треде '{title}' (событие: {event_type}) отправлено в канал.")
-    except Exception as e:
-        print(f"⛔ Не удалось отправить уведомление о треде '{title}' в канал: {e}")
+
+    from archive_manager import _is_chat_not_found_or_forbidden, _get_bot_key, _BOT_INACCESSIBLE_CHANNELS
+    for bot_instance in candidate_bots:
+        bot_key = _get_bot_key(bot_instance)
+        if (bot_key, ARCHIVE_CHANNEL_ID) in _BOT_INACCESSIBLE_CHANNELS:
+            continue
+        try:
+            await bot_instance.send_message(
+                chat_id=ARCHIVE_CHANNEL_ID,
+                text=message_text,
+                parse_mode="HTML"
+            )
+            print(f"✅ Уведомление о треде '{title}' (событие: {event_type}) отправлено в канал.")
+            return
+        except Exception as e:
+            if _is_chat_not_found_or_forbidden(e):
+                _BOT_INACCESSIBLE_CHANNELS.add((bot_key, ARCHIVE_CHANNEL_ID))
+            logger.warning(f"⛔ Не удалось отправить уведомление о треде '{title}' ботом {bot_key}: {e}")
 
 async def process_new_post(params: shared_state.NewPostParams) -> int | None:
     """

@@ -487,8 +487,16 @@ class MessageBroadcaster:
                     break
 
             send_timeout_sec = DELIVERY_PER_RECIPIENT_TIMEOUT_SEC
+            has_raw_media = (
+                bool(self.content.get("image_bytes") or self.content.get("voice_bytes")) or
+                (self.content.get("type") == "media_group" and any(
+                    not isinstance(item.get("media") or item.get("file_id"), str)
+                    for item in (self.content.get("media") or [])
+                ))
+            )
+            current_chunk_limit = 1 if (has_raw_media and self.stats['success'] == 0) else CHUNK_SIZE
             chunk = []
-            for _ in range(min(len(queue), CHUNK_SIZE)):
+            for _ in range(min(len(queue), current_chunk_limit)):
                 chunk.append(queue.popleft())
 
             chunk_start = time.time()
@@ -1112,6 +1120,16 @@ class MessageBroadcaster:
                         common_kwargs[ct] = file_source
                         send_method = getattr(self.bot_instance, f"send_{ct}")
                         media_msg = await send_method(**common_kwargs)
+                        if media_msg:
+                            fid = None
+                            if getattr(media_msg, 'photo', None): fid = media_msg.photo[-1].file_id
+                            elif getattr(media_msg, 'video', None): fid = media_msg.video.file_id
+                            elif getattr(media_msg, 'voice', None): fid = media_msg.voice.file_id
+                            elif getattr(media_msg, 'audio', None): fid = media_msg.audio.file_id
+                            elif getattr(media_msg, 'document', None): fid = media_msg.document.file_id
+                            if fid:
+                                self.content['file_id'] = fid
+                                self.content_for_common['file_id'] = fid
                         text_parts = split_text(full_text, 4096)
                         try:
                             for part in text_parts:
@@ -1140,6 +1158,16 @@ class MessageBroadcaster:
                         common_kwargs[ct] = file_source
                         send_method = getattr(self.bot_instance, f"send_{ct}")
                         res = await send_method(**common_kwargs)
+                        if res:
+                            fid = None
+                            if getattr(res, 'photo', None): fid = res.photo[-1].file_id
+                            elif getattr(res, 'video', None): fid = res.video.file_id
+                            elif getattr(res, 'voice', None): fid = res.voice.file_id
+                            elif getattr(res, 'audio', None): fid = res.audio.file_id
+                            elif getattr(res, 'document', None): fid = res.document.file_id
+                            if fid:
+                                self.content['file_id'] = fid
+                                self.content_for_common['file_id'] = fid
                         self.stats['success'] += 1
                         return res
                 elif ct == "media_group":
@@ -1176,6 +1204,22 @@ class MessageBroadcaster:
                         disable_notification=is_sage,
                         request_timeout=request_timeout,
                     )
+                    
+                    # Cache file_ids from Telegram response so subsequent recipients in the broadcast
+                    # send pre-warmed file_id references instead of re-uploading raw bytes.
+                    if isinstance(res, list) and self.content.get('media'):
+                        for idx, sent_m in enumerate(res):
+                            if idx < len(self.content['media']):
+                                fid = None
+                                if getattr(sent_m, 'photo', None): fid = sent_m.photo[-1].file_id
+                                elif getattr(sent_m, 'video', None): fid = sent_m.video.file_id
+                                elif getattr(sent_m, 'document', None): fid = sent_m.document.file_id
+                                elif getattr(sent_m, 'audio', None): fid = sent_m.audio.file_id
+                                if fid:
+                                    self.content['media'][idx]['media'] = fid
+                                    self.content['media'][idx]['file_id'] = fid
+                        if self.content_for_common.get('media'):
+                            self.content_for_common['media'] = self.content['media']
                     
                     if not can_fit_caption:
                         anchor_msg = res[0] if isinstance(res, list) else res

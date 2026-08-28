@@ -353,7 +353,7 @@
             <h3 style="margin: 0; border: none;">📬 Связь с Админом</h3>
             <button onclick="document.getElementById('feedback-modal').style.display='none'; document.getElementById('modal-overlay').style.display='none';" class="btn btn-secondary" style="font-size: 1.5em; line-height: 1; padding: 0 8px;">&times;</button>
         </div>
-        <form id="feedback-form">
+        <form id="feedback-form" onsubmit="event.preventDefault(); sendFeedback(this);">
             <div class="form-group">
                 <label>Тема обращения:</label>
                 <select name="category" class="form-control" required>

@@ -253,7 +253,7 @@ async def isolated_test_db(tmp_path):
         mock.patch.object(common.db_pool, "DB_NAME", db_path),
         mock.patch.object(common.database, "DB_NAME", db_path),
         mock.patch.object(common.config, "DB_NAME", db_path),
-        mock.patch.object(common.db_pool, "db_lock", asyncio.Lock()),
+        mock.patch.object(common.db_pool, "db_lock", common.db_pool.LazyLock()),
     ]
     for p in patches:
         p.start()

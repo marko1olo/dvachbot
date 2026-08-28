@@ -298,24 +298,25 @@ def apply_lootbox_reward(
 
     else:
         now = int(time.time())
+        max_protection_cap = now + 7 * 86400  # Cap at 7 days maximum
         # Standard combat / duration / consumable payload
         for k, v in payload.items():
             if k in ("tinfoil_hat", "tinfoil_until"):
                 current_exp = active_items.get(k, 0)
                 base = current_exp if current_exp > now else now
-                active_items[k] = base + 6 * 3600
+                active_items[k] = min(base + 6 * 3600, max_protection_cap)
                 active_items["owned_hat_tinfoil"] = True
                 active_items["equipped_head"] = "hat_tinfoil"
                 recycle_msg = "👽 <b>Шапочка из фольги:</b> +6 часов к длительности защиты!"
             elif k in ("reflect_shield_until", "shield_until"):
                 current_exp = active_items.get(k, 0)
                 base = current_exp if current_exp > now else now
-                active_items[k] = base + 6 * 3600
+                active_items[k] = min(base + 6 * 3600, max_protection_cap)
                 recycle_msg = "🛡️ <b>Зеркальный Щит:</b> +6 часов к длительности защиты!"
             elif k == "janitor_until":
                 current_exp = active_items.get("janitor_until", 0)
                 base = current_exp if current_exp > now else now
-                active_items["janitor_until"] = base + 6 * 3600
+                active_items["janitor_until"] = min(base + 6 * 3600, max_protection_cap)
                 active_items["janitor_deletes_left"] = active_items.get("janitor_deletes_left", 0) + 5
                 recycle_msg = "🧹 <b>Билет Дворника:</b> +6 часов и +5 удалений!"
             elif k in ("knife_gun", "mute_gun", "partyvan_gun", "pepperspray_gun", "shit_gun", "laxative_gun", "schizopill_gun"):
@@ -335,5 +336,12 @@ def apply_lootbox_reward(
                     active_items[k] = True
             else:
                 active_items[k] = v
+
+    # Ensure any preexisting bloated protection duration is capped to 7 days
+    now = int(time.time())
+    max_cap = now + 7 * 86400
+    for prot_key in ("shield_until", "reflect_shield_until", "tinfoil_until", "tinfoil_hat", "janitor_until"):
+        if active_items.get(prot_key, 0) > max_cap:
+            active_items[prot_key] = max_cap
 
     return active_items, final_cash, recycle_msg

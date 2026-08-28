@@ -40,7 +40,7 @@ HELP_HUB_PAGES_RU = {
         "• <code>/wallet</code> — Кошелек, баланс, история операций и рефералы\n"
         "• <code>/bank</code> (<code>/deposit</code>, <code>/withdraw</code>) — <b>Банк Абу и Сейф:</b> 100% защита от /rob, вклады под процент (0.5% - 6.0%/день)\n"
         "• <code>/market</code> (<code>/bazar</code>, <code>/sell</code>) — <b>P2P Барахолка:</b> Торговля шмотом, оружием и кейсами между анонами\n"
-        "• <code>/shop</code> — Торговый Хаб: Оружие, Бутик, Аптека, Кейсы\n"
+        "• <code>/shop</code> — <b>Торговый Хаб:</b> Оружие, Бутик, Аптека (Ксива полковника, Удостоверение дружинника, Взятки), Кейсы\n"
         "• <code>/work</code> — Биржа труда: 15 вакансий со сбором сетов и лута\n"
         "• <code>/casino</code> — Казино: <code>/slots</code>, <code>/coinflip</code>, <code>/blackjack</code>, <code>/rroulette</code>, <code>/ttt</code>, <code>/dice_duel</code>, <code>/duel_rr</code>\n"
         "• <code>/ttt &lt;ставка&gt;</code> — ❌⭕ Крестики-Нолики PvP на шекели (таймер 60 сек)\n"
@@ -109,7 +109,9 @@ HELP_HUB_PAGES_RU = {
         "• <code>/dice_duel &lt;сумма&gt;</code> — Вызвать на бросок костей 2d6 на шекели (⚀⚁⚂⚃⚄⚅).\n"
         "• <code>/duel_rr &lt;сумма&gt;</code> — Вызвать на Русскую Рулетку PvP на шекели (проигравшему мут 30 мин).\n"
         "• <code>/deanon</code> — Шуточный спуфинг-деанон с генерацией фейкового IP и адреса.\n"
-        "• 🗳️ <code>/votemute</code> — <b>Народный Вотум / Шизо-Мут:</b> Выдвинуть пост нарушителя на голосование. 5 голосов анонов за 10 минут отправляют шиза в <b>ЖЕЛЕЗНЫЙ МУТ на 30 минут</b> (не продается за взятки в /shop!)."
+        "• 🗳️ <code>/votemute</code> — <b>Народный Вотум / Шизо-Мут:</b> Выдвинуть пост нарушителя на голосование. 5 голосов анонов за 10 минут отправляют шиза в <b>ЖЕЛЕЗНЫЙ МУТ на 30 минут</b> (не продается за взятки в /shop!).\n"
+        "• 📋 <code>/dopros</code> (<code>/допрос</code>) — <b>Вызов на допрос в Отдел «К»</b> (себе или реплаем). Дай взятку 50₪, возьми 51-ю статью или сдай соседа по борде!\n"
+        "• 🪪 <code>/fine</code> (<code>/штраф</code>, <code>/druzhina</code>) — <b>Штраф от Дружинника (Reply)</b>. Требует «Удостоверение дружинника» из /shop. Штрафует нарушителя на 15 ₪ (10 ₪ дружиннику, 5 ₪ в Фонд Абу) раз в сутки."
     ),
     "settings": (
         "⚙️ <b>Раздел: Настройки и Управление</b>\n\n"
@@ -127,7 +129,7 @@ HELP_HUB_PAGES_RU = {
         "<b>Экономика & PvP:</b> /wallet, /bank, /deposit, /withdraw, /market, /sell, /my_lots, /work, /daily, /shop, /top, /duel, /ttt, /dice_duel, /duel_rr, /drop, /casino\n"
         "<b>Медиа:</b> /dem, /invite_pic, /invite, /fap, /loli, /roll, /ruletka\n"
         "<b>ИИ:</b> /summarize, /roast, /stats, /tags\n"
-        "<b>Интерактив (Reply):</b> /dossier, /rob, /shit, /curse, /partyvan, /deanon, /votemute\n"
+        "<b>Интерактив (Reply):</b> /dossier, /rob, /shit, /curse, /partyvan, /deanon, /votemute, /dopros, /fine\n"
         "<b>Настройки:</b> /nsfw, /hide, /togglegif, /token\n"
         "<b>Режимы:</b> /anime, /zaputin, /slavaukraine, /warhammer, /imperial, /gopnik, /schizo, /polish, /rus, /abu, /matrix, /oldweb, /jewish, /america\n"
         "<b>Доски:</b> /b/, /a/, /po/, /soc/, /sex/, /h/, /bunker/, /vg/, /v/, /tech/, /ai/, /wh40k/, /mu/, /tv/, /fit/, /sci/, /biz/, /news/, /fa/, /x/, /vt/, /au/, /me/, /int/, /meta/, /thread/"

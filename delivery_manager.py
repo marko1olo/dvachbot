@@ -18,6 +18,7 @@ from post_helpers import format_header
 from common.thread_manager import get_threads_data
 from thread_texts import thread_messages
 from common.bot_helpers import process_new_post, is_ai_slop_content
+from archive_manager import _site_public_url, _site_file_source, _site_file_send_type
 from datetime import timezone, datetime, timedelta
 import __main__ as main
 UTC = timezone.utc
@@ -750,7 +751,14 @@ class MessageDeliveryTask:
         self.queue = queue
         self.msg_data = msg_data
 
-        self.b_data = board_data[self.board_id]
+        self.b_data = board_data.get(self.board_id, {})
+        self.post_num = self.msg_data.get('post_num') if isinstance(self.msg_data, dict) else None
+        self.content = self.msg_data.get('content', {}) if isinstance(self.msg_data, dict) else {}
+        self.keyboard = self.msg_data.get('keyboard') if isinstance(self.msg_data, dict) else None
+        self.thread_id = self.msg_data.get('thread_id') if isinstance(self.msg_data, dict) else None
+        self.delivery_phase = self.msg_data.get("delivery_phase", "full") if isinstance(self.msg_data, dict) else "full"
+        self.initial_recipients = self.msg_data.get('recipients', set()) if isinstance(self.msg_data, dict) else set()
+        self.enqueued_at = self.msg_data.get("enqueued_at") if isinstance(self.msg_data, dict) else None
 
     async def process(self):
         """Основной метод оркестрации обработки сообщения."""
@@ -760,7 +768,8 @@ class MessageDeliveryTask:
         # Delayed initialization to ensure msg_data is valid
         self.post_num = self.msg_data['post_num']
         self.content = self.msg_data['content']
-        self.content['post_num'] = self.post_num
+        if isinstance(self.content, dict):
+            self.content['post_num'] = self.post_num
         self.keyboard = self.msg_data.get('keyboard')
         self.thread_id = self.msg_data.get('thread_id')
         self.delivery_phase = self.msg_data.get("delivery_phase", "full")
@@ -793,6 +802,16 @@ class MessageDeliveryTask:
 
         active_recipients = self._resolve_active_recipients()
         if not active_recipients:
+            if self.post_num and (self.content.get('archive_allowed') or not self.content.get('archive_skip')) and not self.content.get('is_shadow_muted') and not self.msg_data.get('durable_delivery_id'):
+                from archive_manager import _forward_post_to_realtime_archive
+                from common.task_manager import spawn_task
+                spawn_task(_forward_post_to_realtime_archive(
+                    bot_instance=self.bot_instance,
+                    board_id=self.board_id,
+                    post_num=self.post_num,
+                    content=self.content,
+                    is_shadow_muted=False
+                ))
             if self.msg_data.get("durable_delivery_id"):
                 await _delete_durable_delivery_item(self.msg_data, "no_active_recipients")
             return
@@ -908,7 +927,7 @@ class MessageDeliveryTask:
                     except Exception:
                         pass
 
-            if self.post_num and not self.content.get('archive_skip') and not self.content.get('is_shadow_muted') and not self.msg_data.get('durable_delivery_id'):
+            if self.post_num and (self.content.get('archive_allowed') or not self.content.get('archive_skip')) and not self.content.get('is_shadow_muted') and not self.msg_data.get('durable_delivery_id'):
                 from archive_manager import _forward_post_to_realtime_archive
                 from common.task_manager import spawn_task
                 spawn_task(_forward_post_to_realtime_archive(
@@ -1896,7 +1915,7 @@ async def site_posts_broadcaster():
                             else:
                                 runtime_logger.error(f"[site_posts_broadcaster] enqueue FAILED for #{post_num} board={board_id} — NOT marking as sent")
                             
-                            if not content.get('archive_skip') and not is_shadow_muted:
+                            if (content.get('archive_allowed') or not content.get('archive_skip')) and not is_shadow_muted:
                                 bot_to_use = main.GLOBAL_BOTS.get(board_id) or main.GLOBAL_BOTS.get('b')
                                 if bot_to_use:
                                     spawn_task(main._forward_post_to_realtime_archive(
@@ -1930,8 +1949,8 @@ def _site_public_url(raw_url: str | None) -> str | None:
 
 
 def _site_media_item(file_info: dict) -> dict | None:
-    send_type = main._site_file_send_type(file_info)
-    source = main._site_file_source(file_info)
+    send_type = _site_file_send_type(file_info) if callable(globals().get('_site_file_send_type')) else (getattr(main, '_site_file_send_type', lambda f: None)(file_info))
+    source = _site_file_source(file_info) if callable(globals().get('_site_file_source')) else (getattr(main, '_site_file_source', lambda f: None)(file_info))
     if not send_type or not source:
         return None
     return {
@@ -1941,6 +1960,7 @@ def _site_media_item(file_info: dict) -> dict | None:
         "mime_type": file_info.get("mime_type"),
         "filename": file_info.get("filename"),
     }
+
 
 def _attach_site_media_for_delivery(content: dict, source_content: dict | None = None) -> dict:
     files = (source_content or content).get("files")

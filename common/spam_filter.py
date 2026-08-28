@@ -75,11 +75,87 @@ RE_AD_SCAM = re.compile(
 RE_URL = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+', re.IGNORECASE)
 URL_WHITELIST = {"tgach.top", "t.me/tgchan_archive", "t.me/tgach_archive", "2ch.hk", "dvach.top"}
 
+# --- Anti-Dox & Phone Leak Patterns ---
+DOX_MASK_REPLACEMENT = "[НОМЕР ТЕЛЕФОНА СКРЫТ / ANTI-DOX]"
+
+RE_PHONE_RU_KZ = r'(?:(?:\+7|8)[\s\-\(\)\.\/]*(?:9|7)(?:[\s\-\(\)\.\/]*\d){9})'
+RE_PHONE_UA = r'(?:(?:\+?380)(?:[\s\-\(\)\.\/]*\d){9})'
+RE_PHONE_BY = r'(?:(?:\+?375)(?:[\s\-\(\)\.\/]*\d){9})'
+
+RE_PHONE_DOX = re.compile(
+    rf'(?<![\d+])(?:{RE_PHONE_RU_KZ}|{RE_PHONE_UA}|{RE_PHONE_BY})(?!\d)',
+    re.IGNORECASE
+)
+
+
+def contains_phone_number(text: str) -> bool:
+    """Returns True if the text contains a leaked mobile phone number."""
+    if not text or not isinstance(text, str):
+        return False
+    return bool(RE_PHONE_DOX.search(text))
+
+
+def extract_phone_numbers(text: str) -> List[str]:
+    """Extracts all matched mobile phone numbers from text."""
+    if not text or not isinstance(text, str):
+        return []
+    return [match.group(0) for match in RE_PHONE_DOX.finditer(text)]
+
+
+def mask_phone_numbers(text: str, replacement: str = DOX_MASK_REPLACEMENT) -> str:
+    """Masks all mobile phone numbers in text with replacement label."""
+    if not text or not isinstance(text, str):
+        return text
+    return RE_PHONE_DOX.sub(replacement, text)
+
+
+def check_dox_content(
+    text: str,
+    user_id: int = 0,
+    board_id: str = "b",
+    mask: bool = True
+) -> Tuple[bool, str, List[str]]:
+    """
+    Checks text for doxing/phone number leaks.
+    Returns: (is_dox_detected: bool, masked_or_original_text: str, list_of_phone_numbers: List[str]).
+    """
+    if not text or not isinstance(text, str):
+        return False, text or "", []
+
+    try:
+        from bot_helpers import is_admin
+        if user_id and is_admin(user_id, board_id):
+            return False, text, []
+    except Exception:
+        pass
+
+    phones = extract_phone_numbers(text)
+    if not phones:
+        return False, text, []
+
+    masked_text = mask_phone_numbers(text) if mask else text
+    logger.warning(
+        f"🛡️ ANTI-DOX: Leaked mobile phone number detected from user {user_id} on /{board_id}/: {phones}"
+    )
+    return True, masked_text, phones
+
+
+def check_phone_dox(user_id: int, board_id: str, text: str) -> Tuple[bool, str, str]:
+    """
+    Validation helper returning (is_dox: bool, masked_text: str, reason: str).
+    """
+    is_dox, masked, phones = check_dox_content(text, user_id=user_id, board_id=board_id, mask=True)
+    if is_dox:
+        reason = f"Слив мобильного номера деанона (Anti-Dox: {phones[0]})"
+        return True, masked, reason
+    return False, text, ""
+
+
 # Legacy spam rules preserved for compatibility
 SPAM_RULES = {
     'text': {'max_repeats': 5, 'min_length': 4, 'window_sec': 15, 'max_per_window': 10},
-    'sticker': {'max_repeats': 5, 'max_per_window': 10, 'window_sec': 20},
-    'animation': {'max_repeats': 5, 'max_per_window': 10, 'window_sec': 20},
+    'sticker': {'max_repeats': 3, 'max_per_window': 10, 'window_sec': 20},
+    'animation': {'max_repeats': 3, 'max_per_window': 10, 'window_sec': 20},
     'photo': {'max_repeats': 4, 'max_per_window': 15, 'window_sec': 30},
     'video': {'max_repeats': 4, 'max_per_window': 15, 'window_sec': 30},
     'document': {'max_repeats': 4, 'max_per_window': 15, 'window_sec': 30},
@@ -100,13 +176,23 @@ def set_spam_filter_words(board_id: str, words: set):
 
 
 def is_spam_filtered(text: str, board_id: str, user_id: int) -> bool:
-    """Checks if a message contains a banned spam filter word."""
+    """Checks if a message contains a banned spam filter word, forbidden link/ad, or dox phone leak."""
     try:
         from bot_helpers import is_admin
         if is_admin(user_id, board_id):
             return False
     except Exception:
         pass
+    
+    # Check phone leak
+    if contains_phone_number(text):
+        return True
+
+    # Check forbidden link / invite / promo / ad spam
+    is_link_spam, _ = check_link_or_ad_spam(user_id, board_id, text)
+    if is_link_spam:
+        return True
+
     banned_words = _spam_filter_words.get(board_id)
     if not banned_words:
         return False
@@ -338,32 +424,15 @@ def check_link_or_ad_spam(user_id: int, board_id: str, text: str, now_ts: float 
     for wl in URL_WHITELIST:
         clean_text = clean_text.replace(wl, "")
 
-    # 1. Telegram invite links (t.me/+ or t.me/joinchat)
-    if RE_TG_INVITE.search(clean_text):
-        return True, "Инвайт-ссылка Telegram"
-
-    # 2. Casino / Crypto / Scam keywords
+    # 1. Casino / Crypto / Scam keywords
     scam_match = RE_AD_SCAM.search(clean_text)
     if scam_match:
         return True, f"Реклама/скам: '{scam_match.group(0)}'"
 
-    # 3. Channel promo links
-    if RE_TG_PROMO.search(clean_text):
-        return True, "Промо-ссылка Telegram канала"
-
-    # 4. Multiple URLs in a single post
-    urls = RE_URL.findall(clean_text)
-    if len(urls) >= 2:
-        return True, f"Массовые ссылки ({len(urls)} шт. в одном посте)"
-
-    # 5. Link frequency spam: >= 3 link messages in 60s
-    if urls:
-        l_tracker = _user_link_timestamps[user_id]
-        while l_tracker and now - l_tracker[0][0] > 60.0:
-            l_tracker.popleft()
-        l_tracker.append((now, text[:50]))
-        if len(l_tracker) >= 3:
-            return True, "Спам ссылками (>= 3 постов со ссылками за минуту)"
+    # 2. Phone number / doxing leaks (+79..., 89..., +380..., +375...)
+    if contains_phone_number(clean_text):
+        phones = extract_phone_numbers(clean_text)
+        return True, f"Слив телефонного номера (Anti-Dox): {phones[0]}"
 
     return False, ""
 
@@ -403,24 +472,27 @@ def _check_repeats(user_id: int, b_data: dict, msg_info: tuple[str, str], rules:
                 
         last_items_deque.append((now, content))
         
-        if len(last_items_deque) >= max_repeats:
-            contents = [item[1] for item in last_items_deque]
-            
-            if len(set(contents)) == 1:
-                if msg_type != 'text' or len(contents[0].strip()) >= rules.get('min_length', 4):
+        # Consecutive identical items check:
+        # e.g., max_repeats = 3 allows up to 3 identical stickers/animations in a row; 4th is blocked.
+        consecutive_limit = max_repeats + 1
+        if len(last_items_deque) >= consecutive_limit:
+            tail = [item[1] for item in list(last_items_deque)[-consecutive_limit:]]
+            if len(set(tail)) == 1:
+                if msg_type != 'text' or len(str(tail[0]).strip()) >= rules.get('min_length', 4):
                     violations['level'] += 1
                     last_items_deque.clear()
                     return False
-            elif msg_type == 'text':
-                def _fast_similar(s1: str, s2: str) -> bool:
-                    if s1 == s2: return True
-                    l1, l2 = len(s1), len(s2)
-                    if abs(l1 - l2) / max(l1, l2, 1) > 0.25: return False
-                    return difflib.SequenceMatcher(None, s1[:400], s2[:400]).ratio() > 0.85
-                if all(_fast_similar(contents[0], c) for c in contents[1:]):
-                    violations['level'] += 1
-                    last_items_deque.clear()
-                    return False
+        elif len(last_items_deque) >= max_repeats and msg_type == 'text':
+            contents = [item[1] for item in list(last_items_deque)[-max_repeats:]]
+            def _fast_similar(s1: str, s2: str) -> bool:
+                if s1 == s2: return True
+                l1, l2 = len(s1), len(s2)
+                if abs(l1 - l2) / max(l1, l2, 1) > 0.25: return False
+                return difflib.SequenceMatcher(None, str(s1)[:400], str(s2)[:400]).ratio() > 0.85
+            if all(_fast_similar(contents[0], c) for c in contents[1:]):
+                violations['level'] += 1
+                last_items_deque.clear()
+                return False
     return True
 
 

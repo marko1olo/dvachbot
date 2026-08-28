@@ -1675,6 +1675,18 @@ def _merge_negative_tags(*groups):
                 merged.append(value)
     return merged
 
+ANIME_SAFETY_NEGATIVE_TAGS = _merge_negative_tags(
+    DANBOORU_NEGATIVE_TAGS,
+    GELBOORU_NEGATIVE_TAGS,
+    AIBOORU_NEGATIVE_TAGS,
+    LOLI_IMAGE_NEGATIVE_TAGS,
+    [
+        "-underage", "-minor", "-minors", "-child", "-children", "-kid", "-kids",
+        "-rape", "-snuff", "-torture", "-blood",
+    ]
+)
+
+
 def _normalize_tag_token(value: str) -> str:
     return str(value).strip().lower().replace(" ", "_")
 
@@ -2448,11 +2460,16 @@ async def _fetch_from_yandere_paginated(session, headers, proxy=None, **kwargs) 
             if not posts or not isinstance(posts, list):
                 continue
 
-            # Фильтруем пустые URL
-            valid_posts = [p for p in posts if p.get('file_url') and not _post_has_blocked_tags(p)]
+            # Фильтруем пустые URL (предпочитаем легкий sample_url/jpeg_url перед тяжелым file_url)
+            valid_posts = [
+                p for p in posts 
+                if (p.get('sample_url') or p.get('jpeg_url') or p.get('file_url')) 
+                and not _post_has_blocked_tags(p)
+            ]
             if not valid_posts: continue
 
-            img = random.choice(valid_posts).get('file_url')
+            chosen_post = random.choice(valid_posts)
+            img = chosen_post.get('sample_url') or chosen_post.get('jpeg_url') or chosen_post.get('file_url')
             if img and img.startswith("//"): img = "https:" + img
             return img
 
@@ -2675,7 +2692,7 @@ async def get_event_anime_images(is_nsfw: bool, is_loli: bool = False, count: in
                         posts = await resp.json()
                         if isinstance(posts, list):
                             for p in posts:
-                                u = p.get('file_url') or p.get('jpeg_url')
+                                u = p.get('sample_url') or p.get('jpeg_url') or p.get('file_url')
                                 if u: raw_urls.append(u)
         except Exception as e:
             print(f"[events] Yande.re fallback failed: {e}")

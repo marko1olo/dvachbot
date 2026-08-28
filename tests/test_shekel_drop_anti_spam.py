@@ -79,26 +79,12 @@ class TestShekelDropAntiSpam(unittest.IsolatedAsyncioTestCase):
     # 1. Differentiated Cooldown Math
     # -------------------------------------------------------------------------
     def test_differentiated_cooldown_tiers(self):
-        """Проверяет дифференцированные тайминги кулдауна по суммам:
-        - 150 – 500 ₪: 45с
-        - 500 – 5 000 ₪: 20с
-        - > 5 000 ₪: 10с
-        """
-        # Tier 1: 150 - 500 ₪ -> 45 сек
-        self.assertEqual(drop_engine.get_drop_cooldown_seconds(150), 45)
-        self.assertEqual(drop_engine.get_drop_cooldown_seconds(300), 45)
-        self.assertEqual(drop_engine.get_drop_cooldown_seconds(500), 45)
-
-        # Tier 2: 500 - 5000 ₪ -> 20 сек
-        self.assertEqual(drop_engine.get_drop_cooldown_seconds(501), 20)
-        self.assertEqual(drop_engine.get_drop_cooldown_seconds(1000), 20)
-        self.assertEqual(drop_engine.get_drop_cooldown_seconds(5000), 20)
-
-        # Tier 3: > 5000 ₪ -> 10 сек
-        self.assertEqual(drop_engine.get_drop_cooldown_seconds(5001), 10)
-        self.assertEqual(drop_engine.get_drop_cooldown_seconds(10000), 10)
-        self.assertEqual(drop_engine.get_drop_cooldown_seconds(50000), 10)
-        self.assertEqual(drop_engine.get_drop_cooldown_seconds(1000000), 10)
+        """Проверяет кулдаун на создание раздач (1 раз в 5 минут / 300 секунд)."""
+        self.assertEqual(drop_engine.get_drop_cooldown_seconds(150), 300)
+        self.assertEqual(drop_engine.get_drop_cooldown_seconds(500), 300)
+        self.assertEqual(drop_engine.get_drop_cooldown_seconds(1000), 300)
+        self.assertEqual(drop_engine.get_drop_cooldown_seconds(10000), 300)
+        self.assertEqual(drop_engine.get_drop_cooldown_seconds(1000000), 300)
 
     # -------------------------------------------------------------------------
     # 2. Min & Max Limits & Toxic Excuses
@@ -160,8 +146,8 @@ class TestShekelDropAntiSpam(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(rec1)
 
         rem = drop_engine.get_user_cooldown_remaining(donor_id)
-        self.assertGreater(rem, 40)
-        self.assertLessEqual(rem, 45)
+        self.assertGreater(rem, 250)
+        self.assertLessEqual(rem, 300)
 
         # Step 2: Immediate second drop attempt by same user must be blocked
         ok2, msg2, rec2 = await drop_engine.create_money_drop(

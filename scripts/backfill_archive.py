@@ -70,7 +70,7 @@ async def run_archive_backfill(start_post_num: int = 492000, max_posts: int = 10
         except Exception:
             content = {}
 
-        if content.get('archive_skip'):
+        if content.get('archive_skip') and not content.get('archive_allowed'):
             continue
 
         # Double check deduplication in DB

@@ -14133,38 +14133,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     window.addEventListener('hashchange', highlightTarget);
     highlightTarget();
-    const feedbackForm = document.getElementById('feedback-form');
-    if (feedbackForm) {
-        feedbackForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const btn = feedbackForm.querySelector('button[type="submit"]');
-            const originalText = btn.textContent;
-            btn.disabled = true;
-            btn.textContent = t('feedback_sending');
-            const formData = new FormData(feedbackForm);
-            const data = Object.fromEntries(formData.entries());
-            try {
-                const res = await fetch('/api/feedback', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(data)
-                });
-                if (res.ok) {
-                    showToast(t('feedback_done'));
-                    closeModal();
-                    feedbackForm.reset();
-                } else {
-                    const err = await res.json();
-                    showToast(`❌ ${t('error_prefix')}${err.detail}`);
-                }
-            } catch (err) {
-                showToast(t('network_error'));
-            } finally {
-                btn.disabled = false;
-                btn.textContent = originalText;
-            }
-        });
-    }
     window.addEventListener('dragover', e => e.preventDefault());
     window.addEventListener('drop', e => {
         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
