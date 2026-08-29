@@ -267,6 +267,13 @@ async def accept_duel_logic(message: types.Message, challenger_id: int, board_id
         await message.answer("Нельзя принять собственный вызов, трус.")
         return
 
+    # Acceptor cannot already have an active open duel challenge themselves
+    if user_id in _active_duels:
+        existing = _active_duels[user_id]
+        if time.time() - existing["ts"] < _DUEL_TIMEOUT:
+            await message.answer("⚠️ У тебя самого есть активный вызов на дуэль — сначала отмени его.")
+            return
+
     async with db_lock:
         # Проверяем глобальные балансы обоих под локом
         ch_bal = await get_user_global_balance(db, challenger_id)
@@ -490,4 +497,4 @@ async def get_post_num_by_reply(msg: types.Message) -> int | None:
         pass
     return None
 
-
+

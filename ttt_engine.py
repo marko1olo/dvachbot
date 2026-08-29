@@ -570,7 +570,7 @@ async def accept_ttt_challenge(
         game = active_ttt_games.get(game_id)
         if not game:
             return False, "❌ Вызов не найден или устарел.", None
-        if game.status != "waiting":
+        if game.status not in ("waiting",):
             return False, "❌ Эта игра уже начата или завершена.", None
         if game.challenger_id == opponent_id:
             return False, "❌ Ты не можешь принять собственный вызов!", None
@@ -584,17 +584,28 @@ async def accept_ttt_challenge(
             if existing_g and existing_g.status in ("waiting", "active"):
                 return False, "⚠️ У тебя уже есть другая активная игра в крестики-нолики!", None
 
+        # Mark state to prevent double-accept race condition
+        game.status = "accepting"
+
+    def _ttt_rollback():
+        g = active_ttt_games.get(game_id)
+        if g and g.status == "accepting":
+            g.status = "waiting"
+
+    async with ttt_lock:
         # Escrow verification under db_lock
         async with db_lock:
             ch_bal = await get_user_global_balance(db, game.challenger_id)
             op_bal = await get_user_global_balance(db, opponent_id)
 
             if ch_bal < game.bet:
-                active_ttt_games.pop(game_id, None)
+                # Challenger can no longer pay — cancel cleanly without nuking game object
+                game.status = "cancelled"
                 user_active_ttt_session.pop(game.challenger_id, None)
                 return False, f"❌ У создателя вызова [{get_anon_id(game.challenger_id)}] изменился баланс. Вызов отменен.", None
 
             if op_bal < game.bet:
+                _ttt_rollback()
                 return False, f"❌ Недостаточно шекелей. Нужно {game.bet:,} ₪, у тебя {int(op_bal):,} ₪.", None
 
             # Deduct escrow from both players
@@ -607,6 +618,7 @@ async def accept_ttt_challenge(
                     await add_user_global_balance(db, game.challenger_id, game.board_id, game.bet)
                 if ok_op:
                     await add_user_global_balance(db, opponent_id, game.board_id, game.bet)
+                _ttt_rollback()
                 return False, "❌ Ошибка списания средств. Попробуй снова.", None
 
             await record_user_transaction(db, game.challenger_id, -game.bet, "ttt", f"Ставка в КН против [{get_anon_id(opponent_id)}]")
@@ -1032,6 +1044,7 @@ async def cb_ttt_join(callback: CallbackQuery):
 
     ok, err, game = await accept_ttt_challenge(callback.bot, game_id, user_id)
     if not ok or not game:
+        logger.warning(f"[TTT] accept FAILED gid={game_id} uid={user_id}: {err}")
         await callback.answer(err, show_alert=True)
         return
 

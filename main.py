@@ -10041,15 +10041,16 @@ async def cb_casino_handler(callback: types.CallbackQuery, board_id: str | None)
             await callback.answer()
             return
 
-        session = casino_engine.active_bj_sessions.get(user_id)
-        if not session:
-            await callback.answer("❌ Сессия блэкджека завершена или не найдена. Начни новую игру!", show_alert=True)
-            return
+        async with casino_engine.session_lock:
+            session = casino_engine.active_bj_sessions.get(user_id)
+            if not session:
+                await callback.answer("❌ Сессия блэкджека завершена или не найдена. Начни новую игру!", show_alert=True)
+                return
 
-        bet = session["bet"]
-        deck = session["deck"]
-        p_hand = session["player_hand"]
-        d_hand = session["dealer_hand"]
+            bet = session["bet"]
+            deck = session["deck"]
+            p_hand = session["player_hand"]
+            d_hand = session["dealer_hand"]
 
         if action == "hit":
             p_hand.append(deck.pop())

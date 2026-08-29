@@ -322,7 +322,7 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
         game = active_rr_games.get(game_id)
         if not game:
             return False, "❌ Игра не найдена или была отменена.", None
-        if game["state"] != "pending":
+        if game["state"] not in ("pending",):
             return False, "❌ Вызов уже был принят или завершен!", None
         if game["challenger_id"] == acceptor_id:
             return False, "❌ Нельзя играть в Русскую Рулетку с самим собой, шизик.", None
@@ -337,6 +337,13 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
         bet = game["bet"]
         board_id = game["board_id"]
         challenger_id = game["challenger_id"]
+        # Mark 'accepting' immediately to prevent double-accept race condition
+        game["state"] = "accepting"
+
+    def _rr_rollback():
+        g = active_rr_games.get(game_id)
+        if g and g.get("state") == "accepting":
+            g["state"] = "pending"
 
     # Escrow deduction
     db = await get_pool()
@@ -344,8 +351,10 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
         bal_c = await get_user_global_balance(db, challenger_id)
         bal_a = await get_user_global_balance(db, acceptor_id)
         if bal_c < bet:
+            async with rr_lock: _rr_rollback()
             return False, "❌ У создателя вызова не хватает шекелей на балансе!", None
         if bal_a < bet:
+            async with rr_lock: _rr_rollback()
             return False, f"❌ У тебя не хватает шекелей! Ставка: <b>{bet:,} ₪</b>, баланс: <b>{int(bal_a):,} ₪</b>.", None
 
         ok_c, _ = await deduct_user_global_balance(db, challenger_id, board_id, bet)
@@ -356,6 +365,7 @@ async def accept_rr_challenge(game_id: str, acceptor_id: int) -> Tuple[bool, str
                 await add_user_global_balance(db, challenger_id, board_id, bet)
             if ok_a:
                 await add_user_global_balance(db, acceptor_id, board_id, bet)
+            async with rr_lock: _rr_rollback()
             return False, "❌ Ошибка списания ставки. Баланс изменился.", None
 
         await record_user_transaction(db, challenger_id, -bet, 'rr_pvp', f'Ставка в Русской Рулетке #{game_id}')
@@ -840,6 +850,7 @@ async def cb_rr_accept(callback: types.CallbackQuery, board_id: str | None = Non
 
     ok, msg, game = await accept_rr_challenge(game_id, user_id)
     if not ok:
+        runtime_logger.warning(f"[RR] accept FAILED gid={game_id} uid={user_id}: {msg}")
         await callback.answer(msg, show_alert=True)
         return
 

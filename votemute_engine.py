@@ -26,7 +26,8 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 
-from common.db_pool import get_pool, db_lock
+from common.db_pool import get_pool, db_lock, db_transaction
+from common.anon_identity import get_anon_id
 
 logger = logging.getLogger("runtime")
 
@@ -95,11 +96,12 @@ def get_votemute_card_text(post_num: int, target_id: int, votes_count: int, crea
     time_left_sec = max(0, int(VOTE_WINDOW_SEC - (now - created_ts)))
     time_left_min = (time_left_sec + 59) // 60
 
+    anon_tag = get_anon_id(target_id) if target_id else "???"
     if is_executed or votes_count >= VOTES_REQUIRED:
         return (
             f"⚖️ <b>НАРОДНЫЙ ВОТУМ ЗАВЕРШЕН!</b>\n\n"
             f"🎯 <b>Пост:</b> #{post_num}\n"
-            f"🤐 <b>Нарушитель:</b> <code>[ID:{target_id}]</code>\n"
+            f"🤐 <b>Нарушитель:</b> <code>[ID:{anon_tag}]</code>\n"
             f"📊 <b>Итог:</b> Собрано {VOTES_REQUIRED}/{VOTES_REQUIRED} голосов анонов!\n\n"
             f"🔒 <b>Приговор:</b> <b>ЖЕЛЕЗНЫЙ НАРОДНЫЙ МУТ на 30 минут</b>.\n"
             f"<i>Этот мут не снимается взятками в /shop и защищен от помилований.</i>"
@@ -108,7 +110,7 @@ def get_votemute_card_text(post_num: int, target_id: int, votes_count: int, crea
     return (
         f"🗳️ <b>НАРОДНЫЙ ВОТУМ НЕДОВЕРИЯ / ШИЗО-МУТ</b>\n\n"
         f"🎯 <b>Выдвинут пост:</b> #{post_num}\n"
-        f"👤 <b>Автор поста:</b> <code>[ID:{target_id}]</code>\n"
+        f"👤 <b>Автор поста:</b> <code>[ID:{anon_tag}]</code>\n"
         f"📊 <b>Проголосовало:</b> <b>{votes_count}/{VOTES_REQUIRED}</b> анонов\n"
         f"⏳ <b>Осталось времени:</b> ~{time_left_min} мин.\n\n"
         f"<i>Нажми кнопку ниже, если считаешь, что автор — злостный шиз/вайпер. "
@@ -266,9 +268,8 @@ async def _apply_unbribable_iron_mute(board_id: str, target_id: int, post_num: i
 
     # 1. Update SQLite database
     db = await get_pool()
-    async with db_lock:
-        try:
-            await db.execute("BEGIN IMMEDIATE")
+    try:
+        async with db_transaction(db):
             # Update user's active_items with unbribable_votemute_until and cursed_until
             await db.execute(
                 """
@@ -288,13 +289,8 @@ async def _apply_unbribable_iron_mute(board_id: str, target_id: int, post_num: i
                 "INSERT INTO Mutes (user_id, board_id, mute_type, expires_at) VALUES (?, ?, 'mute', ?)",
                 (target_id, board_id, float(mute_until))
             )
-            await db.execute("COMMIT")
-        except Exception as e:
-            try:
-                await db.execute("ROLLBACK")
-            except Exception:
-                pass
-            logger.error(f"Error persisting unbribable mute for user {target_id}: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error persisting unbribable mute for user {target_id}: {e}", exc_info=True)
 
     # 2. Update in-memory state
     try:
@@ -306,10 +302,11 @@ async def _apply_unbribable_iron_mute(board_id: str, target_id: int, post_num: i
         logger.error(f"Error updating in-memory mutes for user {target_id}: {e}")
 
     # 3. Publish public verdict across the board
+    target_anon = get_anon_id(target_id) if target_id else "???"
     announcement = (
         f"⚖️ <b>НАРОДНЫЙ ПРИГОВОР ВЫНЕСЕН И ПРИВЕДЕН В ИСПОЛНЕНИЕ!</b>\n\n"
         f"👨‍⚖️ По итогам Народного Вотума недоверия (5 голосов анонов) за пост <b>#{post_num}</b>:\n"
-        f"🤐 <b>Анон <code>[ID:{target_id}]</code></b> признан злостным шизо-вайпером и отправлен в <b>ЖЕЛЕЗНЫЙ МУТ на 30 минут</b>!\n\n"
+        f"🤐 <b>Анон <code>[ID:{target_anon}]</code></b> признан злостным шизо-вайпером и отправлен в <b>ЖЕЛЕЗНЫЙ МУТ на 30 минут</b>!\n\n"
         f"🔒 <i>Этот мут наложен волей народа борды: его НЕ СНЯТЬ взятками в /shop и админскими указами!</i>"
     )
 
@@ -414,7 +411,7 @@ async def cmd_votemute(message: types.Message, board_id: Optional[str] = None):
     if is_unbribable:
         rem_min = max(1, (remaining_sec + 59) // 60)
         await message.answer(
-            f"🔒 <b>Анон <code>[ID:{target_id}]</code> уже отбывает Железный Народный Мут!</b>\n"
+            f"🔒 <b>Анон <code>[ID:{get_anon_id(target_id)}]</code> уже отбывает Железный Народный Мут!</b>\n"
             f"Осталось сидеть: ~<b>{rem_min} мин.</b> Повторный вотум не требуется.",
             parse_mode="HTML"
         )
